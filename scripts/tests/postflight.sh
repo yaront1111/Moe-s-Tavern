@@ -120,6 +120,116 @@ function ok(payload) {
     result: { content: [{ type: 'text', text: JSON.stringify(payload) }] }
   }) + '\n');
 }
+
+// Candidate/check/finalize recorder: reject invalid payloads instead of green
+// mocks accepting arbitrary calls. This fixture never calls the live daemon.
+const assert = require('node:assert/strict');
+const rpcLog = path.join(moe, 'evidence-rpcs.jsonl');
+const appendRpc = () => fs.appendFileSync(rpcLog, JSON.stringify({tool,args}) + '\n');
+function readRows(file) {
+  try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse); }
+  catch (e) { if (e.code === 'ENOENT') return []; throw e; }
+}
+function attemptFixture() {
+  const id = 'attempt-postflight', generation = 7;
+  const taskId = process.env.FAKE_CLAIM_MODE === 'resume' ? 'task-resume' : 'task-postflight';
+  ensureDir(path.join(moe, 'attempts'));
+  const file = path.join(moe, 'attempts', id + '.json');
+  if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify({
+    id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
+    phase: 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString()
+  }));
+  if (process.env.FROZEN_MODE === 'claim-missing') return {};
+  return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
+}
+const safeId = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
+const sha = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
+function candidateReply() {
+  let payload;
+  const a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',args.attemptId+'.json'),'utf8'));
+  assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
+  assert.equal(args.generation,a.generation); assert.notEqual(a.phase,'closed');
+  assert.ok(safeId(args.id)); assert.ok(sha(args.treeSha)); assert.ok(sha(args.baseRevision));
+  assert.match(args.deliveryTarget,/^refs\/heads\/.+/);
+  const {generation,workerId,...candidate} = args;
+  payload = {success:true,candidate:{...candidate,createdAt:new Date().toISOString()},duplicate:false};
+  ensureDir(path.join(moe,'candidates'));
+  const file = path.join(moe,'candidates',args.id+'.json');
+  if (fs.existsSync(file)) {
+    payload.candidate = JSON.parse(fs.readFileSync(file,'utf8')); payload.duplicate = true;
+    for (const key of Object.keys(candidate)) assert.deepEqual(payload.candidate[key],candidate[key]);
+  } else fs.writeFileSync(file,JSON.stringify(payload.candidate));
+  return payload;
+}
+function checkReply() {
+  let payload;
+  const c = JSON.parse(fs.readFileSync(path.join(moe,'candidates',args.candidateId+'.json'),'utf8'));
+  assert.equal(args.treeSha,c.treeSha); assert.ok(safeId(args.id)); assert.ok(safeId(args.runnerId));
+  const tip = require('node:child_process').spawnSync('git',['-C',project,'rev-parse','--verify',c.deliveryTarget],{encoding:'utf8'});
+  if(tip.status===0) assert.equal(tip.stdout.trim(),c.baseRevision,'CheckRun must persist before CAS');
+
+  assert.equal(args.source,'runner-observed'); assert.ok(Number.isSafeInteger(args.exitCode));
+  assert.ok(typeof args.command === 'string' && args.command.trim() && args.command.length <= 500);
+  assert.ok(typeof args.outputTail === 'string' && Buffer.byteLength(args.outputTail,'utf8') <= 16384);
+  assert.ok(!args.outputTail.includes('\ufffd'));
+  const {workerId,...checkRun} = args;
+  payload = {success:true,checkRun:{...checkRun,createdAt:new Date().toISOString()},duplicate:false};
+  ensureDir(path.join(moe,'checks'));
+  fs.writeFileSync(path.join(moe,'checks',args.id+'.json'),JSON.stringify(payload.checkRun));
+  return payload;
+}
+function finalizeReply() {
+  let payload;
+  const mode = process.env.FAKE_EVIDENCE_MODE || '';
+  const file = path.join(moe,'attempts',args.attemptId+'.json');
+  const a = JSON.parse(fs.readFileSync(file,'utf8'));
+  assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
+  assert.equal(args.generation,a.generation); assert.ok(safeId(args.runnerId));
+  assert.ok(['finalizing','closed'].includes(a.phase));
+  assert.ok(['landed','nothing-to-commit','rescued','failed'].includes(args.outcome));
+  if (args.outcome === 'landed') {
+    assert.ok(sha(args.landedRevision));
+    const rows = readRows(rpcLog);
+    assert.ok(rows.some(r => r.tool === 'record_commit' && r.args.outcome === 'committed'
+      && r.args.kind === 'completion' && r.args.sha === args.landedRevision));
+  } else assert.equal(args.landedRevision,undefined);
+  a.phase = 'closed'; fs.writeFileSync(file,JSON.stringify(a));
+  payload = {success:true,taskId:a.taskId,attemptId:a.id,generation:a.generation,phase:'closed',
+    outcome:args.outcome,landedRevision:args.landedRevision || null};
+  if (mode === 'finalize-loss' || (mode === 'finalize-loss-once'
+    && readRows(rpcLog).filter(r=>r.tool === tool).length === 1)) return null;
+  return payload;
+}
+function evidenceRpc() {
+  appendRpc();
+  if (['record_commit','deregister_worker','add_comment'].includes(tool)) return false;
+  const refusal = message => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,
+    error:{code:-32002,message,data:{codeName:'FIXTURE_REFUSED'}}}) + '\n');
+  const mode = process.env.FAKE_EVIDENCE_MODE || '';
+  if (mode === tool + '-refuse') { refusal('fixture persistence refused'); return true; }
+  if (mode === tool + '-null') { ok(null); return true; }
+  if (mode === tool + '-malformed') { ok({success:true}); return true; }
+  try {
+    const payload = tool === 'record_candidate' ? candidateReply() : tool === 'record_check_run' ? checkReply() : finalizeReply();
+    if (payload !== null) ok(payload);
+  } catch(e) { refusal(e.message); }
+  return true;
+}
+if (['record_candidate','record_check_run','finalize_attempt','record_commit','deregister_worker','add_comment'].includes(tool)) {
+  if (evidenceRpc()) process.exit(0);
+}
+if (tool === 'claim_next_task' && !['idle','blocked'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+if (tool === 'get_context' && args.taskId) {
+  const countFile = path.join(moe,'context-count');
+  const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
+  fs.writeFileSync(countFile,String(count));
+  const file = path.join(moe,'attempts','attempt-postflight.json');
+  if (count > 1 && ['REVIEW','DONE','ARCHIVED'].includes(process.env.FAKE_TASK_STATUS) && fs.existsSync(file)) {
+    const a = JSON.parse(fs.readFileSync(file,'utf8'));
+    if (a.phase === 'running') { a.phase = 'finalizing'; fs.writeFileSync(file,JSON.stringify(a)); }
+  }
+}
+
 switch (tool) {
   case 'create_team': ok({ team: { id: 'team-smoke', name: args.name || 'Smoke' } }); break;
   case 'join_team': ok({ success: true }); break;
@@ -164,7 +274,7 @@ switch (tool) {
       // the wrapper launch a CLI and tell it to claim itself.
       ok({ hasNext: false });
     } else {
-      ok({ hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
+      ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
     }
     break;
   }
@@ -331,6 +441,255 @@ switch (tool) {
   default: ok({ success: true });
 }
 JS
+
+FROZEN_SUITE="$TMP_DIR/frozen-candidate.cjs"
+cat > "$FROZEN_SUITE" <<'FROZENJS'
+
+const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),assert=require('node:assert/strict');
+const [platform,wrapper,proxy,parent,engine]=process.argv.slice(2),win=platform==='ps1';
+const root=fs.mkdtempSync(path.join(parent,'frozen gate é '));
+const read=f=>fs.readFileSync(f,'utf8');
+const write=(f,b)=>{fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,b);};
+const rows=f=>fs.existsSync(f)?read(f).trim().split('\n').filter(Boolean).map(JSON.parse):[];
+function git(d,...a){const r=cp.spawnSync('git',['-C',d,...a],{encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();}
+const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tracked-mutation','exit-tail',
+'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
+'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
+'finalize-loss-once','finalize-loss','no-change','disabled','deferred','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt','interrupt-int',...(win?[]:['interrupt-term'])];
+let count=0;
+try {
+if(!win){const source=read(wrapper),stop=source.slice(source.indexOf('stop_gate_child() {'),source.indexOf('cleanup_gate_workspace() {'));
+  assert.ok(stop.indexOf('kill -KILL')>=0&&stop.indexOf('kill -KILL')<stop.indexOf('if wait "$GATE_PID"'),'explicit shutdown cannot wait forever on TERM-ignoring children');}
+for(const mode of modes.filter(m=>!process.env.MOE_FROZEN_TEST_ONLY||m===process.env.MOE_FROZEN_TEST_ONLY)){
+  console.log('[frozen candidate] '+mode);
+  const repo=path.join(root,mode),nested=path.join(repo,'nested project é'),owned=path.join(nested,'owned.txt');
+  fs.mkdirSync(nested,{recursive:true});
+  const gateSource=`
+const fs=require('fs'),cp=require('child_process'),path=require('path');
+const dir=process.env.FROZEN_FIXTURE,mode=process.env.FROZEN_MODE;
+const get=(...a)=>cp.execFileSync('git',a,{encoding:'utf8'}).trim();
+const persisted=fs.existsSync(path.join(dir,'.moe','candidates'))?
+ fs.readdirSync(path.join(dir,'.moe','candidates')).map(f=>JSON.parse(fs.readFileSync(path.join(dir,'.moe','candidates',f),'utf8'))):[];
+const observation={persisted,pid:process.pid,cwd:process.cwd(),project:process.env.MOE_PROJECT_PATH,tree:get('rev-parse','HEAD^{tree}'),
+ helper:fs.existsSync('helper.txt'),peer:fs.existsSync('peer.txt'),denied:fs.existsSync('.codex/dirty.txt'),owned:fs.readFileSync('owned.txt','utf8')};
+if(mode.startsWith('interrupt-'))observation.childPid=cp.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}).pid;
+observation.recordedAt=new Date().toISOString();
+fs.appendFileSync(path.join(dir,'.moe','gate-observations.jsonl'),JSON.stringify(observation)+'\\n');
+if(mode==='shared-mutation')fs.writeFileSync(path.join(dir,'owned.txt'),'late shared\\n');
+fs.writeFileSync('scratch.txt','generated only\\n');
+if(mode==='tracked-mutation')fs.writeFileSync('owned.txt','gate changed tracked\\n');
+if(mode==='dirty-helper'&&!fs.existsSync('helper.txt'))process.exit(19);
+if(mode==='race-fail'&&fs.existsSync('../break-gate.txt'))process.exit(23);
+if(mode.startsWith('interrupt-')){fs.writeFileSync(path.join(dir,'owned.txt'),'late shared\\n');fs.writeFileSync(path.join(dir,'.moe','gate-ready'),'ready');setInterval(()=>{},1000);}
+if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');process.stderr.write('END');process.exit(37);}
+`;
+  write(path.join(nested,'gate.cjs'),gateSource);write(owned,'base\n');write(path.join(repo,'seed.txt'),'seed\n');
+  const settings={qualityGate:'node gate.cjs',qualityGateScope:'everyTask',commitBoardState:false,attribution:{undeclared:'never'}};
+  if(mode==='disabled')settings.qualityGate='';
+  if(mode==='deferred')settings.qualityGateScope='epicFinal';
+  if(mode==='manual')settings.autoCommit=false;
+  write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
+  write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
+    status:'WORKING',filesModified:['owned.txt'],implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:['owned.txt']}]}));
+  if(mode!=='no-git'){
+    git(repo,'init','-q');git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
+    git(repo,'add','--','seed.txt','nested project é/owned.txt','nested project é/gate.cjs');
+    git(repo,'commit','-qm','seed');git(repo,'checkout','-qb','moe/frozen');
+    if(mode==='workspace-failure'){
+      write(path.join(nested,'.gitattributes'),'gate.cjs filter=fail\n');
+      git(repo,'add','--','nested project é/.gitattributes');git(repo,'commit','-qm','filter');
+      git(repo,'config','filter.fail.clean','cat');git(repo,'config','filter.fail.smudge','exit 41');git(repo,'config','filter.fail.required','true');
+    }
+
+  }
+  write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
+  write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
+  const cliJs=path.join(root,mode+'-cli.cjs');
+  write(cliJs,`
+const fs=require('fs'),path=require('path'),dir=process.env.MOE_PROJECT_PATH,mode=process.env.FROZEN_MODE;
+if(mode!=='no-change')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
+const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
+if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));a.phase='finalizing';
+if(mode==='closed-attempt')a.phase='closed';if(mode==='stale-attempt')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
+`);
+  const cli=path.join(root,mode+(win?'.cmd':'.sh'));
+  write(cli,win?'@echo off\r\nchcp 65001 >nul\r\nnode "'+cliJs+'"\r\nexit /b %errorlevel%\r\n':
+    '#!/usr/bin/env bash\nexec node "'+cliJs.replaceAll('\\','/')+'"\n');fs.chmodSync(cli,0o700);
+  const race=path.join(root,mode+'-race.cjs');
+  write(race,"const fs=require('fs'),cp=require('child_process');fs.writeFileSync('break-gate.txt','advanced');"+
+    "cp.execFileSync('git',['add','--','break-gate.txt']);cp.execFileSync('git',['commit','-qm','peer-race','--','break-gate.txt']);");
+  write(path.join(nested,'.moe','daemon.json'),JSON.stringify({port:9876,projectPath:nested}));
+  const before=mode==='no-git'?'':git(repo,'rev-parse','HEAD'),index=path.join(repo,'.git','index');
+  const beforeIndex=mode==='no-git'?null:fs.readFileSync(index);
+  const env={...process.env,MOE_PROXY_PATH:proxy,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',
+    FAKE_TASK_STATUS:'REVIEW',FAKE_SCOPE_PEERS_ACTIVE:'1',FAKE_SCOPE_PEER_DECLARED:'peer.txt:task-peer',
+    FROZEN_FIXTURE:nested,FROZEN_MODE:mode,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),
+    FAKE_EVIDENCE_MODE:mode,FAKE_CTX_IS_EPIC_FINAL:mode==='deferred'?'false':'true'};
+  if(mode.startsWith('race-'))env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
+  const args=win?['-NoProfile','-File',wrapper,'-Project',nested,'-WorkerId','worker-frozen','-Role','worker',
+    '-Team','Smoke','-NoStartDaemon','-Command',cli,'-NoLoop','-PollInterval','0']:
+    [wrapper,'--project',nested,'--worker-id','worker-frozen','--role','worker','--team','Smoke','--no-start-daemon',
+    '--command',cli,'--no-loop','--poll-interval','0'];
+
+  if(mode==='finalize-loss'){
+    args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
+    args[args.indexOf(win?'-PollInterval':'--poll-interval')+1]='1';
+  }
+  let runEngine=engine,runArgs=args;
+  if(mode.startsWith('interrupt-')){
+    const supervisor=path.join(root,mode+(win?'-supervisor.ps1':'-supervisor.sh'));
+    if(win){
+      write(path.join(root,'interrupt-args.json'),JSON.stringify(args));
+      write(supervisor,`
+param([string]$Engine,[string]$ArgsFile,[string]$Ready,[string]$Log)
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$global:OutputEncoding=[Console]::OutputEncoding
+$arguments=([IO.File]::ReadAllText($ArgsFile)|ConvertFrom-Json)|ForEach-Object {'"'+$_+'"'}
+$p=Start-Process -FilePath $Engine -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $Log -RedirectStandardError "$Log.err"
+$null=$p.Handle
+try {
+  $until=[DateTime]::UtcNow.AddSeconds(120)
+  while(-not (Test-Path -LiteralPath $Ready)){if($p.HasExited -or [DateTime]::UtcNow -gt $until){throw 'gate readiness failed'};Start-Sleep -Milliseconds 100}
+  Add-Type 'using System; using System.Runtime.InteropServices; public static class GateSignal {
+    [DllImport("kernel32.dll")] public static extern bool FreeConsole();
+    [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint pid);
+    [DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(IntPtr h,bool add);
+    [DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint code,uint group);
+  }'
+  [GateSignal]::FreeConsole()|Out-Null
+  if(-not [GateSignal]::AttachConsole($p.Id)){throw 'AttachConsole to OWNED wrapper failed'}
+  [GateSignal]::SetConsoleCtrlHandler([IntPtr]::Zero,$true)|Out-Null
+  if(-not [GateSignal]::GenerateConsoleCtrlEvent(0,0)){throw 'owned Ctrl+C failed'}
+  if(-not $p.WaitForExit(30000)){throw 'gate cancellation failed to finish'}
+  Get-Content -LiteralPath $Log
+  Get-Content -LiteralPath "$Log.err"
+  exit $p.ExitCode
+} finally {
+  if(Test-Path -LiteralPath $Log){Get-Content -LiteralPath $Log}
+  if(Test-Path -LiteralPath "$Log.err"){Get-Content -LiteralPath "$Log.err"}
+  if(-not $p.HasExited){& taskkill /T /F /PID $p.Id|Out-Null;$p.WaitForExit(5000)|Out-Null}
+}
+`);
+      runArgs=['-NoProfile','-File',supervisor,engine,path.join(root,'interrupt-args.json'),
+        path.join(nested,'.moe','gate-ready'),path.join(root,'interrupt-child.log')];
+    }else{
+      write(supervisor,`
+#!/usr/bin/env bash
+set -m
+ready="$1"; signal="$2"; shift 2
+"$@" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || true' EXIT
+for ((i=0;i<1200;i++)); do [ ! -f "$ready" ] || break; sleep 0.1; done
+[ -f "$ready" ] || exit 98
+kill "-$signal" "$child" || exit 97
+wait "$child"
+rc=$?
+trap - EXIT
+exit "$rc"
+`);
+      runArgs=[supervisor,path.join(nested,'.moe','gate-ready'),mode==='interrupt-int'?'INT':'TERM',engine,...args];
+    }
+  }
+  const run=cp.spawnSync(runEngine,runArgs,{env,encoding:'utf8',timeout:Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)*1000,maxBuffer:4*1024*1024});
+  const log=(run.stdout||'')+(run.stderr||'');write(path.join(root,mode+'.log'),log);
+  assert.equal(run.signal,null,log);assert.ok(run.status!==null,log);
+  const rpc=rows(path.join(nested,'.moe','evidence-rpcs.jsonl')),candidates=rpc.filter(r=>r.tool==='record_candidate'),
+    checks=rpc.filter(r=>r.tool==='record_check_run'),finals=rpc.filter(r=>r.tool==='finalize_attempt'),
+    seen=rows(path.join(nested,'.moe','gate-observations.jsonl'));
+  const failed=['dirty-helper','race-fail','tracked-mutation','exit-tail','missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','workspace-failure','interrupt-int','interrupt-term'].includes(mode)||mode.startsWith('record_');
+  const after=mode==='no-git'?'':git(repo,'rev-parse','HEAD');
+  if(mode==='dirty-helper'){
+    assert.equal(after,before,'dirty helper must not authorize a branch commit\n'+log);
+    assert.equal(checks[0]?.args.exitCode,19);
+  }else if(mode==='race-fail'){
+    assert.equal(git(repo,'log','-1','--format=%s'),'peer-race','stale candidate check must not authorize rebuilt tree\n'+log);
+    assert.equal(checks.length,2);assert.deepEqual(checks.map(r=>r.args.exitCode),[0,23]);
+  }
+  if(mode==='manual'||mode==='no-git'){
+    assert.equal(candidates.length,0);assert.equal(checks.length,0);assert.equal(finals.length,1,log);
+    assert.equal(finals[0].args.outcome,'nothing-to-commit');assert.equal(after,before);count++;continue;
+  }
+  if(['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt'].includes(mode)){assert.equal(after,before);assert.equal(checks.length,0);}
+  else{
+    assert.ok(candidates.length>0,'candidate must be recorded\n'+log);
+    for(const c of candidates){assert.equal(c.args.attemptId,'attempt-postflight');assert.equal(c.args.generation,7);
+      assert.equal(c.args.deliveryTarget,'refs/heads/moe/frozen');}
+  }
+  if(mode.startsWith('race-')){
+    assert.equal(candidates.length,2);assert.notEqual(candidates[0].args.id,candidates[1].args.id);
+    assert.notEqual(candidates[0].args.treeSha,candidates[1].args.treeSha);
+    assert.notEqual(candidates[0].args.baseRevision,candidates[1].args.baseRevision);
+  }
+  for(const check of checks){
+    const ci=rpc.findIndex(r=>r.tool==='record_candidate'&&r.args.id===check.args.candidateId);
+    assert.ok(ci>=0&&ci<rpc.indexOf(check));assert.equal(check.args.treeSha,rpc[ci].args.treeSha);
+    assert.equal(check.args.source,'runner-observed');assert.equal(check.args.command,'node gate.cjs');
+    assert.ok(Buffer.byteLength(check.args.outputTail)<=16384);
+  }
+  for(const o of seen){
+    assert.notEqual(path.resolve(o.cwd),path.resolve(nested));assert.equal(path.basename(o.cwd),'nested project é');
+    assert.equal(path.resolve(o.project),path.resolve(o.cwd));assert.equal(o.helper,false);assert.equal(o.peer,false);assert.equal(o.denied,false);
+    assert.ok(candidates.some(r=>r.args.treeSha===o.tree));assert.ok(o.persisted.some(c=>c.treeSha===o.tree),'candidate persisted before gate execution');assert.equal(o.owned,mode==='no-change'?'base\n':'frozen owned\n');
+  }
+  const refs=git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/').split('\n').filter(Boolean);
+  if(failed){
+    assert.equal(refs.length,1,'failure must rescue frozen bytes\n'+log);
+    assert.equal(git(repo,'show',refs[0]+':nested project é/owned.txt'),'frozen owned');
+    if(candidates.length)assert.equal(git(repo,'rev-parse',refs[0]+'^{tree}'),candidates.at(-1).args.treeSha,'rescue must preserve the entire frozen tree');
+    if(mode!=='race-fail'){assert.equal(after,before);assert.deepEqual(fs.readFileSync(index),beforeIndex);}
+    assert.equal(rpc.filter(r=>r.tool==='record_commit').at(-1)?.args.code,'MOE_COMMIT_FAILED_GATE');
+  }else{
+    if(mode!=='no-change')assert.notEqual(after,before,log);
+    if(candidates.length)assert.equal(git(repo,'rev-parse','HEAD^{tree}'),candidates.at(-1).args.treeSha);
+    assert.equal(refs.length,0);assert.equal(read(owned),mode==='shared-mutation'?'late shared\n':mode==='no-change'?'base\n':'frozen owned\n');
+  }
+  if(['disabled','deferred','workspace-failure'].includes(mode))assert.equal(checks.length,0);
+  if(mode==='exit-tail'){assert.equal(checks.length,1,log);assert.equal(checks[0].args.exitCode,37);assert.ok(checks[0].args.outputTail.endsWith('TAILEND'));
+    let expected=Buffer.from('é😀'.repeat(5000)+'TAILEND').subarray(-16384);
+    while(expected.length&&(expected[0]&0xc0)===0x80)expected=expected.subarray(1);
+    assert.equal(checks[0].args.outputTail,expected.toString('utf8'));
+    assert.ok(rpc.some(r=>r.tool==='add_comment'&&r.args.content.includes('TAILEND')),'failure comment keeps output tail');
+    assert.ok(Buffer.byteLength(checks[0].args.outputTail)>16000,'tail bytes='+Buffer.byteLength(checks[0].args.outputTail)+' prefix='+JSON.stringify(checks[0].args.outputTail.slice(0,16)));}
+  if(mode==='finalize-loss'||mode==='finalize-loss-once'){
+    assert.equal(finals.length,mode==='finalize-loss'?3:2,log);
+    for(const f of finals)assert.deepEqual(f.args,finals[0].args);
+    assert.equal(rpc.filter(r=>r.tool==='record_commit'&&r.args.kind==='completion').length,1);
+  }else if(!['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt'].includes(mode))assert.equal(finals.length,1,log);
+  if(finals.length){assert.equal(finals[0].args.outcome,failed?'rescued':mode==='no-change'?'nothing-to-commit':'landed');
+    if(!failed&&mode!=='no-change')assert.equal(finals[0].args.landedRevision,after);}
+  assert.equal(read(path.join(nested,'helper.txt')),'dirty helper\n');assert.equal(read(path.join(nested,'peer.txt')),'peer bytes\n');
+  assert.equal(fs.existsSync(path.join(nested,'scratch.txt')),false);
+  if(mode.startsWith('interrupt-')){
+    assert.equal(checks.length,1,'started interrupted command must have an observed exit');
+    assert.notEqual(checks[0].args.exitCode,0);
+    const rescueAt=rpc.findIndex(r=>r.tool==='record_commit'&&r.args.kind==='rescue');
+    assert.ok(rescueAt>=0&&rpc.findIndex(r=>r.tool==='deregister_worker')>rescueAt,'rescue before deregister');
+    assert.equal(read(owned),'late shared\n');
+    for(const o of seen)for(const pid of [o.pid,o.childPid]){
+      let alive=true,detail='';try{process.kill(pid,0);}catch(e){alive=false;}
+      if(alive&&process.platform==='win32'){
+        const ps="$p=Get-CimInstance Win32_Process -Filter 'ProcessId="+pid+"';if($p){@{created=$p.CreationDate.ToUniversalTime().ToString('o');command=$p.CommandLine}|ConvertTo-Json -Compress}";
+        detail=cp.execFileSync('powershell.exe',['-NoProfile','-Command',ps],{encoding:'utf8'}).trim();
+        if(!detail)alive=false;
+        else if(Date.parse(JSON.parse(detail).created)>Date.parse(o.recordedAt)){console.log('[cleanup] Windows reused exited gate PID '+pid+' '+detail);alive=false;}
+      }
+      assert.equal(alive,false,'gate process leaked: '+pid+' '+detail);
+    }
+  }
+
+  assert.equal(git(repo,'worktree','list','--porcelain').split('\n').filter(l=>l.startsWith('worktree ')).length,1);
+  for(const o of seen)assert.equal(fs.existsSync(path.dirname(o.cwd)),false,'owned gate workspace must be deleted');
+  count++;
+}
+console.log('PASS frozen candidate scenarios: '+count);
+}catch(e){console.error('FROZEN FIXTURE '+root);throw e;}
+finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)fs.rmSync(root,{recursive:true,force:true});}
+
+FROZENJS
+"$NODE_FOR_TEST" "$FROZEN_SUITE" sh "$WRAPPER" "$FAKE_PROXY" "$TMP_DIR" "$(command -v bash)"
+if printenv MOE_FROZEN_TEST_ONLY >/dev/null; then exit 0; fi
 
 set +e
 PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \

@@ -1,0 +1,29 @@
+{
+  "id": "task-c628902ee8ba45188660e7a28f0e0bdd",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: start_step accepts a worker that never claimed the row",
+  "description": "DEFECT observed 2026-09-13 alongside task-2a7e0f5b (split out of that card by its architect). util/enforcement.ts assertWorkerOwns (and assertContextFetched) return early when task.assignedWorkerId is null, so moe.start_step on an UNASSIGNED WORKING row succeeds for any registered, non-DEAD worker. tools/startStep.ts then writes { implementationPlan, status: WORKING } to the task and touchWorker(params.workerId, { status: CODING, currentTaskId: task.id }) — the worker record points at a row it never claimed while the task stays unassigned and no execution attempt is opened (a one-way back-pointer). That is how worker-c8e523ea ended up CODING on task-9e851 with a stale currentTaskId during the incident. Expected: a step can only be started by the worker that owns the row (task.assignedWorkerId === workerId) — or, for an unassigned row, start_step must refuse with a retryable STATE_CONFLICT that points at moe.claim_next_task { taskId }, never stamp the worker. Keep the change daemon-only and inside the ownership guard + startStep; do not touch attempts (task-2a7e0f5b owns attempt lifetime). Check complete_step / complete_task for the same early-return hole and cover them in the same change if they share it.",
+  "definitionOfDone": [
+    "moe.start_step on an unassigned WORKING task is refused with a STATE_CONFLICT whose nextAction is moe.claim_next_task { taskId }, and the caller worker record is left untouched (status and currentTaskId unchanged)",
+    "moe.start_step by a worker other than task.assignedWorkerId is refused with NOT_ALLOWED exactly as today; the owner path is unchanged and all existing startStep tests stay green",
+    "complete_step and complete_task either already refuse a non-owner on an unassigned row or are fixed under the same rule, with a test per tool proving the refusal",
+    "docs/MCP_SERVER.md states the rule under moe.start_step; npm test and npx tsc --noEmit pass in packages/moe-daemon"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 202,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-13T19:37:10.974Z",
+  "updatedAt": "2026-09-13T19:37:10.974Z"
+}

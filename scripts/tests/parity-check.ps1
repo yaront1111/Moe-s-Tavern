@@ -60,7 +60,8 @@ $required = [ordered]@{
         'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
-    'RPC tools' = @('get_commit_scope', 'record_commit')
+    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')
+    'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     'context fields' = @('isEpicFinal')
     'blocked-hold prose' = @('only resource-lease waits and third-party blocks hold a seat now')
     # Agent-CLI parity: every CLI the launchers support is wired the same way in

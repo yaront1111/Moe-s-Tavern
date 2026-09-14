@@ -1,0 +1,32 @@
+{
+  "id": "task-32ecce5df28e4d72ad72b2ff079f53ba",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: ps1 wrapper second landing in a loop throws on an empty GitArgs and neither lands nor rescues",
+  "description": "DEFECT observed 2026-09-13 during the plan critique of task-e47284ef, running `MOE_FROZEN_TEST_ONLY=finalize-loss pwsh -NoProfile -File scripts/tests/postflight.ps1` against task-49ec8755's uncommitted working tree.\n\nThe ps1 wrapper ran two loop iterations. The second iteration logged `[WARN] landing failed for task task-postflight: Cannot bind argument to parameter 'GitArgs' because it is an empty string.; baseline kept.` and then `[WARN] rescue ref failed for task task-postflight: Cannot bind argument to parameter 'GitArgs' because it is an empty string.` The bytes were neither landed nor rescued. The bash twin passes the same mode.\n\nInvoke-MoeGit declares a mandatory [string[]]$GitArgs, so some value that feeds a git call is empty on the second iteration — most likely a variable set once before the loop or reset per iteration without being recomputed.\n\nWhy it matters now: task-e47284ef wires the unused $postflightBreak into the ps1 loop tail, after which finalize-loss stops after iteration 1 and this failure is no longer exercised by any case.\n\nVerify first whether it reproduces at HEAD (without the 49ec edits) or is introduced by 49ec's diff; if 49ec introduced it, fix it inside that landing and close this card with a pointer. Wrapper-only; keep both twins in parity.",
+  "definitionOfDone": [
+    "A ps1 postflight harness case runs two landing iterations in one wrapper loop (two claims with owned changes) and both land a commit, or on a forced landing failure both write a rescue ref; the case is RED before the fix",
+    "The task comment names the root cause (which value is empty on iteration 2 and why) and the fix does not mask it, for example no empty-array default substituted for a missing git argument",
+    "The bash twin gets the same two-iteration case and passes; bash scripts/tests/parity-check.sh and pwsh scripts/tests/parity-check.ps1 pass",
+    "MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh and pwsh scripts/tests/postflight.ps1 both pass on a quiet box"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-49ec8755a9ad4fa29c87294adf61804d"
+  ],
+  "priority": "HIGH",
+  "order": 204,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-13T22:47:29.952Z",
+  "updatedAt": "2026-09-13T22:47:29.952Z"
+}

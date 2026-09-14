@@ -145,8 +145,12 @@ for banner in 'Grok MCP config written to:' 'Grok mode: headless' 'Grok mode: in
 done
 
 # MCP tools the wrappers call for the ledger.
-for tool in get_commit_scope record_commit; do
+for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt; do
   require_both "RPC tool" "$tool"
+done
+
+for field in attemptId generation candidateId treeSha runnerId runner-observed; do
+  require_both "candidate evidence field" "$field"
 done
 
 # Daemon get_context fields both wrappers must consume identically (the

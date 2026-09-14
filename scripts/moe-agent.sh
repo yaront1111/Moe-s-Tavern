@@ -118,6 +118,7 @@ cleanup_temp() {
     if [ "$(type -t stop_heartbeat_sidecar)" = "function" ]; then
         stop_heartbeat_sidecar
     fi
+    if [ "$(type -t finish_gate_observation)" = function ]; then finish_gate_observation || true; fi
     # Teardown rescue BEFORE deregister: if this session holds a task with a
     # baseline and never completed a landing (Ctrl+C mid-CLI, set -e abort),
     # park its edits on refs/moe/rescue/<taskId>/<ts> so a peer re-claiming
@@ -126,6 +127,10 @@ cleanup_temp() {
     if [ "$(type -t teardown_rescue)" = "function" ]; then
         teardown_rescue || true
     fi
+    if [ "${MOE_LANDING_DONE:-false}" = true ] && [ "$(type -t finalize_postflight)" = function ]; then
+        finalize_postflight || true
+    fi
+    if [ "$(type -t cleanup_gate_workspace)" = function ]; then cleanup_gate_workspace || true; fi
     # Drop this session's live-session marker. This is the union of BOTH
     # abnormal exit paths -- the INT/TERM trap ends in `exit 0`, which fires
     # this EXIT trap -- so a Ctrl+C, a window close through SIGTERM or a
@@ -154,6 +159,7 @@ cleanup_temp() {
     fi
 }
 trap cleanup_temp EXIT
+create_secure_temp >/dev/null
 
 # Path normalization for cross-platform support
 # Converts Windows paths (backslashes) to Unix paths (forward slashes)
@@ -1814,14 +1820,14 @@ moe_rpc() {
     local args_json="${2:-}"
     if [ -z "$args_json" ]; then args_json='{}'; fi
     local rpc
-    rpc=$($PYTHON_CMD -c "
+    rpc=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c "
 import json, sys
 tool = sys.argv[1]
-args = json.loads(sys.argv[2]) if sys.argv[2] else {}
+args = json.load(sys.stdin)
 if not tool.startswith('moe.'):
     tool = 'moe.' + tool
 print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':tool,'arguments':args}}))
-" "$tool" "$args_json" 2>/dev/null) || return 1
+" "$tool" 2>/dev/null <<< "$args_json") || return 1
 
     local raw=""
     if [ -n "${TEAM_PROXY:-}" ]; then
@@ -1832,7 +1838,7 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':
         return 1
     fi
 
-    $PYTHON_CMD -c "
+    PYTHONIOENCODING=utf-8 $PYTHON_CMD -c "
 import json, sys
 raw = sys.stdin.read().strip()
 if not raw:
@@ -1850,6 +1856,8 @@ for line in reversed(raw.split('\n')):
         sys.exit(1)
     if 'result' in d:
         r = d['result']
+        if isinstance(r, dict) and r.get('isError') is True:
+            sys.stderr.write('MCP daemon refusal\\n'); sys.exit(1)
         if isinstance(r, dict) and 'content' in r:
             for c in r['content']:
                 if c.get('type') == 'text':
@@ -1859,6 +1867,129 @@ for line in reversed(raw.split('\n')):
         sys.exit(0)
 sys.exit(1)
 " <<< "$raw"
+}
+
+
+# Candidate evidence is pinned outside the CLI's mutable context projection.
+# Reading the existing store does not claim, repair or write an attempt.
+moe_attempt_read() {
+    $PYTHON_CMD - "$PROJECT" "$WORKER_ID" "$PREFLIGHT_TASK_ID" "$1" "$2" <<'PY'
+import glob,json,os,re,sys
+project,worker,task,aid,generation=sys.argv[1:]
+try:
+    records=[json.load(open(p,encoding='utf-8-sig')) for p in glob.glob(os.path.join(project,'.moe','attempts','*.json'))]
+    records=[a for a in records if a.get('taskId')==task]
+    opened=[a for a in records if a.get('phase')!='closed']
+    if len(opened)!=1: raise ValueError('ambiguous or missing open attempt')
+    a=opened[0]; g=a.get('generation')
+    if a.get('workerId')!=worker or type(g)!=int or not 0<g<=9007199254740991: raise ValueError('identity')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a.get('id','')): raise ValueError('id')
+    if a.get('phase') not in ('running','finalizing'): raise ValueError('phase')
+    if aid and (a['id']!=aid or str(g)!=generation): raise ValueError('stale identity')
+    print(json.dumps(a))
+except Exception as e:
+    sys.stderr.write('Attempt identity unavailable: '+str(e)+'\n'); sys.exit(1)
+PY
+}
+
+pin_attempt_identity() {
+    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
+    local pinned tokens
+    tokens=$($PYTHON_CMD -c '
+import json,re,sys
+c=json.load(sys.stdin); a=c.get("attemptId"); g=c.get("generation")
+if a is None and g is None and c.get("alreadyAssigned"): print("resume"); sys.exit(0)
+if not isinstance(a,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",a): sys.exit(1)
+if type(g)!=int or not 0<g<=9007199254740991: sys.exit(1)
+print(a+" "+str(g))
+' <<< "$CLAIM_RESULT") || return 1
+    if [ "$tokens" = resume ]; then
+        pinned=$(moe_attempt_read "" "") || return 1
+        tokens=$($PYTHON_CMD -c 'import json,sys;a=json.load(sys.stdin);print(a["id"]+" "+str(a["generation"]))' <<< "$pinned") || return 1
+    fi
+    read -r MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION <<< "$tokens"
+    moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" >/dev/null
+}
+
+moe_evidence_rpc() {
+    local tool="$1" args="$2" tries="${3:-1}" result n
+    local expected="$SECURE_TEMP_DIR/evidence-expected.json" reply="$SECURE_TEMP_DIR/evidence-reply.json"
+    printf '%s' "$args" > "$expected" || return 1
+    for ((n=1;n<=tries;n++)); do
+        if result=$(moe_rpc "$tool" "$args"); then
+            printf '%s' "$result" > "$reply" || return 1
+            if $PYTHON_CMD - "$tool" "$expected" "$reply" <<'PY'
+import json,sys
+try:
+    tool,p,r=sys.argv[1:]; p=json.load(open(p,encoding='utf-8')); r=json.load(open(r,encoding='utf-8'))
+    assert isinstance(r,dict) and r.get('success') is True
+    if tool=='finalize_attempt':
+        assert r.get('phase')=='closed'
+        keys=('taskId','attemptId','generation','outcome','landedRevision'); record=r
+    else:
+        record=r.get('candidate' if tool=='record_candidate' else 'checkRun')
+        keys=[k for k in p if k not in ('workerId','generation')]
+        assert isinstance(record,dict) and isinstance(r.get('duplicate'),bool)
+    assert all(record.get(k)==p.get(k) and type(record.get(k))==type(p.get(k)) for k in keys)
+except Exception:
+    sys.exit(1)
+PY
+            then return 0; fi
+            echo "[WARN] $tool invalid payload acknowledgement; not persisted evidence." >&2
+        else
+            echo "[WARN] $tool transport failure or daemon refusal; not persisted evidence." >&2
+        fi
+    done
+    return 1
+}
+
+record_candidate_rpc() {
+    local args
+    [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_ATTEMPT_GENERATION" ] || return 1
+    moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" >/dev/null || return 1
+    args=$($PYTHON_CMD -c '
+import json,sys
+t,a,g,w,c,b,s,r=sys.argv[1:]
+print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,id=c,baseRevision=b,treeSha=s,deliveryTarget=r)))
+' "$LAND_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$FROZEN_CANDIDATE_ID" "$FROZEN_BASE_REVISION" "$FROZEN_TREE" "refs/heads/$LAND_BRANCH") || return 1
+    moe_evidence_rpc record_candidate "$args"
+}
+
+record_check_run_rpc() {
+    local args
+    args=$($PYTHON_CMD - "$FROZEN_CANDIDATE_ID" "$FROZEN_TREE" "$QUALITY_GATE" "$GATE_RC" "$MOE_RUNNER_ID" "$GATE_CHECK_ID" "$GATE_LOG" "$WORKER_ID" <<'PY'
+import json,sys
+c,t,command,rc,runner,cid,log,worker=sys.argv[1:]
+with open(log,'rb') as f:
+    f.seek(0,2); f.seek(max(0,f.tell()-16384)); b=f.read(16384)
+while b and b[0]&0xc0==0x80: b=b[1:]
+tail=b.decode('utf-8','replace').encode('utf-8')[-16384:].decode('utf-8','ignore')
+print(json.dumps(dict(id=cid,candidateId=c,treeSha=t,command=command,exitCode=int(rc),
+    runnerId=runner,source='runner-observed',outputTail=tail,workerId=worker)))
+PY
+    ) || return 1
+    moe_evidence_rpc record_check_run "$args"
+}
+
+finalize_attempt_rpc() {
+    [ "$ROLE" = worker ] && [ -n "${PREFLIGHT_TASK_ID:-}" ] || return 0
+    [ -n "${MOE_ATTEMPT_ID:-}" ] || { echo '[WARN] Cannot finalize without pinned attempt identity.' >&2; return 1; }
+    local record phase args outcome="$1" sha="${2:-}"
+    if $PYTHON_CMD -c 'import json,sys;a=json.load(open(sys.argv[1],encoding="utf-8-sig"));sys.exit(0 if a.get("id")==sys.argv[2] and a.get("taskId")==sys.argv[3] and a.get("workerId")==sys.argv[4] and type(a.get("generation"))==int and str(a["generation"])==sys.argv[5] and a.get("phase")=="closed" else 1)' \
+        "$PROJECT/.moe/attempts/$MOE_ATTEMPT_ID.json" "$MOE_ATTEMPT_ID" "$PREFLIGHT_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_GENERATION" 2>/dev/null; then return 0; fi
+    record=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION") || return 1
+    phase=$($PYTHON_CMD -c 'import json,sys;print(json.load(sys.stdin)["phase"])' <<< "$record") || return 1
+    [ "$phase" = finalizing ] || return 0
+    args=$($PYTHON_CMD -c '
+import json,sys
+t,a,g,w,r,o,s=sys.argv[1:]
+p=dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome=o)
+if o=="landed": p["landedRevision"]=s
+print(json.dumps(p))
+' "$PREFLIGHT_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$MOE_RUNNER_ID" "$outcome" "$sha") || return 1
+    if moe_evidence_rpc finalize_attempt "$args" 3; then return 0; fi
+    echo "[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect)." >&2
+    return 1
 }
 
 # The CLI invocation below blocks this process for the CLI's entire runtime
@@ -3492,6 +3623,94 @@ moe_commit_with_hooks() {
     return "$rc"
 }
 
+
+# One disposable checkout per frozen CAS candidate. No shared helpers copied.
+gate_git() {
+    (unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+     git -C "$GATE_WORKSPACE" "$@")
+}
+gate_integrity() {
+    [ "$(gate_git rev-parse HEAD 2>/dev/null)" = "$FROZEN_COMMIT" ] || return 1
+    [ "$(gate_git write-tree 2>/dev/null)" = "$FROZEN_TREE" ] || return 1
+    gate_git ls-files -z | gate_git update-index --no-assume-unchanged --no-skip-worktree -z --stdin || return 1
+    gate_git diff-files --quiet --ignore-submodules=none --
+}
+stop_gate_child() {
+    [ -n "${GATE_PID:-}" ] || return 0
+    # Job control gave this invocation its OWN process group, descendants included.
+    kill -TERM -- "-$GATE_PID" 2>/dev/null || true
+    # Explicit shutdown, never an idle timeout: TERM may be ignored by a gate.
+    kill -KILL -- "-$GATE_PID" 2>/dev/null || true
+    if [ "${GATE_FINISHED:-false}" != true ]; then
+        if wait "$GATE_PID"; then GATE_RC=0; else GATE_RC=$?; fi
+        GATE_FINISHED=true
+    fi
+    wait "$GATE_PID" 2>/dev/null || true
+    GATE_PID=""
+}
+cleanup_gate_workspace() {
+    stop_gate_child
+    [ -n "${GATE_ROOT:-}" ] || return 0
+    local failed=0
+    if [ -n "${GATE_WORKSPACE:-}" ] && [ -e "$GATE_WORKSPACE/.git" ]; then
+        git -C "$MOE_TOP" worktree remove --force "$GATE_WORKSPACE" >/dev/null 2>&1 || failed=1
+    fi
+    if [ "$failed" -ne 0 ]; then
+        echo "[WARN] Cannot remove owned qualityGate worktree: $GATE_WORKSPACE" >&2
+        return 1
+    fi
+    rm -rf -- "$GATE_ROOT" || return 1
+    GATE_ROOT=""; GATE_WORKSPACE=""; GATE_LOG=""
+}
+freeze_candidate() {
+    local old="$1" tree="$2"
+    FROZEN_TREE="$tree"; FROZEN_BASE="$old"; FROZEN_COMMIT=""
+    FROZEN_BASE_REVISION="$old"
+    if [ -n "$old" ]; then
+        FROZEN_COMMIT=$(printf '%s\n' 'Moe frozen candidate snapshot' | git -C "$MOE_TOP" commit-tree "$tree" -p "$old") || return 1
+    else
+        FROZEN_BASE_REVISION=$(git -C "$MOE_TOP" hash-object -w -t tree --stdin </dev/null) || return 1
+        FROZEN_COMMIT=$(printf '%s\n' 'Moe frozen candidate snapshot' | git -C "$MOE_TOP" commit-tree "$tree") || return 1
+    fi
+    FROZEN_CANDIDATE_ID=$($PYTHON_CMD -c 'import uuid;print("cand-"+uuid.uuid4().hex)') || return 1
+    record_candidate_rpc
+}
+run_frozen_gate() {
+    [ -n "${QUALITY_GATE:-}" ] || return 0
+    cleanup_gate_workspace || return 1
+    # Assignment runs in the parent; never create_secure_temp in a subshell.
+    GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
+    GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
+    GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
+    GATE_RC=0; GATE_OUT=""; GATE_PID=""
+    if ! git -C "$MOE_TOP" -c core.hooksPath=/dev/null -c core.sparseCheckout=false \
+        -c core.sparseCheckoutCone=false worktree add --detach "$GATE_WORKSPACE" "$FROZEN_COMMIT" >"$GATE_LOG" 2>&1; then
+        echo "[WARN] qualityGate workspace materialization failed." >&2; return 1
+    fi
+    gate_integrity || { echo "[WARN] qualityGate initial tree integrity failed." >&2; return 1; }
+    [ -d "$GATE_WORKSPACE/$MOE_REL" ] || return 1
+    GATE_CHECK_ID=$($PYTHON_CMD -c 'import uuid;print("check-"+uuid.uuid4().hex)') || return 1
+    echo -e "$BLUE Post-flight: quality gate: $QUALITY_GATE$NC"
+    set -m
+    (unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+     cd "$GATE_WORKSPACE/$MOE_REL" || exit 125
+     export MOE_PROJECT_PATH="$PWD"
+     exec bash -c "$QUALITY_GATE") >"$GATE_LOG" 2>&1 &
+    GATE_PID=$!; GATE_STARTED=true
+    set +m
+    if wait "$GATE_PID"; then GATE_RC=0; else GATE_RC=$?; fi
+    GATE_FINISHED=true
+    stop_gate_child
+    GATE_RECORDED=true
+    record_check_run_rpc || return 1
+    if [ "$GATE_RC" -ne 0 ]; then
+        echo "[WARN] qualityGate failed (exit $GATE_RC); refusing branch commit." >&2; return 1
+    fi
+    gate_integrity || { echo "[WARN] qualityGate tracked tree/index/HEAD mutation; refusing branch commit." >&2; return 1; }
+    echo -e "$GREEN[OK]$NC qualityGate passed."
+    cleanup_gate_workspace
+}
+
 # land_commit KIND -- §7: branch (peel), then plumbing (temp index +
 # commit-tree + update-ref CAS, 3 attempts). With commitHooks=true, a private
 # ordinary commit runs hooks against the validated index before the same CAS.
@@ -3532,13 +3751,23 @@ land_plumbing() {
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: could not build the landing index for task $LAND_TASK_ID."
             return 1
         fi
-        if ! moe_temp_index_has_changes "$old"; then
+        local changed=true
+        moe_temp_index_has_changes "$old" || changed=false
+        write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
+        tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
+        if [ "$LAND_KIND" = completion ]; then
+            if [ -z "$tree" ] || ! freeze_candidate "$old" "$tree" || ! run_frozen_gate; then
+                LAND_OUTCOME="failed"; LAND_CODE="MOE_COMMIT_FAILED_GATE"; GATE_FAILED=true
+                rescue_ref "gate-failed" "$ATTR_DIR/candidates" || true
+                moe_temp_index_drop
+                return 4
+            fi
+        fi
+        if [ "$changed" = false ]; then
             moe_temp_index_drop
             LAND_OUTCOME="nothing"
             return 2
         fi
-        write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
-        tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
         if [ -n "$tree" ]; then
             if [ "$LAND_KIND" = "completion" ] && [ "$CS_COMMIT_HOOKS" = "true" ]; then
                 if moe_commit_with_hooks "$old" "$tree" "$TI_INDEX" "$msgfile" "$err"; then
@@ -3583,6 +3812,7 @@ land_plumbing() {
             index_refresh "$LAND_STAGED_FILE" || true
             return 0
         fi
+        FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
         echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
     done
     LAND_OUTCOME="failed"
@@ -3594,6 +3824,36 @@ land_plumbing() {
 }
 
 # ---- rescue refs -------------------------------------------------------------
+
+rescue_frozen_tree() {
+    local reason="$1" file sha
+    file="$SECURE_TEMP_DIR/frozen-rescue-msg.txt"
+    write_rescue_message "$reason" "$file"
+    local -a args=(commit-tree "$FROZEN_TREE" -F "$file")
+    [ -z "$FROZEN_BASE" ] || args+=(-p "$FROZEN_BASE")
+    sha=$(git -C "$MOE_TOP" "${args[@]}" 2>/dev/null) || return 1
+    RESCUE_STAGED_FILE="${LAND_STAGED_FILE:-}"
+    rescue_ref_from_commit "$sha" "$reason"
+}
+finish_gate_observation() {
+    stop_gate_child
+    if [ "${GATE_STARTED:-false}" = true ] && [ "${GATE_RECORDED:-false}" != true ]; then
+        GATE_RECORDED=true
+        record_check_run_rpc || return 1
+    fi
+}
+finalize_postflight() {
+    [ "${MOE_FINALIZE_DONE:-false}" != true ] || return 0
+    MOE_FINALIZE_DONE=true
+    local outcome=failed
+    case "${LAND_OUTCOME:-nothing}" in
+        committed) outcome=landed ;;
+        nothing) outcome=nothing-to-commit ;;
+        *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
+    esac
+    finalize_attempt_rpc "$outcome" "${LAND_SHA:-}"
+}
+
 # rescue_ref REASON CAND_FILE -- park the candidate snapshot on
 # refs/moe/rescue/<taskId>/<utc-ts> (tree built exactly like §7.2 against
 # HEAD; commit-tree -p HEAD, no parent when unborn). HEAD, the branch and the
@@ -3605,6 +3865,7 @@ rescue_ref() {
     LAND_RESCUE_REF=""
     LAND_RESCUE_SHA=""
     RESCUE_STAGED_FILE=""
+    if [ -n "${FROZEN_TREE:-}" ]; then rescue_frozen_tree "$reason"; return $?; fi
     if [ ! -s "$cand" ]; then
         echo -e "${BLUE}[rescue]${NC} nothing to rescue for task $LAND_TASK_ID (no candidate paths) [reason=$reason]"
         return 1
@@ -3916,6 +4177,7 @@ PYEOF
 # loop), 4 gate-failed (stop the loop). Sets MOE_LANDING_DONE on every path so
 # the teardown rescue never double-parks a session that already landed.
 run_landing() {
+    FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
     local work rc=0 snap tool head_before head_after n_skipped
     work="$(create_secure_temp)/landing-$$"
     rm -rf "$work" 2>/dev/null || true
@@ -3995,7 +4257,9 @@ run_landing() {
         return 4
     fi
 
-    if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ]; then
+    if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] || {
+        [ "$LAND_KIND" = completion ] && [ "${ATTR_N_DECLARED:-0}" -gt 0 ] &&
+        [ "${ATTR_ALL_ASSERTED_MISSING:-0}" != 1 ]; }; then
         head_before=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head_before=""
         if land_commit "$LAND_KIND"; then rc=0; else rc=$?; fi
         if [ "$rc" -eq 0 ]; then
@@ -4066,7 +4330,7 @@ run_landing() {
     # cannot reach the remote). Checkpoints only when settings.checkpointPush.
     # Ref-contention skips the push: the branch is moving under a peer.
     LAND_PUSHED=""
-    if [ "$rc" -ne 3 ]; then
+    if [ "$rc" -ne 3 ] && [ "$rc" -ne 4 ]; then
         if [ "$LAND_KIND" = "completion" ]; then
             if [ "$LAND_OUTCOME" = "failed" ] && [ "${LAND_CODE:-}" = "MOE_COMMIT_FAILED_REF_CONTENTION" ]; then
                 LAND_PUSHED=""
@@ -4369,6 +4633,14 @@ teardown_rescue() {
     [ "$(type -t run_landing)" = "function" ] || return 0
     echo ""
     echo -e "${YELLOW}[rescue]${NC} session ending with task $tid unlanded -- taking a rescue snapshot before deregistering."
+    if [ -n "${FROZEN_TREE:-}" ]; then
+        LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED_GATE
+        rescue_ref "teardown" "" || true
+        record_commit_rpc failed "$LAND_KIND" "" "" "$LAND_CODE" "qualityGate interrupted" "" "" "" || true
+        finalize_postflight || true
+        MOE_LANDING_DONE=true
+        return 0
+    fi
     local work
     work="$(create_secure_temp)/teardown-$$"
     rm -rf "$work" 2>/dev/null
@@ -4384,6 +4656,7 @@ teardown_rescue() {
     if [ -z "$tool" ] || [ ! -f "$tool" ]; then tool="$work/tool.txt"; : > "$tool"; fi
     LAND_TOOL_FILE_EFFECTIVE="$tool"
     resolve_attribution "rescue" "$tid" "$work/S.tsv" "$work/B.tsv" "$work/U.tsv" "$tool" "$work/scope.json" "$ATTR_DIR" "never" || return 0
+    LAND_OUTCOME=failed
     rescue_ref "teardown" "$ATTR_DIR/candidates" || true
     MOE_LANDING_DONE=true
     return 0
@@ -4491,6 +4764,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Claim the next task, fetch context, read chat backlog.
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
+    MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""
+    GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
+    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
+    MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
     PREFLIGHT_TASK_ID=""
     PREFLIGHT_TASK_TITLE=""
     PREFLIGHT_TASK_CHANNEL=""
@@ -4845,6 +5123,8 @@ except Exception:
     pass
 " <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
                 fi
+
+                pin_attempt_identity || echo "[WARN] Missing/stale attempt identity; candidate completion will fail closed."
 
                 # 5. Fetch context for the claimed task
                 if [ -n "$PREFLIGHT_TASK_ID" ]; then
@@ -6426,24 +6706,7 @@ except Exception:
                         echo -e "${BLUE}[info]${NC} qualityGate deferred: task $PREFLIGHT_TASK_ID is mid-epic (scope=epicFinal; the epic-final task runs the full gate)."
                         QUALITY_GATE=""
                     fi
-                    if [ -n "$QUALITY_GATE" ]; then
-                        echo -e "${BLUE}Post-flight: quality gate: $QUALITY_GATE${NC}"
-                        # Capture output AND exit code separately so `set -e`
-                        # can't abort on a failing gate.
-                        if GATE_OUT=$(cd "$PROJECT" && bash -c "$QUALITY_GATE" 2>&1); then
-                            GATE_RC=0
-                        else
-                            GATE_RC=$?
-                        fi
-                        if [ "$GATE_RC" -ne 0 ]; then
-                            echo "$GATE_OUT" | tail -15
-                            echo -e "${YELLOW}[WARN]${NC} qualityGate failed (exit $GATE_RC); skipping commit+push for task $PREFLIGHT_TASK_ID."
-                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID will be parked on a rescue ref (never a branch commit) -- stopping the worker loop after the rescue so the failed tree can't be absorbed by a later task."
-                            GATE_FAILED=true
-                        else
-                            echo -e "${GREEN}[OK]${NC} qualityGate passed."
-                        fi
-                    fi
+
                 fi
                 LAND_KIND="$LANDING_MODE"
                 LAND_TASK_ID="$PREFLIGHT_TASK_ID"
@@ -6457,14 +6720,11 @@ except Exception:
                 LAND_SNAPSHOT_FILE="$POSTFLIGHT_SNAPSHOT"
                 LAND_TOOL_FILE="$MOE_TOOL_WRITES_FILE"
                 LAND_SCOPE_FILE=""
-                # A gate that ran may have rewritten files (formatters): the
-                # pre-gate snapshot would then drop every touched path as
-                # MOE_ATTR_CONCURRENT, so re-snapshot after it.
-                if [ -n "$QUALITY_GATE" ]; then
-                    LAND_SNAPSHOT_FILE=""
-                fi
                 if run_landing; then LAND_RC=0; else LAND_RC=$?; fi
                 if [ "$GATE_FAILED" = true ]; then
+                    if [ -n "${GATE_LOG:-}" ] && [ -f "$GATE_LOG" ]; then
+                        GATE_OUT=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c 'import sys;f=open(sys.argv[1],"rb");f.seek(0,2);f.seek(max(0,f.tell()-16384));print(f.read().decode("utf-8","ignore"))' "$GATE_LOG")
+                    fi
                     announce_gate_failure "$PREFLIGHT_TASK_ID" "$QUALITY_GATE" "$GATE_RC" "$GATE_OUT"
                     echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)} -- stopping the worker loop."
                     POSTFLIGHT_BREAK=true
@@ -6481,6 +6741,8 @@ except Exception:
                 fi
             fi
         fi
+        if ! cleanup_gate_workspace; then POSTFLIGHT_BREAK=true; fi
+        if ! finalize_postflight; then POSTFLIGHT_BREAK=true; fi
         # Whatever happened above, this session's bytes have been handled
         # (committed, parked on a rescue ref, refused, nothing to land, or a
         # deliberate policy skip): the teardown rescue in the EXIT trap must

@@ -21,71 +21,136 @@
     {
       "stepId": "step-1",
       "description": "READ-ONLY CONTRACT AND OWNERSHIP CHECK. Load explore-before-assume and test-driven-development. Verify the task-bound wrapper baseline and inspect current wrappers, both postflight/parity harnesses, docs/MCP_SERVER.md, candidateStore.ts, recordCandidate.ts, recordCheckRun.ts, finalizeAttempt.ts and claimNextTask.ts. Re-prove producer landing via matching Moe-Task history or epicSiblings.landing.merged, not raw status. Record foreign dirty/staged/conflicted paths in the step note without modifying them. Pin the behavior table before edits: candidate-backed completion versus checkpoint/rescue; gate enabled/deferred/disabled; valid/missing/stale attempt; existing/unborn HEAD; successful/failed/refused/nothing landing; finalizing versus running/closed attempt. Keep receipt/crash replay and target-movement recheck out of this card. No daemon source or held-out acceptance-test edits.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-09-13T14:22:00.339Z"
+      "note": "Read-only contract check: loaded explore-before-assume/TDD, CLAUDE/worker role, wrapper landing/CAS/gate/rescue paths, harness twins/parity and producer implementations/docs. HEAD 074e89a189bffcad5d70ae39eb1650bb254d7d5f; task-bound baseline at 19:10:31Z matches HEAD, landed=0. Exact task/worker attempt-bc658bb550cf4e968efe2b9839d7f0f0 generation=1 phase=running exists. Live MCP exposes all 3 producers; previous activation blocker resolved. Candidate/CheckRun/finalize source commits d408634/3feff7c/a899c92 reachable via matching Moe-Task history. No source/staged/conflicted foreign paths; daemon task JSON and .moe/attempts runtime dirt remain untouched. Behavior table pinned: worker completion requires candidate+valid exact open attempt even gate disabled/deferred; enabled gate also runs on eligible no-change tree; no-owned/missing refusal unchanged. Running checkpoints/rescue never acquire checks or finalize. No-git/manual autoCommit=false fabricate neither candidate/check nor Git effects, finalizing acknowledges nothing-to-commit. Existing HEAD uses actual CAS base, unborn uses empty-tree base sentinel/parentless snapshot; hooked unborn refusal retained. True committed=>landed actual SHA even push failure; nothing=>nothing-to-commit; successful parking=>rescued; refusal/unrescued failure=>failed. Only exact finalizing record can initiate finalization; closed only identical in-call retry. Receipt/replay and postdelivery target movement excluded. No edits/tests yet.",
+      "startedAt": "2026-09-13T14:22:00.339Z",
+      "completedAt": "2026-09-13T19:12:14.052Z"
     },
     {
       "stepId": "step-2",
       "description": "TESTS FIRST: extend both daemon-free harnesses with matching claim attemptId/generation fixtures and strict candidate/check/finalize RPC recorders (validate arguments, tree binding and call order; return real-shaped success/error responses instead of accepting arbitrary calls). Add named scenarios: (1) a pre-existing untracked helper makes a gate pass in shared cwd but is absent from the attributed candidate: clean-workspace gate fails, original branch/index/foreign bytes unchanged, owned frozen bytes rescued; (2) passing gate sees the frozen tree and nested-project cwd, excludes peer/preexisting/denied/untracked inputs, records exact candidate/check identity before CAS, and finalizes with the actual landed SHA after record_commit; (3) scenario-O race first passes, advances the target with a tracked gate-breaking change, then records a different candidate/base/tree and reruns/fails, leaving the peer tip intact; add a two-pass race control proving only candidate two lands; (4) mutate shared owned bytes during the gate and generate scratch outputs inside its workspace: neither is restaged into the frozen landing; tracked gate-workspace mutations refuse landing; (5) candidate/check persistence refusal, null/malformed reply and failed materialization prevent CAS and rescue the frozen tree; finalization response loss retries only the same acknowledgement and stops the loop on exhaustion; (6) no-change, refusal, checkpoint, hook rejection/tree mutation, unborn, gate opt-out/epic deferral, no-git and autoCommit=false retain existing semantics and truthful RPC outcomes. Assert exact existing refusal codes, rescue tree contents, actual shell exit codes including nonzero, UTF-8 bounded output tails, and zero fabricated checks on skipped or never-started commands. Add mid-GATE Ctrl+C/INT and TERM/terminating-error cleanup probes, not just the existing mid-CLI scenario W; verify no owned workspace/worktree metadata/process remains and rescue precedes deregistration. Use temp fixtures under paths containing spaces/non-ASCII, with Windows engine-appropriate interruption. Obtain assertion-level red proof for dirty-helper and stale-CAS cases against the old wrappers in an owned scratch fixture, not by swapping shared source.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Tests first: both daemon-free proxies now issue attempt-postflight/generation 7 and validate candidate/check/finalize payloads, exact bindings, result shapes and persisted-file ordering; refusal/null/malformed/lost-finalization fixtures added. Identical production-launcher fixture suite covers dirty omitted helper, nested clean tree, two CAS race outcomes, shared/tracked mutation, UTF-8 nonzero tail, RPC failures, no-change, disabled/deferred/manual/no-git, missing/stale attempt and checkout failure. Added mid-gate INT plus Bash TERM supervisors (Windows isolated hidden owned console Ctrl+C); checks cover worktree/process cleanup and rescue-before-deregister. Existing tier/refusal/hook/unborn/checkpoint harness retained. Fresh assertion-level RED: Git Bash dirty-helper and race-fail both native exit1 (unexpected branch completion; race HEAD feat(task-postflight) instead of peer-race); powershell.exe 5.1 both corresponding scenarios native exit1 with same assertion failures. Old wrappers remain unmodified, all git effects in owned temporary repositories under space/non-ASCII paths. Logs in %TEMP%/moe-frozen-red-{sh,ps,race-sh,race-ps}.log. Full new suite intentionally not green until implementation; platform cleanup probes will be exercised/adjusted against real engine behavior during concentrated verification. Corrected an owned test-edit encoding issue immediately; explicit UTF-8 reads and PS BOM preserve all pre-existing text. No production edits yet.",
+      "startedAt": "2026-09-13T19:12:27.767Z",
+      "completedAt": "2026-09-13T19:23:39.242Z"
     },
     {
       "stepId": "step-3",
       "description": "PIN ATTEMPT IDENTITY AND ADD SMALL RPC HELPERS. Retain the exact top-level claim attemptId and positive integer generation in per-iteration wrapper state, reset between tasks, and keep them outside the CLI's mutable task/context projection. Assign a separate per-run [A-Za-z0-9_-] runnerId within 128 characters; do not reuse the timestamped session string. For an already-assigned same-worker resume lacking returned tokens, read existing attempt records without writing .moe: require one unambiguous current open record matching exact task and worker, validate its generation/phase, and pin it before CLI launch. Never adopt another worker/generation, fabricate a baseline/attempt, or re-claim to discover identity. Through moe_rpc/Invoke-MoeRpc add checked helpers for record_candidate, record_check_run and finalize_attempt; serialize JSON using existing Python/Node/ConvertTo-Json mechanisms rather than shell interpolation. Candidate IDs are unique per rebuilt candidate; check IDs unique per actual execution; retries of an identical RPC reuse identical IDs/payloads. Validate success and returned identity/tree fields; transport failure, MCP error, malformed/empty responses are not success. Bound the transmitted outputTail to a complete-character final 16384 UTF-8 bytes, preserve the configured command and integer process exitCode, and explicitly send source=runner-observed. Missing/stale identity on candidate-backed completion is a fail-closed landing error with rescue, never silent legacy bypass. No candidate/check is fabricated for no-git or autoCommit=false. Explicit error handling must distinguish transport failure, daemon refusal, invalid payload and real command failure; none may be treated as a persisted check or successful landing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Added per-iteration pinned top-level attemptId/generation and independent UUID safe runnerId in both wrappers. Same-seat token-less resume reads one exact-owned open running/finalizing record; no claims/writes/adoption. Added checked candidate/check/finalize helpers with type/field/tree echo validation, explicit worker/source, bounded complete-character UTF-8 file-tail reads, stable payload retries (finalize at most three) and transport/refusal/invalid-ack diagnostics. Generic RPC paths now reject MCP isError; PS also rejects nonzero transport exit. Helpers intentionally not yet connected to landing until steps 4/5. Fresh syntax: Git Bash -n exit0; PowerShell parser errors0. Existing dirty-helper/stale-CAS red proofs remain the behavior tests awaiting integration, no passing landing claim.",
+      "startedAt": "2026-09-13T19:23:39.362Z",
+      "completedAt": "2026-09-13T19:28:03.097Z"
     },
     {
       "stepId": "step-4",
       "description": "FREEZE AND EXECUTE THE GATE IN A CLEAN WORKSPACE. Remove gate execution from the shared-project pre-attribution path; retain only selection using completion kind, RunGate/equivalent, qualityGateScope/isEpicFinal and MOE_DISABLE_QUALITY_GATE. After existing pathspec-only attribution and safe-branch selection, build the private index using existing concurrency/tier checks, write-tree, and pin treeSha, actual baseRevision and full refs/heads target. Create a temporary plumbing snapshot commit from that tree/base, without changing a branch or the shared index; an unborn base uses the actual empty-tree object id as the explicitly documented base sentinel and a parentless snapshot. A changed/no-change completion that is eligible to run a gate must still acquire a candidate and run it; existing no-owned/missing-owned refusals must not be transformed into success. Call and require record_candidate BEFORE executing any gate. For an enabled gate create an owned detached worktree from the snapshot, with checkout hooks disabled, normal full checkout (no sparse omission), and no copied/linked shared helpers, node_modules, ignored files or live .moe runtime directories. Assert checkout/index/HEAD start at the frozen tree. Run in worktree plus MOE_REL/Git.Rel so nested Moe projects preserve their cwd, quote paths, clear inherited Git index/worktree/gitdir overrides in the child, and bind child project-path environment to that clean cwd while RPCs still address the original project. Invoke bash -c in sh and the existing ComSpec /d /s /c dialect in ps1; capture actual stdout/stderr and exit code without set-e/pipeline swallowing failures or retaining unbounded output in memory. Report each executed gate via record_check_run for that exact candidate/tree, including failure; never manufacture a pass for a skipped/unstarted command. Afterward verify tracked worktree/index/HEAD still represent the frozen candidate; refuse landing on mutation or a failed integrity probe, retaining the actual command's exit code in its CheckRun and diagnosing the separate integrity failure. Generated untracked build outputs may exist only in the disposable workspace and are never staged or copied back.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Moved both gate executions behind attribution/private-index write-tree and candidate persistence, within the existing CAS loop. Eligible no-change completion now takes the same candidate path; no-owned/missing refusal arms remain separate. Added detached full checkouts with hooks/sparse disabled, nested cwd, clean Git overrides and child project env, tree/index/HEAD integrity checks, real command exits and bounded recorded logs; gate outputs never staged. Windows uses a suspended native ComSpec launch assigned to an owned kill-on-close Job before resume, merging stdout/stderr to one file handle; Bash owns a separate process group. Existing shell dialects retained. Cleanup/frozen rescue/finalize integration follows in step5. Fresh focused dirty-helper tests on both Bash and Windows 5.1 now pass branch-unchanged and exact CheckRun exit19 assertions, then exposed fixture LF assumption under host core.autocrlf=true (checkout correctly CRLF). Fixed only fixture config to core.autocrlf=false for byte-exact comparisons; no relaxed production assertion. Both parser/syntax checks clean. Full gates remain pending step7; no green completion claim.",
+      "startedAt": "2026-09-13T19:28:03.285Z",
+      "completedAt": "2026-09-13T19:37:45.547Z"
     },
     {
       "stepId": "step-5",
       "description": "INTEGRATE CAS, RESCUE, FINALIZATION AND TOTAL CLEANUP. Put freeze -> record_candidate -> fresh workspace -> gate -> record_check_run inside EACH existing CAS iteration, ahead of branch update. Retain commitHooks behavior and its exact tree/parent validation; build the delivered commit only from frozen tree/base, never by restaging gate outputs. On failed CAS discard that iteration's check eligibility/workspace, read the advanced tip and rebuild using existing attribution/concurrent-change rules; issue a new candidate and rerun even if a gate passed before. Keep the three-attempt cap and MOE_COMMIT_FAILED_REF_CONTENTION. Required gate nonzero or tracked-integrity failure keeps MOE_COMMIT_FAILED_GATE, PUSH-BLOCKED diagnostics, baseline retention and stop-loop behavior, with NO branch update or push. Extend rescue helpers to accept a frozen tree/base snapshot so failures and Ctrl+C during a gate cannot rescue later shared bytes instead; preserve rescue subjects/reasons, path counts and the final failed record_commit after the committed/rescue ledger row. Before freeze is available retain existing attributable-byte rescue fallback. Once a finalizing attempt's postflight outcome/record_commit reporting is complete, call finalize_attempt with the pinned identity/generation and runnerId: committed -> landed + actual 40-hex commit; nothing or deliberate no-git/autoCommit=false -> nothing-to-commit; successfully parked unlanded bytes -> rescued; refusal/unrescued failure -> failed. Never turn push failure after a real branch commit into a claim that no commit landed. Do not finalize ordinary running checkpoints, architect/QA sessions or already-closed attempts as though they were new completions; determine phase from the exact pinned record, not task status alone. Retry acknowledgement at most three times with identical payload and no repeated Git effect; on exhaustion report loudly and stop new-task looping without undoing a landed commit. Use one idempotent workspace cleanup helper from per-iteration finally/normal return AND outer cleanup_temp/PowerShell finally. Register paths in the parent shell (avoid create_secure_temp in an unregistered command-substitution subshell), stop/wait only owned gate children before deletion, remove only this detached worktree and its registration, and continue rescue/finalization/deregister cleanup even after an earlier cleanup error. On Windows validate resolved absolute owned temp paths before removal and use LiteralPath, never cross-shell recursive deletion. Never globally prune worktrees or introduce an idle/quiet-output kill rule.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Integrated fresh freeze/candidate/workspace/check per CAS iteration, frozen-tree/base rescue (retaining rescue subjects/path ledger), post-record_commit finalization with exact landed SHA and identical bounded retry payloads, normal/outer cleanup and interrupted gate observation before rescue/deregister. Running/other-role/closed attempts do not initiate completion acknowledgements; missing/stale tokens fail closed. Gate/evidence/integrity failure skips push and stops looping. Windows suspended process + owned kill-on-close job and Bash owned process group stop descendants before integrity/cleanup; secure temp root now parent-registered. Fresh focused behavioral gates: dirty-helper and race-fail passed on Git Bash and Windows PowerShell5.1 (four native exit0 runs, one selected scenario each); clean workspace absent after failure, rescue exact frozen bytes, peer index preserved, new CAS candidate/check IDs and finalization order all asserted. Tightened test refusal assertion from console token presence to exact final failed record_commit.code=MOE_COMMIT_FAILED_GATE. Full suite including interruption/ack-loss arms awaits concentrated step7; no whole-task verification claim.",
+      "startedAt": "2026-09-13T19:37:45.629Z",
+      "completedAt": "2026-09-13T19:47:41.036Z"
     },
     {
       "stepId": "step-6",
       "description": "PARITY AND CONFIGURATION CONTRACT. Extend both parity checkers' RPC/field lists with record_candidate, record_check_run, finalize_attempt, attemptId, generation, candidateId, treeSha and runner-observed at the real wrapper emission sites; preserve every existing refusal-code, tier, setting, shell-flag and banner assertion. Add narrow structural assertions in the behavioral harnesses where plain token presence cannot prove ordering; do not rely on a comment containing a tool name. Update only the qualityGate-related configuration prose: frozen clean checkout per candidate, no shared dependency/helper copying, gate commands must prepare their own required dependencies, nested-project cwd, exact-tree check recording, gate mutations not incorporated and tracked mutations refusing landing, retry reruns, cleanup and the unborn empty-base convention. State that a CheckRun is an observed command result, not a delivery receipt, and that finalization acknowledges a landing result without persisting receipt evidence. Keep the current disable/deferral/manual/no-git policies and the separate commitHooks contract accurate. Do not edit foreign documentation hunks or add a release/changelog sweep to this mid-epic card.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Extended both parity vocabularies with record_candidate, record_check_run, finalize_attempt and real emitted attemptId/generation/candidateId/treeSha/runnerId/runner-observed fields. Behavioral fixtures additionally observe persisted candidate at command start and require CheckRun persistence before target CAS (not comment/token proof). Existing parity assertions retained. Updated only qualityGate configuration prose with per-candidate clean checkout, self-prepared dependencies, nested cwd, exact tree checks, untracked outputs/tracked mutation refusal, retry/cleanup, unborn empty-base sentinel and distinction between CheckRun, finalization acknowledgement and receipt. Existing opt-out/deferral/manual/no-git/commitHooks policies documented unchanged. Fresh parity-check.sh and Windows5.1 parity-check.ps1 both PASS native exit0.",
+      "startedAt": "2026-09-13T19:47:41.123Z",
+      "completedAt": "2026-09-13T19:49:39.105Z"
     },
     {
       "stepId": "step-7",
       "description": "ONE CONCENTRATED VERIFICATION STEP. On a quiet box, from repository root run exactly: MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh. Use a real runnable Bash environment (Git Bash or WSL with its own node/python/toolchain, not an accidental Windows cmd fallback); a SKIP, timeout, empty scenario count or omitted gate arm is not a pass. Then validate Windows behavior serially, not concurrently with the Bash harness: set MOE_POSTFLIGHT_TIMEOUT_SEC=180 and run powershell.exe -NoProfile -File scripts/tests/postflight.ps1 plus scripts/tests/parity-check.ps1; run the same pair with pwsh when installed. Capture each native exit code explicitly. Verify Bash syntax and both PowerShell parsers as part of this step. Report executed scenario counts, exact commands, fresh output tails, cleanup assertions and old-wrapper red proof; label any unavailable platform honestly. Do not run unrelated daemon/IDE/full-epic gates, repair the foreign qaApprove.ts conflict, or change timeouts in production because a build is quiet. If a gate fails, repair only owned wrapper/harness changes and rerun the same focused suite.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Fresh focused verification PASS, native exits explicitly captured. Git Bash: MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh -> 0; 28 frozen scenarios + commit-scope counter 28, all auxiliary smoke/gate/CLI arms, no SKIP. Serial Windows: MOE_POSTFLIGHT_TIMEOUT_SEC=180; powershell.exe -NoProfile -File scripts/tests/postflight.ps1 -> 0 (27 frozen + 28 scope), parity-check.ps1 -> 0; same pair pwsh 7.6.6 -> 0 (27+28), parity ->0. Fresh Bash parity rerun after PS-only repairs ->0. Bash source/harness unchanged since its final full pass. Both PS parsers (5.1.26100.9444/7.6.6, three files each), Bash -n three files, owned git diff --check ->0. Logs %TEMP%/moe-frozen-final-{sh.log,powershell.exe-postflight.ps1.log,pwsh-postflight.ps1.log} plus engine parity logs. Old-wrapper dirty-helper and stale-CAS assertion reds on both shells retained in %TEMP%/moe-frozen-red-*.log. Verification repairs: UTF8/argv transport, PS OEM Git path decode, unchanged tree write-tree, correct PS loop-stop flag, restored failure-comment tail, bounded explicit shutdown and Job Object descendant wait. PS7 real Ctrl+C exposed a pre-existing foreign-thread Console.CancelKeyPress scriptblock abort; removed unsafe callback so host unwinds finally. Narrow scope extension inside same wrapper is required for mandated interruption cleanup; both engines' real Ctrl+C green. PID-only probe was made birth-time-aware after one transient liveness failure; three focused INT reruns and final full suites pass. All owned workspace/registration/process and full rescue-tree equality assertions pass for final code. Earlier incomplete-run scratch leftovers noted separately for operator cleanup; no deletion refusal bypass.",
+      "startedAt": "2026-09-13T19:49:39.201Z",
+      "completedAt": "2026-09-13T21:48:45.461Z"
     },
     {
       "stepId": "step-8",
       "description": "ONE ADVERSARIAL REVIEW AND QA HANDOFF. Load adversarial-self-review and review the final seven-path diff against every DoD item: can the gate see a dirty omitted helper; can shared/gate changes escape the frozen tree; can candidate-A evidence authorize CAS candidate-B; can an RPC refusal still reach update-ref/push; do all normal/error/interrupt paths remove only the owned workspace and preserve rescue bytes/peer index; can invalid or resumed identity close another attempt; does no-git/autoCommit=false execute any new Git activity; do checkpoint, hook, unborn, tier and refusal controls remain covered? Check no broad staging, shared-index commit, hidden fallback or receipt/replay implementation was introduced. Report every actual source/doc path created or modified via complete_step.modifiedFiles rather than declaring foreign paths. Provide QA the candidate/check/finalize payload-order evidence, exact delivered/rescue tree comparisons, cleanup and CAS race assertions, and fresh verification command/exit/output. Save the task handoff through Serena and call complete_task only with truthful passing evidence; QA owns approval and any subsequent rejection loop.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarial review complete; no source edits in this step (seven cumulative owned paths explicitly reported). Reviewed final wrapper/doc/parity diffs and matching strict harness blocks. Candidate freeze/RPC/check ordering precedes each CAS; fresh candidate2 evidence, no dirty helpers/scratch restaging; malformed/refused RPCs cannot CAS/push. Full frozen rescue tree remains authoritative under shared and gate mutation; normal/failure/handled interrupt cleanup owns only its workspace/process group/Job Object and preserves peer index. Exact pinned task/worker/generation and phase guard prevent adopting/resolving another attempt; no-git/manual produce no candidate/check/new gate Git effects; running checkpoints/closed attempts do not falsely finalize. Original attribution/refusal/hook/unborn controls retain full harness coverage; no broad staging/shared-index commit/receipt/replay code or foreign docs/source edits. Fresh final suites: Bash28 frozen+28 scope, PS5.1 and PS7 each27+28, all full postflight/parity native exits0; both parsers and Bash syntax0, diff-check0. Additional selected PS5.1 pass and stale-CAS reruns0; exact payload-order and landed/rescue SHA/tree equality evidence posted in task comment-26b12e9e57524544a3046dcbdd4d2811 and retained fixture journals. Handoff and gotchas written through Serena. Boundaries reviewed: clean checkout is not an OS security sandbox; CheckRun is not receipt; hard-kill replay/target recheck intentionally excluded. Cleanup I/O failures warn/fail closed, never global prune. Historical pre-final-fix scratch dirs still require operator cleanup after explicit deletion refusal; fully documented, not claimed removed. Final tested workspaces/processes/registrations clean. Shared HEAD074e89a on moe/work-2026-09-13 unchanged; wrapper must publish, QA owns approval.",
+      "startedAt": "2026-09-13T21:48:52.503Z",
+      "completedAt": "2026-09-13T21:54:14.562Z"
     }
   ],
-  "status": "WORKING",
-  "assignedWorkerId": "worker-f9946b0d",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-f0f9ea9e",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -116,11 +181,47 @@
       "author": "governor-9844430a",
       "content": "GOVERNOR (governor-9844430a), 2026-09-13 19:00Z. The runtime-activation blocker is resolved and verified. These are facts, not a plan.\n- The moes daemon restarted at 18:58:52Z, with the human's approval. It now runs as pid 4972 on port 9877, version 0.8.0. The JetBrains plugin respawned it from D:/projexts/moes/packages/moe-daemon/dist, because ~/.moe/config.json sets installPath. That dist was built at 18:41Z from main 91e14c2, and its tools/index.js hash matches the installed plugin bundle.\n- A raw MCP tools/list over ws://127.0.0.1:9877/mcp returns 66 tools. moe.record_candidate, moe.record_check_run, moe.finalize_attempt and moe.reattach_attempt are all registered. .moe/attempts/ is populated.\n- The record_check_run wire contract in governor-6c1e1bf2's comment was a pre-landing summary. Treat the registered inputSchema as authoritative.\n- Step 1 still shows IN_PROGRESS from worker-9f2c3ad4's session before the block. The row is unassigned, so assertNoLiveLease will not refuse a new claimer.\n- The checkout has moved since the step-1 audit. That audit ran on moe/work-2026-09-10 at 624b354. The branch is now moe/work-2026-09-13 at 2fb9593, one wip commit on top of main 91e14c2.\n- settings.deliveryPolicy is unset, so the default is legacy. list_tasks reports dependsOnUnmet 0.\n- Another worker is in the same checkout: worker-c8e523ea is reworking task-9e851 (deliveryProjection.ts plus the JetBrains model). That work does not touch this card's seven paths. Run the postflight harnesses one at a time with MOE_POSTFLIGHT_TIMEOUT_SEC=180.",
       "timestamp": "2026-09-13T19:01:20.751Z"
+    },
+    {
+      "id": "comment-0f46c061938b4a8bbb591337f20523ae",
+      "author": "worker-f9946b0d",
+      "content": "Step 7 verification in progress, no full green claimed. Fresh focused Bash + Windows PowerShell 5.1 passes for dirty-helper, stale-CAS/race-fail, UTF-8 exit-tail, failed materialization, and mid-gate Ctrl+C. Interrupt now mutates shared owned bytes and spawns a grandchild: frozen rescue tree, unchanged peer index, child/grandchild death, workspace removal and rescue-before-deregister asserted. Full exact Bash postflight && parity is running foreground/polled; Windows full suites will follow serially. Verification fixes stayed in owned paths: required-smudge fixture now supplies clean=cat so only materialization fails; PS new-console probe exposed OEM decoding of non-ASCII Git roots, so Get-MoeGitTop/Invoke-MoeGit save/restore UTF-8 decoding. Also fixed UTF-8 RPC pipeline/Windows argv size issues and outer Bash finalization cleanup window. Two obsolete step-4 test workspaces need operator deletion after an environment refusal; no deletion bypass attempted.",
+      "timestamp": "2026-09-13T20:14:45.586Z"
+    },
+    {
+      "id": "comment-4c785ac7e84747819d27e43ae0a8efe0",
+      "author": "worker-f9946b0d",
+      "content": "Fresh full Bash run passed: 28 frozen-candidate scenarios + commit-scope counter 28, including Q/V/W and all auxiliary smoke/gate/CLI arms; postflight.sh and parity-check.sh exit 0. Before final verification I added full rescue-tree equality and exact UTF-8 suffix assertions, restored PS failure-comment output tails (new assertion red then focused green), and closed TERM-ignoring shutdown waits (structural assertion red then real INT focused green on both wrappers). Windows now waits for all owned Job Object members to terminate before deletion. Strict fake RPC branches split into <=50-line helpers. Final exact Bash command is being rerun, followed serially by full powershell.exe and pwsh pairs. Both parsers (5.1.26100.9444, 7.6.6; 3 files each) and Bash syntax have freshly passed. No complete_task until final serial gates finish.",
+      "timestamp": "2026-09-13T20:47:17.855Z"
+    },
+    {
+      "id": "comment-fdb946538bb14c95a1a8058b5231ffc4",
+      "author": "worker-f9946b0d",
+      "content": "Step 7 update: final Bash postflight+parity passed on unchanged Bash source/harness (28 frozen + commit-scope counter 28); Windows PS5.1 full postflight and parity also passed after fixing the finalization stop flag and materializing an unchanged private-index tree. PS7 full run reached mid-gate Ctrl+C and exposed a PRE-EXISTING direct Console.CancelKeyPress scriptblock: the foreign callback thread throws 'no Runspace', aborting before rescue/finally. Removed that unsafe callback (host cancellation now unwinds the existing finally); freshly reran real mid-gate Ctrl+C under BOTH 5.1 and 7.6.6, both exit0 with frozen rescue, check, finalization, child/grandchild stop and cleanup assertions. Rerunning the two full Windows pairs serially now, plus fresh Bash parity. No daemon/receipt/foreign-source changes.",
+      "timestamp": "2026-09-13T21:39:12.193Z"
+    },
+    {
+      "id": "comment-26b12e9e57524544a3046dcbdd4d2811",
+      "author": "worker-f9946b0d",
+      "content": "QA evidence (daemon-free FIXTURES, not this task's delivery receipt), fresh selected PS5.1 pass and race-fail reruns both exit0. PASS: record_candidate cand-909ddc4f0c914b158b4799015457763b (attempt-postflight generation7, base 7632414f23a6dcb1c67a515e595696bfb405fdd9, tree a3faf5760a1ea6267e2f9ebcf54c098c9e95c776, refs/heads/moe/frozen) -> check-cd3b2fddfdcf4698a9358247619cfe54 / source runner-observed / node gate.cjs / exit0 / same candidate+tree -> record_commit completion sha 3eda6f64c596cf53c52366b399c4c5696ed2a810 -> finalize_attempt landedRevision same SHA -> deregister. Actual HEAD tree equals candidate/check tree. RACE-FAIL: candidate989ea567 tree a3faf576..., base220efb558... / exit0; peer advances to a01d3647e8deb99c8dfbecd827afa24150a055e5; NEW candidate ba778151 tree8e0c410619f7e3d27c7356dad236913730cc21c2, base=peer / NEW check exit23; record_commit rescue sha7e433ab5ba437af9f261987bb7ab4fc824c2c5f9 then failed/MOE_COMMIT_FAILED_GATE -> finalize rescued -> deregister. Rescue tree EXACTLY candidate2 tree; branch remains peer SHA, tree9e91c6dbe27e89fbdbafa7607d710eb4bbe8b87e. Raw journals and original wrapper logs retained under %TEMP%/moe-postflight-a2a5c597ff9b41f8949575a715302d6d/frozen gate é l7zNoR/pass and %TEMP%/moe-postflight-90ee32a9e2ff435ca2b32232052ec931/frozen gate é ucNxa0/race-fail. Their disposable GATE workspaces were removed; only intentional test-repo evidence remains. All full suites passed (Bash28 frozen+28 scope; PS5.1/7.6.6 each27+28; all parity and parsers exit0). Scope remains seven paths, no manual commit/publication.",
+      "timestamp": "2026-09-13T21:50:55.521Z"
+    },
+    {
+      "id": "comment-264df34b55574c898ccd3871cfa2c190",
+      "author": "agent",
+      "content": "Heads-up from the plan critique of task-e47284ef (read-only run on this task's working tree, 2026-09-13):\n1. `MOE_FROZEN_TEST_ONLY=finalize-loss pwsh -NoProfile -File scripts/tests/postflight.ps1` fails `6 !== 3`. `$postflightBreak` is set in the post-flight but never reset or read, so the ps1 loop does not stop on an exhausted finalize acknowledgement the way bash does.\n2. That run's second iteration logged `Cannot bind argument to parameter 'GitArgs' because it is an empty string.` for both the landing and the rescue ref. Filed as task-32ecce5df28e4d72ad72b2ff079f53ba.\ntask-e47284ef plans the $postflightBreak wiring. If you fix either issue inside your own landing, say so here so that task skips it.",
+      "timestamp": "2026-09-13T22:47:30.037Z"
+    },
+    {
+      "id": "comment-36e350760b664db3867ee902257f1216",
+      "author": "governor-9844430a",
+      "content": "GOVERNOR (governor-9844430a), 2026-09-13 22:50Z. Notes for the reviewer: evidence to check, not a verdict.\n1. LOOP STOP (looks resolved). task-e47284ef's plan critique found that on an earlier snapshot of this tree the ps1 `$postflightBreak` was assigned but never read. The working tree at 22:48Z has no `$postflightBreak`. Instead, `$moeStopLoop` is reset each iteration (moe-agent.ps1:5626), set by a landing StopLoop (:5776) and by a failed Complete-MoePostflight (:5782), and breaks the loop at :5832. Read it once to confirm.\n2. RE-RUN TO CONFIRM. task-32ecce5d (BACKLOG) records that `MOE_FROZEN_TEST_ONLY=finalize-loss pwsh -NoProfile -File scripts/tests/postflight.ps1` failed `6 !== 3` on that earlier snapshot. On the second loop iteration it threw `Cannot bind argument to parameter 'GitArgs' because it is an empty string`, so it neither landed nor rescued. Re-run that mode and its powershell.exe twin on this candidate. If both pass, note it on task-32ecce5d.\n3. LANDING. worker-f9946b0d is an interactive Codex seat. Its completion commit lands only after the operator exits Codex; closing the window leaves a rescue ref instead. Check task.commits for the feat commit before approving. A QA claim closes the finalizing attempt-bc658bb5 (generation 1).",
+      "timestamp": "2026-09-13T22:49:11.860Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:34.280Z",
-  "updatedAt": "2026-09-13T19:10:28.458Z",
+  "updatedAt": "2026-09-14T18:29:21.570Z",
   "contextFetchedBy": [
     "architect-2d25447a",
     "governor-6c1e1bf2",
@@ -128,12 +229,14 @@
     "architect-643e6210",
     "worker-9f2c3ad4",
     "governor-9844430a",
-    "worker-f9946b0d"
+    "worker-f9946b0d",
+    "qa-f0f9ea9e"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T22:30:16.145Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 7
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 8
   },
   "commits": [
     {
@@ -151,52 +254,53 @@
       "treeId": "0240f1a12daf4b6a11cda91e77f092c820bb5c0f",
       "status": "PLANNING",
       "pushed": false
+    },
+    {
+      "sha": "074e89a189bffcad5d70ae39eb1650bb254d7d5f",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-f9946b0d@2026-09-13T19:10:28Z",
+      "paths": [
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-9e851d4e6e144f808a089bfbbd29ae11.json"
+      ],
+      "recordedBy": "worker-f9946b0d",
+      "recordedAt": "2026-09-13T19:10:31.178Z",
+      "treeId": "90d21363f8721f90556b6e426bdafa798b4615ce",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
-    ".moe/tasks/task-94f534924ea841af8c164191060ee4d3.json"
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "docs/CONFIGURATION.md"
   ],
-  "unattributedPaths": [
-    "docs/MCP_SERVER.md",
-    "docs/roles/architect.reference.md",
-    "docs/roles/qa.reference.md",
-    "docs/roles/worker.reference.md",
-    "packages/moe-daemon/src/generated/initFiles.ts",
-    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
-    "packages/moe-daemon/src/state/chatStore.ts",
-    "packages/moe-daemon/src/state/dependencyUnblock.ts",
-    "packages/moe-daemon/src/state/StateManager.test.ts",
-    "packages/moe-daemon/src/state/StateManager.ts",
-    "packages/moe-daemon/src/state/workerStore.ts",
-    "packages/moe-daemon/src/tools/chatChannelRef.test.ts",
-    "packages/moe-daemon/src/tools/chatRead.ts",
-    "packages/moe-daemon/src/tools/chatSend.ts",
-    "packages/moe-daemon/src/tools/chatWait.ts",
-    "packages/moe-daemon/src/tools/claimNextTask.test.ts",
-    "packages/moe-daemon/src/tools/enterGovernance.test.ts",
-    "packages/moe-daemon/src/tools/enterGovernance.ts",
-    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
-    "packages/moe-daemon/src/tools/getCommitScope.ts",
-    "packages/moe-daemon/src/tools/getContext.ts",
-    "packages/moe-daemon/src/tools/qaApprove.test.ts",
-    "packages/moe-daemon/src/tools/qaApprove.ts",
-    "packages/moe-daemon/src/tools/releaseTask.test.ts",
-    "packages/moe-daemon/src/tools/setTaskStatus.test.ts",
-    "packages/moe-daemon/src/tools/setTaskStatus.ts",
-    "packages/moe-daemon/src/util/mentionRouter.ts",
-    "packages/moe-daemon/src/util/mentionRouterSystemHops.test.ts"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-643e6210@2026-09-13T13:50:09Z",
-    "at": "2026-09-13T13:50:11.494Z"
+    "sessionId": "worker-f9946b0d@2026-09-13T19:10:28Z",
+    "at": "2026-09-13T19:10:31.178Z"
   },
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-13T14:11:12.928Z",
   "planningNotes": {
@@ -219,7 +323,16 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "planRevision": 0,
+  "planRevision": 15,
   "priorBlockedReason": "Live prerequisite contract is absent despite producer commits being on HEAD624b354. Read-only proxy tools/list exits0:61 tools, claim_next_task present, record_candidate/record_check_run/finalize_attempt all absent. .moe/attempts is absent, so this fresh claim has no durable attemptId/generation to pin. Runtime .moe/daemon.json identifies PID55520 port9878 started2026-09-12T22:03:33.261Z; process runs the installed PyCharm2026.1/plugins/moe-jetbrains/daemon/index.js, whose bytes lack those3 tools and ATTEMPT_FINALIZING. Source-landed is not runtime-activated. Task baseline is valid (14:21:04Z, correct task/HEAD); seven planned paths are clean. Fail-closed candidate completion cannot safely use fabricated tokens or a legacy-success bypass, and deployment/restarting the shared daemon is outside this wrapper-only scope. Activate producer runtime through owner/operator, then fresh task-bound relaunch. No source/test/doc edits or tests run; all foreign WIP/conflict preserved, NOT the blocker. Step1 audit and exact evidence in comment-b2753a22880d4dbda5c1a6f7cd988587; Serena handoff saved.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-09-13T21:55:29.019Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "Git Bash full: PASS frozen candidate scenarios: 28; commit-scope scenarios run: 28; PASS postflight.sh; PASS parity-check.sh; native exit 0. Bash source/harness unchanged since full pass; parity rerun after PS-only fixes: exit 0.\nSerial MOE_POSTFLIGHT_TIMEOUT_SEC=180 powershell.exe -NoProfile -File scripts/tests/postflight.ps1: PASS frozen candidate scenarios: 27; commit-scope scenarios run: 28; PASS postflight.ps1; exit 0. powershell.exe parity-check.ps1: PASS, exit 0.\nSerial pwsh 7.6.6 same pair: 27 frozen +28 scope, PASS postflight.ps1 and parity-check.ps1, each exit 0.\nNo SKIP/timeout. Both PowerShell parsers (3 files each), Bash -n (3 files), owned git diff --check: exit 0. Extra selected pass and stale-CAS fixture reruns exit 0; exact delivered/rescue tree equality and RPC ordering retained in QA journals. All processes/tests completed before handoff.",
+    "reportedAt": "2026-09-13T21:55:29.019Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Implemented frozen-candidate clean-worktree quality gates in both wrappers. Claim identity is pinned; each CAS rebuild records a new candidate, executes/records its exact-tree check, rejects tracked gate mutations, and preserves frozen rescue bytes. Finalizing attempts acknowledge actual landed/nothing/rescued/failed results with bounded identical retries and stop-loop behavior. Preserved attribution, tier/refusal/hook/unborn/manual/no-git policies; no receipt/replay or daemon changes. Added strict matching harnesses, parity fields and qualityGate configuration contract. Full Bash and Windows PowerShell 5.1/7.6.6 suites and parity pass; old-wrapper dirty-helper/stale-CAS assertion reds retained. Fresh exact payload-order/tree evidence posted in task comment and Serena handoff; gate interruption cleanup tested with shared mutation plus child/grandchild. Historical pre-final-fix scratch cleanup requests remain documented separately, not falsely claimed removed. Seven owned paths reported; no manual commit/publication, parent wrapper owns landing and QA owns approval."
 }
