@@ -1,0 +1,35 @@
+{
+  "id": "task-758423de874f461199b8ed17cfd847a1",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Keep a QA claim from superseding the worker's finalizing attempt before its landing is acknowledged",
+  "description": "DEFECT reported 2026-09-14 by qa-f0f9ea9e while reviewing task-49ec8755, reproduced in a scratch fixture. Evidence: the task-49ec8755 rejection comment and #general msg-1a7d6192.\n\nWHAT HAPPENS\n1. complete_task moves the task to REVIEW and parks the worker's attempt in `finalizing`. The wrapper is expected to record the candidate and call finalize_attempt after the CLI exits.\n2. A QA seat claims the REVIEW row. In claimNextTask.ts, openClaimAttempt hits ATTEMPT_ALREADY_OPEN and calls closeOpenAttempts. That closes every open phase, including `finalizing`, and opens a new generation for QA.\n3. The worker wrapper's post-flight then calls record_candidate with its pinned identity. record_candidate is fenced to the current attempt, so it refuses with ATTEMPT_SUPERSEDED. docs/MCP_SERVER.md says the runner records after complete_task \"when QA may already own the REVIEW task\", so this contradicts the documented contract.\n4. task-49ec8755's wrappers record a candidate before every completion landing, even when no qualityGate is configured. The refusal therefore turns the landing into MOE_COMMIT_FAILED_GATE, a rescue ref, and a stopped worker loop.\n5. The qa_approve finalizing hold never fires either, because the claim already closed the attempt.\n\nLIVE EVIDENCE\n- task-9e851: QA generation 2 closed worker generation 1 about 40s after TASK_COMPLETED (2026-09-13 18:43:10Z).\n- task-49ec8755: qa-f0f9ea9e's claim closed attempt-bc658bb5 (generation 1, finalizing) at 2026-09-14 18:29Z.\n\nEXPOSURE. Every seat launched from the repo launcher now runs task-49ec8755's wrapper code, committed as checkpoint 65b2702. Any completion that loses this race stops its worker seat. The bytes survive in a rescue ref and are recovered by the claiming seat's pre-flight.\n\nDECISION NEEDED (architect chooses)\nA. Daemon: a claim by a different worker must not close another worker's finalizing attempt before finalize_attempt. Either refuse the claim with a retryable ATTEMPT_FINALIZING, or keep the finalizing record addressable by record_candidate and finalize_attempt after the supersede.\nB. Wrapper: record a candidate only when a gate will actually run, and treat ATTEMPT_SUPERSEDED at landing as \"QA already owns the row\", not as a gate failure.\nC. Both, for defence in depth.\n\nCONSTRAINTS\n- Keep the finalizing hold's purpose: neither the worker's next claim nor qa_approve may race past an unacknowledged landing.\n- No timeouts based on lastActivityAt or any other idle signal.\n- Coordinate with task-2a7e0f5b, which is editing claimNextTask.ts and attemptStore.ts right now. That overlap is why this card depends on it.\n- Any wrapper-side change must touch both launchers, keep parity, and be coordinated with task-49ec8755's rework.",
+  "definitionOfDone": [
+    "A QA claim of a REVIEW row whose worker attempt is still finalizing no longer breaks that worker's completion landing: the completion commit lands, with no rescue ref and no stopped loop",
+    "Tests cover complete_task, then a QA claim, then record_candidate and finalize_attempt from the worker's pinned identity, and enforce the chosen rule (claim refusal, or a superseded finalizing attempt that stays acknowledgeable)",
+    "qa_approve cannot approve a row whose worker landing has been neither acknowledged nor superseded under the chosen rule, and a test proves it",
+    "docs/MCP_SERVER.md states the rule for claim_next_task, record_candidate and finalize_attempt; npm test and npx tsc --noEmit pass in packages/moe-daemon, and both postflight harnesses and parity checks pass if the launchers change"
+  ],
+  "taskRails": [
+    "Never gate, close or release an attempt based on lastActivityAt or any other idle signal",
+    "If the launchers change, change scripts/moe-agent.sh and scripts/moe-agent.ps1 together and keep parity-check green"
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2a7e0f5b3926471a8a26d999cae96ff4"
+  ],
+  "priority": "HIGH",
+  "order": 77,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-14T19:05:33.152Z",
+  "updatedAt": "2026-09-14T19:05:33.152Z"
+}

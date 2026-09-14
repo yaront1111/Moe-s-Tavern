@@ -9,8 +9,10 @@ import { getAttempt, setAttemptPhase } from '../state/attemptStore.js';
 // =============================================================================
 //
 // A daemon restart cannot see the processes the previous daemon was watching, so
-// every `running` attempt is parked in `reconciling` at startup and its task is
-// HELD instead of released. This tool is how the hold ends in the good case: the
+// every `running` attempt whose task is still assigned to its worker is parked in
+// `reconciling` at startup and its task is HELD instead of released (a running
+// attempt whose seat already gave the task up is closed instead: there is no
+// owner left to hold it for). This tool is how the hold ends in the good case: the
 // runner comes back and names the execution it is still driving, and the attempt
 // returns to `running` with the task never having moved.
 //

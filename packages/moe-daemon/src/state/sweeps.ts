@@ -171,8 +171,9 @@ export function stopReconcileWindowCheck(state: StateManager): void {
  * Close reconciling attempts that no runner ever came back for, and release
  * their tasks for ONE successor each.
  *
- * WHY THIS EXISTS. A daemon restart parks every `running` attempt in
- * `reconciling`: the daemon has lost sight of that execution and holds the task
+ * WHY THIS EXISTS. A daemon restart parks every `running` attempt whose task is
+ * still assigned to its worker in `reconciling` (reconcileRunningAttempts closes
+ * the rest): the daemon has lost sight of that execution and holds the task
  * until a runner reattaches and proves which process it is talking about. If no
  * runner ever comes back, nothing else releases the row — the seat is spared by
  * purgeAllWorkers, third parties are refused by the claim guard, and there is

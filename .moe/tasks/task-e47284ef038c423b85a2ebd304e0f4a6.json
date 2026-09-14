@@ -108,11 +108,17 @@
       "author": "agent",
       "content": "ARCHITECT NOTE (operator session), 2026-09-13 ~21:15Z — corrected premise before planning. Read against task-49ec8755's in-flight working tree (functions absent at HEAD): both wrappers ALREADY treat a pinned attempt that reads back phase closed with matching id/taskId/workerId/generation as a no-op success (finalize_attempt_rpc fast path; Send-MoeFinalize fast path), and a running attempt never sends the RPC. So the daemon's close-on-hand-back of the pinned attempt (task-2a7e0f5b) does NOT end the loop on checkpoint exits. What still ends it: no pinned identity (claim reply without attemptId from an older daemon; a resume onto an attempt already closed or parked reconciling), a pinned record rewritten to reconciling, a file-absent/identity-mismatch read, and a corrupt attempt file for ANY task (both twins parse every file before filtering by taskId). Opposite defect in ps1:  is set by Complete-MoePostflight but never read, so a real finalize failure livelocks on ATTEMPT_FINALIZING refusals (MOE_TASKLESS_NO_LAUNCH reason=claim-failed every poll) instead of stopping like bash. The plan therefore keys the no-op on the attempt PHASE (acknowledge only the seat's own finalizing attempt on the task, found on disk by taskId+workerId whether pinned or not), not on task assignment — a finalizing attempt's task is already unassigned by complete_task, so assignment alone would swallow the one case that must be acknowledged. DoD 1 is satisfied by that stronger rule. Wrapper-only; no daemon change needed (no MCP attempt read exists and none is required). Line numbers in the description are stale; grep anchors are in the plan.",
       "timestamp": "2026-09-13T20:28:53.406Z"
+    },
+    {
+      "id": "comment-2fc92215680f4b8a96c205a09aa6dbf1",
+      "author": "governor-9844430a",
+      "content": "GOVERNOR (governor-9844430a), 2026-09-14 18:36Z. Pointer for whoever claims this card. task-49ec8755's wrapper code is now committed as checkpoint 65b2702 on moe/work-2026-09-13; it is not yet reviewed. worker-a7127038 checked it against HEAD. In both launchers, finalize_attempt_rpc (moe-agent.sh:1978-1979) and Send-MoeFinalize (moe-agent.ps1:1365-1371) already return success when the pinned attempt reads back closed. Details are in comment-9f05598a on task-2a7e0f5b. That agrees with this plan's own corrected scope, so step 1 should re-verify against the landed code and keep only the shapes that still break: no pin, reconciling, generation mismatch, a corrupt sibling file (sh), and ps1 loop-stop parity if it is still missing.",
+      "timestamp": "2026-09-14T18:34:59.622Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:53:40.916Z",
-  "updatedAt": "2026-09-13T22:47:51.788Z",
+  "updatedAt": "2026-09-14T18:34:59.622Z",
   "dependsOn": [
     "task-49ec8755a9ad4fa29c87294adf61804d",
     "task-2a7e0f5b3926471a8a26d999cae96ff4"

@@ -5,7 +5,7 @@ import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { openAttempt, reconcileRunningAttempts, setAttemptPhase } from './attemptStore.js';
 import { MoeError } from '../util/errors.js';
-import type { StateManager } from './StateManager.js';
+import { StateManager } from './StateManager.js';
 import type { ExecutionAttempt, Task, Worker } from '../types/schema.js';
 
 // =============================================================================
@@ -250,5 +250,93 @@ describe('purgeAllWorkers + startup attempt reconciliation', () => {
     // Whatever the resume path answers, it is not the third-party refusal.
     expect(result).toBeDefined();
     expect(readTaskFile('task-L').assignedWorkerId).toBe('worker-W');
+  });
+
+  // ---------------------------------------------------------------------------
+  // The boot rule. A restart holds a task only for a seat that still owns it: a
+  // running attempt parks only while its task is still assigned to the attempt's
+  // worker. An attempt whose seat already gave the task up is an orphan, whether
+  // it is still `running` or an earlier restart already parked it: holding the
+  // row for it would hold it for nobody, so startup closes it and does not spare
+  // that seat. Seeded on disk before load, never by clearing a seat through
+  // updateTask, which would close the attempt while seeding and let these cases
+  // pass vacuously.
+  // ---------------------------------------------------------------------------
+
+  /** An attempt in `phase` for quiet worker-W on a task worker-W does not hold. */
+  async function seedOrphanedAttempt(
+    assignee: string | null | undefined,
+    phase: 'running' | 'reconciling'
+  ): Promise<void> {
+    if (assignee !== undefined) h.createTask({ id: 'task-L', status: 'WORKING', assignedWorkerId: assignee });
+    if (assignee) h.createWorker({ id: assignee, status: 'CODING', currentTaskId: 'task-L' });
+    h.createWorker({ id: 'worker-W', status: 'IDLE', currentTaskId: null, lastActivityAt: QUIET_FOR_HOURS });
+    await h.state.load();
+    const orphan = await openAttempt(h.state, {
+      id: 'attempt-L-1',
+      taskId: 'task-L',
+      workerId: 'worker-W',
+      runnerId: 'runner-pilot',
+      workspace: h.testDir,
+    });
+    if (phase === 'reconciling') await setAttemptPhase(h.state, orphan.id, 'reconciling');
+  }
+
+  it.each([
+    { phase: 'running', shape: 'unassigned', assignee: null },
+    { phase: 'running', shape: 'assigned to another worker', assignee: 'worker-9' },
+    { phase: 'running', shape: 'missing', assignee: undefined },
+    { phase: 'reconciling', shape: 'unassigned', assignee: null },
+    { phase: 'reconciling', shape: 'assigned to another worker', assignee: 'worker-9' },
+  ] as const)('closes, never holds, a $phase attempt whose task is $shape', async ({ phase, assignee }) => {
+    await seedOrphanedAttempt(assignee, phase);
+
+    const parked = await reconcileRunningAttempts(h.state);
+    await h.state.purgeAllWorkers();
+
+    // The return value lists what was PARKED; a closed orphan is not in it.
+    expect(parked).toEqual([]);
+    expect(readAttemptFile('attempt-L-1').phase).toBe('closed');
+    expect(fs.existsSync(workerFile('worker-W'))).toBe(false);
+    expect(h.state.workers.has('worker-W')).toBe(false);
+    // The row is left as found: never yanked from the worker that holds it now.
+    expect(h.state.getTask('task-L')?.assignedWorkerId).toBe(assignee);
+
+    // Durable: a fresh daemon reads the close back off disk.
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    restarted.clearEmitter();
+    expect(restarted.attempts.get('attempt-L-1')?.phase).toBe('closed');
+  });
+
+  it('keeps holding an attempt an earlier restart parked for its still-assigned owner', async () => {
+    await seedOwnedTask();
+    await reconcileRunningAttempts(h.state);
+    const parkedAt = readAttemptFile('attempt-L-1').lastPhaseAt;
+
+    const parkedAgain = await reconcileRunningAttempts(h.state);
+    await h.state.purgeAllWorkers();
+
+    // A second restart neither closes the hold nor restarts its window clock.
+    expect(parkedAgain).toEqual([]);
+    expect(readAttemptFile('attempt-L-1')).toMatchObject({ phase: 'reconciling', lastPhaseAt: parkedAt });
+    expect(fs.existsSync(workerFile('worker-W'))).toBe(true);
+    expect(readTaskFile('task-L').assignedWorkerId).toBe('worker-W');
+  });
+
+  it('survives an orphan it cannot close: startup completes and the attempt stays running', async () => {
+    await seedOrphanedAttempt(null, 'running');
+    const realWrite = h.state.writeEntity.bind(h.state);
+    vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+      if (args[0] === 'attempts') throw new Error('EPERM: attempt-L-1 is unwritable');
+      return realWrite(...args);
+    });
+
+    await expect(restartDaemonStartup()).resolves.toBeUndefined();
+
+    vi.restoreAllMocks();
+    // Benign: the claim guard holds a row only for a still-assigned owner, and
+    // the next claim of the row closes a leftover attempt before it opens its own.
+    expect(readAttemptFile('attempt-L-1').phase).toBe('running');
   });
 });

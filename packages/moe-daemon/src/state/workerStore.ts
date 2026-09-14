@@ -330,7 +330,10 @@ function workersHoldingOpenAttempts(state: StateManager): Set<string> {
  * Purge stale workers at startup. Since the daemon is (re)starting, a worker
  * record is stale UNLESS its seat still owns a non-closed attempt — which after
  * reconcileRunningAttempts means an execution the daemon has lost sight of but
- * has NOT established is gone. Those seats are spared whole: file, map entry,
+ * has NOT established is gone. (That pass closes a running or already-parked
+ * attempt whose task is missing or no longer assigned to its worker, so a seat
+ * that already handed its task back is never spared for it.) Those seats are
+ * spared whole: file, map entry,
  * currentTaskId, and their task left WORKING and assigned, because destroying
  * them would hand live work to a second worker while the first is still
  * running (the exact restart-during-a-long-build failure).

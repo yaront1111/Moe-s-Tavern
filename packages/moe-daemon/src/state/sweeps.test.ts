@@ -17,7 +17,8 @@ import type { ExecutionAttempt, ExecutionAttemptPhase, Task } from '../types/sch
 // The reconcile-window sweep: an attempt parked in `reconciling` must not stay
 // there forever.
 //
-// A daemon restart parks every running attempt in `reconciling` — the daemon
+// A daemon restart parks every running attempt whose task is still assigned to
+// its worker in `reconciling` — the daemon
 // has lost sight of that execution and holds the task until a runner reattaches
 // and proves which process it is talking about. If no runner ever comes back,
 // nothing else releases the row: the seat is spared by purgeAllWorkers, the
@@ -294,12 +295,21 @@ describe('reconcile-window sweep', () => {
   it('closes a stale attempt but never yanks a row a different worker now holds', async () => {
     // A dangling reconciling attempt whose task has since been handed to
     // someone else. Closing the stale record is right; releasing the row would
-    // yank a live worker, which a rail forbids outright.
-    await seedHeldTask({ phase: 'reconciling', ageMs: WINDOW + 1 });
+    // yank a live worker, which a rail forbids outright. Seeded straight onto
+    // disk: handing the row over through updateTask would close the attempt at
+    // the seat clear, leaving this sweep nothing to find.
+    h.createTask({ id: 'task-L', status: 'WORKING', assignedWorkerId: 'worker-Z' });
     h.createWorker({ id: 'worker-Z', status: 'CODING', currentTaskId: 'task-L' });
     await h.state.load();
-    await h.state.updateTask('task-L', { assignedWorkerId: null });
-    await h.state.updateTask('task-L', { assignedWorkerId: 'worker-Z' });
+    const stale = await openAttempt(h.state, {
+      id: 'attempt-L-1',
+      taskId: 'task-L',
+      workerId: 'worker-W',
+      runnerId: 'runner-1',
+      workspace: h.testDir,
+    });
+    await setAttemptPhase(h.state, stale.id, 'reconciling');
+    await backdatePhase(stale.id, WINDOW + 1);
 
     const closed = await checkReconcileWindow(h.state, NOW);
 

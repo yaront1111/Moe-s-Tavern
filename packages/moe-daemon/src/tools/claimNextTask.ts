@@ -89,6 +89,44 @@ async function handBackUnrecordedClaim(state: StateManager, taskId: string, work
 }
 
 /**
+ * The explicit-taskId refusal for a row a daemon restart is HOLDING. A task
+ * whose attempt is `reconciling` is held for its owner: the restart parked it
+ * because it lost sight of that execution, and the owner's runner may be seconds
+ * from reattaching — so handing the row to anyone else would start a second
+ * execution of live work.
+ *
+ * Scoped to the TASK, NOT to the caller: that is the whole difference from the
+ * finalizing hold, which stops a worker taking MORE work; copying that scope
+ * here would let a third party walk straight in. The holder itself is exempt:
+ * its own resume is not a takeover (reattachment has its own tool).
+ *
+ * And ONLY while the row is still assigned to the holder. The hold exists for a
+ * seat that owns its task; a reconciling attempt on a row that is unassigned or
+ * assigned to somebody else protects nobody — it is an orphan from a hand-back
+ * that predates closing on hand-back. Such a claim falls through to the ordinary
+ * checks: an unassigned row is claimed, and openClaimAttempt closes the leftover
+ * before opening the successor generation, exactly as the ranked pool already
+ * does; a row a live worker holds is refused as assigned. Only this explicit
+ * path needs a guard at all: a held row stays assigned to a seat the startup
+ * purge spared, so isTaskClaimable keeps it out of the ranked pool.
+ *
+ * THROWN, like the finalizing refusal, so McpAdapter surfaces { tool, codeName }
+ * on the wire for both. The caller runs it before any assignment write, so a
+ * refused claim can never have changed an owner.
+ */
+function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId: string | undefined): void {
+  const holding = listAttempts(state, task.id).find((a) => a.phase === 'reconciling');
+  if (!holding || holding.workerId === workerId) return;
+  if (task.assignedWorkerId !== holding.workerId) return;
+  throw attemptReconcilingRefusal({
+    attemptId: holding.id,
+    generation: holding.generation,
+    taskId: holding.taskId,
+    workerId: holding.workerId,
+  });
+}
+
+/**
  * The refusal an explicit-taskId claim gets when the dependsOn gate withholds
  * the task. A prerequisite that has not reached DONE keeps the refusal this gate
  * has always given, word for word; it comes first and lists only such ids. Only
@@ -243,42 +281,17 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           }
         }
 
-        // A task whose attempt is `reconciling` is HELD for its owner. A daemon
-        // restart parked it there because it lost sight of that execution, and
-        // the owner's runner may be seconds from reattaching — so handing the
-        // row to anyone else would start a second execution of live work.
-        //
-        // Scoped to the TASK, NOT to the caller: that is the whole difference
-        // from the finalizing hold directly above, which stops a worker taking
-        // MORE work. Copying that scope here would let a third party walk
-        // straight in. Only the explicit-taskId path needs it — the ranked pool
-        // never offers a held row, because the spared owner is still present in
-        // the worker map and isTaskClaimable therefore excludes it.
-        //
-        // Fires before any ranking, eligibility scan or assignment write, so a
-        // refused claim can never have changed an owner. THROWN, like the
-        // finalizing refusal, so McpAdapter surfaces { tool, codeName } on the
-        // wire for both.
-        if (params.taskId) {
-          const holding = listAttempts(state, params.taskId).find((a) => a.phase === 'reconciling');
-          // The owner is exempt: its own resume is not a takeover (reattachment
-          // has its own tool, and this refusal is for third parties).
-          if (holding && holding.workerId !== params.workerId) {
-            throw attemptReconcilingRefusal({
-              attemptId: holding.id,
-              generation: holding.generation,
-              taskId: holding.taskId,
-              workerId: holding.workerId,
-            });
-          }
-        }
-
         let tasks: Task[];
         if (params.taskId) {
           const requested = state.getTask(params.taskId);
           if (!requested) {
             throw notFound('Task', params.taskId);
           }
+          // A row a daemon restart is holding for its still-assigned owner is
+          // refused to third parties before any other check or write. A
+          // reconciling attempt on a row its holder no longer owns holds
+          // nothing (see assertNotHeldByReconciliation).
+          assertNotHeldByReconciliation(state, requested, params.workerId);
           if (!statuses.includes(requested.status)) {
             throw invalidState('Task', requested.status, statuses.join('|'));
           }

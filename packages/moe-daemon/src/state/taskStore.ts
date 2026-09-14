@@ -34,6 +34,7 @@ import {
   trimComments,
 } from './validators.js';
 import { runDependencyUnblock } from './dependencyUnblock.js';
+import { closeHandedBackAttempts } from './attemptStore.js';
 
 /** Hard cap on declared dependency ids per task (dependsOn / blockedOnTaskIds). */
 export const MAX_TASK_DEPENDENCY_IDS = 20;
@@ -222,6 +223,36 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
   return task;
 }
 
+/**
+ * Close on hand-back. A write that turned a non-null assignedWorkerId into null
+ * gave that seat up, so the seat's execution ends here too — at the one
+ * chokepoint every hand-back already shares, whether it cleared the seat through
+ * the status-change cascade or wrote an explicit null with no status change
+ * (qa_reject's park, unblock_worker's seat-only arm, the sweeps' releases, a
+ * claim handing back a seat it could not record). Keyed on the before and after
+ * assignment, never on shouldClearWorker, which is false for exactly those
+ * explicit-null writes. A claim (null to worker), a kept seat and a same-worker
+ * write close nothing, and `finalizing` survives by construction
+ * (closeHandedBackAttempts spares it): complete_task's own REVIEW write clears
+ * its seat while that landing hold is still open.
+ *
+ * Logged, never thrown: the task write is already durable, so failing the tool
+ * now would report an error for a hand-back that happened. The leftover is
+ * benign — the next claim of the row closes it before opening its own, and a
+ * restart closes a running attempt whose seat no longer holds its task.
+ */
+async function closeAttemptsOnHandBack(state: StateManager, before: Task, after: Task): Promise<void> {
+  if (!before.assignedWorkerId || after.assignedWorkerId) return;
+  try {
+    await closeHandedBackAttempts(state, after.id);
+  } catch (error) {
+    logger.error(
+      { taskId: after.id, previousWorkerId: before.assignedWorkerId, error },
+      'Failed to close the attempt of a handed-back task; the next claim of the row closes it'
+    );
+  }
+}
+
 export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
@@ -349,6 +380,10 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
       });
     }
   }
+
+  // A write that dropped the seat ends that seat's execution (see
+  // closeAttemptsOnHandBack). Before emit, so TASK_UPDATED publishes after it.
+  await closeAttemptsOnHandBack(state, task, updated);
 
   // actorWorkerId is threaded from the tool that knows who called it. Without
   // it every task event was written with no actor and the per-worker audit
