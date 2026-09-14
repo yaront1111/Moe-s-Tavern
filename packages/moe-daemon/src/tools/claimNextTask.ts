@@ -5,7 +5,14 @@ import { MoeError, missingRequired, notAllowed, invalidState, notFound } from '.
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
-import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
+import {
+  blockingHold,
+  finalizingAttemptsByTask,
+  foreignFinalizingAttempt,
+  foreignFinalizingRefusal,
+  heldTaskRefusal,
+  isClaimGatedByDependsOn
+} from '../util/claimEligibility.js';
 import { dependencyShortfall, unmetDependsOn } from '../state/dependencyUnblock.js';
 import { describeMissingEvidence } from '../delivery/policy.js';
 import {
@@ -39,10 +46,18 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
  *  2. ATTEMPT_ALREADY_OPEN on a resume — this worker held the seat before this
  *     claim and the open attempt is its own: adopt it. A respawned CLI coming
  *     back to its task is the same execution, not a second one.
- *  3. ATTEMPT_ALREADY_OPEN otherwise: it belongs to a seat that was given up
- *     without closing it (a crash between a release's two writes, or a path
- *     that does not close yet), so close it through the shared helper and open
- *     the successor generation.
+ *  3. ATTEMPT_ALREADY_OPEN otherwise: a `running` or `reconciling` leftover of
+ *     a seat that was given up without closing it (a crash between a release's
+ *     two writes, or a hand-back that predates closing on hand-back), so close
+ *     it through the shared helper and open the successor generation.
+ *
+ * Another worker's `finalizing` attempt is never such a leftover: it is that
+ * worker's landing, not yet acknowledged, and only moe.finalize_attempt or its
+ * runner's moe.deregister_worker may end it. The claim path refuses or skips
+ * that row before any write (util/claimEligibility.ts), so arm 3 throws the same
+ * refusal instead of closing it — a backstop for a row that reached the
+ * assignment write some other way. The caller's handBackUnrecordedClaim then
+ * undoes that write, and its seat clear closes only running/reconciling.
  * Any other failure propagates; the caller treats it as fatal to the claim.
  */
 async function openClaimAttempt(
@@ -67,6 +82,8 @@ async function openClaimAttempt(
   }
   const open = currentAttempt(state, taskId);
   if (open && resumingOwnSeat && open.workerId === workerId) return open;
+  const landing = foreignFinalizingAttempt(finalizingAttemptsByTask(state), taskId, workerId);
+  if (landing) throw foreignFinalizingRefusal(landing);
   await closeOpenAttempts(state, taskId);
   return openAttempt(state, params);
 }
@@ -265,9 +282,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // can never have changed an owner. THROWN: the held-out acceptance
           // case for this boundary requires a MoeError, and the retryable rail
           // now travels in context.retryable rather than in the response shape.
-          // Scoped to this worker by construction — another worker's
-          // finalizing attempt is none of this caller's business (qa_approve's
-          // hold is the task-scoped one).
+          // Scoped to this worker by construction. Another worker's finalizing
+          // attempt does not hold THIS worker's seat; it holds ITS task, and the
+          // task-scoped third-party hold in the claim path below keeps every
+          // other seat off that row (explicit-taskId refusal, ranked-pool skip —
+          // util/claimEligibility.ts), as qa_approve's hold keeps approval off it.
           const finalizing = listAttempts(state).find(
             (a) => a.workerId === params.workerId && a.phase === 'finalizing'
           );
@@ -309,6 +328,16 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               `Task ${requested.id} is parked for human review (reopen/critique budget exhausted). A human must reopen or approve it before it re-enters the QA queue.`
             );
           }
+          // A row whose attempt is still finalizing under ANOTHER worker is that
+          // worker's unacknowledged landing, not a free row. Refused here, before
+          // the dependsOn gate, the eviction branches and the assignment write —
+          // openClaimAttempt would otherwise close the attempt out from under its
+          // runner. Retryable: the hold ends at moe.finalize_attempt or at its
+          // runner's moe.deregister_worker (util/claimEligibility.ts).
+          const landing = foreignFinalizingAttempt(finalizingAttemptsByTask(state), requested.id, params.workerId);
+          if (landing) {
+            throw foreignFinalizingRefusal(landing);
+          }
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
           // dependsOn gates WORKING-status claims: an explicit-taskId claim of
@@ -340,6 +369,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             const w = state.getWorker(params.workerId);
             adjacentEpicId = w?.epicId || undefined;
           }
+          const finalizingByTask = finalizingAttemptsByTask(state);
           tasks = Array.from(state.tasks.values())
             .filter((t) => statuses.includes(t.status))
             .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
@@ -354,6 +384,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // pool skips it silently, and only an explicit-taskId claim is
             // refused with the detail (dependsOnClaimRefusal).
             .filter((t) => !isClaimGatedByDependsOn(state, t))
+            // Finalizing hold — the SAME predicate as wait_for_task's matcher. A
+            // row another worker's landing still holds is SKIPPED, never refused:
+            // the wrappers claim only through this pool, and a thrown refusal
+            // here reads to the sh wrapper as a dead daemon ("claim_next_task
+            // stopped answering").
+            .filter((t) => !foreignFinalizingAttempt(finalizingByTask, t.id, params.workerId))
             .sort((a, b) => {
               // When preferAdjacentInEpic is on and a hint epic is set,
               // rank in-epic candidates ahead of out-of-epic. This lets a

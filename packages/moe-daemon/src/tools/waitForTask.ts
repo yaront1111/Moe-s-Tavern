@@ -4,7 +4,13 @@ import type { ChatMessage, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { noTeamMembershipRefusal, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
-import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
+import {
+  blockingHold,
+  finalizingAttemptsByTask,
+  foreignFinalizingAttempt,
+  heldTaskRefusal,
+  isClaimGatedByDependsOn
+} from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {

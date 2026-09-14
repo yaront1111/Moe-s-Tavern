@@ -503,3 +503,23 @@ export async function closeHandedBackAttempts(
   }
   return closed;
 }
+
+/**
+ * Tell the board and parked moe.wait_for_task waiters that a task's finalizing
+ * boundary has ended — this store's one deliberate event (see the header).
+ * While an attempt is finalizing, claim_next_task refuses or skips its task for
+ * every seat but the attempt's own worker, and wait_for_task hides it the same
+ * way; closing the attempt writes no task, so without this nothing would tell a
+ * waiter the hold lifted.
+ *
+ * Re-publishes the task exactly as it is: no activity row, no updatedAt change,
+ * nothing written. A task that no longer exists announces nothing. Call it only
+ * AFTER the close's write has published the closed record, so no subscriber can
+ * observe the attempt still open; state.emit isolates subscriber errors, so a
+ * failing subscriber never fails the caller.
+ */
+export function announceAttemptClosed(state: StateManager, taskId: string): void {
+  const task = state.getTask(taskId);
+  if (!task) return;
+  state.emit({ type: 'TASK_UPDATED', payload: task });
+}

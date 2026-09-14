@@ -24,6 +24,7 @@ import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { startStepTool } from '../tools/startStep.js';
 import { completeStepTool } from '../tools/completeStep.js';
 import { completeTaskTool } from '../tools/completeTask.js';
+import { finalizeAttemptTool } from '../tools/finalizeAttempt.js';
 import { qaApproveTool } from '../tools/qaApprove.js';
 import { qaRejectTool } from '../tools/qaReject.js';
 import { setTaskStatusTool } from '../tools/setTaskStatus.js';
@@ -108,6 +109,20 @@ describe('lifecycle E2E', () => {
     }
   }
 
+  /**
+   * The wrapper's post-flight after complete_task: acknowledge the landing with
+   * the attempt identity the completion returned. The attempt stays `finalizing`
+   * until then and no seat other than its worker may claim the row, so every QA
+   * claim below follows one of these.
+   */
+  async function finalizeLanding(taskId: string, workerId: string, completed: unknown): Promise<void> {
+    const { attemptId, generation } = completed as { attemptId: string; generation: number };
+    await finalizeAttemptTool(state).handler(
+      { taskId, workerId, runnerId: workerId, attemptId, generation, outcome: 'nothing-to-commit' },
+      state
+    );
+  }
+
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-e2e-'));
     moePath = path.join(testDir, '.moe');
@@ -142,7 +157,7 @@ describe('lifecycle E2E', () => {
     // 3. Worker steps + complete_task
     await workThroughSteps('task-e2e', 'worker-a');
     const completeTask = completeTaskTool(state);
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
+    await finalizeLanding('task-e2e', 'worker-a', await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state));
     expect(state.getTask('task-e2e')!.status).toBe('REVIEW');
 
     // 4. QA claim + get_context + approve → DONE
@@ -177,7 +192,7 @@ describe('lifecycle E2E', () => {
     await workThroughSteps('task-e2e', 'worker-a');
 
     const completeTask = completeTaskTool(state);
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
+    await finalizeLanding('task-e2e', 'worker-a', await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state));
 
     // QA claim + get_context + reject
     const claim = claimNextTaskTool(state);
@@ -200,7 +215,7 @@ describe('lifecycle E2E', () => {
     await state.updateTask('task-e2e', { contextFetchedBy: ['worker-a'] });
     expect(state.getTask('task-e2e')!.implementationPlan.every((s) => s.status === 'PENDING')).toBe(true);
     await workThroughSteps('task-e2e', 'worker-a');
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
+    await finalizeLanding('task-e2e', 'worker-a', await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state));
 
     await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-e2e' }, state);
     await state.updateTask('task-e2e', { contextFetchedBy: ['qa-1'] });
@@ -225,7 +240,7 @@ describe('lifecycle E2E', () => {
     await approveAndClaimWorker('task-e2e', 'worker-a');
     await workThroughSteps('task-e2e', 'worker-a');
     const completeTask = completeTaskTool(state);
-    await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
+    await finalizeLanding('task-e2e', 'worker-a', await completeTask.handler({ taskId: 'task-e2e', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state));
 
     const claim = claimNextTaskTool(state);
     const qaReject = qaRejectTool(state);
