@@ -22,6 +22,7 @@ import { logger } from './util/logger.js';
 import { VERSION } from './util/version.js';
 import { writeInitFiles } from './generated/initFiles.js';
 import { writeSkillFiles } from './generated/skillFiles.js';
+import { linkClaudeSkills } from './util/claudeSkills.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
@@ -991,6 +992,10 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 
   // Write the curated skill pack (.moe/skills/<name>/SKILL.md + manifest)
   writeSkillFiles(moePath);
+
+  // Expose that pack at .claude/skills/ so nextAction.recommendedSkill names
+  // resolve in the host's Skill tool instead of erroring "Unknown skill".
+  linkClaudeSkills(projectPath);
 
   // Write global install config so other projects can find this installation
   writeGlobalConfig();

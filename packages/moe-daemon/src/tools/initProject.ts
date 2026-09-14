@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { writeInitFiles } from '../generated/initFiles.js';
 import { writeSkillFiles } from '../generated/skillFiles.js';
 import { writeClaudeHook } from '../util/claudeHook.js';
+import { linkClaudeSkills } from '../util/claudeSkills.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {
   return {
@@ -172,6 +173,14 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
 
       // Write the curated skill pack (.moe/skills/<name>/SKILL.md + manifest)
       writeSkillFiles(moePath);
+
+      // Expose that pack at .claude/skills/ so the names the daemon puts in
+      // nextAction.recommendedSkill actually resolve. Unconditional, unlike
+      // the hook below: the recommendations are emitted to every seat
+      // regardless of enableClaudeHook, so leaving them unresolvable is the
+      // bug, not a Claude-specific opt-in. Inert either way — a skill only
+      // does something when an agent chooses to load it.
+      linkClaudeSkills(projectPath);
 
       // Write optional Claude Code PreToolUse hook files only when explicitly
       // requested. Phase 6 is defense-in-depth; init_project must not impose
