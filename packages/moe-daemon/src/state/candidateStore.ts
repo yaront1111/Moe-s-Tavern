@@ -38,7 +38,7 @@ import { validateEntityId } from '../util/sanitize.js';
 import { getAttempt } from './attemptStore.js';
 
 /** The sha shape tools/recordCommit.ts already accepts (7-40 hex) — deliberately the same one. */
-const SHA_RE = /^[0-9a-f]{7,40}$/i;
+export const SHA_RE = /^[0-9a-f]{7,40}$/i;
 /** The bound tools/recordCommit.ts puts on a ref. */
 const MAX_TARGET_CHARS = 255;
 

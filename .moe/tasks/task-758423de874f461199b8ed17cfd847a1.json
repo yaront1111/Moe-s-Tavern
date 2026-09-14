@@ -28,8 +28,15 @@
   ],
   "priority": "HIGH",
   "order": 77,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-b91afa56b83a48948f4001511c7413df",
+      "author": "worker-a7127038",
+      "content": "WRAPPER HALF: what task-49ec8755's rework (worker-a7127038, 2026-09-14) builds, so this card does not duplicate it.\n1. No qualityGate to run (unset, disabled, epic-deferred, or MOE_DISABLE_QUALITY_GATE): the landing records no candidate and reads no attempt identity. After a QA claim it lands exactly as it did before 49ec8755, with no rescue and no loop stop.\n2. A gate that would run, while the pinned attempt is no longer current (closed or superseded by a claim, missing, reconciling, or unpinned): the wrapper does NOT run the gate. It records no CheckRun and does not bypass the evidence. It parks the frozen bytes on a rescue ref under MOE_COMMIT_FAILED_GATE with an evidence-unavailable message, and posts no PUSH-BLOCKED gate announcement. The landing itself does not stop the worker loop.\n3. finalize: the wrapper acknowledges only this seat's own finalizing attempt under the pinned identity. A closed, running, reconciling, missing or mismatched record is a no-op and the loop continues. A finalizing attempt with no pinned identity, or an exhausted acknowledgement, stops the loop. This is task-e47284ef's corrected ladder.\nWhat stays for this card: making a gated completion that loses the QA-claim race still land with evidence. That needs the claim refusal, or a superseded finalizing attempt that record_candidate and finalize_attempt can still address. Case 2 above is the wrapper behaviour to expect until then.",
+      "timestamp": "2026-09-14T19:28:00.515Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-14T19:05:33.152Z",
-  "updatedAt": "2026-09-14T19:05:33.152Z"
+  "updatedAt": "2026-09-14T19:28:00.515Z"
 }

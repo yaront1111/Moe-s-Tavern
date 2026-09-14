@@ -1,7 +1,7 @@
 // Serving-only evidence. Never attach it to a stored Task or write it to disk.
 import type { Candidate, CheckRun, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import type { StateManager } from './StateManager.js';
-import { listCandidatesForTask } from './candidateStore.js';
+import { listCandidatesForTask, SHA_RE as CANDIDATE_SHA_RE } from './candidateStore.js';
 import { listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
@@ -14,7 +14,8 @@ export interface TaskDelivery {
   attemptPhase?: ExecutionAttempt['phase'];
 }
 
-const isSha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
+const isCandidateSha = (value: unknown): value is string => typeof value === 'string' && CANDIDATE_SHA_RE.test(value);
+const isLandedRevision = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
 
 /** Bad persisted metadata must not take down a board connection. No record is repaired here. */
@@ -38,7 +39,7 @@ function candidateFor(state: StateManager, task: Task): Candidate | undefined {
     const candidates = listCandidatesForTask(state, task.id);
     return valid(candidates[candidates.length - 1], c =>
       isString(c.id) && isString(c.attemptId) && isString(c.createdAt) &&
-      isSha(c.treeSha) && isSha(c.baseRevision));
+      isCandidateSha(c.treeSha) && isCandidateSha(c.baseRevision));
   });
 }
 
@@ -54,7 +55,7 @@ function checkFor(state: StateManager, task: Task, candidate: Candidate): TaskDe
 function receiptFor(state: StateManager, task: Task, candidate: Candidate): TaskDelivery['deliveryReceipt'] {
   return readEvidence(task.id, 'receipt', () => {
     const receipt = valid(getDeliveryReceiptForCandidate(state, candidate.id), r =>
-      isString(r.target) && isSha(r.landedRevision));
+      isString(r.target) && isLandedRevision(r.landedRevision));
     return receipt ? { target: receipt.target, landedRevision: receipt.landedRevision } : undefined;
   });
 }

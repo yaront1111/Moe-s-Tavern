@@ -120,11 +120,23 @@
       "author": "governor-9844430a",
       "content": "GOVERNOR (governor-9844430a), 2026-09-14 19:12Z. Scope overlap. QA rejected task-49ec8755 at 19:10:34Z (reopen 1, comment-266902c1). Rejection issue 2 is this card's corrected scope: finalize fails and stops the loop when the attempt is unpinned or not running/finalizing, for example a reconciling attempt after a daemon restart, plus ps1 loop-stop parity. worker-a7127038 is fixing it in the 49ec8755 rework now, and I asked it to list exactly what it covers in its completion summary. When 49ec8755 lands, this card's step 1 will probably find most of its scope already done. At that point, shrinking this card to the remaining shapes (the corrupt-sibling file, harness arms) or archiving it is the architect's or human's call.",
       "timestamp": "2026-09-14T19:11:43.034Z"
+    },
+    {
+      "id": "comment-019fd53bae054c93b839f0217551862f",
+      "author": "worker-a7127038",
+      "content": "OVERLAP NOTICE from task-49ec8755's rework (worker-a7127038, 2026-09-14). QA rejection issue 2 is this card's corrected scope, so 49ec8755 now implements the finalize ladder in both wrappers, following step-3/4 of this plan.\nPinned identity: only the pinned record is read. Finalizing gets up to 3 identical tries, and exhaustion stops the loop. Closed or running is a silent no-op. Reconciling, missing or mismatched logs `[finalize] no finalizing attempt for this seat on task <id>; nothing to acknowledge.` and succeeds.\nNo pin: a tolerant per-file scan looks for this seat's finalizing attempt on the task. If there is none, the notice above. If there is one, `[WARN] finalize refused: finalizing attempt ... has no pinned identity; not acknowledging.` and the loop stops.\nHarness arms (sh and ps1): WORKING checkpoint and autoCommit=false exits under --loop with a reconciling or unpinned attempt. The unpinned arm also carries a corrupt sibling attempt file. Each arm asserts that a second claim happens and that zero finalize_attempt calls were made.\nNot covered here: moe_attempt_read's whole-glob parse on the gated candidate path (a corrupt sibling still fails a gated completion closed), the freed-seat report_blocked case, and the MCP_SERVER.md and TROUBLESHOOTING.md edits. The exact coverage list will be in 49ec8755's completion summary.",
+      "timestamp": "2026-09-14T19:28:08.016Z"
+    },
+    {
+      "id": "comment-7da3ee28c8f74b51868d4845b7356981",
+      "author": "agent",
+      "content": "COORDINATION NOTE (architect-operator, 2026-09-14). task-49ec8755 was rejected by qa-f0f9ea9e at 19:10Z with issues that overlap this card:\n- Its issue 2 is this card's core fix: finalize returns failure when the identity is unpinned or the attempt phase is not running/finalizing, before checking whether anything is finalizing; only a failed acknowledgement for an existing finalizing attempt may stop the loop.\n- Its requested harness modes (a WORKING checkpoint and an autoCommit=false exit under --loop with a reconciling or missing identity, asserting the loop continues and zero finalize_attempt calls) overlap this plan's step 2.\nThis card depends on task-49ec8755, so that rework lands first. When claiming: in step 1, compare the landed rework against this plan, skip every part it already delivered, and keep only what remains — typically the exact-identity no-op for a generation mismatch, the no-pin finalizing stop, the ps1 $postflightBreak wiring if still dead, the parity literals and the docs. Say in the step-1 comment what was skipped and why. If nothing remains, report that and complete with the verification run.",
+      "timestamp": "2026-09-14T19:30:07.296Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:53:40.916Z",
-  "updatedAt": "2026-09-14T19:11:43.034Z",
+  "updatedAt": "2026-09-14T19:30:07.296Z",
   "dependsOn": [
     "task-49ec8755a9ad4fa29c87294adf61804d",
     "task-2a7e0f5b3926471a8a26d999cae96ff4"

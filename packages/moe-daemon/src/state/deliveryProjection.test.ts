@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { deliveryProjection } from './deliveryProjection.js';
+import { recordCandidate } from './candidateStore.js';
+import { recordCheckRun } from './checkRunStore.js';
+import { recordDeliveryReceipt } from './receiptStore.js';
 import type { Candidate, CheckRun, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import { createServer } from 'http';
 import { once } from 'events';
@@ -58,6 +61,44 @@ describe('deliveryProjection', () => {
   it('projects the current candidate, latest check, receipt and owning attempt', () => {
     seed();
     expect(deliveryProjection(h.state, task)).toEqual(expected);
+  });
+
+  it.each([7, 12, 39, 40].flatMap(length => [
+    [length, 'tree', SHA.slice(0, length), BASE] as const,
+    [length, 'base', SHA, BASE.slice(0, length)] as const,
+    [length, 'tree and base', SHA.slice(0, length), BASE.slice(0, length)] as const,
+  ]))('projects store-valid %i-character %s tokens with a closed owner', async (_, __, treeSha, baseRevision) => {
+    h.state.attempts.set(attempt.id, { ...attempt, phase: 'closed' });
+    await recordCandidate(h.state, { ...candidate, treeSha, baseRevision });
+    await recordCheckRun(h.state, { ...check, treeSha });
+    await recordDeliveryReceipt(h.state, receipt);
+    expect(deliveryProjection(h.state, task)).toEqual({
+      ...expected,
+      currentCandidate: { id: candidate.id, treeSha, shortSha: treeSha.slice(0, 8), baseRevision },
+      attemptPhase: 'closed',
+    });
+  });
+
+  it.each(['123456', SHA + 'a', 'g'.repeat(7), 1234567])('omits invalid candidate token %s without coercion', value => {
+    seed();
+    for (const field of ['treeSha', 'baseRevision']) {
+      h.state.candidates.set(candidate.id, { ...candidate, [field]: value } as Candidate);
+      expect(deliveryProjection(h.state, task)).toEqual({ attemptPhase: 'finalizing' });
+    }
+  });
+
+  it.each([7, 12, 39])('omits a %i-character receipt revision without losing other evidence', length => {
+    seed();
+    h.state.receipts.set(receipt.id, { ...receipt, landedRevision: SHA.slice(0, length) });
+    const { deliveryReceipt: _, ...withoutReceipt } = expected;
+    expect(deliveryProjection(h.state, task)).toEqual(withoutReceipt);
+  });
+
+  it.each([SHA.toLowerCase(), SHA.slice(0, 7)])('omits a check bound to a different SHA spelling %s', treeSha => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, treeSha });
+    const { latestCheckRun: _, ...withoutCheck } = expected;
+    expect(deliveryProjection(h.state, task)).toEqual(withoutCheck);
   });
 
   it('returns undefined with no evidence and preserves byte-identical task payloads', () => {

@@ -105,7 +105,7 @@
       "completedAt": "2026-09-13T22:54:38.333Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -160,22 +160,37 @@
       "author": "governor-9844430a",
       "content": "GOVERNOR (governor-9844430a), 2026-09-13 22:57Z. Landing note for the reviewer.\n- The row entered REVIEW at 22:56:08Z. Its task.commits hold only checkpoints (e33c9d1, 2fb9593, 868e864). The open attempt-a66814a5 (generation 3, worker-c8e523ea) is finalizing.\n- worker-c8e523ea is an interactive Codex seat, so the completion commit for this rework round lands only after the operator exits Codex. Closing the window leaves a rescue ref instead.\n- Check task.commits for the feat commit before approving. A QA claim closes the finalizing attempt.\n- The worker's handoff is #general msg-1ffae223: 21 new cases, 9 red on the old code, daemon suite 2024 passed / 2 skipped, plugin 197/197, tsc exit 0, 9 scratch mutants killed. Its artifacts are at D:/moe-9e851-reopen1-20260914, outside the repo.",
       "timestamp": "2026-09-13T22:56:49.563Z"
+    },
+    {
+      "id": "comment-02a6e2536c8c479d8be050f1f13ce50c",
+      "author": "governor-9844430a",
+      "content": "GOVERNOR (governor-9844430a), 2026-09-14 19:30Z. Where this rework's bytes are, for the reviewer.\n- The reopen-1 repair from worker-c8e523ea is not in any commit yet. That covers the shared 7-40 hex validator, the 40-hex receipt, and the short-SHA regression cases (handoff in #general msg-1ffae223: 21 new cases, 9 red on old code). It sits uncommitted in the working tree: packages/moe-daemon/src/state/candidateStore.ts, candidateStore.test.ts, deliveryProjection.ts and deliveryProjection.test.ts. The worker's Codex window was closed between 09:23Z and 18:29Z without a post-flight, and task.commits still ends at 868e864. Review the rework with `git diff -- packages/moe-daemon/src/state/`.\n- Your pre-flight took a fresh baseline at 19:26:33Z instead of landing a recovery checkpoint. The 4 files are ASSERTED for this task (get_commit_scope, completed step modifiedFiles), so your session's exit landing should commit them regardless of baseline.\n- That rework session ran the pre-candidate launcher, so it most likely recorded no candidate. Check get_context.currentCandidate. A NO-COMPLETION-COMMIT warning on qa_approve is expected for the same reason.\n- The governor will verify at your exit that the 4 files landed.",
+      "timestamp": "2026-09-14T19:31:23.540Z"
+    },
+    {
+      "id": "comment-daef64e896454dfcac7acb696c6d8cf1",
+      "author": "qa-f0f9ea9e",
+      "content": "QA qa-f0f9ea9e, reopen-1 re-review evidence (2026-09-14 19:27-19:35Z). Reviewed tree = HEAD bcd5c6a + the 4 uncommitted repair paths (no other dirty source in the checkout).\n\nDIFF: candidateStore.ts exports its existing SHA_RE (/^[0-9a-f]{7,40}$/i). deliveryProjection.ts uses it, typeof-guarded, for Candidate.treeSha and baseRevision. Receipt landedRevision stays 40 hex; check binding stays exact equality. That now equals every store contract: checkRunStore.ts:235 exact tree equality, receiptStore.ts:54 REVISION_RE 40 hex, candidateStore SHA_RE 7-40. ExecutionAttemptPhase union unchanged on the moved HEAD (schema.ts:932).\n\nGATES (all fresh, current tree):\n- npm --prefix packages/moe-daemon test -- --reporter=json: exit 0, 122 files, 2043 passed | 2 skipped. Worker's 2024/121 predates 90277ac (+attemptHandback.test.ts, +19 tests). deliveryProjection.test.ts 38/38 and candidateStore.test.ts 36/36, both equal to the worker's counts.\n- tsc --noEmit -p packages/moe-daemon/tsconfig.json: exit 0.\n- gradlew.bat -p moe-jetbrains test --rerun-tasks (GRADLE_OPTS=-Xmx1g, jetbrains-gradle lease acquired and released): BUILD SUCCESSFUL 36s, 11 executed. Fresh JUnit: 15 files, 197 tests, 0 failures/errors/skipped. DeliveryPresentationTest 7, MoeJsonTest 22.\n\nRED PROOF (scratch copy D:/qa-9e851-r2, repo never touched, SHA256 restore check after every run, 74 tests collected in every run):\nnone 74/0 | old HEAD sources: 10 red (the 9 short-token cases 7/12/39 x tree/base/both 'expected undefined to deeply equal', plus the SHA_RE export pin) | narrow-candidate 9 | tree-only (base kept 40-only) 6 | broad-receipt 3 | typeof guard removed 1 (TypeError treeSha.slice: a numeric token would crash serving) | case-insensitive check 1 | unexported regex copy 1 | none 74/0.\n\nPLUGIN: parseDelivery reads strict strings with no length or hex filter (MoeJson.kt:423-438, mapped at 401 and 594). DeliveryPresentation take(8) renders short shas. No moe-jetbrains change since the first QA review (git diff 2fb9593..HEAD -- moe-jetbrains is empty).\n\nRAILS: 4 daemon files only; no actions, dashboard or VS Code; no forbidden patterns in the diff.\n\nLANDING: no completion commit for this round (worker Codex window closed without post-flight, per governor 18:34Z). get_commit_scope postflight lists all 4 paths ASSERTED for this task, none peer-declared, so this QA seat's exit checkpoint is the landing path.",
+      "timestamp": "2026-09-14T19:35:28.751Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:03:26.996Z",
-  "updatedAt": "2026-09-13T22:56:49.563Z",
+  "updatedAt": "2026-09-14T19:36:36.130Z",
   "metrics": {
     "firstClaimAt": "2026-09-13T13:36:47.503Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 10,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-14T19:36:36.130Z",
+    "wallClockMs": 107988627
   },
   "contextFetchedBy": [
     "worker-c8e523ea",
-    "qa-64519ef1"
+    "qa-64519ef1",
+    "qa-f0f9ea9e"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -316,7 +331,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "QA reopen1 fixed: candidate treeSha/baseRevision reuse candidateStore's7-40 hex SHA_RE; receipt revision stays40-only; exact check binding/strict string guards preserved.21 regression cases use real stores+closed owner; old code failed9.\nOriginal card assumed plugin already saw evidence; it did not. The serving-only daemon projection was the necessary original scope addition (landed PR187). Reopen adds shared-validator export+its exact-export test, not new actions/dashboard/VSCode.\nFresh gates (all exit0):\ncd moe-jetbrains; ./gradlew.bat test --rerun-tasks: BUILD SUCCESSFUL37s,11 executed,197/197 tests; lease released.\nnpm.cmd --prefix packages/moe-daemon test -- --reporter=json --outputFile=D:/moe-9e851-reopen1-20260914/daemon-full.json:121 files,2024 passed/2 skipped.\nnpx.cmd --prefix packages/moe-daemon tsc --noEmit -p packages/moe-daemon/tsconfig.json: clean.\nNine scratch mutants killed: empty4,older6,parseTask3,nonzero3,narrow-SHA9,broad-receipt3,coercion1,direct-reply1,writable1. Serial replay with independent SHA256 restore check after every run; restored38 daemon/29 plugin green. Adversarial+independent review clean. Artifacts D:/moe-9e851-reopen1-20260914.4 repair files, no foreign edits/manual commits; wrapper landing pending:\npackages/moe-daemon/src/state/candidateStore.ts\npackages/moe-daemon/src/state/candidateStore.test.ts\npackages/moe-daemon/src/state/deliveryProjection.ts\npackages/moe-daemon/src/state/deliveryProjection.test.ts",
-  "reviewCompletedAt": "2026-09-13T18:57:35.960Z",
+  "reviewCompletedAt": "2026-09-14T19:36:36.130Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Task detail renders a Delivery block showing candidate sha and base, check command and exit code, receipt target and landed revision, and attempt phase"
@@ -359,5 +374,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-14T19:36:36.130Z",
+  "reviewSummary": "Reopen-1 repair verified. All 5 DoD items hold on the current tree: HEAD bcd5c6a plus the 4 uncommitted repair paths.\n\nTHE FIX: deliveryProjection.ts now validates Candidate.treeSha and baseRevision with candidateStore's exported SHA_RE (7-40 hex, typeof-guarded). The receipt's landedRevision stays 40 hex, and the check binding stays an exact match. The projection now matches every store contract (checkRunStore.ts:235, receiptStore.ts:54).\n\nFRESH GATES:\n- Daemon npm test: exit 0, 122 files, 2043 passed, 2 skipped. The worker's 2024 was run before 90277ac added 19 tests. deliveryProjection 38/38 and candidateStore 36/36 match the worker's counts.\n- tsc --noEmit: exit 0.\n- gradlew.bat test --rerun-tasks: BUILD SUCCESSFUL. Fresh JUnit: 15 files, 197 tests, 0 failures, including DeliveryPresentationTest 7 and MoeJsonTest 22. Gradle lease released.\n\nRED PROOF (scratch copy, repo untouched, every restore SHA256-checked, 74 tests collected on every run):\n- Old sources: 10 red, the 9 short-token cases (7/12/39 chars x tree/base/both) plus the export pin.\n- Mutants: narrow-candidate 9 red, tree-only 6, broad-receipt 3, typeof guard removed 1, case-insensitive check 1, unexported regex 1.\n- Unmutated tree: 74/0 before and after.\n\nPLUGIN: the parser and presentation apply no length filter, and neither has changed since the first review.\n\nRAILS: clean. 4 daemon files, no actions, no dashboard, no VS Code.\n\nNOTE, NO COMPLETION COMMIT THIS ROUND: the worker's Codex window closed without running post-flight. get_commit_scope lists all 4 paths as ASSERTED for this task and none as peer-declared, so this QA seat's exit checkpoint (wip ... status=DONE role=qa) will land them. Full evidence is in the task comment."
 }
