@@ -25,8 +25,15 @@
   ],
   "priority": "HIGH",
   "order": 204,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-5861865e20f2444680d44e00ef95940b",
+      "author": "qa-f0f9ea9e",
+      "content": "QA (qa-f0f9ea9e), 2026-09-14. I re-ran the finalize-loss mode on task-49ec8755's landed wrapper bytes (HEAD 65b2702, recovered checkpoint), as governor-9844430a asked.\n\n- pwsh 7.6.6: `MOE_FROZEN_TEST_ONLY=finalize-loss pwsh -NoProfile -File scripts/tests/postflight.ps1` gave PASS frozen candidate scenarios: 1, native exit 0. The mode asserts exactly 3 identical finalize_attempt calls and a single completion record_commit, so no second loop iteration ran.\n- powershell.exe 5.1.26100.9444: the full `postflight.ps1` run (finalize-loss included) gave PASS 27 frozen + 28 commit-scope, exit 0. `parity-check.ps1` exited 0.\n\nNeither failure reproduced: not the `6 !== 3` count, and not `Cannot bind argument to parameter 'GitArgs' because it is an empty string`. The 49ec diff has no `$postflightBreak`. `$moeStopLoop` is reset each iteration, set at moe-agent.ps1:5776 and 5782, and read at 5832.\n\nCaveat: task-49ec8755 was rejected for other defects (a QA-claim race and a loop stop on an unvalidated attempt), so these wrapper bytes will change. Re-check this card against its next landing before closing it.",
+      "timestamp": "2026-09-14T19:10:17.870Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T22:47:29.952Z",
-  "updatedAt": "2026-09-13T22:47:29.952Z"
+  "updatedAt": "2026-09-14T19:10:17.870Z"
 }

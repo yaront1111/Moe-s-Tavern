@@ -190,7 +190,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:12:30.633Z",
-  "updatedAt": "2026-09-14T19:06:50.825Z",
+  "updatedAt": "2026-09-14T19:07:38.384Z",
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
@@ -270,7 +270,64 @@
     "packages/moe-daemon/src/state/sweeps.test.ts",
     "packages/moe-daemon/src/state/attemptHandback.test.ts",
     "docs/MCP_SERVER.md",
-    "docs/CONFIGURATION.md"
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-2a7e0f5b3926471a8a26d999cae96ff4.json",
+    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+    ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json"
   ],
-  "completionSummary": "A daemon restart can no longer hold a row that nobody owns. Three layers, all under the state mutex:\n(1) CHOKEPOINT. taskStore.updateTask calls closeAttemptsOnHandBack -> attemptStore.closeHandedBackAttempts on every write that turns a non-null assignedWorkerId into null (a status-change clear or an explicit null). It closes running and reconciling attempts only; finalizing survives until finalize_attempt. A failed close is logged, never thrown.\n(2) BOOT RULE. reconcileRunningAttempts parks a running attempt only when its task still exists and is assigned to that attempt's worker. It closes every running or reconciling attempt whose task is missing, unassigned or assigned elsewhere, so the purge no longer spares that seat. Each arm has its own catch; nothing reads an idle signal.\n(3) GUARD SCOPING. claim_next_task refuses ATTEMPT_RECONCILING only while the row is still assigned to the holder. An unassigned row is claimed and the leftover attempt closed; a row held by another worker is refused as assigned.\nTests: new state/attemptHandback.test.ts (12 cases, incident regression: generation 3 after qa_reject + restart); boot-rule cases in workerStore.test.ts; one sweeps.test.ts fixture re-seeded, assertions unchanged. The new tests were RED before the fix, and 12 single-line mutations each turn named tests red; details in task comments.\nDocs: MCP_SERVER.md and CONFIGURATION.md.\nDeviations:\n- The boot rule also closes reconciling orphans; the incident's on-disk orphan was already reconciling, so running-only could not heal it.\n- The report_blocked doc does not claim a freed wrapper ends its claim loop: at HEAD 65b2702 the wrapper treats a closed pinned attempt as finalized.\n- CONFIGURATION.md also carries peer task-49ec8755's uncommitted hunks.\nComment-only edits: sweeps.ts, workerStore.ts, reattachAttempt.ts. The live daemon keeps the old behaviour until it restarts on a rebuilt dist."
+  "completionSummary": "A daemon restart can no longer hold a row that nobody owns. Three layers, all under the state mutex:\n(1) CHOKEPOINT. taskStore.updateTask calls closeAttemptsOnHandBack -> attemptStore.closeHandedBackAttempts on every write that turns a non-null assignedWorkerId into null (a status-change clear or an explicit null). It closes running and reconciling attempts only; finalizing survives until finalize_attempt. A failed close is logged, never thrown.\n(2) BOOT RULE. reconcileRunningAttempts parks a running attempt only when its task still exists and is assigned to that attempt's worker. It closes every running or reconciling attempt whose task is missing, unassigned or assigned elsewhere, so the purge no longer spares that seat. Each arm has its own catch; nothing reads an idle signal.\n(3) GUARD SCOPING. claim_next_task refuses ATTEMPT_RECONCILING only while the row is still assigned to the holder. An unassigned row is claimed and the leftover attempt closed; a row held by another worker is refused as assigned.\nTests: new state/attemptHandback.test.ts (12 cases, incident regression: generation 3 after qa_reject + restart); boot-rule cases in workerStore.test.ts; one sweeps.test.ts fixture re-seeded, assertions unchanged. The new tests were RED before the fix, and 12 single-line mutations each turn named tests red; details in task comments.\nDocs: MCP_SERVER.md and CONFIGURATION.md.\nDeviations:\n- The boot rule also closes reconciling orphans; the incident's on-disk orphan was already reconciling, so running-only could not heal it.\n- The report_blocked doc does not claim a freed wrapper ends its claim loop: at HEAD 65b2702 the wrapper treats a closed pinned attempt as finalized.\n- CONFIGURATION.md also carries peer task-49ec8755's uncommitted hunks.\nComment-only edits: sweeps.ts, workerStore.ts, reattachAttempt.ts. The live daemon keeps the old behaviour until it restarts on a rebuilt dist.",
+  "commits": [
+    {
+      "sha": "90277ac777a002dd4cd4b467f2f1747c6df29aa2",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a7127038@2026-09-14T18:29:15Z",
+      "paths": [
+        ".moe/tasks/task-2a7e0f5b3926471a8a26d999cae96ff4.json",
+        ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+        ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/sweeps.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/workerStore.test.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/reattachAttempt.ts"
+      ],
+      "recordedBy": "worker-a7127038",
+      "recordedAt": "2026-09-14T19:07:38.384Z",
+      "treeId": "72d4f892d85fc2726209367e334917c27f999d28",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-49ec8755a9ad4fa29c87294adf61804d"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/workerStore.ts",
+    "packages/moe-daemon/src/state/sweeps.test.ts",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/state/sweeps.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/reattachAttempt.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-a7127038@2026-09-14T18:29:15Z",
+    "at": "2026-09-14T19:07:38.384Z"
+  }
 }
