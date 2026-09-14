@@ -59,11 +59,13 @@ $required = [ordered]@{
         'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
         'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
-    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
+    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
     'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     'context fields' = @('isEpicFinal')
     'blocked-hold prose' = @('only resource-lease waits and third-party blocks hold a seat now')
+    # Attempt finalize ladder, candidate-evidence and gate-cleanup prose.
+    'attempt/gate prose' = @('[finalize] no finalizing attempt for this seat on task', 'has no pinned identity; not acknowledging.', 'finalize_attempt acknowledgement exhausted; stopping new-task loop', 'qualityGate not run: candidate evidence unavailable', 'Cannot remove owned qualityGate workspace', 'cleanup will be retried')
     # Agent-CLI parity: every CLI the launchers support is wired the same way in
     # both wrappers - its config dir is a DENY-tier attribution prefix, its
     # cliType literal exists, and its mode/config banners are grep-stable.

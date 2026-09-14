@@ -186,20 +186,29 @@ runs in that case. Hooks otherwise run with a detached HEAD.
 
 ### Frozen quality-gate candidates
 
-The runner freezes the attributed private-index tree and records it with
-`record_candidate` before starting a gate. Each CAS retry against an advanced
-branch tip creates a new candidate and reruns the gate in a fresh detached
-worktree. A nested Moe project runs in the corresponding project subdirectory,
-using Bash on Unix/Git Bash and ComSpec `/d /s /c` on Windows.
+A completion that will run a gate has its attributed private-index tree frozen
+and recorded with `record_candidate` before the gate starts. Each CAS retry
+against an advanced branch tip creates a new candidate and reruns the gate in a
+fresh detached worktree. A nested Moe project runs in the corresponding project
+subdirectory, using Bash on Unix/Git Bash and ComSpec `/d /s /c` on Windows. A
+completion with no gate to run (`qualityGate` unset, `MOE_DISABLE_QUALITY_GATE=1`,
+or the `epicFinal` deferral) records no candidate and its landing does not depend
+on attempt identity: it lands exactly as it did before candidates existed.
 
 This is a normal full checkout of the candidate: no dirty checkout helpers,
 ignored dependencies, linked `node_modules`, or live runtime directories are
 copied. Gate commands must install or prepare their own required dependencies.
 Generated untracked outputs remain disposable; no gate output is staged or
 copied back. Tracked worktree, index or HEAD mutation refuses landing rather
-than incorporating formatter fixes. Cleanup stops owned gate descendants and
+than incorporating formatter fixes; flags that hide a tracked edit
+(`assume-unchanged`, `skip-worktree`) are cleared with one batched
+`update-index --stdin` before the check. Cleanup stops owned gate descendants and
 removes only the owned checkout and its registration, including on gate failure
-and handled interruption; there is no quiet-output kill rule.
+and handled interruption; there is no quiet-output kill rule. A checkout that
+cannot be removed is reported (`Cannot remove owned qualityGate workspace: …;
+cleanup will be retried.`) and retried at the next cleanup point; the landing is
+decided by the gate's exit code and the tracked-tree check alone, so a cleanup
+failure never turns a passing gate into a refusal or stops the loop.
 
 Each command actually started is reported with `record_check_run`, the exact
 candidate/tree, actual exit code, `source: runner-observed` and a final 16 KiB
@@ -209,13 +218,31 @@ refusals retain their existing meaning. An unborn branch uses the actual empty
 Git tree object as `baseRevision`, with a parentless snapshot and root landing;
 the separate hook-enabled unborn refusal remains unchanged.
 
+Candidate evidence belongs to the seat's current attempt. When the pinned attempt
+is missing, closed or superseded (a QA claim of the REVIEW row closes the
+worker's finalizing attempt today), parked in `reconciling`, or was never pinned,
+the gate is not run and no CheckRun is recorded: the frozen bytes go to a rescue
+ref under `MOE_COMMIT_FAILED_GATE` with the ledger message
+`qualityGate not run: candidate evidence unavailable (…)`. Nothing is bypassed
+and no gate failed, so there is no `PUSH-BLOCKED:` announcement and the landing
+does not stop the worker loop; the task's next session lands the bytes.
+
 A CheckRun is an observed command result, not a delivery receipt. After landing
 outcome reporting, `finalize_attempt` acknowledges the exact attempt's result;
-it does not persist receipt evidence. Ordinary checkpoints do not finalize a
-running attempt. `autoCommit=false` and no-git projects create no candidates,
-checks or gate worktrees; finalizing attempts acknowledge no Git delivery.
-Gate opt-out and epic deferral policies are unchanged. `commitHooks` retains
-its separate private-index/original-working-directory contract above.
+it does not persist receipt evidence. The post-flight acknowledges only the
+seat's own `finalizing` attempt under the identity pinned at claim time. A
+closed, running, reconciling, missing or no-longer-matching attempt is nothing
+to acknowledge, so ordinary checkpoints and `autoCommit=false` exits make no
+call and the worker keeps claiming; a reconciling, missing or mismatched record
+logs `[finalize] no finalizing attempt for this seat on task <id>; nothing to
+acknowledge.` A finalizing attempt with no pinned
+identity is never acknowledged and stops the loop, as does an acknowledgement
+still unanswered after three identical tries, because the daemon refuses the
+seat's next claim while its attempt is finalizing. `autoCommit=false` and no-git
+projects create no candidates, checks or gate worktrees; finalizing attempts
+acknowledge no Git delivery. Gate opt-out and epic deferral policies are
+unchanged. `commitHooks` retains its separate private-index/original-working-
+directory contract above.
 
 ### Session touch evidence
 

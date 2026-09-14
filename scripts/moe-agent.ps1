@@ -1284,7 +1284,10 @@ function Read-MoeAttempt([string]$TaskId, [string]$AttemptId = '', $Generation =
         if ($a.id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $a.phase -cnotin @('running','finalizing')) { throw 'phase or id' }
         if ($AttemptId -and ($a.id -cne $AttemptId -or $a.generation -ne $Generation)) { throw 'stale identity' }
         return $a
-    } catch { Write-Host "[WARN] Attempt identity unavailable: $_" -ForegroundColor Yellow; return $null }
+    } catch {
+        $script:MoeAttemptReadError = "Attempt identity unavailable: $_"
+        Write-Host "[WARN] $script:MoeAttemptReadError" -ForegroundColor Yellow; return $null
+    }
 }
 function Set-MoeAttemptIdentity($Claim, [string]$TaskId) {
     $script:MoeAttemptId = ''; $script:MoeAttemptGeneration = $null
@@ -1324,12 +1327,21 @@ function Send-MoeEvidence([string]$Tool, [hashtable]$Payload, [int]$Tries = 1) {
     }
     return $false
 }
+# Candidate evidence needs this seat's CURRENT attempt. When the pinned attempt is
+# missing, closed or superseded by another claim, or parked, no gate result can
+# be bound to it: MoeEvidenceUnavailable tells the landing to park the frozen
+# bytes without running the gate and without announcing a gate failure.
 function Send-MoeCandidate([string]$TaskId, [hashtable]$Frozen, [string]$Branch) {
-    if (-not $script:MoeAttemptId -or -not (Read-MoeAttempt $TaskId $script:MoeAttemptId $script:MoeAttemptGeneration)) { return $false }
+    $script:MoeEvidenceUnavailable = ''
+    if (-not $script:MoeAttemptId -or $null -eq $script:MoeAttemptGeneration) { $script:MoeEvidenceUnavailable = 'no pinned attempt identity'; return $false }
+    if (-not (Read-MoeAttempt $TaskId $script:MoeAttemptId $script:MoeAttemptGeneration)) { $script:MoeEvidenceUnavailable = $script:MoeAttemptReadError; return $false }
     $payload = @{ taskId=$TaskId; attemptId=$script:MoeAttemptId; generation=$script:MoeAttemptGeneration
         workerId=$WorkerId; id=$Frozen.CandidateId; baseRevision=$Frozen.BaseRevision
         treeSha=$Frozen.Tree; deliveryTarget="refs/heads/$Branch" }
-    return (Send-MoeEvidence 'record_candidate' $payload)
+    if (Send-MoeEvidence 'record_candidate' $payload) { return $true }
+    # A claim can supersede the attempt between the read above and the RPC.
+    if (-not (Read-MoeAttempt $TaskId $script:MoeAttemptId $script:MoeAttemptGeneration)) { $script:MoeEvidenceUnavailable = $script:MoeAttemptReadError }
+    return $false
 }
 function Read-MoeGateTail([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
@@ -1359,19 +1371,48 @@ function Send-MoeCheckRun([hashtable]$Frozen, [hashtable]$Gate) {
         runnerId=$script:MoeRunnerId; source='runner-observed'; workerId=$WorkerId }
     return (Send-MoeEvidence 'record_check_run' $payload)
 }
+# The post-flight acknowledges only this seat's own FINALIZING attempt, under the
+# identity pinned at claim time. A closed, running, reconciling, missing or
+# no-longer-matching attempt is nothing to acknowledge: no RPC, and the loop
+# goes on. A finalizing attempt with no pinned identity is never acknowledged,
+# and it stops the loop, as an exhausted acknowledgement does: the daemon
+# refuses this seat's next claim while an attempt of it is finalizing.
+function Get-MoePinnedAttemptPhase {
+    try {
+        $a=[IO.File]::ReadAllText((Join-Path $projectPath ('.moe/attempts/'+$script:MoeAttemptId+'.json'))) | ConvertFrom-Json -ErrorAction Stop
+        if ($a.id -ceq $script:MoeAttemptId -and $a.taskId -ceq $preflightTaskId -and $a.workerId -ceq $WorkerId -and
+            (Test-MoeGeneration $a.generation) -and $a.generation -eq $script:MoeAttemptGeneration -and $a.phase -is [string]) { return $a.phase }
+    } catch { }
+    return 'mismatch'
+}
+# This seat's finalizing attempts on the task. A sibling file that cannot be
+# parsed is skipped, never fatal.
+function Find-MoeSeatFinalizingAttempts {
+    $ids = New-Object 'System.Collections.Generic.List[string]'
+    try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop | Sort-Object Name) } catch { return @() }
+    foreach ($f in $files) {
+        try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        if ($a.taskId -ceq $preflightTaskId -and $a.workerId -ceq $WorkerId -and $a.phase -ceq 'finalizing') { $ids.Add([string]$a.id) }
+    }
+    return @($ids)
+}
 function Send-MoeFinalize([string]$Outcome, [string]$Sha = '') {
     if ($Role -ne 'worker' -or -not $preflightTaskId) { return $true }
-    if (-not $script:MoeAttemptId) { Write-Host '[WARN] Cannot finalize without pinned attempt identity.'; return $false }
-    try {
-        $file=Join-Path $projectPath ('.moe/attempts/'+$script:MoeAttemptId+'.json')
-        $closed=[IO.File]::ReadAllText($file) | ConvertFrom-Json -ErrorAction Stop
-        if ($closed.id -ceq $script:MoeAttemptId -and $closed.taskId -ceq $preflightTaskId -and
-            $closed.workerId -ceq $WorkerId -and (Test-MoeGeneration $closed.generation) -and
-            $closed.generation -eq $script:MoeAttemptGeneration -and $closed.phase -ceq 'closed') { return $true }
-    } catch { }
-    $a = Read-MoeAttempt $preflightTaskId $script:MoeAttemptId $script:MoeAttemptGeneration
-    if (-not $a) { return $false }
-    if ($a.phase -cne 'finalizing') { return $true }
+    if (-not $script:MoeAttemptId -or $null -eq $script:MoeAttemptGeneration) {
+        $ids = @(Find-MoeSeatFinalizingAttempts)
+        if ($ids.Count -gt 0) {
+            Write-Host "[WARN] finalize refused: finalizing attempt $($ids -join ' ') on task $preflightTaskId has no pinned identity; not acknowledging." -ForegroundColor Yellow
+            return $false
+        }
+        Write-Host "[finalize] no finalizing attempt for this seat on task $preflightTaskId; nothing to acknowledge."
+        return $true
+    }
+    $phase = Get-MoePinnedAttemptPhase
+    if ($phase -ceq 'closed' -or $phase -ceq 'running') { return $true }
+    if ($phase -cne 'finalizing') {
+        Write-Host "[finalize] no finalizing attempt for this seat on task $preflightTaskId; nothing to acknowledge."
+        return $true
+    }
     $payload = @{ taskId=$preflightTaskId; attemptId=$script:MoeAttemptId; generation=$script:MoeAttemptGeneration
         workerId=$WorkerId; runnerId=$script:MoeRunnerId; outcome=$Outcome }
     if ($Outcome -eq 'landed') { $payload.landedRevision=$Sha }
@@ -3334,14 +3375,25 @@ function Test-MoeGateIntegrity([hashtable]$Frozen) {
     $head = Invoke-MoeGit -Top $top -GitArgs @('rev-parse','HEAD')
     $tree = Invoke-MoeGit -Top $top -GitArgs @('write-tree')
     if ($head.Rc -ne 0 -or ($head.Out -join '').Trim() -cne $Frozen.Commit -or $tree.Rc -ne 0 -or ($tree.Out -join '').Trim() -cne $Frozen.Tree) { return $false }
-    $files=Invoke-MoeGit -Top $top -GitArgs @('ls-files','-z')
-    if ($files.Rc -ne 0) { return $false }
-    foreach ($file in (($files.Out -join '').Split([char]0) | Where-Object { $_ })) {
-        $clear=Invoke-MoeGit -Top $top -GitArgs @('update-index','--no-assume-unchanged','--no-skip-worktree','--',$file)
-        if ($clear.Rc -ne 0) { return $false }
-    }
+    # One ls-files | update-index --stdin pair, as in the sh twin: a git spawn per
+    # tracked file cost about 31 s per probe on a 1000-file tree.
+    if (-not (Clear-MoeGateIndexFlags $top)) { return $false }
     $diff = Invoke-MoeGit -Top $top -GitArgs @('diff-files','--quiet','--ignore-submodules=none','--')
     return ($diff.Rc -eq 0)
+}
+function Clear-MoeGateIndexFlags([string]$Top) {
+    # The cmd pipe carries raw bytes. A .NET StandardInput writer does not: under
+    # a UTF-8 console it writes a BOM first, corrupting the first NUL-separated path.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        Push-Location -LiteralPath $Top
+        try {
+            & $env:ComSpec /d /s /c 'git ls-files -z | git update-index --no-assume-unchanged --no-skip-worktree -z --stdin' 2>&1 | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        } finally { Pop-Location }
+    } catch { return $false }
+    finally { $ErrorActionPreference = $prev }
 }
 function Stop-MoeGateChild {
     $gate = $script:MoeGate
@@ -3351,24 +3403,40 @@ function Stop-MoeGateChild {
         if (-not $gate.Finished) { $gate.ExitCode=$gate.Process.ExitCode; $gate.Finished=$true }
     } finally { $gate.Process.Dispose(); $gate.Process=$null }
 }
+# Removes every owned gate checkout this run still holds: the current one and any
+# earlier one whose removal failed. A failure is reported and kept for the next
+# cleanup point (the next gate, the end of the landing, the outer finally); it
+# never changes a landing decision and never stops the loop.
+$script:MoeGatePending = New-Object 'System.Collections.Generic.List[hashtable]'
+function Remove-MoeGateRoot([hashtable]$Entry) {
+    $root=[IO.Path]::GetFullPath($Entry.Root)
+    $temp=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
+    if (-not $root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
+        (Split-Path -Leaf $root) -notmatch '^moe-gate-[0-9a-f]{32}$' -or
+        [IO.Path]::GetFullPath($Entry.Workspace) -cne (Join-Path $root 'tree')) { throw 'invalid owned gate path' }
+    if (Test-Path -LiteralPath (Join-Path $Entry.Workspace '.git')) {
+        $r=Invoke-MoeGit -Top $Entry.Top -GitArgs @('worktree','remove','--force',$Entry.Workspace)
+        if ($r.Rc -ne 0) { throw 'owned worktree removal failed' }
+    }
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop }
+}
 function Remove-MoeGateWorkspace {
     $gate = $script:MoeGate
-    if (-not $gate) { return $true }
-    try {
-        Stop-MoeGateChild
-        $root=[IO.Path]::GetFullPath($gate.Root)
-        $temp=[IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
-        if (-not $root.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or
-            (Split-Path -Leaf $root) -notmatch '^moe-gate-[0-9a-f]{32}$' -or
-            [IO.Path]::GetFullPath($gate.Workspace) -cne (Join-Path $root 'tree')) { throw 'invalid owned gate path' }
-        if (Test-Path -LiteralPath (Join-Path $gate.Workspace '.git')) {
-            $r=Invoke-MoeGit -Top $gate.Top -GitArgs @('worktree','remove','--force',$gate.Workspace)
-            if ($r.Rc -ne 0) { throw 'owned worktree removal failed' }
+    if ($gate) {
+        try { Stop-MoeGateChild } catch { Write-Host "[WARN] Cannot stop owned qualityGate process: $_" -ForegroundColor Yellow }
+        $script:MoeGatePending.Add(@{ Root=$gate.Root; Top=$gate.Top; Workspace=$gate.Workspace })
+        $script:MoeGate = $null
+    }
+    $kept = New-Object 'System.Collections.Generic.List[hashtable]'
+    foreach ($entry in @($script:MoeGatePending)) {
+        try { Remove-MoeGateRoot $entry }
+        catch {
+            $kept.Add($entry)
+            Write-Host "[WARN] Cannot remove owned qualityGate workspace: $($entry.Root); cleanup will be retried. ($_)" -ForegroundColor Yellow
         }
-        if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop }
-        $script:MoeGate=$null
-        return $true
-    } catch { Write-Host "[WARN] Cannot remove owned qualityGate workspace: $_" -ForegroundColor Yellow; return $false }
+    }
+    $script:MoeGatePending = $kept
+    return ($kept.Count -eq 0)
 }
 function New-MoeFrozenCandidate([hashtable]$Git,[string]$Tree,[string]$Base) {
     $args=@('commit-tree',$Tree,'-m','Moe frozen candidate snapshot')
@@ -3390,7 +3458,7 @@ function New-MoeFrozenCandidate([hashtable]$Git,[string]$Tree,[string]$Base) {
 }
 function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Command) {
     if (-not $Command) { return $true }
-    if (-not (Remove-MoeGateWorkspace)) { return $false }
+    $null = Remove-MoeGateWorkspace # an earlier leftover never blocks this candidate's gate
     $root=Join-Path ([IO.Path]::GetTempPath()) ('moe-gate-'+[guid]::NewGuid().ToString('N'))
     $script:MoeGate=@{ Root=$root; Top=$Git.Top; Workspace=(Join-Path $root 'tree'); Log=(Join-Path $root 'output.log')
         Command=$Command; CheckId=('check-'+[guid]::NewGuid().ToString('N')); Started=$false; Finished=$false; Recorded=$false; ExitCode=0; Process=$null }
@@ -3419,7 +3487,10 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
         if ($gate.ExitCode -ne 0) { throw "qualityGate failed (exit $($gate.ExitCode))" }
         if (-not (Test-MoeGateIntegrity $Frozen)) { throw 'qualityGate tracked tree/index/HEAD mutation' }
         Write-Host '[OK] qualityGate passed.' -ForegroundColor Green
-        return (Remove-MoeGateWorkspace)
+        # Landing is decided by the exit code and integrity above; a failed removal
+        # of the disposable checkout is reported and retried, never a gate failure.
+        $null = Remove-MoeGateWorkspace
+        return $true
     } catch { Write-Host "[WARN] $_; refusing branch commit." -ForegroundColor Yellow; return $false }
 }
 
@@ -3616,7 +3687,10 @@ function Invoke-MoeLanding {
             }
             $dropped = @($built.Dropped)
             $landed = @($built.Landed)
-            if ($Kind -eq 'completion') {
+            # Only a completion that will actually run a gate freezes and records a
+            # candidate. A completion with no gate to run (unset, disabled, deferred)
+            # lands exactly as before, whoever owns the attempt by now.
+            if ($Kind -eq 'completion' -and $gate) {
                 # The legacy builder omits Tree on unchanged/empty candidates.
                 $treeResult=Invoke-MoeGit -Top $Git.Top -IndexFile $idx -GitArgs @('write-tree')
                 if ($treeResult.Rc -ne 0 -or -not $treeResult.Out.Count) { throw 'candidate write-tree failed' }
@@ -3627,9 +3701,22 @@ function Invoke-MoeLanding {
                 $script:MoeFrozen=$snapshot
                 if (-not (Send-MoeCandidate $TaskId $script:MoeFrozen $branch) -or
                     -not (Invoke-MoeFrozenGate $Git $script:MoeFrozen $gate)) {
-                    $res.Outcome='failed'; $res.Code='MOE_COMMIT_FAILED_GATE'; $res.StopLoop=$true
+                    $res.Outcome='failed'; $res.Code='MOE_COMMIT_FAILED_GATE'
                     $rescue=Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'gate-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
                     if ($rescue) { $res.Ref=$rescue.Ref; $res.Sha=$rescue.Sha }
+                    if ($script:MoeEvidenceUnavailable) {
+                        # No gate ran, so no gate failed: this seat no longer holds a
+                        # current attempt (a QA claim superseded it, or none was
+                        # pinned). The frozen bytes stay parked for the task's next
+                        # session; finalize decides whether the loop goes on.
+                        $evidenceMsg="qualityGate not run: candidate evidence unavailable ($($script:MoeEvidenceUnavailable))"
+                        $parked=if ($res.Ref) { $res.Ref } else { 'no rescue ref (nothing to rescue)' }
+                        Write-Host "[WARN] qualityGate not run: candidate evidence unavailable for task $TaskId ($($script:MoeEvidenceUnavailable)); the completion is parked on $parked." -ForegroundColor Yellow
+                        Send-MoeRecordCommit @{taskId=$TaskId;outcome='failed';kind=$Kind;status=$Status;workerId=$WorkerId;
+                            role=$Role;sessionId=$Sid;code=$res.Code;message=$evidenceMsg} | Out-Null
+                        return $res
+                    }
+                    $res.StopLoop=$true
                     $gateRc=if ($script:MoeGate -and $script:MoeGate.Finished) { $script:MoeGate.ExitCode } else { 125 }
                     $gateMsg="PUSH-BLOCKED: qualityGate failed for task $($TaskId): $gate (exit $gateRc)"
                     Send-MoeGeneralChat $gateMsg
@@ -3780,7 +3867,7 @@ function Invoke-MoeLanding {
             }
             $script:moeLandingDone=$true
         } catch { Write-Host "[WARN] landing cleanup evidence failed: $_" -ForegroundColor Yellow; $res.StopLoop=$true }
-        if (-not (Remove-MoeGateWorkspace)) { $res.StopLoop=$true }
+        $null = Remove-MoeGateWorkspace
         Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
         if ($msgFile) { Remove-Item -LiteralPath $msgFile -Force -ErrorAction SilentlyContinue }
         $ErrorActionPreference = $prev
@@ -4237,6 +4324,7 @@ do {
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     $script:MoeFrozen=$null; $script:MoeLandingResult=$null; $script:MoeFinalizeDone=$false
+    $script:MoeEvidenceUnavailable=''; $script:MoeAttemptReadError=''
     $script:MoeAttemptId = ""; $script:MoeAttemptGeneration = $null
     $script:MoeRunnerId = "runner-" + [guid]::NewGuid().ToString("N")
     $preflightTaskId = ""

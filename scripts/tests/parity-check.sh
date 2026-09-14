@@ -77,7 +77,7 @@ done
 
 # Baseline / temp-index plumbing (identical file formats and git invocations).
 for lit in '#moe-baseline v1' 'moe/baseline' ':(literal)' \
-  '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths'; do
+  '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths' \n  'update-index --no-assume-unchanged --no-skip-worktree -z --stdin'; do
   require_both "baseline/index" "$lit"
 done
 
@@ -163,6 +163,12 @@ done
 # seat; both wrappers must state it in the same words.
 for prose in 'only resource-lease waits and third-party blocks hold a seat now'; do
   require_both "blocked-hold prose" "$prose"
+done
+
+# Attempt finalize ladder, candidate-evidence and gate-cleanup prose: an operator
+# reading either transcript must see the same diagnosis for the same state.
+for prose in '[finalize] no finalizing attempt for this seat on task' 'has no pinned identity; not acknowledging.'   'finalize_attempt acknowledgement exhausted; stopping new-task loop' 'qualityGate not run: candidate evidence unavailable'   'Cannot remove owned qualityGate workspace' 'cleanup will be retried'; do
+  require_both "attempt/gate prose" "$prose"
 done
 
 # Deferred features must not be advertised by either wrapper.

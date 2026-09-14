@@ -1943,16 +1943,30 @@ PY
     return 1
 }
 
+# Candidate evidence needs this seat's CURRENT attempt. When the pinned attempt is
+# missing, closed or superseded by another claim, or parked, no gate result can
+# be bound to it: GATE_EVIDENCE_UNAVAILABLE tells the landing to park the frozen
+# bytes without running the gate and without announcing a gate failure.
 record_candidate_rpc() {
-    local args
-    [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_ATTEMPT_GENERATION" ] || return 1
-    moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" >/dev/null || return 1
+    local args detail
+    GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
+    if [ -z "$MOE_ATTEMPT_ID" ] || [ -z "$MOE_ATTEMPT_GENERATION" ]; then
+        GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="no pinned attempt identity"; return 1
+    fi
+    if ! detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then
+        GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="${detail:-attempt not current}"; return 1
+    fi
     args=$($PYTHON_CMD -c '
 import json,sys
 t,a,g,w,c,b,s,r=sys.argv[1:]
 print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,id=c,baseRevision=b,treeSha=s,deliveryTarget=r)))
 ' "$LAND_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$FROZEN_CANDIDATE_ID" "$FROZEN_BASE_REVISION" "$FROZEN_TREE" "refs/heads/$LAND_BRANCH") || return 1
-    moe_evidence_rpc record_candidate "$args"
+    moe_evidence_rpc record_candidate "$args" && return 0
+    # A claim can supersede the attempt between the read above and the RPC.
+    if ! detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then
+        GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="${detail:-attempt not current}"
+    fi
+    return 1
 }
 
 record_check_run_rpc() {
@@ -1971,15 +1985,30 @@ PY
     moe_evidence_rpc record_check_run "$args"
 }
 
+# The post-flight acknowledges only this seat's own FINALIZING attempt, under the
+# identity pinned at claim time. A closed, running, reconciling, missing or
+# no-longer-matching attempt is nothing to acknowledge: no RPC, and the loop
+# goes on. A finalizing attempt with no pinned identity is never acknowledged,
+# and it stops the loop, as an exhausted acknowledgement does: the daemon
+# refuses this seat's next claim while an attempt of it is finalizing.
 finalize_attempt_rpc() {
     [ "$ROLE" = worker ] && [ -n "${PREFLIGHT_TASK_ID:-}" ] || return 0
-    [ -n "${MOE_ATTEMPT_ID:-}" ] || { echo '[WARN] Cannot finalize without pinned attempt identity.' >&2; return 1; }
-    local record phase args outcome="$1" sha="${2:-}"
-    if $PYTHON_CMD -c 'import json,sys;a=json.load(open(sys.argv[1],encoding="utf-8-sig"));sys.exit(0 if a.get("id")==sys.argv[2] and a.get("taskId")==sys.argv[3] and a.get("workerId")==sys.argv[4] and type(a.get("generation"))==int and str(a["generation"])==sys.argv[5] and a.get("phase")=="closed" else 1)' \
-        "$PROJECT/.moe/attempts/$MOE_ATTEMPT_ID.json" "$MOE_ATTEMPT_ID" "$PREFLIGHT_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_GENERATION" 2>/dev/null; then return 0; fi
-    record=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION") || return 1
-    phase=$($PYTHON_CMD -c 'import json,sys;print(json.load(sys.stdin)["phase"])' <<< "$record") || return 1
-    [ "$phase" = finalizing ] || return 0
+    local outcome="$1" sha="${2:-}" phase ids args
+    if [ -z "${MOE_ATTEMPT_ID:-}" ] || [ -z "${MOE_ATTEMPT_GENERATION:-}" ]; then
+        ids=$(moe_seat_finalizing_attempts) || ids=""
+        if [ -n "$ids" ]; then
+            echo "[WARN] finalize refused: finalizing attempt $ids on task $PREFLIGHT_TASK_ID has no pinned identity; not acknowledging." >&2
+            return 1
+        fi
+        echo "[finalize] no finalizing attempt for this seat on task $PREFLIGHT_TASK_ID; nothing to acknowledge."
+        return 0
+    fi
+    phase=$(moe_pinned_attempt_phase)
+    case "$phase" in
+        finalizing) ;;
+        closed|running) return 0 ;;
+        *) echo "[finalize] no finalizing attempt for this seat on task $PREFLIGHT_TASK_ID; nothing to acknowledge."; return 0 ;;
+    esac
     args=$($PYTHON_CMD -c '
 import json,sys
 t,a,g,w,r,o,s=sys.argv[1:]
@@ -1990,6 +2019,40 @@ print(json.dumps(p))
     if moe_evidence_rpc finalize_attempt "$args" 3; then return 0; fi
     echo "[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect)." >&2
     return 1
+}
+
+# Phase of the pinned attempt record; "mismatch" when the file is missing,
+# unreadable or no longer carries this seat's exact identity.
+moe_pinned_attempt_phase() {
+    $PYTHON_CMD - "$PROJECT" "$MOE_ATTEMPT_ID" "$PREFLIGHT_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_GENERATION" <<'PY' 2>/dev/null || echo mismatch
+import json,os,sys
+project,aid,task,worker,generation=sys.argv[1:]
+try:
+    a=json.load(open(os.path.join(project,'.moe','attempts',aid+'.json'),encoding='utf-8-sig'))
+    g=a.get('generation')
+    same=a.get('id')==aid and a.get('taskId')==task and a.get('workerId')==worker and type(g)==int and str(g)==generation
+    print(a['phase'] if same and isinstance(a.get('phase'),str) else 'mismatch')
+except Exception:
+    print('mismatch')
+PY
+}
+
+# This seat's finalizing attempts on the task (space-separated ids). A sibling
+# file that cannot be parsed is skipped, never fatal.
+moe_seat_finalizing_attempts() {
+    $PYTHON_CMD - "$PROJECT" "$PREFLIGHT_TASK_ID" "$WORKER_ID" <<'PY'
+import glob,json,os,sys
+project,task,worker=sys.argv[1:]
+ids=[]
+for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
+    try:
+        a=json.load(open(p,encoding='utf-8-sig'))
+    except Exception:
+        continue
+    if isinstance(a,dict) and a.get('taskId')==task and a.get('workerId')==worker and a.get('phase')=='finalizing':
+        ids.append(str(a.get('id')))
+print(' '.join(ids))
+PY
 }
 
 # The CLI invocation below blocks this process for the CLI's entire runtime
@@ -3648,19 +3711,33 @@ stop_gate_child() {
     wait "$GATE_PID" 2>/dev/null || true
     GATE_PID=""
 }
+# Removes every owned gate checkout this run still holds: the current one and any
+# earlier one whose removal failed. A failure is reported and kept for the next
+# cleanup point (the next gate, the end of the iteration, the EXIT trap); it
+# never changes a landing decision and never stops the loop.
+GATE_PENDING_ROOTS=""
+remove_gate_root() {
+    if [ -e "$1/tree/.git" ]; then
+        git -C "$MOE_TOP" worktree remove --force "$1/tree" >/dev/null 2>&1 || return 1
+    fi
+    rm -rf -- "$1"
+}
 cleanup_gate_workspace() {
     stop_gate_child
-    [ -n "${GATE_ROOT:-}" ] || return 0
-    local failed=0
-    if [ -n "${GATE_WORKSPACE:-}" ] && [ -e "$GATE_WORKSPACE/.git" ]; then
-        git -C "$MOE_TOP" worktree remove --force "$GATE_WORKSPACE" >/dev/null 2>&1 || failed=1
+    if [ -n "${GATE_ROOT:-}" ]; then
+        GATE_PENDING_ROOTS="${GATE_PENDING_ROOTS:-}$GATE_ROOT"$'\n'
+        GATE_ROOT=""; GATE_WORKSPACE=""; GATE_LOG=""
     fi
-    if [ "$failed" -ne 0 ]; then
-        echo "[WARN] Cannot remove owned qualityGate worktree: $GATE_WORKSPACE" >&2
-        return 1
-    fi
-    rm -rf -- "$GATE_ROOT" || return 1
-    GATE_ROOT=""; GATE_WORKSPACE=""; GATE_LOG=""
+    local root kept=""
+    while IFS= read -r root; do
+        [ -n "$root" ] || continue
+        if ! remove_gate_root "$root"; then
+            kept="$kept$root"$'\n'
+            echo "[WARN] Cannot remove owned qualityGate workspace: $root; cleanup will be retried." >&2
+        fi
+    done <<< "${GATE_PENDING_ROOTS:-}"
+    GATE_PENDING_ROOTS="$kept"
+    [ -z "$kept" ]
 }
 freeze_candidate() {
     local old="$1" tree="$2"
@@ -3677,7 +3754,7 @@ freeze_candidate() {
 }
 run_frozen_gate() {
     [ -n "${QUALITY_GATE:-}" ] || return 0
-    cleanup_gate_workspace || return 1
+    cleanup_gate_workspace || true
     # Assignment runs in the parent; never create_secure_temp in a subshell.
     GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
     GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
@@ -3708,7 +3785,9 @@ run_frozen_gate() {
     fi
     gate_integrity || { echo "[WARN] qualityGate tracked tree/index/HEAD mutation; refusing branch commit." >&2; return 1; }
     echo -e "$GREEN[OK]$NC qualityGate passed."
-    cleanup_gate_workspace
+    # Landing is decided by the exit code and integrity above; a failed removal
+    # of the disposable checkout is reported and retried, never a gate failure.
+    cleanup_gate_workspace || true
 }
 
 # land_commit KIND -- §7: branch (peel), then plumbing (temp index +
@@ -3755,9 +3834,18 @@ land_plumbing() {
         moe_temp_index_has_changes "$old" || changed=false
         write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
         tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
-        if [ "$LAND_KIND" = completion ]; then
+        # Only a completion that will actually run a gate freezes and records a
+        # candidate. A completion with no gate to run (unset, disabled, deferred)
+        # lands exactly as before, whoever owns the attempt by now.
+        if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
+            GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
             if [ -z "$tree" ] || ! freeze_candidate "$old" "$tree" || ! run_frozen_gate; then
-                LAND_OUTCOME="failed"; LAND_CODE="MOE_COMMIT_FAILED_GATE"; GATE_FAILED=true
+                LAND_OUTCOME="failed"; LAND_CODE="MOE_COMMIT_FAILED_GATE"
+                if [ "$GATE_EVIDENCE_UNAVAILABLE" = true ]; then
+                    LAND_MESSAGE="qualityGate not run: candidate evidence unavailable ($GATE_EVIDENCE_DETAIL)"
+                else
+                    GATE_FAILED=true
+                fi
                 rescue_ref "gate-failed" "$ATTR_DIR/candidates" || true
                 moe_temp_index_drop
                 return 4
@@ -6661,6 +6749,7 @@ except Exception:
             else
                 echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true, mode=$LANDING_MODE, status=$LANDING_STATUS)...${NC}"
                 GATE_FAILED=false
+                GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
                 GATE_RC=0
                 GATE_OUT=""
                 QUALITY_GATE=""
@@ -6738,10 +6827,16 @@ except Exception:
                     # identical to the ps1 twin.
                     echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID could not be landed on a safe branch; its edits are parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)} -- stopping the worker loop."
                     POSTFLIGHT_BREAK=true
+                elif [ "${GATE_EVIDENCE_UNAVAILABLE:-false}" = true ]; then
+                    # No gate ran, so no gate failed: this seat no longer holds a
+                    # current attempt (a QA claim superseded it, or none was
+                    # pinned). The frozen bytes stay parked for the task's next
+                    # session; finalize below decides whether the loop goes on.
+                    echo -e "${YELLOW}[WARN]${NC} qualityGate not run: candidate evidence unavailable for task $PREFLIGHT_TASK_ID ($GATE_EVIDENCE_DETAIL); the completion is parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)}."
                 fi
             fi
         fi
-        if ! cleanup_gate_workspace; then POSTFLIGHT_BREAK=true; fi
+        cleanup_gate_workspace || true
         if ! finalize_postflight; then POSTFLIGHT_BREAK=true; fi
         # Whatever happened above, this session's bytes have been handled
         # (committed, parked on a rescue ref, refused, nothing to land, or a
