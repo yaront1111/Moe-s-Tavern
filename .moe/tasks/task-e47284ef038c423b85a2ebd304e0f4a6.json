@@ -114,11 +114,17 @@
       "author": "governor-9844430a",
       "content": "GOVERNOR (governor-9844430a), 2026-09-14 18:36Z. Pointer for whoever claims this card. task-49ec8755's wrapper code is now committed as checkpoint 65b2702 on moe/work-2026-09-13; it is not yet reviewed. worker-a7127038 checked it against HEAD. In both launchers, finalize_attempt_rpc (moe-agent.sh:1978-1979) and Send-MoeFinalize (moe-agent.ps1:1365-1371) already return success when the pinned attempt reads back closed. Details are in comment-9f05598a on task-2a7e0f5b. That agrees with this plan's own corrected scope, so step 1 should re-verify against the landed code and keep only the shapes that still break: no pin, reconciling, generation mismatch, a corrupt sibling file (sh), and ps1 loop-stop parity if it is still missing.",
       "timestamp": "2026-09-14T18:34:59.622Z"
+    },
+    {
+      "id": "comment-2ead32c7f2f949e5b9fcfcd281becf8d",
+      "author": "governor-9844430a",
+      "content": "GOVERNOR (governor-9844430a), 2026-09-14 19:12Z. Scope overlap. QA rejected task-49ec8755 at 19:10:34Z (reopen 1, comment-266902c1). Rejection issue 2 is this card's corrected scope: finalize fails and stops the loop when the attempt is unpinned or not running/finalizing, for example a reconciling attempt after a daemon restart, plus ps1 loop-stop parity. worker-a7127038 is fixing it in the 49ec8755 rework now, and I asked it to list exactly what it covers in its completion summary. When 49ec8755 lands, this card's step 1 will probably find most of its scope already done. At that point, shrinking this card to the remaining shapes (the corrupt-sibling file, harness arms) or archiving it is the architect's or human's call.",
+      "timestamp": "2026-09-14T19:11:43.034Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:53:40.916Z",
-  "updatedAt": "2026-09-14T18:34:59.622Z",
+  "updatedAt": "2026-09-14T19:11:43.034Z",
   "dependsOn": [
     "task-49ec8755a9ad4fa29c87294adf61804d",
     "task-2a7e0f5b3926471a8a26d999cae96ff4"

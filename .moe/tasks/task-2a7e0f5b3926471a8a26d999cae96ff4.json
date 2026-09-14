@@ -140,7 +140,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -190,7 +190,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:12:30.633Z",
-  "updatedAt": "2026-09-14T19:07:38.384Z",
+  "updatedAt": "2026-09-14T19:24:10.279Z",
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
@@ -210,7 +210,9 @@
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 10,
     "firstClaimAt": "2026-09-14T18:29:15.217Z",
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-14T19:24:10.276Z",
+    "wallClockMs": 3295059
   },
   "planningNotes": {
     "approachesConsidered": "A (close at hand-back) + B (close-instead-of-park at boot) + C (guard scoped to a still-assigned holder). A sits at taskStore.updateTask's seat-clear rather than in the three named tools because the same leak exists in qa_approve, submit_plan, submit_plan_critique, request_replan, unblock_worker, handBackUnrecordedClaim and two sweeps; one chokepoint covers all of them and every seat-clearing caller already runs under the state mutex. C is included although the card calls it symptom-only: A+B cannot heal orphan records already on disk until the next restart, and on the explicit path the leftover is closed by openClaimAttempt's ATTEMPT_ALREADY_OPEN arm anyway (the ranked path already behaves this way). Rejected: closing in reconcileRunningAttempts on worker liveness or lastActivityAt (task rail forbids idle signals); an isHeld() gate on the chokepoint (unneeded — no seat-clearing caller is outside the mutex — and it would make harness tests skip the close); adding a closeReason/closedBy field to ExecutionAttempt (schema change, not required). Two observations were split into their own cards: the start_step ownership hole (assertWorkerOwns returns early for an unassigned row) and the wrapper post-flight consequence of closing at hand-back (finalize_attempt_rpc treats 'no open attempt for this worker' as a hard failure and ends the claim loop) — task-c628902ee8ba45188660e7a28f0e0bdd (start_step) and task-e47284ef038c423b85a2ebd304e0f4a6 (wrapper post-flight), both BACKLOG in this epic.",
@@ -235,7 +237,8 @@
   "planApprovedAt": "2026-09-13T20:02:13.504Z",
   "contextFetchedBy": [
     "governor-9844430a",
-    "worker-a7127038"
+    "worker-a7127038",
+    "qa-f0f9ea9e"
   ],
   "workStartedAt": "2026-09-14T18:29:31.354Z",
   "declaredFiles": [
@@ -329,5 +332,8 @@
     "kind": "completion",
     "sessionId": "worker-a7127038@2026-09-14T18:29:15Z",
     "at": "2026-09-14T19:07:38.384Z"
-  }
+  },
+  "completedAt": "2026-09-14T19:24:10.276Z",
+  "reviewCompletedAt": "2026-09-14T19:24:10.276Z",
+  "reviewSummary": "Verified candidate cand-0e3d996a = commit 90277ac (tree 72d4f892, pushed, branch==origin). DoD1: taskStore.updateTask closes running|reconciling on any non-null->null assignee write; tests for qa_reject, seat-freeing report_blocked, set_task_status, unblock_worker seat-only. Task writers that bypass updateTask (purge with its own close, reorder, parentTaskId clear, load backfill) never clear a seat. finalizing carve-out is in the approved plan and documented. DoD2: boot closes running|reconciling orphans (missing/unassigned/other assignee; 5 it.each rows, fresh-StateManager reload); explicit claim of unassigned row succeeds. DoD3: existing hold tests untouched (workerStore +89/-1 import only, sweeps one fixture re-seed with same assertions) and green; guard-removed mutation reddens 'refuses a competing claim'. DoD4: incident test reaches gen 3. DoD5: MCP_SERVER.md + CONFIGURATION.md updated; no 'ends its claim loop' sentence (architect correction); replacement checked at moe-agent.sh:1975-1979 / ps1:1363-1370. Re-ran: exact-candidate archive probe npm test exit 0 (122 files, 2022 passed/2 skipped), tsc 0; shared checkout recorded command exit 0 (2043/2 skipped), tsc 0. The 21-case gap is all peer-uncommitted parameterized cases in deliveryProjection.test.ts (17 vs 38); this task's files match (12/16/10). Mutation replay on candidate: all-old 12 red incl. incident ATTEMPT_RECONCILING; old-taskStore 4; old-claimNextTask 2; boot-old 5; boot-running-only 2; boot-reparks-held 1; handback-finalizing 1; hook-needs-status-change 1; hook-rethrows 1; guard-ignores-assignee 2; guard-removed 2; none 38/0 before+after. Rails: no idle signal in added source; scripts/schema untouched."
 }
