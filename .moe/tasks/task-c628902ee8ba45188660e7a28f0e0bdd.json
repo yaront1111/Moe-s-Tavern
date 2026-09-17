@@ -111,7 +111,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,20 +121,30 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-76452bc1e63c414291a4f84d4dad465e",
+      "author": "qa-17c2d0c8",
+      "content": "QA evidence (qa-17c2d0c8, 2026-09-17) — APPROVE.\n\nCommit: fedba17, kind=completion, pushed, ancestor of HEAD, recordedAt 17:25:08 > reviewStartedAt 17:24:19. 11 paths = the 9 task files + 2 board JSONs. Worktree == HEAD on every task path; EOLs preserved (enforcement.ts/completeTask.ts/startStep.test.ts/completeStep.test.ts CRLF, the rest LF), all test diffs +N -0.\n\nCommands I re-ran in packages/moe-daemon:\n- npx vitest run src/util/enforcement.test.ts src/tools/{startStep,completeStep,completeTask}.test.ts -> exit 0, 4 files, 156 passed.\n- npm test -> exit 0, 122 files, 2067 passed | 2 skipped (matches the worker's number exactly).\n- npx tsc --noEmit -> exit 0.\n\nDoD:\n1. start_step on an unassigned WORKING row: STATE_CONFLICT (-32002, codeName TASK_NOT_CLAIMED), context.retryable true, nextAction moe.claim_next_task {taskId, statuses:['WORKING'], workerId}; message names the claim because McpAdapter.ts:314 ships only {tool, codeName}. Worker record untouched.\n2. Foreign worker still NOT_ALLOWED: assertWorkerOwns is byte-identical and its 7 other callers (submitPlan, qaApprove, qaReject, reportBlocked, requestReplan, acquireResource, waitForResource) are untouched (grep-confirmed). Owner path unchanged, pre-existing startStep cases green.\n3. complete_step + complete_task carry the same guard with one refusal test each. In completeTask.ts the guard is line 102 — before assertAllStepsCompleted, verification, branch policy, setAttemptPhase('finalizing') (149) and the REVIEW updateTask (156).\n4. docs/MCP_SERVER.md: 'Claimed row required' under moe.start_step, a bullet under complete_step and complete_task, narrowed Ownership & Ordering no-op sentence (accurate for that section's six-tool scope) + prose paragraph.\n\nIndependent red proof, my own scratch tree D:/moe-qa-c628 (outside the repo, node_modules junction, all 4 sources restored and sha256-verified before AND after every run; baseline `none` 156/156 first and last):\n- guard-noop -> 7 red\n- old-startStep (fedba17^ source) -> 3 red, only startStep's new cases\n- old-completeStep -> 1 red\n- old-completeTask -> 1 red\n- late-guard-startStep (guard moved after the writes) -> \"expected 'CODING' to be 'IDLE'\" + a follow-on INVALID_STATE, so the \"nothing is written\" assertions are not vacuous.\nAll failures behavioural (\"promise resolved { success: true } instead of rejecting\" / value mismatches), never a missing symbol. Teardown: junction deleted first, repo vitest.mjs verified present, scratch removed, `git diff HEAD -- packages/moe-daemon docs` empty — no mutation leaked back.\n\nRails: daemon-only, no git in the daemon, no store or migration change, no forbidden pattern, the refusal is one typed throw before any write with no new try/catch to swallow it. Calls without a workerId stay tolerated on purpose (the plugin /ws path never sends one; WebSocketServer does not dispatch these tools with an injected workerId).\n\nNot blocking, for the record: enforcement.ts is now 341 lines (300 advisory), and qa_approve/qa_reject still hold the same unassigned-row early return — already filed by the plan as a separate card. Behaviour change is intended and documented: after a release_task or a restart purge, a live seat's next start_step/complete_step/complete_task is refused until it re-claims.\n\nActivation: inert until the live daemon is rebuilt and restarted.",
+      "timestamp": "2026-09-17T18:12:33.408Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:37:10.974Z",
-  "updatedAt": "2026-09-17T17:25:08.306Z",
+  "updatedAt": "2026-09-17T18:13:03.411Z",
   "metrics": {
     "firstClaimAt": "2026-09-17T16:48:37.886Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-17T18:13:03.411Z",
+    "wallClockMs": 5065525
   },
   "contextFetchedBy": [
     "architect-259309b5",
     "governor-82389379",
-    "worker-3b5de06f"
+    "worker-3b5de06f",
+    "qa-17c2d0c8"
   ],
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -235,5 +245,8 @@
     "kind": "completion",
     "sessionId": "worker-3b5de06f@2026-09-17T17:12:59Z",
     "at": "2026-09-17T17:25:08.306Z"
-  }
+  },
+  "completedAt": "2026-09-17T18:13:03.411Z",
+  "reviewCompletedAt": "2026-09-17T18:13:03.411Z",
+  "reviewSummary": "APPROVED. Full evidence: comment-76452bc1e63c414291a4f84d4dad465e.\n\nCommit fedba17 verified (completion, pushed, ancestor of HEAD, recorded after reviewStartedAt; 11 paths = 9 task files + 2 board JSONs; worktree == HEAD on every task path; EOLs preserved; test diffs +N -0).\n\nRe-run by me in packages/moe-daemon: the 4 target test files -> exit 0, 156 passed; npm test -> exit 0, 122 files, 2067 passed | 2 skipped (matches the worker's figure); npx tsc --noEmit -> exit 0.\n\nDoD1: start_step on an unassigned WORKING row throws STATE_CONFLICT (-32002, TASK_NOT_CLAIMED), context.retryable + nextAction moe.claim_next_task {taskId, statuses:['WORKING'], workerId}; the message names the claim (McpAdapter ships only {tool,codeName}); caller worker record untouched. DoD2: foreign worker still NOT_ALLOWED — assertWorkerOwns byte-identical, its 7 other callers untouched, owner path and existing startStep tests green. DoD3: complete_step and complete_task take the same guard with one refusal test each; in complete_task it precedes step/verification/branch checks, setAttemptPhase('finalizing') and the REVIEW write. DoD4: docs/MCP_SERVER.md states the rule under moe.start_step, a bullet each under complete_step/complete_task, and a narrowed Ownership & Ordering sentence.\n\nOwn red proof, scratch tree outside the repo, sources sha-verified around every run, baseline 156/156 first and last: guard-noop 7 red, old-startStep 3, old-completeStep 1, old-completeTask 1, late-guard 'expected CODING to be IDLE' (so the \"writes nothing\" assertions bite). All behavioural. Teardown clean: git diff HEAD on packages/moe-daemon and docs empty.\n\nRails: daemon-only, no git, no store/migration change, no forbidden pattern, one typed throw before any write. No-workerId legacy tolerance kept on purpose. Non-blocking: enforcement.ts now 341 lines (300 advisory); qa_approve/qa_reject keep the same unassigned-row early return (separate card). Inert until the daemon is rebuilt and restarted."
 }
