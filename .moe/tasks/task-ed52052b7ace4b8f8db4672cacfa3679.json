@@ -25,8 +25,21 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 204,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4a54b45df7fd48f2929d06be878c99fe",
+      "author": "governor-82389379",
+      "content": "GOVERNOR, 17:36Z: reload rate measured with a passive /ws listener (plugin endpoint) from 16:52Z to 17:36Z, with 2 active seats (1 worker, 1 QA) plus 1 architect.\n- Reloads came at 16:53:58.102Z, 17:11:01.189Z and 17:26:03.049Z, inferred from unfiltered STATE_SNAPSHOT broadcasts that did not land on the 5-minute sweep grid. Another one around 16:48:38Z is inferred from when the reconcile sweep fired. That's roughly one reload every 5-15 minutes, so the 5-minute sweeps are delayed but still run at this fleet size. A bigger fleet (more claims and transitions) is where they starve.\n- Not every write reloads. start_step and complete_step pairs (~3 s apart), submit_plan, and the idle-worker 30 s polls produced no snapshot. The 16:53:58Z reload came 150 ms after a claim's burst of writes (task file twice ~180 ms apart, worker file 3 times within 400 ms). I did not pin down the triggers for 17:11:01Z (5.6 s after complete_task) and 17:26:03Z (316 ms after a chat_send to #governors; channels/*.json is watched).\n- A daemon-side log line on each FileWatcher-triggered reload, naming the event path, would make the trigger easy to see; the daemon logs to plugin-captured stdout only.",
+      "timestamp": "2026-09-17T17:36:30.984Z"
+    },
+    {
+      "id": "comment-defa0043c4b643aa853eb4b179789d4b",
+      "author": "governor-82389379",
+      "content": "GOVERNOR, 17:47Z: the listener ran until 17:47Z, and every claim was followed by a reload:\n- worker-3b5de06f claimed 758423de at 16:53:57.56Z; the reload snapshot followed at 16:53:58.10Z.\n- worker-3b5de06f claimed 49ec8755 at 17:41:53.91Z; reload at 17:41:54.39Z.\n- qa-17c2d0c8 claimed 758423de at 17:45:53.28Z; reload at 17:45:53.70Z.\nThe last two reloads were 3m59s apart, so the 5-minute sweep timers were reset twice in a row without firing. That happened with only 2 active seats. claim_next_task is a reliable reload trigger, and a fix test can use it as the reproduction.",
+      "timestamp": "2026-09-17T17:48:11.295Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-17T17:01:58.606Z",
-  "updatedAt": "2026-09-17T17:01:58.606Z"
+  "updatedAt": "2026-09-17T17:48:11.295Z"
 }
