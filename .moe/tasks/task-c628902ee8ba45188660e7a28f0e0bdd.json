@@ -124,7 +124,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:37:10.974Z",
-  "updatedAt": "2026-09-17T17:24:19.004Z",
+  "updatedAt": "2026-09-17T17:25:08.306Z",
   "metrics": {
     "firstClaimAt": "2026-09-17T16:48:37.886Z",
     "plannedStepCount": 6,
@@ -184,7 +184,56 @@
     "packages/moe-daemon/src/tools/completeStep.test.ts",
     "packages/moe-daemon/src/tools/completeTask.ts",
     "packages/moe-daemon/src/tools/completeTask.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+    ".moe/tasks/task-c628902ee8ba45188660e7a28f0e0bdd.json"
   ],
-  "completionSummary": "This fixes the defect where moe.start_step, moe.complete_step and moe.complete_task accepted a supplied workerId on an unassigned WORKING row and stamped that worker's record. It adds `assertWorkerHoldsTask` and `TASK_NOT_CLAIMED` to util/enforcement.ts as a strict sibling of assertWorkerOwns, which stays byte-identical so its 7 other callers keep the unassigned no-op.\n\nGuard behaviour:\n- A truthy workerId on an unassigned row gets STATE_CONFLICT (-32002, codeName TASK_NOT_CLAIMED), context `{taskId, workerId, retryable:true, nextAction:{tool:'moe.claim_next_task', args:{taskId, statuses:['WORKING'], workerId}}}`. The message names the claim call.\n- Every other case goes to assertWorkerOwns: a foreign worker still gets NOT_ALLOWED, and no workerId (legacy) is still tolerated.\n\nThe three tools swap in the new guard in place (+2 -2 each). It runs before every write, and in complete_task before steps, verification, branch policy and setAttemptPhase('finalizing').\n\nTests (all +N -0):\n- 6 unit cases.\n- start_step: 3 cases. The refusal writes nothing (worker stays IDLE/null); the claim is refused before get_context; following nextAction.args through claim_next_task, then get_context, then the same start_step succeeds.\n- complete_step: 1 case. Nothing is recorded and the worker is untouched.\n- complete_task: 1 case. The task stays WORKING with no verification and the worker stays CODING/task-other.\n\ndocs/MCP_SERVER.md gets a Claimed row required note under start_step, a bullet each under complete_step and complete_task, and an amended Ownership & Ordering no-op sentence plus a prose paragraph.\n\nRed proof (scratch tree, none = 156/156 first and last):\n- Swapping in each tool's HEAD source turns only that tool's new cases red, with 'promise resolved { success: true } instead of rejecting'.\n- guard-noop: 7 red.\n- legacy-refused: 14 red. That is 13 pre-existing no-workerId cases plus unit (c).\n- no-statuses: 5 red. not-retryable: 4 red.\n- late-guard: 'CODING' vs 'IDLE', 'COMPL"
+  "completionSummary": "This fixes the defect where moe.start_step, moe.complete_step and moe.complete_task accepted a supplied workerId on an unassigned WORKING row and stamped that worker's record. It adds `assertWorkerHoldsTask` and `TASK_NOT_CLAIMED` to util/enforcement.ts as a strict sibling of assertWorkerOwns, which stays byte-identical so its 7 other callers keep the unassigned no-op.\n\nGuard behaviour:\n- A truthy workerId on an unassigned row gets STATE_CONFLICT (-32002, codeName TASK_NOT_CLAIMED), context `{taskId, workerId, retryable:true, nextAction:{tool:'moe.claim_next_task', args:{taskId, statuses:['WORKING'], workerId}}}`. The message names the claim call.\n- Every other case goes to assertWorkerOwns: a foreign worker still gets NOT_ALLOWED, and no workerId (legacy) is still tolerated.\n\nThe three tools swap in the new guard in place (+2 -2 each). It runs before every write, and in complete_task before steps, verification, branch policy and setAttemptPhase('finalizing').\n\nTests (all +N -0):\n- 6 unit cases.\n- start_step: 3 cases. The refusal writes nothing (worker stays IDLE/null); the claim is refused before get_context; following nextAction.args through claim_next_task, then get_context, then the same start_step succeeds.\n- complete_step: 1 case. Nothing is recorded and the worker is untouched.\n- complete_task: 1 case. The task stays WORKING with no verification and the worker stays CODING/task-other.\n\ndocs/MCP_SERVER.md gets a Claimed row required note under start_step, a bullet each under complete_step and complete_task, and an amended Ownership & Ordering no-op sentence plus a prose paragraph.\n\nRed proof (scratch tree, none = 156/156 first and last):\n- Swapping in each tool's HEAD source turns only that tool's new cases red, with 'promise resolved { success: true } instead of rejecting'.\n- guard-noop: 7 red.\n- legacy-refused: 14 red. That is 13 pre-existing no-workerId cases plus unit (c).\n- no-statuses: 5 red. not-retryable: 4 red.\n- late-guard: 'CODING' vs 'IDLE', 'COMPL",
+  "commits": [
+    {
+      "sha": "fedba1718776e8e440f22ed36c571f9e768eaad7",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3b5de06f@2026-09-17T17:12:59Z",
+      "paths": [
+        ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+        ".moe/tasks/task-c628902ee8ba45188660e7a28f0e0bdd.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts",
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "recordedBy": "worker-3b5de06f",
+      "recordedAt": "2026-09-17T17:25:08.306Z",
+      "treeId": "351164d5ff95d3744e3805f17fd247fe28ea7b2d",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-758423de874f461199b8ed17cfd847a1"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/completeStep.ts",
+    "packages/moe-daemon/src/util/enforcement.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/startStep.ts",
+    "packages/moe-daemon/src/tools/completeTask.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3b5de06f@2026-09-17T17:12:59Z",
+    "at": "2026-09-17T17:25:08.306Z"
+  }
 }
