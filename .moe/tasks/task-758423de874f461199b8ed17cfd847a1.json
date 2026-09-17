@@ -70,46 +70,83 @@
     {
       "stepId": "step-5",
       "description": "Phase 4c — Wait and wake. packages/moe-daemon/src/state/attemptStore.ts: add one state-side helper, `announceAttemptClosed(state: StateManager, taskId: string): void`, that emits `{ type: 'TASK_UPDATED', payload: task }` for the task when it still exists (no activity row, no updatedAt change), and update the store header (~22-26, 'appends no activity row and emits no event') to name this single, deliberate exception: the one event that lets wait_for_task waiters and the board see that a finalizing boundary ended. packages/moe-daemon/src/tools/finalizeAttempt.ts: after the single close write (~224), when the attempt really moved from finalizing to closed, call announceAttemptClosed; the idempotent closed replay (~200) calls nothing. The tool never calls the @internal state.emit directly. packages/moe-daemon/src/tools/waitForTask.ts: in findMatchingTask's eligible chain (~158-168) add the same `foreignFinalizingAttempt` filter with one index per call, so a row claim_next_task would skip is never wait-visible (otherwise QA seats spin wake → claim → nothing); it stays inside the eligible chain so the solo NO_TEAM_MEMBERSHIP routing (~201) is unaffected. Error handling: the emit runs after the durable write (setAttemptPhase publishes the closed record before returning), and state.emit already isolates subscriber errors, so a subscriber can never observe the attempt still open or fail the tool. Make step 2's cases (2) and (3) green.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/attemptStore.ts",
         "packages/moe-daemon/src/tools/finalizeAttempt.ts",
         "packages/moe-daemon/src/tools/waitForTask.ts"
       ],
-      "startedAt": "2026-09-14T21:58:08.850Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "note": "Resumed by worker-3b5de06f (prior seat worker-a7127038 left announceAttemptClosed + the waitForTask import in checkpoint 3056104; no src drift since).\n- attemptStore.ts (CRLF kept): header now names the ONE deliberate event exception (announceAttemptClosed re-publishes the unchanged task as TASK_UPDATED when a finalizing boundary ends). Helper itself was already in HEAD: no activity row, no updatedAt, missing task announces nothing.\n- finalizeAttempt.ts (LF kept): calls announceAttemptClosed(state, closed.taskId) right after the single setAttemptPhase close write; the closed replay (returns before the fence) announces nothing. Header, response message and tool description now say the close lifts all three holds (own next claim, other seats' claims of the task, qa_approve).\n- waitForTask.ts (CRLF kept): findMatchingTask's eligible chain gains the same foreignFinalizingAttempt predicate as claim_next_task's ranked pool, after the dependsOn filter, so the solo NO_TEAM routing is unaffected. Index built lazily at most once per match (??=) since the matcher re-runs per waiter per task event.\nVerification:\n- tsc --noEmit: exit 0.\n- Repo: waitForTask, finalizeAttempt, claimNextTask, lifecycle.e2e, governanceFeatures, delivery/acceptance, attemptHandback, qaApprove tests: 8 files, 234 passed | 2 skipped.\n- Scratch (composed test file, recompose byte-identical to prior final): none = 3 failed | 52 passed; the 3 reds are the step-6 deregister cases only. Waiter (3) and publish (3b) now green.\n- Mutation replay (HEAD file swapped in, restored + cmp after): old finalizeAttempt.ts -> waiter 'expected false to be true' (never woke) + publish 'expected [] to deeply equal [ task-W ]'; old waitForTask.ts -> waiter 'expected { hasNext: true ... } to match object { hasNext: false, timedOut: true }'. Final none rerun identical (3 step-6 reds).",
+      "startedAt": "2026-09-14T21:58:08.850Z",
+      "completedAt": "2026-09-17T16:58:31.764Z"
     },
     {
       "stepId": "step-6",
       "description": "Phase 4d — Close path for an exiting runner. packages/moe-daemon/src/state/workerLifecycle.ts deregisterWorker (~174-192). (1) FIRST, before the missing-record early return (~179-182), close every attempt with `attempt.workerId === workerId && phase === 'finalizing'` through setAttemptPhase(…, 'closed'), each in its own try/catch (log { workerId, attemptId, taskId, error } and continue), then announceAttemptClosed for each affected task. Keyed on the attempt, it still works when the worker record was already pruned (a post-flight gate longer than staleWorkerTimeoutMs lets the Layer-3 sweep delete the record while the attempt is finalizing). (2) Close-only retry: when the worker record is DEAD with no assigned task (the existing alreadyDead short-circuit ~188), keep returning alreadyDead true WITHOUT re-posting chat, activity or WORKER_DELETED — the close in (1) has already run, so a retry after a failed close closes again quietly and the documented idempotency holds. The return shape and tools/deregisterWorker.ts stay unchanged. (3) Comment the rationale precisely: deregister_worker is sent only from exit and teardown paths — after the landing, its rescue, or its abandonment — so it never cuts a live landing short; it is NOT evidence of a landing: on some paths no finalize precedes it (sh EXIT trap with no landing done, ps1 console-window close, a finalize whose acknowledgement failed), and the close then lifts qa_approve's hold without an acknowledged landing — exactly what today's QA-claim supersede already does; under the legacy delivery policy the soft NO-COMPLETION-COMMIT warning is then the only guard, and strict policies still refuse. This is an explicit end-of-life call, not an idle signal. Do NOT close finalizing attempts in deleteWorker, the startup purge or any sweep — non-DEAD deletions are driven by lastActivityAt (rail); those gaps belong to task-686afecb5b844706be805f7cd86ba055. packages/moe-daemon/src/state/attemptStore.ts, comment-only: closeHandedBackAttempts' doc (~483-487) must say a finalizing attempt ends only through moe.finalize_attempt or its runner's deregister_worker, no longer 'a later claim of the row supersedes it'. Error handling: a failed close never fails deregister_worker; it logs and leaves the attempt finalizing for the retry. Make step 2's case (4) and its variants green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts",
         "packages/moe-daemon/src/state/attemptStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts"
+      ],
+      "note": "workerLifecycle.ts (CRLF kept, +68/-4):\n- New private closeOwnFinalizingAttempts(state, workerId): filters listAttempts on attempt.workerId === workerId && phase finalizing, closes each through setAttemptPhase in its own try/catch (logger.warn { workerId, attemptId, taskId, error }, continue), then announceAttemptClosed per real close. Doc states the rationale: exit/teardown-only call, explicit end-of-life not idle signal; NOT landing evidence (sh EXIT trap before landing, ps1 console close, failed finalize ack) so it lifts qa_approve's hold as the old supersede did; legacy policy only warns NO-COMPLETION-COMMIT, strict refuses; deleteWorker/purge/sweeps deliberately excluded (task-686afecb).\n- deregisterWorker calls it FIRST, before the missing-record and DEAD early returns, so a pruned record still closes and a DEAD retry is a quiet close-only call (return shape and tools/deregisterWorker.ts unchanged).\nattemptStore.ts: closeHandedBackAttempts doc now says finalizing ends only via finalize_attempt or its runner's deregister_worker; no later claim supersedes it.\nattemptHandback.test.ts LANDED (+332/-0): cmp pristine==repo first, then cp of the composed final; scratch src == repo src after. Draft gained 2 cases beyond the plan list: (4C) failed close -> deregister still succeeds (alreadyDead false, worker DEAD, attempt finalizing), quiet retry closes it with no postToRoleChannel; (4D) GUARD a different seat's deregister leaves worker-1's hold (phases finalizing, qa-2 claim refused ATTEMPT_FINALIZING). Composed test typechecks (tsc on test-only tsconfig in scratch, exit 0).\nVerification:\n- tsc --noEmit exit 0.\n- Repo: attemptHandback, defensiveBatch, releaseTask, waitForTask, finalizeAttempt, claimNextTask, lifecycle.e2e, governanceFeatures, delivery/acceptance, attemptStore, workerStore, qaApprove: 12 files, 361 passed | 2 skipped.\n- Scratch mutation series (driver mutate6.mjs, restore + string check each run): none 25/25; old (HEAD workerLifecycle) 4 red: (4),(4A),(4B),(4C) 'expected [[1,finalizing]] to deeply equal [[1,closed]]'; after-missing 1 red (4A); after-dead 3 red (4A,4B,4C); no-announce 1 red (4B 'expected [] to deeply equal [ TASK_UPDATED ]'); no-catch 1 red (4C 'EPERM: attempt record is unwritable' thrown); any-worker 1 red (4D 'expected [[1,closed]] to deeply equal [[1,finalizing]]'); none 25/25; scratch == repo after.",
+      "startedAt": "2026-09-17T16:58:34.957Z",
+      "completedAt": "2026-09-17T17:02:07.970Z"
     },
     {
       "stepId": "step-7",
       "description": "Phase 5+6 — Update the tests that encode the old supersede, run the regression, document the rule. (1) Insert the worker's finalize_attempt (attemptId and generation from the preceding complete_task response, outcome 'nothing-to-commit') before each of the five QA claims that follow a complete_task: src/__e2e__/lifecycle.e2e.test.ts ~150, ~184 and ~205 (generation 3 for the second), ~234, and src/tools/governanceFeatures.test.ts ~317 — mirroring what the real wrapper does. Never weaken the new refusal to keep an old expectation; if a case needs a different outcome, say why in the step report. (2) Run `npx tsc --noEmit -p tsconfig.json` and the full `npm test` in packages/moe-daemon; delivery/acceptance.test.ts (fast-QA criterion ~1010-1175, candidate criterion, restart criterion) must stay green unchanged. Rerun a flaky file alone before concluding. (3) docs/MCP_SERVER.md: the record_check_run (~117) and record_delivery_receipt (~119) premise lines and the 'Close on hand-back' paragraph (~121) — replace '(or the next claim of that row)' with '(or its runner's moe.deregister_worker)', say the next claim closes only running and reconciling leftovers, and that no other seat can own the row while its attempt is finalizing; moe.finalize_attempt (~457-488) and moe.record_candidate (~678) — replace 'when QA may already own the REVIEW task' with the rule (no other seat can claim the row until the attempt is finalized; the attempt fence is still the guard), note that a real finalize publishes a TASK_UPDATED, and add the escape (`outcome: 'failed'` by a governor or human for a runner that is gone); moe.claim_next_task 'Finalizing hold' (~1103) — keep the worker-scoped paragraph and add the task-scoped third-party rule: an explicit-taskId claim of a task whose attempt is finalizing under another worker is refused with retryable -32002 ATTEMPT_FINALIZING before any write, the ranked pool skips it, and an interactive (TUI) seat's row stays held until its operator closes the CLI and the wrapper finalizes; moe.wait_for_task (~1171) — the matcher skips the same rows and wakes when the boundary ends; moe.deregister_worker (~1647) — closes the worker's own finalizing attempts, including when its record was already pruned, a DEAD worker's retry is a quiet close-only no-op that still returns alreadyDead true, and a deregister without a finalize lifts qa_approve's hold without an acknowledged landing; moe.qa_approve finalizing hold (~1756) — a QA claim can no longer lift it, and it is lifted by finalize_attempt or the runner's deregister.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
         "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts"
+      ],
+      "note": "(1) FINALIZE INSERTS: already landed in step 4 (checkpoint 3056104, unchanged since): lifecycle.e2e.test.ts finalizeLanding() wraps all 4 complete_task calls, so all 5 QA claims follow a finalize (the rejection cycle's second one uses its own gen-3 response); governanceFeatures.test.ts finalizes before its QA claim. Proof they encode the rule rather than weaken it: the pre-insert copies run against the final sources fail 4 tests with '[ATTEMPT_FINALIZING] Task task-e2e is held by worker worker-a's attempt ... (generation 1)' (and task-m); the landed copies pass 18/18. No refusal was weakened.\n(2) REGRESSION: tsc --noEmit -p tsconfig.json exit 0. Full `npm test` in packages/moe-daemon: exit 0, Test Files 122 passed (122), Tests 2056 passed | 2 skipped (2058) (+13 = the new attemptHandback cases). delivery/acceptance.test.ts green and untouched.\n(3) DOCS (docs/MCP_SERVER.md, LF kept): premise lines ~117/119, 'Close on hand-back', record_candidate and claim_next_task 'Finalizing hold on the task' were written by the prior seat (3056104); this step added: finalize_attempt intro no longer says 'two holds'; Escape note gains 'Finding one' (board attemptPhase; read-only .moe/attempts grep for \"phase\": \"finalizing\"; a workerId-less directed claim via moe-call.sh names holder/attempt/generation; a governor seat is redirected so reads the record) and 'Before closing it' (confirm the wrapper is gone) - answers governor-9844430a's ask 1; reattach_attempt and claim_next_task Reconciling-hold sentences no longer contrast with a caller-scoped-only finalizing hold; claim_next_task task hold points at the escape note; wait_for_task gains the finalizing-skip + TASK_UPDATED wake bullet; deregister_worker gains 'Closes its own finalizing attempts, first' (pruned record, TASK_UPDATED, failed close + quiet DEAD retry, exit-only call, not landing evidence, legacy vs strict policy, nothing else closes it) and the alreadyDead comment; qa_approve hold: lifted by finalize_attempt or the runner's deregister, a QA claim can no longer lift it.\n(4) TEST EXTENSION (governor ask 2): case (6) now parks a QA waiter, the governor's outcome-failed finalize wakes it (hasNext true, task-W REVIEW), then QA claims gen 2; 15s case timeout so a broken wake fails on the assertion. Recomposed, cmp repo==previous final before cp; repo test now +336/-0.\nMutation replay on the final test file (scratch, restored + cmp each run): none 25/25; old finalizeAttempt 3 red (waiter, publish, governor waiter); old waitForTask 2 red (waiter immediate match, governor waiter not parked); all 6 pre-task sources 11 red / 14 green (12 pre-existing + own worker-scoped hold + malformed record); none 25/25.",
+      "startedAt": "2026-09-17T17:02:16.876Z",
+      "completedAt": "2026-09-17T17:07:13.503Z"
     },
     {
       "stepId": "step-8",
       "description": "Phase 7+8 — Adversarial self-review, then complete. Answer in the task comment: (1) LIVENESS — every way a finalizing attempt now ends (finalize_attempt by its runner, its runner's deregister_worker even after the record was pruned, a governor or human finalize with outcome 'failed') and every shape that still holds a row: a wrapper killed with no exit trap (SIGKILL, power loss), deleteTask, set_task_status REVIEW→DONE (task-686afecb5b844706be805f7cd86ba055), and an interactive TUI seat, whose row stays held until its operator closes the CLI (codex runs the TUI for every role by default; a one-shot seat lands promptly). Confirm nothing new closes on an idle signal. (2) REJECT BYPASS — qa_reject has no finalizing hold and its ownership checks are no-ops on an unassigned row, so a human reject sends the row to WORKING with the attempt still finalizing; rework claims are then refused or skipped until the runner finalizes, and that worker's post-flight sees WORKING and lands a checkpoint, not a completion; cite case (7). (3) DEREGISTER WITHOUT FINALIZE — list the exit paths where it happens and state that qa_approve's hold then lifts without an acknowledged landing, as HEAD's supersede already does. (4) ORPHANS — task-2a7e0f5b's arm-3 cleanup of running and reconciling leftovers is untouched; cite the green cases. (5) LOCKSTEP — claim_next_task's ranked filter and wait_for_task's matcher use the same predicate; a QA waiter never wakes into a claim that returns nothing. (6) ORDERING AND CONCURRENCY — both refusals run before any write on the explicit path; claims, finalize_attempt and deregister_worker run serially under the state mutex; state which order yields which generation. (7) WRAPPER — through its post-flight the worker's attempt is the only open one, so moe_attempt_read passes and record_candidate is current; wrapper-side changes stay with task-49ec8755's rework. (8) DRIFT — tool descriptions outside the 10-file budget that now contradict the rule (recordCandidate.ts, claimGuards.ts, deregisterWorker.ts) are handed to task-686afecb5b844706be805f7cd86ba055. Then rerun `npm test` and `npx tsc --noEmit` in packages/moe-daemon, call moe.declare_files for every path touched, and moe.complete_task with `verification: { command: 'npm test', exitCode: 0, outputTail }` and a summary naming the third-party refusal, the pool and wait skip, the finalize wake and the deregister close.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/util/claimEligibility.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimEligibility.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review with no code changes in this step. The modifiedFiles list repeats the task's full path set for attribution. The 8 answers are in task comment comment-5b6a63bb:\n- liveness closes and the remaining holders\n- reject bypass (case 7)\n- deregister without finalize (exit paths; ps1 finally order is gate stop, rescue, postflight, then deregister)\n- orphans (12 pre-existing cases green on old and new, case 9)\n- lockstep (shared predicate, lazy wait index)\n- ordering, generations and mutex\n- the wrapper precondition, with an honest boundary: DoD 1 is proven at the daemon contract level, not by a live fleet run\n- drift in recordCandidate.ts, claimGuards.ts, deregisterWorker.ts and qaApprove.ts, handed to task-686afecb (comment-abd55b4c on that card)\nAdversarial findings with no fix needed: get_next_task is not in claim lockstep even for dependsOn (pre-existing, out of scope). On activation, any finalizing attempt already on disk becomes a hold (none on this board at 2026-09-17). A governor's directed claim is redirected before the refusal, so the doc tells governors to read the attempt record.\nFresh verification: tsc --noEmit exit 0; npm test exit 0, 122 files, 2056 passed | 2 skipped (13.0s). declare_files was called for all 10 paths. Launchers are untouched, so the postflight and parity harnesses were not required.",
+      "startedAt": "2026-09-17T17:07:19.352Z",
+      "completedAt": "2026-09-17T17:10:21.920Z"
     }
   ],
-  "planRevision": 10,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-a7127038",
+  "planRevision": 17,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -145,11 +182,17 @@
       "author": "worker-a7127038",
       "content": "STEP 1: I confirmed the chain at HEAD d1b3d3a (branch moe/work-2026-09-13; 90277ac from task-2a7e0f5b is an ancestor). No code changed in this step.\n\n(a) THE RACE\n- completeTask.ts:149-152 puts the attempt in `finalizing` BEFORE the WORKING->REVIEW updateTask (:156-169) clears the seat.\n- claimNextTask.ts:271-281: the worker-scoped hold only matches `a.workerId === params.workerId`, so qa-1 passes. The explicit path (:285-331) has no finalizing check. The assignment is written at :463, then openClaimAttempt runs at :487.\n- In openClaimAttempt (:63-71), openAttempt throws ATTEMPT_ALREADY_OPEN because finalizing is in OPEN_PHASES (attemptStore.ts:56-60). Arm 3 (:70) calls closeOpenAttempts, which closes the worker's finalizing attempt, and :71 opens QA's next generation.\n- After that, qaApprove.ts:79 finds nothing to hold. The equality fence (enforcement.ts:148-193) refuses the worker's identity with ATTEMPT_SUPERSEDED.\n\n(b) WRAPPER AT HEAD\n- moe_attempt_read (sh:1875-1893) and Read-MoeAttempt (ps1:1275-1288) require exactly one open attempt owned by this seat. After the supersede, the only open attempt is QA's, so the read fails with 'identity'. The result is MOE_COMMIT_FAILED_GATE, a rescue ref and a stopped loop.\n- Both wrappers claim only through the ranked pool: sh:1641 CLAIM_JSON and ps1:558 $claimJson carry statuses and workerId, never a taskId. So the pool must skip silently rather than refuse.\n- Live evidence consistent with this: refs/moe/rescue/task-49ec8755.../20260914T212120Z (a7042eb, Moe-Reason gate-failed, session worker-a7127038@2026-09-14T19:10:49Z). I did not re-prove its cause.\n- Wrapper hardening stays with task-49ec8755's rework, which is still dirty and unlanded.\n\n(c) NOTHING ELSE CLOSES IT\n- These all select by assignment: releaseWorkerTasks (workerLifecycle.ts:127-128), deleteWorker (workerStore.ts:260-261), purgeAllWorkers (:415-416), and release_task's unassigned branch (releaseTask.ts:199-233).\n- These skip finalizing: closeHandedBackAttempts (attemptStore.ts:468-472), reconcileRunningAttempts (:372), runReconcileWindowSweep (sweeps.ts:218). reattach refuses it (reattachAttempt.ts:177-190).\n- The purge even SPARES a seat that holds a finalizing attempt (workersHoldingOpenAttempts, workerStore.ts:320-327).\n- So a refusal with no close path would wedge the row, which is why the deregister close is needed.\n\n(d) WAKE GAP\n- attemptStore.ts:22-26 emits no event. wait_for_task reacts only to TASK_CREATED and TASK_UPDATED (waitForTask.ts:383).\n- state.emit is @internal (StateManager.ts:978-979). It calls the emitter plus every subscriber, each in its own try/catch.\n- Non-test subscribers:\n  - waitForTask:356\n  - waitForResource:143 (RESOURCE_UPDATED only)\n  - chatWait:91 (MESSAGE_CREATED and CHANNEL_DELETED only)\n- The emitter is wsServer.broadcast (index.ts:597-599), which re-serves TASK_UPDATED through deliveryProjection (WebSocketServer.ts:279-290).\n- An extra TASK_UPDATED for an unchanged task therefore only re-runs the matcher and refreshes the board row.\n\n(e) finalize_attempt has no ownership gate. OUTCOMES are landed|nothing-to-commit|rescued|failed (finalizeAttempt.ts:30), and an already-closed attempt replays at :200 before the fence runs. A governor or human can therefore close an abandoned boundary with outcome 'failed'.\n\n(f) TESTS THAT DEPEND ON ARM 3 (five insert points in four tests)\n- lifecycle.e2e.test.ts :150, :184, :205 (second completion is generation 3) and :234 (:246 is a direct updateTask with no attempt).\n- governanceFeatures.test.ts:317.\n- Staying green:\n  - claimNextTask.test.ts:1239 and :1262 claim WORKING task-2 while the finalizing attempt sits on REVIEW task-1.\n  - finalizeAttempt.test.ts:115-126 pins the persisted keys, and this change persists no new field.\n  - delivery/acceptance.test.ts claims at :1052, :1109, :1152, :1324, :1766, :1882 and :1906, and none of them touches a row finalizing under another worker. In the candidate criterion (:1457-1560), QA only calls get_context before the finalize.\n\nDESIGN DECISION: option A-refuse.\n- Only the attempt's own worker may claim a task whose attempt is finalizing.\n- An explicit-taskId claim from anyone else is refused with retryable -32002 ATTEMPT_FINALIZING, before any write.\n- The ranked pool and the wait_for_task matcher skip the row through one shared predicate in util/claimEligibility.ts.\n- A real finalize emits one TASK_UPDATED through a state-side helper.\n- deregister_worker closes its own worker's finalizing attempts, keyed on attempt.workerId, so a pruned worker record is covered.\n- Arm 3 still closes running and reconciling leftovers.\n\nREJECTED ALTERNATIVES\n- Keeping the finalizing record acknowledgeable next to QA's attempt: this breaks assertNoOpenAttempt, currentAttempt, the equality fence, and both wrapper readers.\n- A persisted supersede marker: needs a schema change.\n- Wrapper-only option B: cannot restore qa_approve's hold, and the fence would still refuse the candidate a gated landing needs.",
       "timestamp": "2026-09-14T21:38:25.384Z"
+    },
+    {
+      "id": "comment-5b6a63bb77a94410b92844cd7b34920b",
+      "author": "worker-3b5de06f",
+      "content": "STEP 8 ADVERSARIAL SELF-REVIEW (worker-3b5de06f; whole-task diff vs 3056104~1: 10 files, +679/-50).\n\n(1) LIVENESS. A finalizing attempt now ends only through: (a) finalize_attempt by its runner (sh finalize_postflight / ps1 Send-MoeFinalize run for every worker landing kind: landed, nothing-to-commit, rescued, failed); (b) its runner's deregister_worker, keyed on attempt.workerId, so it also works after the record prune (case 4A) and on a DEAD retry (4B, 4C); (c) a governor or human finalize_attempt with outcome 'failed' (case 6, which now also proves the parked QA waiter wakes). Shapes that still hold a row: a wrapper killed with no exit trap (SIGKILL, power loss; ps1 console-window close runs only the Exiting handler, which deregisters); an interactive TUI seat until its operator closes the CLI (codex TUI is the default for every role); deleteTask (finalize_attempt then answers TASK_NOT_FOUND, but deregister still closes it); set_task_status REVIEW->DONE (not claimable anyway; the worker-scoped hold lasts until the wrapper finalizes). The automated backstops belong to task-686afecb. Nothing new reads lastActivityAt or any idle signal. The new code reads only attempt records, plus the explicit deregister call.\n\n(2) REJECT BYPASS. qa_reject has no finalizing hold, so a human reject sends the row to WORKING, unassigned, with gen 1 still finalizing. Rework claims are then refused (explicit) or skipped (ranked and wait) until the runner finalizes. The sh wrapper's finalize_postflight still acknowledges after a checkpoint landing. Case (7): worker-2 is refused ATTEMPT_FINALIZING, then after finalize it gets gen 2.\n\n(3) DEREGISTER WITHOUT FINALIZE. This happens on the sh EXIT trap before any landing ran, the ps1 PowerShell.Exiting handler on a console close, a finalize whose acknowledgement was exhausted, and the sh wrapper_restart exec path (post-flight already ran). In those cases qa_approve's hold lifts with no acknowledged landing, exactly as HEAD's QA-claim supersede did. Under legacy, NO-COMPLETION-COMMIT is the only guard; strict policies refuse. Documented in the workerLifecycle doc and MCP_SERVER.md. Verified ordering: ps1's outer finally runs Stop-MoeGateChild, then teardown rescue, then Complete-MoePostflight, then Invoke-MoeDeregister. The postflight harnesses assert 'rescue before deregister'.\n\n(4) ORPHANS. Arm 3 still closes running and reconciling leftovers. The 12 pre-existing attemptHandback cases (task-2a7e0f5b) are green on both the old and the new sources. Case (9): a malformed finalizing record holds nothing and is superseded as before.\n\n(5) LOCKSTEP. claim_next_task's ranked filter and wait_for_task's eligible chain both call foreignFinalizingAttempt over finalizingAttemptsByTask. The wait index is built lazily, at most once per match. Case (3): the waiter stays parked (activeWaiters.has) while a finalize is pending. Mutation old-waitForTask makes the waiter match immediately; that is the spin.\n\n(6) ORDERING AND CONCURRENCY. On the explicit path, both refusals (worker-scoped, then task-scoped) run before any eviction, dependsOn or assignment write. claim, finalize_attempt, deregister_worker, qa_approve and qa_reject all run under state.runExclusive. announceAttemptClosed emits synchronously after setAttemptPhase has published the closed record, so a woken matcher never sees it open. state.emit isolates subscriber errors. There is no await between wait_for_task's immediate check and its subscribe. Generations:\n- complete_task gives g1 finalizing.\n- A QA claim before finalize writes nothing and allocates nothing.\n- finalize closes g1 (one TASK_UPDATED). The QA claim then gets g2, and qa_approve closes g2.\n- A deregister before finalize closes g1. A QA claim then gets g2, and a late finalize(g1) replays success with no write and no event.\n- After a human reject, worker-2 gets g2 only after the g1 close.\n\n(7) WRAPPER. Through post-flight the worker's finalizing attempt is the only open attempt on the task (case 1 asserts qa-1 holds none and phases stay [[1,finalizing]]), so moe_attempt_read and Read-MoeAttempt pass and record_candidate stays current (case 1 records cand-1 after the refused QA claim). No launcher bytes changed, so postflight and parity harnesses were not required. Wrapper hardening stays with task-49ec8755. Honest boundary: DoD 1 is proven at the daemon contract level plus a code read of the wrappers, not by a live fleet run. The live daemon keeps old behaviour until it is rebuilt and restarted. On activation, every finalizing attempt already on disk becomes a hold. Check `grep -l '\"phase\": \"finalizing\"' .moe/attempts/*.json` first (none on this board at 2026-09-17).\n\n(8) DRIFT, out of the 10-file budget and handed to task-686afecb (comment posted there):\n- recordCandidate.ts:25-26: 'when QA may already hold the task'\n- claimGuards.ts:34-38: 'Two callers refuse' (three refusals now share ATTEMPT_FINALIZING)\n- deregisterWorker.ts:10-12: description says repeat calls are no-ops and omits the finalizing close\n- qaApprove.ts:67-70: 'Refuse until moe.finalize_attempt closes it' (deregister also closes)\n\nFinal evidence: tsc exit 0; npm test 122 files, 2056 passed | 2 skipped. Mutation replay on the final test file: none 25/25; all pre-task sources 11 red / 14 green; old finalizeAttempt 3 red; old waitForTask 2 red; step-6 driver: old 4, after-missing 1, after-dead 3, no-announce 1, no-catch 1, any-worker 1.",
+      "timestamp": "2026-09-17T17:09:33.732Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-14T19:05:33.152Z",
-  "updatedAt": "2026-09-15T02:30:53.912Z",
+  "updatedAt": "2026-09-17T17:10:55.507Z",
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
@@ -157,7 +200,11 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-14T19:59:51.547Z",
@@ -165,7 +212,7 @@
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 10,
     "firstClaimAt": "2026-09-14T21:31:16.735Z",
-    "executedStepCount": 4
+    "executedStepCount": 8
   },
   "planningNotes": {
     "approachesConsidered": "Option A-refuse (chosen): no seat other than the attempt's own worker may claim a task whose execution attempt is finalizing — explicit claims refuse with a retryable ATTEMPT_FINALIZING, the ranked pool and wait_for_task skip the row, a real finalize wakes waiters through one state-side helper, and deregister_worker closes its own worker's finalizing attempts (keyed on the attempt, so a pruned record is covered). It keeps every evidence property (record_candidate and finalize_attempt stay fenced to the current attempt), restores both holds, and makes the wrapper's exactly-one-open pre-check pass through the landing. Option A-keep-acknowledgeable (rejected): a finalizing attempt beside a new QA running attempt breaks assertNoOpenAttempt, currentAttempt and the equality fence in assertAttemptCurrent, and both wrappers' readers hard-fail on two open attempts. A persisted supersede marker (rejected): schema addition, and finalize_attempt persists no outcome. Option B wrapper-only (not this card): it cannot restore qa_approve's hold, and a gated landing still needs a candidate the fence refuses; its wrapper half belongs to task-49ec8755's rework. A refusal without a close path would wedge any row whose runner exits without finalizing, so the deregister close is part of this card; idle-free backstops for DEAD records, deleted tasks and REVIEW→DONE bypasses are split to task-686afecb5b844706be805f7cd86ba055.",
@@ -188,7 +235,9 @@
   },
   "planApprovedAt": "2026-09-14T19:59:51.584Z",
   "contextFetchedBy": [
-    "worker-a7127038"
+    "worker-a7127038",
+    "governor-82389379",
+    "worker-3b5de06f"
   ],
   "workStartedAt": "2026-09-14T21:32:37.156Z",
   "commits": [
@@ -327,15 +376,16 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
-    "docs/MCP_SERVER.md",
-    "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
-    "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
-    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
-    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/state/attemptHandback.test.ts",
     "packages/moe-daemon/src/util/claimEligibility.ts",
-    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json"
+    "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "docs/MCP_SERVER.md"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/tools/claimNextTask.ts",
@@ -352,5 +402,26 @@
     "kind": "checkpoint",
     "sessionId": "worker-a7127038@2026-09-15T02:30:47Z",
     "at": "2026-09-15T02:30:53.912Z"
-  }
+  },
+  "declaredFiles": [
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/state/attemptHandback.test.ts",
+    "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "reviewStartedAt": "2026-09-17T17:10:55.504Z",
+  "verification": {
+    "command": "npm test",
+    "exitCode": 0,
+    "outputTail": "cd packages/moe-daemon: npx tsc --noEmit -> exit 0. npm test -> exit 0. Test Files  122 passed (122); Tests  2056 passed | 2 skipped (2058); Duration 10.45s",
+    "reportedAt": "2026-09-17T17:10:55.504Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Option A-refuse: a QA claim can no longer supersede a worker's unacknowledged landing.\n(1) THIRD-PARTY REFUSAL: claim_next_task with an explicit taskId refuses any seat other than the attempt's worker (and any caller without a workerId) with retryable -32002 ATTEMPT_FINALIZING, before any eviction or write. The arm-3 backstop throws the same refusal. Running/reconciling orphans still close.\n(2) POOL + WAIT SKIP: the ranked pool and wait_for_task's matcher skip the row via one predicate in util/claimEligibility.ts (wait index built lazily).\n(3) FINALIZE WAKE: a real finalize_attempt close publishes one TASK_UPDATED via attemptStore.announceAttemptClosed; the idempotent replay publishes none.\n(4) DEREGISTER CLOSE: deregister_worker first closes its own worker's finalizing attempts, keyed on attempt.workerId, so it works after a record prune. A failed close is logged; the DEAD retry closes quietly (no chat, activity or WORKER_DELETED).\nResult: the runner's record_candidate/finalize_attempt stay current through post-flight, and qa_approve's hold stands until the landing is acknowledged.\nTests: attemptHandback.test.ts +13 cases (+336/-0), including complete_task -> refused QA claim -> record_candidate -> qa_approve refused -> finalize -> QA gen 2 -> approve DONE. The governor outcome-failed finalize wakes a parked waiter.\nRed proof: all pre-task sources 11 red / 14 green. Single-site mutations each redden named cases. Pre-insert lifecycle tests fail with ATTEMPT_FINALIZING; landed 18/18.\nDocs: MCP_SERVER.md covers claim_next_task, wait_for_task, finalize_attempt (how to find/close a stuck boundary), record_candidate, deregister_worker, qa_approve.\nBoundaries: launchers untouched, so no harness run. DoD 1 is proven at the daemon contract level, not by a live fleet run. Live daemon unchanged until rebuild+restart, and any finalizing attempt then on disk becomes a hold. Stale descriptions in recordCandidate/claimGuards/deregisterWorker/qaApprove handed to task-686afecb."
 }

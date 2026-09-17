@@ -1,0 +1,33 @@
+{
+  "id": "task-5e096de99bc94b7d81231bb855603e76",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: no runner ever reattaches, so a daemon restart releases every live seat's row once the reconcile window passes",
+  "description": "CONTRACT DRIFT between Wave 1 slices. Filed by the governor on 2026-09-17 after verifying it in source; no live incident on a live seat yet.\n\nTHE DAEMON HALF SHIPPED\n- task-58f7db9a: a restart parks running attempts in `reconciling`.\n- task-d7fa98f4: runReconcileWindowSweep gives up on an attempt that stays `reconciling` longer than reconcileWindowMs (2h by default, counted from lastPhaseAt). It then unassigns a row that is still assigned to that attempt's owner. There is deliberately no liveness check.\n- task-06b658be: moe.heartbeat answers `reattachRequired: true, reattachWith: 'moe.reattach_attempt'` for a reconciling attempt (src/tools/heartbeat.ts:46-62, 103).\n- moe.reattach_attempt returns the attempt to `running` only when the caller's processStartedAt and host match what the attempt recorded.\n\nTHE RUNNER HALF WAS NEVER BUILT\n1. A real claim records no process identity. openClaimAttempt passes only taskId, workerId, runnerId=workerId and workspace, and its comment says \"A distinct runner identity and a per-attempt workspace arrive with the reattachment work\" (src/tools/claimNextTask.ts:69-76). claim_next_task takes no processStartedAt or host.\n2. Reattach therefore never matches a production attempt: src/tools/reattachAttempt.ts:109 refuses one with 'processStartedAt (none recorded)'.\n3. Neither launcher calls it: `grep -i reattach scripts/moe-agent.ps1 scripts/moe-agent.sh` finds nothing. The heartbeat sidecar ignores reattachRequired.\n4. Wave 1 acceptance case 4 (\"restarting only the daemon during a long build preserves ownership\") passes only because its fixture writes processStartedAt and host straight into the attempt record and then plays the runner itself (src/delivery/acceptance.test.ts:1690-1718).\n\nCONSEQUENCE IN THE REAL FLEET\nAfter any daemon restart:\n- Every live seat's attempt is parked.\n- Once the window passes, the sweep unassigns the row out from under that still-running seat.\nUntil task-c628902e is built, that seat keeps calling start_step and complete_step on the now-unassigned row without any refusal (the assertWorkerOwns early return). Meanwhile a second worker can claim the same row, so two seats do the same work. After c628902e, the seat gets TASK_NOT_CLAIMED and must re-claim under a new generation.\nRelated evidence:\n- task-49ec8755's QA reject, issue 2, measured the wrapper side: a `reconciling` attempt stops the loop, and \"the wrappers never reattach\".\n- 2026-09-17: dead worker-a7127038's row was released through exactly this sweep path at 16:53:38Z. That was correct for a dead seat, and a live seat is treated the same way.\n\nWHY IT MATTERS NOW\nActivating task-2a7e0f5b's fix needs a daemon rebuild and restart, and the restart window is the human's call. Every restart from now on is subject to this gap.\n\nDIRECTION (the architect decides, probably via a SPIDR split; it spans the daemon, both launchers and the harnesses)\n- Claims opened by a runner record that runner's process identity.\n- The runner (the wrapper, which outlives CLI respawns) reacts to the heartbeat's reattachRequired by calling moe.reattach_attempt with that identity before the window expires.\n- The give-up half stays as it is for seats that really are dead.",
+  "definitionOfDone": [
+    "An attempt opened by a wrapper-launched claim records the runner's processStartedAt and host, and moe.reattach_attempt accepts that identity after a daemon-only restart (daemon test with a real restart, not a fixture-seeded attempt record).",
+    "Both wrappers reattach: after a daemon-only restart, a live seat whose heartbeat answers reattachRequired calls moe.reattach_attempt, the attempt returns to running, and the reconcile-window sweep no longer releases that row. Proven in the launcher harness for sh and ps1; parity-check passes.",
+    "A different process (mismatched processStartedAt or host) still cannot reattach, and a seat that never reattaches is still given up after reconcileWindowMs exactly as task-d7fa98f4 shipped.",
+    "docs/MCP_SERVER.md (claim_next_task, heartbeat, reattach_attempt) and the restart story in CLAUDE.md/docs/ARCHITECTURE.md describe the runner reattach path as shipped; daemon npm test and npx tsc --noEmit pass."
+  ],
+  "taskRails": [
+    "The daemon stays state-only; process identity is supplied by the runner, never probed by the daemon.",
+    "Do not add any idle-based release of WORKING/PLANNING tasks, and do not weaken the give-up for seats that never reattach.",
+    "Both launchers or neither: moe-agent.ps1 and moe-agent.sh change together."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 205,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-17T17:04:17.294Z",
+  "updatedAt": "2026-09-17T17:04:17.294Z"
+}

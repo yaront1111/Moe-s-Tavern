@@ -1,0 +1,32 @@
+{
+  "id": "task-ed52052b7ace4b8f8db4672cacfa3679",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: every FileWatcher reload restarts the periodic sweep timers, so a busy fleet can starve the self-heal sweeps",
+  "description": "DEFECT, filed by the governor on 2026-09-17 from live measurement. Nothing is stalled yet; so far it has only delayed one self-heal by about 4 minutes.\n\nMECHANISM (source at HEAD, same as the live 09-13 dist)\n- StateManager.load() ends by calling startBlockedTimeoutCheck, startProposalPurgeInterval, startStaleWorkerWatcher and startReconcileWindowCheck (packages/moe-daemon/src/state/StateManager.ts:1139-1142).\n- Each start* first calls its stop* and then a fresh setInterval (src/state/sweeps.ts:58, 87, 124, 147), so the sweep's phase starts again from zero.\n- The FileWatcher callback in src/index.ts calls state.load() on every .moe change that self-write suppression lets through.\n- Net effect: after every reload, a 5-minute sweep needs another 5 reload-free minutes before it fires, and the 60s stale-worker watcher needs 60s.\n\nWHAT TRIGGERED RELOADS (observed)\n- The observed reloads followed claim_next_task.\n- Self-write suppression (src/state/FileWatcher.ts:22, 52-54, 98-99) is a Set keyed by path. An entry is deleted on the first matching event and expires after 500ms.\n- The claim writes the task file twice about 180ms apart, and the worker file three times within about 400ms. With awaitWriteFinish stabilityThreshold 100, that can produce two chokidar events for a single Set entry, and the second one reloads.\n- Each reload also broadcasts an unfiltered STATE_SNAPSHOT (ARCHIVED tasks included: 308 tasks vs 171 on connect).\n\nEVIDENCE, 2026-09-17\nLive daemon pid 22572 started 16:44:23Z; passive /ws listener attached.\n1. The reconcile-window sweep closed its past-window attempts at 16:53:38.35Z. These were attempt-fcb4df2f, attempt-6f430bd3 and attempt-91637830, all with lastPhaseAt 2026-09-15, so they had been eligible since boot. The boot-armed tick, due by 16:49:23Z, never acted. 16:53:38Z is exactly 5 minutes after architect-259309b5's claim at 16:48:37.9Z.\n2. worker-3b5de06f's claim wrote files between 16:53:57.56Z and 16:53:57.96Z. The reload's STATE_SNAPSHOT broadcast went out at 16:53:58.102Z. The blocked-timeout sweep's Layer-3 prune of worker-a7127038 then emitted its STATE_SNAPSHOT at 16:58:58.101Z, exactly 5:00.000 later.\n\nCONSEQUENCE\nIf fleet-wide claims (or any other unsuppressed .moe writes) arrive more often than every 5 minutes, these never run:\n- checkBlockedTimeouts: blocked-timeout alerts and parking, the resource lease reaper, the stale-worker prune, and the REVIEW self-heal for a crashed QA\n- runReconcileWindowSweep\nIf reloads arrive more often than every 60s, the stale-worker alerts also go silent. These are the recovery paths for dead seats.\n\nDIRECTION (the architect decides)\n- Arm each sweep once per process instead of re-arming it on every load(). For example, load() skips any start* whose interval is already armed, or index.ts arms the sweeps once after the first load.\n- Keep the outside-the-lock arming and the mutex.exit detachment described in the load() comment.\n- Reloads do not need re-arming: the sweep intervals are constants, and thresholds are read from state at tick time.\n- Tightening self-write suppression (for example a per-path pending-write count) is a possible follow-up, not required here.",
+  "definitionOfDone": [
+    "A FileWatcher-driven state.load() does not restart an already-armed sweep interval: a fake-timer test shows a load() 4 minutes after arming does not push back the 5-minute blocked-timeout and reconcile-window ticks, or the 60s stale-worker tick. The test fails on HEAD.",
+    "The first load() still arms every sweep outside the locked section, still detached via mutex.exit, and stop()/shutdown still clears every interval; the existing sweeps and StateManager tests stay green.",
+    "docs/ARCHITECTURE.md or the load() comment states that the sweeps are armed once per process and that reloads do not reset them.",
+    "npm test and npx tsc --noEmit pass in packages/moe-daemon."
+  ],
+  "taskRails": [
+    "Daemon-only change; no launcher edits.",
+    "Do not introduce any idle-based release of WORKING/PLANNING tasks; only sweep scheduling changes."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 204,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-17T17:01:58.606Z",
+  "updatedAt": "2026-09-17T17:01:58.606Z"
+}

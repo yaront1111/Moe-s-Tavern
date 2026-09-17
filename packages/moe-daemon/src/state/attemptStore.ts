@@ -20,10 +20,16 @@
 // Write path per mutation: writeEntity → map.set. Persist BEFORE the record
 // becomes visible, so a failed write leaves no attempt anywhere and a crash can
 // never expose an attempt that is not on disk. Unlike resourceStore this store
-// appends no activity row and emits no event: both would require editing the
-// existing ACTIVITY_EVENT_TYPES / StateChangeEvent unions, and there is no
+// appends no activity row and emits no attempt event: both would require editing
+// the existing ACTIVITY_EVENT_TYPES / StateChangeEvent unions, and there is no
 // consumer yet. Claim and release open and close attempts without either; add
 // both together with the first consumer (an attempt view on the board).
+//
+// ONE deliberate exception: announceAttemptClosed re-publishes the unchanged
+// TASK as TASK_UPDATED when a finalizing boundary ends. While an attempt is
+// finalizing no other seat may claim its task, and closing the attempt writes no
+// task — so without that one event neither a parked moe.wait_for_task waiter nor
+// the board would ever see the hold lift.
 //
 // Recovery is an idempotent re-open, not a file repair: writeEntity is an atomic
 // temp-file-and-rename, so a torn half-JSON is not reachable. The reachable
@@ -482,10 +488,11 @@ const HANDED_BACK_PHASES: ReadonlySet<ExecutionAttemptPhase> = new Set<Execution
  *
  * NARROWER THAN closeOpenAttempts ON PURPOSE: it never closes `finalizing`.
  * complete_task parks its attempt in `finalizing` BEFORE its own WORKING→REVIEW
- * write clears the seat, and that hold is the wrapper's landing boundary: only
- * moe.finalize_attempt lifts it (a later claim of the row supersedes it through
- * openClaimAttempt). Closing it at the seat clear would free the worker for its
- * next task while this task's bytes are still unlanded.
+ * write clears the seat, and that hold is the wrapper's landing boundary: it
+ * ends only through moe.finalize_attempt or its runner's moe.deregister_worker.
+ * No later claim of the row supersedes it — claim_next_task refuses or skips a
+ * row another worker's landing holds. Closing it at the seat clear would free
+ * the worker for its next task while this task's bytes are still unlanded.
  *
  * Otherwise the closeOpenAttempts contracts hold: idempotent, tolerant of a task
  * with no attempt record, never deletes, and each close goes through

@@ -1,0 +1,45 @@
+{
+  "id": "task-686afecb5b844706be805f7cd86ba055",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: a finalizing attempt can outlive its task or its runner with no close path",
+  "description": "Split out of the planning of task-758423de (architect, 2026-09-14). That task stops another seat's claim from closing a worker's finalizing attempt, and adds one explicit close path: deregister_worker closes its own worker's finalizing attempts. After it lands, only finalize_attempt and that deregister close end a finalizing attempt. Three shapes still leave one open forever, holding the row (no other seat may claim it, qa_approve refuses) and the worker (its own next claim refuses):\n\nG1 — deleteTask (state/taskStore.ts) never touches attempts. finalize_attempt then throws notFound(Task) before its attempt lookup (tools/finalizeAttempt.ts), so even the governor escape cannot close it, and the daemon restart close in reconcileRunningAttempts skips finalizing. The worker id is refused every claim with ATTEMPT_FINALIZING and spared by every startup purge (workersHoldingOpenAttempts counts any non-closed phase).\n\nG2 — set_task_status REVIEW -> DONE or ARCHIVED is a legal transition with no finalizing check, so it bypasses qa_approve's finalizing hold and leaves the attempt finalizing on a row nothing will ever claim.\n\nG3 — a wrapper killed without its exit trap (SIGKILL, console window closed, power loss) never finalizes and never deregisters. Worker ids are random per launch, so the seat never returns. The worker record stays IDLE, so the Layer-3 prune deletes it on lastActivityAt, which is an idle signal and must not close anything; deleteWorker closes only attempts of tasks still assigned to that worker. The row then waits for a human or governor to call moe.finalize_attempt. A DEAD record (a graceful deregister whose close failed) is a legitimate non-idle signal for a backstop close.\n\nRails: never close or release an attempt based on lastActivityAt or any other idle signal; daemon-only.",
+  "definitionOfDone": [
+    "Deleting a task closes every open attempt of that task (all phases), and a test proves the former runner can then claim other work",
+    "set_task_status out of REVIEW into DONE or ARCHIVED is refused with a retryable -32002 ATTEMPT_FINALIZING while the task has a finalizing attempt, before any write, and a test proves the refusal and the success after finalize_attempt",
+    "deleteWorker of a DEAD worker and the startup purge close that worker's finalizing attempts, a non-DEAD worker's finalizing attempt is never closed by either, and tests prove both halves",
+    "docs/MCP_SERVER.md lists every path that ends a finalizing attempt and names moe.finalize_attempt as the human or governor escape for a runner that vanished; npm test and npx tsc --noEmit pass in packages/moe-daemon"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-758423de874f461199b8ed17cfd847a1"
+  ],
+  "priority": "MEDIUM",
+  "order": 2,
+  "comments": [
+    {
+      "id": "comment-91f1dde494154303b8fcc980019fdc86",
+      "author": "agent",
+      "content": "Additional scope from task-758423de's plan critique (architect-operator, 2026-09-14), left out of that task's 10-file budget:\n- Tool descriptions that will contradict the rule once task-758423de lands: packages/moe-daemon/src/tools/recordCandidate.ts ~26-27 and ~39 ('when QA may already hold the task'), packages/moe-daemon/src/util/claimGuards.ts ~34-39 (the ATTEMPT_FINALIZING doc says 'Two callers refuse on it'; claim_next_task now also refuses third-party claims), packages/moe-daemon/src/tools/deregisterWorker.ts ~12 (idempotency wording; a DEAD worker holding a finalizing attempt now gets a quiet close-only retry). Agents read these descriptions, so fold them into this card's docs pass.\n- Already covered by task-758423de, not needed here: deregister_worker closes its runner's finalizing attempts keyed on attempt.workerId, including when the worker record was already pruned.",
+      "timestamp": "2026-09-14T19:59:51.745Z"
+    },
+    {
+      "id": "comment-abd55b4c1f3c467f927b4d5114a331fb",
+      "author": "worker-3b5de06f",
+      "content": "HANDOFF FROM task-758423de (worker-3b5de06f, 2026-09-17). That card is now in review. It adds a task-scoped finalizing hold: no seat other than the attempt's own worker may claim a task whose attempt is finalizing. Explicit claims are refused with retryable ATTEMPT_FINALIZING; the ranked pool and wait_for_task skip the row. A real finalize_attempt publishes TASK_UPDATED. deregister_worker closes its own worker's finalizing attempts, keyed on attempt.workerId, even after a record prune.\n\nConsequence for this card: a finalizing attempt now holds its row until finalize_attempt or its runner's deregister_worker. The shapes with no automated close are this card's scope:\n- a wrapper killed with no exit trap (SIGKILL / power loss)\n- deleteTask (finalize_attempt then answers TASK_NOT_FOUND; only deregister closes it)\n- set_task_status REVIEW->DONE while finalizing\n- an interactive TUI seat that never exits\nManual escape, documented in MCP_SERVER.md finalize_attempt 'Finding one': grep the .moe/attempts records for \"phase\": \"finalizing\", then call finalize_attempt with outcome 'failed'. Do not add any idle-signal close.\n\nStale text left out of that card's 10-file budget, for this card to fix:\n- packages/moe-daemon/src/tools/recordCandidate.ts:25-26: 'the runner records after complete_task, when QA may already hold the task'. QA can no longer hold it while the attempt is finalizing.\n- packages/moe-daemon/src/util/claimGuards.ts:34-38 (ATTEMPT_FINALIZING doc): 'Two callers refuse'. A third refusal now shares the code name: claimEligibility.foreignFinalizingRefusal, task-scoped, for other seats. The ATTEMPT_RECONCILING doc's contrast with 'the finalizing hold above' covers only its worker-scoped part.\n- packages/moe-daemon/src/tools/deregisterWorker.ts:10-12 (tool description): 'repeat calls on an already-OFFLINE worker are no-ops'. It does not mention that every call first closes the worker's finalizing attempts.\n- packages/moe-daemon/src/tools/qaApprove.ts:67-70: 'Refuse until moe.finalize_attempt closes it'. The runner's deregister_worker also closes it.",
+      "timestamp": "2026-09-17T17:09:40.663Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-14T19:45:02.746Z",
+  "updatedAt": "2026-09-17T17:09:40.663Z"
+}

@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { ChatMessage, TaskPriority } from '../types/schema.js';
+import type { ChatMessage, ExecutionAttempt, TaskPriority } from '../types/schema.js';
 import { missingRequired } from '../util/errors.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import { noTeamMembershipRefusal, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
@@ -161,6 +161,10 @@ function findMatchingTask(
   // pool: any task that is wait-visible but claim-ineligible wakes the waiter
   // into a claim that declines straight back to wait_for_task — a hot
   // wake→claim→wait spin at full RPC speed for as long as the task persists.
+  // The finalizing index is built at most once per match, and only when a
+  // candidate reaches its filter: this matcher re-runs for every waiter on every
+  // task event, and the index walks every attempt record.
+  let finalizingByTask: ReadonlyMap<string, ExecutionAttempt> | undefined;
   const eligible = Array.from(state.tasks.values())
     .filter((t) => statuses.includes(t.status))
     .filter((t) => (epicId ? t.epicId === epicId : true))
@@ -171,7 +175,15 @@ function findMatchingTask(
     // dependsOn gate (WORKING candidates only) — mirrors claim_next_task's
     // ranked pool via the SAME predicate (util/claimEligibility.ts); a drift
     // here wakes the waiter into a claim that refuses (the measured spin).
-    .filter((t) => !isClaimGatedByDependsOn(state, t));
+    .filter((t) => !isClaimGatedByDependsOn(state, t))
+    // Finalizing hold — the SAME predicate as claim_next_task's ranked pool. A
+    // row another worker's landing still holds would wake this waiter into a
+    // claim that returns nothing; the close announces itself with a TASK_UPDATED
+    // (announceAttemptClosed), which re-runs this matcher.
+    .filter((t) => {
+      finalizingByTask ??= finalizingAttemptsByTask(state);
+      return !foreignFinalizingAttempt(finalizingByTask, t.id, workerId);
+    });
   // Single-worker-per-epic-status (solo workers only): claim skips a
   // candidate when a live OTHER worker holds a different task in the same
   // epic+status — mirror that too. Effective membership, exactly as

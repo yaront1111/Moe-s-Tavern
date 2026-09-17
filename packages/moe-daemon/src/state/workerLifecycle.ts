@@ -9,7 +9,7 @@
 import type { StateManager } from './StateManager.js';
 import type { Task, TaskStatus } from '../types/schema.js';
 import { logger } from '../util/logger.js';
-import { closeOpenAttempts } from './attemptStore.js';
+import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
 
 export { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
@@ -158,9 +158,59 @@ export interface DeregisterResult {
 }
 
 /**
- * Full deregister flow: release tasks, mark worker DEAD, post chat-leave
- * system messages to every channel the worker had a cursor for, and emit a
- * single banner to #workers / #governors summarizing the cleanup.
+ * Close every `finalizing` attempt this worker still holds, keyed on the
+ * ATTEMPT's workerId — never on a task assignment or on the worker record.
+ *
+ * WHY HERE. complete_task parks the attempt in `finalizing` and unassigns the
+ * row, and while that attempt is open no other seat may claim the task
+ * (util/claimEligibility.ts). Every release path selects by assignment, so none
+ * reaches it: without this close, a runner that exits without
+ * moe.finalize_attempt would wedge the row. Keyed on the attempt, it still works
+ * when the worker record is already gone — a post-flight longer than
+ * staleWorkerTimeoutMs lets the record prune delete it mid-landing.
+ *
+ * WHY IT CANNOT CUT A LANDING SHORT. moe.deregister_worker is sent only from the
+ * wrapper's exit and teardown paths — after the landing, its rescue, or its
+ * abandonment. It is an explicit end-of-life call, not an idle signal.
+ *
+ * WHAT IT IS NOT: evidence of a landing. Some exits send it with no finalize
+ * before it (the sh EXIT trap before any landing ran, a ps1 console window
+ * closed, a finalize whose acknowledgement failed), and the close then lifts
+ * qa_approve's hold without an acknowledged landing — exactly what a QA claim's
+ * supersede did before the task-scoped hold existed. Under the legacy delivery
+ * policy the soft NO-COMPLETION-COMMIT warning is then the only guard; strict
+ * policies still refuse the approval.
+ *
+ * Deliberately NOT done by deleteWorker, the startup purge or any sweep: their
+ * non-DEAD deletions are driven by lastActivityAt, and no idle signal may close
+ * an attempt (task-686afecb5b844706be805f7cd86ba055 owns those gaps).
+ *
+ * Each close has its own catch: a failed write is logged, leaves that attempt
+ * finalizing for the wrapper's retry, and never fails the deregister. A real
+ * close announces itself (announceAttemptClosed) so parked waiters wake. Caller
+ * must hold state.mutex.
+ */
+async function closeOwnFinalizingAttempts(state: StateManager, workerId: string): Promise<void> {
+  const held = listAttempts(state).filter((a) => a.workerId === workerId && a.phase === 'finalizing');
+  for (const attempt of held) {
+    try {
+      await setAttemptPhase(state, attempt.id, 'closed');
+    } catch (error) {
+      logger.warn(
+        { workerId, attemptId: attempt.id, taskId: attempt.taskId, error },
+        'deregisterWorker: failed to close a finalizing attempt; it stays finalizing for a retry'
+      );
+      continue;
+    }
+    announceAttemptClosed(state, attempt.taskId);
+  }
+}
+
+/**
+ * Full deregister flow: close the worker's own finalizing attempts, release
+ * tasks, mark worker DEAD, post chat-leave system messages to every channel the
+ * worker had a cursor for, and emit a single banner to #workers / #governors
+ * summarizing the cleanup.
  *
  * Marking the worker DEAD (rather than deleting it) keeps lastError/history for
  * post-mortem and makes repeat calls idempotent; the record prune in
@@ -169,13 +219,20 @@ export interface DeregisterResult {
  * (updateWorker emits WORKER_DELETED + getSnapshot excludes them).
  *
  * Idempotent: if the worker is already DEAD with no current task, returns
- * { alreadyDead: true, released: [] } and skips chat noise.
+ * { alreadyDead: true, released: [] } and skips chat noise. The finalizing close
+ * runs before that answer (and before the missing-record one), so a retry after
+ * a failed close is a quiet close-only call.
  */
 export async function deregisterWorker(
   state: StateManager,
   workerId: string,
   reason: string
 ): Promise<DeregisterResult> {
+  // FIRST, before either early return: these attempts sit on rows complete_task
+  // already unassigned, so nothing below reaches them, and a pruned or
+  // already-DEAD record must still end its landing hold.
+  await closeOwnFinalizingAttempts(state, workerId);
+
   const worker = state.getWorker(workerId);
   if (!worker) {
     return { workerId, released: [], alreadyDead: true };
@@ -185,6 +242,7 @@ export async function deregisterWorker(
   // authoritative ownership (any task still assigned to this worker), NOT the
   // secondary worker.currentTaskId pointer: if a prior release failed partway
   // and left a dangling assignment, a retry should re-run releaseWorkerTasks.
+  // The finalizing close above has already run, so this answer stays quiet.
   if (worker.status === 'DEAD' && state.getTasksAssignedToWorker(workerId).length === 0) {
     return { workerId, released: [], alreadyDead: true };
   }

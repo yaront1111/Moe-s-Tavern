@@ -4,11 +4,16 @@ import type { ToolDefinition } from '../tools/index.js';
 import { acquireResourceTool } from '../tools/acquireResource.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { completeTaskTool } from '../tools/completeTask.js';
+import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
+import { finalizeAttemptTool } from '../tools/finalizeAttempt.js';
 import { getContextTool } from '../tools/getContext.js';
+import { qaApproveTool } from '../tools/qaApprove.js';
 import { qaRejectTool } from '../tools/qaReject.js';
+import { recordCandidateTool } from '../tools/recordCandidate.js';
 import { reportBlockedTool } from '../tools/reportBlocked.js';
 import { setTaskStatusTool } from '../tools/setTaskStatus.js';
 import { unblockWorkerTool } from '../tools/unblockWorker.js';
+import { activeWaiters, waitForTaskTool } from '../tools/waitForTask.js';
 import { listAttempts, openAttempt, reconcileRunningAttempts, setAttemptPhase } from './attemptStore.js';
 import { MoeError } from '../util/errors.js';
 import type { StateManager } from './StateManager.js';
@@ -43,6 +48,9 @@ describe('attempt close on hand-back', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // A waiter that a failing case left parked must never resolve into the next case.
+    for (const waiter of Array.from(activeWaiters.values())) waiter.unsubscribe();
+    activeWaiters.clear();
     h.state.clearEmitter();
     h.cleanup();
   });
@@ -288,5 +296,333 @@ describe('attempt close on hand-back', () => {
     expect(err.codeName).toBe('ATTEMPT_RECONCILING');
     expect(h.state.getTask('task-O')?.assignedWorkerId).toBe('qa-1');
     expect(phases('task-O')).toEqual([[1, 'reconciling']]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // A finalizing landing is not superseded by another seat (task-758423de).
+  //
+  // complete_task parks the worker's attempt in `finalizing` and unassigns the
+  // REVIEW row; the runner records its candidate and finalizes only after the
+  // CLI exits. A QA claim of that row used to close the attempt through
+  // openClaimAttempt's ATTEMPT_ALREADY_OPEN arm, so qa_approve's hold vanished
+  // and the runner's fenced record_candidate was refused as superseded. Until
+  // the boundary ends, no seat other than the attempt's own worker may claim it.
+  // ---------------------------------------------------------------------------
+
+  describe('a finalizing landing is not superseded by another seat', () => {
+    const LANDED = 'b2'.repeat(20);
+
+    interface Landing {
+      attemptId: string;
+      generation: number;
+    }
+
+    /** worker-1 claims and completes task-W: REVIEW, unassigned, generation 1 finalizing. */
+    async function completeClaimedRow(): Promise<Landing> {
+      await seedClaimedWorkingRow({ implementationPlan: DONE_PLAN });
+      const completed = await call(completeTaskTool(h.state), {
+        taskId: 'task-W',
+        workerId: 'worker-1',
+        verification: { command: 'npm test', exitCode: 0 },
+      });
+      expect(h.state.getTask('task-W')).toMatchObject({ status: 'REVIEW', assignedWorkerId: null });
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+      expect(completed.generation).toBe(1);
+      return { attemptId: completed.attemptId as string, generation: completed.generation as number };
+    }
+
+    /** The runner's acknowledgement, sent with the identity complete_task returned. */
+    function finalize(landing: Landing, by = 'worker-1', outcome = 'landed'): Promise<Record<string, unknown>> {
+      return call(finalizeAttemptTool(h.state), {
+        taskId: 'task-W',
+        attemptId: landing.attemptId,
+        generation: landing.generation,
+        workerId: by,
+        runnerId: by,
+        outcome,
+        ...(outcome === 'landed' ? { landedRevision: LANDED } : {}),
+      });
+    }
+
+    function waitForReview(timeoutMs: number): Promise<Record<string, unknown>> {
+      return call(waitForTaskTool(h.state), { statuses: ['REVIEW'], workerId: 'qa-1', timeoutMs });
+    }
+
+    /** Non-closed attempts a seat holds anywhere on the board. */
+    function openAttemptsOf(workerId: string): Phases {
+      return listAttempts(h.state)
+        .filter((a) => a.workerId === workerId && a.phase !== 'closed')
+        .map((a): [number, ExecutionAttemptPhase] => [a.generation, a.phase]);
+    }
+
+    /** Both finalizing holds name the attempt's holder, never the refused caller. */
+    function expectHeldForWorker1(err: MoeError, landing: Landing): void {
+      expect(err.code).toBe(-32002);
+      expect(err.codeName).toBe('ATTEMPT_FINALIZING');
+      expect(err.context).toEqual({
+        attemptId: landing.attemptId,
+        generation: 1,
+        taskId: 'task-W',
+        workerId: 'worker-1',
+        retryable: true,
+      });
+    }
+
+    it('refuses a QA claim until the landing is finalized, keeps the runner current and holds qa_approve', async () => {
+      const landing = await completeClaimedRow();
+
+      const err = await refusal(claim('task-W', 'qa-1', 'REVIEW'));
+
+      expectHeldForWorker1(err, landing);
+      expect(err.message).toContain('held by worker worker-1');
+      expect(err.message).toContain(landing.attemptId);
+      expect(err.message).toContain('no other seat may claim it');
+      expect(err.message).toContain('moe.finalize_attempt');
+      expect(h.state.getTask('task-W')?.assignedWorkerId).toBeNull();
+      expect(openAttemptsOf('qa-1')).toEqual([]);
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+      // The runner's post-flight records its candidate with the identity it pinned.
+      const recorded = await call(recordCandidateTool(h.state), {
+        taskId: 'task-W',
+        attemptId: landing.attemptId,
+        generation: landing.generation,
+        workerId: 'worker-1',
+        id: 'cand-1',
+        baseRevision: 'a1'.repeat(20),
+        treeSha: 'c3'.repeat(20),
+        deliveryTarget: 'refs/heads/wave1-pilot',
+      });
+      expect(recorded.success).toBe(true);
+      expect(recorded.candidate).toMatchObject({ id: 'cand-1', taskId: 'task-W', attemptId: landing.attemptId });
+
+      // The hold runs before qa_approve's ownership checks, so it answers first.
+      const approval = await refusal(
+        call(qaApproveTool(h.state), { taskId: 'task-W', workerId: 'qa-1', summary: 'Approving before the landing is acknowledged.' })
+      );
+      expectHeldForWorker1(approval, landing);
+      expect(h.state.getTask('task-W')?.status).toBe('REVIEW');
+
+      const finalized = await finalize(landing);
+      expect(finalized).toMatchObject({ success: true, phase: 'closed', outcome: 'landed', landedRevision: LANDED });
+      expect(phases('task-W')).toEqual([[1, 'closed']]);
+
+      const retried = await claimForReview('task-W', 'qa-1');
+      expect(retried.hasNext).toBe(true);
+      expect(retried.generation).toBe(2);
+      expect(phases('task-W')).toEqual([[1, 'closed'], [2, 'running']]);
+
+      const approved = await call(qaApproveTool(h.state), {
+        taskId: 'task-W',
+        workerId: 'qa-1',
+        summary: 'Re-ran npm test after the landing was finalized.',
+        candidateId: 'cand-1',
+      });
+      expect(approved.status).toBe('DONE');
+      expect(phases('task-W')).toEqual([[1, 'closed'], [2, 'closed']]);
+    });
+
+    it('skips the finalizing row in the ranked pool without throwing, then offers it once finalized', async () => {
+      const landing = await completeClaimedRow();
+
+      const skipped = await call(claimNextTaskTool(h.state), { statuses: ['REVIEW'], workerId: 'qa-1' });
+      // A claim that names no worker assigns nothing, and it must not report the row either.
+      const peeked = await call(claimNextTaskTool(h.state), { statuses: ['REVIEW'] });
+
+      expect(skipped.hasNext).toBe(false);
+      expect(skipped.nextAction).toMatchObject({ tool: 'moe.wait_for_task' });
+      expect(peeked.hasNext).toBe(false);
+      expect(h.state.getTask('task-W')?.assignedWorkerId).toBeNull();
+      expect(openAttemptsOf('qa-1')).toEqual([]);
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+      await finalize(landing);
+      const offered = await call(claimNextTaskTool(h.state), { statuses: ['REVIEW'], workerId: 'qa-1' });
+
+      expect(offered.hasNext).toBe(true);
+      expect(offered.task).toMatchObject({ id: 'task-W', assignedWorkerId: 'qa-1' });
+      expect(offered.generation).toBe(2);
+      expect(phases('task-W')).toEqual([[1, 'closed'], [2, 'running']]);
+    });
+
+    it('keeps a QA waiter parked while the landing is finalizing and wakes it when the boundary ends', async () => {
+      const landing = await completeClaimedRow();
+
+      // Waiters are keyed by workerId: the first must resolve before the second starts.
+      const idle = await waitForReview(1000);
+      expect(idle).toMatchObject({ hasNext: false, timedOut: true });
+
+      const woken = waitForReview(5000);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(activeWaiters.has('qa-1')).toBe(true);
+
+      await finalize(landing);
+      const result = await woken;
+
+      expect(result.hasNext).toBe(true);
+      expect(result.task).toMatchObject({ id: 'task-W', status: 'REVIEW' });
+      expect(activeWaiters.has('qa-1')).toBe(false);
+    }, 15_000);
+
+    it('publishes one TASK_UPDATED when a finalize ends the boundary and none on its idempotent replay', async () => {
+      const landing = await completeClaimedRow();
+      const published: string[] = [];
+      h.state.subscribe((event) => {
+        if (event.type === 'TASK_UPDATED') published.push(event.payload.id);
+      });
+
+      await finalize(landing);
+      expect(published).toEqual(['task-W']);
+
+      const replay = await finalize(landing);
+      expect(replay).toMatchObject({ success: true, phase: 'closed' });
+      expect(published).toEqual(['task-W']);
+    });
+
+    it('deregister_worker closes its own finalizing attempt so an exiting runner cannot wedge the row', async () => {
+      await completeClaimedRow();
+
+      const result = await call(deregisterWorkerTool(h.state), { workerId: 'worker-1', reason: 'terminal_closed' });
+
+      expect(result).toMatchObject({ success: true, alreadyDead: false, releasedTaskIds: [] });
+      expect(phases('task-W')).toEqual([[1, 'closed']]);
+      const taken = await claim('task-W', 'qa-1', 'REVIEW');
+      expect(taken.hasNext).toBe(true);
+      expect(taken.generation).toBe(2);
+    });
+
+    it('deregister_worker closes the finalizing attempt even after the worker record was pruned', async () => {
+      await completeClaimedRow();
+      await h.state.deleteWorker('worker-1');
+      expect(h.state.workers.has('worker-1')).toBe(false);
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+      const result = await call(deregisterWorkerTool(h.state), { workerId: 'worker-1', reason: 'terminal_closed' });
+
+      expect(result).toMatchObject({ success: true, alreadyDead: true, releasedTaskIds: [] });
+      expect(phases('task-W')).toEqual([[1, 'closed']]);
+    });
+
+    it('closes a DEAD worker finalizing attempt on a retried deregister without chat, activity or worker events', async () => {
+      await completeClaimedRow();
+      await h.state.updateWorker('worker-1', { status: 'DEAD' });
+      const posted = vi.spyOn(h.state, 'postToRoleChannel');
+      const activity = vi.spyOn(h.state, 'appendActivity');
+      const published: string[] = [];
+      h.state.subscribe((event) => {
+        published.push(event.type);
+      });
+
+      const result = await call(deregisterWorkerTool(h.state), { workerId: 'worker-1', reason: 'terminal_closed' });
+
+      expect(result).toMatchObject({ success: true, alreadyDead: true, releasedTaskIds: [] });
+      expect(phases('task-W')).toEqual([[1, 'closed']]);
+      expect(posted).not.toHaveBeenCalled();
+      expect(activity).not.toHaveBeenCalled();
+      expect(published).toEqual(['TASK_UPDATED']);
+    });
+
+    it('a deregister whose finalizing close fails still succeeds, and its quiet retry closes the attempt', async () => {
+      await completeClaimedRow();
+      const realWrite = h.state.writeEntity.bind(h.state);
+      vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+        if (args[0] === 'attempts') throw new Error('EPERM: attempt record is unwritable');
+        return realWrite(...args);
+      });
+
+      const first = await call(deregisterWorkerTool(h.state), { workerId: 'worker-1', reason: 'terminal_closed' });
+
+      vi.restoreAllMocks();
+      expect(first).toMatchObject({ success: true, alreadyDead: false, releasedTaskIds: [] });
+      expect(h.state.getWorker('worker-1')?.status).toBe('DEAD');
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+      const posted = vi.spyOn(h.state, 'postToRoleChannel');
+      const retried = await call(deregisterWorkerTool(h.state), { workerId: 'worker-1', reason: 'terminal_closed' });
+
+      expect(retried).toMatchObject({ success: true, alreadyDead: true, releasedTaskIds: [] });
+      expect(posted).not.toHaveBeenCalled();
+      expect(phases('task-W')).toEqual([[1, 'closed']]);
+    });
+
+    it("leaves another worker's landing hold alone when a different seat deregisters", async () => {
+      h.createWorker({ id: 'qa-1' });
+      const landing = await completeClaimedRow();
+
+      const result = await call(deregisterWorkerTool(h.state), { workerId: 'qa-1', reason: 'terminal_closed' });
+
+      expect(result).toMatchObject({ success: true, alreadyDead: false, releasedTaskIds: [] });
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+      expectHeldForWorker1(await refusal(claim('task-W', 'qa-2', 'REVIEW')), landing);
+    });
+
+    it('still refuses the attempt owner its next claim with the worker-scoped refusal', async () => {
+      h.createTask({ id: 'task-2', status: 'WORKING', order: 2 });
+      const landing = await completeClaimedRow();
+
+      const err = await refusal(claim('task-2', 'worker-1', 'WORKING'));
+
+      expectHeldForWorker1(err, landing);
+      expect(err.message).toContain('Close the boundary with moe.finalize_attempt');
+      expect(h.state.getTask('task-2')?.assignedWorkerId).toBeNull();
+      expect(phases('task-2')).toEqual([]);
+    });
+
+    it('lets a governor close an abandoned boundary with outcome failed, which wakes a parked QA waiter that can then claim', async () => {
+      const landing = await completeClaimedRow();
+      const woken = waitForReview(5000);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(activeWaiters.has('qa-1')).toBe(true);
+
+      const closed = await finalize(landing, 'governor-1', 'failed');
+
+      expect(closed).toMatchObject({ success: true, phase: 'closed', outcome: 'failed', landedRevision: null });
+      expect(phases('task-W')).toEqual([[1, 'closed']]);
+      expect(await woken).toMatchObject({ hasNext: true, task: { id: 'task-W', status: 'REVIEW' } });
+      const taken = await claim('task-W', 'qa-1', 'REVIEW');
+      expect(taken.hasNext).toBe(true);
+      expect(taken.generation).toBe(2);
+    }, 15_000);
+
+    it('holds rework after a human qa_reject until the landing is finalized', async () => {
+      const landing = await completeClaimedRow();
+
+      const rejected = await call(qaRejectTool(h.state), { taskId: 'task-W', reason: 'DoD item 1 fails' });
+      expect(rejected.status).toBe('WORKING');
+      expect(h.state.getTask('task-W')).toMatchObject({ status: 'WORKING', assignedWorkerId: null });
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+      const err = await refusal(claim('task-W', 'worker-2', 'WORKING'));
+      expectHeldForWorker1(err, landing);
+      expect(err.message).toContain('no other seat may claim it');
+      expect(h.state.getTask('task-W')?.assignedWorkerId).toBeNull();
+      expect(openAttemptsOf('worker-2')).toEqual([]);
+
+      await finalize(landing, 'worker-1', 'nothing-to-commit');
+      const retaken = await claim('task-W', 'worker-2', 'WORKING');
+      expect(retaken.hasNext).toBe(true);
+      expect(retaken.generation).toBe(2);
+      expect(phases('task-W')).toEqual([[1, 'closed'], [2, 'running']]);
+    });
+
+    it('never lets a malformed finalizing record hold a row: the next claim supersedes it as before', async () => {
+      h.createTask({ id: 'task-X', status: 'REVIEW', implementationPlan: DONE_PLAN });
+      await h.state.load();
+      const opened = await openAttempt(h.state, {
+        taskId: 'task-X',
+        workerId: 'worker-1',
+        runnerId: 'worker-1',
+        workspace: h.testDir,
+      });
+      const held = await setAttemptPhase(h.state, opened.id, 'finalizing');
+      // loadEntities admits any JSON carrying an id, so a hand-edited record can lose its worker.
+      h.state.attempts.set(held.id, { ...held, workerId: '' });
+
+      const taken = await claim('task-X', 'qa-1', 'REVIEW');
+
+      expect(taken.hasNext).toBe(true);
+      expect(taken.generation).toBe(2);
+      expect(phases('task-X')).toEqual([[1, 'closed'], [2, 'running']]);
+    });
   });
 });
