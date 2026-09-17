@@ -53,6 +53,48 @@ export function assertWorkerOwns(task: Task, workerId: string | undefined, toolN
   );
 }
 
+/** codeName of assertWorkerHoldsTask's refusal: a workerId was supplied on a row nobody claimed. */
+export const TASK_NOT_CLAIMED = 'TASK_NOT_CLAIMED';
+
+/**
+ * assertWorkerOwns, strict about an unassigned row, for the execution tools
+ * (start_step, complete_step, complete_task). On 2026-09-13 both ownership guards
+ * returned early on an unassigned WORKING row, so start_step stamped
+ * worker-c8e523ea CODING with a currentTaskId for a row it never claimed and no
+ * attempt was opened. assertWorkerOwns keeps its unassigned no-op on purpose:
+ * report_blocked (a seat-freeing path), submit_plan, qa_approve/qa_reject,
+ * request_replan, acquire_resource and wait_for_resource rely on it.
+ *
+ * STATE_CONFLICT, not NOT_ALLOWED: the caller becomes entitled once it claims (the
+ * claimGuards.ts ATTEMPT_* convention). A missing or empty workerId stays on the
+ * legacy path. statuses is ['WORKING'] because every caller has already refused a
+ * non-WORKING row, and the message names the claim call because MoeError.context
+ * never crosses MCP.
+ */
+export function assertWorkerHoldsTask(task: Task, workerId: string | undefined, toolName = 'unknown'): void {
+  if (workerId && !task.assignedWorkerId) {
+    const tool = displayToolName(toolName);
+    throw new MoeError(
+      MoeErrorCode.STATE_CONFLICT,
+      `Task ${task.id} is not claimed by any worker, so ${workerId} cannot call ${tool} on it. ` +
+        `Claim it first with moe.claim_next_task { taskId: "${task.id}", statuses: ["WORKING"] }, then retry — ` +
+        'this is a RETRYABLE refusal (context.retryable), NOT a fatal error.',
+      {
+        taskId: task.id,
+        workerId,
+        retryable: true,
+        nextAction: {
+          tool: 'moe.claim_next_task',
+          args: { taskId: task.id, statuses: ['WORKING'], workerId },
+          reason: `Claim task ${task.id}, then retry ${tool} (call moe.get_context first if you have not fetched it).`,
+        },
+      },
+      TASK_NOT_CLAIMED
+    );
+  }
+  assertWorkerOwns(task, workerId, toolName);
+}
+
 // =============================================================================
 // Attempt fencing
 // =============================================================================

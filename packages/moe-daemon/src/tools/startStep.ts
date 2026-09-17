@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState } from '../util/errors.js';
-import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
+import { assertWorkerHoldsTask, assertContextFetched } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
@@ -27,7 +27,7 @@ export function startStepTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'WORKING');
       }
 
-      assertWorkerOwns(task, params.workerId, 'moe.start_step');
+      assertWorkerHoldsTask(task, params.workerId, 'moe.start_step');
       assertContextFetched(task, params.workerId, 'moe.start_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {

@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { MoeError, MoeErrorCode, notFound, invalidState } from '../util/errors.js';
-import { assertWorkerOwns, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
+import { assertWorkerHoldsTask, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
 import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
 import { currentAttempt, setAttemptPhase } from '../state/attemptStore.js';
 import type { ExecutionAttempt } from '../types/schema.js';
@@ -99,7 +99,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       if (task.status !== 'WORKING') {
         throw invalidState('Task', task.status, 'WORKING');
       }
-      assertWorkerOwns(task, params.workerId);
+      assertWorkerHoldsTask(task, params.workerId, 'moe.complete_task');
       assertAllStepsCompleted(task);
       const verification = assertVerificationEvidence(params.verification);
       // Runs with the other assertions, BEFORE updateTask: a rejection must

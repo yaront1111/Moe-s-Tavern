@@ -108,7 +108,9 @@ Bookkeeping fields on `Task`:
 - `contextFetchedBy?: string[]` — de-duplicated workerIds that invoked `moe.get_context`.
 - `stepsCompleted?: string[]` — ordered stepIds already marked `COMPLETED`, populated by `moe.complete_step`.
 
-All guards are no-ops when `task.assignedWorkerId` is `null`, preserving `--no-auto-claim` interactive flows and the JetBrains plugin `/ws` path (which never carries a `workerId`).
+When `task.assignedWorkerId` is `null`, the guards are no-ops for every call without a `workerId`, preserving `--no-auto-claim` interactive flows and the JetBrains plugin `/ws` path (which never carries a `workerId`). They are also no-ops there for `submit_plan`, `qa_approve` and `qa_reject`, with or without a `workerId`.
+
+**Claimed row required.** `start_step`, `complete_step` and `complete_task` refuse a supplied `workerId` on an unassigned row. The refusal is `STATE_CONFLICT` (`-32002`, codeName `TASK_NOT_CLAIMED`), not `NOT_ALLOWED`, because the caller becomes entitled once it claims: it is retryable, and its message names `moe.claim_next_task { taskId, statuses: ["WORKING"], workerId }`. It fires before the other guards (the get_context check included) and before anything is written, so a worker record never points at a row its worker does not hold. See `moe.start_step`.
 
 Three tools are deliberately **guard-exempt** even though the proxy injects `workerId` into them: `moe.get_commit_scope`, `moe.record_commit` and `moe.declare_files`. The wrapper calls the first two **after** the CLI exits — by then QA may already own the REVIEW task, a seat-only `unblock_worker` may have left it unassigned, or the task may be `BLOCKED`/`DONE` — and a governor uses `declare_files` on tasks it never owns. They are allowed in every task status.
 
@@ -330,6 +332,12 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 
 > `moe.get_context` must be called by `workerId` before `moe.start_step` — see **Ownership & Ordering** below.
 
+**Claimed row required.** When the call carries a `workerId`, the task must be assigned to that worker:
+- On a `WORKING` task whose `assignedWorkerId` is `null`, the call is refused with `STATE_CONFLICT` (`-32002`, codeName `TASK_NOT_CLAIMED`) before every other guard, including the get_context check. Nothing is written: the step stays `PENDING`, and the caller's worker record (`status`, `currentTaskId`) is not touched. Before this rule the call succeeded and stamped the caller `CODING` on a row it never claimed, with no attempt opened.
+- The refusal is retryable. Claim the row with `moe.claim_next_task { taskId, statuses: ["WORKING"], workerId }`, call `moe.get_context` if this worker has not fetched it yet, then retry. The error message names the claim call because `MoeError` context does not cross MCP; in-process callers also get `context.retryable: true` and `context.nextAction`.
+- A `workerId` that differs from a set `assignedWorkerId` is still refused with `NOT_ALLOWED`.
+- A call without a `workerId` (the JetBrains plugin `/ws` path, legacy clients) keeps the old tolerance.
+
 **Returns:**
 ```typescript
 { success: true, taskId, stepId, stepNumber, totalSteps }
@@ -373,6 +381,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 - `amended` is omitted entirely (not `false`/`null`) on unamended steps, so existing consumers see an unchanged shape.
 - `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
 - `modifiedFiles` is the worker's positive assertion and feeds the **ASSERTED** attribution tier: the wrapper's post-flight commits every completed step's `modifiedFiles ?? affectedFiles` regardless of what its baseline says. Omitting it returns `warning`. The wrapper can still pick up unreported edits through the TOOL (stream-json harvest, claude only), PLANNED (plan-declared and changed) and MEASURED (undeclared and changed, solo only) tiers — but with another worker active an undeclared, non-tool-written edit stays **unattributed** (reported as `MOE_ATTRIBUTION_UNRESOLVED`, never staged) until someone declares it via `moe.declare_files`.
+- **Claimed row required**, the same rule as `moe.start_step`: a `workerId` on an unassigned `WORKING` row is refused with `STATE_CONFLICT` (`TASK_NOT_CLAIMED`) before the get_context check. The step stays `IN_PROGRESS`, nothing is recorded (no `note`, `modifiedFiles`, `stepsCompleted` or step metrics), and the caller's worker record is untouched.
 
 ---
 
@@ -435,6 +444,7 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 ```
 
 **Notes:**
+- **Claimed row required**, the same rule as `moe.start_step`: a `workerId` on an unassigned `WORKING` row is refused with `STATE_CONFLICT` (`TASK_NOT_CLAIMED`) before the step, verification and branch-policy checks, before any open attempt is moved to `finalizing`, and before the `REVIEW` write. The task stays `WORKING` with no verification persisted, and the caller's worker record is untouched.
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
 - `summary` is persisted as `task.completionSummary` (it used to be accepted and silently discarded) and surfaced via `moe.get_context` — both on the task itself and on the `epicSiblings` entries of every dependent task, so a later task can read what its prerequisite actually delivered without grepping HEAD.
 - The evidence is persisted as `task.verification` (with `reportedAt`, and `source: "agent-reported"` stamped after validation), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier the wrapper commits regardless of its baseline; `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself and never runs git.

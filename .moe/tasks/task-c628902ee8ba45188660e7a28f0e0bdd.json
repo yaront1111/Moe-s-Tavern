@@ -14,56 +14,104 @@
     {
       "stepId": "step-1",
       "description": "Add the claimed-row guard in packages/moe-daemon/src/util/enforcement.ts (CRLF file: edit with the Edit tool, not Serena, and keep CRLF). Put it directly after assertWorkerOwns, before the 'Attempt fencing' banner.\n\n(1) `export const TASK_NOT_CLAIMED = 'TASK_NOT_CLAIMED';` (grep confirms the name is unused).\n\n(2) `export function assertWorkerHoldsTask(task: Task, workerId: string | undefined, toolName = 'unknown'): void`. If `workerId` is truthy and `task.assignedWorkerId` is falsy, throw `new MoeError(MoeErrorCode.STATE_CONFLICT, message, context, TASK_NOT_CLAIMED)`. Otherwise call `assertWorkerOwns(task, workerId, toolName)` unchanged. That keeps a foreign owner as NOT_ALLOWED with owner/caller context, and keeps a missing or empty workerId on the legacy path (tolerated, with the once-per-(task,tool) warning).\n\ncontext = `{ taskId: task.id, workerId, retryable: true, nextAction: { tool: 'moe.claim_next_task', args: { taskId: task.id, statuses: ['WORKING'], workerId }, reason } }`. claim_next_task's schema requires `statuses`. 'WORKING' is correct because every caller already refused a non-WORKING row; say so in the doc comment.\n\nmessage: McpAdapter sends only code, message and {tool, codeName}. MoeError.context never crosses the MCP wire, so the message alone must be actionable (same convention as util/claimGuards.ts): `Task ${task.id} is not claimed by any worker, so ${workerId} cannot call ${displayToolName(toolName)} on it. Claim it first with moe.claim_next_task { taskId: \"${task.id}\", statuses: [\"WORKING\"] }, then retry — this is a RETRYABLE refusal (context.retryable), NOT a fatal error.`\n\nError handling: the guard only throws a typed MoeError. It catches nothing, logs nothing, reads no state and writes nothing. McpAdapter's existing MoeError branch logs the rejection and maps it to a JSON-RPC error, so no new try/catch is needed anywhere, and nothing may swallow the refusal.\n\nDoc comment, WHY only: in the 2026-09-13 incident both ownership guards returned early on an unassigned WORKING row. start_step then stamped worker-c8e523ea CODING with a currentTaskId for a row it never claimed, with no attempt opened. assertWorkerOwns itself deliberately keeps its unassigned no-op, because its other callers rely on it: report_blocked on an unassigned task, submit_plan, qa_approve/qa_reject, request_replan, acquire_resource and wait_for_resource.\n\nUnit tests in packages/moe-daemon/src/util/enforcement.test.ts (LF). Add a new `describe('assertWorkerHoldsTask')` using the file's makeTask helper:\n(a) Unassigned task, caller 'worker-x', toolName 'moe.start_step'. Throws MoeError with code MoeErrorCode.STATE_CONFLICT and codeName 'TASK_NOT_CLAIMED'. context toEqual `{ taskId:'task-1', workerId:'worker-x', retryable:true, nextAction:{ tool:'moe.claim_next_task', args:{ taskId:'task-1', statuses:['WORKING'], workerId:'worker-x' }, reason: expect.any(String) } }`. The message contains 'moe.claim_next_task', 'task-1' and 'moe.start_step'.\n(b) toolName 'complete_step' renders as 'moe.complete_step' in the message.\n(c) Unassigned with workerId undefined, and with '', does not throw.\n(d) Assigned to the caller does not throw.\n(e) Assigned to 'worker-a', caller 'worker-b': throws codeName 'NOT_ALLOWED' with context owner 'worker-a' and caller 'worker-b'.\n(f) Assigned with workerId undefined does not throw.\nLeave the existing 'assertWorkerOwns still no-ops on an unassigned task' test untouched: it pins that the other callers keep their tolerance.\n\nLand this export BEFORE any importer (steps 2-4). A named ESM import of a missing export fails at link time for every peer running the suite.\n\nRun: cd packages/moe-daemon && npx vitest run src/util/enforcement.test.ts",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/util/enforcement.ts",
         "packages/moe-daemon/src/util/enforcement.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts"
+      ],
+      "note": "Added TASK_NOT_CLAIMED + assertWorkerHoldsTask(task, workerId, toolName) in util/enforcement.ts (Edit tool, CRLF kept: 341 CRLF / 0 bare LF), placed between assertWorkerOwns and the Attempt fencing banner. Supplied workerId + unassigned row -> MoeError STATE_CONFLICT codeName TASK_NOT_CLAIMED, context {taskId, workerId, retryable:true, nextAction:{tool:'moe.claim_next_task', args:{taskId, statuses:['WORKING'], workerId}, reason}}; message names moe.claim_next_task { taskId, statuses } + the tool (no get_context mention). Every other case delegates to assertWorkerOwns unchanged (assertWorkerOwns byte-identical). Guard only throws; no try/catch, no state reads/writes. TDD: scratch tree D:/moe-c628-scratch (outside repo, node_modules junction); baseline none = repo = 145/145 over the 4 target files. RED: 6 new unit cases composed into scratch enforcement.test.ts vs old source -> 6 failed | 67 passed ('assertWorkerHoldsTask is not a function'). GREEN: repo source copied into scratch -> 73/73. Landed tests into repo (cmp vs pristine first; git diff --numstat enforcement.test.ts +71 -0, enforcement.ts +42 -0, LF kept). Repo run: npx vitest run src/util/enforcement.test.ts -> 73 passed (73). Cases: (a) refusal shape/context toEqual/message, (b) 'complete_step' renders moe.complete_step, (c) undefined and '' tolerated on unassigned, (d) assignee accepted, (e) foreign worker NOT_ALLOWED owner/caller context, (f) assigned + no workerId tolerated AND emits the legacy warning once with {taskId, tool} (proves delegation). Existing 'assertWorkerOwns still no-ops on an unassigned task' untouched. Note: enforcement.ts is now 341 lines (was 299) — plan placed the guard beside assertWorkerOwns and displayToolName is module-private; accepted overshoot of the 300-line advisory.",
+      "startedAt": "2026-09-17T17:13:42.352Z",
+      "completedAt": "2026-09-17T17:15:52.337Z"
     },
     {
       "stepId": "step-2",
       "description": "Wire the guard into moe.start_step: packages/moe-daemon/src/tools/startStep.ts (LF, keep LF).\n\nImport `assertWorkerHoldsTask` in place of `assertWorkerOwns`, and change line 30 to `assertWorkerHoldsTask(task, params.workerId, 'moe.start_step')`. Keep the order: status check, then assertWorkerHoldsTask, then assertContextFetched, then the plan checks. On an unassigned row the claim refusal therefore comes BEFORE the get_context refusal: claim first, then get_context.\n\nChange nothing else. The owner path, the response shape and the `task.assignedWorkerId || params.workerId` touchWorker line all stay as they are; after the guard that line can only resolve to the assignee or to nothing. Edit the source BEFORE adding the tests, so the shared checkout never sits red. A scratch prototype of exactly this rule already ran the full daemon suite with zero behavioural failures.\n\nTests in packages/moe-daemon/src/tools/startStep.test.ts (CRLF, keep CRLF). Add `describe('moe.start_step on an unclaimed row')` with ToolTestHarness (already imported at line 168).\n\nbeforeEach: setupMoeFolder(); createEpic(); createTask({ status:'WORKING', assignedWorkerId:null, contextFetchedBy:['worker-x'], implementationPlan:[{stepId:'step-1',description:'First',status:'PENDING',affectedFiles:[]},{stepId:'step-2',description:'Second',status:'PENDING',affectedFiles:[]}] }); createWorker({ id:'worker-x', status:'IDLE', currentTaskId:null }); await load().\n\nAssert the codeName with the literal string 'TASK_NOT_CLAIMED'. Do NOT import the new constant here, so step 6's swap to the HEAD source fails behaviourally rather than at link time.\n\n(a) DoD 1. start_step {taskId:'task-1', stepId:'step-1', workerId:'worker-x'} rejects with a MoeError:\n- code MoeErrorCode.STATE_CONFLICT and codeName 'TASK_NOT_CLAIMED'\n- context toMatchObject `{ retryable:true, nextAction:{ tool:'moe.claim_next_task', args:{ taskId:'task-1', statuses:['WORKING'], workerId:'worker-x' } } }`\n- a message containing 'moe.claim_next_task' and 'task-1'\nAfterwards, worker-x is still status 'IDLE' with currentTaskId null. The task still has assignedWorkerId null, step-1 is PENDING with no startedAt, and workStartedAt is undefined.\n\n(b) Precedence. After `await h.state.updateTask('task-1', { contextFetchedBy: [] })`, the same call still rejects with codeName 'TASK_NOT_CLAIMED' (not the get_context NOT_ALLOWED), and the message does not contain 'moe.get_context'.\n\n(c) The nextAction can be followed. Take err.context.nextAction.args and call `claimNextTaskTool(h.state).handler(args, h.state)` (import from './claimNextTask.js'). Then call `getContextTool(h.state).handler({ taskId:'task-1', workerId:'worker-x' }, h.state)` (import from './getContext.js'). Then start_step with the same args succeeds (success true). The task's assignedWorkerId is 'worker-x', step-1 is IN_PROGRESS, and worker-x is status 'CODING' with currentTaskId 'task-1'. This proves the refusal points at a valid claim call: statuses present, taskId honoured, and an unknown seat auto-registered (claimNextTask.ts:530).\n\nExisting tests stay unchanged and green (DoD 2): 'rejects when a different worker attempts to start the step' (NOT_ALLOWED), 'starts the step after context has been fetched by owner', 'preserves legacy path when workerId is not supplied (null assignedWorkerId)', and the harness 'marks step as IN_PROGRESS'. A call without a workerId on an unassigned row stays tolerated on purpose.\n\nRun: cd packages/moe-daemon && npx vitest run src/tools/startStep.test.ts",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/startStep.ts",
         "packages/moe-daemon/src/tools/startStep.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts"
+      ],
+      "note": "startStep.ts (LF kept, 0 CRLF): import assertWorkerHoldsTask instead of assertWorkerOwns; guard call swapped in place (status check -> assertWorkerHoldsTask -> assertContextFetched -> plan checks). Nothing else changed (git diff +2 -2). Tests (CRLF kept): new describe('moe.start_step on an unclaimed row') appended (ToolTestHarness; task-1 WORKING unassigned, contextFetchedBy ['worker-x']; worker-x IDLE/null on disk) + imports claimNextTaskTool/getContextTool at top; git diff +82 -0 (no existing case touched). codeName asserted as literal 'TASK_NOT_CLAIMED' (constant not imported). Cases: (a) STATE_CONFLICT/TASK_NOT_CLAIMED, context toMatchObject retryable + nextAction claim_next_task {taskId, statuses:['WORKING'], workerId}, message has moe.claim_next_task + task-1; worker-x still IDLE/null, task unassigned, step-1 PENDING no startedAt, workStartedAt undefined. (b) contextFetchedBy [] -> still TASK_NOT_CLAIMED, message lacks moe.get_context. (c) nextAction.args fed verbatim to claim_next_task handler, then get_context, then same start_step -> success, assignedWorkerId worker-x, step IN_PROGRESS, worker CODING/task-1 (worker-x pre-exists, so auto-registration is not exercised here). TDD in scratch: RED composed tests vs old startStep.ts -> 3 failed | 6 passed, each 'AssertionError: promise resolved \"{ success: true, …(5) }\" instead of rejecting'. GREEN with repo source -> 9/9. Landed (cmp vs pristine first). Repo: npx vitest run src/tools/startStep.test.ts -> 9 passed (9). Existing DoD-2 cases (different worker NOT_ALLOWED, owner path, legacy no-workerId, harness IN_PROGRESS) unchanged and green.",
+      "startedAt": "2026-09-17T17:15:54.989Z",
+      "completedAt": "2026-09-17T17:17:32.710Z"
     },
     {
       "stepId": "step-3",
       "description": "Wire the guard into moe.complete_step: packages/moe-daemon/src/tools/completeStep.ts (LF, keep LF). This tool has the same hole: both guards returned early on an unassigned row, and touchWorker then stamped the caller CODING with that currentTaskId.\n\nImport `assertWorkerHoldsTask` instead of `assertWorkerOwns`, and change line 40 to `assertWorkerHoldsTask(task, params.workerId, 'moe.complete_step')`. Keep it before assertContextFetched and change nothing else. Edit the source first, then the test.\n\nTest in packages/moe-daemon/src/tools/completeStep.test.ts (CRLF, keep CRLF), inside the existing harness `describe('moe.complete_step')`. Its fixture is task-1: WORKING, unassigned, step-1 IN_PROGRESS, step-2 PENDING.\n\nAdd `it('refuses a worker that never claimed the unassigned row and records nothing')`:\n- Setup: `await h.state.updateTask('task-1', { contextFetchedBy: ['worker-x'] })`, then `await h.state.createWorker({ id:'worker-x', type:'CLAUDE', projectId:'proj-test', epicId:'epic-1', currentTaskId:null, status:'IDLE' })`.\n- Call complete_step {taskId:'task-1', stepId:'step-1', workerId:'worker-x', modifiedFiles:['src/x.ts'], note:'n'}. It rejects with code MoeErrorCode.STATE_CONFLICT, codeName literal 'TASK_NOT_CLAIMED', context.retryable true, and context.nextAction toMatchObject `{ tool:'moe.claim_next_task', args:{ taskId:'task-1', statuses:['WORKING'], workerId:'worker-x' } }`. Do not import the constant.\n- Afterwards: step-1 is still IN_PROGRESS with no completedAt, modifiedFiles or note; stepsCompleted is undefined; metrics?.executedStepCount is undefined; worker-x is still status 'IDLE' with currentTaskId null.\n\nThe describe's existing cases without a workerId (the legacy path) and 'rejects when a different worker attempts to complete' stay unchanged and green.\n\nRun: cd packages/moe-daemon && npx vitest run src/tools/completeStep.test.ts",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeStep.ts",
         "packages/moe-daemon/src/tools/completeStep.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts"
+      ],
+      "note": "completeStep.ts (LF kept, 0 CRLF): import assertWorkerHoldsTask instead of assertWorkerOwns; guard call swapped in place, still before assertContextFetched; git diff +2 -2, nothing else. Test (CRLF kept): new it('refuses a worker that never claimed the unassigned row and records nothing') appended at the end of the harness describe('moe.complete_step'); git diff +43 -0. Setup per plan (updateTask contextFetchedBy ['worker-x'] + state.createWorker worker-x IDLE/null). Asserts rejects.toMatchObject {code STATE_CONFLICT, codeName literal 'TASK_NOT_CLAIMED', context {retryable:true, nextAction {tool moe.claim_next_task, args {taskId task-1, statuses ['WORKING'], workerId worker-x}}}}; afterwards step-1 IN_PROGRESS with no completedAt/modifiedFiles/note, stepsCompleted undefined, metrics?.executedStepCount undefined, worker-x IDLE/null. TDD in scratch: RED composed test vs old completeStep.ts -> 1 failed | 20 passed ('AssertionError: promise resolved \"{ success: true, …(6) }\" instead of rejecting'); GREEN with repo source -> 21/21. Landed after cmp vs pristine. Repo: npx vitest run src/tools/completeStep.test.ts -> 21 passed (21). Legacy no-workerId cases and 'rejects when a different worker attempts to complete' unchanged and green.",
+      "startedAt": "2026-09-17T17:17:36.081Z",
+      "completedAt": "2026-09-17T17:18:20.004Z"
     },
     {
       "stepId": "step-4",
       "description": "Wire the guard into moe.complete_task: packages/moe-daemon/src/tools/completeTask.ts (CRLF, keep CRLF).\n\nImport `assertWorkerHoldsTask` instead of `assertWorkerOwns`. Replace line 102, `assertWorkerOwns(task, params.workerId);`, with `assertWorkerHoldsTask(task, params.workerId, 'moe.complete_task');` in the same position. That is after the WORKING check and before assertAllStepsCompleted, verification and branch policy. Critically, it is also before currentAttempt/setAttemptPhase, so a refused completion can never move an attempt to finalizing, flip the row to REVIEW, or set the caller IDLE.\n\nDo not touch any attempt code (task-2a7e0f5b owns attempt lifetime). Passing a toolName only renames the dedupe key of the legacy missing-workerId warning, which is harmless. Edit the source first, then the test.\n\nTest in packages/moe-daemon/src/tools/completeTask.test.ts (LF, keep LF), inside the existing harness `describe('moe.complete_task')`. Its fixture is task-1: WORKING, unassigned, step-1 COMPLETED.\n\nAdd `it('refuses a worker that never claimed the unassigned row and leaves task and worker untouched')`:\n- Setup: `await h.state.createWorker({ id:'worker-x', type:'CLAUDE', projectId:'proj-test', epicId:'epic-1', currentTaskId:'task-other', status:'CODING' })`. The seat is busy elsewhere, so the old IDLE/null stamp would be visible.\n- Call complete_task {taskId:'task-1', workerId:'worker-x', verification:{command:'npm test', exitCode:0}, summary:'s'}. It rejects with code MoeErrorCode.STATE_CONFLICT, codeName literal 'TASK_NOT_CLAIMED', context.retryable true, and context.nextAction toMatchObject `{ tool:'moe.claim_next_task', args:{ taskId:'task-1', statuses:['WORKING'], workerId:'worker-x' } }`.\n- Afterwards: the task is still status 'WORKING' with assignedWorkerId null, and verification, reviewStartedAt, completionSummary and filesModified are all undefined. worker-x is still status 'CODING' with currentTaskId 'task-other'.\n\nThese existing cases stay unchanged and green: the legacy 'moves task to REVIEW' without a workerId, 'rejects when a different worker attempts to complete', and the whole '— finalizing attempt' describe.\n\nRun: cd packages/moe-daemon && npx vitest run src/tools/completeTask.test.ts",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/completeTask.ts",
         "packages/moe-daemon/src/tools/completeTask.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts"
+      ],
+      "note": "completeTask.ts (CRLF kept: 228 CRLF / 0 bare LF): import assertWorkerHoldsTask instead of assertWorkerOwns; line 102 now assertWorkerHoldsTask(task, params.workerId, 'moe.complete_task') in the same position — after the WORKING check, before assertAllStepsCompleted, verification, branch policy, currentAttempt/setAttemptPhase, the REVIEW updateTask and touchWorker IDLE. No attempt code touched; git diff +2 -2. Test (LF kept): new it('refuses a worker that never claimed the unassigned row and leaves task and worker untouched') appended at the end of the harness describe('moe.complete_task'); git diff +41 -0. worker-x created CODING/currentTaskId 'task-other' so the old IDLE/null stamp would show. Asserts rejects.toMatchObject {STATE_CONFLICT, codeName literal 'TASK_NOT_CLAIMED', context {retryable:true, nextAction claim_next_task {taskId, statuses ['WORKING'], workerId}}}; afterwards task WORKING, assignedWorkerId null, verification/reviewStartedAt/completionSummary/filesModified undefined; worker-x still CODING/task-other. TDD in scratch: RED vs old completeTask.ts -> 1 failed | 52 passed ('AssertionError: promise resolved \"{ success: true, …(5) }\" instead of rejecting'); GREEN with repo source -> 53/53. Landed after cmp vs pristine. Repo: npx vitest run src/tools/completeTask.test.ts -> 53 passed (53). Legacy 'moves task to REVIEW' (no workerId), 'rejects when a different worker attempts to complete' and the whole '— finalizing attempt' describe unchanged and green.",
+      "startedAt": "2026-09-17T17:18:23.275Z",
+      "completedAt": "2026-09-17T17:19:14.021Z"
     },
     {
       "stepId": "step-5",
       "description": "Document the rule in docs/MCP_SERVER.md (LF, keep LF; use Edit, not Serena). Do not add or rename any `### moe.*` heading: src/util/taskTimeBudgetDocs.test.ts matches the headings against getTools().\n\n(1) DoD 4. Under `### moe.start_step`, after the get_context blockquote, add a **Claimed row required** note covering:\n- When the call carries a `workerId`, the task must be assigned to that worker.\n- On a `WORKING` task whose `assignedWorkerId` is `null`, the call is refused with `STATE_CONFLICT` (`-32002`, codeName `TASK_NOT_CLAIMED`) before any other guard, including the get_context check.\n- Nothing is written: the step stays `PENDING`, and the caller's worker record (`status`, `currentTaskId`) is not touched.\n- The refusal is retryable. Claim the row with `moe.claim_next_task { taskId, statuses: [\"WORKING\"], workerId }`, call `moe.get_context`, then retry. The message names the claim call because MoeError context does not cross MCP; in-process callers also get `context.retryable: true` and `context.nextAction`.\n- A caller whose `workerId` differs from a set `assignedWorkerId` is still refused with `NOT_ALLOWED`.\n- A call without a `workerId` (the plugin `/ws` path, legacy clients) keeps the old tolerance.\n\n(2) `### moe.complete_step` Notes: add one bullet. The same claimed-row rule as `moe.start_step` applies: the step stays `IN_PROGRESS` and nothing is recorded.\n\n(3) `### moe.complete_task` Notes: add one bullet. The same rule applies, and the refusal comes before the attempt is moved to `finalizing` and before the REVIEW write. The task stays `WORKING` with no verification persisted, and the caller's worker record is untouched.\n\n(4) **Ownership & Ordering**. Line 111 says every guard is a no-op when `assignedWorkerId` is `null`, which is no longer true. Amend it: the no-op still holds for calls without a `workerId` and for `submit_plan`/`qa_approve`/`qa_reject`, but `start_step`, `complete_step` and `complete_task` refuse a supplied `workerId` on an unassigned row (`TASK_NOT_CLAIMED`, see `moe.start_step`). Describe that refusal in prose after the guard table, not as a table row: the sentence before the table says every guard failure is `NOT_ALLOWED` (-32003), and this one is -32002.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md (Edit tool, LF kept: 0 CRLF; git diff +11 -1; no ### heading added/renamed). (1) ### moe.start_step: **Claimed row required** note after the get_context blockquote — workerId must hold the task; unassigned WORKING row refused STATE_CONFLICT (-32002, TASK_NOT_CLAIMED) before every other guard incl. get_context; nothing written (step stays PENDING, worker status/currentTaskId untouched) + why (old stamp CODING with no attempt); retryable: claim_next_task { taskId, statuses: [\"WORKING\"], workerId }, get_context if not fetched, retry; message names the claim because MoeError context does not cross MCP, in-process callers get context.retryable/nextAction; foreign workerId still NOT_ALLOWED; no-workerId (plugin /ws, legacy) keeps tolerance. (2) ### moe.complete_step Notes bullet: same rule, step stays IN_PROGRESS, nothing recorded (note/modifiedFiles/stepsCompleted/metrics), worker untouched. (3) ### moe.complete_task Notes bullet (first bullet): same rule, refused before steps/verification/branch-policy checks, before any open attempt moves to finalizing, before the REVIEW write; task stays WORKING with no verification, worker untouched. (4) Ownership & Ordering: replaced 'All guards are no-ops when assignedWorkerId is null' with the no-workerId + submit_plan/qa_approve/qa_reject scope, and added a prose **Claimed row required** paragraph after the table (STATE_CONFLICT -32002 not NOT_ALLOWED, retryable, names the claim, fires before the other guards and before any write). Verify: npx vitest run src/util/taskTimeBudgetDocs.test.ts -> 17 passed (17).",
+      "startedAt": "2026-09-17T17:19:17.709Z",
+      "completedAt": "2026-09-17T17:20:15.847Z"
     },
     {
       "stepId": "step-6",
       "description": "Prove red, run the regression suite, then self-review.\n\n(1) Red proof without breaking the shared checkout. Follow Serena memory `pattern-red-proof-by-scratch-tree-mutation-vitest`.\n- Build a scratch tree OUTSIDE the repo holding packages/moe-daemon/{src,package.json,tsconfig.json,vitest.config.ts}, with a node_modules junction to the repo's.\n- Target files: src/util/enforcement.test.ts, src/tools/startStep.test.ts, src/tools/completeStep.test.ts and src/tools/completeTask.test.ts.\n- Run `none` first. Its counts must equal the repo's.\n- Then apply one mutation at a time, restoring from pristine and sha-verifying between runs:\n  - old-startStep, old-completeStep, old-completeTask: each swaps in `git show HEAD:packages/moe-daemon/src/tools/<file>.ts`.\n  - guard-noop: the body of assertWorkerHoldsTask reduced to `assertWorkerOwns(task, workerId, toolName)`.\n- Expected:\n  - Each old-tool swap turns ONLY that tool's new cases red, with behavioural failures (a promise that resolved instead of rejecting, or 'CODING' where 'IDLE' was expected).\n  - guard-noop turns all the new tool cases red, plus unit cases (a) and (b).\n  - Every pre-existing case stays green.\n- Run `none` again last.\n- Record the mutation-to-red map in the step note.\n- Teardown: delete the junction FIRST with `(Get-Item <junction> -Force).Delete()`, confirm the repo's node_modules/vitest/vitest.mjs still exists, then rm -rf the scratch tree and cmp the repo targets against the final sources.\n\n(2) Regression, from packages/moe-daemon:\n- `npx vitest run src/util/enforcement.test.ts src/tools/startStep.test.ts src/tools/completeStep.test.ts src/tools/completeTask.test.ts src/tools/enforcement.integration.test.ts src/tools/claimNextTask.race.test.ts src/delivery/acceptance.test.ts src/__e2e__/lifecycle.e2e.test.ts`\n- Then the full `npm test` and `npx tsc --noEmit`. Both must exit 0 (DoD 4); report the exact command and exit code in complete_task.verification.\n- Under fleet load, rerun a failing file that is unrelated to this change on its own before calling it a flake. Never report a red run as green.\n\n(3) Adversarial self-review:\n- Error handling: every new refusal is a thrown typed MoeError that fires before any write (updateTask, touchWorker, setAttemptPhase, postSystemMessage). No try/catch was added or widened, so nothing can swallow the refusal and leave a half-applied row or worker.\n- `grep -rn \"assertWorkerOwns(\" src --include=*.ts` still shows the other callers unchanged: submitPlan, qaApprove, qaReject, reportBlocked, requestReplan, acquireResource and waitForResource.\n- A workerId of '' or undefined stays on the legacy path.\n- Handlers run under the state mutex (McpAdapter runExclusive), so no write can interleave between the guard and the handler's own writes.\n- `git diff` shows no whole-file EOL flips. CRLF: enforcement.ts, completeTask.ts, startStep.test.ts, completeStep.test.ts. LF: startStep.ts, completeStep.ts, enforcement.test.ts, completeTask.test.ts, docs/MCP_SERVER.md.\n- Report every path you touched in complete_step.modifiedFiles.\n- Leave dirty paths that belong to peers alone: never stage, stash or revert them.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/util/enforcement.test.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStep.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.test.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completeTask.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "No new repo edits in this step (list = the task's full path set, all edited in steps 1-5). (1) RED PROOF, scratch D:/moe-c628-scratch outside repo (src+docs+scripts copy, node_modules junction), driver restores all 8 targets from final/ before+after each run with sha256 verify, one mutation per run, anchors must match once; 4 target test files, JSON reporter. none=156/156 (repo 145 + 11 new). old-startStep (git show HEAD swap): exactly 3 red = the 3 new start_step cases, each 'promise resolved \"{ success: true, …(5) }\" instead of rejecting'. old-completeStep: exactly 1 red = new case, 'promise resolved { success: true, …(6) }'. old-completeTask: exactly 1 red = new case, same. guard-noop (body reduced to assertWorkerOwns): 7 red = all 5 new tool cases + unit (a)+(b) ('expected MoeError TASK_NOT_CLAIMED, but nothing was thrown'). Extra: legacy-refused (drop the workerId condition): 14 red = 13 pre-existing no-workerId tool cases (e.g. startStep 'preserves legacy path…', 'marks step as IN_PROGRESS', completeTask 'moves task to REVIEW') + unit (c) -> legacy tolerance pinned (DoD 2). no-statuses: 5 red incl. follow-through case 'MISSING_REQUIRED statuses'. not-retryable: 4 red. late-guard-* (guard moved after the tool's own writes, still refusing): startStep (a) \"expected 'CODING' to be 'IDLE'\"; completeStep \"expected 'COMPLETED' to be 'IN_PROGRESS'\"; completeTask \"expected 'REVIEW' to be 'WORKING'\" (+3 existing ordering cases) -> the no-write assertions bite. none last=156/156. Known: start_step precedence case (b) cannot distinguish guard order today because assertContextFetched itself no-ops on unassigned rows; it pins the order if that early return ever goes. Teardown: junction deleted first, repo vitest.mjs present, scratch rm -rf'd, repo targets cmp-equal to final. (2) REGRESSION from packages/moe-daemon: named 8-file set -> 8 files passed, 171 passed | 2 skipped, exit 0; npm test -> Test Files 122 passed (122), Tests 2067 passed | 2 skipped (2069), exit 0; npx tsc --noEmit -> exit 0, no output; the 4 test files also typecheck clean under strict via a scratch tsconfig including them (exit 0). (3) SELF-REVIEW: refusal is a synchronous typed MoeError thrown before any await/write (updateTask, touchWorker, setAttemptPhase, postSystemMessage); no try/catch added. assertWorkerOwns callers unchanged: submitPlan, qaApprove, qaReject, reportBlocked, requestReplan, acquireResource, waitForResource. '' / undefined workerId stay legacy (unit c). McpAdapter dispatches non-blocking tools under state.runExclusive. No plugin/wrapper code calls these tools directly (only prompts). EOLs byte-verified: CRLF enforcement.ts 341/0, completeTask.ts 228/0, startStep.test.ts 290/0, completeStep.test.ts 490/0; LF startStep.ts, completeStep.ts, enforcement.test.ts, completeTask.test.ts, MCP_SERVER.md all 0 CRLF; git diff 296+/7-, no whole-file flips. Peer dirty paths (.moe/tasks/* of other tasks, .moe/attempts|candidates|reviews) untouched. Residual: enforcement.ts 341 lines (>300 advisory); a live CLI whose row was released (release_task/restart purge) now gets TASK_NOT_CLAIMED on its next step call and must re-claim (intended, documented).",
+      "startedAt": "2026-09-17T17:20:18.627Z",
+      "completedAt": "2026-09-17T17:23:34.031Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 13,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,20 +124,29 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:37:10.974Z",
-  "updatedAt": "2026-09-17T16:59:34.918Z",
+  "updatedAt": "2026-09-17T17:24:19.004Z",
   "metrics": {
     "firstClaimAt": "2026-09-17T16:48:37.886Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-259309b5",
-    "governor-82389379"
+    "governor-82389379",
+    "worker-3b5de06f"
   ],
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-17T16:59:25.847Z",
   "planningNotes": {
@@ -108,5 +165,26 @@
       "docs/MCP_SERVER.md"
     ]
   },
-  "planApprovedAt": "2026-09-17T16:59:25.911Z"
+  "planApprovedAt": "2026-09-17T16:59:25.911Z",
+  "workStartedAt": "2026-09-17T17:13:42.352Z",
+  "reviewStartedAt": "2026-09-17T17:24:19.001Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test && npx tsc --noEmit",
+    "exitCode": 0,
+    "outputTail": "npm test: exit 0 — Test Files 122 passed (122); Tests 2067 passed | 2 skipped (2069); Duration 9.91s. npx tsc --noEmit: exit 0, no output. Targeted: npx vitest run src/util/enforcement.test.ts src/tools/startStep.test.ts src/tools/completeStep.test.ts src/tools/completeTask.test.ts src/tools/enforcement.integration.test.ts src/tools/claimNextTask.race.test.ts src/delivery/acceptance.test.ts src/__e2e__/lifecycle.e2e.test.ts -> 8 files passed, 171 passed | 2 skipped.",
+    "reportedAt": "2026-09-17T17:24:19.001Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/enforcement.ts",
+    "packages/moe-daemon/src/util/enforcement.test.ts",
+    "packages/moe-daemon/src/tools/startStep.ts",
+    "packages/moe-daemon/src/tools/startStep.test.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts",
+    "packages/moe-daemon/src/tools/completeStep.test.ts",
+    "packages/moe-daemon/src/tools/completeTask.ts",
+    "packages/moe-daemon/src/tools/completeTask.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "This fixes the defect where moe.start_step, moe.complete_step and moe.complete_task accepted a supplied workerId on an unassigned WORKING row and stamped that worker's record. It adds `assertWorkerHoldsTask` and `TASK_NOT_CLAIMED` to util/enforcement.ts as a strict sibling of assertWorkerOwns, which stays byte-identical so its 7 other callers keep the unassigned no-op.\n\nGuard behaviour:\n- A truthy workerId on an unassigned row gets STATE_CONFLICT (-32002, codeName TASK_NOT_CLAIMED), context `{taskId, workerId, retryable:true, nextAction:{tool:'moe.claim_next_task', args:{taskId, statuses:['WORKING'], workerId}}}`. The message names the claim call.\n- Every other case goes to assertWorkerOwns: a foreign worker still gets NOT_ALLOWED, and no workerId (legacy) is still tolerated.\n\nThe three tools swap in the new guard in place (+2 -2 each). It runs before every write, and in complete_task before steps, verification, branch policy and setAttemptPhase('finalizing').\n\nTests (all +N -0):\n- 6 unit cases.\n- start_step: 3 cases. The refusal writes nothing (worker stays IDLE/null); the claim is refused before get_context; following nextAction.args through claim_next_task, then get_context, then the same start_step succeeds.\n- complete_step: 1 case. Nothing is recorded and the worker is untouched.\n- complete_task: 1 case. The task stays WORKING with no verification and the worker stays CODING/task-other.\n\ndocs/MCP_SERVER.md gets a Claimed row required note under start_step, a bullet each under complete_step and complete_task, and an amended Ownership & Ordering no-op sentence plus a prose paragraph.\n\nRed proof (scratch tree, none = 156/156 first and last):\n- Swapping in each tool's HEAD source turns only that tool's new cases red, with 'promise resolved { success: true } instead of rejecting'.\n- guard-noop: 7 red.\n- legacy-refused: 14 red. That is 13 pre-existing no-workerId cases plus unit (c).\n- no-statuses: 5 red. not-retryable: 4 red.\n- late-guard: 'CODING' vs 'IDLE', 'COMPL"
 }
