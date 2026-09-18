@@ -141,8 +141,8 @@ See `docs/MCP_SERVER.md` for tool definitions.
 ├── activity.log       # event log + rotations (gitignored)
 ├── epics/  tasks/  proposals/            # tracked task-state
 ├── workers/  teams/  messages/  memory/  # runtime (gitignored)
-├── attempts/  candidates/  checks/       # delivery records (see Delivery Path below)
-├── reviews/  receipts/
+├── attempts/  candidates/  checks/       # delivery records (gitignored; see Delivery Path below)
+├── reviews/  receipts/                   # delivery records (gitignored)
 ├── resources/         # shared-resource leases (gitignored)
 ├── channels/  decisions/
 ├── roles/             # role guides (sha-stamped, auto-upgraded)
@@ -205,6 +205,24 @@ replayed from `<gitdir>/moe/receipt/<taskId>.json` by the next pre-flight, which
 records the missing receipt and never lands twice. A daemon restart parks a
 still-assigned `running` attempt in `reconciling` and holds its row until the
 runner reattaches or `reconcileWindowMs` passes; no idle signal releases a seat.
+
+The five record directories are local runtime state, gitignored like
+`resources/` and never committed. The evidence that travels with the repository
+is the git commit plus the tracked task fields `commits`, `lastCommitOutcome`,
+`completionSummary` and `reviewSummary`. Each record only makes sense in the
+clone that wrote it:
+
+- `attempts/`: live fencing and process identity (`generation`, `phase`,
+  `host`, `processStartedAt`) for this daemon; stale on any other clone.
+- `candidates/`: a runner-reported `treeSha` bound to a local attempt; the
+  frozen bytes themselves live in git.
+- `checks/`: gate output from a disposable local checkout; the verdict reaches
+  the tracked task as the landed commit or the `MOE_COMMIT_FAILED_GATE` entry.
+- `reviews/`: an append-only `candidateId` binding for this daemon;
+  `qa_approve` already persists `reviewSummary` on the tracked task.
+- `receipts/`: crash recovery for this clone's ref move, paired with
+  `<gitdir>/moe/receipt/<taskId>.json`, which never leaves the clone; the
+  landing itself travels as the commit.
 
 Record shapes: `docs/SCHEMA.md`. Tool contracts: `docs/MCP_SERVER.md`. Settings
 and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.

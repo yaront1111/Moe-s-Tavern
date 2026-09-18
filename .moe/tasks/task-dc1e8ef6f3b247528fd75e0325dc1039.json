@@ -10,9 +10,67 @@
     "docs/ARCHITECTURE.md and CLAUDE.md say for each record directory whether it is committed"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD: extend packages/moe-daemon/src/util/initFiles.test.ts so the old template and the old root .gitignore fail. Keep the existing `creates .moe/.gitignore when missing and preserves an existing one` test (custom-ignore\\n must still be left untouched).\n\nAdd a shared list in the test file:\n```\nconst WAVE1_RUNTIME_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'] as const;\n```\nComment on it: a new daemon-written record directory under .moe/ must be added to this list, to GITIGNORE_CONTENT, and to the root .gitignore.\n\nThree new cases (all must fail on current HEAD):\n1) `GITIGNORE_CONTENT lists every Wave 1 record directory as its own trimmed line` — `GITIGNORE_CONTENT.split(/\\r?\\n/).map(l => l.trim())` contains each WAVE1_RUNTIME_DIRS entry. This is the pin that a new record directory cannot ship unlisted: dropping any of the five from the template fails the test.\n2) `writeInitFiles appends missing Wave 1 dirs onto a bundled-style .moe/.gitignore` — write the historical template (`# Moe runtime files (not shared)\\ndaemon.json\\ndaemon.lock\\nworkers/\\nproposals/\\n`) then call writeInitFiles. Expect each WAVE1 dir present as a trimmed line, and workers/ and proposals/ still present. Do NOT require byte-equality with GITIGNORE_CONTENT (append, don't rewrite).\n3) `repository .gitignore ignores the Wave 1 record directories` — read the repo root .gitignore via `path.resolve(__dirname, '../../../../.gitignore')` and expect trimmed lines `.moe/attempts/`, `.moe/candidates/`, `.moe/checks/`, `.moe/reviews/`, `.moe/receipts/`.\n\nKeep `preserves an existing one` covering a file whose body is `custom-ignore\\n` (no bundled header) — writeInitFiles must still leave that file byte-identical. That is this repo's .moe/.gitignore class.\n\nRun from packages/moe-daemon: `npx vitest run src/util/initFiles.test.ts`. Expect FAIL on the new assertions before the next step edits anything else. Skill: test-driven-development.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "note": "RED confirmed on HEAD: `npx vitest run src/util/initFiles.test.ts` -> 4 failed | 7 passed (11). The failures are the new pins. (1) GITIGNORE_CONTENT lists the 5 Wave 1 dirs. (2) Root .gitignore lists .moe/<dir>/. (3) it.each x2: writeInitFiles appends missing dirs onto a bundled-style .moe/.gitignore. One case is the historical template. The other is a CRLF file with no trailing newline where attempts/ is already listed; it asserts no glued line and no duplicate. Both cases assert the original bytes stay a prefix and that a second run is a no-op. The existing 'preserves an existing one' test (custom-ignore\\n) is unchanged and passes. Root .gitignore is read via new URL('../../../../.gitignore', import.meta.url), the repo convention (version.test.ts), instead of __dirname. Shared-checkout note: 24 dirty paths from a 2026-09-17 ponytail-skill WIP are not mine: docs/roles/*.reference.md, docs/skills/*, .moe/skills/*, recommendSkill*, startStep.ts, contextNextAction.ts, generated/skillFiles.ts, and generated/initFiles.ts, which is already regenerated with their role-doc lines. I left them untouched.",
+      "startedAt": "2026-09-18T20:17:45.859Z",
+      "completedAt": "2026-09-18T20:18:53.477Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Minimum impl to make step 1's tests pass. Edit the generator, not the generated file by hand.\n\nIn packages/moe-daemon/scripts/generate-init-files.ts:\n- Extend GITIGNORE_CONTENT (keep the existing four entries, append the five Wave 1 dirs):\n```\nexport const GITIGNORE_CONTENT = `# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nproposals/\nattempts/\ncandidates/\nchecks/\nreviews/\nreceipts/\n`;\n```\n- Replace the skip-if-exists gitignore block in writeInitFiles with: missing file → write GITIGNORE_CONTENT; existing file whose contents include the bundled header `# Moe runtime files (not shared)` → append any of `attempts/`, `candidates/`, `checks/`, `reviews/`, `receipts/` whose trimmed line is absent (insert a leading newline if the file does not already end with `\\n`); any other existing file → leave byte-identical. Split lines on /\\r?\\n/. Do not remove or rewrite user lines. Do not add resources/memory/messages/teams in this task.\n\nError handling: do not try/catch inside the new gitignore branch. atomicWriteText is already temp-file-then-rename, so a failed write leaves the previous file intact. Let readFileSync / atomicWriteText throw; writeInitFiles callers already own error handling (index.ts daemon start ~523 and existing-.moe backfill ~936 wrap writeInitFiles in try/catch, log warn, and keep the daemon running). Swallowing IO here would hide a half-applied ignore list.\n\nRegenerate with `npm run generate-init-files` from packages/moe-daemon (tsx scripts/generate-init-files.ts). Do NOT `npm run build` or `npm run prebuild` — prebuild runs `clean` and deletes dist/, which races the live daemon on this shared checkout. Confirm packages/moe-daemon/src/generated/initFiles.ts now contains the new GITIGNORE_CONTENT and the new writeInitFiles branch; never hand-edit that file.\n\nIn the repository root .gitignore, immediately after the existing `.moe/resources/` line, add:\n```\n.moe/attempts/\n.moe/candidates/\n.moe/checks/\n.moe/reviews/\n.moe/receipts/\n```\nForward slashes; git on Windows accepts them. Do not touch .moe/.gitignore (DENY-tier, daemon-owned scaffold, custom header in this repo).\n\nRe-run `npx vitest run src/util/initFiles.test.ts` from packages/moe-daemon; expect PASS. Optional sanity (not the completion command): `git check-ignore -v .moe/attempts/dummy` should cite root .gitignore.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        ".gitignore"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        ".gitignore"
+      ],
+      "note": "GREEN: `npx vitest run src/util/initFiles.test.ts` -> 11 passed (11). `npx tsc --noEmit -p .` -> exit 0.\n- Generator: one RUNTIME_RECORD_DIRS list (the five dirs) and a GITIGNORE_HEADER const. GITIGNORE_CONTENT is built from both, so its bytes are the plan's literal (the 4 old entries + the 5 dirs) and cannot drift from the heal list.\n- The gitignore block moved into a new helper, writeGitignore(moePath), so writeInitFiles stays under 50 lines and needs no early return. The helper writes GITIGNORE_CONTENT when the file is missing. If the file contains the bundled header, it appends only the absent dirs: trimmed-line match, split on /\\r?\\n/, and a leading \\n when the file lacks a trailing newline. Any other file is left untouched. No try/catch, so IO errors still reach the existing callers (index.ts:523/936 warn; :990 init propagates).\n- Regenerated with `npm run generate-init-files` only (no build/prebuild). Diff against a pre-regen copy (D:/moe-tdc1e-scratch/initFiles.before.ts) = exactly my GITIGNORE/writeGitignore hunks.\n- NOTE for QA: HEAD..worktree on generated/initFiles.ts ALSO carries the pre-existing 2026-09-17 ponytail WIP: 3 sha markers + 4 role-doc table rows from the dirty docs/roles/*.reference.md. It was already in the file before I touched it. I did not revert it. Landing the whole file carries it; CI prebuild regenerates from docs/roles anyway.\n- Root .gitignore: 5 lines after .moe/resources/. `git check-ignore -v .moe/{attempts,candidates,checks,reviews,receipts}/dummy` cites .gitignore:69-73, and `git status` no longer lists the three untracked dirs. .moe/.gitignore was not touched.",
+      "startedAt": "2026-09-18T20:18:56.782Z",
+      "completedAt": "2026-09-18T20:20:12.930Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Record the per-directory decision in the two DoD docs. Do not expand to SCHEMA.md or CONFIGURATION.md.\n\nIn docs/ARCHITECTURE.md File System Layout (.moe), change the attempts/candidates/checks and reviews/receipts lines so each directory is marked runtime/gitignored, same phrasing style as resources/. Keep the `see Delivery Path below` pointer. Under ## Delivery Path, add one short paragraph (not a new subsystem): the five record directories are local runtime state, gitignored like resources/; they are not committed. The evidence that travels with the repo is the git commit plus the tracked task fields (commits, lastCommitOutcome, completionSummary, reviewSummary). Reasons the worker must put on the page, one clause each:\n- attempts/ — live fencing/process identity (generation, phase, host, processStartedAt) for this daemon; stale on any other clone.\n- candidates/ — runner-reported treeSha bound to a local landing in progress; the frozen bytes themselves live in git.\n- checks/ — wrapper-reported gate output from a disposable local checkout; the gate result is already on the tracked task.\n- reviews/ — append-only candidateId binding for this daemon; qa_approve already persists reviewSummary on the tracked task JSON.\n- receipts/ — crash-recovery for this wrapper's ref move (pair of .moe/receipts and <gitdir>/moe/receipt/); cloning one would hide a real landing on another machine.\n\nIn CLAUDE.md, in the `Never edit .moe/ files by hand` bullet that currently lists the runtime subset as `(daemon.json, activity.log, workers/, memory/, messages/, teams/)`, extend that parenthetical to also name resources/, attempts/, candidates/, checks/, reviews/, receipts/ as gitignored runtime. Do not claim they are committed.\n\nSkill: ponytail — docs only, no extra files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "CLAUDE.md"
+      ],
+      "note": "Docs only, 2 files.\n- ARCHITECTURE.md File System Layout: attempts/candidates/checks and reviews/receipts lines now read \"delivery records (gitignored...)\", same style as resources/, and keep the Delivery Path pointer.\n- ARCHITECTURE.md Delivery Path: new paragraph plus one bullet per directory. It says the directories are local runtime state, gitignored like resources/ and never committed. The evidence that travels with the repo is the git commit plus task.commits / lastCommitOutcome / completionSummary / reviewSummary (field names checked in types/schema.ts).\n- Each reason was checked against types/schema.ts and the stores:\n  - attempts: generation/phase/host/processStartedAt.\n  - candidates: treeSha bound to attemptId.\n  - checks: the gate verdict reaches the task as the landed commit or the MOE_COMMIT_FAILED_GATE code (moe-agent.sh LAND_CODE -> record_commit code).\n  - reviews: reviewStore has no update; qa_approve persists reviewSummary.\n  - receipts: paired with <gitdir>/moe/receipt/<taskId>.json.\n- One wording change from the plan: I did not write \"cloning one would hide a real landing on another machine\". receiptStore is keyed per candidate and never rewritten, and I could not show that a cloned receipt hides a landing. I wrote the claim I could verify instead: the gitdir partner never leaves the clone, and the landing itself travels as the commit.\n- CLAUDE.md: the runtime-subset parenthetical now also names resources/ and the five delivery-record dirs as gitignored and never committed, with a pointer to ARCHITECTURE Delivery Path.\n- No test pins the text of either doc (grep of *.test.ts). SCHEMA.md and CONFIGURATION.md are untouched, per the plan.",
+      "startedAt": "2026-09-18T20:20:23.492Z",
+      "completedAt": "2026-09-18T20:21:34.405Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff only (not the whole epic). Then run the verification command fresh; its output is complete_task evidence.\n\nChecklist:\n- Custom .moe/.gitignore without the bundled header stays byte-identical (this repo).\n- Bundled-header file with CRLF still matches the header and appends only missing dirs.\n- Append on a file that has no trailing newline does not glue `receipts/` onto the last existing line.\n- Root .gitignore entries use `.moe/<dir>/` (repo-relative); inner template uses `<dir>/` (relative to .moe/). Mixing them would fail to ignore.\n- src/generated/initFiles.ts matches the generator (no hand-edit drift).\n- Wrappers, DENY list, BOARD paths, autoCommit, and heartbeat/liveness untouched.\n- .moe/.gitignore in this checkout was not edited.\n- No `npm run build`/`prebuild` on the shared checkout.\n- Error handling still flows to the existing writeInitFiles try/catch at daemon start; a throw on gitignore IO must not be swallowed in writeInitFiles.\n\nVerification (one command, from packages/moe-daemon):\n`npx vitest run src/util/initFiles.test.ts`\nExpect exit 0. That command is complete_task.verification.command. Mid-epic: do not run the full daemon suite.\n\nSkills: adversarial-self-review, verification-before-completion, regression-check.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Review-only step: it changed no files. The task's paths were reported in steps 1-3: .gitignore, CLAUDE.md, docs/ARCHITECTURE.md, packages/moe-daemon/scripts/generate-init-files.ts, packages/moe-daemon/src/generated/initFiles.ts, packages/moe-daemon/src/util/initFiles.test.ts.\n\nFresh verification: `npx vitest run src/util/initFiles.test.ts` (from packages/moe-daemon) -> 11 passed (11), exit 0.\nTargeted regression over every test that exercises writeInitFiles or the generated ROLE_DOCS: qaCommitPolicy, tools/initProject and claudeHook.integration -> 14 passed (14). `tsc --noEmit` exit 0. I did not run the full suite, per the plan.\n\nChecklist:\n- Custom header-less file stays byte-identical ('preserves an existing one' passes). This repo's .moe/.gitignore is unmodified (git diff --quiet).\n- CRLF + no trailing newline + attempts/ already listed is an it.each case. The header matches via includes. Exactly one line per dir, no glued line, original bytes stay a prefix, and a second run is a no-op.\n- Root .gitignore uses .moe/<dir>/ and the template uses <dir>/. `git check-ignore -v` cites .gitignore:69-73 for all five dirs, and `git status` no longer lists them.\n- The generated file equals generator output: the regen diff against the pre-regen copy is only my hunks. Only `npm run generate-init-files` was run, no build/prebuild.\n- No scripts/, wrapper, DENY/BOARD, autoCommit or heartbeat change.\n- writeGitignore has no try/catch. Callers index.ts:523/936 warn and :990 propagates. It runs last, so a gitignore IO error cannot skip role docs.\n\nTheoretical only:\n- read-then-rename window vs a concurrent hand edit. The pre-existing exists-then-write race with the JetBrains initializer is unchanged.\n- A user who deletes an appended dir from a bundled-header file gets it re-appended on the next start. The opt-out is to drop the header line, the same convention as the role-doc marker.\n- A `!attempts/` negation in a bundled-header file would be overridden by the appended line.",
+      "startedAt": "2026-09-18T20:21:36.887Z",
+      "completedAt": "2026-09-18T20:23:09.875Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,5 +83,66 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:26:55.783Z",
-  "updatedAt": "2026-09-18T17:26:55.783Z"
+  "updatedAt": "2026-09-18T20:23:47.599Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T20:05:10.233Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4323a407",
+    "worker-161b9959"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T20:16:00.400Z",
+  "planningNotes": {
+    "approachesConsidered": "Three options: (1) track the five directories as BOARD evidence and teach the wrappers to stage them; (2) split the set (gitignore attempts/receipts, track reviews/candidates/checks); (3) treat all five as runtime state and gitignore them, matching resources/. (1) is rejected: wrappers DENY .moe/** outside the task/epic/project BOARD paths, receipts/attempts are machine-local crash/fencing state (host, pid, output tails), and expanding BOARD would land those into every clone and would still fail autoCommit=false / no-git projects. (2) is rejected: the five are one resourceStore-pattern delivery path; splitting still leaves untracked noise and does not make receipts useful on another machine. (3) is the decision. A merge-upgrade of every existing .moe/.gitignore was considered and narrowed: only bundled-style files (those that still carry the header `# Moe runtime files (not shared)`) get missing dirs appended. This repo's tracked .moe/.gitignore is a custom-header file (`# Worker state is ephemeral`) and must be left alone — wrappers DENY .moe/** so a dirty inner gitignore could not land, and agents must not edit .moe/ by hand. This checkout is cleaned by the root .gitignore. JetBrains MoeProjectInitializer.kt writes a second, slightly different bundled gitignore; it is not in this task's file set because writeInitFiles runs on every daemon start and will append the five dirs to that header. Do not expand wrappers, SCHEMA.md, CONFIGURATION.md, or the inner .moe/.gitignore.",
+    "codebaseInsights": "Root .gitignore already ignores .moe/daemon.json, activity.log*, workers/, memory/, messages/, teams/, resources/ — not the five Wave 1 dirs. The init template is GITIGNORE_CONTENT in packages/moe-daemon/scripts/generate-init-files.ts (copied into src/generated/initFiles.ts by `npm run generate-init-files`); it currently lists only daemon.json, daemon.lock, workers/, proposals/. writeInitFiles skip-if-exists with the comment `no upgrade logic needed` — that is why the five dirs shipped unlisted in every already-initialized project. writeInitFiles is invoked on every daemon start (index.ts ~523) and on init/backfill, so a bundled-header append heals JetBrains-first and daemon-init consumers without a plugin rebuild. Tests live in src/util/initFiles.test.ts and already import GITIGNORE_CONTENT; the existing `preserves an existing one` test uses `custom-ignore\\n` and must keep passing. Stores write via writeEntity(kind) with kinds attempts/candidates/checks/reviews/receipts (same durable-first pattern as resources). Shared evidence of a landing already lives on the tracked task JSON (commits, lastCommitOutcome, completionSummary, reviewSummary) plus the git commit itself. `npm run build` / `prebuild` runs `clean` and deletes dist/ — do not run them on this shared checkout; regenerate with `npm run generate-init-files` only. Callers wrap writeInitFiles in try/catch and log warn (index.ts start and backfill) — that is the existing error handling; the new append branch must keep throwing to those callers rather than swallowing IO failures.",
+    "risks": "CRLF vs LF in an existing .moe/.gitignore: split on /\\r?\\n/ and compare trimmed lines. Append must insert a newline when the file does not already end with one. A custom gitignore without the bundled header will not be upgraded — this repo is one of those; root .gitignore is the THIS-repo fix. JetBrains initializer stays stale until the daemon starts (acceptable). Do not `npm run build`/`prebuild` (wipes live daemon dist). Do not hand-edit .moe/.gitignore or src/generated/initFiles.ts. proposals/ is listed in the inner template but ARCHITECTURE.md calls it tracked — out of scope, do not 'fix'. memory/messages/teams/activity.log are also absent from the consumer template relative to this repo's root gitignore — out of scope. autoCommit=false / no-git / quiet-build-is-not-death are untouched because this change is ignore rules only.",
+    "keyFiles": [
+      ".gitignore",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/src/util/initFiles.test.ts",
+      "docs/ARCHITECTURE.md",
+      "CLAUDE.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T20:16:00.460Z",
+  "workStartedAt": "2026-09-18T20:17:45.859Z",
+  "declaredFiles": [
+    ".gitignore",
+    "CLAUDE.md",
+    "docs/ARCHITECTURE.md",
+    "packages/moe-daemon/scripts/generate-init-files.ts",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    "packages/moe-daemon/src/util/initFiles.test.ts"
+  ],
+  "reviewStartedAt": "2026-09-18T20:23:47.597Z",
+  "verification": {
+    "command": "npx vitest run src/util/initFiles.test.ts",
+    "exitCode": 0,
+    "outputTail": "(cwd packages/moe-daemon) Test Files  1 passed (1)\n      Tests  11 passed (11)\n   Start at  23:23:21\n   Duration  265ms (tests 71%, transform 21%, import 6%, worker 2%)\nVERIFY_EXIT=0",
+    "reportedAt": "2026-09-18T20:23:47.597Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/initFiles.test.ts",
+    "packages/moe-daemon/scripts/generate-init-files.ts",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    ".gitignore",
+    "docs/ARCHITECTURE.md",
+    "CLAUDE.md"
+  ],
+  "completionSummary": "Decision: .moe/attempts, candidates, checks, reviews and receipts are local runtime state, gitignored like resources/ and never committed. Shared evidence is the git commit plus task.commits, lastCommitOutcome, completionSummary and reviewSummary.\n- Root .gitignore: 5 `.moe/<dir>/` lines. `git check-ignore -v` cites .gitignore:69-73, and `git status` no longer shows the untracked dirs.\n- Generator (scripts/generate-init-files.ts): GITIGNORE_CONTENT is built from one RUNTIME_RECORD_DIRS list and GITIGNORE_HEADER. A new writeGitignore() creates a missing file. A file carrying the bundled header gets only the missing dirs appended (CRLF-safe, no-trailing-newline safe, idempotent), so older daemon- and JetBrains-scaffolded projects heal on the next daemon start. Any other file stays byte-identical, so this repo's custom .moe/.gitignore is untouched. There is no try/catch; the existing callers handle errors.\n- src/generated/initFiles.ts was regenerated via `npm run generate-init-files` (no build/prebuild).\n- Test pins in initFiles.test.ts: the template lists the dirs, the root .gitignore lists them, and it.each append cases. RED on HEAD: 4 failed; now 11/11.\n- Targeted regression: qaCommitPolicy + initProject + claudeHook.integration 14/14. `tsc --noEmit` 0. The full suite was not run, per the plan.\n- Docs: ARCHITECTURE.md File System Layout marks each dir gitignored, and Delivery Path has a paragraph with one verified reason per dir. CLAUDE.md's runtime-subset parenthetical names all five plus resources/.\n- Wording deviation: I did not write the plan's receipts clause \"cloning one would hide a real landing\", because I could not verify it. The doc says instead that the gitdir partner never leaves the clone and the landing travels as the commit.\n- CAVEAT: generated/initFiles.ts also carries 10 lines of the pre-existing uncommitted ponytail WIP from 2026-09-17 (3 sha markers + 4 role-doc rows from the dirty docs/roles/*.reference.md). They were present before this task and"
 }

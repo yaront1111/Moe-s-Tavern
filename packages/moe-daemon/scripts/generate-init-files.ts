@@ -117,14 +117,19 @@ export const SUBAGENT_DOCS: Record<string, string> = {
 ${subagentEntries.join(',\n')}
 };
 
+/** Daemon-written .moe/ record directories: local runtime state, never committed. */
+const RUNTIME_RECORD_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'];
+const GITIGNORE_HEADER = '# Moe runtime files (not shared)';
+
 /**
  * Content for .moe/.gitignore
  */
-export const GITIGNORE_CONTENT = \`# Moe runtime files (not shared)
+export const GITIGNORE_CONTENT = \`\${GITIGNORE_HEADER}
 daemon.json
 daemon.lock
 workers/
 proposals/
+\${RUNTIME_RECORD_DIRS.join('\\n')}
 \`;
 
 const GENERATED_MARKER_RE = /^<!--\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*-->/;
@@ -206,11 +211,28 @@ export function writeInitFiles(moePath: string): void {
   // agent-context.md is no longer auto-written to new projects (role doc +
   // CLAUDE.md cover the same ground). Existing projects keep their copy.
 
-  // Write .gitignore (skip if already exists — trivial content, no upgrade logic needed)
+  writeGitignore(moePath);
+}
+
+/**
+ * Creates .moe/.gitignore when missing. A file that still carries the bundled
+ * header is Moe's scaffold: any runtime record directory it lacks is appended,
+ * so an older project heals on the next daemon start. Any other file is the
+ * user's own and stays byte-identical. IO errors propagate to the callers.
+ */
+function writeGitignore(moePath: string): void {
   const gitignorePath = path.join(moePath, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
     atomicWriteText(gitignorePath, GITIGNORE_CONTENT);
+    return;
   }
+  const onDisk = fs.readFileSync(gitignorePath, 'utf-8');
+  if (!onDisk.includes(GITIGNORE_HEADER)) return;
+  const listed = new Set(onDisk.split(/\\r?\\n/).map((line) => line.trim()));
+  const missing = RUNTIME_RECORD_DIRS.filter((dir) => !listed.has(dir));
+  if (missing.length === 0) return;
+  const separator = onDisk.endsWith('\\n') ? '' : '\\n';
+  atomicWriteText(gitignorePath, onDisk + separator + missing.join('\\n') + '\\n');
 }
 `;
 

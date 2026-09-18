@@ -58,7 +58,7 @@ You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handli
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=c16de6533b52 -->
+  'architect.reference.md': `<!-- moe-generated: sha=e2a8f3f9711d -->
 
 # Architect — Reference
 
@@ -84,6 +84,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 | Drafting the plan | \`moe-planning\` | After \`moe.get_context\`, every PLANNING task |
 | Naming symbols / referencing existing code | \`explore-before-assume\` | Before referencing a function, model, attribute, constant |
 | Step-level granularity inside the plan | \`writing-plans\` | Companion to \`moe-planning\` for fine-grained steps |
+| Sizing steps under the \`submit_plan\` cap | \`ponytail\` | Before drafting: a stdlib or native-platform step is one step where a hand-rolled equivalent is four. Shortens the solution, never the reading, and never a DoD item or rail |
 
 ## Why small tasks
 
@@ -418,7 +419,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=b3eec7c94327 -->
+  'qa.reference.md': `<!-- moe-generated: sha=5a68f996e738 -->
 
 # QA — Reference
 
@@ -438,6 +439,7 @@ Deep-dive material trimmed out of \`qa.md\`. Read this on demand; it is not load
 |-------|-------|--------------|
 | Claiming a task in REVIEW | \`moe-qa-loop\` | Structured \`qa_approve\` vs \`qa_reject\` decision flow + actionable \`rejectionDetails\` |
 | Reading the diff | \`adversarial-self-review\` | Same checklist the worker should have run — apply it again as the second pair of eyes |
+| After the correctness verdict | \`ponytail-review\` | Complexity-only second pass. Rail/DoD breaches become \`rejectionDetails\`; taste-only findings go in the approve summary or a follow-up card — never a reject |
 
 ## Review order (do not skip)
 
@@ -514,7 +516,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=e6856d2d3801 -->
+  'worker.reference.md': `<!-- moe-generated: sha=b0ef035a319f -->
 
 # Worker — Reference
 
@@ -526,6 +528,7 @@ Deep-dive material trimmed out of \`worker.md\`. Read this on demand; it is not 
 |---|---|
 | "This step is trivial, I can skip TDD/explore/etc." | Simple steps fail when skills are skipped. |
 | "I already know what this skill says" | Skills evolve. Read the current version. |
+| "ponytail says YAGNI, so I can skip this step" | No. The plan, the DoD and the rails are the requested tier. A step you believe is pointless is a \`complete_step { note }\`, a \`report_blocked\`, or a \`propose_rail\` — never a silent skip. |
 | "I'll run adversarial-self-review mentally instead of loading it" | No — load it and walk the checklist. |
 | "I can ship without verification-before-completion" | You can't. No complete-claim without fresh evidence. |
 | "receiving-code-review is just common sense, I'll just fix the feedback" | That's exactly the failure the skill prevents. Load it first. |
@@ -536,6 +539,7 @@ Deep-dive material trimmed out of \`worker.md\`. Read this on demand; it is not 
 |-------|-------|--------------|
 | First step in unfamiliar code | \`explore-before-assume\` | Before referencing any symbol you haven't grepped for |
 | Test-touching step | \`test-driven-development\` | RED-GREEN-REFACTOR with mutation-resistant assertions |
+| Any other implementation step | \`ponytail\` | Climb the ladder before you write code: reuse what this repo has, then stdlib, then native, then one line. Never trims a plan step, a DoD item, or a rail — those are requested work |
 | Stuck on a bug or repeated step failure | \`systematic-debugging\` | 4-phase root-cause method, before proposing fixes |
 | Final step before \`complete_step\` | \`adversarial-self-review\` | Read your own diff as an attacker — concurrency, null, embarrassment checklist |
 | Before \`complete_task\` | \`regression-check\` | Run the broader suite; capture counts in your summary |
@@ -742,14 +746,19 @@ Do NOT analyze why tests failed — that's the worker's job. Just run them and s
 Do NOT call \`moe.*\` MCP tools — the worker owns the Moe state. You just execute and report.`
 };
 
+/** Daemon-written .moe/ record directories: local runtime state, never committed. */
+const RUNTIME_RECORD_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'];
+const GITIGNORE_HEADER = '# Moe runtime files (not shared)';
+
 /**
  * Content for .moe/.gitignore
  */
-export const GITIGNORE_CONTENT = `# Moe runtime files (not shared)
+export const GITIGNORE_CONTENT = `${GITIGNORE_HEADER}
 daemon.json
 daemon.lock
 workers/
 proposals/
+${RUNTIME_RECORD_DIRS.join('\n')}
 `;
 
 const GENERATED_MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
@@ -831,9 +840,26 @@ export function writeInitFiles(moePath: string): void {
   // agent-context.md is no longer auto-written to new projects (role doc +
   // CLAUDE.md cover the same ground). Existing projects keep their copy.
 
-  // Write .gitignore (skip if already exists — trivial content, no upgrade logic needed)
+  writeGitignore(moePath);
+}
+
+/**
+ * Creates .moe/.gitignore when missing. A file that still carries the bundled
+ * header is Moe's scaffold: any runtime record directory it lacks is appended,
+ * so an older project heals on the next daemon start. Any other file is the
+ * user's own and stays byte-identical. IO errors propagate to the callers.
+ */
+function writeGitignore(moePath: string): void {
   const gitignorePath = path.join(moePath, '.gitignore');
   if (!fs.existsSync(gitignorePath)) {
     atomicWriteText(gitignorePath, GITIGNORE_CONTENT);
+    return;
   }
+  const onDisk = fs.readFileSync(gitignorePath, 'utf-8');
+  if (!onDisk.includes(GITIGNORE_HEADER)) return;
+  const listed = new Set(onDisk.split(/\r?\n/).map((line) => line.trim()));
+  const missing = RUNTIME_RECORD_DIRS.filter((dir) => !listed.has(dir));
+  if (missing.length === 0) return;
+  const separator = onDisk.endsWith('\n') ? '' : '\n';
+  atomicWriteText(gitignorePath, onDisk + separator + missing.join('\n') + '\n');
 }
