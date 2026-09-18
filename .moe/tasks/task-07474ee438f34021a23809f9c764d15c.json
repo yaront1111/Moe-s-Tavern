@@ -1,0 +1,31 @@
+{
+  "id": "task-07474ee438f34021a23809f9c764d15c",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: every Wave 1 revision check refuses SHA-256 (64-hex) object ids, so a landing in a sha256 repository is refused and rescued",
+  "description": "Found by QA of task-31fe6dc8 (comment-90d8b959, qa-7100be29; FYI from qa-5e66a826 in #general at 22:03Z). That card's DoD forbids behaviour changes, so it could not fix this. Every Wave 1 revision shape check assumes SHA-1: candidateStore SHA_RE accepts 7-40 hex and REVISION_RE exactly 40. In a repository created with --object-format=sha256 the object ids are 64 hex, so a `landed` finalize_attempt is refused 3 times and the wrapper parks the bytes on a rescue ref. This is rare, but it is untracked once task-31fe6dc8 closes. Pick ONE rule and apply it everywhere a revision is validated: either accept 64-hex ids, or refuse a sha256 repository up front at pre-flight with a message that names the object format.",
+  "definitionOfDone": [
+    "One documented rule for SHA-256 object-format repositories, applied in state/candidateStore.ts (SHA_RE, REVISION_RE) and in every caller that validates a revision",
+    "A test using a 64-hex revision (or a sha256 fixture repository) fails on the old code and passes on the fix",
+    "npx tsc --noEmit and the daemon suite stay green; both parity-check scripts pass if a wrapper changes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-31fe6dc806d9466d9d71c9f8beda60be"
+  ],
+  "priority": "LOW",
+  "order": 213.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T22:04:32.874Z",
+  "updatedAt": "2026-09-18T22:04:32.874Z"
+}
