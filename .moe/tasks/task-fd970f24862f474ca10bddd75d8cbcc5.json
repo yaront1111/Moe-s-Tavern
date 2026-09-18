@@ -73,7 +73,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T18:31:05.637Z",
-  "updatedAt": "2026-09-18T20:52:35.648Z",
+  "updatedAt": "2026-09-18T21:36:54.260Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:35:53.210Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-09-18T21:36:54.259Z",
+    "wallClockMs": 3661049
   },
   "contextFetchedBy": [
     "architect-4323a407",
-    "worker-161b9959"
+    "worker-161b9959",
+    "qa-ac8d988b"
   ],
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -208,5 +211,8 @@
     "kind": "completion",
     "sessionId": "worker-161b9959@2026-09-18T20:40:49Z",
     "at": "2026-09-18T20:52:35.648Z"
-  }
+  },
+  "completedAt": "2026-09-18T21:36:54.259Z",
+  "reviewCompletedAt": "2026-09-18T21:36:54.259Z",
+  "reviewSummary": "Verified completion commit 97df78f (git show): schema.ts, policy.ts, qaApprove.ts, WebSocketServer.ts, util/reopen.ts, 2 test files, CONFIGURATION.md. Later fa5d8bb touched qaApprove.ts only for the unrelated ATTEMPT_FINALIZING refusal; the snapshot write is intact.\nDoD1: the decision (bind the check at DONE: qa_approve writes requiredCheckAtDone = requiredCheckCommand under every policy; checkShortfall is the single read site) is recorded in planningNotes, the policy.ts header and CONFIGURATION.md. acceptance.test.ts has an empty diff vs 8fbc17e, and criterion 2 is green.\nDoD2 red proof: on a scratch HEAD export with policy.ts restored from 8fbc17e, the archive probe fails with ['required-check:node gate.cjs'] and the qualityGate probe with ['required-check:node other-gate.cjs'], the issue's exact outcomes. Both are green on HEAD.\nDoD3: the deliveryPolicy row's judge-time vs delivery-time passage matches the code. All three reopen paths (set_task_status, WS board drag, reopenTask) call buildReopenClearingUpdates, and DONE->ARCHIVED keeps the snapshot.\nRe-ran the verification command: 166/166, exit 0. tsc --noEmit exit 0. Full daemon suite on the HEAD export: 2144/2145. The 1 failure was initFiles reading the root .gitignore that the export lacked (ENOENT); after adding it, 11/11.\nMutations: removing the qa_approve write (4 tests fail), the denylist entry, or the reopen clear, switching the discriminator to hasOwnProperty or to == null, and dropping the status guard were all caught by this task's tests. A string snapshot read as 'none owed' is caught at HEAD by deliveryProjection.test.ts (task-fee5e136).\nNo forbidden patterns; LF line endings kept. Outside the DoD, per the plan: SCHEMA.md and the MCP_SERVER.md qa_approve section do not list the new field yet."
 }

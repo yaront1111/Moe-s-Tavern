@@ -104,7 +104,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T20:45:37.590Z",
-  "updatedAt": "2026-09-18T21:35:09.371Z",
+  "updatedAt": "2026-09-18T21:35:34.247Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T21:08:28.171Z",
     "plannedStepCount": 5,
@@ -157,7 +157,9 @@
     "packages/moe-daemon/src/util/claimGuards.ts",
     "packages/moe-daemon/src/tools/qaApprove.ts",
     "packages/moe-daemon/src/state/taskStore.ts",
-    ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json"
+    ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json",
+    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+    ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json"
   ],
   "completionSummary": "qa_approve and the DONE/ARCHIVED terminal-column guard no longer give a non-holder the holder's \"Close the boundary with moe.finalize_attempt, then retry\" advice.\n- util/claimGuards.ts: new nonHolderFinalizingRefusal(attempt, action). Same envelope as attemptFinalizingRefusal: -32002, codeName ATTEMPT_FINALIZING, context {attemptId, generation, taskId, workerId, retryable:true} with the same key order. Message: \"Task T is held by worker W's attempt A (generation N) in phase finalizing: its bytes are not landed yet, so <action> would finish it over work that has not landed. This is a RETRYABLE refusal (context.retryable), NOT a fatal error: wait for that worker's runner to call moe.finalize_attempt. Do NOT close the boundary to get past this refusal — only once you have confirmed that runner is gone may a governor or human close it with moe.finalize_attempt { taskId, attemptId, generation, outcome: 'failed' }.\" The plan's ' - ' is written as ' — ' to match the sibling builders.\n- The stale comment \"The refusal both holds raise\" is rewritten. It now names the holder caller (claim_next_task's own-worker hold) and both siblings with their callers.\n- tools/qaApprove.ts uses action 'approving this task'; state/taskStore.ts assertNoFinalizingAttempt (reached by set_task_status, archive_task, archive_epic) uses 'moving this task into DONE or ARCHIVED'. Neither call moved, so a refused call still writes nothing.\n- Unchanged: claimNextTask's holder text (still pinned), claimEligibility.foreignFinalizingRefusal, and finalize_attempt (no caller/role check; the governor 'failed' escape test passes).\n- Tests: one new it() per path, in finalizeAttempt.test.ts (qa_approve) and attemptHandback.test.ts (set_task_status DONE + archive_epic). Each pins the new phrases and asserts the old holder text is absent. Both were red on the old text (step-1 note) and pass now.\n- Diff: exactly 5 files, +107/-20. Self-review: comment-1c1ead4e.",
   "commits": [
@@ -186,6 +188,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "71aac69f1cafdc8bada66650f716a3cef897c717",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-9a371c33@2026-09-18T21:30:18Z",
+      "paths": [
+        ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+        ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+        ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json"
+      ],
+      "recordedBy": "qa-9a371c33",
+      "recordedAt": "2026-09-18T21:35:34.247Z",
+      "treeId": "0f9e50056d6243b09e1980e1c40f3f617942b3e4",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -198,9 +217,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-161b9959@2026-09-18T21:11:24Z",
-    "at": "2026-09-18T21:17:16.167Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-9a371c33@2026-09-18T21:30:18Z",
+    "at": "2026-09-18T21:35:34.247Z"
   },
   "completedAt": "2026-09-18T21:35:09.371Z",
   "reviewCompletedAt": "2026-09-18T21:35:09.371Z",
