@@ -1842,6 +1842,9 @@ describe('Wave 1 acceptance: a delayed generation-N call cannot alter generation
   // UNSKIP OWNER: task-b6c48bf029bf4170a603a91c12451df7 (attempt lifecycle wired
   // into claim/release). Not the guard-only task-a135d4d63554410286a369a95e60c2a8:
   // a guard with no tool wiring cannot make this end-to-end case pass.
+  // Its owner shipped; the Wave 1 integration gate
+  // (task-808869c56228430ca5b15cb901497544) unskipped it unchanged. It passed as
+  // shipped, and removing release_task's attempt fence makes it fail.
   //
   // OLD-BEHAVIOUR COUNTEREXAMPLE the owner must show first (STALE RELEASE
   // LANDS): on today's code a generation-1 release_task that arrives late — after
@@ -1850,7 +1853,7 @@ describe('Wave 1 acceptance: a delayed generation-N call cannot alter generation
   //
   // Generation fencing guards DAEMON state only. Nothing here claims it stops an
   // external process from writing shared files.
-  it.skip('refuses a late generation-1 release after the same worker re-claimed as generation 2', async () => {
+  it('refuses a late generation-1 release after the same worker re-claimed as generation 2', async () => {
     const h = new ToolTestHarness();
     h.init();
     try {

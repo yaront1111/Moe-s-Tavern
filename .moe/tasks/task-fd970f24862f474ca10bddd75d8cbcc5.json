@@ -1,0 +1,28 @@
+{
+  "id": "task-fd970f24862f474ca10bddd75d8cbcc5",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: the delivery policy re-derives a DONE task's required check from current settings and epic shape, so a later edit withholds its dependents",
+  "description": "Found by the Wave 1 integration gate (task-808869c5, adversarial pass) and confirmed with a scratch vitest probe against evaluateDeliveryEvidence.\n\nrequiredCheckCommand(state, task) reads settings.autoCommit, qualityGate, qualityGateScope and isEpicFinalTask when the evidence is JUDGED. For a DONE task that required check is re-judged every time: the status rule acceptance criterion 2 forces. So the requirement is whatever the project says now, not what was due when the task landed.\n1. Archiving, deleting or reordering an epic's final task makes an earlier DONE task epic-final. Under the default epicFinal scope, that task landed with its gate deferred: no candidate and no check. It now \"requires\" a check that nothing short of a new landing can produce, and every task naming it in dependsOn or blockedOnTaskIds becomes unclaimable (DEPENDENCY_EVIDENCE_MISSING).\n   Probe: before the archive {satisfied:true}; after {satisfied:false, missingEvidence:['required-check:node gate.cjs']}.\n2. Changing settings.qualityGate re-judges every DONE task against the NEW command.\n   Probe: a DONE task with a runner-observed exit-0 run of 'node gate.cjs' on its current candidate reports ['required-check:node other-gate.cjs'] missing once the setting changes.\n3. The same happens when qualityGateScope switches to everyTask, or when a project with history turns on a strict deliveryPolicy.\n\nNo project here runs a strict policy today (this repository is legacy), so the impact is latent. It lands on the first adopter, and there is no operator escape short of set_task_dependencies.",
+  "definitionOfDone": [
+    "A recorded design decision: bind the required check to what was due at delivery (for example the required command, or none, recorded on the candidate or receipt or at the DONE transition), or keep re-judging with an explicit operator escape. Held-out acceptance criterion 2 stays green with no assertion edited",
+    "The two probes (archive of the epic-final sibling; a qualityGate change after DONE) are regression tests that fail on today's code and pass after the fix",
+    "docs/CONFIGURATION.md's deliveryPolicy row states which settings are read at delivery time and which at judge time"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 210.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T18:31:05.637Z",
+  "updatedAt": "2026-09-18T18:31:05.637Z"
+}

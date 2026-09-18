@@ -57,9 +57,11 @@ export function isClaimGatedByDependsOn(state: StateManager, task: Task): boolea
  *
  * The attempt's own worker never reaches this rule, because claim_next_task's
  * worker-scoped hold refuses every claim of that worker first. The hold ends
- * through moe.finalize_attempt (its runner, or a governor or human with outcome
- * 'failed') or through its runner's moe.deregister_worker — never on an idle
- * signal.
+ * only through the closes attemptStore.closeHandedBackAttempts lists —
+ * moe.finalize_attempt (its runner, or a governor or human with outcome
+ * 'failed'), its worker's moe.deregister_worker, deletion of its task, a restart
+ * that finds its task gone, or removal of its worker's DEAD record — never on an
+ * idle signal.
  */
 
 /**

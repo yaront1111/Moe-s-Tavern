@@ -141,6 +141,9 @@ See `docs/MCP_SERVER.md` for tool definitions.
 ├── activity.log       # event log + rotations (gitignored)
 ├── epics/  tasks/  proposals/            # tracked task-state
 ├── workers/  teams/  messages/  memory/  # runtime (gitignored)
+├── attempts/  candidates/  checks/       # delivery records (see Delivery Path below)
+├── reviews/  receipts/
+├── resources/         # shared-resource leases (gitignored)
 ├── channels/  decisions/
 ├── roles/             # role guides (sha-stamped, auto-upgraded)
 ├── agents/            # Claude Code subagent defs (mirrored to .claude/agents/)
@@ -148,6 +151,63 @@ See `docs/MCP_SERVER.md` for tool definitions.
 ```
 
 The daemon is the only writer; all clients send actions to the daemon.
+
+---
+
+## Delivery Path
+
+A task reaches DONE through six durable records. Two invariants hold the path
+together:
+
+- **The daemon is state-only.** It never runs git, a gate or a push. Every sha,
+  exit code and landing it stores is what a runner *reported*, and each store
+  checks shape and binding, never the repository.
+- **The wrapper is the only git and process actor.** `scripts/moe-agent.{ps1,sh}`
+  freezes the bytes, runs `settings.qualityGate`, moves the branch ref and
+  reports each step through a `moe.*` tool.
+
+| Record | Lives in | Written by |
+|---|---|---|
+| Plan revision | `task.planRevision` in `tasks/<id>.json` | daemon, on every plan or DoD change (`taskStore.updateTask`) |
+| ExecutionAttempt | `attempts/<id>.json` | daemon: opened by `claim_next_task`, moved by `complete_task`, a restart, `reattach_attempt` and `finalize_attempt` |
+| Candidate | `candidates/<id>.json` | wrapper, through `record_candidate`, before the gate runs |
+| CheckRun | `checks/<id>.json` | wrapper, through `record_check_run`, for each gate command it started |
+| Review | `reviews/<id>.json` | daemon, from `qa_approve` / `qa_reject` naming the candidate read |
+| DeliveryReceipt | `receipts/<id>.json` | wrapper, through `record_delivery_receipt`, after it moved the target ref |
+
+End to end:
+
+1. `claim_next_task` opens attempt generation N (`running`); the generation is
+   the fencing token the other attempt tools check.
+2. `complete_task` moves the row to REVIEW, unassigned, and the attempt to
+   `finalizing`. Until the attempt closes, the worker's next claim, every other
+   seat's claim of the task, `qa_approve` and a move into DONE/ARCHIVED are
+   refused with retryable `ATTEMPT_FINALIZING`.
+3. After the CLI exits, the wrapper records the attributed tree as a Candidate,
+   runs the gate in a disposable clean checkout of it and records the CheckRun.
+4. A passing gate lands the tree with a CAS `update-ref`, then the wrapper records
+   the commit, the DeliveryReceipt and `finalize_attempt { outcome: 'landed' }`.
+   A failing gate never moves the branch: the bytes go to
+   `refs/moe/rescue/<taskId>/<utc-ts>`, the ledger says `MOE_COMMIT_FAILED_GATE`,
+   and the attempt closes as `rescued`.
+5. QA approves or rejects naming the candidate it read; a superseded candidate is
+   refused `CANDIDATE_MISMATCH`.
+6. Under a strict `settings.deliveryPolicy`, `delivery/policy.ts` is the one rule
+   both gates use: `qa_approve` refuses `DELIVERY_EVIDENCE_MISSING` until the
+   landing evidence and the required check exist, and a DONE prerequisite
+   without its required check keeps its dependents unclaimable
+   (`DEPENDENCY_EVIDENCE_MISSING`).
+
+Every store writes the record file (temp file + rename) before it publishes the
+record in memory, so a crash can lose an unpublished write but never expose a
+record that is not on disk. A crash between the ref move and the receipt is
+replayed from `<gitdir>/moe/receipt/<taskId>.json` by the next pre-flight, which
+records the missing receipt and never lands twice. A daemon restart parks a
+still-assigned `running` attempt in `reconciling` and holds its row until the
+runner reattaches or `reconcileWindowMs` passes; no idle signal releases a seat.
+
+Record shapes: `docs/SCHEMA.md`. Tool contracts: `docs/MCP_SERVER.md`. Settings
+and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
 
 ---
 

@@ -100,8 +100,9 @@ function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessI
  *     it through the shared helper and open the successor generation.
  *
  * Another worker's `finalizing` attempt is never such a leftover: it is that
- * worker's landing, not yet acknowledged, and only moe.finalize_attempt or its
- * runner's moe.deregister_worker may end it. The claim path refuses or skips
+ * worker's landing, not yet acknowledged, and only the closes
+ * attemptStore.closeHandedBackAttempts lists may end it (moe.finalize_attempt
+ * first among them; never a claim). The claim path refuses or skips
  * that row before any write (util/claimEligibility.ts), so arm 3 throws the same
  * refusal instead of closing it — a backstop for a row that reached the
  * assignment write some other way. The caller's handBackUnrecordedClaim then

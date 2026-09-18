@@ -1387,6 +1387,19 @@ describe('delivery policy — evaluateDeliveryEvidence', () => {
     expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
   });
 
+  it('accepts a pass recorded with a padded qualityGate verbatim, as the PowerShell wrapper records it', async () => {
+    // A hand-edited project.json can pad the gate. The sh wrapper trims it before
+    // running and recording; the ps1 wrapper records it verbatim. No shell sees
+    // the padding, so both runs are the gate the policy requires.
+    const padded = `  ${GATE}  `;
+    const task = await seedPrerequisite({
+      settings: { ...STRICT_SETTINGS, qualityGate: padded },
+      checks: [run('check-P-current-padded-pass', { command: padded })],
+    });
+
+    expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+  });
+
   it.each<[string, Record<string, unknown>]>([
     ['an exit code stored as a string', { exitCode: '0' }],
     ['no source', { source: undefined }],

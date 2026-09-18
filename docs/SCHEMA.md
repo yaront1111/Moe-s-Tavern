@@ -1008,6 +1008,45 @@ interface ResourceQueueEntry {
 
 ---
 
+## ExecutionAttempt
+
+**File:** `.moe/attempts/{attempt-id}.json` (one file per attempt)
+
+One execution of one task by one worker seat. `moe.claim_next_task` opens one whenever it assigns a named worker, and returns its `attemptId` and `generation` beside `task`. A [Candidate](#candidate) names the attempt that produced its bytes, and the fenced tools (`moe.record_candidate`, `moe.release_task`, `moe.finalize_attempt`) refuse an attempt that is no longer the task's current one with `ATTEMPT_SUPERSEDED`. Only `packages/moe-daemon/src/state/attemptStore.ts` writes the file, and it persists before it publishes. Purely additive: no `schemaVersion` bump and no migration.
+
+```typescript
+interface ExecutionAttempt {
+  id: string;                 // "attempt-<32 hex>", also the filename
+  taskId: string;
+  workerId: string;           // The seat that opened it; not necessarily the row's current assignee
+  runnerId: string;           // The runner session; a claim-opened attempt records the worker id
+  generation: number;         // Fencing token: per task, starts at 1, (max over every prior attempt) + 1, never reused
+  workspace: string;          // The checkout it runs against; a claim records the project path
+  phase: 'running' | 'finalizing' | 'reconciling' | 'closed';
+  startedAt: string;          // ISO 8601
+  lastPhaseAt: string;        // ISO 8601, when `phase` last changed; the reconcile window counts from it
+  processStartedAt?: string;  // The runner's process identity exactly as the claim sent it (both or neither).
+  host?: string;              // A hint that narrows which process, never proof that it is alive
+  presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'; // Latest moe.heartbeat self-report, not verified
+  presenceAt?: string;        // When it was reported; never touches lastPhaseAt
+}
+```
+
+**Phases.** A task has at most one attempt that is not `closed`.
+
+| From | To | By |
+|---|---|---|
+| (none) | `running` | a claim that names a worker. A genuine resume adopts the worker's own open attempt; any other claim first closes a leftover `running` or `reconciling` attempt of the task |
+| `running` | `finalizing` | `moe.complete_task`: the row goes to REVIEW unassigned, but the bytes are not landed yet |
+| `running` | `reconciling` | a daemon restart, when the task is still assigned to the attempt's worker: the row is held, not released |
+| `reconciling` | `running` | `moe.reattach_attempt` with the exact recorded identity |
+| `running`, `reconciling` | `closed` | a hand-back of the row (a release, `qa_reject`, a seat-freeing `report_blocked`, …), the worker's `moe.deregister_worker`, a restart that finds the seat already gave the task up, or `reconcileWindowMs` (default 2 h) without a reattach |
+| `finalizing` | `closed` | only the ends listed under `moe.finalize_attempt` → **Every end of a finalizing attempt** in docs/MCP_SERVER.md, the runner's own `moe.finalize_attempt` first; never an idle signal |
+
+While an attempt is `finalizing`, its worker's next claim, every other seat's claim of the task, `moe.qa_approve` and a move of the task into `DONE` or `ARCHIVED` are refused with retryable `-32002` / `ATTEMPT_FINALIZING`. The outcome a runner reports to `moe.finalize_attempt` is not stored on the attempt; the durable landing record is the [DeliveryReceipt](#deliveryreceipt).
+
+---
+
 ## Candidate
 
 **File:** `.moe/candidates/{candidate-id}.json` (one file per candidate)

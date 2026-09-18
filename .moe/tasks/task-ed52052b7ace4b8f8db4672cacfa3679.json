@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-17T17:01:58.606Z",
-  "updatedAt": "2026-09-18T18:14:48.683Z",
+  "updatedAt": "2026-09-18T18:15:33.225Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T17:24:00.509Z",
     "plannedStepCount": 5,
@@ -166,7 +166,8 @@
     "packages/moe-daemon/src/state/StateManager.ts",
     ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
     ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
-    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json"
+    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json"
   ],
   "completionSummary": "Fix: StateManager.load() no longer re-arms the periodic sweeps on every FileWatcher reload. load()'s four start* calls are replaced by armPeriodicSweeps(this) (state/sweeps.ts), which starts a sweep only when its handle === undefined. It still runs outside the locked section; start* are unchanged and still arm via mutex.exit; clearEmitter() (shutdown; StateManager has no stop()) still clears all four, so the next load arms fresh ones. Explicit start* keep restart semantics. No cadence, threshold, sweep body or release path changed.\nTests (sweeps.test.ts, new describe 'periodic sweep arming', fake setInterval/clearInterval only):\n- Case 1 'a reload does not restart an armed sweep, so its ticks keep their phase': reloads at 4:00 and 4:30 (a 4:00-only reload is on the 60 s phase, where HEAD's restart is invisible), then 5:01. On HEAD all 4 handles are replaced and ticks are blocked 0, reconcile 0, stale 4; fixed: same handles and ticks 1/1/5.\n- Case 2a 'clearEmitter() stops every sweep, and the next load() arms all four again'.\n- Case 2b 'an explicit start* still restarts its sweep on the cadence the caller passes' (5 ticks, not 6).\nMutation replay (scratch tree, full suite per mutant, none first and last 2110/2110). Red per mutant:\n- restore-start-calls, unconditional: case 1.\n- guard-blocked-only: case 1, with only the 3 unguarded sweeps in the diff.\n- never-arm-first: 1 and 2a.\n- no-stop-clearing, stop-keeps-handles: 2a.\n- module-flag: 1 and 2a.\n- idempotent-start, start-no-stop: 2b.\nAll reds are behavioural; repo == final copies was verified before the scratch tree was deleted.\nCounts: baseline 122 files / 2107 passed, now 122 / 2110; the only per-file delta is sweeps.test.ts 10 -> 13. tsc exit 0.\nThe load() comment is 3 lines because stateModules.test caps StateManager.ts below 1500 lines (now 1493, net +1); the full why is on armPeriodicSweeps (DoD 3).\nOut of scope, unchanged, nothing filed: the reload rate (500 ms per-path self-write Set), the unfiltered STATE_S",
   "commits": [
@@ -189,6 +190,22 @@
       "treeId": "21a8f650b5c931e64b3f1708c4c45aa49024091c",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "93a26a14f9b7578ca34efe6fc7b60bd0d87df294",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T18:09:47Z",
+      "paths": [
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T18:15:33.225Z",
+      "treeId": "65d34ddb8467a96ad60c6a4fbf56bc89486b5066",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -198,9 +215,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d0c3b06e@2026-09-18T17:27:06Z",
-    "at": "2026-09-18T17:43:06.194Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-a36819c3@2026-09-18T18:09:47Z",
+    "at": "2026-09-18T18:15:33.225Z"
   },
   "completedAt": "2026-09-18T18:14:48.683Z",
   "reviewCompletedAt": "2026-09-18T18:14:48.683Z",

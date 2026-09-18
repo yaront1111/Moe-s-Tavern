@@ -169,8 +169,12 @@ export function requiredCheckCommand(state: StateManager, task: Task): string | 
 /**
  * True only for a run on the task's CURRENT candidate (last by createdAt then id,
  * the rule get_context and the review binding share), on that candidate's own
- * tree, of exactly `command`, exit 0, reported as runner-observed. A lookup
- * failure is logged and answers false.
+ * tree, of `command`, exit 0, reported as runner-observed. A lookup failure is
+ * logged and answers false.
+ *
+ * `command` is the trimmed setting, and the recorded command is trimmed before the
+ * compare: the ps1 wrapper records settings.qualityGate verbatim (the sh one trims
+ * it), and no shell sees the padding a hand-edited project.json can carry.
  */
 function hasPassingCheck(state: StateManager, taskId: string, command: string): boolean {
   try {
@@ -178,7 +182,8 @@ function hasPassingCheck(state: StateManager, taskId: string, command: string): 
     const current = candidates[candidates.length - 1];
     if (!current || typeof current.treeSha !== 'string' || current.treeSha === '') return false;
     return listCheckRunsForCandidate(state, current.id).some((run) =>
-      run.candidateId === current.id && run.treeSha === current.treeSha && run.command === command &&
+      run.candidateId === current.id && run.treeSha === current.treeSha &&
+      typeof run.command === 'string' && run.command.trim() === command &&
       run.exitCode === 0 && run.source === 'runner-observed');
   } catch (err) {
     logger.warn({ err, taskId }, 'Delivery policy: check evidence unreadable; reporting it missing');
