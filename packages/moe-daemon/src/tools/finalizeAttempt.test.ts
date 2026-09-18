@@ -368,6 +368,21 @@ describe('moe.qa_approve — finalizing hold', () => {
     expect(err.codeName).toBe('ATTEMPT_FINALIZING');
   });
 
+  it('tells a non-holder to wait for the runner, never to close the boundary itself', async () => {
+    // The approver never owns the landing. Following the holder's advice would
+    // close a live runner's boundary and approve to DONE before a byte landed.
+    const held = await finalizingAttempt();
+
+    const err = await refusal(approve());
+
+    expect(err.message).toContain("is held by worker worker-1's attempt");
+    expect(err.message).toContain(`${held.id} (generation ${held.generation})`);
+    expect(err.message).toContain('approving this task');
+    expect(err.message).toContain("wait for that worker's runner to call moe.finalize_attempt");
+    expect(err.message).toContain('Do NOT close the boundary to get past this refusal');
+    expect(err.message).not.toContain('Close the boundary with moe.finalize_attempt, then retry');
+  });
+
   it('approves to DONE once the attempt is closed', async () => {
     const held = await finalizingAttempt();
     await setAttemptPhase(h.state, held.id, 'closed');

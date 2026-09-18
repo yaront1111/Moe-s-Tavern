@@ -857,6 +857,25 @@ describe('attempt close on hand-back', () => {
         expect(h.state.getEpic('epic-1')?.status).toBe('ACTIVE');
       });
 
+      it('tells a non-holder moving the row into DONE or ARCHIVED to wait for the runner, never to close the boundary itself', async () => {
+        const landing = await completeClaimedRow();
+
+        const refusals = [
+          await refusal(call(setTaskStatusTool(h.state), { taskId: 'task-W', status: 'DONE' })),
+          await refusal(call(archiveEpicTool(h.state), { epicId: 'epic-1' })),
+        ];
+
+        for (const err of refusals) {
+          expectHeldForWorker1(err, landing);
+          expect(err.message).toContain("is held by worker worker-1's attempt");
+          expect(err.message).toContain(`${landing.attemptId} (generation ${landing.generation})`);
+          expect(err.message).toContain('moving this task into DONE or ARCHIVED');
+          expect(err.message).toContain("wait for that worker's runner to call moe.finalize_attempt");
+          expect(err.message).toContain('Do NOT close the boundary to get past this refusal');
+          expect(err.message).not.toContain('Close the boundary with moe.finalize_attempt, then retry');
+        }
+      });
+
       it('removing a DEAD worker record closes its finalizing attempt and hands the row to QA', async () => {
         await deadWithLandingHold();
         const published: string[] = [];

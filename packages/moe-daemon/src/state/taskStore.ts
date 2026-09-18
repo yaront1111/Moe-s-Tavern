@@ -25,7 +25,7 @@ import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { sanitizeString, sanitizeStringArray } from '../util/sanitize.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
-import { attemptFinalizingRefusal } from '../util/claimGuards.js';
+import { nonHolderFinalizingRefusal } from '../util/claimGuards.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import {
@@ -257,20 +257,25 @@ async function closeAttemptsOnHandBack(state: StateManager, before: Task, after:
 /**
  * A terminal column may not strand a landing hold. While the task has a
  * finalizing attempt (complete_task's landing, not yet acknowledged), a move
- * into DONE or ARCHIVED is refused with qa_approve's retryable
- * ATTEMPT_FINALIZING: nothing ever claims a terminal row, so the hold on it and
- * on its runner's next claim would never end. Only those two columns — a reopen
- * leaves a claimable row whose hold still ends normally. Throws, writes nothing.
+ * into DONE or ARCHIVED is refused with the retryable ATTEMPT_FINALIZING that
+ * claimGuards.nonHolderFinalizingRefusal builds, the non-holder refusal
+ * qa_approve raises too: nothing ever claims a terminal row, so the hold on it
+ * and on its runner's next claim would never end. Only those two columns — a
+ * reopen leaves a claimable row whose hold still ends normally. Throws, writes
+ * nothing.
  */
 export function assertNoFinalizingAttempt(state: StateManager, taskId: string): void {
   const finalizing = listAttempts(state, taskId).find((a) => a.phase === 'finalizing');
   if (!finalizing) return;
-  throw attemptFinalizingRefusal({
-    attemptId: finalizing.id,
-    generation: finalizing.generation,
-    taskId: finalizing.taskId,
-    workerId: finalizing.workerId,
-  });
+  throw nonHolderFinalizingRefusal(
+    {
+      attemptId: finalizing.id,
+      generation: finalizing.generation,
+      taskId: finalizing.taskId,
+      workerId: finalizing.workerId,
+    },
+    'moving this task into DONE or ARCHIVED'
+  );
 }
 
 export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
