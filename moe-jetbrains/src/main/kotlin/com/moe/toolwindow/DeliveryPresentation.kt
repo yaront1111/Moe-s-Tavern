@@ -26,6 +26,13 @@ object DeliveryPresentation {
                 val key = if (outcome == DeliveryOutcome.PASS) "moe.delivery.checkPassed" else "moe.delivery.checkFailed"
                 add(DeliveryRow(key, code.toString(), outcome = outcome))
             }
+            addValue("moe.delivery.checkSource", delivery.latestCheckRun?.source)
+            // The delivery policy's verdict, never inferred from the reported run above.
+            when (delivery.requiredCheckSatisfied) {
+                true -> add(DeliveryRow("moe.delivery.requiredCheckCounted", "yes", outcome = DeliveryOutcome.PASS))
+                false -> add(DeliveryRow("moe.delivery.requiredCheckNotCounted", "no", outcome = DeliveryOutcome.FAIL))
+                null -> Unit
+            }
             addValue("moe.delivery.receiptTarget", delivery.deliveryReceipt?.target)
             addValue("moe.delivery.landedRevision", delivery.deliveryReceipt?.landedRevision, sha = true)
             addValue("moe.delivery.attemptPhase", delivery.attemptPhase)

@@ -430,12 +430,17 @@ object MoeJson {
                 )
             },
             latestCheckRun = delivery.deliveryObject("latestCheckRun")?.let {
-                DeliveryCheckRun(it.getStrictStringOrNull("command"), it.deliveryExitCode())
+                DeliveryCheckRun(
+                    it.getStrictStringOrNull("command"), it.deliveryExitCode(),
+                    it.getStrictStringOrNull("source")?.takeIf { source -> source == "runner-observed" || source == "agent-reported" }
+                )
             },
             deliveryReceipt = delivery.deliveryObject("deliveryReceipt")?.let {
                 DeliveryReceipt(it.getStrictStringOrNull("target"), it.getStrictStringOrNull("landedRevision"))
             },
-            attemptPhase = delivery.getStrictStringOrNull("attemptPhase")
+            attemptPhase = delivery.getStrictStringOrNull("attemptPhase"),
+            requiredCheckSatisfied = delivery.get("requiredCheckSatisfied")
+                ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
         )
     }
 
