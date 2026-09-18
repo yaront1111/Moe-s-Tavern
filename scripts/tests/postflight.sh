@@ -280,12 +280,14 @@ if (tool === 'claim_next_task' && process.env.FAKE_CLAIM_MODE === 'finalizing') 
 // FAKE_CLAIM_ONCE=1: only the first claim hands out the task. Every later claim
 // answers idle and leaves .moe/second-claim, the proof that a --loop wrapper
 // went on claiming after its post-flight instead of stopping.
+// FAKE_CLAIM_LIMIT=N: the same, but the first N claims hand out the task.
 let claimOnceIdle = false;
-if (tool === 'claim_next_task' && process.env.FAKE_CLAIM_ONCE === '1') {
+const claimLimit = process.env.FAKE_CLAIM_ONCE === '1' ? 1 : Number(process.env.FAKE_CLAIM_LIMIT || 0);
+if (tool === 'claim_next_task' && claimLimit > 0) {
   const claimCount = path.join(moe, 'claim-count');
   const claimN = Number(fs.existsSync(claimCount) ? fs.readFileSync(claimCount, 'utf8') : 0) + 1;
   fs.writeFileSync(claimCount, String(claimN));
-  if (claimN > 1) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
+  if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
 }
 if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
 if (tool === 'get_context' && args.taskId) {
@@ -530,6 +532,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
 'finalize-loss-once','finalize-loss','no-change','disabled','deferred','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
+'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
@@ -653,7 +656,9 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   const cliJs=path.join(root,mode+'-cli.cjs');
   write(cliJs,`
 const fs=require('fs'),path=require('path'),dir=process.env.MOE_PROJECT_PATH,mode=process.env.FROZEN_MODE;
-if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
+if(mode==='loop-land-twice'){const n=Number(fs.readFileSync(path.join(dir,'.moe','claim-count'),'utf8'));
+ fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned '+(n===2?1:n)+'\\n');}
+else if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
 const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||mode==='teardown-running';
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
@@ -692,14 +697,15 @@ if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mo
   if(/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running')env.FAKE_TASK_STATUS='WORKING';
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
-  if(mode==='finalize-loss'||loopModes.includes(mode)){
+  if(mode==='finalize-loss'||mode==='loop-land-twice'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
     args[args.indexOf(win?'-PollInterval':'--poll-interval')+1]='1';
   }
   let runEngine=engine,runArgs=args;
   const secondClaim=path.join(nested,'.moe','second-claim');
-  if(loopModes.includes(mode)){
-    env.FAKE_CLAIM_ONCE='1';env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
+  if(loopModes.includes(mode)||mode==='loop-land-twice'){
+    if(mode==='loop-land-twice')env.FAKE_CLAIM_LIMIT='3';else env.FAKE_CLAIM_ONCE='1';
+    env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
     const supervisor=path.join(root,'loop-supervisor.cjs');
     write(supervisor,KILL_ON_MARKER);
     runEngine=process.execPath;
@@ -868,6 +874,31 @@ exit "$rc"
     if(mode.startsWith('manual-')){assert.equal(after,before);assert.deepEqual(fs.readFileSync(index),beforeIndex);}
     else{assert.notEqual(after,before,log);assert.match(git(repo,'log','-1','--format=%s'),/^wip\(task-postflight\)/);
       assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');}
+    count++;continue;
+  }
+  if(mode==='loop-land-twice'){
+    // Two landings in one --loop wrapper: claim 1 lands, claim 2 re-presents the
+    // bytes claim 1 landed, claim 3 lands. Claim 2's candidate is the unchanged
+    // tip and must freeze the tip's real tree: the ps1 twin once froze an empty
+    // one there, threw on its commit-tree, and neither landed nor rescued.
+    const completions=rpc.filter(r=>r.tool==='record_commit'&&r.args.kind==='completion');
+    assert.deepEqual(finals.map(f=>f.args.outcome),['landed','nothing-to-commit','landed'],log);
+    for(const f of finals){assert.equal(f.args.attemptId,'attempt-postflight',log);assert.equal(f.args.generation,7,log);}
+    assert.equal(fs.existsSync(secondClaim),true,'the worker loop must go on claiming after its third post-flight\n'+log);
+    assert.deepEqual(completions.map(r=>r.args.outcome),['committed','nothing','committed'],log);
+    assert.equal(completions[1].args.code,'MOE_COMMIT_NOTHING_TO_COMMIT',log);
+    assert.equal(candidates.length,3,log);assert.deepEqual(checks.map(r=>r.args.exitCode),[0,0,0],log);
+    assert.equal(candidates[1].args.baseRevision,finals[0].args.landedRevision,log);
+    assert.equal(candidates[1].args.treeSha,git(repo,'rev-parse',finals[0].args.landedRevision+'^{tree}'),log);
+    assert.deepEqual(seen.map(o=>o.owned),['frozen owned 1\n','frozen owned 1\n','frozen owned 3\n'],log);
+    const subjects=git(repo,'log','--format=%s',before+'..moe/frozen').split('\n');
+    assert.equal(subjects.length,2,log);for(const s of subjects)assert.match(s,/^feat\(task-postflight\): /,log);
+    assert.equal(finals[2].args.landedRevision,after,log);assert.equal(git(repo,'rev-parse','HEAD~1'),finals[0].args.landedRevision,log);
+    assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned 3',log);
+    assert.equal(git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),'',log);
+    for(const bad of ['Cannot bind argument','landing failed for task','rescue ref failed'])assert.equal(log.includes(bad),false,bad+'\n'+log);
+    assert.equal(git(repo,'worktree','list','--porcelain').split('\n').filter(l=>l.startsWith('worktree ')).length,1,log);
+    for(const o of seen)assert.equal(fs.existsSync(path.dirname(o.cwd)),false,'owned gate workspace must be deleted\n'+log);
     count++;continue;
   }
   if(mode.startsWith('freed-')){
