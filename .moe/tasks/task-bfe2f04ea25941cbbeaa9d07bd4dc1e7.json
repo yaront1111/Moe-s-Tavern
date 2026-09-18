@@ -166,7 +166,7 @@
       "completedAt": "2026-09-18T14:31:16.409Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -196,17 +196,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-12T18:47:26.339Z",
-  "updatedAt": "2026-09-18T14:32:06.731Z",
+  "updatedAt": "2026-09-18T15:26:01.618Z",
   "planRevision": 19,
   "metrics": {
     "firstClaimAt": "2026-09-18T11:57:00.727Z",
     "plannedStepCount": 9,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 9
+    "executedStepCount": 9,
+    "doneAt": "2026-09-18T15:26:01.618Z",
+    "wallClockMs": 12540891
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
-    "worker-d0c3b06e"
+    "worker-d0c3b06e",
+    "qa-a36819c3"
   ],
   "planSizeWarnings": [
     "Plan has 9 steps (target <=8); plans over 12 are rejected. Consider splitting the task before it grows.",
@@ -269,7 +272,115 @@
     "scripts/tests/parity-check.sh",
     "scripts/tests/parity-check.ps1",
     "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json",
+    ".moe/tasks/task-bfe2f04ea25941cbbeaa9d07bd4dc1e7.json"
+  ],
+  "completionSummary": "Both wrappers now record a delivery receipt for every landed gated candidate, and replay it after a crash without landing a second time.\n- Journal: <gitdir>/moe/receipt/<taskId>.json, written atomically BEFORE update-ref. It holds the whole report: target, targetBefore = CAS base (zero oid if unborn), targetAfter = landedRevision, and pushResult. The pushResult starts as null with no remote, else as 'push result unknown…'. The journal is rewritten after the push.\n- Sending: the receipt is the landing's last daemon call, after record_commit and before finalize. It goes through the existing evidence helpers. On success or DELIVERY_RECEIPT_CONFLICT the journal is deleted. A refusal or a lost answer only logs a WARN and keeps the journal; the landing, its ledger row and finalize are never touched.\n- Replay: runs right AFTER the pre-flight claim, because a still-finalizing seat's claim is refused, which skips the 300 s single-shot wait. Journals whose task a live session holds are skipped. Git decides via merge-base --is-ancestor:\n  - landed: the journaled bytes are resent verbatim, and the seat's OWN journaled attempt is closed as landed;\n  - not landed: the journal is dropped.\n  The replay never moves a ref, re-freezes or re-gates.\n- Push: no `git remote` means no push attempt and pushResult null, with an [info] line. A pushed or failed push gives a bounded line of at most 500 chars. record_commit's `pushed` flag is unchanged.\n- Gate reuse: a CAS retry reuses the passed gate only when tree AND base match. Same tree with a new base reruns the gate.\n\nArms (sh and ps1 byte-identical): 7 new (receipt-replay, receipt-cached-check, receipt-same-tree-race, receipt-push, receipt-push-failed, receipt-refused, receipt-conflict), plus a receipt assertion block on every arm. Each was RED on the pristine wrappers, or on a mutant with the base comparison dropped. Frozen count 50 -> 57; commit-scope stays 28.\n\nResults on the repo copy:\n- acceptance: 5 passed | 1 skipped, 6.9 s.\n- npm",
+  "commits": [
+    {
+      "sha": "997c85065b7011c72f1dc1ffecf561f631be043e",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T12:08:05Z",
+      "paths": [
+        ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json",
+        ".moe/tasks/task-bfe2f04ea25941cbbeaa9d07bd4dc1e7.json",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T14:32:38.796Z",
+      "treeId": "fd9762a04b50846fca1584421ff6c33155ed454b",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/parity-check.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/parity-check.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-32ecce5df28e4d72ad72b2ff079f53ba"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-32ecce5df28e4d72ad72b2ff079f53ba"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "92217380b932798d5f874d989b1f5ed73448bc8f",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T14:32:58Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T14:44:34.167Z",
+      "treeId": "3ed7f43105dc0a0ce3e34d1db7e6fad88cd1e563",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/parity-check.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/parity-check.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-32ecce5df28e4d72ad72b2ff079f53ba"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-32ecce5df28e4d72ad72b2ff079f53ba"
+        }
+      ],
+      "pushed": false,
+      "message": "QA self-land of the six contested paths 997c850 held back (skip-untouched, no TOOL witness). Bytes are the worker's delivered files, unchanged since 13:27:30Z."
+    }
+  ],
+  "touchedFiles": [
     "docs/CONFIGURATION.md"
   ],
-  "completionSummary": "Both wrappers now record a delivery receipt for every landed gated candidate, and replay it after a crash without landing a second time.\n- Journal: <gitdir>/moe/receipt/<taskId>.json, written atomically BEFORE update-ref. It holds the whole report: target, targetBefore = CAS base (zero oid if unborn), targetAfter = landedRevision, and pushResult. The pushResult starts as null with no remote, else as 'push result unknown…'. The journal is rewritten after the push.\n- Sending: the receipt is the landing's last daemon call, after record_commit and before finalize. It goes through the existing evidence helpers. On success or DELIVERY_RECEIPT_CONFLICT the journal is deleted. A refusal or a lost answer only logs a WARN and keeps the journal; the landing, its ledger row and finalize are never touched.\n- Replay: runs right AFTER the pre-flight claim, because a still-finalizing seat's claim is refused, which skips the 300 s single-shot wait. Journals whose task a live session holds are skipped. Git decides via merge-base --is-ancestor:\n  - landed: the journaled bytes are resent verbatim, and the seat's OWN journaled attempt is closed as landed;\n  - not landed: the journal is dropped.\n  The replay never moves a ref, re-freezes or re-gates.\n- Push: no `git remote` means no push attempt and pushResult null, with an [info] line. A pushed or failed push gives a bounded line of at most 500 chars. record_commit's `pushed` flag is unchanged.\n- Gate reuse: a CAS retry reuses the passed gate only when tree AND base match. Same tree with a new base reruns the gate.\n\nArms (sh and ps1 byte-identical): 7 new (receipt-replay, receipt-cached-check, receipt-same-tree-race, receipt-push, receipt-push-failed, receipt-refused, receipt-conflict), plus a receipt assertion block on every arm. Each was RED on the pristine wrappers, or on a mutant with the base comparison dropped. Frozen count 50 -> 57; commit-scope stays 28.\n\nResults on the repo copy:\n- acceptance: 5 passed | 1 skipped, 6.9 s.\n- npm"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "qa-a36819c3@2026-09-18T14:32:58Z",
+    "at": "2026-09-18T14:44:34.167Z"
+  },
+  "completedAt": "2026-09-18T15:26:01.618Z",
+  "reviewCompletedAt": "2026-09-18T15:26:01.618Z",
+  "reviewSummary": "LANDING: completion 997c850 carried 4 of 8 paths. The 6 wrapper/harness/parity files were held back as contested (skip-untouched: the worker copied them in, so no TOOL witness). They were unchanged since 13:27:30Z, hash-identical to my snapshot, and every hunk belongs to this card. QA self-landed them as 9221738 (private index, CAS on moe/work-2026-09-13, shared index reset, record_commit ok). Peer task-32ecce5d's postflight edit (14:45) sits on top of it; the receipt arms are intact.\nTESTS (clean HEAD export + snapshot):\n- acceptance.test.ts: 5 passed, 1 skipped. Criterion 6 passes in 4.9 s. With HEAD's old ps1 it fails: \"wrapper run 1 exited ... the receipt barrier was never reached\". The test diff is comments plus it.skip -> it only.\n- Verification command re-run in the repo: 5 passed, 1 skipped, exit 0.\n- parity-check.sh PASS; parity-check.ps1 PASS (pwsh 7 and PS 5.1). Guard proven: renaming one receipt literal in moe-agent.sh fails both.\n- postflight.sh (Git Bash, timeout 240): frozen 57, scope 28, PASS, 40m32s.\n- postflight.ps1: frozen 57, scope 28, PASS on both pwsh 7 and PS 5.1. All 7 new arms ran in each run.\nMUTATIONS:\n- Replay recomputes targetBefore -> acceptance fails.\n- Replay skips finalize -> acceptance still passes on ps1 (deregister closes the attempt), but the receipt-replay arm fails on both engines.\n- sh gate reuse without the base check -> receipt-same-tree-race fails (1 candidate vs 2 expected).\nDoD 1-6 met. Receipts cover every gated landing, as the plan scoped.\nResiduals the worker named (not blocking):\n- A crash between update-ref and record_commit loses the ledger row.\n- A pull --rebase retry leaves the receipt on the CAS sha."
 }
