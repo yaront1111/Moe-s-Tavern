@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionAttempt } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired, notFound } from '../util/errors.js';
 import { announceAttemptClosed, getAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { REVISION_RE } from '../state/candidateStore.js';
 import { assertAttemptCurrent } from '../util/enforcement.js';
 
 // =============================================================================
@@ -31,14 +32,6 @@ import { assertAttemptCurrent } from '../util/enforcement.js';
 /** The four real endings of a wrapper's landing attempt. */
 const OUTCOMES = ['landed', 'nothing-to-commit', 'rescued', 'failed'] as const;
 type FinalizeOutcome = (typeof OUTCOMES)[number];
-
-/**
- * A git object name as the wrapper reports it: 40 hex characters. Case-insensitive
- * to match the sibling runner-called tool (`record_candidate`'s sha check) — two
- * tools in the same slice disagreeing about the case of a sha is exactly the kind
- * of interop trap that only shows up in production.
- */
-const REVISION_PATTERN = /^[0-9a-f]{40}$/i;
 
 interface FinalizeParams {
   taskId: string;
@@ -84,7 +77,7 @@ function validateRevision(outcome: FinalizeOutcome, value: unknown): string | nu
     return null;
   }
   const revision = requireNonBlank('landedRevision', value);
-  if (!REVISION_PATTERN.test(revision)) {
+  if (!REVISION_RE.test(revision)) {
     throw invalidInput('landedRevision', `must be 40 hex characters (got ${JSON.stringify(revision)})`);
   }
   return revision;

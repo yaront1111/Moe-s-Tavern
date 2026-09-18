@@ -1,7 +1,7 @@
 // Serving-only evidence. Never attach it to a stored Task or write it to disk.
 import type { Candidate, CheckRun, CheckRunSource, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import type { StateManager } from './StateManager.js';
-import { listCandidatesForTask, SHA_RE as CANDIDATE_SHA_RE } from './candidateStore.js';
+import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js';
 import { listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
@@ -22,8 +22,8 @@ export interface TaskDelivery {
   attemptPhase?: ExecutionAttempt['phase'];
 }
 
-const isCandidateSha = (value: unknown): value is string => typeof value === 'string' && CANDIDATE_SHA_RE.test(value);
-const isLandedRevision = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
+const isCandidateSha = (value: unknown): value is string => typeof value === 'string' && SHA_RE.test(value);
+const isLandedRevision = (value: unknown): value is string => typeof value === 'string' && REVISION_RE.test(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
 const isCheckSource = (value: unknown): value is CheckRunSource => value === 'runner-observed' || value === 'agent-reported';
 

@@ -37,8 +37,15 @@ import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { getAttempt } from './attemptStore.js';
 
-/** The sha shape tools/recordCommit.ts already accepts (7-40 hex) — deliberately the same one. */
+/** The one git-object shape (7-40 hex, any case) every Wave 1 record and moe.record_commit accept; import it, never copy it. */
 export const SHA_RE = /^[0-9a-f]{7,40}$/i;
+/**
+ * A full git object name (40 hex): the shape moe.finalize_attempt accepts for landedRevision and a
+ * delivery receipt for every revision it records. An abbreviation or a ref name could name different
+ * bytes by the time anyone reads the receipt. Case-insensitive to match the sibling runner-called
+ * tools' SHA_RE. Import it, never copy it.
+ */
+export const REVISION_RE = /^[0-9a-f]{40}$/i;
 /** The bound tools/recordCommit.ts puts on a ref. */
 const MAX_TARGET_CHARS = 255;
 
@@ -66,8 +73,11 @@ export interface RecordCandidateResult {
 
 type RawCandidateParams = { [K in keyof RecordCandidateParams]?: unknown };
 
-/** Bounded rendering of an untrusted value: it cannot throw and cannot flood a message. */
-function renderGot(value: unknown): string {
+/**
+ * Bounded rendering of an untrusted value: it cannot throw and cannot flood a message.
+ * Shared by every Wave 1 store and delivery/policy.ts; import it, never copy it.
+ */
+export function renderGot(value: unknown): string {
   if (value === null) return 'null';
   const kind = typeof value;
   if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;

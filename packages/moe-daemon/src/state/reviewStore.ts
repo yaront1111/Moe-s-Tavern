@@ -34,7 +34,7 @@ import type { Review, ReviewDecision } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
-import { listCandidatesForTask } from './candidateStore.js';
+import { listCandidatesForTask, renderGot } from './candidateStore.js';
 
 /** The only two decisions a review may carry. A third value is refused, never coerced. */
 const DECISIONS: readonly ReviewDecision[] = ['approve', 'reject'] as const;
@@ -57,15 +57,6 @@ export interface RecordReviewParams {
 }
 
 type RawReviewParams = { [K in keyof RecordReviewParams]?: unknown };
-
-/** Bounded rendering of an untrusted value: it cannot throw and cannot flood a message. */
-function renderGot(value: unknown): string {
-  if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
-  const text = kind === 'string' ? JSON.stringify(value) : String(value);
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
-}
 
 /** Absent (undefined or null) is MISSING_REQUIRED; present but not a non-blank string is INVALID_INPUT. */
 function requireText(field: string, value: unknown): string {

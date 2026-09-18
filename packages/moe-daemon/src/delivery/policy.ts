@@ -29,7 +29,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { DeliveryPolicy, Task, TaskCommit, TaskDeliveryEvidence } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { logger } from '../util/logger.js';
-import { listCandidatesForTask } from '../state/candidateStore.js';
+import { listCandidatesForTask, renderGot } from '../state/candidateStore.js';
 import { listCheckRunsForCandidate } from '../state/checkRunStore.js';
 
 /** Keyed by the type, so the recognised list cannot drift from DeliveryPolicy without a compile error. */
@@ -85,15 +85,6 @@ export interface DeliveryEvidenceResult {
   satisfied: boolean;
   /** Tokens for exactly what is missing, landing first, then the required check; [] when satisfied. */
   missingEvidence: string[];
-}
-
-/** Bounded rendering of an untrusted value: it cannot throw and cannot flood a message. */
-function renderGot(value: unknown): string {
-  if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
-  const text = kind === 'string' ? JSON.stringify(value) : String(value);
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
 }
 
 /**

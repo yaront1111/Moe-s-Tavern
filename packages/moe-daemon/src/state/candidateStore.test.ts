@@ -216,14 +216,17 @@ describe('candidateStore', () => {
   it('exports no update, patch or delete path at all', async () => {
     const store = await import('./candidateStore.js');
     expect(Object.keys(store).sort()).toEqual([
+      'REVISION_RE',
       'SHA_RE',
       'getCandidate',
       'listCandidatesForAttempt',
       'listCandidatesForTask',
       'recordCandidate',
+      'renderGot',
       'validateCandidateParams',
     ]);
     expect(store.SHA_RE).toEqual(/^[0-9a-f]{7,40}$/i);
+    expect(store.REVISION_RE).toEqual(/^[0-9a-f]{40}$/i);
   });
 
   // ---------------------------------------------------------------------------
