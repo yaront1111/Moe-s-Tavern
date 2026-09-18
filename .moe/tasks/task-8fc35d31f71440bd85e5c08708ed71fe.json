@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:26:46.752Z",
-  "updatedAt": "2026-09-18T21:50:10.328Z",
+  "updatedAt": "2026-09-18T22:10:38.254Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T19:14:08.572Z",
     "plannedStepCount": 5,
@@ -118,7 +118,8 @@
     "architect-aa5a6c1e",
     "worker-d0c3b06e",
     "governor-39911495",
-    "worker-3c030e77"
+    "worker-3c030e77",
+    "qa-7100be29"
   ],
   "stepsCompleted": [
     "step-1",
@@ -170,6 +171,27 @@
       "treeId": "6b21436b53e5b17ee24eb2b3ad7b254953557d1e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "f1399a3ce859a5968cf12a6ad1885341b17c81a2",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3c030e77@2026-09-18T20:21:26Z",
+      "paths": [
+        ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json",
+        ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-3c030e77",
+      "recordedAt": "2026-09-18T21:50:40.284Z",
+      "treeId": "ec87592dab91844b15503b28f4bf37c6f1225f92",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -177,14 +199,16 @@
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1",
     "scripts/tests/parity-check.sh",
-    "scripts/tests/parity-check.ps1"
+    "scripts/tests/parity-check.ps1",
+    ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json",
+    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-3c030e77@2026-09-18T20:21:26Z",
-    "at": "2026-09-18T20:21:29.350Z"
+    "at": "2026-09-18T21:50:40.284Z"
   },
   "declaredFiles": [
     "scripts/moe-agent.ps1",
@@ -201,5 +225,10 @@
     "reportedAt": "2026-09-18T21:50:10.325Z",
     "source": "agent-reported"
   },
-  "completionSummary": "ps1 Read-MoeCommitSettings now trims settings.qualityGate where it reads it. That is its only reader, and the -is [string] guard is kept. So \"   \" means no gate, and \"  node gate.cjs  \" runs and is recorded as \"node gate.cjs\", matching the sh reader and delivery/policy.ts.\n\nThe ps1 gate-failure line (chat and task comment) now carries the sh twin's \"🚫 PUSH-BLOCKED:\" marker. Both parity lists pin the marker. parity-check.ps1 now reads UTF-8 and builds the needle from its code point, because PS 5.1 decodes BOM-less files as ANSI.\n\nNew frozen arms, byte-identical in both harnesses:\n- gate-blank, a loop mode: no candidate, check or rescue ref; a landed finalize; the loop goes on.\n- gate-padded: the gate runs once and is recorded trimmed.\n- dirty-helper now asserts the exact marked line in chat and in the comment.\n\nThese were red only on the pre-fix ps1:\n- gate-blank: the loop stopped after a blank-command rescue (MOE_RESCUE_REF reason=gate-failed).\n- gate-padded: the command was recorded as '  node gate.cjs  '.\n- dirty-helper: the line had no marker.\nOn sh they passed from the start, so they act as parity guards there.\n\nVerification:\n- postflight.sh: 66 frozen + 28 scope PASS, exit 0.\n- postflight.ps1 on pwsh and on PS 5.1: 66 + 28 PASS each.\n- Parity checks PASS on sh, pwsh and PS 5.1. The guard is proven both ways: a marker removed from either wrapper fails both checks.\n- Frozen 66 = baseline 64 + 2. Scope stays 28.\n\nOnly the five planned files changed (+5/-2, +22/-4 twice, +3/-2, +7/-3), with BOM and line endings as HEAD. This project has no qualityGate, so the live fleet sees no change. Self-review: comment-dad1f420."
+  "completionSummary": "ps1 Read-MoeCommitSettings now trims settings.qualityGate where it reads it. That is its only reader, and the -is [string] guard is kept. So \"   \" means no gate, and \"  node gate.cjs  \" runs and is recorded as \"node gate.cjs\", matching the sh reader and delivery/policy.ts.\n\nThe ps1 gate-failure line (chat and task comment) now carries the sh twin's \"🚫 PUSH-BLOCKED:\" marker. Both parity lists pin the marker. parity-check.ps1 now reads UTF-8 and builds the needle from its code point, because PS 5.1 decodes BOM-less files as ANSI.\n\nNew frozen arms, byte-identical in both harnesses:\n- gate-blank, a loop mode: no candidate, check or rescue ref; a landed finalize; the loop goes on.\n- gate-padded: the gate runs once and is recorded trimmed.\n- dirty-helper now asserts the exact marked line in chat and in the comment.\n\nThese were red only on the pre-fix ps1:\n- gate-blank: the loop stopped after a blank-command rescue (MOE_RESCUE_REF reason=gate-failed).\n- gate-padded: the command was recorded as '  node gate.cjs  '.\n- dirty-helper: the line had no marker.\nOn sh they passed from the start, so they act as parity guards there.\n\nVerification:\n- postflight.sh: 66 frozen + 28 scope PASS, exit 0.\n- postflight.ps1 on pwsh and on PS 5.1: 66 + 28 PASS each.\n- Parity checks PASS on sh, pwsh and PS 5.1. The guard is proven both ways: a marker removed from either wrapper fails both checks.\n- Frozen 66 = baseline 64 + 2. Scope stays 28.\n\nOnly the five planned files changed (+5/-2, +22/-4 twice, +3/-2, +7/-3), with BOM and line endings as HEAD. This project has no qualityGate, so the live fleet sees no change. Self-review: comment-dad1f420.",
+  "touchedFiles": [
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/.parity-check.sh.new",
+    "scripts/tests/parity-check.ps1"
+  ]
 }

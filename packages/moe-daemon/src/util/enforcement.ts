@@ -3,6 +3,7 @@ import type { Task, TaskVerification } from '../types/schema.js';
 // state layer in at runtime and no import cycle can form through it.
 import type { StateManager } from '../state/StateManager.js';
 import { currentAttempt, listAttempts, MAX_ATTEMPT_GENERATION } from '../state/attemptStore.js';
+import { renderGot } from '../state/candidateStore.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from './errors.js';
 import { logger } from './logger.js';
 
@@ -127,15 +128,6 @@ function firstAttemptNotice(key: string): boolean {
   return true;
 }
 
-/** Bounded rendering of an untrusted value that cannot throw (no String() on objects). */
-function renderUntrusted(value: unknown): string {
-  if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
-  const text = kind === 'string' ? JSON.stringify(value) : String(value);
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
-}
-
 /**
  * Refuse a malformed token, never coerce it (the plan-revision token rule). Checks
  * are `!== undefined`, not truthiness: generation 0 and attemptId '' are falsy but
@@ -146,7 +138,7 @@ function validateAttemptIdentity(identity: AttemptIdentity): AttemptIdentity {
   const { attemptId, generation } = identity;
   if (attemptId !== undefined) {
     if (typeof attemptId !== 'string' || attemptId.trim() === '') {
-      const got = renderUntrusted(attemptId);
+      const got = renderGot(attemptId);
       throw invalidInput('attemptIdentity.attemptId', `must be a non-blank string (got ${got})`);
     }
     validated.attemptId = attemptId;
@@ -156,7 +148,7 @@ function validateAttemptIdentity(identity: AttemptIdentity): AttemptIdentity {
     // attemptStore refuses a stored value below 1.
     const inDomain = typeof generation === 'number' && Number.isSafeInteger(generation);
     if (!inDomain || generation < 1 || generation > MAX_ATTEMPT_GENERATION) {
-      const got = renderUntrusted(generation);
+      const got = renderGot(generation);
       throw invalidInput('attemptIdentity.generation', `must be a positive safe integer (got ${got})`);
     }
     validated.generation = generation;

@@ -75,7 +75,7 @@ type RawCandidateParams = { [K in keyof RecordCandidateParams]?: unknown };
 
 /**
  * Bounded rendering of an untrusted value: it cannot throw and cannot flood a message.
- * Shared by every Wave 1 store and delivery/policy.ts; import it, never copy it.
+ * Shared by every Wave 1 store, delivery/policy.ts and util/enforcement.ts; import it, never copy it.
  */
 export function renderGot(value: unknown): string {
   if (value === null) return 'null';

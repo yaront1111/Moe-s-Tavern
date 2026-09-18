@@ -492,7 +492,7 @@ interface Task {
   // Timestamps
   createdAt: string;
   updatedAt: string;
-  reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts only completion commits recorded at/after it
+  reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts completion commits from the current work round: at/after the latest rejection, else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)
   reviewCompletedAt?: string;
 }
 

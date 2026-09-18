@@ -13,23 +13,32 @@
     {
       "stepId": "step-1",
       "description": "BASELINE + RED TEST. This task depends on task-fd970f24 (which edits delivery/policy.ts) and task-fee5e136 (likely edits deliveryProjection.ts). Start only after both land, and find code by symbol name; line numbers are from bb5e7e2.\n\n1. BEFORE any edit, record the daemon suite counts on a CLEAN export of the starting commit. The shared checkout carries peers' dirty test files, and they shift the counts (mem:gotcha-qa-test-count-drift-shared-tree).\n   a. git archive HEAD | tar -x -C D:/moe-chore-31fe-<worker> (use a unique name).\n   b. mklink /J <scratch>\\packages\\moe-daemon\\node_modules D:\\projexts\\moes\\packages\\moe-daemon\\node_modules\n   c. cd <scratch>/packages/moe-daemon && npx vitest run --reporter=json --outputFile=<scratch>/before.json\n   d. Keep the 'Tests N passed | M skipped (T)' line and the per-file counts.\n2. In state/candidateStore.test.ts, test 'exports no update, patch or delete path at all':\n   - Add 'REVISION_RE' and 'renderGot' to the sorted export allowlist; keep 'SHA_RE'.\n   - Beside the existing expect(store.SHA_RE).toEqual(/^[0-9a-f]{7,40}$/i), add expect(store.REVISION_RE).toEqual(/^[0-9a-f]{40}$/i).\n   These are new expects inside the SAME it(). Add no new test, so the counts stay the same.\n3. Run 'npx vitest run src/state/candidateStore.test.ts'. It must be RED today, because the store exports neither symbol yet. Paste the failing assertion into the step note. This satisfies the epic rail: a test that fails on the old code.\n4. The checkRunStore and receiptStore allowlists do not change, because their exports do not change. Say so in the note so QA does not look for edits there.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.test.ts"
-      ]
+      ],
+      "note": "Round 2 (after qa_reject #1). Starting commit b84da46 (QA board-only checkpoint on top of 965db22; code unchanged since db8c16f).\nBASELINE: clean export `git archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json` into D:/moe-scratch/w3c03-31fe-r2/before + node_modules junction, MOE_PROJECT_PATH/MOE_WORKER_ID unset: `npx vitest run` exit 0, \"Test Files 122 passed (122) / Tests 2145 passed (2145)\" (before.json kept for per-file compare). Matches QA's round-1 numbers.\nRED EVIDENCE for round 2 (a pure dedupe + comment fix, so there is no behaviour to fail; the checks are content greps):\n- `git grep -nF 'a value of type ${kind}' -- packages/moe-daemon/src ':!*.test.ts'` = 2 hits today: candidateStore.ts:83 and util/enforcement.ts:134 (private renderUntrusted). Body md5 (CR stripped) identical: bc94fb2b… for both.\n- Stale \"reviewStartedAt\" anchor for NO-COMPLETION-COMMIT = 3 hits, not 2: types/schema.ts:766, docs/SCHEMA.md:495, AND docs/TROUBLESHOOTING.md:689 (\"recorded at or after task.reviewStartedAt\"), which QA's list missed. Will fix all 3 in step-4.\nRegression guard for the enforcement refactor: releaseTask.test.ts ('refuses a malformed attempt identity…', generation 0) and recordCandidate.test.ts (zero/string/null generation) drive both renderUntrusted call sites; a broken import would turn their INVALID_INPUT into a TypeError. No test is added (DoD 2: same counts; QA's fix asks for none). No vi.mock of candidateStore/enforcement exists anywhere in src.\nNo repo file changed in this step; round-1's allowlist test (candidateStore.test.ts) is already landed in db8c16f.",
+      "startedAt": "2026-09-18T22:05:50.024Z",
+      "completedAt": "2026-09-18T22:07:07.334Z"
     },
     {
       "stepId": "step-2",
       "description": "DEFINE ONCE, in state/candidateStore.ts. It is already the exported home of SHA_RE, deliveryProjection already imports SHA_RE from it, and checkRunStore, receiptStore, reviewStore, deliveryProjection and delivery/policy all import from it already. candidateStore imports only util/*, and attemptStore imports only util/*, so the moves add no import cycle. stateModules.test.ts fails on any runtime cycle inside src/state; keep it that way.\n\nA new util module was rejected: it would push the plan to 11 files, past the 10-file gate.\n\n1. SHA_RE stays /^[0-9a-f]{7,40}$/i. Reword its comment to: the one git-object shape (7-40 hex, any case) every Wave 1 record and moe.record_commit accept; import it, never copy it.\n2. Add 'export const REVISION_RE = /^[0-9a-f]{40}$/i;'. Merge the rationale of the two copies into its JSDoc:\n   - receiptStore's 'an abbreviation or a ref name could name different bytes by the time anyone reads the receipt';\n   - finalizeAttempt's 'case-insensitive to match the sibling runner-called tool'.\n3. Export the private renderGot unchanged. Its body must stay byte-identical: all 5 copies hash the same today. Keep its one-line JSDoc and add 'shared by every Wave 1 store and delivery/policy.ts; import it, never copy it'.\n4. Neither regex may carry a g or y flag. The shared instances must stay stateless for .test().\n5. Run 'npx vitest run src/state/candidateStore.test.ts'; it is GREEN now.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts"
+      ],
+      "note": "Round 2. The three shared definitions from round 1 are intact in candidateStore.ts: SHA_RE /^[0-9a-f]{7,40}$/i (:41), REVISION_RE /^[0-9a-f]{40}$/i (:48), export function renderGot (:80). Only edit: renderGot's JSDoc consumer list now names util/enforcement.ts too (\"Shared by every Wave 1 store, delivery/policy.ts and util/enforcement.ts; import it, never copy it.\"), because step-3 makes enforcement.ts import it. Body untouched. File stays LF (Serena's CRLF rewrite renormalized back: 0 CRLF / 253 LF; git diff = 1 line). `npx vitest run src/state/candidateStore.test.ts` (MOE_* unset): 36 passed (36), unchanged from round 1.",
+      "startedAt": "2026-09-18T22:07:11.540Z",
+      "completedAt": "2026-09-18T22:07:39.136Z"
     },
     {
       "stepId": "step-3",
       "description": "REPLACE EVERY COPY WITH AN IMPORT. There is no behaviour change: every regex source and flag, and every error message, stays identical.\n- state/checkRunStore.ts: delete the SHA_RE copy (and its comment) and the private renderGot. Import both from './candidateStore.js', extending the existing getCandidate import.\n- state/receiptStore.ts: delete REVISION_RE (its rationale moved to the shared JSDoc) and renderGot. Import REVISION_RE and renderGot from './candidateStore.js'.\n- state/reviewStore.ts: delete renderGot and import it, extending the listCandidatesForTask import.\n- state/deliveryProjection.ts: import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js' and drop the CANDIDATE_SHA_RE alias. isCandidateSha uses SHA_RE. isLandedRevision uses REVISION_RE instead of the inline /^[a-f0-9]{40}$/i, which matches the same strings.\n- delivery/policy.ts: delete renderGot and import it from '../state/candidateStore.js', extending the existing import.\n- tools/recordCommit.ts: delete 'const SHA_RE' and import SHA_RE from '../state/candidateStore.js'.\n- tools/finalizeAttempt.ts: delete REVISION_PATTERN and its comment block, and use the imported REVISION_RE. The message 'must be 40 hex characters' stays unchanged.\n\nError handling: the validation paths keep their exact refusals, and only the regex's home moves. Run 'npx tsc --noEmit' in packages/moe-daemon; it must be clean.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/checkRunStore.ts",
         "packages/moe-daemon/src/state/receiptStore.ts",
@@ -38,32 +47,59 @@
         "packages/moe-daemon/src/delivery/policy.ts",
         "packages/moe-daemon/src/tools/recordCommit.ts",
         "packages/moe-daemon/src/tools/finalizeAttempt.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/enforcement.ts"
+      ],
+      "note": "Round 2 fix for QA issue 1 (the 6th copy). util/enforcement.ts: deleted the private `renderUntrusted` and its JSDoc (body was byte-identical to renderGot: md5 bc94fb2b… both, CR stripped), added `import { renderGot } from '../state/candidateStore.js';` after the existing attemptStore runtime import, and switched the 2 call sites in validateAttemptIdentity (attemptId and generation refusals) to renderGot. Messages unchanged: 'must be a non-blank string (got …)' / 'must be a positive safe integer (got …)'. No export change (renderUntrusted was private).\nAcyclic: candidateStore's runtime imports are util/{errors,ids,sanitize} + state/attemptStore; sanitize → util/{logger,errors}; attemptStore → util/{errors,ids,logger}. Nothing in that closure imports util/enforcement.js (git grep: only tools/* import it). No vi.mock of candidateStore anywhere.\nRound-1 replacements in the other 7 files are unchanged and still in place.\nEvidence: `git grep -nF 'a value of type ${kind}' -- packages/moe-daemon/src ':!*.test.ts'` = 1 hit (candidateStore.ts:83); `grep -rn renderUntrusted packages/moe-daemon/src` = 0 hits. `npx tsc --noEmit` exit 0. `npx vitest run` releaseTask, recordCandidate, finalizeAttempt, reattachAttempt, stateModules, enforcement tests (MOE_* unset): 6 files / 198 passed. enforcement.ts stays pure CRLF (333 CRLF / 0 bare LF), diff = +1 import, -9 function, 2 call-site renames.",
+      "startedAt": "2026-09-18T22:07:41.078Z",
+      "completedAt": "2026-09-18T22:08:30.142Z"
     },
     {
       "stepId": "step-4",
       "description": "CLAUDE.md ANCHOR. Line 88 in the 'Task-size + verification gates' bullet currently reads: NO-COMPLETION-COMMIT when no completion commit is recorded since `reviewStartedAt`.\n\nRewrite that clause so it matches completionCommitsForReview in delivery/policy.ts: no completion commit is recorded in the current work round, at or after the most recent rejection, else the first step start (workStartedAt), else reviewStartedAt. Name `completionCommitsForReview` in `delivery/policy.ts` as the anchor.\n\nEdit only that clause. CLAUDE.md is one very long line that peers also edit, so keep the hunk minimal. Do not touch docs/MCP_SERVER.md or docs/CONFIGURATION.md; task-808869c5 already fixed them. A repo-wide grep showed CLAUDE.md is the only remaining stale copy.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "Round 2 fix for QA issues 4-5, plus one more stale copy QA's list missed. CLAUDE.md:88 is unchanged: round 1 already states the work-round rule naming completionCommitsForReview in delivery/policy.ts (re-verified).\nThe plan's premise \"CLAUDE.md is the only stale copy\" was false. A content sweep (grep reviewStartedAt across docs, CLAUDE.md, types, jetbrains, vscode and scripts) found 3 wrong anchors. All 3 are comment/doc-only and now state the completionCommitsForReview rule: latest rejection, else the first step start (workStartedAt), else reviewStartedAt.\n- types/schema.ts:765-768, the Task.commits JSDoc: \"qa_approve looks for a completion commit recorded in the current work round: at or after the most recent rejection, else the first step start (`workStartedAt`), else `reviewStartedAt` (completionCommitsForReview in delivery/policy.ts).\"\n- docs/SCHEMA.md:495, the reviewStartedAt field comment: \"qa_approve counts completion commits from the current work round: at/after the latest rejection, else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)\".\n- docs/TROUBLESHOOTING.md:689-691 (NEW, not in QA's list): the \"qa_approve returned NO-COMPLETION-COMMIT\" section said \"recorded at or after `task.reviewStartedAt`\". It now says \"in the current work round: at or after the latest rejection, else the first step start (`task.workStartedAt`), else `task.reviewStartedAt` (`completionCommitsForReview` in `delivery/policy.ts`)\".\nAfter the fix, every reviewStartedAt mention in docs, CLAUDE.md and types states the work-round rule: CLAUDE.md:88, CONFIGURATION.md:166, MCP_SERVER.md:1816, SCHEMA.md:495, TROUBLESHOOTING.md:690 and schema.ts:768. The rest are bare field declarations.\nLeft as is: the \"for this review round\" wording in governor.md:42, moe-qa-loop SKILL.md:40 and MCP_SERVER.md:1770. It names no anchor, so it is not false. Also, docs/roles/qa* and docs/skills/moe-qa-loop are dirty with a peer's edits.\nNo test pins any of these lines; the earlier grep of *.test.ts found none. The doc-reading tests taskTimeBudgetDocs and qaCommitPolicy pass: 2 files / 23 passed.\nEOLs are kept. All 3 files stay pure CRLF with no BOM: schema.ts 1353/0, SCHEMA.md 1869/0, TROUBLESHOOTING.md 873/0.",
+      "startedAt": "2026-09-18T22:08:32.306Z",
+      "completedAt": "2026-09-18T22:09:25.210Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY.\n1. Single definitions. Run:\n   grep -rnE '\\{7,40\\}|\\{40\\}\\$|function renderGot|REVISION_PATTERN|CANDIDATE_SHA_RE' packages/moe-daemon/src --include=*.ts | grep -v '\\.test\\.ts'\n   Expected: only the three definitions in state/candidateStore.ts. Paste the output.\n2. Types: cd packages/moe-daemon && npx tsc --noEmit. It must print nothing (TS7 finishes in under 1 s; that is not a skip).\n3. SAME COUNTS:\n   a. In the step-1 scratch export, apply the diff of this task's 10 files: git diff -- <the 10 paths> | git -C <scratch> apply\n   b. Run npx vitest run --reporter=json --outputFile=<scratch>/after.json.\n   c. Compare with before.json. Passed, skipped and total must be identical, and so must the per-file counts, except that no file may lose tests.\n   d. If a file fails under fleet load, rerun it alone (mem:moes-test-env-quirks).\n4. Also run the full suite in the shared checkout, and explain any count difference from the scratch run by peers' dirty test files.\n5. Cleanup: remove the junction first (cmd //c \"rmdir <junction>\"), check that the live node_modules still exists, then remove the scratch.\n\nFor complete_task, the verification is the scratch 'npx vitest run' command, and outputTail holds the before and after count lines.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY (round 2). No repo bytes changed in this step. Round-2 paths are unchanged since steps 2-4.\n1. Single definitions:\n- The plan grep `grep -rnE '\\{7,40\\}|\\{40\\}\\$|function renderGot|REVISION_PATTERN|CANDIDATE_SHA_RE' packages/moe-daemon/src --include=*.ts | grep -v '\\.test\\.ts'` gives exactly 3 hits: candidateStore.ts:41 SHA_RE, :48 REVISION_RE, :80 export function renderGot.\n- QA's body grep `git grep -nF 'a value of type ${kind}' -- packages/moe-daemon/src ':!*.test.ts'` gives exactly 1 hit: candidateStore.ts:83.\n- Content census of every hex character class in daemon src: the only other hits are generated-file marker shas ({6,64}), the task-id parser in reportBlocked, and claudeHook's marker. None is the Wave 1 git-object or revision rule. No `length === 40`-style shape check exists either.\n2. `npx tsc --noEmit`: exit 0, no output.\n3. SAME COUNTS on clean exports, with MOE_PROJECT_PATH and MOE_WORKER_ID unset:\n- Before = `git archive HEAD(b84da46) packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json`.\n- After = tree c1f14ee built in a temp GIT_INDEX_FILE: read-tree HEAD + update-index of the 5 round-2 paths. `git diff --stat HEAD c1f14ee` shows exactly those 5 files, 11+/15-. The repo index was not touched: 0 staged.\n- `npx vitest run`: before \"Test Files 122 passed (122) / Tests 2145 passed (2145)\"; after \"Test Files 122 passed (122) / Tests 2145 passed (2145)\". Both exit 0.\n- Per-file compare of the JSON reports: 122 files compared, 0 count diffs, 0 title diffs.\n4. Shared checkout full suite: 122 files / 2146 passed, exit 0. The +1 is entirely src/util/recommendSkill.test.ts (12 to 13), a peer's dirty test file (+9 lines, ponytail skill work, not this task).\n5. Cleanup:\n- Both junctions were removed with [System.IO.Directory]::Delete after a LinkType=Junction check.\n- The live node_modules/vitest/vitest.mjs is still present.\n- 0 reparse points were left, then D:/moe-scratch/w3c03-31fe-r2 was rm -rf'd.",
+      "startedAt": "2026-09-18T22:09:27.461Z",
+      "completedAt": "2026-09-18T22:11:07.419Z"
     },
     {
       "stepId": "step-6",
       "description": "SELF-REVIEW, answered in a task comment:\n1. Is there any import cycle? Name each new import edge and say why it is acyclic. stateModules.test.ts must stay green.\n2. Is each regex byte-for-byte the same language as every copy it replaced? The /^[a-f0-9]{40}$/i form counts as the same language as /^[0-9a-f]{40}$/i.\n3. Is renderGot's body unchanged? Compare the md5 of the moved function body with the old copies.\n4. Were no messages or error codes changed?\n5. Neither shared regex has a g or y flag, so sharing one instance cannot leak lastIndex state between callers.\n6. Were no tests added or removed? Only candidateStore.test.ts changed.\n7. Is the CLAUDE.md hunk exactly the one clause?\n8. Run 'git diff --stat': only the 10 planned paths are this task's.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/util/enforcement.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "SELF-REVIEW posted as task comment comment-b69b4fe8, answering all 8 questions:\n- No cycle: the new enforcement.ts -> candidateStore.ts edge has a closure of util/* + attemptStore only.\n- No regex was touched.\n- renderGot body md5 is identical across 7 bodies.\n- Messages and codes are unchanged.\n- The shared regexes carry /i only.\n- No test file changed; 0 per-file count or title diffs.\n- CLAUDE.md was not touched.\n- This task's paths are the 5 round-2 paths + its board file.\nAdversarial finding, fixed: docs/SCHEMA.md is peer-declared by task-808869c5 (REVIEW). Under contested=skip-untouched it lands only from the TOOL tier, and the wrapper's harvest does not know Serena replace_content (moe-agent.sh:6681 / ps1:4416 list replace_regex). Without a fix the SCHEMA.md fix would have been silently dropped. I re-touched all 5 paths with built-in Edit round trips, which puts them in the TOOL tier. `git hash-object` before == after for all 5, and EOLs are kept: CRLF files stay pure CRLF, candidateStore.ts stays pure LF. The wrapper blind spot is reported to #general (msg-e7691513) for an architect or governor to file. The modifiedFiles listed here are the same 5 paths the round trips re-touched (steps 2-4 already reported them).",
+      "startedAt": "2026-09-18T22:11:10.095Z",
+      "completedAt": "2026-09-18T22:13:21.296Z"
     }
   ],
-  "planRevision": 14,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3c030e77",
+  "planRevision": 26,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -84,16 +120,22 @@
       "author": "worker-161b9959",
       "content": "SELF-REVIEW (step-6)\n1. Import cycles: NEW edges are only tools/recordCommit.ts -> state/candidateStore.ts and tools/finalizeAttempt.ts -> state/candidateStore.ts. state/{checkRunStore,receiptStore,reviewStore,deliveryProjection} -> ./candidateStore and delivery/policy -> state/candidateStore already existed; they only gained specifiers. candidateStore's runtime closure is util/errors (no imports), util/ids (crypto), util/sanitize (logger, errors), util/logger (pino), and state/attemptStore (util/* only; StateManager and schema are type-only). It never reaches tools/, delivery/ or another store, so no edge can close a cycle. stateModules.test.ts is green. No imported symbol is read at module-evaluation time: all uses sit inside function bodies.\n2. Regex languages: at HEAD all 3 SHA_RE copies were byte-identical to /^[0-9a-f]{7,40}$/i. receiptStore REVISION_RE and finalizeAttempt REVISION_PATTERN were byte-identical to /^[0-9a-f]{40}$/i. deliveryProjection's /^[a-f0-9]{40}$/i has the same class set, anchors, quantifier and i flag, so it is the same language.\n3. renderGot: body md5 (signature to closing brace, `export ` stripped) is 6ba41b71fb42cc2876184b2dfdba5203 for the new export and for all 5 HEAD copies.\n4. Messages/codes: `git diff -U0` removes no throw/invalidInput/missingRequired/MoeError line. The only hits are the 5 renderGot JSDoc lines, which contain the word \"cannot throw\". recordCommit's 'must be 7-40 hex characters', finalizeAttempt's 'must be 40 hex characters (got …)' and the stores' 'hexadecimal characters' messages are unchanged. The only hex-mentioning line that disappeared is the deleted REVISION_PATTERN JSDoc.\n5. Flags: both shared regexes carry only 'i'. The candidateStore.test toEqual pins source and flags. A non-global, non-sticky .test() never reads or writes lastIndex.\n6. Tests: only candidateStore.test.ts changed: +2 allowlist entries and +1 expect in the same it(). Clean-export counts before and after are both 122 files / 2145 passed / 0 skipped, identical per file.\n7. CLAUDE.md: the word-diff is exactly the one clause (numstat 1/1). It is now the work-round rule, anchored on completionCommitsForReview in delivery/policy.ts.\n8. git diff --stat: this task's paths are CLAUDE.md plus 9 daemon src files (candidateStore.ts, candidateStore.test.ts, checkRunStore.ts, receiptStore.ts, reviewStore.ts, deliveryProjection.ts, delivery/policy.ts, tools/recordCommit.ts, tools/finalizeAttempt.ts), 27+/64-. Every other dirty path (roles/skills docs, skillFiles.ts, startStep.ts, contextNextAction.ts, recommendSkill*.ts, scripts/*, peers' .moe/tasks) was already dirty before this task and is not mine.\nTheoretical residual, not acted on: a shared exported RegExp is still a mutable object (RegExp.prototype.compile would recompile it for every consumer). The code is trusted in-repo and SHA_RE was already shared with deliveryProjection before this task. Freezing it was not planned.",
       "timestamp": "2026-09-18T21:51:41.636Z"
+    },
+    {
+      "id": "comment-b69b4fe8e94f42698041ba690902a378",
+      "author": "worker-3c030e77",
+      "content": "Round-2 self-review (step-6), after qa_reject #1.\nChanges this round: util/enforcement.ts drops the private renderUntrusted (6th renderGot copy) and imports renderGot. Stale work-round anchors fixed in types/schema.ts:765-768, docs/SCHEMA.md:495 and docs/TROUBLESHOOTING.md:689-691 (TROUBLESHOOTING was a 3rd stale copy QA's list missed). The renderGot JSDoc in candidateStore.ts now names util/enforcement.ts.\n1. Import cycles. New edge: util/enforcement.ts -> state/candidateStore.ts (runtime). candidateStore's runtime closure is util/{errors,ids,sanitize} + state/attemptStore; sanitize imports util/{logger,errors}; attemptStore imports util/{errors,ids,logger}. Nothing in that closure imports enforcement.js; only tools/* do. candidateStore has no top-level side effects (consts + functions), so module-init order cannot matter. stateModules.test.ts is green in all 3 full runs. The enforcement.ts header comment (\"never pull the state layer in at runtime\") is about the type-only StateManager import. The runtime attemptStore import sat right below it before this task.\n2. Regex languages: this round touched no regex. SHA_RE /^[0-9a-f]{7,40}$/i and REVISION_RE /^[0-9a-f]{40}$/i are unchanged since round 1.\n3. renderGot body: md5 (CR stripped) = bc94fb2b… for 7 bodies: the current export, the removed renderUntrusted (HEAD), and all 5 round-1 copies at f1399a3.\n4. Messages and codes: validateAttemptIdentity still throws INVALID_INPUT 'attemptIdentity.attemptId: must be a non-blank string (got X)' and 'attemptIdentity.generation: must be a positive safe integer (got X)'. X is rendered by the identical body.\n5. Flags: both shared regexes carry only /i. No g or y flag, so no lastIndex state is shared.\n6. Tests: round 2 changed no test file. Clean exports before (HEAD b84da46) and after (tree c1f14ee = HEAD + the 5 paths) both give 122 files / 2145 passed. Per-file counts and titles: 0 diffs.\n7. CLAUDE.md: untouched this round; its line 88 already matches completionCommitsForReview.\n8. git diff --stat: this task's paths are those 5 + its own board file. Every other dirty path belongs to peers: ponytail skill work, the startStep/contextNextAction/recommendSkill edits, other tasks' board files. There are 4 paths beyond the plan's 10 (enforcement.ts, types/schema.ts, SCHEMA.md, TROUBLESHOOTING.md), because QA's reopen demands them.\nLanding hazard, handled: docs/SCHEMA.md is peer-declared by task-808869c5 (REVIEW), and contested paths land only from the TOOL tier. The wrapper's TOOL harvest knows Serena replace_regex but not the current replace_content (moe-agent.sh:6681, ps1:4416). So I re-touched all 5 paths with Edit round trips; the bytes are identical, verified by hash-object before and after. QA: `git show --stat <completion sha>` should list all 5.",
+      "timestamp": "2026-09-18T22:13:07.864Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:01.259Z",
-  "updatedAt": "2026-09-18T22:04:52.319Z",
+  "updatedAt": "2026-09-18T22:14:14.398Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:40:31.589Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 6,
+    "executedStepCount": 12,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -108,7 +150,14 @@
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [
     {
       "item": "Each shape rule and renderGot is defined once and imported everywhere it is checked; exported-symbol allowlist tests are updated",
@@ -137,28 +186,23 @@
   },
   "planApprovedAt": "2026-09-18T20:45:40.876Z",
   "workStartedAt": "2026-09-18T21:44:20.041Z",
-  "reviewStartedAt": "2026-09-18T21:52:59.896Z",
+  "reviewStartedAt": "2026-09-18T22:14:14.395Z",
   "verification": {
-    "command": "cd <scratch>/packages/moe-daemon && npx vitest run   (scratch = git archive of tree 65925ed0 = HEAD f1399a3 + this task's 10 files; node_modules junctioned; MOE_PROJECT_PATH/MOE_WORKER_ID unset)",
+    "command": "git archive c1f14ee (= HEAD b84da46 + the 5 round-2 paths, built via a temp GIT_INDEX_FILE) packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C D:/moe-scratch/w3c03-31fe-r2v/after; junction node_modules; cd D:/moe-scratch/w3c03-31fe-r2v/after/packages/moe-daemon && (unset MOE_PROJECT_PATH MOE_WORKER_ID; npx vitest run && npx tsc --noEmit)",
     "exitCode": 0,
-    "outputTail": "BEFORE (clean export of aee5fc4, step 1):\n Test Files  122 passed (122)\n      Tests  2145 passed (2145)\nAFTER (aee5fc4 + diff, tree 58a7532f, step 5; per-file counts identical, 0 diffs over 122 files):\n Test Files  122 passed (122)\n      Tests  2145 passed (2145)\nFINAL fresh run (HEAD f1399a3 + diff, tree 65925ed0):\n Test Files  122 passed (122)\n      Tests  2145 passed (2145)\n   Duration  14.59s\nnpx tsc --noEmit: exit 0, no output\ngrep single definitions:\n state/candidateStore.ts:41:export const SHA_RE = /^[0-9a-f]{7,40}$/i;\n state/candidateStore.ts:48:export const REVISION_RE = /^[0-9a-f]{40}$/i;\n state/candidateStore.ts:80:export function renderGot(value: unknown): string {",
-    "reportedAt": "2026-09-18T21:52:59.896Z",
+    "outputTail": "BEFORE (clean export of HEAD b84da46): Test Files  122 passed (122) | Tests  2145 passed (2145) | exit=0\nAFTER (tree c1f14ee, fresh run after the Edit round trips): Test Files  122 passed (122) | Tests  2145 passed (2145) | vitest exit=0 | tsc exit=0\nPer-file JSON compare before vs after: files compared: 122; per-file count diffs: 0; title diffs: 0\nShared checkout: Test Files 122 passed (122) | Tests 2146 passed (2146) (+1 = peer's dirty src/util/recommendSkill.test.ts 12 -> 13)",
+    "reportedAt": "2026-09-18T22:14:14.395Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "packages/moe-daemon/src/state/candidateStore.test.ts",
     "packages/moe-daemon/src/state/candidateStore.ts",
-    "packages/moe-daemon/src/state/checkRunStore.ts",
-    "packages/moe-daemon/src/state/receiptStore.ts",
-    "packages/moe-daemon/src/state/reviewStore.ts",
-    "packages/moe-daemon/src/state/deliveryProjection.ts",
-    "packages/moe-daemon/src/delivery/policy.ts",
-    "packages/moe-daemon/src/tools/recordCommit.ts",
-    "packages/moe-daemon/src/tools/finalizeAttempt.ts",
-    "CLAUDE.md",
-    ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json"
+    "packages/moe-daemon/src/util/enforcement.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "docs/SCHEMA.md",
+    "docs/TROUBLESHOOTING.md"
   ],
-  "completionSummary": "The Wave 1 shape rules and renderGot are now defined once, in state/candidateStore.ts:\n- SHA_RE /^[0-9a-f]{7,40}$/i (already exported);\n- new REVISION_RE /^[0-9a-f]{40}$/i;\n- renderGot, now exported with its body byte-identical (md5 6ba41b71… matches all 5 old copies).\n\nEvery copy is now an import:\n- checkRunStore: SHA_RE and renderGot.\n- receiptStore: REVISION_RE and renderGot.\n- reviewStore and delivery/policy.ts: renderGot.\n- deliveryProjection: SHA_RE, plus REVISION_RE in place of its inline /^[a-f0-9]{40}$/i. The CANDIDATE_SHA_RE alias is gone.\n- tools/recordCommit.ts: SHA_RE.\n- tools/finalizeAttempt.ts: REVISION_RE in place of REVISION_PATTERN.\n\nNo regex language, flag, message or error code changed. The two new import edges (tools/recordCommit and tools/finalizeAttempt -> state/candidateStore) are acyclic, and stateModules.test.ts is green.\n\nRed test: the candidateStore.test.ts export allowlist gained 'REVISION_RE' and 'renderGot', plus a REVISION_RE value pin in the same it(). It was RED on the old code (\"expected [ 'SHA_RE', 'getCandidate', …(4) ] to deeply equal [ 'REVISION_RE', 'SHA_RE', …(6) ]\") and is GREEN now at 36/36. The checkRunStore and receiptStore allowlists are unchanged because their exports did not change.\n\nCLAUDE.md: the NO-COMPLETION-COMMIT clause now states the work-round rule (latest rejection, else workStartedAt, else reviewStartedAt), anchored on completionCommitsForReview in delivery/policy.ts. The hunk is that one clause.\n\nCounts, on clean git-archive exports:\n- Before (aee5fc4): 122 files / 2145 passed / 0 skipped.\n- After (same base + this diff): 122 / 2145 / 0.\n- Per-file counts are identical.\n\nFresh final run on HEAD f1399a3 + diff: 122 / 2145, tsc exit 0. The shared checkout shows 2146 because a peer's dirty recommendSkill.test.ts adds one test (12 -> 13).\n\nThe grep proves exactly 3 definitions, all in candidateStore.ts. The self-review is task comment comment-8f3365de.",
+  "completionSummary": "Round 2, after qa_reject #1.\n- DoD 1: util/enforcement.ts no longer has its private renderUntrusted, the 6th renderGot copy. It imports renderGot from ../state/candidateStore.js and calls it at both validateAttemptIdentity sites. The edge is acyclic: candidateStore's runtime closure is util/{errors,ids,sanitize} + attemptStore, and none of them imports enforcement.\n  - Body grep `git grep -nF 'a value of type ${kind}' -- packages/moe-daemon/src ':!*.test.ts'`: 1 hit (candidateStore.ts:83).\n  - The plan grep finds 3 definitions (candidateStore.ts:41/48/80). renderUntrusted: 0 hits.\n  - A hex-regex census finds no other Wave 1 shape copy.\n  - md5 of 7 bodies is identical (bc94fb2b).\n  - The renderGot JSDoc now names util/enforcement.ts.\n- Stale anchors: 3 found, not 2. types/schema.ts:765-768, docs/SCHEMA.md:495, and docs/TROUBLESHOOTING.md:689-691, which QA's list missed. All three now state completionCommitsForReview's work-round rule. CLAUDE.md:88 was already correct.\n- DoD 2: no behaviour change and no test edits. Before (HEAD b84da46) and after (tree c1f14ee) clean exports both give 122 files / 2145 passed, with 0 per-file count or title diffs. tsc exits 0. The shared checkout gives 2146; the +1 is a peer's dirty recommendSkill.test.ts.\n- Landing: docs/SCHEMA.md is contested by task-808869c5 (REVIEW). The wrapper's TOOL-tier harvest does not know Serena replace_content (moe-agent.sh:6681 / ps1:4416), so a contested path edited with it would be silently dropped. I re-touched all 5 paths with byte-identical built-in Edit round trips (hash-object equal before and after, EOLs kept). QA should run `git show --stat <completion sha>` and expect candidateStore.ts, enforcement.ts, types/schema.ts, docs/SCHEMA.md and docs/TROUBLESHOOTING.md. The wrapper blind spot is posted to #general (msg-e7691513).\n- Self-review: comment-b69b4fe8.",
   "commits": [
     {
       "sha": "db8c16f9d134de1509bd2348be6beaf382038787",
@@ -190,6 +234,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "b84da46e64d7657278b418a6907cbea9191cff05",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-5e66a826@2026-09-18T21:57:22Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json"
+      ],
+      "recordedBy": "qa-5e66a826",
+      "recordedAt": "2026-09-18T22:04:54.992Z",
+      "treeId": "e0a016c04a3b85860abde26df6dc935693f550c0",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -204,16 +264,12 @@
     "CLAUDE.md",
     "packages/moe-daemon/src/state/candidateStore.test.ts"
   ],
-  "unattributedPaths": [
-    "docs/roles/architect.md",
-    "packages/moe-daemon/src/generated/initFiles.ts",
-    "scripts/tests/taskless-handoff.test.mjs"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-161b9959@2026-09-18T21:44:01Z",
-    "at": "2026-09-18T21:53:26.562Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-5e66a826@2026-09-18T21:57:22Z",
+    "at": "2026-09-18T22:04:54.992Z"
   },
   "reviewCompletedAt": "2026-09-18T22:03:47.727Z",
   "rejectionDetails": {

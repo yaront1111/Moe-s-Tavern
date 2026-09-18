@@ -686,7 +686,9 @@ wrapper lands it seconds after REVIEW) — verify task.commits / git log before 
 to `#governors`. The approval still landed (DONE).
 
 The warning is advisory. It fires when `settings.autoCommit` is on and no `task.commits` entry of kind
-`completion` was recorded at or after `task.reviewStartedAt`. Causes, in order of likelihood:
+`completion` was recorded in the current work round: at or after the latest rejection, else the first
+step start (`task.workStartedAt`), else `task.reviewStartedAt` (`completionCommitsForReview` in
+`delivery/policy.ts`). Causes, in order of likelihood:
 
 1. **The race**: QA approved within seconds of REVIEW, before the worker's CLI exited and the wrapper
    ran `record_commit`. Re-check `task.commits` a minute later — the wrapper lands the completion

@@ -763,7 +763,9 @@ export interface Task {
    * Git landings recorded for this task by moe.record_commit (newest last,
    * capped at MAX_COMMITS_PER_TASK). Survives qa_reject reopens — it is
    * history, not completion evidence; qa_approve looks for a completion
-   * commit recorded after `reviewStartedAt`.
+   * commit recorded in the current work round: at or after the most recent
+   * rejection, else the first step start (`workStartedAt`), else
+   * `reviewStartedAt` (completionCommitsForReview in delivery/policy.ts).
    */
   commits?: TaskCommit[];
   /** Paths explicitly declared via moe.declare_files (ASSERTED tier; governor/worker lever). */
