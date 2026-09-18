@@ -67,8 +67,13 @@ describe('runPostToolUseHook', () => {
   let wss: WebSocketServer;
   let port: number;
   let received: string[];
+  let prevProjectPath: string | undefined;
 
   beforeEach(async () => {
+    // The hook prefers MOE_PROJECT_PATH over input.cwd, and moe-agent sessions
+    // set it to the live project. Clear it so every case uses its fixture.
+    prevProjectPath = process.env.MOE_PROJECT_PATH;
+    delete process.env.MOE_PROJECT_PATH;
     received = [];
     server = createServer();
     wss = new WebSocketServer({ server });
@@ -84,6 +89,9 @@ describe('runPostToolUseHook', () => {
   });
 
   afterEach(async () => {
+    // Restore first so a failing close cannot strand the launcher's binding.
+    if (prevProjectPath === undefined) delete process.env.MOE_PROJECT_PATH;
+    else process.env.MOE_PROJECT_PATH = prevProjectPath;
     await new Promise<void>((resolve) => wss.close(() => resolve()));
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -100,6 +108,9 @@ describe('runPostToolUseHook', () => {
   });
 
   it('forwards moe.* tool events with the expected envelope', async () => {
+    // Pin for the beforeEach clear: a leaked launcher binding would send this
+    // event to that project's live daemon instead of the fixture.
+    expect(process.env.MOE_PROJECT_PATH).toBeUndefined();
     const project = makeProjectWithDaemon(port);
     const prev = process.env.MOE_WORKER_ID;
     process.env.MOE_WORKER_ID = 'worker-test';
