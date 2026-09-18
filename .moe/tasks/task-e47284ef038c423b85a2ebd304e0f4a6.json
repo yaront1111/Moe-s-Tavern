@@ -130,7 +130,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -188,11 +188,17 @@
       "author": "worker-f0cb282e",
       "content": "STEP 8 ADVERSARIAL SELF-REVIEW (worker-f0cb282e). The wrapper code is byte-identical to the 49ec-approved bytes (sh dee8d9eb, ps1 b6e0bf6a). My diff: 4 frozen modes plus 1 general assertion in both harnesses, 2 parity literals, and docs.\n\n(1) FENCE. finalize_attempt is sent only when .moe/attempts/<pinnedId>.json matches the pinned id, taskId, workerId and generation AND its phase is finalizing. The payload is the pin.\n- freed-generation-bump (same id, generation 8 vs the pinned 7): 0 finalize rows, one notice.\n- frozen stale-attempt: 0 rows.\n- New general check: every finalize row in the suite carries attempt-postflight/7.\nThis wrapper-side fence is the real guard, because the daemon's finalize_attempt never checks workerId.\n\n(2) RACE between the disk read and the RPC.\n- Once complete_task sets the attempt finalizing, a claim can no longer supersede it (758423de: claims refuse or skip a finalizing row). A hand-back close spares finalizing. So in practice nothing replaces the pinned attempt in that window.\n- If the attempt closes anyway (finalize_attempt, the worker's own deregister, task deletion; see ed5483d), finalizeAttempt.ts:202 returns idempotent success BEFORE the fence at :204.\n- Residual, accepted: a refusal (ATTEMPT_SUPERSEDED, ATTEMPT_NOT_FINALIZING, or task-not-found after a delete) counts as a failed try. After 3 tries the loop stops and deregister runs.\n- No codeName parsing was added: the RPC helpers drop error.data, and stopping is the safe direction because deregister_worker closes the worker's own finalizing attempts.\n\n(3) NO PIN + FINALIZING: the loop stops.\n- Acknowledging is wrong: the daemon fences only against the CURRENT attempt and never checks workerId, so a scanned identity could close a record this seat never pinned.\n- Continuing is wrong: claimNextTask refuses this worker's next claim with ATTEMPT_FINALIZING (:294) on every poll.\n- Stopping works: the exit path's deregister_worker closes the hold.\n- Covered by claim-missing and claim-malformed: WARN asserted, 0 rows.\n\n(4) CORRUPT FILES.\n- The pinned read opens one file. freed-corrupt-sibling: 0 rows, no notice, no `Attempt identity unavailable`.\n- The no-pin scan wraps each file in its own try (checkpoint-unpinned and manual-unpinned carry `zzz-broken.json`).\n- Deviation, accepted: the scan skips unreadable files silently, not by name. Attempt records are written by atomic temp-and-rename (attemptStore.ts:34), so a torn record is not a state the daemon produces, and ps1 never had such a line.\n- Candidate evidence still fails closed on any unreadable record. moe_attempt_read is byte-identical to 65b2702; Read-MoeAttempt changed only to store its reason.\n\n(5) ps1 BREAK. The plan's `$postflightBreak` does not exist; 49ec wired `$moeStopLoop` instead.\n- It is reset at :4408 and :5763, set by a failed Complete-MoePostflight at :5919, and breaks at :5969.\n- The outer finally (:5971) runs every cleanup: Stop-MoeGateChild; Invoke-MoeTeardownRescue (a no-op because $moeLandingDone is set); Complete-MoePostflight (returns at once because MoeFinalizeDone is set); gate workspace removal; live-marker removal; Invoke-MoeDeregister.\n- Proof: finalize-loss (3 rows, then the loop stops) is green on pwsh and PS 5.1. finalizing-acked-continues plus the ps1 mutant P2 show a successful acknowledgement never breaks the loop.\n\n(6) RESUME onto a reconciling or closed attempt.\n- The pre-flight pin fails with `Missing/stale attempt identity`, which is unchanged.\n- A checkpoint exit then finds no finalizing attempt and keeps claiming (checkpoint-reconciling, checkpoint-unpinned).\n- A gated completion in that state parks its bytes because evidence is unavailable (claim-missing). If complete_task left an unpinned finalizing attempt, `finalize refused` stops the seat and deregister clears the hold.\n\n(7) Ctrl+C mid-finalize. The plan's wording (\"re-enter the idempotent finalize\") is not what happens, and I am correcting it here.\n- MOE_FINALIZE_DONE / $script:MoeFinalizeDone is set BEFORE the RPC, so the EXIT trap or finally does NOT resend.\n- deregister_worker, which runs after the finalize slot, closes the worker's own finalizing attempts, so the hold is lifted and only the outcome text is lost.\n- This is 49ec's known residual, \"a lost finalize acknowledgement\".\n\n(8) HIDDEN DEFECT. The GitArgs second landing (task-32ecce5d) does not reproduce: finalize-loss is green on pwsh and PS 5.1 at the baseline and in every full run (root cause fixed in 65b2702). Its test-only guard stays on that card, which depends on this one.\n\nOther findings:\n- Harness fidelity: the fake get_commit_scope still reports the freed task as assigned, but neither wrapper uses the scope's assignedWorkerId in the landing (grep: parsed only), so the freed modes model everything the wrapper reads.\n- Docs: I dropped `qa_reject` from the TROUBLESHOOTING hand-back list. A worker seat is already unassigned at complete_task, so qa_reject never touches it.\n- Heartbeat flake, diagnosed, not this change. `Expected the heartbeat sidecar to ping at least twice ... got 1` hit two full sh runs and a scratch run with the frozen suite skipped. Cause: on this box python startup swings from about 60 ms to 1.3 s (%TEMP% holds 776,846 entries, and python with cwd=%TEMP% takes 1.2 s), and each ping spawns python twice.",
       "timestamp": "2026-09-18T11:09:58.044Z"
+    },
+    {
+      "id": "comment-8a8e7f925b9d426eac5562504d29ca52",
+      "author": "qa-a36819c3",
+      "content": "QA EVIDENCE (qa-a36819c3 / session moes-06), 2026-09-18 12:08-14:10Z. Approving. Everything below was run by me against an ISOLATED copy of the candidate bytes (/tmp/qa-e472-m06-…/cand = scripts/ at 750c050), never the shared checkout, because two peer seats were editing scripts/ during the review.\n\nBYTES REVIEWED\n- Completion commit 750c050, pushed, and still an ancestor of the branch tip. 14 paths: 4 scripts + 3 docs + 7 board records.\n- Wrappers are untouched by this card: sh dee8d9eb (= the 49ec-approved bytes), ps1 f8567dfd. NOTE the ps1 is NOT the b6e0bf6a the worker tested — df42861 (an unrelated hot-reload fix) landed at 11:57:57Z, after most of the worker's ps1 runs, so I re-ran the whole ps1 harness on the HEAD bytes.\n- The embedded frozen suite is byte-identical in postflight.sh and postflight.ps1: 33040 bytes, sha256 2dd93883973e. Committed blobs are LF-normalised (postflight.ps1 keeps its BOM); `git diff --check` clean.\n\nRED PROOF, run by me (one mode per run, 65b2702 pre-ladder wrappers + this card's harness)\n- freed-generation-bump: FAIL `the worker loop must go on claiming after this exit`; log shows `Attempt identity unavailable: stale identity`.\n- freed-corrupt-sibling: FAIL, same assertion; log shows `Attempt identity unavailable: Expecting property name enclosed in double quotes`.\n- freed-closed and finalizing-acked-continues pass there — they are guards, as the plan says.\n- All four pass on the candidate.\nMUTATION, run by me: sh ladder `closed|running) return 0` changed to `closed) return 1` turns freed-closed RED (`the worker loop must go on claiming`). So the guard is real, not decorative.\n\nFULL RUNS (candidate bytes)\n- `MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh`: rc=0 in 2773 s. `PASS frozen candidate scenarios: 50`, `commit-scope scenarios run: 28`, `PASS postflight.sh`.\n- pwsh 7.6.6 postflight.ps1: rc=0 in 406 s, 50 + 28, `PASS postflight.ps1`.\n- parity-check.sh PASS; parity-check.ps1 PASS on pwsh 7.6.6 and on PS 5.1. All three ps1 files parse with 0 errors on both engines.\n\nPARITY GUARD, proven by me: with `Attempt identity unavailable: ` and `Missing/stale attempt identity; candidate completion will fail closed.` reworded in a scratch sh wrapper, the PRE-change parity lists still PASS (that was the gap) and both new lists FAIL rc=1, naming both literals.\n\nFLAKE, diagnosed, NOT this card's defect. My first full sh run (timeout 180) failed at `checkpoint-unpinned` — a 49ec mode, untouched here. Signature `[loop supervisor] second claim=false exit=1 signal=null` is the supervisor's own deadline, (MOE_POSTFLIGHT_TIMEOUT_SEC-15)s, ending the wrapper with taskkill. Isolated reruns: FAIL, FAIL, PASS, each ~250 s for ONE mode against ~25 s earlier, while the box ran a moe-next vitest fan-out plus a peer's ps1 harness (CPU 68-93 %). At 400 s every loop mode passed. Recommendation for the next runner: loop modes need headroom, not a quiet box only — use MOE_POSTFLIGHT_TIMEOUT_SEC >= 400 when anything else is running. Also note %TEMP% now holds 781k entries and python with cwd=%TEMP% takes 2.7-3.2 s (was 1.2 s).\n\nDOCS, checked against the daemon source, not against the plan text\n- MCP_SERVER.md report_blocked freed arm matches reportBlocked.ts: no nextAction (:466), `sessionHandoff` END_SESSION only when the freed seat's worker holds no other task (:442), `blockResolution` (:457), and the ALL_STEPS_COMPLETE string is now byte-identical to :433.\n- DoD 4's \"interim sentence\": none ever landed. 2a7e0f5b's sentence says the opposite (the loop keeps going), which is correct, so keeping it is right.\n- TROUBLESHOOTING: both quoted benign lines exist in both twins (`Missing/stale attempt identity…` sh:5257 / ps1:1304); `grep -l '\"phase\": \"finalizing\"'` matches the daemon's pretty-printed attempt records on disk; deregister_worker really does close the worker's own finalizing attempts; both cross-referenced sections exist.\n\nACCEPTED DEVIATIONS (all pre-agreed in the plan or forced by 49ec having landed the fix)\n- DoD 1 says \"no longer assigned to this worker\"; the code keys on the pinned attempt's phase and exact identity instead. That is strictly safer: complete_task's own finalizing attempt sits on an already-unassigned task, so an assignment test would skip the one case that MUST be acknowledged.\n- freed-nopin and freed-reconciling were skipped (checkpoint-unpinned / checkpoint-reconciling cover the same ladder arms; the ladder never reads task status), and no commit-scope scenario was added, so that count stays 28.\n- Minor, not blocking: the frozen scenario count (50) is printed but never asserted, unlike the commit-scope 28. A future edit could drop a mode silently. Pre-existing.\n\nDUPLICATE SEAT during this review: two wrappers ran qa-a36819c3 (orphan 43956 with CLI moes-ea, and operator-launched 53600 with me). I yielded the decision to moes-ea and posted the pids to #general; the operator then killed all three orphan wrappers, and moes-ea died mid-verification, so the decision came back to me and I redid the verification myself. Nothing in this card is affected.",
+      "timestamp": "2026-09-18T14:08:41.552Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:53:40.916Z",
-  "updatedAt": "2026-09-18T12:03:19.570Z",
+  "updatedAt": "2026-09-18T14:10:31.369Z",
   "dependsOn": [
     "task-49ec8755a9ad4fa29c87294adf61804d",
     "task-2a7e0f5b3926471a8a26d999cae96ff4"
@@ -216,7 +222,9 @@
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 9,
     "firstClaimAt": "2026-09-18T08:48:49.115Z",
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-18T14:10:31.369Z",
+    "wallClockMs": 19302254
   },
   "planningNotes": {
     "approachesConsidered": "Corrected scope: the card's premise (a hand-back close of the seat's attempt ends the worker loop) is already false in task-49ec8755's design — both twins turn a pinned attempt that reads back closed into a no-op, and a running attempt never sends the RPC. What still ends the sh loop: a missing pin, a pinned record rewritten to reconciling or to another generation, and a corrupt attempt file for ANY task (the whole-glob parse in moe_attempt_read). In ps1 the opposite defect: $postflightBreak is never read, so a real exhausted acknowledgement does not stop the loop. Chosen rule: acknowledge only the seat's own FINALIZING attempt under its exact pinned identity, read from that one file; everything else is a no-op success; a finalizing attempt with no pin is never acknowledged and stops the loop. Rejected (from plan critique): an identity-blind taskId+workerId+phase scan that adopts whatever finalizing record it finds — it drops the generation fence, and because finalize_attempt never checks workerId and fences only against the CURRENT attempt, a stale runner could close a live runner's attempt. Rejected: keying on 'task no longer assigned to this worker' (DoD 1's wording) — complete_task's own finalizing attempt sits on an already-unassigned task. Rejected: per-file hardening of moe_attempt_read — it is the fail-closed gate for candidate evidence and a skipped corrupt record for THIS task would let a pin through. Rejected: parsing finalize error codeNames (the wrappers' RPC helpers discard error.data, and every supersede closes the old attempt first). Rejected: any daemon change (card rail).",
@@ -240,7 +248,8 @@
   "planApprovedAt": "2026-09-13T22:47:30.438Z",
   "contextFetchedBy": [
     "governor-9844430a",
-    "worker-f0cb282e"
+    "worker-f0cb282e",
+    "qa-a36819c3"
   ],
   "workStartedAt": "2026-09-18T08:49:12.676Z",
   "declaredFiles": [
@@ -269,7 +278,60 @@
     "scripts/tests/parity-check.ps1",
     "docs/CONFIGURATION.md",
     "docs/MCP_SERVER.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+    ".moe/tasks/task-686afecb5b844706be805f7cd86ba055.json",
+    ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+    ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+    ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json"
   ],
-  "completionSummary": "Wrapper-only. The card's premise had already been answered by task-49ec8755: both twins carry the exact-identity finalize ladder (sh finalize_attempt_rpc + moe_pinned_attempt_phase + moe_seat_finalizing_attempts; ps1 Send-MoeFinalize + Get-MoePinnedAttemptPhase + Find-MoeSeatFinalizingAttempts), and the ps1 loop stop is wired through $moeStopLoop, not the plan's $postflightBreak. Step 1 verified that line by line and the step-1 comment says what was skipped and why; the wrappers are untouched here (sha dee8d9eb / b6e0bf6a).\n\nTHE RULE THIS TASK LOCKS IN: the post-flight acknowledges only the seat's own FINALIZING attempt, under the identity pinned at claim time, read from that one record. Closed or running is a silent no-op; missing, reconciling, or any identity difference (a bumped generation included) logs `[finalize] no finalizing attempt for this seat on task <id>; nothing to acknowledge.` and the loop goes on; a finalizing attempt with NO pinned identity is never acknowledged and stops the loop; an exhausted acknowledgement stops the loop.\n\nDELIVERED\n1. Harnesses (the embedded suite stays byte-identical in postflight.sh and postflight.ps1): 4 new frozen --loop modes. Group [freed seat], FAKE_TASK_STATUS=BLOCKED, the seat-freeing report_blocked shape: freed-closed (the hand-back closed the attempt in place, DoD 3), freed-generation-bump, freed-corrupt-sibling. Each asserts a second claim, 0 candidate/check/finalize/gate rows, the notice count (1 for the bump, 0 otherwise), no `Attempt identity unavailable` line, and exactly one `wip(task-postflight) ... [status=BLOCKED` commit carrying the bytes. Group [finalizing seat]: finalizing-acked-continues, where one landed acknowledgement does not stop the loop. Plus a general assertion that every finalize row in the suite carries the pinned attempt-postflight/7.\n2. Parity: registered `Attempt identity unavailable:` and `Missing/stale attempt identity; candidate completion will fail closed.` in both lists.\n3. Docs: CONFI"
+  "completionSummary": "Wrapper-only. The card's premise had already been answered by task-49ec8755: both twins carry the exact-identity finalize ladder (sh finalize_attempt_rpc + moe_pinned_attempt_phase + moe_seat_finalizing_attempts; ps1 Send-MoeFinalize + Get-MoePinnedAttemptPhase + Find-MoeSeatFinalizingAttempts), and the ps1 loop stop is wired through $moeStopLoop, not the plan's $postflightBreak. Step 1 verified that line by line and the step-1 comment says what was skipped and why; the wrappers are untouched here (sha dee8d9eb / b6e0bf6a).\n\nTHE RULE THIS TASK LOCKS IN: the post-flight acknowledges only the seat's own FINALIZING attempt, under the identity pinned at claim time, read from that one record. Closed or running is a silent no-op; missing, reconciling, or any identity difference (a bumped generation included) logs `[finalize] no finalizing attempt for this seat on task <id>; nothing to acknowledge.` and the loop goes on; a finalizing attempt with NO pinned identity is never acknowledged and stops the loop; an exhausted acknowledgement stops the loop.\n\nDELIVERED\n1. Harnesses (the embedded suite stays byte-identical in postflight.sh and postflight.ps1): 4 new frozen --loop modes. Group [freed seat], FAKE_TASK_STATUS=BLOCKED, the seat-freeing report_blocked shape: freed-closed (the hand-back closed the attempt in place, DoD 3), freed-generation-bump, freed-corrupt-sibling. Each asserts a second claim, 0 candidate/check/finalize/gate rows, the notice count (1 for the bump, 0 otherwise), no `Attempt identity unavailable` line, and exactly one `wip(task-postflight) ... [status=BLOCKED` commit carrying the bytes. Group [finalizing seat]: finalizing-acked-continues, where one landed acknowledgement does not stop the loop. Plus a general assertion that every finalize row in the suite carries the pinned attempt-postflight/7.\n2. Parity: registered `Attempt identity unavailable:` and `Missing/stale attempt identity; candidate completion will fail closed.` in both lists.\n3. Docs: CONFI",
+  "commits": [
+    {
+      "sha": "750c050d961c0893e5190a80f92e0edbb5805594",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f0cb282e@2026-09-18T08:48:49Z",
+      "paths": [
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        ".moe/tasks/task-686afecb5b844706be805f7cd86ba055.json",
+        ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+        ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+        ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-f0cb282e",
+      "recordedAt": "2026-09-18T12:03:58.150Z",
+      "treeId": "16e3bdcae05027b93d8a5a0a07048f5ab4de92df",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/TROUBLESHOOTING.md",
+    "docs/MCP_SERVER.md",
+    "docs/CONFIGURATION.md",
+    "scripts/tests/postflight.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-f0cb282e@2026-09-18T08:48:49Z",
+    "at": "2026-09-18T12:03:58.150Z"
+  },
+  "completedAt": "2026-09-18T14:10:31.369Z",
+  "reviewCompletedAt": "2026-09-18T14:10:31.369Z",
+  "reviewSummary": "APPROVED. Candidate = completion 750c050 (pushed, ancestor of tip; 14 paths, no daemon change, LF blobs, diff --check clean). All runs are mine, on an isolated copy of 750c050's scripts/ (peers were editing scripts/ live). Full evidence: comment-8a8e7f92.\n\nDoD1: ladder at moe-agent.sh:2002-2064 / ps1:1384-1424 (landed by 49ec8755, untouched here). New freed-closed mode proves it: a BLOCKED seat-freeing exit whose attempt the hand-back closed gives 0 candidate/check/finalize/gate rows, one wip [status=BLOCKED commit with the bytes, no notice line, and a second claim. freed-generation-bump + freed-corrupt-sibling cover mismatch and corrupt sibling. Keying on attempt phase+identity, not DoD1's \"no longer assigned\" wording, is safer: complete_task's own finalizing attempt sits on an unassigned task.\nDoD2: existing finalize-loss - exactly 3 identical rows with the pinned attempt-postflight/7, then the loop stops.\nDoD3: freed case in BOTH harnesses (suite byte-identical, 33040 B). MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash postflight.sh rc=0 in 2773 s, frozen 50 + scope 28, PASS. pwsh 7.6.6 postflight.ps1 rc=0 in 406 s, 50+28, PASS - re-run because df42861 changed the ps1 after the worker's runs. parity-check.sh PASS; parity-check.ps1 PASS on pwsh and PS 5.1.\nDoD4: no interim \"loop ends\" sentence ever landed (2a7e0f5b's says the opposite, correctly). MCP_SERVER.md freed arm matches reportBlocked.ts :442/:457/:466/:433; TROUBLESHOOTING verified literal by literal against both twins.\nOld-behaviour rail: on the 65b2702 wrappers freed-generation-bump and freed-corrupt-sibling both FAIL \"the worker loop must go on claiming\"; green on the candidate. Mutants: sh closed->return 1 reddens freed-closed; reworded literals pass the OLD parity lists, fail BOTH new ones.\nFlake, not this card: my first sh run at 180 died in pre-existing checkpoint-unpinned on the supervisor deadline under 68-93% CPU; reruns FAIL/FAIL/PASS. Loop modes need >=400 on a busy box."
 }

@@ -16,8 +16,69 @@
     "Defects outside Wave 1 contract drift are filed as new tasks, not fixed here.",
     "Run the launcher harnesses sequentially; they flake under a busy fleet."
   ],
-  "implementationPlan": [],
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phase 1 — establish the gate's starting line. No repo edits in this step.\n\n(a) Prerequisite: task-bfe2f04e must be DONE and merged (it owns acceptance criterion 6 and the wrapper receipt path). Confirm with get_context epicSiblings or `git log --grep 'Moe-Task: task-bfe2f04e'`. Also note which Wave 1 cards are still in flight and therefore OFF LIMITS for fixes here: task-686afecb (finalizing close paths, including the stale claimGuards / deregister_worker / record_candidate texts), task-32ecce5d (ps1 harness guard), task-e47284ef (freed-seat finalize). Do not duplicate their work; a finding in their scope is noted and left to them.\n\n(b) Build the Wave 1 review surface, which the adversarial pass in step 7 consumes:\n- For each task id in this epic, `git log --format=%H --grep \"task-<short id>\"`; the union was 172 commits and 131 files when this plan was written.\n- Drop `.moe/**` and split the rest into: daemon src, both launcher scripts, both harnesses, docs, JetBrains, VS Code.\n- Review the CURRENT state of those files, not a 36k-line diff.\n\n(c) Baselines, recorded with exact counts and exit codes, BEFORE anything changes. Measured while planning, for comparison:\n- `cd packages/moe-daemon && npx vitest run src/delivery/acceptance.test.ts`: 6 tests, 4 passed, 2 skipped (criteria 5 and 6); criterion 4 takes about 1.5 s.\n- Criterion 5 was measured in a scratch copy with only `.skip` removed: it PASSES as shipped. So step 2 is an unskip plus verification, not a repair.\n- Also baseline: daemon `npm test` and `npx tsc --noEmit`; proxy `npm test`; claude-plugin `npm test`; `cd moe-jetbrains && ./gradlew test`; `cd moe-vscode && npm test && npm run compile`; `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`; `bash scripts/tests/parity-check.sh` and both ps1 twins from PowerShell.\n- If a baseline is already red before this card touches anything, say so in the step note and treat it as a finding for step 7, not as this card's regression.\n\nThe fleet is live and these harnesses flake under load (task rail 3, mem:moes-test-env-quirks). Take a quiet window; JetBrains needs GRADLE_OPTS=-Xmx512m when %TEMP% is large.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Phase 3 — all six acceptance cases unskipped and green (DoD 1).\n\nCriterion 6 arrives unskipped from task-bfe2f04e. This card unskips criterion 5, `refuses a late generation-1 release after the same worker re-claimed as generation 2` at packages/moe-daemon/src/delivery/acceptance.test.ts ~1852: change `it.skip(` to `it(` and update the stale `UNSKIP OWNER: task-b6c48bf0…` comment above it to record that its owner shipped and this gate unskipped it.\n\nNot one assertion, fixture or helper in that file may change. The only edits this card may make there are `.skip` removal and comment text; a diff showing anything else is a failure of this step.\n\nThen run `cd packages/moe-daemon && npx vitest run src/delivery/acceptance.test.ts` and require all six green. Criterion 6 drives the real wrapper and may take minutes; criteria 1-3 and 5 are sub-second and criterion 4 spawns a real daemon.\n\nIf criterion 5 or 6 fails here, that is exactly the contract drift this card exists to catch: diagnose it, fix it if it is drift between Wave 1 slices, and file it as a new task if it is not (task rail 2). Record the per-case durations in the step note — QA re-runs this command.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Phase 4a — the end-to-end pilot, success path (DoD 4, first half).\n\nWrite `scripts/tests/wave1-pilot.mjs`: a MANUAL, opt-in harness (never invoked by postflight.sh or CI) that runs the whole Wave 1 flow once against a throwaway project, with the REAL daemon, the REAL proxy and the REAL launcher — which is what no acceptance case does end to end. It exists so QA can re-run the pilot instead of trusting a transcript.\n\nShape:\n- Build first: `cd packages/moe-daemon && npm run build` and the same in packages/moe-proxy (the pilot runs dist/, and a stale dist would test yesterday's daemon). Note in the step report that a rebuilt dist only reaches the live fleet on its next daemon restart.\n- Create a temp project outside the repo, `git init` it with a fixed identity, a tracked gate script and one owned file, and write `.moe/project.json` with deliveryPolicy `local-branch`, a qualityGate, qualityGateScope everyTask, autoCommit true and a consolidationBranch.\n- Start the daemon on it (`node packages/moe-daemon/dist/index.js start --project <tmp>`), wait for `.moe/daemon.json` and GET /health.\n- Seed an epic and two tasks: A (WORKING, one step) and B with `dependsOn: [A]`.\n- Run `scripts/moe-agent.{sh,ps1}` for a worker seat with a fake CLI that edits the owned file and drives get_context / start_step / complete_step / complete_task through the real proxy.\n- Then a QA seat (or moe-call.sh) claims A for REVIEW and calls qa_approve with the candidate id the wrapper recorded.\n\nAssert, and print, each link of the chain: the claim opened attempt generation 1; complete_task left it finalizing and the row unassigned; a QA claim before the finalize is refused ATTEMPT_FINALIZING; the wrapper froze a candidate and ran the gate in a clean workspace (its check run is runner-observed, exit 0, bound to the candidate tree); the landing moved the target once; the receipt names that candidate with target before/after and the landed revision; finalize_attempt closed the attempt; qa_approve refused a superseded candidate id and accepted the current one; B was NOT claimable before A had its evidence and IS after.\n\nError handling: every external step is bounded by a timeout with the daemon log tail printed on failure, the daemon is stopped and the temp project removed in a finally, and the script exits non-zero on the first broken link rather than continuing. It must never touch the repository's own .moe/ or the live daemon's port — let the daemon pick its port and read it from the temp project's daemon.json.\n\nRecord the full transcript for the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/wave1-pilot.mjs"
+      ],
+      "newFiles": [
+        "scripts/tests/wave1-pilot.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Phase 4b — the pilot's forced gate failure (DoD 4, second half).\n\nRun the same pilot with the gate rigged to fail (a mode flag on the script, for example `--gate-fails`, that writes a gate script exiting non-zero on the delivered tree).\n\nAssert, and print: the wrapper recorded the candidate and a check run with the real non-zero exit code and source runner-observed; the delivery target did NOT move; the bytes are parked on a `refs/moe/rescue/<taskId>/<ts>` ref that still contains the edit; the failure is reported as MOE_COMMIT_FAILED_GATE with a PUSH-BLOCKED line; no delivery receipt exists; and B stays unclaimable — with the refusal naming the missing `required-check:<command>` evidence, not just an unmet status.\n\nThe last point is the drift this half is really probing: the wrapper sends the gate command it ran and delivery/policy.ts builds `required-check:<trimmed command>` for comparison. If the two spellings ever differ — by whitespace, quoting or platform — dependents are withheld from a PASSING gate and nothing says why. Assert the recorded check command and the policy token match exactly, on both the pass and the fail run.\n\nSame error handling as the success run: bounded, self-cleaning, non-zero on the first broken link. Record the transcript.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/wave1-pilot.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Phase 5 — the full regression (DoD 2 and 3), sequentially, on a quiet box.\n\n1. `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`.\n2. `cd packages/moe-proxy && npm test`.\n3. `cd packages/moe-claude-plugin && npm test`.\n4. `cd moe-jetbrains && ./gradlew test` (GRADLE_OPTS=-Xmx512m if the client OOMs on a large %TEMP%; \"Could not receive a message from the daemon\" is that, not a test failure).\n5. `cd moe-vscode && npm test && npm run compile`.\n6. `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` from Git Bash (about 36 minutes; background it and read the tail), then `bash scripts/tests/parity-check.sh`.\n7. The ps1 twins of 6, launched from PowerShell under both pwsh and powershell.exe (mem:gotcha-ps-harness-ctrlc-from-git-bash).\n\nRecord every command, exit code and count next to its step-1 baseline. A count that moved without a change in this card is a finding for step 7. Re-run a flaky suite ALONE before concluding, and never paper over a real failure: the epic rail says a quiet build is not evidence, and neither is a green rerun after an unexplained red.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Phase 6 — the documentation sweep (DoD 5), describing the surfaces as SHIPPED.\n\nMeasured while planning: docs/ARCHITECTURE.md (185 lines) mentions none of attempt, candidate, check run, receipt or deliveryPolicy — it still describes the pre-Wave-1 system. docs/CONFIGURATION.md mentions receipts twice and deliveryPolicy once. docs/SCHEMA.md and docs/MCP_SERVER.md already carry the records and tools; verify rather than rewrite them.\n\n- docs/ARCHITECTURE.md: one Wave 1 section — the six records (plan revision, execution attempt, candidate, check run, review, delivery receipt), who writes each (daemon versus wrapper), and the two invariants that make the path work: the daemon is state-only and never runs git, and the wrapper is the only git and process actor. Name where each record lives under .moe/.\n- docs/CONFIGURATION.md: deliveryPolicy's five values and what each requires of DONE, the qualityGate/qualityGateScope pair, and the receipt/journal behaviour the wrapper now has.\n- docs/SCHEMA.md and docs/MCP_SERVER.md: verify each record's fields and each tool's refusals against the code, and fix only what drifted. Leave the stale texts task-686afecb owns (claimGuards' 'Two callers refuse', deregister_worker's description, record_candidate's comment) to that card — say so in the step note so QA does not read it as a miss.\n- Check docs/MCP_SERVER.md for a live peer before editing: it has been contested twice in this epic. If the landing skips it, say so in the completion summary rather than leaving it silently unlanded.\n\nRegenerate nothing by hand: if a doc is mirrored into packages/moe-daemon/src/generated/, run the package's prebuild instead and say which files it rewrote.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Phase 7 — the adversarial pass over the whole epic diff (DoD 6). Work the surface from step 1 with this checklist; record EVERY finding with file:line and a verdict of fixed-here or filed, and name the new task id for each filed one (task rail 2).\n\n1. Revision-shape drift, the one that already bit once (task-9e851d4e reopen 1): candidateStore's 7-40 hex SHA_RE, receiptStore's exactly-40, checkRunStore, deliveryProjection, finalizeAttempt's case-insensitive 40, and both wrappers' own checks. Trace one short (7-hex) candidate treeSha end to end and one uppercase revision; anywhere a producer is laxer than its consumer is drift.\n2. Two builders for one code name: claimGuards.attemptFinalizingRefusal and claimEligibility.foreignFinalizingRefusal both raise ATTEMPT_FINALIZING. Confirm identical context keys and the retryable flag, and that the wire form (McpAdapter forwards only {tool, codeName}) still names the held attempt in the message.\n3. Registry and dispatch: every Wave 1 tool is in getTools() exactly once, none of the new ones sets blocking:true by accident, and each holds the mutex the way its store expects.\n4. Durable-first order in all six stores: persist before publish, and no partial transition left unrepaired. A store that emits before it writes is drift against the epic's architecture note.\n5. Evidence producers versus consumers: the wrapper's recorded check command versus policy.ts's required-check token (step 4 proves it at runtime); the attempt outcomes the wrapper sends (landed / nothing-to-commit / rescued / failed) versus what finalize_attempt accepts; the candidate fields the wrapper freezes versus what qa_approve binds and deliveryProjection serves.\n6. Duplicated helpers: SHA validators, id generators, revision comparators, 'is this task's evidence sufficient' logic. One rule, one home — anything copied is either deleted here or filed.\n7. Combined-failure paths no single slice could test: a gate failure plus a QA claim; a daemon restart between candidate and check run; a receipt refused while the attempt is finalizing; autoCommit=false and manual/no-git projects across the whole chain (epic rail 5).\n8. Client contracts: the JetBrains parser and presentation against deliveryProjection's served fields; VS Code untouched — confirm nothing serves it a field it will choke on.\n\nOnly Wave 1 contract drift is fixed here, and a fix lands with a test that fails on the old behaviour (epic rail 4). Everything else is filed with moe.create_task, including anything found in the three in-flight cards' scope. Keep this card inside its file budget: if a fix would touch more than a couple of files, file it instead and say why.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-8",
+      "description": "Phase 8 — self-review, then complete. Answer in ONE task comment:\n1. The six acceptance cases: their per-case results and durations, plus a diff summary of acceptance.test.ts proving only `.skip` and comments changed since they were authored.\n2. The pilot: both transcripts, with the chain links named — attempt opened, finalizing held, candidate frozen, gate run clean, landing moved the target once, receipt recorded, attempt closed, approval bound to the current candidate, dependent released only then; and for the failure run, no ref move, a rescue ref holding the bytes, no receipt, dependent still withheld with the missing check named.\n3. The regression table: every suite, its baseline count and its count now, with any movement explained.\n4. The adversarial findings: each with file:line, verdict, and the filed task id where applicable. Say plainly if the answer is 'none found' for a checklist item — an unexamined item is not a passed one.\n5. What this gate did NOT cover: provider modes other than the pilot's, platforms other than this box (the acceptance case exercises the ps1 wrapper on Windows and the sh twin's proof is its postflight arms), and any suite that could not be run.\n6. Would I be embarrassed if this shipped? Name the weakest link in the Wave 1 chain as it stands and whether it is filed.\n\nThen: delete any scratch tree (unlink junctions first), confirm the repo carries no leftover build or fixture debris, call moe.declare_files for exactly what this card touched, and moe.complete_task with verification `{ command: 'cd packages/moe-daemon && npx vitest run src/delivery/acceptance.test.ts', exitCode: 0, outputTail }` plus a summary carrying the regression counts and both pilot transcripts.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -38,6 +99,37 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:04:10.992Z",
-  "updatedAt": "2026-09-18T11:56:47.289Z",
-  "planRevision": 0
+  "updatedAt": "2026-09-18T12:13:10.030Z",
+  "planRevision": 1,
+  "metrics": {
+    "firstClaimAt": "2026-09-18T12:08:02.975Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-aa5a6c1e"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T12:13:09.953Z",
+  "planningNotes": {
+    "approachesConsidered": "Measured while planning, so the plan states facts rather than guesses:\n- The acceptance suite today is 4 passed, 2 skipped (criteria 5 and 6).\n- Criterion 5 was run in a scratch copy with only `.skip` removed: it PASSES as shipped, so DoD 1 is an unskip plus verification. Criterion 6 arrives from task-bfe2f04e.\n- The Wave 1 surface is 172 commits over 131 files (about 40 outside .moe/), so the adversarial pass reviews the current state of those files by contract, not a 36k-line diff.\n- docs/ARCHITECTURE.md has zero Wave 1 content; CONFIGURATION.md is thin on receipts and deliveryPolicy; SCHEMA.md and MCP_SERVER.md already carry the records and tools and only need verification.\n\nThe pilot is committed as a manual script rather than run by hand: QA has to be able to re-run the epic's only end-to-end evidence, and a transcript alone cannot be re-run. It is explicitly NOT wired into postflight.sh or CI, because it builds dist/, starts a real daemon and needs a quiet box — exactly the properties that make a suite flaky.\n\nRejected: extending the acceptance suite with a seventh case. Its cases are held-out and this card may not author assertions for the surfaces it is gating. Rejected: fixing the stale texts task-686afecb owns — they are that card's scope and doing them here would collide. Rejected: fixing anything found that is not Wave 1 contract drift; the card's own rail says file it.",
+    "codebaseInsights": "- Wave 1's six records live in state/{attemptStore,candidateStore,checkRunStore,reviewStore,receiptStore}.ts plus deliveryProjection.ts, with delivery/policy.ts as the single authority for deliveryPolicy.\n- The revision-shape question already caused one reopen (task-9e851d4e): candidateStore validates 7-40 hex, receiptStore and finalizeAttempt want exactly 40, and deliveryProjection had to be repaired to share candidateStore's regex. That is the highest-yield drift lane.\n- ATTEMPT_FINALIZING is raised by two builders on purpose (worker-scoped in claimGuards, task-scoped in claimEligibility); their context shapes must stay identical because both cross the same wire.\n- The wrapper records a check run whose `command` is the configured qualityGate, and delivery/policy.ts compares it against `required-check:<command>`; a whitespace or quoting difference silently withholds every dependent. No existing test crosses that boundary with the real daemon — the pilot does.\n- Criterion 4 already spawns a real daemon, and criterion 6 runs the real wrapper against a fixture transport, but nothing today runs daemon + proxy + wrapper together, which is what the pilot adds.\n- Three Wave 1 cards are still in flight (task-686afecb, task-32ecce5d, task-e47284ef); their files and stale texts are off limits here.",
+    "risks": "1. The gate depends on task-bfe2f04e landing first; until then criterion 6 stays skipped and DoD 1 cannot be met.\n2. The launcher harnesses and the pilot need a quiet box; the fleet is live and these flake under load. postflight.sh alone is about 36 minutes.\n3. The pilot builds packages/moe-daemon/dist and packages/moe-proxy/dist in the shared checkout. The running daemon keeps its loaded bytes, but the next fleet restart picks the new ones up — say so in the step report.\n4. The pilot must never touch the repository's own .moe/ or the live daemon's port: temp project, daemon-chosen port, everything removed in a finally.\n5. docs/MCP_SERVER.md is contested and has been skipped by two landings in this epic; verify the path is in task.commits afterwards.\n6. Scope pressure: an adversarial pass finds things. Only Wave 1 contract drift is fixed here, each with a red-first test; everything else is filed, and a fix that would sprawl past a couple of files is filed too.\n7. On this box the acceptance suite exercises the ps1 wrapper; the sh twin's coverage comes from its postflight arms. State that limit rather than implying full platform coverage.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/state/receiptStore.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T12:13:10.030Z"
 }
