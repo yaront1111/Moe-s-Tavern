@@ -115,8 +115,8 @@
       "completedAt": "2026-09-18T21:42:30.094Z"
     }
   ],
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-5e66a826",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -155,7 +155,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:04:10.992Z",
-  "updatedAt": "2026-09-18T23:15:50.181Z",
+  "updatedAt": "2026-09-18T23:38:18.277Z",
   "planRevision": 34,
   "metrics": {
     "firstClaimAt": "2026-09-18T12:08:02.975Z",
@@ -163,7 +163,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 16,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-18T23:38:18.277Z",
+    "wallClockMs": 41415302
   },
   "contextFetchedBy": [
     "worker-161b9959",
@@ -494,7 +496,7 @@
       "reason": "Confirmed crash: qa-a36819c3 died in the machine reboot at 20:03:53Z (LastBootUpTime); no wrapper or CLI process survives. The daemon restart hold was keeping the REVIEW row until ~22:04Z. Human approved the force release."
     }
   ],
-  "reviewCompletedAt": "2026-09-18T21:22:34.632Z",
+  "reviewCompletedAt": "2026-09-18T23:38:18.277Z",
   "rejectionDetails": {
     "failedDodItems": [
       "docs/SCHEMA.md, docs/MCP_SERVER.md, docs/ARCHITECTURE.md and docs/CONFIGURATION.md describe the attempt, candidate, check run, review, receipt and deliveryPolicy surfaces as shipped"
@@ -623,5 +625,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-18T23:38:18.277Z",
+  "reviewSummary": "Round 2, docs-only. Completion aee5fc4 is pushed and was recorded at 21:43:30Z, after the 21:22:34Z rejection. The task has no candidate.\n\nDoD 5: all 11 rejected items are fixed. I checked each new or changed sentence in the 4 docs against the code:\n- Candidate, CheckRun and Receipt are recorded only for gated completions (ps1:3950/4038, sh:3966).\n- The gate conditions include MOE_DISABLE_QUALITY_GATE (ps1:1992, sh:7126), and ps1 now trims (f1399a3).\n- The daemon's only git call is diskState.ts:57.\n- An explicit claim is refused, while the ranked pool and wait_for_task skip the row (claimNextTask.ts:405/458, waitForTask.ts:178-185). The wrappers' claims carry no taskId.\n- dependsOn gates WORKING claims only (claimEligibility.ts:39). blockedOnTaskIds uses the same evidence predicate.\n- A Review is written only when the task has a candidate, with the NO-REVIEWED-CANDIDATE warning (reviewStore.ts:228-245, qaApprove, qaReject).\n- The REVIEW self-heal closes running or reconciling attempts (sweeps.ts:475, HANDED_BACK_PHASES).\n- finalize_attempt answers a closed attempt before the fence (finalizeAttempt.ts:196). complete_task can move reconciling to finalizing.\n- The no-gate finalize outcome is nothing-to-commit.\n- requiredCheckAtDone is snapshotted at qaApprove.ts:226 and cleared on reopen.\n- Board and set_task_status reopens write no rejectionHistory.\nThe remaining pre-Wave-1 \"never runs git\" lines are filed as task-16aac8b4.\n\nRe-run on a clean export of HEAD 63fda1d:\n- Acceptance: 6/6 (c1 302 ms, c6 7137 ms). Since b5925e2, acceptance.test.ts differs only by the 6 skip toggles.\n- Daemon suite: 2147/2148. The one failure is the checkRunStore case-id test added by in-flight task-dad7eda4's WIP commit 3adfc6c. That test is absent at aee5fc4, so the failure does not come from this card.\n- taskTimeBudgetDocs 17/17, qaCommitPolicy 6/6, npm run lint exit 0.\n\nDoD 1-4 and 6 still stand from round 1 (comment-61f95d16). Round 2 changed no code."
 }
