@@ -64,7 +64,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,20 +96,29 @@
       "author": "worker-f0cb282e",
       "content": "WORKER EVIDENCE (worker-f0cb282e, 2026-09-18). Extends architect comment-84586d95.\n\n1. ROOT CAUSE (DoD 2)\n- The empty value was the frozen candidate tree: `$built.Tree` in Invoke-MoeLanding, which is also `$script:MoeFrozen.Tree`.\n- Why only on iteration 2: ps1 Build-MoeTempIndexTree fills `.Tree` only when the private index differs from the tip. Its early returns `if ($landed.Count -eq 0) { return $res }` and `if (-not $res.Changed) { return $res }` leave Tree=''. In finalize-loss, the second claim of the same task re-presented the bytes that iteration 1 had already landed, so Changed=$false and Tree=''. It was not a stale loop variable: MoeFrozen and MoeLandingResult are reset every iteration.\n- How it failed: the gate branch froze '', so New-MoeFrozenCandidate ran `commit-tree ''`. Invoke-MoeGit's mandatory `[string[]]$GitArgs` rejects an empty element: \"Cannot bind argument to parameter 'GitArgs' because it is an empty string.\" The landing catch logged \"landing failed ...; baseline kept.\" The finally's rescue reused Tree='' and threw the same error, so nothing landed and nothing was rescued.\n- Fixed in 65b2702 (task-49ec8755's first landing). The gate branch write-trees the private index before the freeze (moe-agent.ps1 :3842-3844 at 9221738).\n- The fix does not mask anything: it uses the real tree, not a default. An unchanged completion freezes the tip's own tree, the gate checks exactly what is on the branch, and the landing reports MOE_COMMIT_NOTHING_TO_COMMIT.\n- The sh twin write-trees unconditionally (land_plumbing :3845) and was never affected.\n- This card changes no wrapper. Leak check: all 3 ps1 fix lines are present in the repo, the sh line is present, the mutant line counts 0, and the peer WIP diff in moe-agent.* touches no write-tree line.\n\n2. RED/GREEN, mode loop-land-twice alone, MOE_POSTFLIGHT_TIMEOUT_SEC=180\nMutants (scratch only):\n- ps1: delete the 3 write-tree lines.\n- sh: `if [ \"$changed\" = true ]; then tree=$(...write-tree...); else tree=\"\"; fi` (the ps1 builder's contract).\n\n| engine | mutant, fix removed | real wrappers |\n| pwsh 7.6.6 | RED (1) | PASS 11 s |\n| PS 5.1 | RED (1) | PASS 12 s |\n| bash | RED (1) | PASS 58-63 s |\n\nThe first failing assertion is identical on all three engines: finals deepEqual, actual [landed, failed], expected [landed, nothing-to-commit, landed].\n- ps1 logs carry both exact card lines, and the loop stops with no 4th claim.\n- sh logs `parked on no rescue ref (nothing to rescue) -- stopping the worker loop`; the kept fixture shows `failed MOE_COMMIT_FAILED_GATE` with no candidate 2.\n- RED holds on both the f8ecb8e and the 9221738 wrappers.\n\n3. COVERAGE GAP CLOSED\nSince e47284ef, finalize-loss stops after iteration 1, so no case ran two landings in one loop.\nloop-land-twice makes 3 claims:\n- claim 1 lands;\n- claim 2 re-presents claim 1's landed bytes and gets nothing-to-commit, with a candidate on the tip's real tree. This is the RED shape; the case asserts candidate 2 base = landed 1 and tree = landed1^{tree}.\n- claim 3 lands.\nWhy three claims: two changed claims are not RED on the pre-fix code, and two claims with a re-present cannot show two landed commits.\nThe case also asserts: ledger committed / nothing (MOE_COMMIT_NOTHING_TO_COMMIT) / committed; 3 candidates; checks [0,0,0]; gate bytes 1/1/3; exactly two feat(task-postflight) commits with HEAD~1 = landed 1; no rescue refs; none of the three error strings in the log; one worktree left; gate workspaces deleted.\n\n4. TIMING\n- Only the marker is asserted. Claim 4 answers idle and the supervisor stops at the marker. A 5th claim that races the stop is also idle, so it launches no CLI and writes no rows.\n- sh: gates at 14:24:48, 14:25:09 and 14:25:29, about 20 s per gated iteration. The whole mode takes 58-63 s against the 165 s supervisor deadline.\n- This is the longest loop mode, so it is the first to hit the deadline under heavy load; MOE_POSTFLIGHT_TIMEOUT_SEC is the documented remedy.\n\n5. ISOLATION\n- With FAKE_CLAIM_LIMIT unset, claimLimit = (FAKE_CLAIM_ONCE==='1' ? 1 : 0), exactly the old gate, and the old loop modes keep FAKE_CLAIM_ONCE=1.\n- Full runs:\n  - bash postflight.sh: RC=0 in 37.7 min, frozen 58 (57 at 9221738 + 1), scope 28.\n  - pwsh: rc=0 in 374 s, 58 + 28.\n  - PS 5.1: rc=0 in 385 s, 58 + 28.\n  - parity-check.sh PASS; parity-check.ps1 PASS on pwsh and on PS 5.1.\n\n6. TWINS IDENTICAL\n- +37/-6 per file; the added and removed lines are identical across the twins.\n- The embedded frozen suite is byte-identical: 549 lines, 0 differences.\n- The fake proxies already differed in layout at HEAD; my 4 proxy lines are identical.\n- LF kept, and the ps1 BOM kept.\n\n7. SHARED-TREE NOTE\n- bfe2f04e's completion 997c850 skipped its 6 scripts paths as contested-untouched; QA self-landed them as 9221738. I Edit-ed the repo harnesses only after that.\n- task-5e096de9 (worker-d0c3b06e) then wrote WIP on top of my hunks, including a runner-identity assertion that needs its own uncommitted wrappers. We agreed by SendMessage that it parks its two harness files while my completion lands. My commit should therefore carry only these 43 lines, and the full sh run was done on an isolated HEAD+patch copy.",
       "timestamp": "2026-09-18T16:05:57.201Z"
+    },
+    {
+      "id": "comment-1bec399f2446464e9127aab93d6be560",
+      "author": "qa-a36819c3",
+      "content": "QA (qa-a36819c3), 2026-09-18: APPROVED. All runs are mine, on an isolated copy of HEAD 462c665's scripts/ (43 files via git show, cmp-equal to the blobs). The repo scripts/ carries WIP from peers 5e096de9 and 808869c5, so I did not run from it.\n\nBYTES\n- Completion 462c665 is pushed (it is an ancestor of origin/moe/work-2026-09-13).\n- It touches 4 paths: postflight.{sh,ps1} at +37/-6 each, its own task json, and bfe2f04e's json. The bfe2f04e change is a daemon ledger row for the DONE sibling, which is board state.\n- The 43 added/removed lines are byte-identical across the two twins. Both files are LF; the ps1 keeps its BOM.\n- The committed harness sha256 prefixes are 86d73f4b (sh) and 206b110d (ps1), which match the worker's tested bytes.\n- No peer hunks were swept in. The two Moe-Contested trailers (5e096de9) are the expected ones.\n- The peer's restored WIP in the working tree still contains this task's hunks.\n- No forbidden patterns.\n\nDoD 1, RED/GREEN, MOE_FROZEN_TEST_ONLY=loop-land-twice, MOE_POSTFLIGHT_TIMEOUT_SEC=180, ps1 launched from PowerShell. Mutants were my own:\n- ps1: the 3 gate-branch write-tree lines deleted.\n- sh: write-tree only when changed=true.\n- Each anchor matched once, and only those lines differed.\n\nResults:\n- pwsh 7.6.6: mutant rc=1 in 6 s. Finals are actual [landed, failed], expected [landed, nothing-to-commit, landed]. The log has both exact card lines: \"landing failed ... Cannot bind argument to parameter 'GitArgs' because it is an empty string.; baseline kept.\" and \"rescue ref failed ...\". Pristine rc=0, PASS 1, 11 s.\n- PS 5.1.26100: mutant rc=1 in 7 s, same finals, both lines. Pristine rc=0 in 12 s.\n- bash: mutant rc=1 in 51 s, same finals, \"parked on no rescue ref (nothing to rescue) -- stopping the worker loop\". Pristine rc=0 in 78 s, while two peer sh harnesses ran alongside, against a 165 s supervisor deadline.\n\nDoD 2:\n- comment-84586d95 and comment-03870b14 name the empty value: the frozen candidate tree, $built.Tree / $script:MoeFrozen.Tree. Build-MoeTempIndexTree returns Tree='' from its unchanged early return, and claim 2 re-presented bytes that had already landed.\n- The fix at HEAD (moe-agent.ps1 :3842-3844) write-trees the private index and throws 'candidate write-tree failed' on an rc or empty-output failure. It uses the real tree with no default, so nothing is masked.\n- sh land_plumbing :3845 write-trees unconditionally.\n\nDoD 3:\n- The bash twin has the same mode; see above.\n- parity-check.sh rc=0 PASS.\n- parity-check.ps1 rc=0 PASS on pwsh and on PS 5.1.\n\nDoD 4, full runs at MOE_POSTFLIGHT_TIMEOUT_SEC=180:\n- pwsh postflight.ps1: rc=0 in 361 s, 16:17Z. \"PASS frozen candidate scenarios: 58\" (57 at 9221738, plus 1), \"commit-scope scenarios run: 28\", \"PASS postflight.ps1\".\n- bash postflight.sh: RC=0 in 2531 s, 16:23:20Z-17:05:30Z. frozen 58, scope 28, \"PASS postflight.sh\".\n- The box was not fully quiet: peer sh harnesses from 5e096de9 and 808869c5 overlapped. There were no flakes and no reruns.\n- I did not rerun the full PS 5.1 harness; the DoD names pwsh. PS 5.1 is covered by the mode-alone RED/GREEN and by parity.\n\nReview notes, not defects:\n- FAKE_CLAIM_LIMIT unset gives claimLimit = (ONCE==='1' ? 1 : 0), which is the old gate.\n- A missing claim-count throws in the fake CLI, so the case fails loudly.\n- loop-land-twice is correctly kept out of loopModes and noFinal.\n\nCleanup: 0 leftover processes. The repo wrappers show the mutant signature 0 times and still carry the fix lines. The scratch tree is deleted.",
+      "timestamp": "2026-09-18T17:06:01.942Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T22:47:29.952Z",
-  "updatedAt": "2026-09-18T16:10:26.254Z",
+  "updatedAt": "2026-09-18T17:06:08.644Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T04:56:44.550Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-09-18T17:06:08.644Z",
+    "wallClockMs": 43764094
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
-    "worker-f0cb282e"
+    "worker-f0cb282e",
+    "qa-a36819c3"
   ],
   "stepsCompleted": [
     "step-1",
@@ -146,7 +155,53 @@
   },
   "filesModified": [
     "scripts/tests/postflight.sh",
-    "scripts/tests/postflight.ps1"
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+    ".moe/tasks/task-bfe2f04ea25941cbbeaa9d07bd4dc1e7.json"
   ],
-  "completionSummary": "Tests-only guard for the ps1 second-landing empty-GitArgs defect. There is no wrapper change: the fix is 65b2702 (task-49ec8755), where the gate branch write-trees before the freeze. Root cause: comment-84586d95. Evidence for DoD 2: comment-03870b14.\n\nThe empty value was the frozen candidate tree ($built.Tree / $script:MoeFrozen.Tree). Build-MoeTempIndexTree returns Tree='' for an unchanged index. finalize-loss iteration 2 re-presented bytes that had already landed, so the freeze ran commit-tree '' and the mandatory [string[]]$GitArgs threw.\n\nDelivered in scripts/tests/postflight.{sh,ps1} (+37/-6 each, identical text in both, frozen suite byte-identical):\n- FAKE_CLAIM_LIMIT beside FAKE_CLAIM_ONCE.\n- New frozen --loop mode loop-land-twice: claim 1 lands; claim 2 re-presents and gets nothing-to-commit, with candidate 2 on the tip's real tree; claim 3 lands; claim 4 is idle.\n- It asserts finals [landed, nothing-to-commit, landed], ledger committed/nothing/committed, 3 candidates and checks, 2 feat commits, no rescue refs, and no \"Cannot bind argument\" in the log.\n\nRED on the mutants (the 3 ps1 write-tree lines deleted; sh write-tree only when changed), on pwsh 7.6.6, PS 5.1 and bash:\n- actual [landed, failed], expected [landed, nothing-to-commit, landed];\n- the ps1 logs carry both exact GitArgs lines;\n- holds on the f8ecb8e and 9221738 wrappers.\n\nGREEN:\n- bash postflight.sh RC=0, frozen 58 (57 + 1) + scope 28;\n- pwsh postflight.ps1 rc=0 in 374 s, 58 + 28;\n- powershell 5.1 postflight.ps1 rc=0 in 385 s, 58 + 28;\n- parity-check.sh PASS; parity-check.ps1 PASS on pwsh and on PS 5.1.\n\nLanding note: task-5e096de9 had WIP on top of my hunks in these two files (runner-identity asserts that need its uncommitted wrappers). By agreement, worker-d0c3b06e parked it in D:/moe-t5e09-harness-hold/, so this completion should carry exactly the 37/6 lines per file. It restores its files once feat(task-32ecce5d) lands."
+  "completionSummary": "Tests-only guard for the ps1 second-landing empty-GitArgs defect. There is no wrapper change: the fix is 65b2702 (task-49ec8755), where the gate branch write-trees before the freeze. Root cause: comment-84586d95. Evidence for DoD 2: comment-03870b14.\n\nThe empty value was the frozen candidate tree ($built.Tree / $script:MoeFrozen.Tree). Build-MoeTempIndexTree returns Tree='' for an unchanged index. finalize-loss iteration 2 re-presented bytes that had already landed, so the freeze ran commit-tree '' and the mandatory [string[]]$GitArgs threw.\n\nDelivered in scripts/tests/postflight.{sh,ps1} (+37/-6 each, identical text in both, frozen suite byte-identical):\n- FAKE_CLAIM_LIMIT beside FAKE_CLAIM_ONCE.\n- New frozen --loop mode loop-land-twice: claim 1 lands; claim 2 re-presents and gets nothing-to-commit, with candidate 2 on the tip's real tree; claim 3 lands; claim 4 is idle.\n- It asserts finals [landed, nothing-to-commit, landed], ledger committed/nothing/committed, 3 candidates and checks, 2 feat commits, no rescue refs, and no \"Cannot bind argument\" in the log.\n\nRED on the mutants (the 3 ps1 write-tree lines deleted; sh write-tree only when changed), on pwsh 7.6.6, PS 5.1 and bash:\n- actual [landed, failed], expected [landed, nothing-to-commit, landed];\n- the ps1 logs carry both exact GitArgs lines;\n- holds on the f8ecb8e and 9221738 wrappers.\n\nGREEN:\n- bash postflight.sh RC=0, frozen 58 (57 + 1) + scope 28;\n- pwsh postflight.ps1 rc=0 in 374 s, 58 + 28;\n- powershell 5.1 postflight.ps1 rc=0 in 385 s, 58 + 28;\n- parity-check.sh PASS; parity-check.ps1 PASS on pwsh and on PS 5.1.\n\nLanding note: task-5e096de9 had WIP on top of my hunks in these two files (runner-identity asserts that need its uncommitted wrappers). By agreement, worker-d0c3b06e parked it in D:/moe-t5e09-harness-hold/, so this completion should carry exactly the 37/6 lines per file. It restores its files once feat(task-32ecce5d) lands.",
+  "commits": [
+    {
+      "sha": "462c66539816c3421aedd92e6ef97cc232df4388",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f0cb282e@2026-09-18T14:10:58Z",
+      "paths": [
+        ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+        ".moe/tasks/task-bfe2f04ea25941cbbeaa9d07bd4dc1e7.json",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-f0cb282e",
+      "recordedAt": "2026-09-18T16:10:45.816Z",
+      "treeId": "cd53e0b0384fb62f33e29fc8f35888fc77475570",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-f0cb282e@2026-09-18T14:10:58Z",
+    "at": "2026-09-18T16:10:45.816Z"
+  },
+  "completedAt": "2026-09-18T17:06:08.644Z",
+  "reviewCompletedAt": "2026-09-18T17:06:08.644Z",
+  "reviewSummary": "APPROVED. Full evidence is in comment-1bec399f. All runs are mine, on an isolated copy of HEAD 462c665's scripts/.\n\nBytes: completion 462c665 is pushed. It changes 4 paths: postflight.{sh,ps1} at +37/-6 each, whose 43 added/removed lines are identical in both twins, plus 2 board task jsons. The harness hashes match the worker's tested bytes (86d73f4b / 206b110d) and no peer hunks were swept in.\n\nDoD1: loop-land-twice alone, my own mutants (the 3 ps1 write-tree lines deleted; sh write-tree only when changed):\n- RED on pwsh 7.6.6, PS 5.1 and bash: finals [landed, failed] vs [landed, nothing-to-commit, landed].\n- The ps1 logs carry both exact \"Cannot bind argument to parameter 'GitArgs'\" lines.\n- Pristine PASS on all three engines.\n\nDoD2: comments 84586d95/03870b14 name the empty value: the frozen candidate tree $built.Tree, because Build-MoeTempIndexTree returns Tree='' on an unchanged index and claim 2 re-presented landed bytes. The HEAD fix (ps1 :3842-3844) write-trees the real tree and throws on failure, so nothing is masked.\n\nDoD3: parity-check.sh PASS; parity-check.ps1 PASS on pwsh and on PS 5.1.\n\nDoD4 (TIMEOUT 180):\n- pwsh postflight.ps1 rc=0 in 361 s, frozen 58 (57+1), scope 28.\n- bash postflight.sh RC=0 in 2531 s, frozen 58, scope 28, PASS.\n- Peer harnesses overlapped both runs, with no flakes and no reruns.\n\nRails: this is a test that fails on the old behaviour, and it is tests only. No mutant leaked into the repo, and the scratch tree is deleted."
 }
