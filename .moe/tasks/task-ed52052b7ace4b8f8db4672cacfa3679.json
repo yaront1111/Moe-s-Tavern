@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,16 +111,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-17T17:01:58.606Z",
-  "updatedAt": "2026-09-18T17:43:06.194Z",
+  "updatedAt": "2026-09-18T18:14:48.683Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T17:24:00.509Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-18T18:14:48.683Z",
+    "wallClockMs": 3048174
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
-    "worker-d0c3b06e"
+    "worker-d0c3b06e",
+    "qa-a36819c3"
   ],
   "stepsCompleted": [
     "step-1",
@@ -198,5 +201,8 @@
     "kind": "completion",
     "sessionId": "worker-d0c3b06e@2026-09-18T17:27:06Z",
     "at": "2026-09-18T17:43:06.194Z"
-  }
+  },
+  "completedAt": "2026-09-18T18:14:48.683Z",
+  "reviewCompletedAt": "2026-09-18T18:14:48.683Z",
+  "reviewSummary": "Completion commit 1bd826b is pushed (origin/moe/work-2026-09-13). The diff is small: armPeriodicSweeps arms a sweep only when its handle === undefined, load() calls it once at its tail, and sweeps.test.ts gains 3 tests. start*/stop*/clearEmitter are byte-identical: sweeps.ts is one additions-only hunk. No cadence, threshold or sweep-body change, and no idle release (rail 2); daemon-only (rail 1).\nDoD1: in a scratch copy, the pre-fix 7728e7b StateManager.ts + sweeps.ts with the new tests fail case 1. All 4 handles are replaced; ticks are 0/0/4 against the expected 1/1/5. With the fix it passes.\nDoD2: armPeriodicSweeps runs after `await withTimeout(loadOperation)`, so it is outside the lock, and start* still arm via mutex.exit. Cases 2a/2b pass, and StateManager.test is 115/115, including the ALS lock-leak regression.\nDoD3: the load() comment says 'Armed ONCE per process: a reload never resets an armed sweep'.\nDoD4, clean HEAD export: tsc exit 0 and npm test 122 files, 2107 passed / 1 skipped. Shared tree: 2110/2110. The delta is entirely peer-dirty acceptance/qaApprove/recommendSkill tests; sweeps.test.ts has 13 in both trees.\nThresholds are read from state at tick time, so arming once loses nothing.\nMy mutants all go red: unconditional arm (case 1), stale-only unguarded (case 1, stale only), inverted reconcile guard (1+2a), clearEmitter skipping reconcile (2a), start* without stop (2b). Unmutated is green first and last. Scratch deleted."
 }

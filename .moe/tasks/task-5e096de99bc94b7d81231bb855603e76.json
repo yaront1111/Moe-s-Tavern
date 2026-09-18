@@ -147,7 +147,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-17T17:04:17.294Z",
-  "updatedAt": "2026-09-18T18:08:01.691Z",
+  "updatedAt": "2026-09-18T18:09:16.601Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T12:48:56.735Z",
     "plannedStepCount": 7,
@@ -225,7 +225,12 @@
     "CLAUDE.md",
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
-    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json"
+    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+    ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+    ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
   ],
   "completionSummary": "Runner half of the reattach, in both wrappers.\n- Identity: sh \"$$@<proc_start_token>\" (/proc starttime, ps lstart fallback) + live_marker_host; ps1 \"$PID@<StartTime UTC ticks>\" + Get-MoeLiveMarkerHost. It reuses the live-marker helpers and is computed once. Both values or neither, with a WARN.\n- Every claim sends the pair.\n- The heartbeat sidecar reattaches on attempt-reconciling for the pinned attempt, using the pinned generation. Other reasons are logged once; a refusal is never retried.\n- The main loop also reattaches the seat's reconciling attempts after the claim (before the pin) and after the CLI exits.\n- Files: moe-agent.{sh,ps1}, postflight.{sh,ps1}, parity-check.{sh,ps1}, CLAUDE.md, docs/MCP_SERVER.md (DoD 4). No daemon file changed.\n\nArms: identity-claim, reattach-sidecar, reattach-refused, reattach-postflight, reattach-none, plus reattach-preflight. checkpoint-/manual-reconciling updated.\n- RED on HEAD: all fail on the identity check.\n- Mutants redden each arm on its own assertion: M1 no-reattach, M2 no main loop, M3 retry-refused (sh and ps1).\n- GREEN: frozen 64, scope 28 on sh (rc=0 rerun), pwsh (400 s) and 5.1 (419 s). Parity PASS on sh/pwsh/5.1. Daemon tsc 0; npm test 2105 passed | 1 skipped (= baseline).\n\nOn-disk proof, real daemon + real proxy + new wrapper, abrupt daemon restart mid-CLI (D:/moe-t5e09-e2e/e2e.mjs):\n- The attempt recorded 737300@73504691/yaron-pc (sh), 56680@639253420725444419 (pwsh), 59468@639253420858687705 (5.1).\n- Reconciling -> running within 3 s via the sidecar; task still assigned.\n- Stranger '1@1': ATTEMPT_IDENTITY_MISMATCH.\n\nCaveats:\n- The fleet daemon (started 2026-09-17 20:00Z) predates bd799955. It accepts the pair but ignores it (probed), so nothing is recorded until a human rebuilds and restarts it.\n- MCP_SERVER.md is shared with task-808869c5: by agreement my commit carries only my 3 hunks, and worker-f0cb282e restores theirs afterwards.",
   "commits": [
@@ -258,6 +263,33 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "aa426d59e843d850285cd2c7125e98034e215ca1",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T17:13:50Z",
+      "paths": [
+        ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+        ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json",
+        "CLAUDE.md"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T18:09:16.601Z",
+      "treeId": "593b9ff7c459b9a56bfee774231c28457fe23d06",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -271,14 +303,16 @@
     "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [
+    "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
     "packages/moe-daemon/src/util/claimEligibility.ts"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-d0c3b06e@2026-09-18T14:33:10Z",
-    "at": "2026-09-18T17:13:27.713Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-a36819c3@2026-09-18T17:13:50Z",
+    "at": "2026-09-18T18:09:16.601Z"
   },
   "completedAt": "2026-09-18T18:08:01.691Z",
   "reviewCompletedAt": "2026-09-18T18:08:01.691Z",
