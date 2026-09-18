@@ -64,6 +64,12 @@ for chat in '🚫 PUSH-BLOCKED:' 'PUSH FAILED' 'CHECKPOINT-UNPUSHED' 'MOE_RESCUE
   require_both "chat prefix" "$chat"
 done
 
+# Claimed-prompt contract: one task per CLI session in both wrappers, and an
+# interactive TUI (which never exits on its own) is told to hand control back.
+for prompt in 'the wrapper will pick up the next task in a fresh session'   'INTERACTIVE session: this TUI stays open after you stop'; do
+  require_both "claimed prompt contract" "$prompt"
+done
+
 # Log prefixes.
 for log in '[attribution]' '[skip]' '[rescue]' '[branch]'; do
   require_both "log prefix" "$log"

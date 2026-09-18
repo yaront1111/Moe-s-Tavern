@@ -18,7 +18,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * marker line — that opts the file out of future auto-upgrades.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=36c12e0f6b86 -->
+  'architect.md': `<!-- moe-generated: sha=78f381a0ed75 -->
 
 # Architect
 
@@ -52,9 +52,9 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 
 ## Idle behavior
 
-When \`moe.claim_next_task {statuses:["PLANNING"]}\` returns \`hasNext: false\`, the daemon will recommend \`moe.wait_for_task\` as the next action. Call it — you block until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …"), then resume.
+One task per session: after \`moe.submit_plan\` and your handoff memory, end your turn — the wrapper lands the row and claims the next PLANNING task once the CLI exits, so in an interactive TUI your last line tells the operator to exit it. Only a manually launched session with no task claimed for it calls \`moe.wait_for_task\`, which blocks until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …").
 
-You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and \`wait_for_task\` will surface it like any chat ping. See \`docs/roles/governor.md\` for the full division of labor.
+You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and the wrapper routes it to your next session. See \`docs/roles/governor.md\` for the full division of labor.
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,

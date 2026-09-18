@@ -130,6 +130,24 @@ for (const [engine, executable] of engines) {
       assert.match(rendered.combined, expected);
     });
   }
+  // A claimed session is one task per CLI: the wrapper lands the row it
+  // launched and claims the next one only once the CLI exits. No claimed prompt
+  // may chain into moe.wait_for_task (a session that hops rows strands every
+  // row but the last), and an interactive TUI, which never exits on its own,
+  // must tell the operator to exit it, or the seat parks after every task.
+  const exitHint = /Exit this CLI session \(e\.g\. \/exit; keep the terminal tab open\) to start the next task/;
+  for (const role of ['architect', 'worker', 'qa']) {
+    for (const interactive of [false, true]) {
+      test(`${engine}: claimed ${interactive ? 'interactive' : 'headless'} ${role} ends after one task`, () => {
+        const { body } = render(engine, executable, { role, interactive, claimed: true, noTask: false });
+        // [^.]* spans the em dash, which PowerShell 5.1 re-encodes on output.
+        assert.match(body, /Do NOT call moe\.wait_for_task[^.]*the wrapper will pick up the next task in a fresh session\./);
+        assert.doesNotMatch(body, /(?:then|Finally call|and call) moe\.wait_for_task|Once approved|respawn you/);
+        if (interactive) assert.match(body, exitHint);
+        else assert.doesNotMatch(body, exitHint);
+      });
+    }
+  }
 }
 
 // ---- Wrapper-side wait + adoption boundary: assert the GUARDS, in both

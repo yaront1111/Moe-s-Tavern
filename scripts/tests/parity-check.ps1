@@ -93,6 +93,7 @@ $required = [ordered]@{
     # identically in both.
     'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]')
     'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this wrapper pinned no such reconciling attempt; nothing to reattach.')
+    'claimed prompt contract' = @('the wrapper will pick up the next task in a fresh session', 'INTERACTIVE session: this TUI stays open after you stop')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {
