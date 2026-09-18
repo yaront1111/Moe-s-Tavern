@@ -139,7 +139,7 @@
       "completedAt": "2026-09-18T07:50:44.551Z"
     }
   ],
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -285,16 +285,23 @@
       "author": "worker-d0c3b06e",
       "content": "ROUND-3 REWORK EVIDENCE (worker-d0c3b06e). The QA issues from comment-d201219f are listed below, each with its fix and the arm that proves it. Run a subset from the repo root with `MOE_FROZEN_TEST_ONLY=<modes> MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`. Launch the ps1 twin FROM POWERSHELL.\n\n1. ps1 finalized nothing-to-commit after a teardown rescue.\n   - Fix: Invoke-MoeTeardownRescue keeps its result. rescued -> rescued; autoCommit=false or no-git -> nothing-to-commit; else failed.\n   - Arms: teardown-finalizing (rescued) and teardown-no-baseline (failed).\n2. sh never finalized when no landing ran.\n   - Fix: cleanup_temp finalizes on every exit, before deregister_worker.\n   - Arms: teardown-manual and teardown-no-git (nothing-to-commit), teardown-running (control: a running attempt stays silent).\n3. Missing arms after complete_task.\n   - There are now 9 teardown arms on both engines, including teardown-recovered, teardown-scope, teardown-landed and teardown-nothing.\n   - Each asserts: exactly one finalize with the expected outcome; the attempt closed; finalize before deregister; a rescue ref only for the rescued arms, with the rescue recorded before the finalize; no 'worker session ended' chat line (proof the interrupt landed).\n4. parity-check.sh:80 literal backslash-n: now a real line continuation.\n\nFurther gaps found in review and fixed:\n- Ctrl+C during the push or record of a no-change gated completion. sh parked the passed frozen tree as 'qualityGate interrupted' and finalized rescued; ps1 said nothing-to-commit. Fix: sh sets MOE_LANDING_DONE once the outcome is reached (never for a recovery).\n- The ps1 re-send of an interrupted committed row passed vacuously: the fake logged the held call even though the Ctrl+C killed that proxy. It now logs held calls only after the hold.\n- The Ctrl+C-before-any-outcome path ('pending') had no arm; teardown-scope covers it.\n- Your hygiene addendum: loop modes now use a suite-owned temp dir that the suite deletes. After full runs %TEMP% shows 0 leftovers.\n\nRED on the round-2 wrappers (HEAD blobs ps1 ed5bb41d, sh c2b41813), from the scratch copy %TEMP%/moe-49ec-r3/red-root:\n- scope: sh PASS; PS5.1 and pwsh RED (nothing-to-commit vs rescued).\n- landed: sh RED (rescued); PS5.1 and pwsh RED (3 refused finalizes).\n- nothing: sh RED (rescued); PS PASS.\n- The other 6 arms' red is in %TEMP%/moe-49ec-r2/red-*.\n\nFRESH VERIFICATION, final bytes:\n- Git Bash `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`, 06:48:26Z to 07:38:32Z: RC=0 (46 frozen + 28 scope, both PASS).\n  - A 06:24Z run returned RC=1 only on the heartbeat-sidecar timing check, while another fleet's vitest was loading the box. The rerun on a quiet box passed.\n- powershell.exe 5.1: postflight.ps1 RC=0 (46 + 28), parity-check.ps1 RC=0.\n- pwsh 7.6.6: postflight.ps1 RC=0 (46 + 28), parity-check.ps1 RC=0.\n- Static checks: parsers 0 errors; bash -n and diff --check clean.\n\nResiduals, identical on both twins:\n- Ctrl+C inside the update-ref call itself (a window of milliseconds) is reported rescued.\n- An interrupted finalize RPC loses its acknowledgement; deregister closes the attempt.\n- An interrupted 'nothing' ledger row is not re-sent.",
       "timestamp": "2026-09-18T07:51:30.741Z"
+    },
+    {
+      "id": "comment-caddcb74c57a448c9218dd02f0cb2670",
+      "author": "qa-a36819c3",
+      "content": "QA EVIDENCE, round 3 (qa-a36819c3, 2026-09-18). Verdict: APPROVE.\n\nBYTES REVIEWED\n- Completion commit 4e11caf (pushed, 11 paths) on moe/work-2026-09-13; it is recorded in task.commits.\n- The working tree matches 4e11caf for all 7 owned paths (sha256 prefix):\n  - scripts/moe-agent.sh dee8d9eb, scripts/moe-agent.ps1 b6e0bf6a\n  - scripts/tests/postflight.sh 67afe05f, scripts/tests/postflight.ps1 2564f758\n  - scripts/tests/parity-check.sh d80a2c57, scripts/tests/parity-check.ps1 be629358\n  - docs/CONFIGURATION.md 85877a84\n- No candidate is recorded because the project has no qualityGate.\n\nCODE REVIEW (git diff ab76a82 4e11caf)\nsh:\n- cleanup_temp now runs finalize_postflight on every exit, and still before deregister.\n- teardown_rescue maps the result:\n  - committed + LAND_SHA -> re-send the ledger row unless LAND_RECORDED, then landed\n  - autoCommit=false or no git repo -> nothing\n  - otherwise failed, or rescued once a ref is parked\n- run_landing sets MOE_LANDING_DONE once the outcome is known, ahead of the push. It skips this when LAND_RECOVERED.\n- After preflight_landing, the recovery's LAND_OUTCOME/SHA/RESCUE_SHA/RECORDED are reset.\nps1:\n- Invoke-MoeTeardownRescue keeps its result with the same mapping.\n- 'pending' sentinel. I checked every return path of Invoke-MoeLanding, and each one sets Outcome first.\n- CAS success sets committed immediately, and the finally re-sends the row when $recorded is false.\n- `recovered` landings set neither MoeLandingResult nor moeLandingDone.\nOrder on both twins: gate stop, teardown, finalize, workspace cleanup, live marker, deregister. The pinned-phase ladder is unchanged, so running and closed attempts stay silent.\nParity: parity-check.sh:80 is fixed (real line continuation). The frozen node suite is byte-identical in the two harnesses (python equality check).\n\nOWN RED PROOF\nScratch copy %TEMP%/moe-qa-49ec-a368/red-root, containing the new harness plus the ab76a82 wrappers (sh c2b41813, ps1 ed5bb41d). One mode per run.\n- sh (Git Bash):\n  - teardown-manual, teardown-no-git, teardown-no-baseline: 0 finalizes (expected 1)\n  - teardown-landed: 'rescued' (expected 'landed')\n  - teardown-nothing: 'rescued' (expected 'nothing-to-commit')\n- PS5.1 (launched from PowerShell):\n  - teardown-finalizing: nothing-to-commit (expected rescued)\n  - teardown-no-baseline: nothing-to-commit (expected failed)\n  - teardown-scope: nothing-to-commit (expected rescued)\n  - teardown-recovered and teardown-landed: 3 finalizes (expected 1)\nAll 10 RED.\n\nFRESH VERIFICATION (final bytes; each engine run serially)\n1. Git Bash, `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`, 07:57:50Z-08:34:13Z: RC=0. Live monitor lines showed all 9 teardown arms and 'PASS frozen candidate scenarios: 46'.\n   CAVEAT: a duplicate qa-a36819c3 CLI (pid 20688, from a second wrapper, pid 49608, started from PyCharm at 08:17:42Z) ran `rm -rf` on the same scratch dir at about 08:22Z. That deleted this run's log file mid-run. The RC file and the monitored lines survived.\n2. powershell.exe 5.1.26100.9444, from PowerShell, 08:34:46Z-08:41:12Z: postflight.ps1 RC=0 (46 frozen + 28 scope, PASS postflight.ps1); parity-check.ps1 RC=0.\n3. pwsh 7.6.6, 08:41:25Z-08:47:18Z: postflight.ps1 RC=0 (46 + 28); parity-check.ps1 RC=0.\n4. Parser::ParseFile: 0 errors on the 3 ps1 files on both engines. bash -n passes on 3 files. git diff --check is clean. No forbidden patterns and no `git add -A` in the added lines.\nLogs: %TEMP%/qa-a368-orig/.\n\nNON-BLOCKING OBSERVATIONS\n- docs/CONFIGURATION.md:258 is one 118-char line inside an 80-col wrapped paragraph. It renders the same.\n- The worker's three residuals are identical on both twins, and receipt/crash replay is out of scope:\n  - Ctrl+C inside update-ref itself\n  - an interrupted finalize acknowledgement\n  - an interrupted 'nothing' ledger row",
+      "timestamp": "2026-09-18T08:48:23.734Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:34.280Z",
-  "updatedAt": "2026-09-18T07:51:47.294Z",
+  "updatedAt": "2026-09-18T08:48:30.749Z",
   "contextFetchedBy": [
     "worker-3b5de06f",
     "qa-17c2d0c8",
     "governor-5d6b90b3",
-    "worker-d0c3b06e"
+    "worker-d0c3b06e",
+    "qa-a36819c3"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T22:30:16.145Z",
@@ -302,7 +309,9 @@
     "plannedDistinctFileCount": 7,
     "executedStepCount": 24,
     "rejectCount": 2,
-    "reopenCount": 2
+    "reopenCount": 2,
+    "doneAt": "2026-09-18T08:48:30.749Z",
+    "wallClockMs": 469094604
   },
   "commits": [
     {
@@ -1086,6 +1095,31 @@
       "treeId": "26b1f858a30576b1436cb7df1428e244d1cce9cb",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "4e11cafc249c9638d50908aec1ef0c110bc186d6",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T05:08:03Z",
+      "paths": [
+        ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+        ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json",
+        "docs/CONFIGURATION.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T07:51:59.715Z",
+      "treeId": "0afbd4e1b7742991541f88a329fa930cf8e5d10c",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -1095,14 +1129,18 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/parity-check.sh",
     "scripts/tests/parity-check.ps1",
-    "docs/CONFIGURATION.md"
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+    ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-17c2d0c8@2026-09-17T16:44:54Z",
-    "at": "2026-09-17T17:45:22.653Z"
+    "kind": "completion",
+    "sessionId": "worker-d0c3b06e@2026-09-18T05:08:03Z",
+    "at": "2026-09-18T07:51:59.715Z"
   },
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -1165,7 +1203,7 @@
   "declaredFiles": [
     "docs/CONFIGURATION.md"
   ],
-  "reviewCompletedAt": "2026-09-17T17:41:53.290Z",
+  "reviewCompletedAt": "2026-09-18T08:48:30.749Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The gate outcome is reported via record_check_run with the tree sha it ran against, and finalize_attempt is called with the landing result"
@@ -1272,5 +1310,12 @@
         }
       ]
     }
-  ]
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "docs/CONFIGURATION.md",
+    "scripts/moe-agent.ps1"
+  ],
+  "completedAt": "2026-09-18T08:48:30.749Z",
+  "reviewSummary": "QA round 3 (qa-a36819c3): APPROVED. Full evidence is in my task comment of 2026-09-18.\n\nBytes: completion 4e11caf (pushed, 11 paths). The working tree matches it for all 7 owned paths (sh dee8d9eb, ps1 b6e0bf6a).\n\nAll 4 round-2 issues are fixed.\n- sh cleanup_temp finalizes on every exit, before deregister.\n- Both teardowns use the same mapping: landed (re-sending an unrecorded row), nothing-to-commit (autoCommit=false or no git), rescued, or failed.\n- ps1: a 'pending' sentinel (every return path sets an Outcome; I checked each), CAS immediately marks committed, and recovered landings set nothing.\n- 9 teardown arms, with the suite byte-identical in both harnesses.\n- The parity-check.sh:80 \\n is fixed.\n\nMy red proof (new harness against the ab76a82 wrappers, one mode per run): 10 of 10 RED.\n- sh: manual, no-git, no-baseline, landed, nothing.\n- PS5.1: finalizing, no-baseline, scope, recovered, landed.\n\nFresh gates on the final bytes:\n- Git Bash postflight.sh && parity-check.sh: RC=0, 07:57Z-08:34Z (frozen 46).\n- PS5.1: postflight.ps1 RC=0 (46+28), parity RC=0.\n- pwsh 7.6.6: postflight.ps1 RC=0 (46+28), parity RC=0.\n- Parsers: 0 errors on both engines. bash -n OK. diff --check clean. No forbidden patterns.\n\nDoD 1-7 and the rails are covered by arms passing on all 3 engines:\n- candidate recorded before the gate\n- clean-workspace dirty-helper\n- check tree equals the candidate tree\n- finalize outcome in all normal and teardown arms\n- race rerun\n- 28 scope scenarios + A-AB\n- workspace cleanup on interrupt, cleanup-retry and teardown\n- gate failure goes to a rescue ref\n\nThe residuals are identical on both twins and out of scope."
 }
