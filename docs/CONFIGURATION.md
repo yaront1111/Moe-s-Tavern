@@ -189,8 +189,11 @@ runs in that case. Hooks otherwise run with a detached HEAD.
 A completion that will run a gate has its attributed private-index tree frozen
 and recorded with `record_candidate` before the gate starts. Each CAS retry
 against an advanced branch tip creates a new candidate and reruns the gate in a
-fresh detached worktree. A nested Moe project runs in the corresponding project
-subdirectory, using Bash on Unix/Git Bash and ComSpec `/d /s /c` on Windows. A
+fresh detached worktree; only a retry whose rebuilt tree AND base both equal the
+gated candidate's reuses its passed gate (`[info] qualityGate result reused: …`),
+so a new base reruns the gate even on an identical tree. A nested Moe project
+runs in the corresponding project subdirectory, using Bash on Unix/Git Bash and
+ComSpec `/d /s /c` on Windows. A
 completion with no gate to run (`qualityGate` unset, `MOE_DISABLE_QUALITY_GATE=1`,
 or the `epicFinal` deferral) records no candidate and its landing does not depend
 on attempt identity: it lands exactly as it did before candidates existed.
@@ -227,9 +230,9 @@ ref under `MOE_COMMIT_FAILED_GATE` with the ledger message
 and no gate failed, so there is no `PUSH-BLOCKED:` announcement and the landing
 does not stop the worker loop; the task's next session lands the bytes.
 
-A CheckRun is an observed command result, not a delivery receipt. After landing
-outcome reporting, `finalize_attempt` acknowledges the exact attempt's result;
-it does not persist receipt evidence. The post-flight acknowledges only the
+A CheckRun is an observed command result, not a delivery receipt (see **Delivery
+receipts** below). After landing outcome reporting, `finalize_attempt`
+acknowledges the exact attempt's result. The post-flight acknowledges only the
 seat's own `finalizing` attempt under the identity pinned at claim time, in
 both wrappers. A closed attempt (the daemon closes a seat's attempt when a
 seat-freeing `report_blocked` or another hand-back releases the task), a
@@ -259,6 +262,36 @@ already reached — a branch commit is still `landed`, a no-change landing still
 session interrupted before its landing reached an outcome is `rescued` once the
 teardown parks its bytes, and `failed` when there was nothing to park. A pre-flight recovery checkpoint belongs to the
 previous session and is never reported as this one's landing.
+
+### Delivery receipts
+
+Every landed gated candidate gets one `moe.record_delivery_receipt`, the
+landing's last daemon call (after its ledger row, before `finalize_attempt`):
+the target ref, where it pointed before (the CAS base: the candidate's
+`baseRevision`, git's zero id on an unborn branch) and after, the landed
+revision, and the push result. The push result is `null` when no push was
+attempted — a repository with no remote at all now skips the push with
+`[info] no git remote configured; push skipped, …` instead of failing it — and
+otherwise one line of at most 500 characters (`pushed <branch>`, or
+`push failed: ` plus git's first `fatal:`/`error:` line). A receipt is what the
+wrapper reported; the daemon verifies nothing about the target. A landing with
+no candidate (no gate to run, `autoCommit=false`, no git) records none.
+
+The report is journaled at `<gitdir>/moe/receipt/<taskId>.json` before
+`update-ref` can move the target (with `push result unknown: the landing
+stopped before its push finished` until the push resolves), rewritten once the
+push resolved, and deleted once the daemon holds the receipt. A refused or
+unanswered receipt never rolls back, re-lands or stops the loop (`[WARN]
+delivery receipt not recorded for candidate …; journal kept at … for the next
+pre-flight to replay.`); `DELIVERY_RECEIPT_CONFLICT` means a receipt already
+records that candidate, and it is not retried. Right after its pre-flight
+claim, which a seat whose attempt is still finalizing gets refused, every seat
+replays the journals of tasks no other live session holds: when git shows the
+journaled revision on the target (its tip or an ancestor) it re-sends the
+journaled report verbatim and, for its own journal only, closes the journaled
+attempt as `landed`; when git does not, the ref never moved and the journal is
+dropped for the baseline recovery. A crash between the ref move and the receipt
+therefore records the one missing receipt and never lands the bytes twice.
 
 ### Session touch evidence
 

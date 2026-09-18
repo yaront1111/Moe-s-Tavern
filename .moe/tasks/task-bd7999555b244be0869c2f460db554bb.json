@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T12:56:44.024Z",
-  "updatedAt": "2026-09-18T14:18:03.739Z",
+  "updatedAt": "2026-09-18T14:18:44.113Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T13:01:18.594Z",
     "plannedStepCount": 6,
@@ -176,7 +176,8 @@
     "packages/moe-daemon/src/tools/reattachAttempt.test.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "docs/MCP_SERVER.md",
-    ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json"
+    ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json",
+    ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json"
   ],
   "completionSummary": "claim_next_task now accepts the runner's optional process identity and records it on the attempt it opens, so moe.reattach_attempt can match a real production attempt after a daemon restart. 4 files: claimNextTask.ts (+72/-7), claimNextTask.test.ts (+159/-0), reattachAttempt.test.ts (+162/-2), docs/MCP_SERVER.md (+7/-1). attemptStore.ts and sweeps.ts untouched — the store already persisted the pair; the only gap was that no claim ever offered it.\n\nIMPLEMENTATION. Optional `processStartedAt` and `host` in the input schema (additionalProperties still false); `readProcessIdentity` returns null when BOTH are undefined (today's path, no new branch, `...null` spreads to nothing), refuses either one alone with 'must be supplied together with <other>', and validates each with `readIdentityField`: typeof -> length bound (200 / 255, the receipt target's) -> non-blank -> C0+DEL scan, all INVALID_INPUT naming the field. It runs immediately after the statuses check, before every other check and write, so a refused claim assigns nobody. `openClaimAttempt` takes the identity and spreads it into its openAttempt params; its three arms, refusals and ordering are unchanged, and the adopt arm still returns the open attempt untouched, so a resume keeps whatever identity its opening claim recorded. The daemon derives, defaults and normalises nothing.\n\nNEW CASES (21). claimNextTask.test.ts 'runner process identity' (15): verbatim record on disk; both values accepted at their bounds; a no-identity claim byte-compared against the full attempt-file text (catches a key written as null); 8 refusals (blank, null-is-not-absent, line break, >200 / empty, non-string, ESC, >255) each proven to write nothing via updateTask+writeEntity spies, unchanged task bytes, no attempt, no worker record; 2 half-identity refusals asserting the message, not just the field; 2 resume cases proving the adopt arm never rewrites. reattachAttempt.test.ts restart describe (6), with NO seeded attempt anywhere — every att",
   "commits": [
@@ -204,6 +205,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "3ef6755c62d6f333b35bc1a3eafd7c1a8e3d2019",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T14:12:45Z",
+      "paths": [
+        ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json",
+        ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T14:18:44.113Z",
+      "treeId": "eb2fb415b71c100e603e4e87b638670f1c4a8cc4",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -213,9 +230,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-f0cb282e@2026-09-18T13:04:04Z",
-    "at": "2026-09-18T13:36:21.627Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-a36819c3@2026-09-18T14:12:45Z",
+    "at": "2026-09-18T14:18:44.113Z"
   },
   "completedAt": "2026-09-18T14:18:03.739Z",
   "reviewCompletedAt": "2026-09-18T14:18:03.739Z",
