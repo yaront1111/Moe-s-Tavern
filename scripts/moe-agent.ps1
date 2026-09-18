@@ -344,6 +344,10 @@ $script:MoeDeregistered = $false
 # unwinds, not this class of abrupt teardown.
 $script:CurrentHeartbeatJob = $null
 function Invoke-MoeDeregister {
+    # $Reason reaches the daemon verbatim. The self-restart path below passes
+    # 'wrapper_restart' (sh twin parity) so a hand-over is distinguishable in
+    # the activity log from an operator closing the terminal.
+    param([string]$Reason = 'terminal_closed')
     # Kill any live heartbeat sidecar first — it's an unmanaged background
     # process (Start-Job's child powershell.exe) that outlives this one unless
     # explicitly stopped; unconditional and idempotent, so it runs even when
@@ -356,7 +360,7 @@ function Invoke-MoeDeregister {
     if ($script:MoeDeregistered) { return }
     $script:MoeDeregistered = $true
     if (-not $WorkerId) { return }
-    try { Invoke-MoeRpc -Tool "deregister_worker" -Args @{ workerId = $WorkerId; reason = "terminal_closed" } | Out-Null } catch {}
+    try { Invoke-MoeRpc -Tool "deregister_worker" -Args @{ workerId = $WorkerId; reason = $Reason } | Out-Null } catch {}
 }
 # PowerShell.Exiting fires for normal exits AND console-window close in 5.1.
 try { Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action { Invoke-MoeDeregister } | Out-Null } catch {}
@@ -4318,6 +4322,9 @@ $script:MoeWrapperPath = $PSCommandPath
 $script:MoeWrapperLaunchHash = $null
 $script:MoeWrapperHostExe = $null
 $script:MoeWrapperRelaunchArgs = @()
+# Set by the restart check below and read once, past the outer finally, by the
+# hand-over at the very bottom of this file.
+$script:MoeWrapperRelaunchRequested = $false
 try {
     if ($script:MoeWrapperPath -and (Test-Path -LiteralPath $script:MoeWrapperPath)) {
         $script:MoeWrapperLaunchHash =
@@ -4357,11 +4364,21 @@ do {
         }
         if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash) {
             Write-Host "wrapper source changed on disk; restarting to load it"
-            try {
-                Start-Process -FilePath $script:MoeWrapperHostExe -ArgumentList $script:MoeWrapperRelaunchArgs -WorkingDirectory (Get-Location).Path | Out-Null
-            } catch {
-                Write-Host "wrapper relaunch failed; continuing on current bytes"
-            }
+            # The hand-over itself happens past the outer finally, IN THIS
+            # CONSOLE. Until 2026-09-18 this was a `Start-Process`, which gives
+            # the relaunched wrapper its OWN console window and leaves the
+            # launching terminal at a prompt: the operator reads that as a dead
+            # seat and relaunches the same worker id, so two wrapper loops share
+            # it and both resume the held task. Measured that day on
+            # qa-a36819c3 (two CLIs reviewing one REVIEW row, one deleting the
+            # other's harness log) and on worker-d0c3b06e. The sh twin `exec`s
+            # in place for the same reason; PowerShell has no exec, so this
+            # process stays alive as the relaunched wrapper's parent.
+            # Deregister BEFORE handing over (sh twin parity, same reason
+            # string): the relaunched wrapper registers afresh, and the
+            # post-flight above has already landed this session's work.
+            Invoke-MoeDeregister -Reason 'wrapper_restart'
+            $script:MoeWrapperRelaunchRequested = $true
             break
         }
     }
@@ -6017,5 +6034,23 @@ $mentionsJson
             $v = $script:GrokEnvPrev[$k]
             if ($null -ne $v) { Set-Item -Path "Env:\$k" -Value $v } else { Remove-Item -Path "Env:\$k" -ErrorAction SilentlyContinue }
         }
+    }
+}
+
+# ---- Self-restart hand-over (see the restart check inside the loop) ---------
+# Runs only after the finally above has released this session's temp files,
+# gate workspace, live marker and seat, so the relaunched wrapper starts from a
+# clean slate. The call operator keeps the CHILD IN THIS CONSOLE: the operator's
+# terminal still shows the seat, Ctrl+C still reaches it, and nobody mistakes a
+# hand-over for a dead seat and launches a second loop on the same worker id.
+if ($script:MoeWrapperRelaunchRequested -and $script:MoeWrapperHostExe) {
+    $moeRelaunchExe = $script:MoeWrapperHostExe
+    $moeRelaunchArgs = @($script:MoeWrapperRelaunchArgs)
+    try {
+        & $moeRelaunchExe @moeRelaunchArgs
+        exit $LASTEXITCODE
+    } catch {
+        Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow
+        exit 1
     }
 }
