@@ -368,10 +368,29 @@ describe('attempt close on hand-back', () => {
       });
     }
 
+    /**
+     * A claim refused before any write: no task write and no published event.
+     * The end state alone cannot show it, because the post-write backstop in
+     * openClaimAttempt hands its assignment back and ends in the same state.
+     */
+    async function refusedWithoutWrites(claimed: () => Promise<unknown>): Promise<MoeError> {
+      const updates = vi.spyOn(h.state, 'updateTask');
+      const published: string[] = [];
+      const unsubscribe = h.state.subscribe((event) => {
+        published.push(event.type);
+      });
+      const err = await refusal(claimed());
+      unsubscribe();
+      expect(published).toEqual([]);
+      expect(updates).not.toHaveBeenCalled();
+      updates.mockRestore();
+      return err;
+    }
+
     it('refuses a QA claim until the landing is finalized, keeps the runner current and holds qa_approve', async () => {
       const landing = await completeClaimedRow();
 
-      const err = await refusal(claim('task-W', 'qa-1', 'REVIEW'));
+      const err = await refusedWithoutWrites(() => claim('task-W', 'qa-1', 'REVIEW'));
 
       expectHeldForWorker1(err, landing);
       expect(err.message).toContain('held by worker worker-1');
@@ -443,6 +462,20 @@ describe('attempt close on hand-back', () => {
       expect(offered.task).toMatchObject({ id: 'task-W', assignedWorkerId: 'qa-1' });
       expect(offered.generation).toBe(2);
       expect(phases('task-W')).toEqual([[1, 'closed'], [2, 'running']]);
+    });
+
+    it('refuses an explicit claim that names no worker, naming the holder and writing nothing', async () => {
+      const landing = await completeClaimedRow();
+
+      // The operator recipe for finding a held row: a directed claim sent without a workerId.
+      const err = await refusedWithoutWrites(() =>
+        call(claimNextTaskTool(h.state), { statuses: ['REVIEW'], taskId: 'task-W' })
+      );
+
+      expectHeldForWorker1(err, landing);
+      expect(err.message).toContain(`held by worker worker-1's attempt ${landing.attemptId} (generation 1)`);
+      expect(h.state.getTask('task-W')?.assignedWorkerId).toBeNull();
+      expect(phases('task-W')).toEqual([[1, 'finalizing']]);
     });
 
     it('keeps a QA waiter parked while the landing is finalizing and wakes it when the boundary ends', async () => {

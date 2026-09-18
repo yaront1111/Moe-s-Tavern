@@ -21,60 +21,94 @@
     {
       "stepId": "step-1",
       "description": "READ-ONLY CONTRACT AND OWNERSHIP CHECK. Load explore-before-assume and test-driven-development. Verify the task-bound wrapper baseline and inspect current wrappers, both postflight/parity harnesses, docs/MCP_SERVER.md, candidateStore.ts, recordCandidate.ts, recordCheckRun.ts, finalizeAttempt.ts and claimNextTask.ts. Re-prove producer landing via matching Moe-Task history or epicSiblings.landing.merged, not raw status. Record foreign dirty/staged/conflicted paths in the step note without modifying them. Pin the behavior table before edits: candidate-backed completion versus checkpoint/rescue; gate enabled/deferred/disabled; valid/missing/stale attempt; existing/unborn HEAD; successful/failed/refused/nothing landing; finalizing versus running/closed attempt. Keep receipt/crash replay and target-movement recheck out of this card. No daemon source or held-out acceptance-test edits.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Rework 2 (QA reopen 2), read-only. HEAD 1549402 is a board-only QA checkpoint on top of fedba17. The 7 owned paths are clean at HEAD and match the reviewed bytes. Rescue ref 20260914T212120Z has the same content as HEAD, so there is nothing to recover. Foreign dirt, not touched: .moe/tasks/{49ec8755,758423de,ed52052b}.json and .moe/attempts|candidates|reviews/.\n\nTeardown finalize table (pinned finalizing attempt), verified by reading the code:\n- Ctrl+C after complete_task, autoCommit=true: sh rescues and sends rescued. ps1 rescues but sends nothing-to-commit, because Invoke-MoeTeardownRescue drops its result (QA issue 1).\n- autoCommit=false, no-git, or missing baseline: sh sends NO finalize, because cleanup_temp requires MOE_LANDING_DONE (QA issue 2). ps1 sends nothing-to-commit in all three cases; missing baseline should be failed.\n- Found myself: ps1 Invoke-MoeLanding's finally sets $script:moeLandingDone and MoeLandingResult for the pre-flight RECOVERY landing too. This task introduced it; a303f04 set neither. After a recovery, Ctrl+C mid-CLI skips the teardown rescue and finalizes with the recovery's result (landed + recovery sha). sh is fine: it resets MOE_LANDING_DONE after preflight_landing.\n- Found myself: Ctrl+C after a successful CAS (during push or record_commit):\n  - sh, gated: FROZEN_TREE is still set, so the teardown parks the landed tree and records MOE_COMMIT_FAILED_GATE 'qualityGate interrupted' plus finalize rescued. That is false.\n  - sh, gate-less: sends finalize failed. Also false.\n  - ps1: reports landed, but only after $res.Outcome is set, and it skips the committed ledger row.\n- Running or closed attempts stay silent on both twins (phase check).\n- Ordering: both twins already finalize before deregister_worker.\n- parity-check.sh:80 has a literal \\n, so the bogus needle 'n' always passes.\n\nPlan: one teardown mapping in both twins:\n- committed after CAS -> landed (re-record, idempotent by sha)\n- rescued ref -> rescued\n- autoCommit=false or no-git -> nothing-to-commit\n- else -> failed\nRecovery landings must not mark the session landed. Arms on both engines: teardown-finalizing, teardown-manual, teardown-recovered, teardown-landed.",
+      "startedAt": "2026-09-17T17:50:15.249Z",
+      "completedAt": "2026-09-17T17:50:42.950Z"
     },
     {
       "stepId": "step-2",
       "description": "TESTS FIRST: extend both daemon-free harnesses with matching claim attemptId/generation fixtures and strict candidate/check/finalize RPC recorders (validate arguments, tree binding and call order; return real-shaped success/error responses instead of accepting arbitrary calls). Add named scenarios: (1) a pre-existing untracked helper makes a gate pass in shared cwd but is absent from the attributed candidate: clean-workspace gate fails, original branch/index/foreign bytes unchanged, owned frozen bytes rescued; (2) passing gate sees the frozen tree and nested-project cwd, excludes peer/preexisting/denied/untracked inputs, records exact candidate/check identity before CAS, and finalizes with the actual landed SHA after record_commit; (3) scenario-O race first passes, advances the target with a tracked gate-breaking change, then records a different candidate/base/tree and reruns/fails, leaving the peer tip intact; add a two-pass race control proving only candidate two lands; (4) mutate shared owned bytes during the gate and generate scratch outputs inside its workspace: neither is restaged into the frozen landing; tracked gate-workspace mutations refuse landing; (5) candidate/check persistence refusal, null/malformed reply and failed materialization prevent CAS and rescue the frozen tree; finalization response loss retries only the same acknowledgement and stops the loop on exhaustion; (6) no-change, refusal, checkpoint, hook rejection/tree mutation, unborn, gate opt-out/epic deferral, no-git and autoCommit=false retain existing semantics and truthful RPC outcomes. Assert exact existing refusal codes, rescue tree contents, actual shell exit codes including nonzero, UTF-8 bounded output tails, and zero fabricated checks on skipped or never-started commands. Add mid-GATE Ctrl+C/INT and TERM/terminating-error cleanup probes, not just the existing mid-CLI scenario W; verify no owned workspace/worktree metadata/process remains and rescue precedes deregistration. Use temp fixtures under paths containing spaces/non-ASCII, with Windows engine-appropriate interruption. Obtain assertion-level red proof for dirty-helper and stale-CAS cases against the old wrappers in an owned scratch fixture, not by swapping shared source.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "TESTS FIRST for QA reopen 2. Six teardown arms were added to the frozen node suite. The suite stays byte-identical in both harnesses (python equality check), and the evidence segment of the fake proxy stays identical too. Checks: node --check passes on the suite and both proxies, bash -n passes, 0 CRLF.\n\nWhat each arm does: the fake CLI marks the attempt finalizing (as complete_task does), writes .moe/gate-ready, and waits for gate-ready.sent. The interrupt supervisor writes that file after the sh INT or the Windows Ctrl+C, so an sh CLI can never exit before the signal arrives. Expected finalize outcome per arm:\n- teardown-finalizing: rescued\n- teardown-manual (autoCommit=false): nothing-to-commit\n- teardown-no-git: nothing-to-commit\n- teardown-no-baseline (the CLI deletes the pre-flight baseline): failed\n- teardown-recovered (a lingering landed=0 baseline makes the pre-flight land a recovery checkpoint first): rescued\n- teardown-landed (the fake holds the completion's committed record_commit until the interrupt, so the interrupt comes after CAS): landed with landedRevision == HEAD, no rescue ref, no failed record\n\nEvery arm asserts:\n- exactly one finalize_attempt with the expected outcome\n- attempt file phase is closed\n- finalize comes before deregister_worker\n- rescue ref only for the rescued arms, holding owned='frozen owned', with its record_commit before the finalize\n- no candidate, check or gate when no landing ran\n- HEAD and index unchanged when appropriate; helper/peer bytes kept; one worktree\n\nRED against today's unmodified wrappers (logs in %TEMP%/moe-49ec-r2/red-{sh,ps51,pwsh}):\n- sh (Git Bash): finalizing PASS; manual FAIL (0 finalizes); no-git FAIL (0); no-baseline FAIL (0); recovered PASS; landed FAIL (actual 'rescued', expected 'landed').\n- PS5.1: finalizing FAIL (actual 'nothing-to-commit', expected 'rescued'); manual PASS; no-git PASS; no-baseline FAIL (nothing-to-commit, expected failed); recovered FAIL (3 refused 'landed' finalizes carrying the recovery sha, no [rescue] after MOE_CHECKPOINT_RECOVERED); landed PASS.\n- pwsh 7: identical to PS5.1.\n\nSo each arm is red on the engine that diverges, and no-baseline is red on all three.",
+      "startedAt": "2026-09-17T17:50:45.578Z",
+      "completedAt": "2026-09-17T18:04:47.401Z"
     },
     {
       "stepId": "step-3",
       "description": "PIN ATTEMPT IDENTITY AND ADD SMALL RPC HELPERS. Retain the exact top-level claim attemptId and positive integer generation in per-iteration wrapper state, reset between tasks, and keep them outside the CLI's mutable task/context projection. Assign a separate per-run [A-Za-z0-9_-] runnerId within 128 characters; do not reuse the timestamped session string. For an already-assigned same-worker resume lacking returned tokens, read existing attempt records without writing .moe: require one unambiguous current open record matching exact task and worker, validate its generation/phase, and pin it before CLI launch. Never adopt another worker/generation, fabricate a baseline/attempt, or re-claim to discover identity. Through moe_rpc/Invoke-MoeRpc add checked helpers for record_candidate, record_check_run and finalize_attempt; serialize JSON using existing Python/Node/ConvertTo-Json mechanisms rather than shell interpolation. Candidate IDs are unique per rebuilt candidate; check IDs unique per actual execution; retries of an identical RPC reuse identical IDs/payloads. Validate success and returned identity/tree fields; transport failure, MCP error, malformed/empty responses are not success. Bound the transmitted outputTail to a complete-character final 16384 UTF-8 bytes, preserve the configured command and integer process exitCode, and explicitly send source=runner-observed. Missing/stale identity on candidate-backed completion is a fail-closed landing error with rescue, never silent legacy bypass. No candidate/check is fabricated for no-git or autoCommit=false. Explicit error handling must distinguish transport failure, daemon refusal, invalid payload and real command failure; none may be treated as a persisted check or successful landing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "note": "No change this rework. QA reopen 2 re-verified the attempt identity pinning (claim tokens, same-seat resume read, per-iteration runnerId) and the checked record_candidate / record_check_run / finalize_attempt helpers. The teardown fix in step 5 reuses finalize_attempt_rpc and Send-MoeFinalize unchanged: the pinned-phase ladder (only a finalizing attempt is acknowledged; closed and running stay silent), 3 identical tries, and the unpinned refusal.",
+      "startedAt": "2026-09-17T18:04:51.182Z",
+      "completedAt": "2026-09-17T18:04:56.044Z"
     },
     {
       "stepId": "step-4",
       "description": "FREEZE AND EXECUTE THE GATE IN A CLEAN WORKSPACE. Remove gate execution from the shared-project pre-attribution path; retain only selection using completion kind, RunGate/equivalent, qualityGateScope/isEpicFinal and MOE_DISABLE_QUALITY_GATE. After existing pathspec-only attribution and safe-branch selection, build the private index using existing concurrency/tier checks, write-tree, and pin treeSha, actual baseRevision and full refs/heads target. Create a temporary plumbing snapshot commit from that tree/base, without changing a branch or the shared index; an unborn base uses the actual empty-tree object id as the explicitly documented base sentinel and a parentless snapshot. A changed/no-change completion that is eligible to run a gate must still acquire a candidate and run it; existing no-owned/missing-owned refusals must not be transformed into success. Call and require record_candidate BEFORE executing any gate. For an enabled gate create an owned detached worktree from the snapshot, with checkout hooks disabled, normal full checkout (no sparse omission), and no copied/linked shared helpers, node_modules, ignored files or live .moe runtime directories. Assert checkout/index/HEAD start at the frozen tree. Run in worktree plus MOE_REL/Git.Rel so nested Moe projects preserve their cwd, quote paths, clear inherited Git index/worktree/gitdir overrides in the child, and bind child project-path environment to that clean cwd while RPCs still address the original project. Invoke bash -c in sh and the existing ComSpec /d /s /c dialect in ps1; capture actual stdout/stderr and exit code without set-e/pipeline swallowing failures or retaining unbounded output in memory. Report each executed gate via record_check_run for that exact candidate/tree, including failure; never manufacture a pass for a skipped/unstarted command. Afterward verify tracked worktree/index/HEAD still represent the frozen candidate; refuse landing on mutation or a failed integrity probe, retaining the actual command's exit code in its CheckRun and diagnosing the separate integrity failure. Generated untracked build outputs may exist only in the disposable workspace and are never staged or copied back.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "note": "No change to gate freezing or execution this rework. QA re-verified the clean-workspace gate, the integrity probe and the CheckRun recording. The existing interrupt-int and interrupt-term arms still cover a mid-gate interrupt. The new teardown-landed arm runs a real gate that passes (candidate, check, CAS) before the interrupt, and asserts HEAD^{tree} == the recorded candidate treeSha.",
+      "startedAt": "2026-09-17T18:04:57.118Z",
+      "completedAt": "2026-09-17T18:05:01.373Z"
     },
     {
       "stepId": "step-5",
       "description": "INTEGRATE CAS, RESCUE, FINALIZATION AND TOTAL CLEANUP. Put freeze -> record_candidate -> fresh workspace -> gate -> record_check_run inside EACH existing CAS iteration, ahead of branch update. Retain commitHooks behavior and its exact tree/parent validation; build the delivered commit only from frozen tree/base, never by restaging gate outputs. On failed CAS discard that iteration's check eligibility/workspace, read the advanced tip and rebuild using existing attribution/concurrent-change rules; issue a new candidate and rerun even if a gate passed before. Keep the three-attempt cap and MOE_COMMIT_FAILED_REF_CONTENTION. Required gate nonzero or tracked-integrity failure keeps MOE_COMMIT_FAILED_GATE, PUSH-BLOCKED diagnostics, baseline retention and stop-loop behavior, with NO branch update or push. Extend rescue helpers to accept a frozen tree/base snapshot so failures and Ctrl+C during a gate cannot rescue later shared bytes instead; preserve rescue subjects/reasons, path counts and the final failed record_commit after the committed/rescue ledger row. Before freeze is available retain existing attributable-byte rescue fallback. Once a finalizing attempt's postflight outcome/record_commit reporting is complete, call finalize_attempt with the pinned identity/generation and runnerId: committed -> landed + actual 40-hex commit; nothing or deliberate no-git/autoCommit=false -> nothing-to-commit; successfully parked unlanded bytes -> rescued; refusal/unrescued failure -> failed. Never turn push failure after a real branch commit into a claim that no commit landed. Do not finalize ordinary running checkpoints, architect/QA sessions or already-closed attempts as though they were new completions; determine phase from the exact pinned record, not task status alone. Retry acknowledgement at most three times with identical payload and no repeated Git effect; on exhaustion report loudly and stop new-task looping without undoing a landed commit. Use one idempotent workspace cleanup helper from per-iteration finally/normal return AND outer cleanup_temp/PowerShell finally. Register paths in the parent shell (avoid create_secure_temp in an unregistered command-substitution subshell), stop/wait only owned gate children before deletion, remove only this detached worktree and its registration, and continue rescue/finalization/deregister cleanup even after an earlier cleanup error. On Windows validate resolved absolute owned temp paths before removal and use LiteralPath, never cross-shell recursive deletion. Never globally prune worktrees or introduce an idle/quiet-output kill rule.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "One teardown finalize mapping in both twins, before deregister.\n\nsh (moe-agent.sh):\n- cleanup_temp now calls finalize_postflight unconditionally (it was gated on MOE_LANDING_DONE, so autoCommit=false, no-git and a missing baseline sent nothing at all). Order kept: gate observation, teardown rescue, finalize, workspace cleanup, live marker, deregister.\n- teardown_rescue now sets the result the finalize reads: committed with a sha (interrupted after the CAS) keeps landed and re-sends the ledger row only when LAND_RECORDED is unset; autoCommit=false or a project that is not a git repo gives nothing; anything past that is failed until a rescue ref is parked. The frozen-tree branch no longer calls finalize itself.\n- run_landing tracks LAND_RECORDED, and the pre-flight recovery's LAND_OUTCOME/LAND_SHA/LAND_RESCUE_SHA/LAND_RECORDED are reset beside MOE_LANDING_DONE, so a previous session's recovery can never be read as this session's landing.\n\nps1 (moe-agent.ps1):\n- Invoke-MoeTeardownRescue keeps its rescue result in $script:MoeLandingResult with the same mapping, so Complete-MoePostflight no longer maps a real rescue to nothing-to-commit.\n- $res.Outcome starts as 'pending', a sentinel every return overwrites. The finally sets $script:moeLandingDone only when the outcome is real AND the landing is not a 'recovered' one, so (a) a pre-flight recovery no longer suppresses this session's teardown rescue or supplies its finalize outcome, and (b) a Ctrl+C before any outcome (attribution, a commit hook, the peel) falls through to the teardown rescue like the sh EXIT trap.\n- The CAS success sets Outcome/Sha/Ref immediately, and the finally re-sends the committed ledger row when $recorded is false, so an interrupt in the push or the record still reports landed with the real sha and never re-parks a landed commit.\n\nHarness: a seventh arm, teardown-running (attempt still running), proves the same exit path acknowledges nothing and leaves the attempt running while still parking a rescue ref. The Windows cancellation bound now tracks MOE_POSTFLIGHT_TIMEOUT_SEC instead of a fixed 30 s, because an interrupted exit now also finalizes and deregisters.\n\nGreen (per-arm, MOE_POSTFLIGHT_TIMEOUT_SEC=400 on a box running the fleet):\n- Git Bash sh: finalizing, manual, no-git, no-baseline, recovered, landed, running all PASS.\n- powershell.exe 5.1: finalizing, manual, no-git, no-baseline, recovered, landed, running all PASS.\nParsers: bash -n clean, Parser::ParseFile clean on PS5.1 and pwsh 7.6.6, node --check clean on the suite and both fake proxies, suite byte-identical in both harnesses, 0 CRLF.",
+      "startedAt": "2026-09-17T18:05:02.303Z",
+      "completedAt": "2026-09-17T18:57:06.267Z"
     },
     {
       "stepId": "step-6",
       "description": "PARITY AND CONFIGURATION CONTRACT. Extend both parity checkers' RPC/field lists with record_candidate, record_check_run, finalize_attempt, attemptId, generation, candidateId, treeSha and runner-observed at the real wrapper emission sites; preserve every existing refusal-code, tier, setting, shell-flag and banner assertion. Add narrow structural assertions in the behavioral harnesses where plain token presence cannot prove ordering; do not rely on a comment containing a tool name. Update only the qualityGate-related configuration prose: frozen clean checkout per candidate, no shared dependency/helper copying, gate commands must prepare their own required dependencies, nested-project cwd, exact-tree check recording, gate mutations not incorporated and tracked mutations refusing landing, retry reruns, cleanup and the unborn empty-base convention. State that a CheckRun is an observed command result, not a delivery receipt, and that finalization acknowledges a landing result without persisting receipt evidence. Keep the current disable/deferral/manual/no-git policies and the separate commitHooks contract accurate. Do not edit foreign documentation hunks or add a release/changelog sweep to this mid-epic card.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Parity and configuration contract.\n\nparity-check.sh: the literal backslash-n at line 80 is now a real line continuation, so the loop no longer runs require_both on the bogus needle \"n\". Proved with bash -x: the baseline/index needles are exactly the six real literals, and the \"n\" call is gone (grep count 0). The update-index literal is still checked.\n\nBoth checkers gained a 'finalize outcome' list (landed, nothing-to-commit, rescued) beside the existing RPC tool and candidate-evidence lists, so the two twins cannot drift apart again on the outcome vocabulary. 'failed' is deliberately not in the list: it is too common a word to be a meaningful needle, and the mapping itself is proved behaviourally by the teardown-no-baseline arm on both engines. parity-check.ps1 was edited byte-wise to keep its mixed line endings (113 CRLF / 2 LF, unchanged apart from the three added CRLF lines).\n\ndocs/CONFIGURATION.md, finalize paragraph only: corrected the claim that \"ordinary checkpoints and autoCommit=false exits make no call\" (an autoCommit=false COMPLETION does acknowledge nothing-to-commit; only a still-running checkpoint attempt is silent), and added the outcome mapping plus the interrupted-exit rules: acknowledgement after the teardown rescue and before deregister_worker, an interrupted push or ledger record still reports landed and is never re-parked, an interruption before landing is rescued (failed when nothing was parked), and a pre-flight recovery checkpoint is never reported as this session's landing.\n\nVerification: bash scripts/tests/parity-check.sh exit 0 (PASS), powershell.exe scripts/tests/parity-check.ps1 exit 0 (PASS), both parsers clean.",
+      "startedAt": "2026-09-17T18:57:09.854Z",
+      "completedAt": "2026-09-17T18:59:02.224Z"
     },
     {
       "stepId": "step-7",
       "description": "ONE CONCENTRATED VERIFICATION STEP. On a quiet box, from repository root run exactly: MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh. Use a real runnable Bash environment (Git Bash or WSL with its own node/python/toolchain, not an accidental Windows cmd fallback); a SKIP, timeout, empty scenario count or omitted gate arm is not a pass. Then validate Windows behavior serially, not concurrently with the Bash harness: set MOE_POSTFLIGHT_TIMEOUT_SEC=180 and run powershell.exe -NoProfile -File scripts/tests/postflight.ps1 plus scripts/tests/parity-check.ps1; run the same pair with pwsh when installed. Capture each native exit code explicitly. Verify Bash syntax and both PowerShell parsers as part of this step. Report executed scenario counts, exact commands, fresh output tails, cleanup assertions and old-wrapper red proof; label any unavailable platform honestly. Do not run unrelated daemon/IDE/full-epic gates, repair the foreign qaApprove.ts conflict, or change timeouts in production because a build is quiet. If a gate fails, repair only owned wrapper/harness changes and rerun the same focused suite.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-09-17T18:59:03.014Z"
     },
     {
       "stepId": "step-8",
@@ -84,7 +118,7 @@
     }
   ],
   "status": "WORKING",
-  "assignedWorkerId": "worker-3b5de06f",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 2,
@@ -227,16 +261,17 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:02:34.280Z",
-  "updatedAt": "2026-09-17T17:45:19.920Z",
+  "updatedAt": "2026-09-18T04:57:59.934Z",
   "contextFetchedBy": [
     "worker-3b5de06f",
-    "qa-17c2d0c8"
+    "qa-17c2d0c8",
+    "governor-5d6b90b3"
   ],
   "metrics": {
     "firstClaimAt": "2026-09-12T22:30:16.145Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 16,
+    "executedStepCount": 22,
     "rejectCount": 2,
     "reopenCount": 2
   },
@@ -1003,6 +1038,25 @@
       "treeId": "db7699adb94dcfc05531ab4e76347f586e6f6c31",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "15494025d135f706d3f1a66e15be564f9e7894ec",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-17c2d0c8@2026-09-17T16:44:54Z",
+      "paths": [
+        ".moe/tasks/task-2a7e0f5b3926471a8a26d999cae96ff4.json",
+        ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-9e851d4e6e144f808a089bfbbd29ae11.json",
+        ".moe/tasks/task-c628902ee8ba45188660e7a28f0e0bdd.json"
+      ],
+      "recordedBy": "qa-17c2d0c8",
+      "recordedAt": "2026-09-17T17:45:22.653Z",
+      "treeId": "26b1f858a30576b1436cb7df1428e244d1cce9cb",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -1016,19 +1070,28 @@
     ".moe/tasks/task-2a7e0f5b3926471a8a26d999cae96ff4.json",
     ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
     ".moe/tasks/task-9e851d4e6e144f808a089bfbbd29ae11.json",
-    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json"
+    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+    ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+    ".moe/tasks/task-c628902ee8ba45188660e7a28f0e0bdd.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-f0f9ea9e@2026-09-15T02:35:21Z",
-    "at": "2026-09-15T02:35:27.152Z"
+    "sessionId": "qa-17c2d0c8@2026-09-17T16:44:54Z",
+    "at": "2026-09-17T17:45:22.653Z"
   },
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [
     {
       "item": "Existing landing behaviour is preserved: pathspec-only attribution, tier rules, rescue refs on failure and the existing refusal codes all keep their harness coverage",
@@ -1062,7 +1125,7 @@
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "planRevision": 33,
+  "planRevision": 46,
   "priorBlockedReason": "Live prerequisite contract is absent despite producer commits being on HEAD624b354. Read-only proxy tools/list exits0:61 tools, claim_next_task present, record_candidate/record_check_run/finalize_attempt all absent. .moe/attempts is absent, so this fresh claim has no durable attemptId/generation to pin. Runtime .moe/daemon.json identifies PID55520 port9878 started2026-09-12T22:03:33.261Z; process runs the installed PyCharm2026.1/plugins/moe-jetbrains/daemon/index.js, whose bytes lack those3 tools and ATTEMPT_FINALIZING. Source-landed is not runtime-activated. Task baseline is valid (14:21:04Z, correct task/HEAD); seven planned paths are clean. Fail-closed candidate completion cannot safely use fabricated tokens or a legacy-success bypass, and deployment/restarting the shared daemon is outside this wrapper-only scope. Activate producer runtime through owner/operator, then fresh task-bound relaunch. No source/test/doc edits or tests run; all foreign WIP/conflict preserved, NOT the blocker. Step1 audit and exact evidence in comment-b2753a22880d4dbda5c1a6f7cd988587; Serena handoff saved.",
   "blockedOnTaskIds": null,
   "reviewStartedAt": "2026-09-14T21:20:55.262Z",
