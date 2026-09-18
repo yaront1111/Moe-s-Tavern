@@ -1935,7 +1935,7 @@ try:
         assert r.get('phase')=='closed'
         keys=('taskId','attemptId','generation','outcome','landedRevision'); record=r
     else:
-        record=r.get('candidate' if tool=='record_candidate' else 'checkRun')
+        record=r.get({'record_candidate':'candidate','record_delivery_receipt':'receipt'}.get(tool,'checkRun'))
         keys=[k for k in p if k not in ('workerId','generation')]
         assert isinstance(record,dict) and isinstance(r.get('duplicate'),bool)
     assert all(record.get(k)==p.get(k) and type(record.get(k))==type(p.get(k)) for k in keys)
@@ -2030,9 +2030,10 @@ print(json.dumps(p))
 }
 
 # Phase of the pinned attempt record; "mismatch" when the file is missing,
-# unreadable or no longer carries this seat's exact identity.
+# unreadable or no longer carries this seat's exact identity. Optional
+# ATTEMPT_ID TASK_ID GENERATION name an identity pinned elsewhere (a receipt journal).
 moe_pinned_attempt_phase() {
-    $PYTHON_CMD - "$PROJECT" "$MOE_ATTEMPT_ID" "$PREFLIGHT_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_GENERATION" <<'PY' 2>/dev/null || echo mismatch
+    $PYTHON_CMD - "$PROJECT" "${1:-$MOE_ATTEMPT_ID}" "${2:-$PREFLIGHT_TASK_ID}" "$WORKER_ID" "${3:-$MOE_ATTEMPT_GENERATION}" <<'PY' 2>/dev/null || echo mismatch
 import json,os,sys
 project,aid,task,worker,generation=sys.argv[1:]
 try:
@@ -3847,7 +3848,14 @@ land_plumbing() {
         # lands exactly as before, whoever owns the attempt by now.
         if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
             GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
-            if [ -z "$tree" ] || ! freeze_candidate "$old" "$tree" || ! run_frozen_gate; then
+            # A retry whose rebuilt tree AND base both equal the gated candidate's IS
+            # that candidate, so its passed gate stands. Any other difference, or a
+            # pair that cannot be read back, re-freezes a new candidate and reruns
+            # the gate: a result from another tree or base is never evidence here.
+            if [ "$attempt" -gt 1 ] && [ -n "$tree" ] && [ -n "${FROZEN_CANDIDATE_ID:-}" ] && [ -n "${FROZEN_TREE:-}" ] \
+                && [ "$tree" = "$FROZEN_TREE" ] && [ "$old" = "${FROZEN_BASE:-}" ]; then
+                echo -e "${BLUE}[info]${NC} qualityGate result reused: the rebuilt candidate has the same tree and base."
+            elif [ -z "$tree" ] || ! freeze_candidate "$old" "$tree" || ! run_frozen_gate; then
                 LAND_OUTCOME="failed"; LAND_CODE="MOE_COMMIT_FAILED_GATE"
                 if [ "$GATE_EVIDENCE_UNAVAILABLE" = true ]; then
                     LAND_MESSAGE="qualityGate not run: candidate evidence unavailable ($GATE_EVIDENCE_DETAIL)"
@@ -3893,12 +3901,26 @@ land_plumbing() {
             unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF
             (cd "$MOE_TOP" && bash -c "$hook") >/dev/null 2>&1 || true
         fi
+        if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
+            # The receipt report is journaled BEFORE the ref can move. targetBefore
+            # is the CAS base: the candidate's baseRevision, git's zero id if unborn.
+            RECEIPT_BEFORE="${old:-$MOE_ZERO_OID}"; RECEIPT_LANDED="$new"
+            RECEIPT_JOURNAL="$(receipt_journal_path "$LAND_TASK_ID")"
+            local pending="push result unknown: the landing stopped before its push finished"
+            if no_git_remote; then pending=""; fi
+            receipt_journal_write "$RECEIPT_JOURNAL" "$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$pending")"
+        fi
         if [ -n "$old" ]; then
             if git -C "$MOE_TOP" update-ref "$ref" "$new" "$old" >/dev/null 2>&1; then rc=0; else rc=1; fi
         else
             if git -C "$MOE_TOP" update-ref "$ref" "$new" "$MOE_ZERO_OID" >/dev/null 2>&1; then rc=0; else rc=1; fi
         fi
         moe_temp_index_drop
+        if [ "$rc" -ne 0 ] && [ -n "${RECEIPT_LANDED:-}" ]; then
+            # The ref never moved, so this attempt's report describes nothing.
+            [ -z "$RECEIPT_JOURNAL" ] || rm -f "$RECEIPT_JOURNAL"
+            RECEIPT_LANDED=""
+        fi
         if [ "$rc" -eq 0 ]; then
             LAND_SHA="$new"
             LAND_TREE="$tree"
@@ -3908,7 +3930,7 @@ land_plumbing() {
             index_refresh "$LAND_STAGED_FILE" || true
             return 0
         fi
-        FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
+        # FROZEN_* stay: the next attempt compares its rebuilt tree and base to them.
         echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
     done
     LAND_OUTCOME="failed"
@@ -4027,6 +4049,14 @@ rescue_ref_from_commit() {
 }
 
 # ---- push --------------------------------------------------------------------
+# no_git_remote -- 0 only when git positively reports no remote at all. A probe
+# that fails is "remote unknown" (1), so it can never silently stop a push.
+# Twin: Test-MoeNoRemote.
+no_git_remote() {
+    local remotes
+    remotes=$(git -C "$MOE_TOP" remote 2>/dev/null) && [ -z "$remotes" ]
+}
+
 announce_checkpoint_unpushed() { # $1 taskId, $2 branch
     local msg="CHECKPOINT-UNPUSHED task=$1 -- checkpoint committed locally only on $2; push when the remote is reachable"
     echo -e "${YELLOW}[WARN]${NC} $msg"
@@ -4045,9 +4075,18 @@ announce_checkpoint_unpushed() { # $1 taskId, $2 branch
 # `CHECKPOINT-UNPUSHED task=<id>`. Note `pull --rebase` refuses in a tree with
 # unstaged tracked changes, so the retry usually fails in a busy fleet --
 # unpushed is a visibility problem, not a loss. Returns 0 when pushed.
+# LAND_PUSH_RESULT is what a delivery receipt reports: empty (null) when no push
+# was attempted (the repository has no remote at all), else one bounded line. A
+# `git remote` probe that fails falls through to the push, so it can never
+# silently stop one.
 push_branch() {
-    local kind="$1" branch="$LAND_BRANCH" tid="$LAND_TASK_ID" PUSH_OUT="" REBASE_OUT="" ok=false
+    local kind="$1" branch="$LAND_BRANCH" tid="$LAND_TASK_ID" PUSH_OUT="" REBASE_OUT="" ok=false why
+    LAND_PUSH_RESULT=""
     [ -n "$branch" ] || return 1
+    if no_git_remote; then
+        echo -e "${BLUE}[info]${NC} no git remote configured; push skipped, the commit stays local on $branch."
+        return 1
+    fi
     if git -C "$MOE_TOP" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
         if PUSH_OUT=$(git -C "$MOE_TOP" push 2>&1); then
             ok=true
@@ -4092,8 +4131,14 @@ push_branch() {
     if [ "$ok" = true ]; then
         printf '%s\n' "$PUSH_OUT" | tail -5
         echo -e "${GREEN}[OK]${NC} Pushed task $tid to $branch."
+        LAND_PUSH_RESULT="pushed $branch"
         return 0
     fi
+    # One line from git's own diagnosis, never raw push output: the receipt
+    # refuses more than 2000 chars rather than truncating them.
+    why=$(printf '%s\n' "$PUSH_OUT" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -m1 -E '^(fatal|error): ' || true)
+    LAND_PUSH_RESULT="push failed: ${why:-git push failed}"
+    LAND_PUSH_RESULT="${LAND_PUSH_RESULT:0:500}"
     if [ "$kind" = "completion" ]; then
         announce_push_failure "$tid"
     else
@@ -4260,6 +4305,138 @@ PYEOF
     return 0
 }
 
+# ---- delivery receipt ----------------------------------------------------------
+# <gitdir>/moe/receipt/<taskId>.json, beside the baseline. A gated completion
+# writes its whole receipt report here BEFORE update-ref can move the target,
+# rewrites it once the push resolved, and deletes it once
+# moe.record_delivery_receipt holds the receipt. A crash between the ref move and
+# that answer leaves the journal for receipt_replay to re-send verbatim: a
+# recomputed report is exactly what a replay conflicts on.
+# Twin: Get-MoeReceiptJournalPath / Write-MoeReceiptJournal.
+receipt_journal_path() {
+    case "$1" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
+    printf '%s/moe/receipt/%s.json' "$MOE_GITDIR" "$1"
+}
+
+# receipt_report TARGET_BEFORE LANDED PUSH_RESULT -- the report as one JSON line
+# from the landing's globals ('' PUSH_RESULT = null).
+receipt_report() {
+    $PYTHON_CMD -c '
+import json,sys
+t,w,a,g,c,target,before,landed,push=sys.argv[1:]
+print(json.dumps(dict(taskId=t,workerId=w,attemptId=a,generation=int(g),candidateId=c,target=target,
+    targetBefore=before,targetAfter=landed,landedRevision=landed,pushResult=push or None)))
+' "$LAND_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$FROZEN_CANDIDATE_ID" "refs/heads/$LAND_BRANCH" "$1" "$2" "$3"
+}
+
+# receipt_journal_write PATH REPORT -- atomic (.tmp + rename) and best-effort: an
+# unwritable journal never blocks a landing.
+receipt_journal_write() {
+    [ -n "$1" ] || return 0
+    if [ -n "$2" ] && mkdir -p "$(dirname "$1")" 2>/dev/null && printf '%s' "$2" > "$1.tmp.$$" 2>/dev/null \
+        && mv -f "$1.tmp.$$" "$1" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$1.tmp.$$" 2>/dev/null || true
+    echo -e "${YELLOW}[WARN]${NC} receipt journal not written ($1); a crash before the receipt would leave this landing without one."
+    return 0
+}
+
+# receipt_send REPORT JOURNAL -- the delivery receipt, the landing's last daemon
+# call. Bookkeeping only: 1 (a refusal, a lost answer) never rolls back, re-lands
+# or stops the loop, and keeps the journal for the next pre-flight to replay.
+# DELIVERY_RECEIPT_CONFLICT means a receipt already records this candidate's
+# landing: logged, never retried. Twin: Send-MoeReceipt.
+receipt_send() {
+    local report="$1" journal="$2" parsed args cand err="$SECURE_TEMP_DIR/receipt-err.txt"
+    parsed=$($PYTHON_CMD -c '
+import json,sys
+d=json.load(sys.stdin)
+p={k:d[k] for k in ("candidateId","target","targetBefore","targetAfter","landedRevision")}
+if d.get("pushResult") is not None: p["pushResult"]=d["pushResult"]
+p["workerId"]=sys.argv[1]
+print(d["candidateId"]); print(json.dumps(p))
+' "$WORKER_ID" <<< "$report") || return 1
+    cand="${parsed%%$'\n'*}"; args="${parsed#*$'\n'}"
+    if moe_evidence_rpc record_delivery_receipt "$args" 2>"$err"; then
+        cat "$err" >&2 2>/dev/null || true
+        [ -z "$journal" ] || rm -f "$journal"
+        return 0
+    fi
+    cat "$err" >&2 2>/dev/null || true
+    if grep -q '"codeName": *"DELIVERY_RECEIPT_CONFLICT"' "$err" 2>/dev/null; then
+        echo -e "${YELLOW}[WARN]${NC} candidate $cand already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
+        [ -z "$journal" ] || rm -f "$journal"
+        return 0
+    fi
+    echo -e "${YELLOW}[WARN]${NC} delivery receipt not recorded for candidate $cand; journal kept at $journal for the next pre-flight to replay."
+    return 1
+}
+
+# receipt_replay -- crash replay of delivery receipts, run right AFTER the
+# pre-flight claim: this seat's still-finalizing attempt makes that claim refuse
+# (ATTEMPT_FINALIZING), which also keeps a single-shot run out of the taskless
+# wait -- close the attempt first and the claim would answer "nothing
+# claimable" and wait. For each journal whose task no other live session holds:
+# git shows its revision on the target -> re-send the journaled report verbatim
+# and, for this seat's own journal only, acknowledge the journaled attempt as
+# landed; git does not -> the ref never moved, drop the journal (the baseline
+# recovery owns those bytes). Reads git, never moves a ref, never re-freezes or
+# re-gates. Each step is safe to repeat. Best-effort: a failure logs and keeps
+# that journal. The git globals are local, so the pre-flight's own probe is
+# untouched. Twin: Invoke-MoeReceiptReplay.
+receipt_replay() {
+    [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner landed tip rc args
+    git_top || return 0
+    [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
+    for f in "$MOE_GITDIR"/moe/receipt/*.json; do
+        [ -f "$f" ] || continue
+        if ! fields=$($PYTHON_CMD - "$f" <<'PY' 2>/dev/null
+import json,os,re,sys
+f=sys.argv[1]; d=json.load(open(f,encoding='utf-8'))
+rev=re.compile(r'[0-9a-fA-F]{40}'); ids=re.compile(r'[A-Za-z0-9_-]{1,128}'); g=d.get('generation')
+ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z0-9_.-]+',str(d.get('taskId')))
+    and all(isinstance(d.get(k),str) and ids.fullmatch(d[k]) for k in ('candidateId','attemptId'))
+    and type(g)==int and 0<g<=9007199254740991 and isinstance(d.get('workerId'),str) and d['workerId']
+    and isinstance(d.get('target'),str) and d['target']
+    and all(isinstance(d.get(k),str) and rev.fullmatch(d[k]) for k in ('targetBefore','targetAfter','landedRevision')))
+if not ok: sys.exit(1)
+print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['landedRevision']]))
+PY
+        ); then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: malformed journal"
+            continue
+        fi
+        IFS=$'\x1f' read -r tid target after aid gen owner landed <<< "$fields" || true
+        if live_marker_foreign_live "$tid"; then continue; fi
+        if tip=$(git -C "$MOE_TOP" rev-parse -q --verify "$target^{commit}" 2>/dev/null); then
+            if git -C "$MOE_TOP" merge-base --is-ancestor "$after" "$tip" 2>/dev/null; then rc=0; else rc=$?; fi
+        else
+            rc=$?
+            [ "$rc" -eq 1 ] || { echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: git rev-parse exited $rc"; continue; }
+        fi
+        if [ "$rc" -gt 1 ]; then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: git merge-base --is-ancestor exited $rc"
+            continue
+        fi
+        if [ "$rc" -ne 0 ]; then
+            echo -e "${BLUE}[receipt]${NC} $target does not contain $after: that landing never moved the ref; dropping $f."
+            rm -f "$f"
+            continue
+        fi
+        echo -e "${BLUE}[receipt]${NC} replaying the delivery receipt of task $tid from $f"
+        receipt_send "$(cat "$f")" "$f" || continue
+        [ "$owner" = "$WORKER_ID" ] || continue
+        [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen")" = finalizing ] || continue
+        args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,s=sys.argv[1:];print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome="landed",landedRevision=s)))' \
+            "$tid" "$aid" "$gen" "$WORKER_ID" "$MOE_RUNNER_ID" "$landed") || continue
+        moe_evidence_rpc finalize_attempt "$args" 3 \
+            || echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; this seat's next claim stays refused until it closes."
+    done
+    return 0
+}
+
 # ---- the landing driver ------------------------------------------------------
 # run_landing -- inputs via LAND_* globals:
 #   LAND_KIND completion|checkpoint, LAND_TASK_ID, LAND_TITLE, LAND_STATUS,
@@ -4280,7 +4457,8 @@ run_landing() {
     mkdir -p "$work"
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
-    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""
+    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""; LAND_PUSH_RESULT=""
+    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -4467,6 +4645,12 @@ run_landing() {
         record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
         LAND_RECORDED=true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" 1
+        if [ -n "${RECEIPT_LANDED:-}" ]; then
+            local report
+            report=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$LAND_PUSH_RESULT") || report=""
+            receipt_journal_write "$RECEIPT_JOURNAL" "$report"
+            [ -z "$report" ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
+        fi
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
         record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "MOE_COMMIT_NOTHING_TO_COMMIT" "" "" "" "" || true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
@@ -4993,6 +5177,7 @@ except Exception:
             CLAIM_RESULT='{"hasNext":false}'
         else
             CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+            receipt_replay || true
         fi
 
         # Role-group tag for @architects/@workers/@qa routing. Computed HERE
