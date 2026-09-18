@@ -230,9 +230,11 @@ does not stop the worker loop; the task's next session lands the bytes.
 A CheckRun is an observed command result, not a delivery receipt. After landing
 outcome reporting, `finalize_attempt` acknowledges the exact attempt's result;
 it does not persist receipt evidence. The post-flight acknowledges only the
-seat's own `finalizing` attempt under the identity pinned at claim time. A
-closed, running, reconciling, missing or no-longer-matching attempt is nothing
-to acknowledge, so an ordinary checkpoint exit — whose attempt is still
+seat's own `finalizing` attempt under the identity pinned at claim time, in
+both wrappers. A closed attempt (the daemon closes a seat's attempt when a
+seat-freeing `report_blocked` or another hand-back releases the task), a
+running, reconciling or missing one, or one that no longer matches the pin is
+nothing to acknowledge, so an ordinary checkpoint exit — whose attempt is still
 `running` — makes no call and the worker keeps claiming; a reconciling, missing
 or mismatched record logs `[finalize] no finalizing attempt for this seat on
 task <id>; nothing to acknowledge.` A finalizing attempt with no pinned

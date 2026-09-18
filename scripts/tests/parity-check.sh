@@ -175,7 +175,7 @@ done
 
 # Attempt finalize ladder, candidate-evidence and gate-cleanup prose: an operator
 # reading either transcript must see the same diagnosis for the same state.
-for prose in '[finalize] no finalizing attempt for this seat on task' 'has no pinned identity; not acknowledging.'   'finalize_attempt acknowledgement exhausted; stopping new-task loop' 'qualityGate not run: candidate evidence unavailable'   'Cannot remove owned qualityGate workspace' 'cleanup will be retried'; do
+for prose in '[finalize] no finalizing attempt for this seat on task' 'has no pinned identity; not acknowledging.'   'finalize_attempt acknowledgement exhausted; stopping new-task loop' 'qualityGate not run: candidate evidence unavailable'   'Cannot remove owned qualityGate workspace' 'cleanup will be retried'   'Attempt identity unavailable:' 'Missing/stale attempt identity; candidate completion will fail closed.'; do
   require_both "attempt/gate prose" "$prose"
 done
 

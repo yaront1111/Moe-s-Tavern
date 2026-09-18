@@ -1,0 +1,32 @@
+{
+  "id": "task-e92b2cb33f744bf18074fc87121f22df",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "test: cover the wrapper self-restart hand-over in both postflight harnesses",
+  "description": "FOLLOW-UP to df42861 (governor fix, 2026-09-18). The wrapper self-restart — the top-of-loop check that relaunches when the wrapper's own bytes change on disk — has NO harness or parity coverage in either twin. `grep -n 'source changed on disk' scripts/tests/*` returns nothing today.\n\nThat gap let a real defect live: the ps1 path relaunched via `Start-Process`, which gave the new wrapper its own console window and left the launching terminal at a prompt. Operators read that as a dead seat and relaunched the same worker id, so two wrapper loops shared one seat and two CLIs reviewed task-49ec8755 at the same time (2026-09-18, qa-a36819c3 and worker-d0c3b06e). df42861 hands over with the call operator instead, past the outer finally, and deregisters with reason `wrapper_restart` first, matching the sh twin's `exec`.\n\nWHY IT IS A SEPARATE CARD: scripts/tests/postflight.{sh,ps1} were held by task-e47284ef when the fix landed, and task-32ecce5d has the same files next. Adding the case then would have been swept into another task's commit.\n\nWHAT TO ASSERT (daemon-free, in the existing fake-proxy harness): with the wrapper copy's bytes changed between iterations, the run must show exactly one `deregister_worker` RPC carrying reason `wrapper_restart`, then a fresh registration from the relaunched wrapper, and exactly one restart per on-disk change (the relaunched process re-reads the hash and must not thrash). The engine difference is the hand-over mechanism itself, so assert what both twins share — the RPC sequence — rather than pids. On ps1 the relaunch is a child of the wrapper and inherits its console; on sh `exec` replaces the process, so the pid is unchanged.\n\nSUGGESTED PROOF (the worker decides): revert the call operator to `Start-Process` in a scratch copy and show the case turns red, the same way the other harness mutations are proven.",
+  "definitionOfDone": [
+    "Both scripts/tests/postflight.sh and scripts/tests/postflight.ps1 gain a self-restart case: change the wrapper copy's bytes between iterations and assert one deregister_worker with reason 'wrapper_restart', a fresh registration afterwards, and exactly one restart per on-disk change.",
+    "The case is proven RED on a scratch copy that restores the pre-df42861 behaviour (Start-Process relaunch, deregister reason terminal_closed).",
+    "MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh and the ps1 twin both pass on a quiet box, and parity-check.sh and parity-check.ps1 stay green.",
+    "Any new banner or reason literal is registered in both parity checkers' fixed lists."
+  ],
+  "taskRails": [
+    "Harness-only change; scripts/moe-agent.ps1 and scripts/moe-agent.sh stay as df42861 left them unless the case proves them wrong.",
+    "Keep both harness twins byte-identical in the shared fake-proxy JavaScript, as the surrounding cases already require."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 204,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T11:58:26.168Z",
+  "updatedAt": "2026-09-18T11:58:26.168Z"
+}

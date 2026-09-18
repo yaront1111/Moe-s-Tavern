@@ -486,12 +486,19 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
 'finalize-loss-once','finalize-loss','no-change','disabled','deferred','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
-'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned','unborn','cleanup-retry','hidden-mutation',
+'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
+'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
-// supervisor stops the wrapper as soon as that claim is seen.
-const loopModes=['nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned'];
+// supervisor stops the wrapper as soon as that claim is seen. freed-* is a
+// seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
+// pinned attempt -- closed in place by the hand-back, rewritten to a generation
+// the seat never pinned, or left running beside a corrupt sibling record --
+// nothing is acknowledged and the seat keeps claiming. finalizing-acked-continues
+// is the control: one acknowledged finalizing attempt does not stop the loop.
+const loopModes=['nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
+  'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues'];
 const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','gate-qa-claimed'];
 // Teardown modes interrupt the wrapper once complete_task has left the attempt
 // finalizing: mid-CLI, in the post-flight landing before it reached any outcome
@@ -504,7 +511,7 @@ const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothin
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
-const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',...loopModes];
+const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',...loopModes.filter(m=>m!=='finalizing-acked-continues')];
 const EMPTY_TREE='4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 // An interrupted wrapper still has to stop the gate, park a rescue ref,
 // acknowledge the attempt and deregister -- several node spawns on a loaded
@@ -580,14 +587,14 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
 const fs=require('fs'),path=require('path'),dir=process.env.MOE_PROJECT_PATH,mode=process.env.FROZEN_MODE;
 if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
-const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running';
+const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||mode==='teardown-running';
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
 if(mode.endsWith('-reconciling'))a.phase='reconciling';
-if(mode==='closed-attempt'||qaClaimed)a.phase='closed';if(mode==='stale-attempt')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
+if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if(mode==='stale-attempt'||mode==='freed-generation-bump')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
 const stamp=new Date().toISOString();
 if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json'),JSON.stringify({id:'attempt-qa',generation:8,taskId:'task-postflight',
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
-if(mode.endsWith('-unpinned'))fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
+if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
 if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
@@ -612,6 +619,7 @@ if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mo
     '--command',cli,'--no-loop','--poll-interval','0'];
 
   if(/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running')env.FAKE_TASK_STATUS='WORKING';
+  if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
   if(mode==='finalize-loss'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
@@ -760,6 +768,15 @@ exit "$rc"
       assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');}
     count++;continue;
   }
+  if(mode.startsWith('freed-')){
+    assert.equal(candidates.length+checks.length+finals.length+seen.length,0,'a seat that holds no finalizing attempt acknowledges nothing\n'+log);
+    assert.equal(log.split('[finalize] no finalizing attempt for this seat on task task-postflight').length-1,mode==='freed-generation-bump'?1:0,log);
+    assert.equal(log.includes('Attempt identity unavailable'),false,'finalize reads only the pinned attempt record\n'+log);
+    assert.equal(git(repo,'rev-list','--count',before+'..HEAD'),'1',log);
+    assert.match(git(repo,'log','-1','--format=%s'),/^wip\(task-postflight\).*\[status=BLOCKED /,log);
+    assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');
+    count++;continue;
+  }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
@@ -840,6 +857,7 @@ exit "$rc"
     for(const f of finals)assert.deepEqual(f.args,finals[0].args);
     assert.equal(rpc.filter(r=>r.tool==='record_commit'&&r.args.kind==='completion').length,1);
   }else assert.equal(finals.length,noFinal.includes(mode)?0:1,log);
+  for(const f of finals){assert.equal(f.args.attemptId,'attempt-postflight',log);assert.equal(f.args.generation,7,log);}
   if(finals.length){assert.equal(finals[0].args.outcome,failed?'rescued':mode==='no-change'?'nothing-to-commit':'landed');
     if(!failed&&mode!=='no-change')assert.equal(finals[0].args.landedRevision,after);}
   assert.equal(read(path.join(nested,'helper.txt')),'dirty helper\n');assert.equal(read(path.join(nested,'peer.txt')),'peer bytes\n');
