@@ -1,0 +1,27 @@
+{
+  "id": "task-0e967fa1c869495888c3e1b50f69c842",
+  "epicId": "epic-be924fb8",
+  "title": "test: claude-plugin postToolUse tests read the launcher's MOE_PROJECT_PATH and send a fake tool event to the live daemon",
+  "description": "Found by the Wave 1 integration gate's regression run (task-808869c5). This is not Wave 1 code.\n\nIn any session launched by scripts/moe-agent.* (MOE_PROJECT_PATH set), `cd packages/moe-claude-plugin && npm test` fails 2 of 13:\n- 'forwards moe.* tool events with the expected envelope': expected 1 frame, got 0.\n- 'does not throw when the daemon is unreachable': forwarded is true.\n\nCause: runPostToolUseHook prefers MOE_PROJECT_PATH over input.cwd (src/postToolUse.ts:84-88), so the hook reaches the LIVE daemon. The first case posts AGENT_TOOL_EVENT {workerId:'worker-test', tool:'moe.start_step'} into the real project's event stream.\n\nWith MOE_PROJECT_PATH and MOE_WORKER_ID unset the suite is 13/13. That is why it stays green in CI and red in agent sessions.",
+  "definitionOfDone": [
+    "The postToolUse tests save, clear and restore MOE_PROJECT_PATH exactly as they already do MOE_WORKER_ID, so no case can reach a daemon outside its own fixture",
+    "npm test in packages/moe-claude-plugin passes with MOE_PROJECT_PATH set to an unrelated live project and with it unset"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T17:27:10.584Z",
+  "updatedAt": "2026-09-18T17:27:10.584Z"
+}

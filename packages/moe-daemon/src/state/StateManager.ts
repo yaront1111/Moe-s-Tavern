@@ -114,6 +114,7 @@ import {
   updateTask,
 } from './taskStore.js';
 import {
+  armPeriodicSweeps,
   checkBlockedTimeouts,
   checkReconcileWindow,
   checkStaleWorkers,
@@ -1136,10 +1137,10 @@ export class StateManager {
     // running the whole sweep unlocked and racing tool handlers (lost-update
     // windows: a sweep release clobbering a concurrent qa_approve, etc.).
     // The start* methods also arm detached (mutex.exit) as defense in depth.
-    this.startBlockedTimeoutCheck();
-    this.startProposalPurgeInterval();
-    this.startStaleWorkerWatcher();
-    this.startReconcileWindowCheck();
+    // Armed ONCE per process: a reload never resets an armed sweep, because
+    // restarting the phase on every FileWatcher reload starved the self-heals
+    // and a reload has nothing to re-read. See armPeriodicSweeps.
+    armPeriodicSweeps(this);
   }
 
   /**

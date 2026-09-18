@@ -1,0 +1,28 @@
+{
+  "id": "task-d5b7e6a21be5458c8b219243ed1a4db4",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: three crash windows the delivery-receipt replay does not cover",
+  "description": "Named by task-bfe2f04e's self-review as residuals and never filed. The Wave 1 integration gate (task-808869c5) files them. They are combined-failure paths that sit between the ledger, the receipt and the attempt, so no single slice could close them.\n1. A hard crash between `update-ref` and `record_commit` loses the ledger row. The next pre-flight's replay records the receipt, but task.commits never gets the completion commit. Under deliveryPolicy local-branch, qa_approve then refuses completion-commit for bytes that did land. Possible fix: the replay also re-sends an idempotent minimal record_commit from the journal, which would need the sessionId journaled.\n2. A `pull --rebase` retry inside the push rewrites the pushed commit. The receipt keeps the CAS sha while record_commit keeps the rebased sha. If that receipt is then lost, the replay's `merge-base --is-ancestor` test fails, and it drops the journal with \"never moved the ref\" although the bytes are on the branch.\n3. A foreign seat's replay records the receipt and deletes the journal, but it never finalizes the owner's attempt. That attempt then waits for the owner's deregister or the other close paths.\nCode: scripts/moe-agent.ps1 Invoke-MoeReceiptReplay / Send-MoeReceipt, and scripts/moe-agent.sh receipt_replay / receipt_send. See mem:gotcha-wrapper-receipt-journal-and-replay.",
+  "definitionOfDone": [
+    "Each of the three windows is either closed in BOTH wrappers or explicitly accepted with its operator recovery documented in docs/CONFIGURATION.md -> Delivery receipts",
+    "Every closed window has a postflight arm in both twins that fails on today's wrappers (a crash injected at the named point), and the existing 7 receipt arms stay green",
+    "Acceptance criterion 6 stays green unedited; postflight.{sh,ps1} and parity-check.{sh,ps1} pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 209.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T17:27:55.919Z",
+  "updatedAt": "2026-09-18T17:27:55.919Z"
+}

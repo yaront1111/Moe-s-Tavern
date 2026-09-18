@@ -168,6 +168,30 @@ export function stopReconcileWindowCheck(state: StateManager): void {
 }
 
 /**
+ * Arm each periodic sweep that is not armed yet. load() calls this on every
+ * load, and the FileWatcher reloads on every .moe write that self-write
+ * suppression lets through (a claim reliably produces one). Re-arming there
+ * restarted each sweep's phase, so a fleet whose reloads arrived faster than a
+ * cadence starved every self-heal behind it: the blocked-timeout alerts and
+ * parking, the resource lease reaper, the stale-worker prune, the REVIEW
+ * self-heal and the reconcile-window pass. Measured 2026-09-17: two claims
+ * 3m59s apart reset the 5-minute timers twice without either firing, with only
+ * two active seats.
+ *
+ * A reload has nothing to re-arm: the cadences and the stale watcher's liveness
+ * window are constants, and every settings-derived threshold is read from
+ * `state` at tick time. stop* (clearEmitter) clear the handles, so the load
+ * after a stop arms fresh ones. start* still restart, for a caller that passes
+ * a cadence on purpose.
+ */
+export function armPeriodicSweeps(state: StateManager): void {
+  if (state.blockedTimeoutInterval === undefined) startBlockedTimeoutCheck(state);
+  if (state.proposalPurgeInterval === undefined) startProposalPurgeInterval(state);
+  if (state.staleWorkerInterval === undefined) startStaleWorkerWatcher(state);
+  if (state.reconcileWindowInterval === undefined) startReconcileWindowCheck(state);
+}
+
+/**
  * Close reconciling attempts that no runner ever came back for, and release
  * their tasks for ONE successor each.
  *
