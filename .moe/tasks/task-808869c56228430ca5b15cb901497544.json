@@ -136,7 +136,7 @@
     }
   ],
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-7100be29",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -163,7 +163,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:04:10.992Z",
-  "updatedAt": "2026-09-18T18:41:43.462Z",
+  "updatedAt": "2026-09-18T20:21:03.403Z",
   "planRevision": 17,
   "metrics": {
     "firstClaimAt": "2026-09-18T12:08:02.975Z",
@@ -173,7 +173,10 @@
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
-    "worker-f0cb282e"
+    "worker-f0cb282e",
+    "qa-a36819c3",
+    "governor-39911495",
+    "qa-7100be29"
   ],
   "stepsCompleted": [
     "step-1",
@@ -238,7 +241,68 @@
     "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/tools/qaApprove.test.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
-    "packages/moe-daemon/src/util/claimEligibility.ts"
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+    ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json"
   ],
-  "completionSummary": "Wave 1 gate on HEAD 93a26a1 + 10 paths.\n- Acceptance: 6/6. c5 unskipped; since authoring only 6 skip toggles and comments changed.\n- DRIFT FIXED: ps1 recorded a padded qualityGate verbatim and policy.ts compared it exactly, so a passing gate never counted. policy.ts:186 now trims; test qaApprove.test.ts:1390 is red on the old code. Also fixed 2 stale comments and doc drift in ARCHITECTURE (+Delivery Path), SCHEMA (+ExecutionAttempt), CONFIGURATION and MCP_SERVER.\n- Regression, baseline -> now:\n  - daemon: 2104 + 1 skipped -> 2109, tsc 0.\n  - proxy 62; VS Code 113 + compile; JetBrains 197.\n  - claude-plugin: 13/13 with MOE_PROJECT_PATH unset. It is 2/13 red inside the wrapper env, pre-existing (task-0e967fa1).\n  - postflight.sh 64+28 (50m34s); postflight.ps1 pwsh and PS 5.1 64+28; parity x3 PASS.\n- Pilot (scripts/tests/wave1-pilot.mjs, 8/8 PASS on pwsh, PS 5.1 and sh):\n  - SUCCESS (pwsh, 27 links): gen-1 attempt opened; finalizing held with the row unassigned; QA claim refused ATTEMPT_FINALIZING. Candidate frozen; gate exit 0, runner-observed, in a clean worktree. Target moved once; receipt recorded; attempt closed. QA rejected; round 2 landed. The superseded candidate got CANDIDATE_MISMATCH; approval was bound to the current one; B became claimable only then.\n  - FAIL (pwsh, 15 links): gate exit 7, target unmoved, rescue ref holds the edit, MOE_COMMIT_FAILED_GATE plus PUSH-BLOCKED, no receipt. qa_approve got DELIVERY_EVIDENCE_MISSING. After a human DONE, B got DEPENDENCY_EVIDENCE_MISSING naming required-check:node gate.cjs, which equals the recorded command.\n  - Also passed: a daemon restart mid-gate, and a padded gate.\n- Filed: fd970f24 (weakest link: the required check is re-derived from current settings), 8fc35d31, d5b7e6a2, dc1e8ef6, 31fe6dc8, fee5e136, 0e967fa1.\n- MCP_SERVER.md: this card's +4/-4 only; peer 5e096de9's 3 hunks landed first by agreement.\n- Full detail: comment-e40f4ac5."
+  "completionSummary": "Wave 1 gate on HEAD 93a26a1 + 10 paths.\n- Acceptance: 6/6. c5 unskipped; since authoring only 6 skip toggles and comments changed.\n- DRIFT FIXED: ps1 recorded a padded qualityGate verbatim and policy.ts compared it exactly, so a passing gate never counted. policy.ts:186 now trims; test qaApprove.test.ts:1390 is red on the old code. Also fixed 2 stale comments and doc drift in ARCHITECTURE (+Delivery Path), SCHEMA (+ExecutionAttempt), CONFIGURATION and MCP_SERVER.\n- Regression, baseline -> now:\n  - daemon: 2104 + 1 skipped -> 2109, tsc 0.\n  - proxy 62; VS Code 113 + compile; JetBrains 197.\n  - claude-plugin: 13/13 with MOE_PROJECT_PATH unset. It is 2/13 red inside the wrapper env, pre-existing (task-0e967fa1).\n  - postflight.sh 64+28 (50m34s); postflight.ps1 pwsh and PS 5.1 64+28; parity x3 PASS.\n- Pilot (scripts/tests/wave1-pilot.mjs, 8/8 PASS on pwsh, PS 5.1 and sh):\n  - SUCCESS (pwsh, 27 links): gen-1 attempt opened; finalizing held with the row unassigned; QA claim refused ATTEMPT_FINALIZING. Candidate frozen; gate exit 0, runner-observed, in a clean worktree. Target moved once; receipt recorded; attempt closed. QA rejected; round 2 landed. The superseded candidate got CANDIDATE_MISMATCH; approval was bound to the current one; B became claimable only then.\n  - FAIL (pwsh, 15 links): gate exit 7, target unmoved, rescue ref holds the edit, MOE_COMMIT_FAILED_GATE plus PUSH-BLOCKED, no receipt. qa_approve got DELIVERY_EVIDENCE_MISSING. After a human DONE, B got DEPENDENCY_EVIDENCE_MISSING naming required-check:node gate.cjs, which equals the recorded command.\n  - Also passed: a daemon restart mid-gate, and a padded gate.\n- Filed: fd970f24 (weakest link: the required check is re-derived from current settings), 8fc35d31, d5b7e6a2, dc1e8ef6, 31fe6dc8, fee5e136, 0e967fa1.\n- MCP_SERVER.md: this card's +4/-4 only; peer 5e096de9's 3 hunks landed first by agreement.\n- Full detail: comment-e40f4ac5.",
+  "commits": [
+    {
+      "sha": "bb5e7e29fcdac5999383321d419d55f750131dfa",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-f0cb282e@2026-09-18T16:11:18Z",
+      "paths": [
+        ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+        ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json",
+        "docs/ARCHITECTURE.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/delivery/acceptance.test.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/util/claimEligibility.ts",
+        "scripts/tests/wave1-pilot.mjs"
+      ],
+      "recordedBy": "worker-f0cb282e",
+      "recordedAt": "2026-09-18T18:42:12.589Z",
+      "treeId": "f19fa7e8660d8b9686ec66da44fe9b9ea8c86bfa",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/util/claimEligibility.ts",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/delivery/acceptance.test.ts",
+    "docs/SCHEMA.md",
+    "scripts/tests/wave1-pilot.mjs",
+    "docs/MCP_SERVER.md",
+    "docs/ARCHITECTURE.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-f0cb282e@2026-09-18T16:11:18Z",
+    "at": "2026-09-18T18:42:12.589Z"
+  },
+  "priorHandoffs": [
+    {
+      "whatIsDone": "qa-a36819c3 reviewed from 18:42:32Z until the 20:03:53Z machine reboot killed its seat. It never posted a verdict or any comment on this task. Its one note was a non-blocking FYI on task-8fc35d31 at 19:55Z: the policy.ts:60 requiredCheckToken doc comment holds only once ps1 trims qualityGate, and 8fc35d31 fixes that.",
+      "whatRemains": "A full QA review from the start: completion commit bb5e7e2 (13 paths, pushed), 8/8 steps, 6 DoD items.",
+      "pitfalls": "The previous QA's partial evidence died with its session. Re-run the verification yourself and don't rely on the earlier review.",
+      "releasedAt": "2026-09-18T20:20:58.053Z",
+      "releasedBy": "governor-39911495",
+      "reason": "Confirmed crash: qa-a36819c3 died in the machine reboot at 20:03:53Z (LastBootUpTime); no wrapper or CLI process survives. The daemon restart hold was keeping the REVIEW row until ~22:04Z. Human approved the force release."
+    }
+  ]
 }

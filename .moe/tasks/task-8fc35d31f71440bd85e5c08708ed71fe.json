@@ -10,9 +10,51 @@
     "postflight.sh, postflight.ps1 (pwsh and PS 5.1) and both parity checks pass"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phases 1+2 — confirm the three spots and record baselines. No repo edits.\n\nVerified while planning; re-check by grep, never by line number:\n- ps1 `Read-MoeCommitSettings`: `$qg = Get-MoeProp $st 'qualityGate'` followed by `if ($qg -is [string]) { $s.qualityGate = $qg }` — stored verbatim. Its neighbour `consolidationBranch` already trims and already treats a whitespace-only value as unset, so qualityGate is the outlier in its own function.\n- sh: the post-flight settings reader prints `v.strip() if isinstance(v, str) else ''`, and every later use is `[ -n \"${QUALITY_GATE:-}\" ]`. So sh already behaves the way this card wants ps1 to.\n- The gate-failure chat line: sh builds `🚫 PUSH-BLOCKED: qualityGate failed for task …`, ps1 builds the same sentence WITHOUT the marker, and both parity lists pin only the bare substring `PUSH-BLOCKED:`, which is why the difference survived. Note that the OTHER PUSH-BLOCKED line in both twins (the post-flight status-lookup one) carries no marker in either — leave that pair alone.\n- ps1 feeds the same `$gateMsg` to the chat line and to the add_comment body, so one edit fixes both halves of DoD 3.\n\nAlso check, before writing any arm: the frozen suite's existing `pushBlocked` helper matches on `includes('PUSH-BLOCKED')`, so prefixing the marker must not disturb it. Say so in the step note after reading it.\n\nBaselines with counts and exit codes: `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`, `bash scripts/tests/parity-check.sh`, and both ps1 twins launched from PowerShell under pwsh and powershell.exe (mem:gotcha-ps-harness-ctrlc-from-git-bash).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "No repo edits. Confirmed by grep on HEAD bb5e7e2 (scripts/ unchanged since 7728e7b, clean vs HEAD):\n- ps1 Read-MoeCommitSettings: `$qg = Get-MoeProp $st 'qualityGate'` then `if ($qg -is [string]) { $s.qualityGate = $qg }` (verbatim); neighbour consolidationBranch trims. Downstream: gate decision `if ($Kind -eq 'completion' -and $RunGate -and $Settings.qualityGate)`, Invoke-MoeFrozenGate `if (-not $Command) { return $true }`, Send-MoeCheckRun `command=$Gate.Command`, `$gateMsg=\"PUSH-BLOCKED: qualityGate failed ...\"` (feeds chat AND add_comment).\n- sh: post-flight reader `print(v.strip() if isinstance(v, str) else '')`; uses `[ -n \"${QUALITY_GATE:-}\" ]`; announce_gate_failure builds `🚫 PUSH-BLOCKED: ...`. Status-lookup PUSH-BLOCKED line unmarked in both twins (left alone).\n- Parity lists pin bare 'PUSH-BLOCKED:' (parity-check.sh:62, parity-check.ps1:53).\n- Frozen suite pushBlocked helper = `includes('PUSH-BLOCKED')` on chat rows + add_comment; the scenario greps (postflight.ps1 Q/gate-fail -notlike '*PUSH-BLOCKED: qualityGate failed for task task-postflight*', postflight.sh grep -Fq same) and wave1-pilot.mjs:474 are substring matches: a leading marker disturbs none.\n- The fake daemon's record_check_run refuses a blank command like the real one (`args.command.trim()`), and logs refused calls too.\nEXTRA FINDING (shapes step 3c): parity-check.ps1 has no BOM (CRLF) and reads both wrappers with bare `Get-Content -Raw`. On PS 5.1 (ANSI = Windows-1252) the BOM-less moe-agent.sh decodes the emoji as mojibake: IndexOf('🚫 PUSH-BLOCKED:') = -1 with the default read, 93655 with -Encoding UTF8 (pwsh 7: 93655 both). So the ps1 list must build the marker from its code point and read the wrappers as UTF-8. moe-agent.ps1 HAS a BOM, so its literal is safe on both engines; ConvertTo-Json + Invoke-MoeRpc's UTF-8 OutputEncoding keep the surrogate pair intact on both.\nHot-reload hazard: every repo-launched ps1 wrapper restarts on a moe-agent.ps1 hash change, so the fix must be parse-checked on both engines right after the edit. A peer postflight.sh runs from the repo; bash reads scripts by offset, so repo harness edits go in via atomic rename, never in place.\nBASELINES (scratch copy D:/moe-t8fc3/base = HEAD scripts): parity-check.sh PASS exit 0 (6m35s, MSYS forks slow under load); parity-check.ps1 PASS exit 0 on pwsh 7.6.6 and PS 5.1. Frozen count 64 sh / 64 ps1 (computed from the modes array), scope 28 (808869c5 recorded 64+28 PASS on these exact bytes). Full ps1/pwsh harness baseline: exit 1 at frozen race-pass, run.signal SIGTERM at the 180 s budget, stalled inside its 2nd gate run: load, not code (node -e 0 = 2.3 s, git --version = 4.6 s, py in %TEMP% = 6.5 s; ~60 moe-next vitest workers + a peer postflight.sh). Full-harness runs deferred to step 4 with a higher MOE_POSTFLIGHT_TIMEOUT_SEC; any failure there is classified against the base copy.\n17 dirty paths belong to others; not touched.",
+      "startedAt": "2026-09-18T19:18:04.372Z",
+      "completedAt": "2026-09-18T19:50:43.969Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Phase 3 — two frozen arms first, byte-identical in scripts/tests/postflight.sh and scripts/tests/postflight.ps1. Edit with the Edit tool (mem:gotcha-serena-edit-rewrites-crlf-on-windows, mem:gotcha-bash-tool-json-escapes-generated-code).\n\n- `gate-blank`: the fixture's project.json carries `\"qualityGate\": \"   \"` on an ordinary gated-shape completion. Assert the landing behaves exactly as a no-gate completion does: a commit on the branch, ZERO record_candidate rows, ZERO record_check_run rows, no rescue ref under refs/moe/rescue/, no PUSH-BLOCKED line anywhere (chat or comment), finalize outcome `landed`, and the loop not stopped.\n- `gate-padded`: `\"qualityGate\": \"  node gate.cjs  \"`. Assert the gate RUNS and that the recorded check command is exactly `node gate.cjs` — the trimmed string, byte-compared, because the delivery policy's required-check token is built from the trimmed command and a padded record is what withheld dependents from a passing gate.\n\nBoth arms assert on the wrapper log they captured, so a failure shows what the wrapper actually printed. Error handling inside the arms: a mode that cannot read the fixture's records fails with that log attached rather than silently asserting on an empty list, which is how a vacuous green slips through.\n\nRed proof, one run per mode (`MOE_FROZEN_TEST_ONLY=<mode>`, ps1 from PowerShell):\n- ps1, pre-fix: `gate-blank` fails — the wrapper runs `cmd /d /s /c \"   \"`, record_check_run refuses the blank command, Send-MoeCheckRun throws 'qualityGate check persistence failed', and the landing becomes MOE_COMMIT_FAILED_GATE with a rescue ref and a PUSH-BLOCKED line. `gate-padded` fails on the recorded command.\n- sh: BOTH arms are expected to pass already, because sh trims at the settings read. They are parity guards there, not red proofs — say so plainly in the step note rather than reporting a red that did not happen.\n\nRecord the first failing assertion for each ps1 arm.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "startedAt": "2026-09-18T19:50:47.845Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Phase 4 — the fix, in scripts/moe-agent.ps1, plus the marker parity in both checks.\n\n(a) Read-MoeCommitSettings: trim the value as it is read, so a whitespace-only setting means NO gate and a padded one becomes canonical. One comment saying the sh twin's settings reader and delivery/policy.ts both trim, so this is the third copy of one rule and the wrapper's recorded evidence is the one that must be canonical.\n\nEverything downstream then inherits it with no further edits: the truthiness test that decides whether a completion gates, the command the frozen gate runs, the command recorded on the check run, and the text in the failure line. Do not add a second trim at any of those sites — one rule, one place.\n\nError handling for this change, which is small but real: keep the existing `-is [string]` guard so a missing, null or non-string setting never reaches Trim() and still falls through to the default empty gate; a malformed project.json is already swallowed by the enclosing try/catch that leaves the defaults standing, and this edit must not move that boundary. The result is that every failure mode of the setting now lands on 'no gate configured' instead of on a blank command the daemon refuses.\n\n(b) The gate-failure message: prefix the ps1 `$gateMsg` with the same `🚫 ` marker the sh twin uses, which covers both the chat line and the task comment since they share the string. Leave the post-flight status-lookup PUSH-BLOCKED line alone: neither twin marks that one, and marking one of them would create the very asymmetry this card is closing.\n\n(c) scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1: replace the bare `PUSH-BLOCKED:` chat-prefix entry with `🚫 PUSH-BLOCKED:` in BOTH lists, so the marker itself is pinned rather than just the words after it. Prove the guard once: delete the marker from one wrapper, confirm BOTH parity scripts fail, restore it.\n\nWatch the encoding: both harness and wrapper files must keep their current encoding and line endings. Check `git diff --numstat` shows only the expected lines and that the emoji survives a round trip in PowerShell 5.1 as well as pwsh — an emoji written as literal bytes by a tool that rewrites the file as ANSI would break the parity check on the other engine.\n\nBoth arms from step 2 turn green on ps1 and stay green on sh.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Phase 5 — regression, sequentially on a quiet box (mem:moes-test-env-quirks).\n\n1. `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` from Git Bash (about 36 minutes; background it and read the tail).\n2. `MOE_POSTFLIGHT_TIMEOUT_SEC=180 pwsh -NoProfile -File scripts/tests/postflight.ps1`, then the same under powershell.exe, both launched FROM PowerShell. PS 5.1 matters here: it is the fleet host and the engine most likely to mangle the marker.\n3. `bash scripts/tests/parity-check.sh` and the ps1 twin.\n\nEach harness run ends with its PASS lines, the frozen count exactly two higher than step 1's baseline, and the commit-scope count unchanged. Pay particular attention to the arms that already assert a gate failure: they must still see their PUSH-BLOCKED line now that it carries a marker. Rerun a flaky harness alone before concluding; never paper over a real failure.\n\nAlso confirm the live board is unaffected: this project's own settings.qualityGate is empty, so the trim changes nothing here — state that rather than implying the fleet behaviour changed.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Phases 7+8 — self-review, then complete. Answer in ONE task comment:\n1. One rule, one place: show the trim happens where the setting is read and nowhere else, and list what inherits it (the gate decision, the executed command, the recorded check command, the failure text).\n2. The three readers now agree: ps1, the sh settings reader and delivery/policy.ts. Say what each does with `\"   \"` and with `\"  node gate.cjs  \"`.\n3. What the padded case cost before the fix: a PASSING gate recorded a padded command, the policy compared it exactly, and dependents were withheld. task-808869c5 fixed the consumer side; this card makes the evidence canonical at the source. Say whether both halves are now needed or whether one is redundant — and keep both regardless, since a consumer-side trim protects records already on disk.\n4. Honest reds: `gate-blank` and `gate-padded` were red on ps1 only; on sh they were green from the start and are parity guards. Do not present them as a two-engine red.\n5. The marker: both twins now build the same sentence, both parity lists pin the marker, and the status-lookup PUSH-BLOCKED line is deliberately unmarked in both.\n6. Encoding: confirm the emoji survives in both PowerShell engines and that `git diff --numstat` shows no unrelated churn.\n7. Would I be embarrassed if this broke in production? Name the worst case — a project whose gate silently stops running because of an over-eager trim — and which arm would catch it.\n\nThen: call moe.declare_files for exactly the five files this plan names, and moe.complete_task with verification `{ command: 'MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh', exitCode: 0, outputTail }` plus a summary carrying the two arms, the ps1 results for both engines and both parity results.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 4,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,8 +64,57 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 205.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-27c856e5bd3e4eb387491ac9a97aaa6c",
+      "author": "qa-a36819c3",
+      "content": "FYI from QA of the Wave 1 gate (task-808869c5). This is a small textual follow-up in your scope, not a blocker. packages/moe-daemon/src/delivery/policy.ts:60 documents requiredCheckToken as \"the command exactly as the wrapper runs it (the trimmed qualityGate)\". Today that holds only for the sh wrapper. moe-agent.ps1:1977 keeps settings.qualityGate verbatim, and its gate runs untrimmed. The gate card made hasPassingCheck (policy.ts:186) compare `run.command.trim()`, so a padded ps1 run already counts. If your fix makes ps1 trim like sh, the comment becomes exactly true again. Otherwise it should say that the token carries the trimmed setting.",
+      "timestamp": "2026-09-18T19:55:39.451Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:26:46.752Z",
-  "updatedAt": "2026-09-18T17:26:46.752Z"
+  "updatedAt": "2026-09-18T20:20:56.209Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T19:14:08.572Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-aa5a6c1e",
+    "worker-d0c3b06e",
+    "governor-39911495"
+  ],
+  "stepsCompleted": [
+    "step-1"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T19:16:54.614Z",
+  "planningNotes": {
+    "approachesConsidered": "The fix is one trim at the point of reading, not a guard at each use. ps1 already trims consolidationBranch in the same function, sh trims in its settings reader, and delivery/policy.ts trims when it builds the required-check token — so trimming at the read makes the wrapper's recorded evidence canonical and leaves exactly one rule per twin.\n\n- Rejected: guarding each use site (the gate decision, the executed command, the recorded command). Three guards drift; one read does not.\n- Rejected: fixing this consumer-side only. task-808869c5 already made policy.ts compare the trimmed recorded command, which protects records already on disk, but a padded record is still wrong evidence and the whitespace-only case is not a comparison problem at all — ps1 RUNS `cmd /d /s /c \"   \"` and turns every completion into a rescue.\n- Rejected: touching the post-flight status-lookup PUSH-BLOCKED line. Neither twin marks it; marking one would create a new asymmetry.\n- Rejected: adding a daemon-side refusal for a whitespace-only qualityGate. The setting is a project file a human edits, the daemon already refuses a blank check command, and this card is wrapper parity.",
+    "codebaseInsights": "- ps1 Read-MoeCommitSettings stores qualityGate verbatim while trimming consolidationBranch two lines away; sh's reader prints `v.strip()`; policy.ts trims for its token. Three readers, one of them non-canonical.\n- A whitespace-only string is TRUTHY in PowerShell, so `if (… -and $Settings.qualityGate)` gates, `if (-not $Command)` does not short-circuit, and record_check_run then refuses the blank command — which is why the symptom is a rescue ref on every completion rather than a quiet no-op.\n- The ps1 gate-failure string is used for both the chat line and the add_comment body, so one edit satisfies both halves of DoD 3.\n- Both parity lists pin the bare `PUSH-BLOCKED:` substring, which is exactly why the missing marker went unnoticed; pinning the marker closes that hole.\n- The frozen suite's pushBlocked helper matches `includes('PUSH-BLOCKED')`, so a prefix does not disturb the existing arms — verify before relying on it.\n- This project's own settings.qualityGate is empty, so the live fleet sees no behaviour change from the trim.",
+    "risks": "1. Honest reds: both new arms are red on ps1 only. On sh they pass from the start and are parity guards — reporting them as two-engine reds would be false evidence.\n2. Emoji encoding: the marker must survive in the wrapper file and in both parity scripts under PS 5.1 as well as pwsh. A tool that rewrites the file in another encoding breaks the check on the other engine; verify with a run on each.\n3. An over-eager trim could silently stop a legitimate gate from running — the `gate-padded` arm is what proves a padded but real command still runs.\n4. Existing gate-failure arms must still match their PUSH-BLOCKED line now that it carries a marker.\n5. postflight.sh is about 36 minutes and the ps1 twin must be launched from PowerShell, not Git Bash.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "packages/moe-daemon/src/delivery/policy.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T19:16:54.718Z",
+  "workStartedAt": "2026-09-18T19:18:04.372Z",
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Step 1 COMPLETED (see its note: spots grep-verified at HEAD bb5e7e2, baselines recorded). Step 2 IN_PROGRESS since 19:50:47Z. The previous session got ahead in the scratch dir D:/moe-t8fc3. NOT in the repo: scripts/ is clean at HEAD. Contents: base/ = HEAD scripts. work/scripts/tests/postflight.{sh,ps1} (19:34Z) = the gate-blank/gate-padded arms, +1399 bytes each vs base/. logs/red-ps1-pwsh-gate-blank.log and red-ps1-pwsh-gate-padded.log = the pwsh red proofs. fix/scripts/moe-agent.ps1 (19:58Z) = the step-3 trim + marker, +266 bytes vs base/. fix/scripts/tests/parity-check.{sh,ps1} = the pinned marker. guard/ = a marker-deleted variant for the parity guard proof.",
+      "whatRemains": "1. Diff D:/moe-t8fc3/work and fix against base/ and re-read the drafts before trusting them. 2. Finish step 2: land the two arms into the repo harnesses (atomic rename, never in place; a peer harness may be running) and redo the red proofs. The PS 5.1 gate-blank red never finished (empty log). 3. Steps 3-5 per plan: ps1 trim + marker, parity pins with the guard proof, full regression.",
+      "pitfalls": "The seat died in a machine reboot: no landing and no rescue ref. The baseline recovery checkpoint will find nothing, because the draft lives only in scratch. Three runs were in flight at the crash and their logs are empty: logs/parity-sh-fix.log, parity-sh-guard.log, red-ps51-gate-blank.log. Rerun them. Salvage from D:/moe-t8fc3 before any cleanup, and write new runs to a fresh, uniquely named dir. Editing the repo's scripts/moe-agent.ps1 hot-reloads every repo-launched ps1 wrapper, so parse-check it on pwsh and PS 5.1 right after the edit.",
+      "releasedAt": "2026-09-18T20:20:56.206Z",
+      "releasedBy": "governor-39911495",
+      "reason": "Confirmed crash: worker-d0c3b06e died in the machine reboot at 20:03:53Z (LastBootUpTime); no wrapper or CLI process survives. The daemon restart hold was keeping the row until ~22:04Z. Human approved the force release."
+    }
+  ]
 }
