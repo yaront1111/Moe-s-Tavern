@@ -26,8 +26,8 @@ import path from 'path';
 import type { StateManager } from './StateManager.js';
 import type { ActivityEventType, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
-import { nextStatusForRelease, isWorkerAlive, LIVENESS_TIMEOUT_MS } from './workerLifecycle.js';
-import { closeOpenAttempts, listAttempts } from './attemptStore.js';
+import { closeOwnFinalizingAttempts, nextStatusForRelease, isWorkerAlive, LIVENESS_TIMEOUT_MS } from './workerLifecycle.js';
+import { closeHandedBackAttempts, listAttempts } from './attemptStore.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
@@ -233,6 +233,15 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
   await state.mutex.runExclusive(async () => {
     const worker = state.workers.get(workerId);
     if (!worker) return;
+    // Only a DEAD record ends its own landing holds: that is a deregister whose
+    // close failed. Any other record is pruned on lastActivityAt alone, which
+    // must close nothing (closeOwnFinalizingAttempts never throws). A close that
+    // fails again keeps the record: its DEAD status is the only evidence the
+    // next prune or restart can retry the close on.
+    if (worker.status === 'DEAD') {
+      await closeOwnFinalizingAttempts(state, workerId);
+      if (listAttempts(state).some((a) => a.workerId === workerId && a.phase === 'finalizing')) return;
+    }
 
     // Remove from memory
     state.workers.delete(workerId);
@@ -268,9 +277,11 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
         logger.error({ error, taskId: task.id }, 'Failed to update task after worker deletion');
         continue; // Still assigned: it keeps its seat, and so its attempt.
       }
-      // The deleted worker's seat is given up, so its attempt ends too.
+      // The deleted worker's seat is given up, so its attempt ends too — by the
+      // hand-back rule, which spares a finalizing attempt: that is another
+      // worker's landing, and only the DEAD close above may end one here.
       try {
-        await closeOpenAttempts(state, task.id);
+        await closeHandedBackAttempts(state, task.id);
       } catch (error) {
         logger.error({ error, taskId: task.id }, 'Failed to close the attempt of a task released by worker deletion');
       }
@@ -346,6 +357,13 @@ function workersHoldingOpenAttempts(state: StateManager): Set<string> {
 export async function purgeAllWorkers(state: StateManager): Promise<void> {
   await state.mutex.runExclusive(async () => {
     const workersDir = path.join(state.moePath, 'workers');
+    // A DEAD record still holding a finalizing attempt is a deregister whose
+    // close failed: evidence the runner ended, not silence. Close those first so
+    // the sparing rule below stops keeping the record for them; a non-DEAD
+    // seat's hold is never touched here (closeOwnFinalizingAttempts never throws).
+    for (const w of Array.from(state.workers.values())) {
+      if (w.status === 'DEAD') await closeOwnFinalizingAttempts(state, w.id);
+    }
     const spared = workersHoldingOpenAttempts(state);
     let deletedCount = 0;
     let keptCount = 0;
@@ -442,11 +460,13 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
         }
         // Every purged seat is given up, so its attempt closes as well — even
         // when the task write above failed, because the in-memory task is
-        // already unassigned. Its own try/catch for the same reason the write
-        // has one: this runs on every daemon start, and one unwritable attempt
-        // record must not abort startup for the rest of the fleet.
+        // already unassigned. By the hand-back rule: a finalizing attempt on the
+        // row is another worker's landing and survives (the DEAD close above is
+        // the purge's only end for one). Its own try/catch for the same reason
+        // the write has one: this runs on every daemon start, and one unwritable
+        // attempt record must not abort startup for the rest of the fleet.
         try {
-          await closeOpenAttempts(state, task.id);
+          await closeHandedBackAttempts(state, task.id);
         } catch (error) {
           logger.error({ error, taskId: task.id }, 'Failed to close the attempt of a task released during worker purge');
         }

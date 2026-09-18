@@ -25,6 +25,7 @@ import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { sanitizeString, sanitizeStringArray } from '../util/sanitize.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
+import { attemptFinalizingRefusal } from '../util/claimGuards.js';
 import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import {
@@ -34,7 +35,7 @@ import {
   trimComments,
 } from './validators.js';
 import { runDependencyUnblock } from './dependencyUnblock.js';
-import { closeHandedBackAttempts } from './attemptStore.js';
+import { closeHandedBackAttempts, closeOpenAttempts, listAttempts } from './attemptStore.js';
 
 /** Hard cap on declared dependency ids per task (dependsOn / blockedOnTaskIds). */
 export const MAX_TASK_DEPENDENCY_IDS = 20;
@@ -253,6 +254,25 @@ async function closeAttemptsOnHandBack(state: StateManager, before: Task, after:
   }
 }
 
+/**
+ * A terminal column may not strand a landing hold. While the task has a
+ * finalizing attempt (complete_task's landing, not yet acknowledged), a move
+ * into DONE or ARCHIVED is refused with qa_approve's retryable
+ * ATTEMPT_FINALIZING: nothing ever claims a terminal row, so the hold on it and
+ * on its runner's next claim would never end. Only those two columns — a reopen
+ * leaves a claimable row whose hold still ends normally. Throws, writes nothing.
+ */
+export function assertNoFinalizingAttempt(state: StateManager, taskId: string): void {
+  const finalizing = listAttempts(state, taskId).find((a) => a.phase === 'finalizing');
+  if (!finalizing) return;
+  throw attemptFinalizingRefusal({
+    attemptId: finalizing.id,
+    generation: finalizing.generation,
+    taskId: finalizing.taskId,
+    workerId: finalizing.workerId,
+  });
+}
+
 export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
@@ -346,6 +366,14 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
     ? { ...normalizedUpdates, assignedWorkerId: null }
     : normalizedUpdates;
 
+  // Every terminal transition funnels through here (set_task_status,
+  // archive_task, archive_epic, the board's UPDATE_TASK and ARCHIVE_DONE_TASKS),
+  // so this one guard keeps all of them from shelving a landing hold. Before any
+  // write, so a refusal changes nothing.
+  if (statusChanged && (normalizedUpdates.status === 'DONE' || normalizedUpdates.status === 'ARCHIVED')) {
+    assertNoFinalizingAttempt(state, taskId);
+  }
+
   // Derive the plan revision from the sanitized surface, BEFORE any write, so a
   // malformed stored stamp or an exhausted counter refuses the whole update
   // instead of persisting half of it. The stamp travels in the same fresh Task
@@ -433,6 +461,12 @@ export async function deleteTask(state: StateManager, taskId: string): Promise<T
   if (!task) {
     throw new Error(`Task not found: ${taskId}`);
   }
+
+  // An attempt never outlives its task: finalize_attempt refuses a missing task
+  // before it looks the attempt up, so nothing could close one afterwards. Closed
+  // FIRST and deliberately not caught, so a failed close changes nothing — not
+  // even the SPEED-mode timer — and the caller retries (the close is idempotent).
+  await closeOpenAttempts(state, taskId);
 
   try {
     cancelSpeedModeTimeout(taskId);

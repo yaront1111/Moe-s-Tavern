@@ -31,11 +31,17 @@ export const STEP_LEASE_HELD = 'STEP_LEASE_HELD';
  * An attempt is still in the `finalizing` phase. complete_task hands the task to
  * QA but deliberately leaves that attempt OPEN, because the bytes are only
  * landed once the session exits and the wrapper commits them — so the boundary
- * is NOT closed until moe.finalize_attempt acknowledges it. Two callers refuse
- * on it, with deliberately different scopes: claim_next_task refuses THIS
- * WORKER's next claim (starting task B would open a second attempt across the
- * first), and qa_approve refuses an approval of THAT TASK (a fast QA would
- * otherwise reach DONE before the runner had landed a byte).
+ * is NOT closed until moe.finalize_attempt acknowledges it. The refusers, with
+ * deliberately different scopes:
+ * - claim_next_task refuses THIS WORKER's next claim (starting task B would
+ *   open a second attempt across the first);
+ * - claim_next_task and wait_for_task refuse or skip THAT TASK for every other
+ *   seat (util/claimEligibility.ts, with its own message for the refused seat);
+ * - qa_approve refuses an approval of THAT TASK (a fast QA would otherwise
+ *   reach DONE before the runner had landed a byte);
+ * - taskStore.updateTask refuses a move of THAT TASK into DONE or ARCHIVED
+ *   (nothing claims a terminal row, so the hold would never end), and
+ *   archive_epic checks every task of the epic up front so it stays atomic.
  *
  * THROWN, and the retryable rail is carried by `context.retryable: true` rather
  * than by the shape of the response. A wrapper reads that flag to decide the

@@ -181,16 +181,19 @@ export interface DeregisterResult {
  * policy the soft NO-COMPLETION-COMMIT warning is then the only guard; strict
  * policies still refuse the approval.
  *
- * Deliberately NOT done by deleteWorker, the startup purge or any sweep: their
- * non-DEAD deletions are driven by lastActivityAt, and no idle signal may close
- * an attempt (task-686afecb5b844706be805f7cd86ba055 owns those gaps).
+ * ALSO THE DEAD-RECORD BACKSTOP. deleteWorker (the stale-record prune) and the
+ * startup purge call it for a DEAD record, and only for one. deregister marks
+ * the seat DEAD after its own close attempt, so a DEAD record still holding a
+ * finalizing attempt is a runner that declared its end and whose close failed —
+ * evidence, not silence. A non-DEAD record is removed on lastActivityAt alone,
+ * and no idle signal may close an attempt, so those removals close nothing.
  *
  * Each close has its own catch: a failed write is logged, leaves that attempt
- * finalizing for the wrapper's retry, and never fails the deregister. A real
- * close announces itself (announceAttemptClosed) so parked waiters wake. Caller
- * must hold state.mutex.
+ * finalizing for the wrapper's retry (or the next prune or restart), and never
+ * fails the caller. A real close announces itself (announceAttemptClosed) so
+ * parked waiters wake. Caller must hold state.mutex.
  */
-async function closeOwnFinalizingAttempts(state: StateManager, workerId: string): Promise<void> {
+export async function closeOwnFinalizingAttempts(state: StateManager, workerId: string): Promise<void> {
   const held = listAttempts(state).filter((a) => a.workerId === workerId && a.phase === 'finalizing');
   for (const attempt of held) {
     try {

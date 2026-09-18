@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
 import { missingRequired, notFound, notAllowed } from '../util/errors.js';
+import { assertNoFinalizingAttempt } from '../state/taskStore.js';
 
 /**
  * In-flight task statuses that block an epic archive — a worker may own them.
@@ -45,6 +46,13 @@ export function archiveEpicTool(_state: StateManager): ToolDefinition {
             .map((t) => `${t.id}:${t.status}`)
             .join(', ')}). Move them to BACKLOG first via moe.set_task_status (release_task keeps a WORKING task in the WORKING column, so releasing does not make it archivable).`
         );
+      }
+
+      // Same all-or-nothing gate for a landing hold: updateTask refuses to shelve
+      // a task whose attempt is still finalizing, so check every task before the
+      // first write rather than archive the ones ahead of it.
+      for (const task of tasksInEpic) {
+        if (task.status !== 'ARCHIVED') assertNoFinalizingAttempt(state, task.id);
       }
 
       // Archive every not-yet-archived task, then the epic. Per-task TASK_ARCHIVED

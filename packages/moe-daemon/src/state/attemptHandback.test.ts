@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import type { ToolDefinition } from '../tools/index.js';
 import { acquireResourceTool } from '../tools/acquireResource.js';
+import { archiveEpicTool } from '../tools/archiveEpic.js';
+import { archiveTaskTool } from '../tools/archiveTask.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { completeTaskTool } from '../tools/completeTask.js';
+import { deleteTaskTool } from '../tools/deleteTask.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
 import { finalizeAttemptTool } from '../tools/finalizeAttempt.js';
 import { getContextTool } from '../tools/getContext.js';
@@ -12,6 +17,7 @@ import { qaRejectTool } from '../tools/qaReject.js';
 import { recordCandidateTool } from '../tools/recordCandidate.js';
 import { reportBlockedTool } from '../tools/reportBlocked.js';
 import { setTaskStatusTool } from '../tools/setTaskStatus.js';
+import { clearAllSpeedModeTimeouts, submitPlanTool } from '../tools/submitPlan.js';
 import { unblockWorkerTool } from '../tools/unblockWorker.js';
 import { activeWaiters, waitForTaskTool } from '../tools/waitForTask.js';
 import { listAttempts, openAttempt, reconcileRunningAttempts, setAttemptPhase } from './attemptStore.js';
@@ -656,6 +662,280 @@ describe('attempt close on hand-back', () => {
       expect(taken.hasNext).toBe(true);
       expect(taken.generation).toBe(2);
       expect(phases('task-X')).toEqual([[1, 'closed'], [2, 'running']]);
+    });
+
+    // -------------------------------------------------------------------------
+    // Every finalizing attempt has a close path (task-686afecb).
+    //
+    // finalize_attempt and the attempt's own deregister_worker used to be the
+    // only ends, so three shapes held the row and its runner forever: a deleted
+    // task, a terminal move that shelved the row with the hold still open, and a
+    // runner that vanished without its exit trap. No new end reads an idle
+    // signal: a quiet seat keeps its hold, and only a DEAD record is evidence.
+    // -------------------------------------------------------------------------
+
+    describe('every finalizing attempt has a close path (task-686afecb)', () => {
+      /**
+       * task-X in REVIEW, assigned to a quiet IDLE qa-1, while worker-1's landing
+       * on it is still finalizing. Seeded on disk and opened directly: building
+       * the mismatch by clearing a seat through updateTask would close the
+       * attempt under test at seeding time.
+       */
+      async function seedLandingUnderAnotherSeat(): Promise<void> {
+        h.createTask({ id: 'task-X', status: 'REVIEW', assignedWorkerId: 'qa-1', implementationPlan: DONE_PLAN });
+        h.createWorker({ id: 'qa-1', status: 'IDLE', currentTaskId: 'task-X', lastActivityAt: QUIET_FOR_HOURS });
+        await h.state.load();
+        const opened = await openAttempt(h.state, {
+          taskId: 'task-X',
+          workerId: 'worker-1',
+          runnerId: 'worker-1',
+          workspace: h.testDir,
+        });
+        await setAttemptPhase(h.state, opened.id, 'finalizing');
+      }
+
+      /** What a deregister whose close failed leaves: the seat DEAD, its landing hold still open. */
+      async function deadWithLandingHold(): Promise<void> {
+        await completeClaimedRow();
+        await h.state.updateWorker('worker-1', { status: 'DEAD' });
+      }
+
+      it('delete_task closes the finalizing attempt and frees its runner for other work', async () => {
+        h.createTask({ id: 'task-2', status: 'WORKING', order: 2 });
+        const landing = await completeClaimedRow();
+        expectHeldForWorker1(await refusal(claim('task-2', 'worker-1', 'WORKING')), landing);
+
+        await call(deleteTaskTool(h.state), { taskId: 'task-W' });
+
+        expect(h.state.getTask('task-W')).toBeNull();
+        expect(phases('task-W')).toEqual([[1, 'closed']]);
+        const next = await claim('task-2', 'worker-1', 'WORKING');
+        expect(next.hasNext).toBe(true);
+        expect(next.task).toMatchObject({ id: 'task-2', assignedWorkerId: 'worker-1' });
+        expect(phases('task-2')).toEqual([[1, 'running']]);
+      });
+
+      it.each(['running', 'reconciling'] as const)('delete_task closes a %s attempt of the task it deletes', async (phase) => {
+        h.createTask({ id: 'task-O', status: 'WORKING', assignedWorkerId: 'worker-1' });
+        h.createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-O' });
+        await h.state.load();
+        const opened = await openAttempt(h.state, {
+          taskId: 'task-O',
+          workerId: 'worker-1',
+          runnerId: 'worker-1',
+          workspace: h.testDir,
+        });
+        await setAttemptPhase(h.state, opened.id, phase);
+
+        await call(deleteTaskTool(h.state), { taskId: 'task-O' });
+
+        expect(h.state.getTask('task-O')).toBeNull();
+        expect(phases('task-O')).toEqual([[1, 'closed']]);
+      });
+
+      it('delete_task deletes nothing when the close cannot be written, and its retry finishes the job', async () => {
+        await completeClaimedRow();
+        const realWrite = h.state.writeEntity.bind(h.state);
+        vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+          if (args[0] === 'attempts') throw new Error('EPERM: attempt record is unwritable');
+          return realWrite(...args);
+        });
+
+        await expect(call(deleteTaskTool(h.state), { taskId: 'task-W' })).rejects.toThrow('EPERM');
+
+        vi.restoreAllMocks();
+        expect(h.state.getTask('task-W')).toMatchObject({ id: 'task-W', status: 'REVIEW' });
+        expect(fs.existsSync(path.join(h.moePath, 'tasks', 'task-W.json'))).toBe(true);
+        expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+        await call(deleteTaskTool(h.state), { taskId: 'task-W' });
+        expect(h.state.getTask('task-W')).toBeNull();
+        expect(phases('task-W')).toEqual([[1, 'closed']]);
+      });
+
+      it('a delete_task refused by a failed close leaves a SPEED-mode auto-approval armed', async () => {
+        const projectFile = path.join(h.moePath, 'project.json');
+        const project = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+        project.settings = { ...project.settings, approvalMode: 'SPEED', speedModeDelayMs: 1000 };
+        fs.writeFileSync(projectFile, JSON.stringify(project));
+        h.createTask({ id: 'task-P', status: 'PLANNING' });
+        await h.state.load();
+        // A landing still finalizing when its row went back to planning.
+        const opened = await openAttempt(h.state, {
+          taskId: 'task-P',
+          workerId: 'worker-1',
+          runnerId: 'worker-1',
+          workspace: h.testDir,
+        });
+        await setAttemptPhase(h.state, opened.id, 'finalizing');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+          await call(submitPlanTool(h.state), { taskId: 'task-P', steps: [{ description: 'Step 1' }] });
+          expect(h.state.getTask('task-P')?.status).toBe('AWAITING_APPROVAL');
+          const realWrite = h.state.writeEntity.bind(h.state);
+          vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+            if (args[0] === 'attempts') throw new Error('EPERM: attempt record is unwritable');
+            return realWrite(...args);
+          });
+
+          await expect(call(deleteTaskTool(h.state), { taskId: 'task-P' })).rejects.toThrow('EPERM');
+
+          vi.restoreAllMocks();
+          await vi.advanceTimersByTimeAsync(1500);
+          // The approval persists through real async fs I/O, which fake timers do
+          // not drive: back on real timers, poll until it settles.
+          vi.useRealTimers();
+          await vi.waitFor(() => expect(h.state.getTask('task-P')?.status).toBe('WORKING'), {
+            timeout: 2000,
+            interval: 20,
+          });
+        } finally {
+          clearAllSpeedModeTimeouts();
+          vi.useRealTimers();
+        }
+      });
+
+      it('a restart closes a finalizing attempt whose task vanished out of band, and the purge then drops the quiet seat', async () => {
+        await completeClaimedRow();
+        // Removed outside the daemon (a git checkout of .moe/tasks, a hand
+        // deletion): no delete_task ran, and finalize_attempt refuses a missing
+        // task before it ever looks the attempt up.
+        fs.unlinkSync(path.join(h.moePath, 'tasks', 'task-W.json'));
+        h.state.tasks.delete('task-W');
+        await h.state.updateWorker('worker-1', { lastActivityAt: QUIET_FOR_HOURS });
+
+        await reconcileRunningAttempts(h.state);
+        expect(phases('task-W')).toEqual([[1, 'closed']]);
+
+        await h.state.purgeAllWorkers();
+        expect(h.state.workers.has('worker-1')).toBe(false);
+      });
+
+      it('refuses every move into DONE or ARCHIVED before any write while the landing is finalizing', async () => {
+        const landing = await completeClaimedRow();
+        const writes = vi.spyOn(h.state, 'writeEntity');
+        const published: string[] = [];
+        const unsubscribe = h.state.subscribe((event) => {
+          published.push(event.type);
+        });
+
+        const moves: Array<() => Promise<unknown>> = [
+          () => call(setTaskStatusTool(h.state), { taskId: 'task-W', status: 'DONE' }),
+          () => call(setTaskStatusTool(h.state), { taskId: 'task-W', status: 'ARCHIVED' }),
+          () => call(archiveTaskTool(h.state), { taskId: 'task-W' }),
+        ];
+        for (const move of moves) {
+          expectHeldForWorker1(await refusal(move()), landing);
+          expect(writes).not.toHaveBeenCalled();
+          expect(published).toEqual([]);
+          expect(h.state.getTask('task-W')).toMatchObject({ status: 'REVIEW', assignedWorkerId: null });
+        }
+
+        unsubscribe();
+        expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+        writes.mockRestore();
+        await finalize(landing);
+        const done = await call(setTaskStatusTool(h.state), { taskId: 'task-W', status: 'DONE' });
+        expect(done).toMatchObject({ success: true, status: 'DONE' });
+      });
+
+      it('archive_epic refuses before archiving anything while a task of the epic is finalizing', async () => {
+        h.createTask({ id: 'task-B', status: 'BACKLOG', order: 2 });
+        const landing = await completeClaimedRow();
+        // archive_epic walks the tasks in map order. Put the resting sibling
+        // first, so a refusal raised only when the loop reached task-W would
+        // find the sibling already archived.
+        const held = h.state.tasks.get('task-W')!;
+        h.state.tasks.delete('task-W');
+        h.state.tasks.set('task-W', held);
+
+        expectHeldForWorker1(await refusal(call(archiveEpicTool(h.state), { epicId: 'epic-1' })), landing);
+
+        expect(h.state.getTask('task-B')?.status).toBe('BACKLOG');
+        expect(h.state.getTask('task-W')?.status).toBe('REVIEW');
+        expect(h.state.getEpic('epic-1')?.status).toBe('ACTIVE');
+      });
+
+      it('removing a DEAD worker record closes its finalizing attempt and hands the row to QA', async () => {
+        await deadWithLandingHold();
+        const published: string[] = [];
+        h.state.subscribe((event) => {
+          if (event.type === 'TASK_UPDATED') published.push(event.payload.id);
+        });
+
+        await h.state.deleteWorker('worker-1');
+
+        expect(h.state.workers.has('worker-1')).toBe(false);
+        expect(phases('task-W')).toEqual([[1, 'closed']]);
+        expect(published).toEqual(['task-W']);
+        const taken = await claim('task-W', 'qa-1', 'REVIEW');
+        expect(taken.hasNext).toBe(true);
+        expect(taken.generation).toBe(2);
+      });
+
+      it('keeps a DEAD record whose close fails again, so the next prune retries the close', async () => {
+        await deadWithLandingHold();
+        const realWrite = h.state.writeEntity.bind(h.state);
+        vi.spyOn(h.state, 'writeEntity').mockImplementation(async (...args: Parameters<StateManager['writeEntity']>) => {
+          if (args[0] === 'attempts') throw new Error('EPERM: attempt record is unwritable');
+          return realWrite(...args);
+        });
+
+        await h.state.deleteWorker('worker-1');
+
+        vi.restoreAllMocks();
+        expect(h.state.getWorker('worker-1')?.status).toBe('DEAD');
+        expect(fs.existsSync(path.join(h.moePath, 'workers', 'worker-1.json'))).toBe(true);
+        expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+
+        await h.state.deleteWorker('worker-1');
+        expect(h.state.workers.has('worker-1')).toBe(false);
+        expect(phases('task-W')).toEqual([[1, 'closed']]);
+      });
+
+      it("removing an IDLE assignee's record never closes another worker's finalizing attempt on the task it releases", async () => {
+        await seedLandingUnderAnotherSeat();
+
+        await h.state.deleteWorker('qa-1');
+
+        expect(h.state.getTask('task-X')).toMatchObject({ status: 'REVIEW', assignedWorkerId: null });
+        expect(phases('task-X')).toEqual([[1, 'finalizing']]);
+      });
+
+      it('the startup purge closes a DEAD worker finalizing attempt and drops its record', async () => {
+        await deadWithLandingHold();
+
+        await reconcileRunningAttempts(h.state);
+        await h.state.purgeAllWorkers();
+
+        expect(phases('task-W')).toEqual([[1, 'closed']]);
+        expect(h.state.workers.has('worker-1')).toBe(false);
+        expect(fs.existsSync(path.join(h.moePath, 'workers', 'worker-1.json'))).toBe(false);
+      });
+
+      it('the startup purge keeps a quiet IDLE worker finalizing attempt and spares its record', async () => {
+        await completeClaimedRow();
+        await h.state.updateWorker('worker-1', { lastActivityAt: QUIET_FOR_HOURS });
+        expect(h.state.getWorker('worker-1')?.status).toBe('IDLE');
+
+        await reconcileRunningAttempts(h.state);
+        await h.state.purgeAllWorkers();
+
+        expect(phases('task-W')).toEqual([[1, 'finalizing']]);
+        expect(h.state.workers.has('worker-1')).toBe(true);
+      });
+
+      it("the startup purge never closes another worker's finalizing attempt on a task whose purged assignee it releases", async () => {
+        await seedLandingUnderAnotherSeat();
+
+        await reconcileRunningAttempts(h.state);
+        await h.state.purgeAllWorkers();
+
+        expect(h.state.workers.has('qa-1')).toBe(false);
+        expect(h.state.getTask('task-X')).toMatchObject({ status: 'REVIEW', assignedWorkerId: null });
+        expect(phases('task-X')).toEqual([[1, 'finalizing']]);
+      });
     });
   });
 });

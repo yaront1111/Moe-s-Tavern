@@ -353,9 +353,13 @@ export async function recordAttemptPresence(
  * never an idle signal.
  *
  * Called once at daemon startup, BEFORE purgeAllWorkers, so the purge can see
- * which seats still own an execution and spare them. Only `running` and
- * `reconciling` are read: `finalizing` belongs to a complete_task that is still
- * landing its bytes and has its own hold, and `closed` is terminal history.
+ * which seats still own an execution and spare them. `finalizing` belongs to a
+ * complete_task that is still landing its bytes and keeps its own hold across
+ * the restart — unless its task no longer exists. A task removed outside the
+ * daemon (a git checkout of .moe/tasks, a hand deletion) is a structural fact,
+ * not an idle signal, and nothing else could close that attempt: finalize_attempt
+ * refuses a missing task before it looks the attempt up. So it is closed as an
+ * orphan. `closed` is terminal history.
  *
  * Goes through setAttemptPhase like every other mutation, so the store keeps
  * its one write-then-publish ordering and a failed write leaves the attempt
@@ -375,6 +379,10 @@ export async function recordAttemptPresence(
 export async function reconcileRunningAttempts(state: StateManager): Promise<ExecutionAttempt[]> {
   const reconciled: ExecutionAttempt[] = [];
   for (const attempt of listAttempts(state)) {
+    if (attempt.phase === 'finalizing') {
+      if (!state.getTask(attempt.taskId)) await closeOrphanedAttempt(state, attempt, null);
+      continue;
+    }
     if (attempt.phase !== 'running' && attempt.phase !== 'reconciling') continue;
     const task = state.getTask(attempt.taskId);
     if (!task || task.assignedWorkerId !== attempt.workerId) {
@@ -397,7 +405,8 @@ export async function reconcileRunningAttempts(state: StateManager): Promise<Exe
 
 /**
  * The startup close for a `running` or `reconciling` attempt whose seat no
- * longer holds its task (see reconcileRunningAttempts). Logged at info, with the
+ * longer holds its task, and for a `finalizing` one whose task is gone (see
+ * reconcileRunningAttempts). Logged at info, with the
  * assignee the row has now, so an operator can see which orphan a restart
  * retired and from whose row.
  *
@@ -408,7 +417,9 @@ export async function reconcileRunningAttempts(state: StateManager): Promise<Exe
  * the next claim of the row closes the leftover through openClaimAttempt's
  * ATTEMPT_ALREADY_OPEN arm before opening its own. The seat is spared by this
  * one purge only; the next claim or restart retires the attempt. It must never
- * be reported as "its task stays held".
+ * be reported as "its task stays held". A finalizing orphan has no row left to
+ * claim: until a later restart retires it, it refuses only its own worker's
+ * next claim.
  */
 async function closeOrphanedAttempt(
   state: StateManager,
@@ -436,13 +447,13 @@ async function closeOrphanedAttempt(
 
 /**
  * Close every non-closed attempt of a task. This is the close path for the sites
- * that take a task's seat away outright (release_task, deregister, worker
- * deletion, the startup purge, a claim evicting the previous owner), so the
- * rules below exist once. A seat hand-back through taskStore.updateTask closes
- * through closeHandedBackAttempts instead, which spares `finalizing`. Every one
- * of those sites except the startup purge writes through updateTask first, so
- * its explicit call here finds only what that left open. Returns the records it
- * closed, in generation order.
+ * that take a task's seat away outright (release_task, deregister, a claim
+ * evicting the previous owner) or the task itself (taskStore.deleteTask), so the
+ * rules below exist once. A seat hand-back through taskStore.updateTask, and the
+ * seat releases of worker deletion and the startup purge, close through
+ * closeHandedBackAttempts instead, which spares `finalizing`. The seat sites
+ * write through updateTask first, so their explicit call here finds only what
+ * that left open. Returns the records it closed, in generation order.
  *
  * - Idempotent: an exit trap and a purge can both fire for the same task, so a
  *   second call finds nothing open and does nothing — no write, no error.
@@ -482,17 +493,23 @@ const HANDED_BACK_PHASES: ReadonlySet<ExecutionAttemptPhase> = new Set<Execution
  * taskStore.updateTask on every write that turns a non-null assignedWorkerId
  * into null — qa_reject, report_blocked's seat-freeing arm, set_task_status,
  * unblock_worker's seat-only arm, the sweeps' releases, and every other status
- * change or release that drops the assignee — so a seat that gave its task up
- * keeps no open execution, and a later restart finds nothing of that seat's to
- * park. Returns the records it closed, in generation order.
+ * change or release that drops the assignee — and directly by the seat releases
+ * of worker deletion and the startup purge (which writes around updateTask), so
+ * a seat that gave its task up keeps no open execution, and a later restart
+ * finds nothing of that seat's to park. Returns the records it closed, in
+ * generation order.
  *
  * NARROWER THAN closeOpenAttempts ON PURPOSE: it never closes `finalizing`.
  * complete_task parks its attempt in `finalizing` BEFORE its own WORKING→REVIEW
- * write clears the seat, and that hold is the wrapper's landing boundary: it
- * ends only through moe.finalize_attempt or its runner's moe.deregister_worker.
- * No later claim of the row supersedes it — claim_next_task refuses or skips a
- * row another worker's landing holds. Closing it at the seat clear would free
- * the worker for its next task while this task's bytes are still unlanded.
+ * write clears the seat, and that hold is the wrapper's landing boundary. It
+ * ends ONLY through: moe.finalize_attempt (its runner, or a governor or human
+ * with outcome 'failed'); its own worker's moe.deregister_worker; deletion of
+ * its task; a daemon restart that finds its task gone; or removal of its
+ * worker's DEAD record (the stale-record prune, the startup purge). No idle
+ * signal is on that list: a quiet seat keeps its hold. No later claim of the
+ * row supersedes it either — claim_next_task refuses or skips a row another
+ * worker's landing holds. Closing it at the seat clear would free the worker for
+ * its next task while this task's bytes are still unlanded.
  *
  * Otherwise the closeOpenAttempts contracts hold: idempotent, tolerant of a task
  * with no attempt record, never deletes, and each close goes through
