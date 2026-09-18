@@ -130,7 +130,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:01.259Z",
-  "updatedAt": "2026-09-18T22:20:59.128Z",
+  "updatedAt": "2026-09-18T22:21:22.622Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:40:31.589Z",
     "plannedStepCount": 6,
@@ -205,7 +205,8 @@
     "docs/SCHEMA.md",
     "docs/TROUBLESHOOTING.md",
     ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
-    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json"
+    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
   ],
   "completionSummary": "Round 2, after qa_reject #1.\n- DoD 1: util/enforcement.ts no longer has its private renderUntrusted, the 6th renderGot copy. It imports renderGot from ../state/candidateStore.js and calls it at both validateAttemptIdentity sites. The edge is acyclic: candidateStore's runtime closure is util/{errors,ids,sanitize} + attemptStore, and none of them imports enforcement.\n  - Body grep `git grep -nF 'a value of type ${kind}' -- packages/moe-daemon/src ':!*.test.ts'`: 1 hit (candidateStore.ts:83).\n  - The plan grep finds 3 definitions (candidateStore.ts:41/48/80). renderUntrusted: 0 hits.\n  - A hex-regex census finds no other Wave 1 shape copy.\n  - md5 of 7 bodies is identical (bc94fb2b).\n  - The renderGot JSDoc now names util/enforcement.ts.\n- Stale anchors: 3 found, not 2. types/schema.ts:765-768, docs/SCHEMA.md:495, and docs/TROUBLESHOOTING.md:689-691, which QA's list missed. All three now state completionCommitsForReview's work-round rule. CLAUDE.md:88 was already correct.\n- DoD 2: no behaviour change and no test edits. Before (HEAD b84da46) and after (tree c1f14ee) clean exports both give 122 files / 2145 passed, with 0 per-file count or title diffs. tsc exits 0. The shared checkout gives 2146; the +1 is a peer's dirty recommendSkill.test.ts.\n- Landing: docs/SCHEMA.md is contested by task-808869c5 (REVIEW). The wrapper's TOOL-tier harvest does not know Serena replace_content (moe-agent.sh:6681 / ps1:4416), so a contested path edited with it would be silently dropped. I re-touched all 5 paths with byte-identical built-in Edit round trips (hash-object equal before and after, EOLs kept). QA should run `git show --stat <completion sha>` and expect candidateStore.ts, enforcement.ts, types/schema.ts, docs/SCHEMA.md and docs/TROUBLESHOOTING.md. The wrapper blind spot is posted to #general (msg-e7691513).\n- Self-review: comment-b69b4fe8.",
   "commits": [
@@ -282,6 +283,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "fb3a22800640bb381ff1a8b4dfedbd5186cb7902",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-9a371c33@2026-09-18T22:16:17Z",
+      "paths": [
+        ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+      ],
+      "recordedBy": "qa-9a371c33",
+      "recordedAt": "2026-09-18T22:21:22.622Z",
+      "treeId": "69a77661e2d3bf9ce3d98c23ff489e1ff5554e34",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -303,9 +320,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3c030e77@2026-09-18T22:03:58Z",
-    "at": "2026-09-18T22:14:52.264Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-9a371c33@2026-09-18T22:16:17Z",
+    "at": "2026-09-18T22:21:22.622Z"
   },
   "reviewCompletedAt": "2026-09-18T22:20:59.128Z",
   "rejectionDetails": {

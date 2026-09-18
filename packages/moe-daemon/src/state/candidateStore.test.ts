@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import {
+  caseVariantId,
   getCandidate,
   listCandidatesForAttempt,
   listCandidatesForTask,
@@ -187,6 +188,41 @@ describe('candidateStore', () => {
     expect(candidateFiles()).toEqual(['cand-a.json']);
   });
 
+  // Cand-1.json and cand-1.json are ONE file on NTFS and a default APFS volume,
+  // so recording cand-1 would silently overwrite Cand-1. Refused whatever its content.
+  it('refuses an id that differs from a stored candidate only by case', async () => {
+    const first = await recordCandidate(h.state, { ...base, id: 'Cand-1' });
+    const bytesBefore = readBytes('Cand-1');
+    const expected = {
+      code: -32002,
+      codeName: 'CANDIDATE_ID_CASE_COLLISION',
+      message:
+        '[CANDIDATE_ID_CASE_COLLISION] Candidate id cand-1 differs only by case from the existing candidate Cand-1; ' +
+        'each record is one file (<id>.json), and NTFS and a default APFS volume treat those two names as the same file, ' +
+        'so recording this one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, ' +
+        'and references match it exactly.',
+      context: { candidateId: 'Cand-1', requestedId: 'cand-1' },
+    };
+
+    for (const incoming of [{ ...base, id: 'cand-1', treeSha: SHA.treeB }, { ...base, id: 'cand-1' }]) {
+      const error = await refusal(recordCandidate(h.state, incoming));
+      expect({ code: error.code, codeName: error.codeName, message: error.message, context: error.context }).toEqual(expected);
+    }
+
+    expect(h.state.candidates.size).toBe(1);
+    expect(getCandidate(h.state, 'Cand-1')).toEqual(first.candidate);
+    expect(readBytes('Cand-1').equals(bytesBefore)).toBe(true);
+    expect(candidateFiles()).toEqual(['Cand-1.json']);
+  });
+
+  it('caseVariantId names a stored id that differs only by case, and never the id itself', () => {
+    const stored = ['Cand-1', 'cand-2'];
+    expect(caseVariantId(stored, 'cand-1')).toBe('Cand-1');
+    expect(caseVariantId(stored, 'CAND-2')).toBe('cand-2');
+    expect(caseVariantId(stored, 'Cand-1')).toBeUndefined();
+    expect(caseVariantId(stored, 'cand-3')).toBeUndefined();
+  });
+
   it('records a changed tree as a NEW candidate and keeps the old one intact', async () => {
     const first = await recordCandidate(h.state, { ...base, id: 'cand-a' });
     const bytesBefore = readBytes('cand-a');
@@ -218,6 +254,7 @@ describe('candidateStore', () => {
     expect(Object.keys(store).sort()).toEqual([
       'REVISION_RE',
       'SHA_RE',
+      'caseVariantId',
       'getCandidate',
       'listCandidatesForAttempt',
       'listCandidatesForTask',

@@ -13,20 +13,28 @@
     {
       "stepId": "step-1",
       "description": "RED FIRST: one test per store, written before the guard exists. This task waits on task-31fe6dc8, which edits the same three stores and candidateStore.test.ts; start after it lands and find code by symbol name.\n\nThe rule the tests pin: a caller-supplied id that differs from an existing record's id ONLY by case is refused, whatever its content. The stored id keeps the case it was given, and reference fields (candidateId) keep matching exactly.\n\n1. state/candidateStore.test.ts, new it() beside the immutability tests, for example 'refuses an id that differs from a stored candidate only by case':\n   - record a candidate with id 'Cand-1';\n   - record again with id 'cand-1' and a DIFFERENT treeSha: expect a refusal with code -32002, codeName 'CANDIDATE_ID_CASE_COLLISION', context { candidateId: 'Cand-1', requestedId: 'cand-1' }, and a message naming both ids;\n   - record again with id 'cand-1' and identical content: the same refusal, because the rule is about the id space, not the content;\n   - after both, state.candidates.size is 1, the stored record still has id 'Cand-1' and its original treeSha, and .moe/candidates holds exactly one file.\n2. state/checkRunStore.test.ts, the same shape with 'Check-1' and 'check-1', codeName 'CHECK_RUN_ID_CASE_COLLISION' and context { checkRunId: 'Check-1', requestedId: 'check-1' }. Keep its candidate binding valid so the refusal is the id rule and not CHECK_RUN_TREE_MISMATCH.\n3. Both tests must FAIL on today's code, where the second call records a SECOND record (and on NTFS its rename overwrites the first file). Paste both failures into the step note.\n4. Do not touch the existing same-id immutability or duplicate-replay tests. An exact-id repeat must keep replaying or refusing exactly as it does now.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.test.ts",
         "packages/moe-daemon/src/state/checkRunStore.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ],
+      "note": "RED written before any guard. Prerequisite task-31fe6dc8 is DONE (completion 862a99f is on moe/work-2026-09-13). I found the code by symbol name.\n- candidateStore.test.ts: new it 'refuses an id that differs from a stored candidate only by case', placed after the replay test. It records Cand-1, then cand-1 twice: first with a DIFFERENT treeSha, then with identical content. Both must be refused with one exact toEqual on {code -32002, codeName CANDIDATE_ID_CASE_COLLISION, the full '[CODENAME] ' message, context {candidateId:'Cand-1', requestedId:'cand-1'}}. Afterwards: candidates.size 1, getCandidate('Cand-1') still equals the first record, its bytes are unchanged, and the dir lists exactly ['Cand-1.json'].\n- checkRunStore.test.ts: the same shape with Check-1/check-1, CHECK_RUN_ID_CASE_COLLISION and context {checkRunId, requestedId}. The candidate binding stays valid (cand-a/treeA), so the refusal is the id rule and not a tree mismatch. It uses snapshot() for the bytes and the map, plus size 1 and checkFiles ['Check-1.json'].\n- The existing same-id immutability and replay tests are untouched.\n\nRED on today's code (`env -u MOE_PROJECT_PATH -u MOE_WORKER_ID npx vitest run src/state/candidateStore.test.ts src/state/checkRunStore.test.ts -t \"only by case\"`):\n  FAIL candidateStore > refuses an id that differs from a stored candidate only by case: Error: expected a MoeError refusal, but the call succeeded (candidateStore.test.ts:207)\n  FAIL checkRunStore > refuses an id that differs from a stored check run only by case: Error: expected a MoeError refusal, but the call succeeded (checkRunStore.test.ts:332)\n  Tests 2 failed | 125 skipped (127)\nBoth fail because the case-variant id is RECORDED as a second record.\n\nReal-NTFS probe of the unfixed store, from a scratch tsx script outside the repo (D:/moe-scratch/dad7-probe-3c03/probe.mts, not in the suite): {\"outcome\":\"RECORDED duplicate=false\",\"mapKeys\":[\"Cand-1\",\"cand-1\"],\"files\":[\"cand-1.json\"],\"firstBytesUnchanged\":false}, and after reload only [\"cand-1:tree d4d4\"]. The rename replaced Cand-1.json and even took the new name, and the reload lost Cand-1 entirely.\n\nEdits were made with the built-in Edit tool on purpose. All 8 target files are LF, and Serena replace_content rewrites a file to CRLF and is missing from the wrappers' TOOL harvest (mem:gotcha-contested-path-needs-edit-tool-to-land). docs/SCHEMA.md and docs/MCP_SERVER.md are peer-declared (task-16aac8b4, task-d5b7e6a2).",
+      "startedAt": "2026-09-18T22:22:21.920Z",
+      "completedAt": "2026-09-18T22:24:14.781Z"
     },
     {
       "stepId": "step-2",
       "description": "THE SHARED CHECK plus the candidate guard, in state/candidateStore.ts. It is the home the sibling stores already import from (checkRunStore, receiptStore and reviewStore all import it, and it imports none of them, so no cycle: stateModules.test.ts fails on a runtime cycle inside src/state).\n\n1. New export:\n     export function caseVariantId(ids: Iterable<string>, id: string): string | undefined\n   It returns the first stored id that is NOT equal to `id` but equals it after toLowerCase(), else undefined.\n   Its doc comment must carry the why: every record is persisted as <id>.json, NTFS and a default APFS volume treat 'Cand-1.json' and 'cand-1.json' as ONE file, the in-memory map is case-sensitive, so the same-id immutability check never sees the collision and the second write silently overwrites the first. After a reload only one record exists and every check run, review or receipt bound to the other one dangles.\n   Note in the comment that it is a linear scan and why that is fine: a record is written about once per landing, so the scan is nothing next to the write it guards.\n2. In recordCandidate, right after the exact-match branch ('const stored = state.candidates.get(id); if (stored) return ...'), add: if caseVariantId(state.candidates.keys(), id) returns an existing id, throw a MoeError(MoeErrorCode.STATE_CONFLICT, ..., { candidateId: <existing>, requestedId: <id> }, 'CANDIDATE_ID_CASE_COLLISION').\n   Message: `Candidate id <id> differs only by case from the existing candidate <existing>; each record is one file (<id>.json), and NTFS and a default APFS volume treat those two names as the same file, so recording this one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, and references match it exactly.`\n3. Order matters: the exact-id replay stays FIRST, so an idempotent retry after a crash is untouched, and the collision check runs before assertAttemptOfTask and before any write.\n4. Error handling: the new check only reads the in-memory map and throws the same MoeError shape as its neighbours, so every refusal still writes no file and publishes no event, and a caller sees one -32002 with a codeName it can branch on. The helper itself cannot throw.\n5. Add 'caseVariantId' to the export allowlist in state/candidateStore.test.ts, which task-31fe6dc8 also edits.\n6. Run the candidate test: it is GREEN now.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.ts",
         "packages/moe-daemon/src/state/candidateStore.test.ts"
-      ]
+      ],
+      "startedAt": "2026-09-18T22:24:18.687Z"
     },
     {
       "stepId": "step-3",
@@ -67,9 +75,9 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 4,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-3c030e77",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -81,14 +89,16 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T20:45:48.838Z",
-  "updatedAt": "2026-09-18T21:34:55.374Z",
+  "updatedAt": "2026-09-18T22:24:18.687Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T21:29:51.250Z",
     "plannedStepCount": 7,
-    "plannedDistinctFileCount": 8
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-e52c9adc"
+    "architect-e52c9adc",
+    "worker-3c030e77"
   ],
   "dependsOn": [
     "task-31fe6dc806d9466d9d71c9f8beda60be"
@@ -96,7 +106,9 @@
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-18T21:34:55.307Z",
   "planningNotes": {
@@ -116,5 +128,6 @@
       "docs/MCP_SERVER.md"
     ]
   },
-  "planApprovedAt": "2026-09-18T21:34:55.374Z"
+  "planApprovedAt": "2026-09-18T21:34:55.374Z",
+  "workStartedAt": "2026-09-18T22:22:21.920Z"
 }
