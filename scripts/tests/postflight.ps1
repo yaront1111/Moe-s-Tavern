@@ -151,9 +151,13 @@ function attemptFixture() {
   const taskId = process.env.FAKE_CLAIM_MODE === 'resume' ? 'task-resume' : 'task-postflight';
   ensureDir(path.join(moe, 'attempts'));
   const file = path.join(moe, 'attempts', id + '.json');
+  // openAttempt records the runner's pair exactly as the claim sent it.
+  // FAKE_ATTEMPT_PHASE=reconciling: a daemon restart parked the attempt before
+  // the wrapper pinned it (the window a resume after a restart lands in).
   if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify({
     id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
-    phase: 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString()
+    phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
+    ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host})
   }));
   if (process.env.FROZEN_MODE === 'claim-missing' || process.env.FAKE_CLAIM_TOKENS === 'missing') return {};
   return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
@@ -238,6 +242,25 @@ function receiptReply() {
   fs.writeFileSync(file,JSON.stringify({id:'receipt-'+args.candidateId,...receipt}));
   return {success:true,receipt:{id:'receipt-'+args.candidateId,...receipt},duplicate:false};
 }
+// reattachAttempt.ts in miniature: the attempt id, generation, recorded process
+// start time and host must all match exactly (nothing recorded never matches),
+// and only a reconciling or already-running attempt returns to running.
+// FAKE_REATTACH_REFUSE=1 refuses even a matching identity, as a stranger's.
+function reattachReply() {
+  for (const key of ['taskId','workerId','runnerId','attemptId','processStartedAt','host'])
+    assert.ok(typeof args[key] === 'string' && args[key].trim(), key);
+  assert.ok(Number.isSafeInteger(args.generation) && args.generation > 0, 'generation');
+  const file = path.join(moe,'attempts',args.attemptId+'.json');
+  if (!fs.existsSync(file)) throw Object.assign(new Error('Attempt not found: '+args.attemptId),{codeName:'ATTEMPT_NOT_FOUND'});
+  const a = JSON.parse(fs.readFileSync(file,'utf8'));
+  if (a.taskId !== args.taskId) throw Object.assign(new Error('Attempt '+a.id+' belongs to '+a.taskId),{codeName:'ATTEMPT_ID_TASK_MISMATCH'});
+  const field = process.env.FAKE_REATTACH_REFUSE === '1' ? 'processStartedAt'
+    : ['generation','processStartedAt','host'].find(key => a[key] === undefined || a[key] !== args[key]);
+  if (field) throw Object.assign(new Error('Attempt '+a.id+' does not match the presented identity ('+field+' differs)'),{codeName:'ATTEMPT_IDENTITY_MISMATCH'});
+  if (!['reconciling','running'].includes(a.phase)) throw Object.assign(new Error('Attempt '+a.id+' is in phase '+a.phase),{codeName:'ATTEMPT_NOT_REATTACHABLE'});
+  a.phase = 'running'; fs.writeFileSync(file,JSON.stringify(a));
+  return {success:true,attemptId:a.id,taskId:a.taskId,generation:a.generation,phase:'running'};
+}
 // Teardown arms hold ONE call until the supervisor has interrupted the wrapper:
 // the post-flight landing's get_commit_scope (teardown-scope: no outcome yet), or
 // the completion's ledger row once it reached one (teardown-landed: a branch CAS,
@@ -273,14 +296,43 @@ function evidenceRpc() {
   }
   try {
     const payload = tool === 'record_candidate' ? candidateReply() : tool === 'record_check_run' ? checkReply()
-      : tool === 'record_delivery_receipt' ? receiptReply() : finalizeReply();
+      : tool === 'record_delivery_receipt' ? receiptReply() : tool === 'reattach_attempt' ? reattachReply() : finalizeReply();
     if (payload !== null) ok(payload);
   } catch(e) { refusal(e.message, e.codeName); }
   return true;
 }
 holdForInterrupt();
-if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment'].includes(tool)) {
+if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment','reattach_attempt'].includes(tool)) {
   if (evidenceRpc()) process.exit(0);
+}
+// claimNextTask.ts readProcessIdentity in miniature: the runner's pair is
+// both-or-neither, non-blank, bounded (200 / 255) and free of control
+// characters, and a refused claim assigns nobody. Every claim is logged with
+// the pair it sent.
+if (tool === 'claim_next_task') {
+  appendRpc();
+  const bad = [['processStartedAt', 200], ['host', 255]].find(([key, max]) => args[key] !== undefined && !(typeof args[key] === 'string'
+    && args[key].trim() && args[key].length <= max && [...args[key]].every(ch => ch.charCodeAt(0) > 31 && ch.charCodeAt(0) !== 127)));
+  if (bad || (args.processStartedAt === undefined) !== (args.host === undefined)) {
+    console.log(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32602,message:'Invalid '+(bad ? bad[0] : 'runner identity: send processStartedAt and host together'),
+      data:{tool:'moe.claim_next_task',codeName:'INVALID_INPUT'}}}));
+    process.exit(0);
+  }
+}
+// FAKE_HEARTBEAT_REATTACH mirrors heartbeat.ts's reattach-required answer: `1`
+// reads the caller's attempt (attempt-reconciling while a restart has it parked,
+// a plain ack otherwise); `other` alternates the two reasons that name no
+// attempt. .moe/heartbeat-count counts the pings.
+if (tool === 'heartbeat' && process.env.FAKE_HEARTBEAT_REATTACH) {
+  const counter = path.join(moe, 'heartbeat-count');
+  const n = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1;
+  fs.writeFileSync(counter, String(n));
+  const reattach = (reason, a) => ({ok:false,reattachRequired:true,reason,reattachWith:'moe.reattach_attempt',...(a ? {attemptId:a.id,phase:a.phase} : {})});
+  let a = null;
+  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts','attempt-postflight.json'),'utf8')); } catch {}
+  if (process.env.FAKE_HEARTBEAT_REATTACH === 'other') ok(reattach(n % 2 ? 'no-worker-record' : 'no-open-attempt'));
+  else ok(a && a.workerId === args.workerId && a.phase === 'reconciling' ? reattach('attempt-reconciling', a) : {ok:true});
+  process.exit(0);
 }
 // FAKE_CLAIM_MODE=finalizing: claimNextTask.ts refuses a seat whose own attempt
 // is still finalizing (ATTEMPT_FINALIZING); with none, nothing is claimable.
@@ -522,6 +574,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
+'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
@@ -531,8 +584,10 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 // the seat never pinned, or left running beside a corrupt sibling record --
 // nothing is acknowledged and the seat keeps claiming. finalizing-acked-continues
 // is the control: one acknowledged finalizing attempt does not stop the loop.
+// identity-claim and reattach-refused finalize too: their second claim proves
+// the runner identity is one pair per wrapper and a refused reattach stops nothing.
 const loopModes=['nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
-  'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues'];
+  'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','identity-claim','reattach-refused'];
 const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','gate-qa-claimed'];
 // Teardown modes interrupt the wrapper once complete_task has left the attempt
 // finalizing: mid-CLI, in the post-flight landing before it reached any outcome
@@ -545,7 +600,8 @@ const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothin
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
-const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',...loopModes.filter(m=>m!=='finalizing-acked-continues')];
+const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',
+  ...loopModes.filter(m=>!['finalizing-acked-continues','identity-claim','reattach-refused'].includes(m))];
 const EMPTY_TREE='4b825dc642cb6eb9a060e54bf8d69288fbee4904',ZERO_OID='0'.repeat(40);
 // Hard-kills its wrapper's whole tree (no trap, no graceful exit) once MARKER
 // exists, or after LIMIT ms: the loop modes' stop and receipt-replay's crash.
@@ -647,8 +703,23 @@ if(mode==='loop-land-twice'){const n=Number(fs.readFileSync(path.join(dir,'.moe'
 else if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
 const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual|freed)-/.test(mode)||mode==='teardown-running';
+// reattach-sidecar/-refused: a daemon restart parks the attempt while this
+// session runs, and the session goes on once the wrapper reattached it (or once
+// the wait runs out, as under a restart nobody reattached). reattach-preflight
+// records the phase the session started on.
+const moeFile=f=>path.join(dir,'.moe',f),count=f=>{try{return Number(fs.readFileSync(moeFile(f),'utf8'));}catch(e){return 0;}};
+const phase=()=>{try{return JSON.parse(fs.readFileSync(file,'utf8')).phase;}catch(e){return '';}};
+const waitFor=(test,ms)=>{for(const end=Date.now()+ms;!test()&&Date.now()<end;)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,100);};
+if(mode==='reattach-preflight')fs.writeFileSync(moeFile('cli-saw-phase'),phase());
+if((mode==='reattach-sidecar'||mode==='reattach-refused')&&fs.existsSync(file)){
+ const a=JSON.parse(fs.readFileSync(file,'utf8'));a.phase='reconciling';fs.writeFileSync(file,JSON.stringify(a));
+ // One more ping after the reattach: the sidecar is sequential, so its line is out.
+ if(mode==='reattach-sidecar'){waitFor(()=>phase()==='running',60000);const seen=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>seen,30000);}
+ else{waitFor(()=>fs.existsSync(moeFile('evidence-rpcs.jsonl'))&&fs.readFileSync(moeFile('evidence-rpcs.jsonl'),'utf8').includes('reattach_attempt'),60000);
+  const pings=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>=pings+3,30000);}}
+if(mode==='reattach-none')waitFor(()=>count('heartbeat-count')>=3,30000);
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
-if(mode.endsWith('-reconciling'))a.phase='reconciling';
+if(mode.endsWith('-reconciling')||mode==='reattach-postflight')a.phase='reconciling';
 if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if(mode==='stale-attempt'||mode==='freed-generation-bump')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
 const stamp=new Date().toISOString();
 if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json'),JSON.stringify({id:'attempt-qa',generation:8,taskId:'task-postflight',
@@ -683,6 +754,11 @@ if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mo
   if(/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running')env.FAKE_TASK_STATUS='WORKING';
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
+  // Reattach arms: the sidecar pings every second against the fake heartbeat.
+  if(['reattach-sidecar','reattach-refused','reattach-none'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
+    env.FAKE_HEARTBEAT_REATTACH=mode==='reattach-none'?'other':'1';}
+  if(mode==='reattach-refused')env.FAKE_REATTACH_REFUSE='1';
+  if(mode==='reattach-preflight')env.FAKE_ATTEMPT_PHASE='reconciling';
   if(mode==='finalize-loss'||mode==='loop-land-twice'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
     args[args.indexOf(win?'-PollInterval':'--poll-interval')+1]='1';
@@ -776,6 +852,33 @@ exit "$rc"
   const pushBlocked=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('PUSH-BLOCKED'))||
     rpc.some(r=>r.tool==='add_comment'&&String(r.args.content).includes('PUSH-BLOCKED'));
   if(loopModes.includes(mode))assert.equal(fs.existsSync(secondClaim),true,'the worker loop must go on claiming after this exit\n'+log);
+  // Runner identity: every claim carries this wrapper's one pair (two claims in
+  // one --loop wrapper carry the same one), and the attempt a claim opened
+  // records it. A reattach goes out only for a parked attempt of this seat, with
+  // that attempt's id and generation and the pair its claim recorded.
+  const claims=rpc.filter(r=>r.tool==='claim_next_task').map(r=>r.args),pair=a=>[a.processStartedAt,a.host];
+  assert.ok(claims.length>0,log);
+  for(const c of claims){assert.ok(pair(c).every(v=>typeof v==='string'&&v.trim()),'every claim carries the runner identity\n'+log);
+    assert.deepEqual(pair(c),pair(claims[0]),'one identity per wrapper process\n'+log);}
+  if(mode==='identity-claim'){assert.ok(claims.length>=2,log);
+    assert.deepEqual(pair(JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json')))),pair(claims[0]),
+      'the claim recorded the pair on the attempt it opened\n'+log);}
+  const reattaches=rpc.filter(r=>r.tool==='reattach_attempt').map(r=>r.args),said=s=>log.split(s).length-1;
+  if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
+    const r=reattaches[0]||{};
+    assert.equal(reattaches.length,1,'exactly one reattach for the one parked attempt\n'+log);
+    assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-postflight','worker-frozen','attempt-postflight',7,...pair(claims[0])],log);
+    assert.ok(typeof r.runnerId==='string'&&r.runnerId.trim(),log);
+    if(mode==='reattach-refused')assert.equal(said('moe.reattach_attempt refused for attempt attempt-postflight (ATTEMPT_IDENTITY_MISMATCH); not retrying it.'),1,
+      'a refusal is logged once and not asked again\n'+log);
+    else assert.equal(said('attempt attempt-postflight (generation 7) on task task-postflight is running again after a daemon restart.'),1,log);
+    if(mode==='reattach-postflight')assert.ok(rpc.findIndex(x=>x.tool==='reattach_attempt')<rpc.findIndex(x=>x.tool==='record_candidate'),
+      'the reattach precedes the candidate\n'+log);
+    if(mode==='reattach-preflight'){assert.equal(read(path.join(nested,'.moe','cli-saw-phase')),'running','reattached before the CLI launched\n'+log);
+      assert.equal(log.includes('Missing/stale attempt identity'),false,log);}
+  }else assert.equal(reattaches.length,0,'nothing parked, so nothing to reattach\n'+log);
+  if(mode==='reattach-none')for(const reason of ['no-worker-record','no-open-attempt'])
+    assert.equal(said('heartbeat asks for reattachment ('+reason+')'),1,'each other reason is logged once\n'+log);
   const journal=path.join(repo,'.git','moe','receipt','task-postflight.json');
   if(mode==='receipt-replay'){
     // Run 1 landed and was hard-killed while its first receipt was held. Run 2 is
@@ -856,7 +959,8 @@ exit "$rc"
   }
   if(mode.startsWith('manual-')||mode.startsWith('checkpoint-')){
     assert.equal(candidates.length+checks.length+finals.length+seen.length,0,log);
-    assert.ok(log.includes('[finalize] no finalizing attempt for this seat on task task-postflight'),log);
+    // A parked attempt is reattached before the landing, so the ladder finds it running and says nothing.
+    assert.equal(log.includes('[finalize] no finalizing attempt for this seat on task task-postflight'),!mode.endsWith('-reconciling'),log);
     if(mode.startsWith('manual-')){assert.equal(after,before);assert.deepEqual(fs.readFileSync(index),beforeIndex);}
     else{assert.notEqual(after,before,log);assert.match(git(repo,'log','-1','--format=%s'),/^wip\(task-postflight\)/);
       assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');}

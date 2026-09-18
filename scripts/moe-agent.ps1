@@ -1308,6 +1308,46 @@ function Set-MoeAttemptIdentity($Claim, [string]$TaskId) {
     }
     $script:MoeAttemptId = $id; $script:MoeAttemptGeneration = $g
 }
+# A daemon restart parked this seat's attempt in `reconciling`: present its id
+# and generation with THIS process's identity so it runs again instead of being
+# given up after the reconcile window. 'running' again; 'refused', which never
+# heals (the same values are refused again), so callers stop asking; 'none' when
+# no usable answer came back, ask again later. One line either way, never a
+# throw. Twin: moe_reattach.
+function Invoke-MoeReattach([string]$TaskId, [string]$AttemptId, $Generation) {
+    $r = $null
+    try {
+        $r = Invoke-MoeRpc -Tool 'reattach_attempt' -Args @{ taskId = $TaskId; workerId = $WorkerId; runnerId = $script:MoeRunnerId
+            attemptId = $AttemptId; generation = $Generation; processStartedAt = $script:MoeProcessStartedAt; host = $script:MoeHost }
+    } catch { $script:MoeRpcFailure = 'transport' }
+    if ($r -and (Get-MoeProp $r 'success') -eq $true -and (Get-MoeProp $r 'phase') -ceq 'running') {
+        Write-Host "[reattach] attempt $AttemptId (generation $Generation) on task $TaskId is running again after a daemon restart." -ForegroundColor Green
+        return 'running'
+    }
+    if ($null -eq $r -and $script:MoeRpcFailure -eq 'daemon refusal' -and $script:MoeRpcCodeName) {
+        Write-Host "[reattach] moe.reattach_attempt refused for attempt $AttemptId ($($script:MoeRpcCodeName)); not retrying it." -ForegroundColor Yellow
+        return 'refused'
+    }
+    Write-Host "[WARN] moe.reattach_attempt got no answer for attempt $AttemptId; retrying later." -ForegroundColor Yellow
+    return 'none'
+}
+# The main loop's half, for what the sidecar cannot see: the pre-flight (a
+# restart between two sessions leaves a resumed attempt parked, and the pin
+# would fail closed on it) and the moment the CLI exits (a restart inside a
+# session that ended before the sidecar's next ping). Every attempt this seat
+# owns in `reconciling` is reattached once; a refusal is remembered for the life
+# of this wrapper. Twin: reattach_own_attempts.
+$script:MoeReattachRefused = [Collections.Generic.HashSet[string]]::new()
+function Invoke-MoeReattachOwnAttempts {
+    if (-not $script:MoeProcessStartedAt) { return }
+    foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+        $id = [string](Get-MoeProp $a 'id'); $tid = [string](Get-MoeProp $a 'taskId'); $g = Get-MoeProp $a 'generation'
+        if ((Get-MoeProp $a 'workerId') -cne $WorkerId -or (Get-MoeProp $a 'phase') -cne 'reconciling' -or -not (Test-MoeGeneration $g) -or
+            $id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $tid -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $script:MoeReattachRefused.Contains($id)) { continue }
+        if ((Invoke-MoeReattach $tid $id $g) -eq 'refused') { [void]$script:MoeReattachRefused.Add($id) }
+    }
+}
 function Send-MoeEvidence([string]$Tool, [hashtable]$Payload, [int]$Tries = 1) {
     for ($i = 0; $i -lt $Tries; $i++) {
         try {
@@ -1693,25 +1733,60 @@ function Start-HeartbeatSidecar {
     $maxDurationSec = 86400
     if ($env:MOE_HEARTBEAT_MAX_DURATION_SEC -match '^\d+$') { $maxDurationSec = [int]$env:MOE_HEARTBEAT_MAX_DURATION_SEC }
 
+    # The attempt pinned at claim time, for the reattach below: the job is a
+    # separate process and sees none of this script's variables.
+    $pin = @{ TaskId = [string]$preflightTaskId; AttemptId = [string]$script:MoeAttemptId; Generation = $script:MoeAttemptGeneration
+        RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost }
     try {
         $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
-            param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec, $WrapperPid)
+            param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec, $WrapperPid, $Pin)
             $env:MOE_PROJECT_PATH = $ProjectPath
-            $rpc = (@{
-                jsonrpc = "2.0"
-                id      = 1
-                method  = "tools/call"
-                params  = @{ name = "moe.heartbeat"; arguments = @{ workerId = $WorkerId } }
-            } | ConvertTo-Json -Compress)
+            # One tools/call through a fresh proxy: @{ Value = <parsed reply> }, or
+            # @{ Refused = <codeName> } for a daemon refusal, or $null.
+            function Send-SidecarRpc([string]$Name, [hashtable]$Arguments) {
+                $rpc = @{ jsonrpc = "2.0"; id = 1; method = "tools/call"; params = @{ name = $Name; arguments = $Arguments } } | ConvertTo-Json -Depth 5 -Compress
+                $lines = @($rpc | & node $ProxyScript 2>&1 | ForEach-Object { "$_" })
+                for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+                    try { $d = $lines[$i] | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+                    if ($d.error) { if ($d.error.data.codeName) { return @{ Refused = [string]$d.error.data.codeName } }; return $null }
+                    if ($d.result.content) { return @{ Value = ($d.result.content[0].text | ConvertFrom-Json -ErrorAction Stop) } }
+                }
+                return $null
+            }
+            $refused = $false; $noted = @{}
             $deadline = (Get-Date).AddSeconds($MaxDurationSec)
             while ((Get-Date) -lt $deadline) {
                 Start-Sleep -Seconds $IntervalSec
                 # The wrapper that owns this job is gone (TerminateProcess leaves
                 # no finally): stop heartbeating on behalf of a dead seat.
                 if ($WrapperPid -and -not (Get-Process -Id $WrapperPid -ErrorAction SilentlyContinue)) { break }
-                try { $rpc | & node $ProxyScript 2>&1 | Out-Null } catch {}
+                # A daemon restart parked the attempt this wrapper pinned at claim
+                # time: reattach it with the pinned generation (the answer carries
+                # none). Any other reason names nothing this process may reattach:
+                # say so once. A refusal never heals, so it is not asked again on
+                # every later ping. Lines surface when Stop-HeartbeatSidecar
+                # receives the job.
+                try {
+                    $beat = Send-SidecarRpc 'moe.heartbeat' @{ workerId = $WorkerId }
+                    if (-not ($beat -and $beat.Value -and $beat.Value.reattachRequired -eq $true)) { continue }
+                    $reason = [string]$beat.Value.reason
+                    if ($reason -ceq 'attempt-reconciling' -and $Pin.AttemptId -and $Pin.ProcessStartedAt -and [string]$beat.Value.attemptId -ceq $Pin.AttemptId) {
+                        if ($refused) { continue }
+                        $r = Send-SidecarRpc 'moe.reattach_attempt' @{ taskId = $Pin.TaskId; workerId = $WorkerId; runnerId = $Pin.RunnerId
+                            attemptId = $Pin.AttemptId; generation = $Pin.Generation; processStartedAt = $Pin.ProcessStartedAt; host = $Pin.Host }
+                        if ($r -and $r.Value -and $r.Value.success -eq $true -and $r.Value.phase -ceq 'running') {
+                            "[reattach] attempt $($Pin.AttemptId) (generation $($Pin.Generation)) on task $($Pin.TaskId) is running again after a daemon restart."
+                        } elseif ($r -and $r.Refused) {
+                            $refused = $true
+                            "[reattach] moe.reattach_attempt refused for attempt $($Pin.AttemptId) ($($r.Refused)); not retrying it."
+                        } else { "[WARN] moe.reattach_attempt got no answer for attempt $($Pin.AttemptId); retrying later." }
+                    } elseif (-not $noted.ContainsKey($reason)) {
+                        $noted[$reason] = $true
+                        "[reattach] heartbeat asks for reattachment ($reason) but this wrapper pinned no such reconciling attempt; nothing to reattach."
+                    }
+                } catch {}
             }
-        } -ArgumentList $ProxyScript, $ProjectPath, $WorkerId, $intervalSec, $maxDurationSec, $PID
+        } -ArgumentList $ProxyScript, $ProjectPath, $WorkerId, $intervalSec, $maxDurationSec, $PID, $pin
         return $script:CurrentHeartbeatJob
     } catch {
         Write-Host "[WARN] Failed to start heartbeat sidecar: $_ — a long silent verification step risks REVIEW self-heal eviction." -ForegroundColor Yellow
@@ -1726,6 +1801,10 @@ function Start-HeartbeatSidecar {
 function Stop-HeartbeatSidecar {
     if (-not $script:CurrentHeartbeatJob) { return }
     try { Stop-Job -Job $script:CurrentHeartbeatJob -ErrorAction SilentlyContinue | Out-Null } catch {}
+    # The sidecar's own lines (a reattach and its outcome) are buffered in the job.
+    # Read the child job's output, not Receive-Job: on Windows PowerShell 5.1 that
+    # throws "The Persistence Path does not exist" when the profile path is absent.
+    try { @($script:CurrentHeartbeatJob.ChildJobs | ForEach-Object { $_.Output }) | ForEach-Object { Write-Host ([string]$_) } } catch {}
     try { Remove-Job -Job $script:CurrentHeartbeatJob -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
     $script:CurrentHeartbeatJob = $null
 }
@@ -2204,6 +2283,33 @@ function Get-MoeProcStartToken([int]$ProcId) {
         if ($null -eq $p) { return '' }
         return ([string]$p.StartTime.ToUniversalTime().Ticks)
     } catch { return '' }
+}
+
+# Runner process identity: which process opened an attempt. Every claim this
+# wrapper makes records it, so moe.reattach_attempt can match it after a daemon
+# restart parks that attempt in `reconciling`. It is THIS wrapper process (it
+# outlives every CLI respawn): <pid>@<start token> plus the host, the same pair
+# the live-session marker names, computed ONCE -- the daemon compares exact
+# strings, so a value this process could spell differently later would refuse
+# every reattach. Both are sent or neither: a partial identity records something
+# no reattach can ever reproduce. A match narrows WHICH process; it is never
+# evidence that the process is alive. Twin: the same block in moe-agent.sh.
+$script:MoeProcessStartedAt = ''; $script:MoeHost = ''; $claimRpcArgs = $claimJson | ConvertFrom-Json
+$moeToken = Get-MoeProcStartToken $PID
+$moeHostName = Get-MoeLiveMarkerHost
+$moeIdentityWhy = if (-not $moeToken) { 'process start time unreadable' } elseif (-not $moeHostName) { 'hostname empty' } else { '' }
+if (-not $moeIdentityWhy) {
+    $moeToken = "$PID@$moeToken"
+    if (@(($moeToken + $moeHostName).ToCharArray() | Where-Object { [char]::IsControl($_) }).Count -gt 0) { $moeIdentityWhy = 'control characters' }
+    elseif ($moeToken.Length -gt 200 -or $moeHostName.Length -gt 255) { $moeIdentityWhy = 'too long' }
+}
+if ($moeIdentityWhy) {
+    Write-Host "[WARN] Runner identity unavailable ($moeIdentityWhy); claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart." -ForegroundColor Yellow
+} else {
+    $script:MoeProcessStartedAt = $moeToken; $script:MoeHost = $moeHostName
+    $claimRpcArgs | Add-Member -NotePropertyName processStartedAt -NotePropertyValue $moeToken
+    $claimRpcArgs | Add-Member -NotePropertyName host -NotePropertyValue $moeHostName
+    Write-Host "Runner identity: processStartedAt=$moeToken host=$moeHostName"
 }
 
 # Claim the task's dirty bytes for THIS session. Best-effort by design: a
@@ -4633,8 +4739,10 @@ do {
             # chat_wait loop).
             $claim = [pscustomobject]@{ hasNext = $false }
         } else {
-            $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
+            $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args $claimRpcArgs
             Invoke-MoeReceiptReplay
+            # Before the pin below reads the attempt: a restart may have parked it.
+            if ($claim) { Invoke-MoeReattachOwnAttempts }
         }
 
         # Role-group tag for @architects/@workers/@qa routing. Computed HERE
@@ -4697,7 +4805,7 @@ do {
                 while ($tasklessWaited -lt $moeTasklessWaitSec) {
                     Start-Sleep -Seconds $moeTasklessPollSec
                     $tasklessWaited += $moeTasklessPollSec
-                    $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args ($claimJson | ConvertFrom-Json)
+                    $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args $claimRpcArgs
                     if ($null -eq $claim) {
                         # Unreachable daemon/proxy. Falling through to a launch
                         # is exactly the hole being closed, so stop waiting and
@@ -5940,6 +6048,9 @@ $mentionsJson
     # Status resolution first; the landing + session-ended chat line follow.
     $script:MoeLastLanding = $null
     $moeStopLoop = $false
+    # A restart inside the session the sidecar did not catch in time: reattach
+    # before the landing reads the attempt, or its evidence would fail closed.
+    if ($AutoClaim -and $preflightTaskId) { Invoke-MoeReattachOwnAttempts }
 
     if ($AutoClaim -and $preflightTaskId) {
         # Look up final task status AND reopenCount (the latter drives

@@ -84,6 +84,11 @@ $required = [ordered]@{
     # result it reports and the reused-gate line, spelled identically in both.
     'delivery receipt' = @('moe/receipt', '[receipt]', 'record_delivery_receipt', 'DELIVERY_RECEIPT_CONFLICT', 'targetBefore', 'targetAfter', 'landedRevision', 'pushResult')
     'delivery receipt prose' = @('delivery receipt not recorded for candidate', 'for the next pre-flight to replay.', 'already has a delivery receipt that differs from this report; keeping the recorded one, not retrying.', 'a crash before the receipt would leave this landing without one.', 'replaying the delivery receipt of task', 'that landing never moved the ref; dropping', 'kept: malformed journal', "is still finalizing after its replayed receipt; this seat's next claim stays refused until it closes.", 'push result unknown: the landing stopped before its push finished', 'no git remote configured; push skipped, the commit stays local on', 'push failed: ', 'git push failed', 'qualityGate result reused: the rebuilt candidate has the same tree and base.')
+    # Runner identity and reattach: the identity line and its warning, the reattach
+    # call and its three outcomes, and the heartbeat's other reasons, spelled
+    # identically in both.
+    'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]')
+    'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this wrapper pinned no such reconciling attempt; nothing to reattach.')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {

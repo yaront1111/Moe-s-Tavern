@@ -188,6 +188,16 @@ for prose in 'delivery receipt not recorded for candidate' 'for the next pre-fli
   require_both "delivery receipt prose" "$prose"
 done
 
+# Runner identity and reattach: the identity line and its warning, the reattach
+# call and its three outcomes, and the heartbeat's other reasons, spelled
+# identically in both.
+for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequired '[reattach]'; do
+  require_both "runner reattach" "$lit"
+done
+for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this wrapper pinned no such reconciling attempt; nothing to reattach.'; do
+  require_both "runner reattach prose" "$prose"
+done
+
 # Deferred features must not be advertised by either wrapper.
 for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$SH"; then fail "deferred setting '$deferred' is referenced by moe-agent.sh"; fi

@@ -2064,6 +2064,70 @@ print(' '.join(ids))
 PY
 }
 
+# moe_reattach TASK_ID ATTEMPT_ID GENERATION -- a daemon restart parked this
+# seat's attempt in `reconciling`: present its id and generation with THIS
+# process's identity so it runs again instead of being given up after the
+# reconcile window. 0 running again; 1 refused, which never heals (the same
+# values are refused again), so callers stop asking; 2 no usable answer, ask
+# again later. One line either way, and it never fails its caller.
+# Twin: Invoke-MoeReattach.
+moe_reattach() {
+    local args out rc=0 verdict
+    args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,p,h=sys.argv[1:];print(json.dumps(dict(taskId=t,workerId=w,runnerId=r,attemptId=a,generation=int(g),processStartedAt=p,host=h)))' \
+        "$1" "$2" "$3" "$WORKER_ID" "$MOE_RUNNER_ID" "$MOE_PROCESS_STARTED_AT" "$MOE_HOST" 2>/dev/null) || return 2
+    out=$(moe_rpc reattach_attempt "$args" 2>&1) || rc=$?
+    verdict=$($PYTHON_CMD -c '
+import json,sys
+rc,out=sys.argv[1:]
+try: d=json.loads(out)
+except Exception: d=None
+d=d if isinstance(d,dict) else {}
+data=d.get("data") if isinstance(d.get("data"),dict) else {}
+if rc=="0" and d.get("success") is True and d.get("phase")=="running": print("running")
+elif rc!="0" and data.get("codeName"): print("refused "+str(data["codeName"]))
+else: print("none")
+' "$rc" "$out" 2>/dev/null) || verdict=none
+    case "$verdict" in
+        running) echo -e "${GREEN}[reattach]${NC} attempt $2 (generation $3) on task $1 is running again after a daemon restart."; return 0 ;;
+        refused\ *) echo -e "${YELLOW}[reattach]${NC} moe.reattach_attempt refused for attempt $2 (${verdict#refused }); not retrying it."; return 1 ;;
+    esac
+    echo -e "${YELLOW}[WARN]${NC} moe.reattach_attempt got no answer for attempt $2; retrying later."
+    return 2
+}
+
+# The main loop's half, for what the sidecar cannot see: the pre-flight (a
+# restart between two sessions leaves a resumed attempt parked, and the pin
+# would fail closed on it) and the moment the CLI exits (a restart inside a
+# session that ended before the sidecar's next ping). Every attempt this seat
+# owns in `reconciling` is reattached once; a refusal is remembered for the life
+# of this wrapper. Twin: Invoke-MoeReattachOwnAttempts.
+MOE_REATTACH_REFUSED=" "
+reattach_own_attempts() {
+    [ -n "$MOE_PROCESS_STARTED_AT" ] && [ -n "$PYTHON_CMD" ] || return 0
+    local parked tid aid gen rc
+    parked=$($PYTHON_CMD - "$PROJECT" "$WORKER_ID" <<'PY' 2>/dev/null
+import glob,json,os,re,sys
+project,worker=sys.argv[1:]
+safe=lambda v: isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',v)
+for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
+    try:
+        a=json.load(open(p,encoding='utf-8-sig'))
+        g=a.get('generation')
+        if a.get('workerId')==worker and a.get('phase')=='reconciling' and type(g)==int and 0<g<=9007199254740991 and safe(a.get('id')) and safe(a.get('taskId')):
+            print(a['taskId'],a['id'],g)
+    except Exception:
+        continue
+PY
+    ) || return 0
+    while read -r tid aid gen; do
+        [ -n "$gen" ] || continue
+        case "$MOE_REATTACH_REFUSED" in *" $aid "*) continue ;; esac
+        rc=0; moe_reattach "$tid" "$aid" "$gen" || rc=$?
+        [ "$rc" -ne 1 ] || MOE_REATTACH_REFUSED="$MOE_REATTACH_REFUSED$aid "
+    done <<< "$parked"
+    return 0
+}
+
 # The CLI invocation below blocks this process for the CLI's entire runtime
 # with no interleaved activity of our own. moe-proxy opens a fresh connection
 # per RPC call rather than holding one for the CLI's lifetime, so the
@@ -2090,12 +2154,29 @@ start_heartbeat_sidecar() {
     local wrapper_pid=$$
     (
         set +e
+        refused="" noted=" "
         end_time=$(( $(date +%s) + max_duration_sec ))
         while [ "$(date +%s)" -lt "$end_time" ]; do
             sleep "$interval_sec"
             # The wrapper that owns this job is gone: stop heartbeating for a dead seat.
             kill -0 "$wrapper_pid" 2>/dev/null || break
-            moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" >/dev/null 2>&1
+            reply=$(moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" 2>/dev/null) || continue
+            # A daemon restart parked the attempt this wrapper pinned at claim time:
+            # reattach it with the pinned generation (the answer carries none). Any
+            # other reason names nothing this process may reattach: say so once. A
+            # refusal never heals, so it is not asked again on every later ping.
+            case "$reply" in *reattachRequired*) ;; *) continue ;; esac
+            ask=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.stdin.read());print(str(d.get("reason") or "?")+" "+str(d.get("attemptId") or "-"))' <<< "$reply" 2>/dev/null) || continue
+            reason="${ask%% *}"
+            if [ "$reason" = attempt-reconciling ] && [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_PROCESS_STARTED_AT" ] && [ "${ask#* }" = "$MOE_ATTEMPT_ID" ]; then
+                [ -z "$refused" ] || continue
+                moe_reattach "$PREFLIGHT_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION"
+                [ $? -ne 1 ] || refused=1
+            else
+                case "$noted" in *" $reason "*) continue ;; esac
+                noted="$noted$reason "
+                echo "[reattach] heartbeat asks for reattachment ($reason) but this wrapper pinned no such reconciling attempt; nothing to reattach."
+            fi
         done
     ) &
     HEARTBEAT_PID=$!
@@ -2495,6 +2576,42 @@ proc_start_token() {
     [ -r "/proc/$1/stat" ] || return 0
     sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{print $20}' | tr -d '[:space:]'
 }
+
+# Runner process identity: which process opened an attempt. Every claim this
+# wrapper makes records it, so moe.reattach_attempt can match it after a daemon
+# restart parks that attempt in `reconciling`. It is THIS wrapper process (it
+# outlives every CLI respawn): <pid>@<start token> plus the host, the same pair
+# the live-session marker names, computed ONCE -- the daemon compares exact
+# strings, so a value this process could spell differently later would refuse
+# every reattach. Without /proc (macOS) the token is `ps` lstart, whitespace
+# squeezed. Both are sent or neither: a partial identity records something no
+# reattach can ever reproduce. A match narrows WHICH process; it is never
+# evidence that the process is alive. Twin: the same block in moe-agent.ps1.
+MOE_PROCESS_STARTED_AT=""; MOE_HOST=""; CLAIM_RPC_JSON="$CLAIM_JSON"
+moe_runner_identity() {
+    local token host why="" claim
+    token="$(proc_start_token "$$")"
+    [ -n "$token" ] || token="$(ps -p "$$" -o lstart= 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')"
+    host="$(live_marker_host)"
+    if [ -z "$token" ]; then why="process start time unreadable"
+    elif [ -z "$host" ]; then why="hostname empty"
+    else
+        token="$$@$token"
+        case "$token$host" in *[[:cntrl:]]*) why="control characters" ;; esac
+        if [ -z "$why" ] && { [ "${#token}" -gt 200 ] || [ "${#host}" -gt 255 ]; }; then why="too long"; fi
+    fi
+    if [ -z "$why" ]; then
+        claim=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.argv[1]);d.update(processStartedAt=sys.argv[2],host=sys.argv[3]);print(json.dumps(d))' \
+            "$CLAIM_JSON" "$token" "$host" 2>/dev/null) || why="claim arguments unbuildable"
+    fi
+    if [ -n "$why" ]; then
+        echo -e "${YELLOW}[WARN]${NC} Runner identity unavailable ($why); claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart."
+        return 0
+    fi
+    MOE_PROCESS_STARTED_AT="$token"; MOE_HOST="$host"; CLAIM_RPC_JSON="$claim"
+    echo "Runner identity: processStartedAt=$MOE_PROCESS_STARTED_AT host=$MOE_HOST"
+}
+moe_runner_identity
 
 # live_marker_write TASKID -- claim the task's dirty bytes for THIS session.
 # Best-effort by design: a marker that cannot be written is a warning and the
@@ -5176,8 +5293,10 @@ except Exception:
             fi
             CLAIM_RESULT='{"hasNext":false}'
         else
-            CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+            CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
             receipt_replay || true
+            # Before the pin below reads the attempt: a restart may have parked it.
+            [ -z "$CLAIM_RESULT" ] || reattach_own_attempts || true
         fi
 
         # Role-group tag for @architects/@workers/@qa routing. Computed HERE
@@ -5263,7 +5382,7 @@ except Exception:
                 while [ "$TASKLESS_WAITED" -lt "$MOE_TASKLESS_WAIT_SEC" ]; do
                     sleep "$MOE_TASKLESS_POLL_SEC"
                     TASKLESS_WAITED=$((TASKLESS_WAITED + MOE_TASKLESS_POLL_SEC))
-                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
                     if [ -z "$CLAIM_RESULT" ]; then
                         # Unreachable daemon/proxy. Falling through to a launch
                         # is exactly the hole being closed, so stop waiting and
@@ -6784,6 +6903,9 @@ PYEOF
         POSTFLIGHT_SNAPSHOT="$(create_secure_temp)/S-post-$$.tsv"
         git_dirty_snapshot "$POSTFLIGHT_SNAPSHOT" || POSTFLIGHT_SNAPSHOT=""
     fi
+    # A restart inside the session the sidecar did not catch in time: reattach
+    # before the landing reads the attempt, or its evidence would fail closed.
+    if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then reattach_own_attempts || true; fi
     # The session-ended chat line (post_flight) runs AFTER the landing now so
     # it can carry commit=<sha> kind=<k> paths=<n> -- see the end of the block.
     POSTFLIGHT_BREAK=false
