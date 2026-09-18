@@ -438,6 +438,11 @@ interface Task {
     recordedBy: string;          // Approving worker, or 'human' on the IDE/human path
     recordedAt: string;          // ISO timestamp
   };
+  requiredCheckAtDone?: string | null; // The gate command the task owed at DONE (trimmed), or null when none was
+                                 // owed. qa_approve snapshots it under every deliveryPolicy, so a later settings
+                                 // edit or sibling archive cannot change it; absent = never snapshotted (an older
+                                 // row, or DONE reached outside qa_approve) and judged on live settings. Every
+                                 // reopen clears it. See deliveryPolicy in docs/CONFIGURATION.md
 
   // Commit ledger — written only by moe.record_commit (wrapper post-flight)
   // and moe.declare_files; the daemon never runs git. Additive, no
@@ -1012,7 +1017,7 @@ interface ResourceQueueEntry {
 
 **File:** `.moe/attempts/{attempt-id}.json` (one file per attempt)
 
-One execution of one task by one worker seat. `moe.claim_next_task` opens one whenever it assigns a named worker, and returns its `attemptId` and `generation` beside `task`. A [Candidate](#candidate) names the attempt that produced its bytes, and the fenced tools (`moe.record_candidate`, `moe.release_task`, `moe.finalize_attempt`) refuse an attempt that is no longer the task's current one with `ATTEMPT_SUPERSEDED`. Only `packages/moe-daemon/src/state/attemptStore.ts` writes the file, and it persists before it publishes. Purely additive: no `schemaVersion` bump and no migration.
+One execution of one task by one worker seat. `moe.claim_next_task` opens one whenever it assigns a named worker, and returns its `attemptId` and `generation` beside `task`. A [Candidate](#candidate) names the attempt that produced its bytes. `moe.record_candidate` and `moe.release_task` refuse an attempt that is no longer the task's current one with `ATTEMPT_SUPERSEDED`. `moe.finalize_attempt` answers an attempt that is already `closed` with an idempotent success before that fence, and a superseded attempt is always `closed`, so it refuses `ATTEMPT_SUPERSEDED` only when the `generation` it is given does not match the open attempt's. Only `packages/moe-daemon/src/state/attemptStore.ts` writes the file, and it persists before it publishes. Purely additive: no `schemaVersion` bump and no migration.
 
 ```typescript
 interface ExecutionAttempt {
@@ -1038,12 +1043,13 @@ interface ExecutionAttempt {
 |---|---|---|
 | (none) | `running` | a claim that names a worker. A genuine resume adopts the worker's own open attempt; any other claim first closes a leftover `running` or `reconciling` attempt of the task |
 | `running` | `finalizing` | `moe.complete_task`: the row goes to REVIEW unassigned, but the bytes are not landed yet |
+| `reconciling` | `finalizing` | `moe.complete_task` from a CLI that outlived a daemon restart and completes before its runner reattaches; the same REVIEW hand-off |
 | `running` | `reconciling` | a daemon restart, when the task is still assigned to the attempt's worker: the row is held, not released |
 | `reconciling` | `running` | `moe.reattach_attempt` with the exact recorded identity |
 | `running`, `reconciling` | `closed` | a hand-back of the row (a release, `qa_reject`, a seat-freeing `report_blocked`, …), the worker's `moe.deregister_worker`, a restart that finds the seat already gave the task up, or `reconcileWindowMs` (default 2 h) without a reattach |
 | `finalizing` | `closed` | only the ends listed under `moe.finalize_attempt` → **Every end of a finalizing attempt** in docs/MCP_SERVER.md, the runner's own `moe.finalize_attempt` first; never an idle signal |
 
-While an attempt is `finalizing`, its worker's next claim, every other seat's claim of the task, `moe.qa_approve` and a move of the task into `DONE` or `ARCHIVED` are refused with retryable `-32002` / `ATTEMPT_FINALIZING`. The outcome a runner reports to `moe.finalize_attempt` is not stored on the attempt; the durable landing record is the [DeliveryReceipt](#deliveryreceipt).
+While an attempt is `finalizing`, its worker's next claim, an explicit-`taskId` `moe.claim_next_task` of the task by any other seat, `moe.qa_approve` and a move of the task into `DONE` or `ARCHIVED` are refused with retryable `-32002` / `ATTEMPT_FINALIZING`; the ranked claim pool and `moe.wait_for_task` skip the row instead of refusing it. The outcome a runner reports to `moe.finalize_attempt` is not stored on the attempt. The durable landing record is the completion entry `moe.record_commit` writes into `task.commits`, plus a [DeliveryReceipt](#deliveryreceipt) when the landing ran a quality gate.
 
 ---
 
@@ -1069,7 +1075,7 @@ interface Candidate {
 
 **Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe.
 
-**Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never runs git, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
+**Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never consults git about them, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
 
 **Queries.** Candidates are listed per task or per attempt, ordered by `createdAt` and then `id`, so ties are deterministic.
 
@@ -1217,7 +1223,7 @@ interface DeliveryReceipt {
 
 There is no `createdAt`: the seven fields above are the whole record, so a repeated report can leave the file byte-identical.
 
-**Reported, never verified.** A receipt is what a wrapper *reported* about a landing it performed. The daemon is state-only and never runs git: it neither performs the landing nor inspects the target ref, and it checks only the shape of each field and that the candidate exists. A receipt therefore cannot prove on its own that the bytes are where it says; a consumer that needs proof must re-derive it from the repository. Recording does not compare `target` with the candidate's `deliveryTarget`, or `targetAfter` with `landedRevision`: refusing a landing that already happened would leave a real ref move unrecorded, so the receipt says what was reported and a later policy decides what it is worth.
+**Reported, never verified.** A receipt is what a wrapper *reported* about a landing it performed. The daemon is state-only: it neither performs the landing nor inspects the target ref, and it checks only the shape of each field and that the candidate exists. A receipt therefore cannot prove on its own that the bytes are where it says; a consumer that needs proof must re-derive it from the repository. Recording does not compare `target` with the candidate's `deliveryTarget`, or `targetAfter` with `landedRevision`: refusing a landing that already happened would leave a real ref move unrecorded, so the receipt says what was reported and a later policy decides what it is worth.
 
 **One receipt per candidate, never rewritten.** The candidate, not a caller-chosen id, is the key, because a crash replay re-sends the same report with no id. A report for a candidate that already has a receipt is compared field by field with the stored one, where an absent `pushResult` and `null` count as the same:
 

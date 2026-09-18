@@ -1,0 +1,27 @@
+{
+  "id": "task-16aac8b441b44867b8c9b1faaf141dc0",
+  "epicId": "epic-be924fb8",
+  "title": "docs: \"the daemon never runs git\" is false in pre-Wave-1 text; it runs a read-only git status for handoff fingerprints",
+  "description": "Found by the Wave 1 gate (task-808869c5, round 2). QA rejected that card because docs/ARCHITECTURE.md said the daemon \"never runs git\". The daemon runs exactly one git command: a read-only `git --no-optional-locks status --porcelain=v2 --branch` in packages/moe-daemon/src/util/diskState.ts:43-57, which fingerprints the working tree for handoff notes. claim_next_task (tools/claimNextTask.ts:794) and release_task (tools/releaseTask.ts:166) call it. task-808869c5 fixed ARCHITECTURE.md and the Wave 1 record sections of SCHEMA.md, MCP_SERVER.md and CONFIGURATION.md. Seven older statements still say the daemon never runs git:\n\n- CLAUDE.md:86 (Land on every exit: \"the daemon is state-only and never runs git\")\n- docs/SCHEMA.md:108 (autoCommit settings comment)\n- docs/SCHEMA.md:448 (commit ledger comment)\n- docs/CONFIGURATION.md:156 (autoCommit row)\n- docs/MCP_SERVER.md:261 (get_context Commit evidence)\n- docs/MCP_SERVER.md:450 (complete_task verification: \"never executes the command itself and never runs git\")\n- docs/MCP_SERVER.md:568 (get_commit_scope: \"State-only — the daemon never runs git\")\n\nFix: reword each to state what holds, matching docs/ARCHITECTURE.md \"Delivery Path\". The daemon never writes git state, lands, pushes or runs the gate, and it never consults git to verify what a runner reported; its one git call is the read-only status fingerprint. Docs only, no code. CLAUDE.md is also declared by task-31fe6dc8, so land after it or coordinate. The epic rail for epic-3d096d59 uses the same phrase; leave that to its owner.",
+  "definitionOfDone": [
+    "Each of the seven listed statements states what holds: no git writes, landing, push, or gate run by the daemon, and no git check of runner-reported values; the read-only status fingerprint is named or not contradicted",
+    "cd packages/moe-daemon && npx vitest run src/util/taskTimeBudgetDocs.test.ts passes, and npm run lint passes at the repo root"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T21:40:47.793Z",
+  "updatedAt": "2026-09-18T21:40:47.793Z"
+}

@@ -156,47 +156,72 @@ The daemon is the only writer; all clients send actions to the daemon.
 
 ## Delivery Path
 
-A task reaches DONE through six durable records. Two invariants hold the path
-together:
+Every task carries a plan revision, and a claim that assigns a named worker opens
+an ExecutionAttempt (a resume adopts the worker's own). The other four records
+exist only for a completion that runs `settings.qualityGate`. The gate is unset
+by default, and the wrapper runs it only on a worker's completion landing in a
+git repository, when the command is non-blank, `autoCommit` is on,
+`qualityGateScope` is `everyTask` or the task is epic-final, and
+`MOE_DISABLE_QUALITY_GATE` is not `1`. Two invariants hold the path together:
 
-- **The daemon is state-only.** It never runs git, a gate or a push. Every sha,
-  exit code and landing it stores is what a runner *reported*, and each store
-  checks shape and binding, never the repository.
+- **The daemon is state-only.** It never writes git state, lands, pushes or
+  runs a gate. Its one git call is a read-only
+  `git --no-optional-locks status --porcelain=v2 --branch` that fingerprints the
+  working tree for handoff notes (`util/diskState.ts`, from `claim_next_task`
+  and `release_task`). Every sha, exit code and landing it stores is what a
+  runner *reported*, and each store checks shape and binding, never the
+  repository.
 - **The wrapper is the only git and process actor.** `scripts/moe-agent.{ps1,sh}`
   freezes the bytes, runs `settings.qualityGate`, moves the branch ref and
   reports each step through a `moe.*` tool.
 
-| Record | Lives in | Written by |
-|---|---|---|
-| Plan revision | `task.planRevision` in `tasks/<id>.json` | daemon, on every plan or DoD change (`taskStore.updateTask`) |
-| ExecutionAttempt | `attempts/<id>.json` | daemon: opened by `claim_next_task`, moved by `complete_task`, a restart, `reattach_attempt` and `finalize_attempt` |
-| Candidate | `candidates/<id>.json` | wrapper, through `record_candidate`, before the gate runs |
-| CheckRun | `checks/<id>.json` | wrapper, through `record_check_run`, for each gate command it started |
-| Review | `reviews/<id>.json` | daemon, from `qa_approve` / `qa_reject` naming the candidate read |
-| DeliveryReceipt | `receipts/<id>.json` | wrapper, through `record_delivery_receipt`, after it moved the target ref |
+| Record | Lives in | Written by | Exists for |
+|---|---|---|---|
+| Plan revision | `task.planRevision` in `tasks/<id>.json` | daemon, on every plan or DoD change (`taskStore.updateTask`) | every task |
+| ExecutionAttempt | `attempts/<id>.json` | daemon: opened by `claim_next_task`, moved by `complete_task`, a restart, `reattach_attempt` and `finalize_attempt` | every claim that assigns a named worker |
+| Candidate | `candidates/<id>.json` | wrapper, through `record_candidate`, before the gate runs | gated completions only |
+| CheckRun | `checks/<id>.json` | wrapper, through `record_check_run`, for each gate command it started | gated completions only |
+| Review | `reviews/<id>.json` | daemon, from `qa_approve` / `qa_reject`, bound to the task's current candidate | tasks with a candidate only |
+| DeliveryReceipt | `receipts/<id>.json` | wrapper, through `record_delivery_receipt`, after it moved the target ref | gated landings only |
 
 End to end:
 
 1. `claim_next_task` opens attempt generation N (`running`); the generation is
    the fencing token the other attempt tools check.
 2. `complete_task` moves the row to REVIEW, unassigned, and the attempt to
-   `finalizing`. Until the attempt closes, the worker's next claim, every other
-   seat's claim of the task, `qa_approve` and a move into DONE/ARCHIVED are
-   refused with retryable `ATTEMPT_FINALIZING`.
-3. After the CLI exits, the wrapper records the attributed tree as a Candidate,
-   runs the gate in a disposable clean checkout of it and records the CheckRun.
+   `finalizing`. Until the attempt closes, the worker's next claim, an explicit
+   `claim_next_task` of the task by any other seat, `qa_approve` and a move into
+   DONE/ARCHIVED are refused with retryable `ATTEMPT_FINALIZING`. The ranked
+   pool (the wrappers' only claim path) and `wait_for_task` skip the row
+   instead of refusing it.
+3. When a gate will run, after the CLI exits the wrapper records the attributed
+   tree as a Candidate, runs the gate in a disposable clean checkout of it and
+   records the CheckRun.
 4. A passing gate lands the tree with a CAS `update-ref`, then the wrapper records
    the commit, the DeliveryReceipt and `finalize_attempt { outcome: 'landed' }`.
    A failing gate never moves the branch: the bytes go to
    `refs/moe/rescue/<taskId>/<utc-ts>`, the ledger says `MOE_COMMIT_FAILED_GATE`,
    and the attempt closes as `rescued`.
-5. QA approves or rejects naming the candidate it read; a superseded candidate is
-   refused `CANDIDATE_MISMATCH`.
+5. On a task with a candidate, QA's approval or rejection is recorded as a
+   Review bound to the current candidate: naming any other candidate is refused
+   `CANDIDATE_MISMATCH`, and naming none binds the current one with a
+   `NO-REVIEWED-CANDIDATE` warning.
 6. Under a strict `settings.deliveryPolicy`, `delivery/policy.ts` is the one rule
    both gates use: `qa_approve` refuses `DELIVERY_EVIDENCE_MISSING` until the
-   landing evidence and the required check exist, and a DONE prerequisite
-   without its required check keeps its dependents unclaimable
-   (`DEPENDENCY_EVIDENCE_MISSING`).
+   landing evidence and the required check exist. A DONE prerequisite without
+   its required check holds back its dependents: the ranked pool and
+   `wait_for_task` skip a WORKING task that names it in `dependsOn`, only an
+   explicit `claim_next_task` of that task is refused
+   `DEPENDENCY_EVIDENCE_MISSING`, and a `blockedOnTaskIds` wait on it is not
+   auto-unblocked. `dependsOn` never gates a PLANNING or REVIEW claim.
+
+With no gate to run (the default), no Candidate, CheckRun, DeliveryReceipt or
+Review is written. The wrapper lands the completion commit directly and reports
+it through `record_commit`; that `task.commits` entry is the landing evidence.
+`finalize_attempt` then closes the attempt with the landing's outcome
+(`nothing-to-commit` when the session landed nothing, as with
+`autoCommit: false` or a project outside git), and QA decides with no candidate
+to bind.
 
 Every store writes the record file (temp file + rename) before it publishes the
 record in memory, so a crash can lose an unpublished write but never expose a
@@ -204,7 +229,10 @@ record that is not on disk. A crash between the ref move and the receipt is
 replayed from `<gitdir>/moe/receipt/<taskId>.json` by the next pre-flight, which
 records the missing receipt and never lands twice. A daemon restart parks a
 still-assigned `running` attempt in `reconciling` and holds its row until the
-runner reattaches or `reconcileWindowMs` passes; no idle signal releases a seat.
+runner reattaches or `reconcileWindowMs` passes. No idle signal releases a
+WORKING or PLANNING seat. A REVIEW row is the exception: the REVIEW self-heal
+releases one whose owner has been silent past `reviewStaleTimeoutMs` (default
+30 min), and that release closes the owner's `running` or `reconciling` attempt.
 
 The five record directories are local runtime state, gitignored like
 `resources/` and never committed. The evidence that travels with the repository

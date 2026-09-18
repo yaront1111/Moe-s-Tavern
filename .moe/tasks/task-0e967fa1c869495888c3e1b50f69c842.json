@@ -50,7 +50,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:10.584Z",
-  "updatedAt": "2026-09-18T21:39:28.957Z",
+  "updatedAt": "2026-09-18T21:39:57.562Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:43:58.447Z",
     "plannedStepCount": 2,
@@ -91,7 +91,8 @@
   "filesModified": [
     "packages/moe-claude-plugin/tests/postToolUse.test.ts",
     ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
-    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json"
+    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
   ],
   "completionSummary": "Test-only fix in packages/moe-claude-plugin/tests/postToolUse.test.ts; src/postToolUse.ts untouched (the production MOE_PROJECT_PATH preference is load-bearing for the PowerShell launcher). The runPostToolUseHook describe's beforeEach now saves and deletes MOE_PROJECT_PATH, capturing it per test rather than at module load. afterEach restores it first, before closing wss/server, so a failing close cannot strand the launcher binding. As a pin, the forwards-envelope test now starts with expect(process.env.MOE_PROJECT_PATH).toBeUndefined(). The per-test MOE_WORKER_ID save/restore is unchanged.\nRed/green without touching the live daemon: a scratch decoy harness (a WS server behind a temp .moe/daemon.json, not committed, since deleted) ran the suite with MOE_PROJECT_PATH pointed at it. At HEAD: 2 failed, 11 passed, and the decoy received 2 leaked worker-test AGENT_TOOL_EVENT frames. With only the pin added, the pin failed with \"expected 'C:\\...\\Temp\\moe…' to be undefined\". After the fix: 13/13 passed and 0 frames leaked.\nLive .moe/activity.log has no new worker-test events from the with-env runs; the only 4 are from the 2026-09-18 17:25Z gate run. Standalone strict tsc on the test file: exit 0.",
   "commits": [
@@ -111,6 +112,22 @@
       "treeId": "09d12e59791e8d19507ba151007e0cc642f8b505",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "c45beb59e5cc939501c6d46495ed67406676bcb3",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-9a371c33@2026-09-18T21:36:05Z",
+      "paths": [
+        ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
+      ],
+      "recordedBy": "qa-9a371c33",
+      "recordedAt": "2026-09-18T21:39:57.562Z",
+      "treeId": "40fe797fc29ecd9c6a4ccacc7a1d19b9cdbb1743",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -119,9 +136,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-161b9959@2026-09-18T21:04:43Z",
-    "at": "2026-09-18T21:09:20.988Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-9a371c33@2026-09-18T21:36:05Z",
+    "at": "2026-09-18T21:39:57.562Z"
   },
   "completedAt": "2026-09-18T21:39:28.957Z",
   "reviewCompletedAt": "2026-09-18T21:39:28.957Z",
