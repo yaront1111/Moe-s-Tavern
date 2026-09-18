@@ -11,8 +11,10 @@ $ps1Path = Join-Path $root 'scripts\moe-agent.ps1'
 $shPath = Join-Path $root 'scripts\moe-agent.sh'
 if (-not (Test-Path -LiteralPath $ps1Path)) { Write-Host "FAIL parity-check.ps1: missing $ps1Path"; exit 1 }
 if (-not (Test-Path -LiteralPath $shPath)) { Write-Host "FAIL parity-check.ps1: missing $shPath"; exit 1 }
-$ps1 = Get-Content -Raw -LiteralPath $ps1Path
-$sh = Get-Content -Raw -LiteralPath $shPath
+# UTF-8 explicitly: PS 5.1 reads a BOM-less file (moe-agent.sh) as ANSI, which
+# garbles every non-ASCII needle below.
+$ps1 = Get-Content -Raw -Encoding UTF8 -LiteralPath $ps1Path
+$sh = Get-Content -Raw -Encoding UTF8 -LiteralPath $shPath
 
 $failures = New-Object System.Collections.Generic.List[string]
 
@@ -50,7 +52,9 @@ $required = [ordered]@{
         'MOE_ATTR_EXCLUDED', 'MOE_ATTR_CONTESTED', 'MOE_ATTR_PEER_DECLARED', 'MOE_ATTR_PREEXISTING', 'MOE_ATTR_MISSING', 'MOE_ATTR_CONCURRENT',
         'MOE_CHECKPOINT_RECOVERED', 'MOE_RESCUE_REF', 'MOE_ATTRIBUTION_UNRESOLVED'
     )
-    'chat prefixes' = @('PUSH-BLOCKED:', 'PUSH FAILED', 'CHECKPOINT-UNPUSHED', 'MOE_RESCUE_REF task=')
+    # The gate-failure line's marker (the status-lookup line carries none in
+    # either), spelled by code point: this file has no BOM for PS 5.1 to go by.
+    'chat prefixes' = @("$([char]::ConvertFromUtf32(0x1F6AB)) PUSH-BLOCKED:", 'PUSH FAILED', 'CHECKPOINT-UNPUSHED', 'MOE_RESCUE_REF task=')
     'log prefixes' = @('[attribution]', '[skip]', '[rescue]', '[branch]')
     'commit trailers' = @('Moe-Task:', 'Moe-Kind:', 'Moe-Session:', 'Moe-Status:', 'Moe-Paths:', 'Moe-Inferred:', 'Moe-Contested:', 'Moe-Reason:')
     'commit subjects' = @('wip(', 'rescue(', 'Completed via Moe worker session.', 'not a completion.', 'Checkpoint via Moe', 'Rescue snapshot via Moe', 'refs/moe/rescue/', 'retry after qa_reject #')

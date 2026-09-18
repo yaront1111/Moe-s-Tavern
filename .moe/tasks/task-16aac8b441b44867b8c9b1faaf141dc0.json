@@ -8,9 +8,43 @@
     "cd packages/moe-daemon && npx vitest run src/util/taskTimeBudgetDocs.test.ts passes, and npm run lint passes at the repo root"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED FIRST: a doc-contract guard, in the style of src/util/taskTimeBudgetDocs.test.ts (it reads the documents off disk and asserts they match the daemon's behaviour). This task waits on task-31fe6dc8 (CLAUDE.md), task-dad7eda4 (SCHEMA.md, MCP_SERVER.md) and task-d5b7e6a2 (CONFIGURATION.md, MCP_SERVER.md), so every file is free when you start; line numbers below are from bb5e7e2 and will have moved, so find each sentence by its text.\n\nNew file packages/moe-daemon/src/util/daemonGitDocs.test.ts, with repoRoot resolved exactly as taskTimeBudgetDocs.test.ts does (src/util -> src -> moe-daemon -> packages -> root). Two it() blocks:\n1. 'no doc says the daemon never runs git'. Scan CLAUDE.md plus every *.md under docs/ (recursive; today docs/plans, docs/roles and docs/skills are clean too, so no exclusions are needed) for /never (?:runs|executes|touches) git|runs no git|does not run git/i and collect 'relative/path:line' for each hit. Expect the list to equal []. Failing with the list, not a boolean, is what makes the red readable.\n2. 'the architecture doc names the one read-only git call, exactly as util/diskState.ts runs it'. Assert docs/ARCHITECTURE.md contains 'git --no-optional-locks status --porcelain=v2 --branch', and that src/util/diskState.ts contains \"['--no-optional-locks', 'status', '--porcelain=v2', '--branch']\". That ties the true statement to the code, so a later edit of either one fails here instead of drifting.\n\nRun: cd packages/moe-daemon && npx vitest run src/util/daemonGitDocs.test.ts. Test 1 must FAIL listing 8 sites: the task's 7 plus docs/DEVELOPMENT.md:184, which the task description missed. Test 2 passes today; it guards the statement the rewrites point at. Paste the red list into the step note.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/daemonGitDocs.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "REWORD THE 8 SITES. Say what holds, in the vocabulary of docs/ARCHITECTURE.md's 'Delivery Path': the daemon never writes git state, lands, pushes or runs the gate; it never checks runner-reported values against git; its one git call is a read-only `git --no-optional-locks status --porcelain=v2 --branch` fingerprint for handoff notes (util/diskState.ts, from claim_next_task and release_task). Keep each hunk to the sentence, because several of these files are long shared lines.\n\n1. CLAUDE.md, 'Land on every exit' bullet: '(... the wrappers are the only git actors; the daemon is state-only and never runs git)' becomes '(... the wrappers are the only git actors; the daemon is state-only: it never writes git state, lands, pushes or runs the gate, and its one git call is a read-only status fingerprint for handoff notes)'. This is the most-read copy, so it names the fingerprint.\n2. docs/SCHEMA.md, the autoCommit settings comment: '(the daemon never runs git)' becomes '(the daemon writes no git state and never lands or pushes)'.\n3. docs/SCHEMA.md, the commit-ledger comment: 'the daemon never runs git' becomes 'the daemon records what the wrapper reported and never checks it against git'.\n4. docs/CONFIGURATION.md, the autoCommit row: '(the wrappers are the only git actors; the daemon never runs git)' becomes '(the wrappers are the only git actors; the daemon writes no git state and never lands, pushes or runs the gate)'.\n5. docs/MCP_SERVER.md, get_context 'Commit evidence': '(the daemon never runs git)' becomes '(the daemon stores what the wrapper reported and never checks it against git)'.\n6. docs/MCP_SERVER.md, complete_task verification: 'The daemon never executes the command itself and never runs git.' becomes 'The daemon never executes the command itself, and never checks the report against git.'\n7. docs/MCP_SERVER.md, get_commit_scope: 'State-only - the daemon never runs git; the wrapper joins this with its own git status snapshot' becomes 'State-only - this answer reads no repository; the wrapper joins it with its own git status snapshot'. The rest of that sentence stays.\n8. docs/DEVELOPMENT.md, the post-flight paragraph: '(the daemon is state-only and never runs git)' becomes '(the daemon is state-only: it writes no git state and never lands, pushes or runs the gate)'. This is the site the task missed; the guard in step 1 cannot pass without it, which is why it is in scope.\n\nLeave the epic-3d096d59 rail text alone (the task says its owner decides), and leave code comments and tool descriptions alone: this task is docs only.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "CLAUDE.md",
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/DEVELOPMENT.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY.\n1. cd packages/moe-daemon && npx vitest run src/util/daemonGitDocs.test.ts src/util/taskTimeBudgetDocs.test.ts: both green. The second one is the DoD's named doc test; it walks MCP_SERVER.md's tool headings, which these rewrites do not touch.\n2. cd packages/moe-daemon && npx tsc --noEmit: prints nothing (the new test is TypeScript).\n3. npm run lint at the repo root: passes. It is the role-doc linter, and no role doc changes, so this confirms nothing else moved.\n4. Paste the final scan: grep -rniE 'never (runs|executes|touches) git|runs no git|does not run git' CLAUDE.md docs/ prints nothing.\n5. For complete_task, verification is the step-1 vitest command with both files, with its tail as outputTail.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "SELF-REVIEW, posted as a task comment. Error handling does not apply beyond the test itself: it reads files with readFileSync, and a missing doc fails loudly rather than passing, which is the intended behaviour.\n1. Is each rewrite TRUE in its own context? The daemon writes no git state, never lands, pushes or runs the gate, never checks reported values against git, and runs exactly one read-only status call.\n2. Does any rewrite now contradict the fingerprint by implying the daemon never touches git at all?\n3. Does each hunk touch only its sentence? CLAUDE.md, SCHEMA.md and MCP_SERVER.md are long shared lines; show the git diff --word-diff of each.\n4. Is the guard neither too broad nor too narrow? Name one phrasing it would catch and one true sentence it must not catch ('the gate runs git hooks' does not match).\n5. List the code comments and MCP tool descriptions that still say 'never runs git' (for example in tools/recordDeliveryReceipt.ts, tools/finalizeAttempt.ts and delivery/policy.ts), so QA or the governor can decide on a follow-up. They were out of scope: docs only.\n6. git diff --stat: exactly the 6 planned paths.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,5 +57,40 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T21:40:47.793Z",
-  "updatedAt": "2026-09-18T21:40:47.793Z"
+  "updatedAt": "2026-09-18T21:46:29.447Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T21:43:29.507Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-e52c9adc"
+  ],
+  "dependsOn": [
+    "task-31fe6dc806d9466d9d71c9f8beda60be",
+    "task-dad7eda464734535b1e7fb489f367793",
+    "task-d5b7e6a21be5458c8b219243ed1a4db4"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T21:46:29.350Z",
+  "planningNotes": {
+    "approachesConsidered": "- Reword only the task's seven statements, with no test: rejected. It would break the epic-be924fb8 rail ('All fixes must include regression tests or test updates'), and this is the second pass over the same phrase: task-808869c5 fixed four other docs, and seven or eight more copies survived.\n- A guard that lists the exact files: rejected. A recursive scan of docs/ plus CLAUDE.md catches the next doc too, and it is satisfiable today, because plans, roles and skills are already clean.\n- Also sweep code comments and tool descriptions: rejected. The task is explicitly docs only; the self-review lists them for a follow-up decision.",
+    "codebaseInsights": "- The daemon's only git call is util/diskState.ts: GIT_STATUS_ARGS = ['--no-optional-locks', 'status', '--porcelain=v2', '--branch'], run through execFile, from claim_next_task and release_task for handoff fingerprints.\n- docs/ARCHITECTURE.md's 'Delivery Path' already states the true invariant, fixed by task-808869c5; the rewrites reuse its vocabulary.\n- The full scan (CLAUDE.md plus docs/**/*.md) finds 8 sites: the task's 7 plus docs/DEVELOPMENT.md:184. A scan filtering on '.moe/' hid CLAUDE.md's line, because that line mentions .moe paths.\n- taskTimeBudgetDocs.test.ts is the repo's doc-contract test pattern: read docs off disk, assert they match behaviour, positive and negative halves.",
+    "risks": "- Shared files: dependsOn task-31fe6dc8, task-dad7eda4 and task-d5b7e6a2, which edit CLAUDE.md, SCHEMA.md, CONFIGURATION.md and MCP_SERVER.md. Starting after them keeps each file uncontested at landing.\n- Keep the hunks minimal: CLAUDE.md's bullet is one very long line that peers edit often.\n- Do not reword the epic rail in .moe/epics; the task leaves it to its owner, and .moe is edited only through moe tools anyway.\n- The guard's regex must not catch true sentences. It anchors on the negated verb phrases only.",
+    "keyFiles": [
+      "CLAUDE.md",
+      "docs/SCHEMA.md",
+      "docs/CONFIGURATION.md",
+      "docs/MCP_SERVER.md",
+      "docs/DEVELOPMENT.md",
+      "docs/ARCHITECTURE.md",
+      "packages/moe-daemon/src/util/diskState.ts",
+      "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T21:46:29.447Z"
 }

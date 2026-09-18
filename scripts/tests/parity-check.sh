@@ -58,8 +58,9 @@ for code in \
   require_both "code" "$code"
 done
 
-# Chat prefixes (daemon-visible lines a governor triages on).
-for chat in 'PUSH-BLOCKED:' 'PUSH FAILED' 'CHECKPOINT-UNPUSHED' 'MOE_RESCUE_REF task='; do
+# Chat prefixes (daemon-visible lines a governor triages on). The gate-failure
+# line carries the marker in both wrappers (the status-lookup line in neither).
+for chat in '🚫 PUSH-BLOCKED:' 'PUSH FAILED' 'CHECKPOINT-UNPUSHED' 'MOE_RESCUE_REF task='; do
   require_both "chat prefix" "$chat"
 done
 

@@ -569,7 +569,7 @@ function git(d,...a){const r=cp.spawnSync('git',['-C',d,...a],{encoding:'utf8'})
 const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tracked-mutation','exit-tail',
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
-'finalize-loss-once','finalize-loss','no-change','disabled','deferred','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
+'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
@@ -586,8 +586,10 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 // is the control: one acknowledged finalizing attempt does not stop the loop.
 // identity-claim and reattach-refused finalize too: their second claim proves
 // the runner identity is one pair per wrapper and a refused reattach stops nothing.
+// gate-blank lands under a whitespace-only qualityGate, which is no gate at all,
+// so its loop goes on as after any ungated landing.
 const loopModes=['nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
-  'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','identity-claim','reattach-refused'];
+  'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','identity-claim','reattach-refused','gate-blank'];
 const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','gate-qa-claimed'];
 // Teardown modes interrupt the wrapper once complete_task has left the attempt
 // finalizing: mid-CLI, in the post-flight landing before it reached any outcome
@@ -601,7 +603,7 @@ const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothin
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
 const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',
-  ...loopModes.filter(m=>!['finalizing-acked-continues','identity-claim','reattach-refused'].includes(m))];
+  ...loopModes.filter(m=>!['finalizing-acked-continues','identity-claim','reattach-refused','gate-blank'].includes(m))];
 const EMPTY_TREE='4b825dc642cb6eb9a060e54bf8d69288fbee4904',ZERO_OID='0'.repeat(40);
 // Hard-kills its wrapper's whole tree (no trap, no graceful exit) once MARKER
 // exists, or after LIMIT ms: the loop modes' stop and receipt-replay's crash.
@@ -662,6 +664,9 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   const settings={qualityGate:'node gate.cjs',qualityGateScope:'everyTask',commitBoardState:false,attribution:{undeclared:'never'}};
   if(mode==='disabled'||mode==='nogate-qa-claimed')settings.qualityGate='';
   if(mode==='deferred')settings.qualityGateScope='epicFinal';
+  // Padding is not part of the command: '   ' is no gate, and a padded one runs trimmed.
+  if(mode==='gate-blank')settings.qualityGate='   ';
+  if(mode==='gate-padded')settings.qualityGate='  node gate.cjs  ';
   if(mode==='manual'||mode.startsWith('manual-')||mode==='teardown-manual')settings.autoCommit=false;
   const ownedPaths=mode==='unborn'?['owned.txt','gate.cjs']:['owned.txt'];
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
@@ -1005,6 +1010,11 @@ exit "$rc"
   if(mode==='dirty-helper'){
     assert.equal(after,before,'dirty helper must not authorize a branch commit\n'+log);
     assert.equal(checks[0]?.args.exitCode,19);
+    // Both twins announce a failed gate with the same marked line: the chat line,
+    // and the first line of the task comment.
+    const line=String.fromCodePoint(0x1f6ab)+' PUSH-BLOCKED: qualityGate failed for task task-postflight: node gate.cjs (exit 19)';
+    assert.deepEqual({chat:rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>m.content===line),
+      comment:rpc.some(r=>r.tool==='add_comment'&&String(r.args.content).split('\n')[0]===line)},{chat:true,comment:true},log);
   }else if(mode==='race-fail'){
     assert.equal(git(repo,'log','-1','--format=%s'),'peer-race','stale candidate check must not authorize rebuilt tree\n'+log);
     assert.equal(checks.length,2);assert.deepEqual(checks.map(r=>r.args.exitCode),[0,23]);
@@ -1013,9 +1023,13 @@ exit "$rc"
     assert.equal(candidates.length,0);assert.equal(checks.length,0);assert.equal(finals.length,1,log);
     assert.equal(finals[0].args.outcome,'nothing-to-commit');assert.equal(after,before);count++;continue;
   }
-  if(['disabled','deferred','nogate-qa-claimed'].includes(mode)){
+  if(['disabled','deferred','nogate-qa-claimed','gate-blank'].includes(mode)){
     assert.equal(candidates.length,0,'a completion with no gate to run records no candidate\n'+log);assert.equal(pushBlocked,false,log);
     if(mode==='nogate-qa-claimed')assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');
+    // A whitespace-only qualityGate lands exactly as an unset one: no check run, no
+    // rescue ref, one landed finalize -- that row also proves the rpc log was read.
+    if(mode==='gate-blank')assert.deepEqual({checks:checks.length,gateRuns:seen.length,rescue:git(repo,'for-each-ref','refs/moe/rescue/'),
+      finals:finals.map(f=>f.args.outcome),landed:after!==before},{checks:0,gateRuns:0,rescue:'',finals:['landed'],landed:true},log);
   }else if(identityModes.includes(mode)){
     assert.equal(after,before);assert.equal(candidates.length+checks.length+seen.length,0,'no current attempt: the gate never runs\n'+log);
     assert.ok(log.includes('qualityGate not run: candidate evidence unavailable'),log);assert.equal(pushBlocked,false,log);
@@ -1032,6 +1046,10 @@ exit "$rc"
     assert.notEqual(candidates[0].args.baseRevision,candidates[1].args.baseRevision);
     if(mode==='race-pass')assert.deepEqual(checks.map(r=>r.args.candidateId),candidates.map(r=>r.args.id),'a moved target reruns the gate on the rebuilt candidate\n'+log);
   }
+  // A padded qualityGate still runs, and records the trimmed command: the delivery
+  // policy builds its required-check token from the trimmed string.
+  if(mode==='gate-padded')assert.deepEqual({gateRuns:seen.length,recorded:checks.map(r=>[r.args.command,r.args.exitCode])},
+    {gateRuns:1,recorded:[['node gate.cjs',0]]},log);
   for(const check of checks){
     const ci=rpc.findIndex(r=>r.tool==='record_candidate'&&r.args.id===check.args.candidateId);
     assert.ok(ci>=0&&ci<rpc.indexOf(check));assert.equal(check.args.treeSha,rpc[ci].args.treeSha);

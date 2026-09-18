@@ -1974,7 +1974,10 @@ function Read-MoeCommitSettings {
                     $s.exclude = @(Get-MoeStringList (Get-MoeProp $attr 'exclude'))
                 }
                 $qg = Get-MoeProp $st 'qualityGate'
-                if ($qg -is [string]) { $s.qualityGate = $qg }
+                # Trimmed here and only here, as the sh twin's settings reader and
+                # delivery/policy.ts do: a blank value is no gate, and the command the
+                # gate runs and records is the canonical one the policy matches on.
+                if ($qg -is [string]) { $s.qualityGate = $qg.Trim() }
                 if ((Get-MoeProp $st 'qualityGateScope') -eq 'everyTask') { $s.qualityGateScope = 'everyTask' }
                 $cb = Get-MoeProp $st 'consolidationBranch'
                 # A literal branch name doubles as the peel target; a pattern
@@ -3979,7 +3982,7 @@ function Invoke-MoeLanding {
                     }
                     $res.StopLoop=$true
                     $gateRc=if ($script:MoeGate -and $script:MoeGate.Finished) { $script:MoeGate.ExitCode } else { 125 }
-                    $gateMsg="PUSH-BLOCKED: qualityGate failed for task $($TaskId): $gate (exit $gateRc)"
+                    $gateMsg="🚫 PUSH-BLOCKED: qualityGate failed for task $($TaskId): $gate (exit $gateRc)"
                     Send-MoeGeneralChat $gateMsg
                     $tail=''
                     if ($script:MoeGate -and (Test-Path -LiteralPath $script:MoeGate.Log)) {
