@@ -8,9 +8,24 @@
     "npm test in packages/moe-claude-plugin passes with MOE_PROJECT_PATH set to an unrelated live project and with it unset"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Isolate MOE_PROJECT_PATH in packages/moe-claude-plugin/tests/postToolUse.test.ts only. Do not edit src/postToolUse.ts.\n\nIn the `describe('runPostToolUseHook')` block, add the same save/clear/restore pattern already used for MOE_WORKER_ID, applied to MOE_PROJECT_PATH for every case:\n\n```\nlet prevProjectPath: string | undefined;\nbeforeEach(() => {\n  prevProjectPath = process.env.MOE_PROJECT_PATH;\n  delete process.env.MOE_PROJECT_PATH;\n});\nafterEach(() => {\n  if (prevProjectPath === undefined) delete process.env.MOE_PROJECT_PATH;\n  else process.env.MOE_PROJECT_PATH = prevProjectPath;\n});\n```\n\nError handling: restore in afterEach (vitest runs it on throw). Do not capture the original at module load.\n\nAdd one pin test inside that describe: set `process.env.MOE_PROJECT_PATH` to a second mkdtemp dir that has its own .moe/daemon.json pointing at port 1 (unreachable), then call runPostToolUseHook with cwd = makeProjectWithDaemon(port) and MOE_WORKER_ID = 'worker-test'. After the beforeEach clear, the test may set the poison path and must delete it again before the call OR the pin is: with the suite-level clear in place, even assigning the poison path in the test body and then deleting it before the hook (documenting the leak) — simpler pin: the existing 'forwards moe.* tool events' case plus 'does not throw when the daemon is unreachable' now pass when the process started with MOE_PROJECT_PATH set. Add an explicit case that process.env.MOE_PROJECT_PATH is undefined at the start of a hook test (after beforeEach), so a future author who removes the clear fails this assertion.\n\n`expect(process.env.MOE_PROJECT_PATH).toBeUndefined()` at the top of the forwards-envelope test is enough of a pin.\n\nKeep the existing per-test MOE_WORKER_ID save/restore; do not merge those into the new beforeEach unless it stays equivalent.\n\nFrom packages/moe-claude-plugin, first prove red: with MOE_PROJECT_PATH=D:\\projexts\\moes, current HEAD fails 2/13; after the edit both of these must pass:\n- `$env:MOE_PROJECT_PATH='D:\\projexts\\moes'; npm test` (PowerShell) / `MOE_PROJECT_PATH=/unrelated npm test`\n- without the var: `npm test`\nExpect 13/13 both times. Skill: test-driven-development.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Adversarial self-review of this one-file diff. Confirm src/postToolUse.ts is untouched (PowerShell launcher still binds via MOE_PROJECT_PATH). Confirm afterEach restores the wrapper's MOE_PROJECT_PATH so a later step in the same process is not stranded. Confirm no live AGENT_TOOL_EVENT can be posted: with the clear in place, the forwards test talks only to 127.0.0.1:<fixture port>.\n\nError handling: afterEach restore on failure; hook send-failed path unchanged.\n\nVerification (complete_task.verification.command). From packages/moe-claude-plugin, in one shell so the env is set:\nPowerShell: `$env:MOE_PROJECT_PATH='D:\\projexts\\moes'; npm test`\nExpect exit 0, 13/13. Also run once with the variable removed to satisfy DoD item 2; the named command is the with-env run because that is the old failure mode.\n\nSkills: adversarial-self-review, verification-before-completion.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,5 +38,25 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:10.584Z",
-  "updatedAt": "2026-09-18T17:27:10.584Z"
+  "updatedAt": "2026-09-18T20:44:52.378Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T20:43:58.447Z",
+    "plannedStepCount": 2,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-4323a407"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T20:44:52.306Z",
+  "planningNotes": {
+    "approachesConsidered": "Two options: (1) change runPostToolUseHook to prefer input.cwd over MOE_PROJECT_PATH so tests pass without env isolation — rejected: the production preference is load-bearing for the PowerShell claude launcher (comment at postToolUse.ts:84-88) and is not this bug; (2) isolate MOE_PROJECT_PATH in the tests the same way MOE_WORKER_ID is already saved/cleared/restored. (2) is the decision and the DoD. Do not edit src/postToolUse.ts.",
+    "codebaseInsights": "tests/postToolUse.test.ts already save/clear/restore MOE_WORKER_ID inside the two hook cases that set it, and MOE_DISABLE_TOOL_HOOK in a third. MOE_PROJECT_PATH is never touched, so a moe-agent session leaks D:\\projexts\\moes into runPostToolUseHook, which then reads the live .moe/daemon.json instead of the fixture. Classifier tests do not call the hook. Isolate at the runPostToolUseHook describe (beforeEach delete, afterEach restore) so every hook case uses input.cwd. Capture the original value once in beforeAll/beforeEach, not at module load. afterEach is the error handling path: it must restore even when a test throws.",
+    "risks": "Restoring a captured-at-module-load value can restore a stale copy if another file mutates the env; capture in beforeEach. Do not delete MOE_PROJECT_PATH without restoring — this session's wrapper needs it after the suite. Do not change production env preference. vitest may run files in parallel; this file only needs to isolate its own process env for its duration.",
+    "keyFiles": [
+      "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T20:44:52.378Z"
 }

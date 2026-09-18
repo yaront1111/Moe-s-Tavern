@@ -16,7 +16,9 @@
 //   - The REQUIRED CHECK applies when the wrapper would run settings.qualityGate
 //     for the task: a CheckRun on the CURRENT candidate, on that candidate's own
 //     tree, of the gate command, exit 0, runner-observed. Those records are
-//     immutable, so it is judged in every status.
+//     immutable, so it is judged in every status. WHICH check is owed is live
+//     until DONE; qa_approve then binds it to task.requiredCheckAtDone, so a
+//     later settings edit or epic reshape cannot change what a DONE task owes.
 //
 // Fail closed: an unreadable record or failed lookup reports the evidence missing.
 // The one throw is an unrecognised deliveryPolicy, because reading it as the
@@ -53,6 +55,8 @@ export const EVIDENCE_TOKENS = {
   pushedCompletionCommit: 'pushed-completion-commit',
   mergedPullRequest: 'merged-pull-request',
   manualArtifact: 'manual-artifact',
+  /** A DONE task's requiredCheckAtDone is neither a command nor null, so the check it owes cannot be read. */
+  unreadableRequiredCheck: 'unreadable-required-check',
 } as const;
 
 export const REQUIRED_CHECK_TOKEN_PREFIX = 'required-check:';
@@ -154,7 +158,7 @@ export function isEpicFinalTask(state: StateManager, task: Task): boolean {
  * no runner produces. Mirrors scripts/moe-agent.{sh,ps1}: the gate runs only on a
  * completion landing (never with autoCommit false), only for a non-blank
  * qualityGate (trimmed), and, unless qualityGateScope is exactly 'everyTask', only
- * on the epic-final task.
+ * on the epic-final task. Read live; qa_approve snapshots it as requiredCheckAtDone.
  */
 export function requiredCheckCommand(state: StateManager, task: Task): string | null {
   const settings: { autoCommit?: unknown; qualityGate?: unknown; qualityGateScope?: unknown } | undefined =
@@ -217,6 +221,27 @@ function landingShortfall(policy: StrictDeliveryPolicy, task: Task, attested: De
 const LANDING_JUDGED: ReadonlySet<string> = new Set(['DONE', 'ARCHIVED']);
 
 /**
+ * The required-check token `task` is missing, or none. Until DONE the check owed
+ * is the live requiredCheckCommand. A DONE or ARCHIVED task owes what qa_approve
+ * snapshotted (requiredCheckAtDone: a command, or null for none); one without a
+ * snapshot falls back to the live rule. A snapshot of any other type is logged
+ * and reported missing: fail closed, never read as none owed.
+ */
+function checkShortfall(state: StateManager, task: Task): string[] {
+  const snapshot: unknown = task.requiredCheckAtDone;
+  let command: string | null;
+  if (!LANDING_JUDGED.has(task.status) || snapshot === undefined) {
+    command = requiredCheckCommand(state, task);
+  } else if (snapshot === null || typeof snapshot === 'string') {
+    command = snapshot?.trim() || null;
+  } else {
+    logger.warn({ taskId: task.id, snapshot: renderGot(snapshot) }, 'Delivery policy: requiredCheckAtDone unreadable; reporting the check missing');
+    return [EVIDENCE_TOKENS.unreadableRequiredCheck];
+  }
+  return command !== null && !hasPassingCheck(state, task.id, command) ? [requiredCheckToken(command)] : [];
+}
+
+/**
  * Whether `task` satisfies the project's delivery policy, and exactly which
  * evidence is missing. A plain predicate over any task: pass `attestations` only
  * when judging an approval that supplies them. Throws only for an unrecognised
@@ -226,9 +251,7 @@ export function evaluateDeliveryEvidence(state: StateManager, task: Task, attest
   const policy = resolveDeliveryPolicy(state.project?.settings);
   if (policy === 'legacy') return { policy, satisfied: true, missingEvidence: [] };
   const landing = LANDING_JUDGED.has(task.status) ? [] : landingShortfall(policy, task, attestations);
-  const command = requiredCheckCommand(state, task);
-  const check = command !== null && !hasPassingCheck(state, task.id, command) ? [requiredCheckToken(command)] : [];
-  const missingEvidence = [...landing, ...check];
+  const missingEvidence = [...landing, ...checkShortfall(state, task)];
   return { policy, satisfied: missingEvidence.length === 0, missingEvidence };
 }
 
@@ -284,6 +307,7 @@ const TOKEN_REASONS = new Map<string, string>([
   [EVIDENCE_TOKENS.pushedCompletionCommit, 'no completion commit recorded for this review round is marked pushed; a commit that never reached the remote does not count'],
   [EVIDENCE_TOKENS.mergedPullRequest, 'no merged pull request was attested; pass mergedPullRequest naming it'],
   [EVIDENCE_TOKENS.manualArtifact, 'no manual artifact was attested; pass manualArtifact naming the deliverable you checked'],
+  [EVIDENCE_TOKENS.unreadableRequiredCheck, 'task.requiredCheckAtDone is neither a command nor null, so the check owed at DONE cannot be judged'],
 ]);
 
 /** A readable reason for one missing-evidence token. */

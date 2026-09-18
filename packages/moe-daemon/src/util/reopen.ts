@@ -29,6 +29,8 @@ export function resetPlanStepsToPending(plan: ImplementationStep[]): Implementat
 /**
  * Compute the field updates that invalidate a task's prior completion on reopen:
  *  - clear completedAt / reviewStartedAt / reviewCompletedAt (no longer done)
+ *    and requiredCheckAtDone (the check the prior DONE owed; a DONE reached
+ *    again outside qa_approve is judged on the live rule instead)
  *  - strip metrics.doneAt / metrics.wallClockMs (the "finished" markers)
  *  - reset the plan steps to PENDING + clear stepsCompleted (enforced rework;
  *    closes the "all-steps-COMPLETED → vacuous complete_task" hole)
@@ -49,6 +51,7 @@ export function buildReopenClearingUpdates(task: Task): Partial<Task> {
     completedAt: undefined,
     reviewStartedAt: undefined,
     reviewCompletedAt: undefined,
+    requiredCheckAtDone: undefined,
     needsHumanReview: undefined,
     critiqueBlockCount: undefined,
     failedDodItems: [],

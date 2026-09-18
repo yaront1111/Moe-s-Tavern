@@ -9,9 +9,60 @@
     "CLAUDE.md's NO-COMPLETION-COMMIT anchor matches delivery/policy.ts completionCommitsForReview"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "BASELINE + RED TEST. This task depends on task-fd970f24 (which edits delivery/policy.ts) and task-fee5e136 (likely edits deliveryProjection.ts). Start only after both land, and find code by symbol name; line numbers are from bb5e7e2.\n\n1. BEFORE any edit, record the daemon suite counts on a CLEAN export of the starting commit. The shared checkout carries peers' dirty test files, and they shift the counts (mem:gotcha-qa-test-count-drift-shared-tree).\n   a. git archive HEAD | tar -x -C D:/moe-chore-31fe-<worker> (use a unique name).\n   b. mklink /J <scratch>\\packages\\moe-daemon\\node_modules D:\\projexts\\moes\\packages\\moe-daemon\\node_modules\n   c. cd <scratch>/packages/moe-daemon && npx vitest run --reporter=json --outputFile=<scratch>/before.json\n   d. Keep the 'Tests N passed | M skipped (T)' line and the per-file counts.\n2. In state/candidateStore.test.ts, test 'exports no update, patch or delete path at all':\n   - Add 'REVISION_RE' and 'renderGot' to the sorted export allowlist; keep 'SHA_RE'.\n   - Beside the existing expect(store.SHA_RE).toEqual(/^[0-9a-f]{7,40}$/i), add expect(store.REVISION_RE).toEqual(/^[0-9a-f]{40}$/i).\n   These are new expects inside the SAME it(). Add no new test, so the counts stay the same.\n3. Run 'npx vitest run src/state/candidateStore.test.ts'. It must be RED today, because the store exports neither symbol yet. Paste the failing assertion into the step note. This satisfies the epic rail: a test that fails on the old code.\n4. The checkRunStore and receiptStore allowlists do not change, because their exports do not change. Say so in the note so QA does not look for edits there.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "DEFINE ONCE, in state/candidateStore.ts. It is already the exported home of SHA_RE, deliveryProjection already imports SHA_RE from it, and checkRunStore, receiptStore, reviewStore, deliveryProjection and delivery/policy all import from it already. candidateStore imports only util/*, and attemptStore imports only util/*, so the moves add no import cycle. stateModules.test.ts fails on any runtime cycle inside src/state; keep it that way.\n\nA new util module was rejected: it would push the plan to 11 files, past the 10-file gate.\n\n1. SHA_RE stays /^[0-9a-f]{7,40}$/i. Reword its comment to: the one git-object shape (7-40 hex, any case) every Wave 1 record and moe.record_commit accept; import it, never copy it.\n2. Add 'export const REVISION_RE = /^[0-9a-f]{40}$/i;'. Merge the rationale of the two copies into its JSDoc:\n   - receiptStore's 'an abbreviation or a ref name could name different bytes by the time anyone reads the receipt';\n   - finalizeAttempt's 'case-insensitive to match the sibling runner-called tool'.\n3. Export the private renderGot unchanged. Its body must stay byte-identical: all 5 copies hash the same today. Keep its one-line JSDoc and add 'shared by every Wave 1 store and delivery/policy.ts; import it, never copy it'.\n4. Neither regex may carry a g or y flag. The shared instances must stay stateless for .test().\n5. Run 'npx vitest run src/state/candidateStore.test.ts'; it is GREEN now.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "REPLACE EVERY COPY WITH AN IMPORT. There is no behaviour change: every regex source and flag, and every error message, stays identical.\n- state/checkRunStore.ts: delete the SHA_RE copy (and its comment) and the private renderGot. Import both from './candidateStore.js', extending the existing getCandidate import.\n- state/receiptStore.ts: delete REVISION_RE (its rationale moved to the shared JSDoc) and renderGot. Import REVISION_RE and renderGot from './candidateStore.js'.\n- state/reviewStore.ts: delete renderGot and import it, extending the listCandidatesForTask import.\n- state/deliveryProjection.ts: import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js' and drop the CANDIDATE_SHA_RE alias. isCandidateSha uses SHA_RE. isLandedRevision uses REVISION_RE instead of the inline /^[a-f0-9]{40}$/i, which matches the same strings.\n- delivery/policy.ts: delete renderGot and import it from '../state/candidateStore.js', extending the existing import.\n- tools/recordCommit.ts: delete 'const SHA_RE' and import SHA_RE from '../state/candidateStore.js'.\n- tools/finalizeAttempt.ts: delete REVISION_PATTERN and its comment block, and use the imported REVISION_RE. The message 'must be 40 hex characters' stays unchanged.\n\nError handling: the validation paths keep their exact refusals, and only the regex's home moves. Run 'npx tsc --noEmit' in packages/moe-daemon; it must be clean.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/receiptStore.ts",
+        "packages/moe-daemon/src/state/reviewStore.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "CLAUDE.md ANCHOR. Line 88 in the 'Task-size + verification gates' bullet currently reads: NO-COMPLETION-COMMIT when no completion commit is recorded since `reviewStartedAt`.\n\nRewrite that clause so it matches completionCommitsForReview in delivery/policy.ts: no completion commit is recorded in the current work round, at or after the most recent rejection, else the first step start (workStartedAt), else reviewStartedAt. Name `completionCommitsForReview` in `delivery/policy.ts` as the anchor.\n\nEdit only that clause. CLAUDE.md is one very long line that peers also edit, so keep the hunk minimal. Do not touch docs/MCP_SERVER.md or docs/CONFIGURATION.md; task-808869c5 already fixed them. A repo-wide grep showed CLAUDE.md is the only remaining stale copy.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY.\n1. Single definitions. Run:\n   grep -rnE '\\{7,40\\}|\\{40\\}\\$|function renderGot|REVISION_PATTERN|CANDIDATE_SHA_RE' packages/moe-daemon/src --include=*.ts | grep -v '\\.test\\.ts'\n   Expected: only the three definitions in state/candidateStore.ts. Paste the output.\n2. Types: cd packages/moe-daemon && npx tsc --noEmit. It must print nothing (TS7 finishes in under 1 s; that is not a skip).\n3. SAME COUNTS:\n   a. In the step-1 scratch export, apply the diff of this task's 10 files: git diff -- <the 10 paths> | git -C <scratch> apply\n   b. Run npx vitest run --reporter=json --outputFile=<scratch>/after.json.\n   c. Compare with before.json. Passed, skipped and total must be identical, and so must the per-file counts, except that no file may lose tests.\n   d. If a file fails under fleet load, rerun it alone (mem:moes-test-env-quirks).\n4. Also run the full suite in the shared checkout, and explain any count difference from the scratch run by peers' dirty test files.\n5. Cleanup: remove the junction first (cmd //c \"rmdir <junction>\"), check that the live node_modules still exists, then remove the scratch.\n\nFor complete_task, the verification is the scratch 'npx vitest run' command, and outputTail holds the before and after count lines.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "SELF-REVIEW, answered in a task comment:\n1. Is there any import cycle? Name each new import edge and say why it is acyclic. stateModules.test.ts must stay green.\n2. Is each regex byte-for-byte the same language as every copy it replaced? The /^[a-f0-9]{40}$/i form counts as the same language as /^[0-9a-f]{40}$/i.\n3. Is renderGot's body unchanged? Compare the md5 of the moved function body with the old copies.\n4. Were no messages or error codes changed?\n5. Neither shared regex has a g or y flag, so sharing one instance cannot leak lastIndex state between callers.\n6. Were no tests added or removed? Only candidateStore.test.ts changed.\n7. Is the CLAUDE.md hunk exactly the one clause?\n8. Run 'git diff --stat': only the 10 planned paths are this task's.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,8 +72,52 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 207.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-90d8b959a5814cf89cf00368c3eb5a99",
+      "author": "qa-7100be29",
+      "content": "QA of task-808869c5 adds one input for the shared shape rule: SHA-256 object-format repositories.\n\nEvery Wave 1 revision validator caps at 40 hex:\n- candidateStore.ts:41 SHA_RE /^[0-9a-f]{7,40}$/i\n- checkRunStore.ts:43, a copy of the same regex\n- receiptStore.ts:54 REVISION_RE /^[0-9a-f]{40}$/i\n- finalizeAttempt.ts:41 REVISION_PATTERN, the same 40\n- the wrappers' 40-zero ids (moe-agent.sh:2294, moe-agent.ps1:4034)\n\nIn a `git init --object-format=sha256` repository (64-hex ids), a `landed` finalize is refused on each of its 3 tries, the loop stops and the attempt stays finalizing. With a qualityGate, the unrecordable candidate is reported as a gate failure and the bytes are parked on a rescue ref.\n\nDecide one rule when the regexes are unified: either accept 64 hex, or refuse sha256 repositories up front with a clear message. This is rare, and it is filed here rather than as its own task.",
+      "timestamp": "2026-09-18T20:45:53.154Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:01.259Z",
-  "updatedAt": "2026-09-18T17:27:01.259Z"
+  "updatedAt": "2026-09-18T20:45:53.154Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T20:40:31.589Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 10
+  },
+  "contextFetchedBy": [
+    "architect-e52c9adc"
+  ],
+  "dependsOn": [
+    "task-fd970f24862f474ca10bddd75d8cbcc5",
+    "task-fee5e13608744f60bf5d12073d9da95a"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T20:45:40.812Z",
+  "planningNotes": {
+    "approachesConsidered": "Where the three shared symbols live:\n- A new util module (for example util/shapes.ts) or util/sanitize.ts: rejected. A separate home file means 11 distinct files: 8 consumers + the home + the test + CLAUDE.md, which is past the submit_plan hard cap of 10.\n- candidateStore.ts (chosen). It already exports SHA_RE, the other Wave 1 stores, deliveryProjection and delivery/policy already import from it, and it has no imports back into them. So it can hold all three symbols with no cycle and no new file.\n- Re-exports that leave the allowlists untouched: rejected. They are not a single definition, and they leave no test that fails on the old code.\n- A source-scan guard test against re-duplication: rejected. It would change the suite counts, and the DoD requires them unchanged. The grep in the verify step proves the single definitions once instead.",
+    "codebaseInsights": "- All 5 renderGot copies are byte-identical (same md5): delivery/policy.ts, candidateStore, checkRunStore, receiptStore and reviewStore.\n- The regex copies:\n  - SHA_RE /^[0-9a-f]{7,40}$/i: candidateStore (exported), checkRunStore, tools/recordCommit.ts.\n  - 40-hex /^[0-9a-f]{40}$/i: receiptStore REVISION_RE, finalizeAttempt REVISION_PATTERN.\n  - deliveryProjection has an inline /^[a-f0-9]{40}$/i.\n- Export allowlist tests exist for candidateStore (it lists SHA_RE and pins its value), checkRunStore and receiptStore. Only candidateStore's changes. reviewStore has no allowlist test.\n- stateModules.test.ts forbids runtime import cycles inside src/state.\n- The CLAUDE.md line 88 clause 'since `reviewStartedAt`' is the only stale copy of the NO-COMPLETION-COMMIT anchor. The real rule is completionCommitsForReview in delivery/policy.ts: the latest rejection, else workStartedAt, else reviewStartedAt.",
+    "risks": "- Serialization: dependsOn is task-fd970f24 (WORKING, edits delivery/policy.ts) and task-fee5e136 (PLANNING, very likely edits deliveryProjection.ts). Start after both land. Their new tests change the suite total, which is why the baseline is taken on this task's own starting commit.\n- Count drift: peers' dirty test files in the shared checkout shift counts. Compare on a clean git-archive export, before and after applying this diff.\n- CLAUDE.md is one huge shared line, so keep the hunk to the clause.\n- Behaviour must not change: keep the regex literals, flags and error messages exactly. Never add a g flag to a shared regex.\n- 10 distinct files is exactly the gate's cap. Do not add files, for example by pinning REVISION_RE in receiptStore.test.ts.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/state/candidateStore.test.ts",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/state/receiptStore.ts",
+      "packages/moe-daemon/src/state/reviewStore.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+      "CLAUDE.md",
+      "packages/moe-daemon/src/state/stateModules.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T20:45:40.876Z"
 }

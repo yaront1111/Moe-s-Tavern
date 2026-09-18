@@ -1,0 +1,29 @@
+{
+  "id": "task-e7cf44d7fc6840658f6992b4034d7d10",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: qa_approve and DONE/ARCHIVED moves answer ATTEMPT_FINALIZING with the holder's advice, and finalize_attempt lets any caller follow it",
+  "description": "Found by QA of the Wave 1 integration gate (task-808869c5). The gate's adversarial pass did not record it. Code refs are at HEAD 09513e0.\n\nContract drift between Wave 1 slices:\n- task-758423de gave the claim path a refusal worded for QA, `claimEligibility.foreignFinalizingRefusal`. Its own comment (util/claimEligibility.ts:122-124) calls the holder's advice \"the wrong advice for a QA caller\".\n- Two non-holder paths still throw `claimGuards.attemptFinalizingRefusal`: `qa_approve` (tools/qaApprove.ts:79-86) and taskStore.updateTask's DONE/ARCHIVED guard (state/taskStore.ts:265-273, also reached from archive_epic).\n- That refusal's message names the attempt id and generation and says \"Close the boundary with moe.finalize_attempt, then retry\".\n- `moe.finalize_attempt` checks only the attempt id/generation fence (tools/finalizeAttempt.ts:204-209) and has no caller or role check. That is by design, so a governor or human can close a dead runner's attempt with outcome 'failed'.\n\nFailure scenario (combined paths, no single slice tests it):\n1. The worker calls complete_task. Attempt A goes to finalizing; the row goes to REVIEW, unassigned.\n2. A QA agent or governor calls qa_approve {taskId}. An unassigned REVIEW row passes the ownership check.\n3. It is refused with A's id and generation, plus the advice to finalize.\n4. It calls finalize_attempt {attemptId: A, generation, outcome: 'failed'}, which is accepted.\n5. The retried qa_approve succeeds under the default legacy policy, so the task is DONE before its bytes landed.\n6. When a qualityGate applies, the wrapper's candidate read finds no open attempt, the \"evidence unavailable\" path (scripts/moe-agent.sh:1890-1891, 1964-1966; moe-agent.ps1:1281-1296). The completion is parked on a rescue ref that no pre-flight recovers, because a DONE task is never claimed again.\n\nAlso stale: util/claimGuards.ts:93, \"The refusal both holds raise.\" attemptFinalizingRefusal now has three non-claim callers (claimNextTask's own-worker hold, qa_approve, the DONE/ARCHIVED guard). The other-seat hold throws foreignFinalizingRefusal instead.",
+  "definitionOfDone": [
+    "qa_approve's and the DONE/ARCHIVED guard's ATTEMPT_FINALIZING refusal addresses a non-holder: wait for the runner to finalize, or close with outcome 'failed' only after confirming the runner is gone. It keeps code -32002, codeName ATTEMPT_FINALIZING, the context keys and retryable:true, and still names the held attempt.",
+    "A test per path pins the message and fails on the old holder-voiced text",
+    "util/claimGuards.ts:93 comment corrected to the builder's actual callers",
+    "cd packages/moe-daemon && npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 211.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T20:45:37.590Z",
+  "updatedAt": "2026-09-18T20:45:37.590Z"
+}

@@ -724,6 +724,11 @@ export interface Task {
    */
   deliveryEvidence?: TaskDeliveryEvidence;
   /**
+   * Gate command that was due at the DONE transition (qa_approve), or null if none was.
+   * Absent (undefined) means not snapshotted: a record written before this field, or a DONE that skipped qa_approve. Additive; no schemaVersion bump.
+   */
+  requiredCheckAtDone?: string | null;
+  /**
    * The worker's own account of what was delivered — the `summary` param of
    * moe.complete_task, persisted (it used to be accepted and discarded).
    * Surfaced to QA and to dependent tasks via get_context's epicSiblings.

@@ -1,0 +1,28 @@
+{
+  "id": "task-dad7eda464734535b1e7fb489f367793",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: caller-supplied candidate and check-run ids that differ only by case overwrite each other on a case-insensitive filesystem",
+  "description": "Found by QA of the Wave 1 integration gate (task-808869c5). Code refs are at HEAD 09513e0.\n\n`moe.record_candidate` and `moe.record_check_run` accept an optional caller-supplied `id` (state/candidateStore.ts:224 `input.id ?? generateId('cand')`; checkRunStore.ts:277-279). util/sanitize.ts:106 allows mixed case. The in-memory maps are case-sensitive, but each record is persisted as `<id>.json` (state/persistence.ts:331).\n\nOn NTFS or a default APFS volume:\n1. record_candidate {id: 'Cand-1', ...} is recorded.\n2. record_candidate {id: 'cand-1', ...} with a different treeSha misses the `state.candidates.get(id)` lookup (candidateStore.ts:225-226), so it is not refused CANDIDATE_IMMUTABLE.\n3. Its atomic rename overwrites Cand-1.json. After a reload only 'cand-1' exists, and every check run, review or receipt bound to 'Cand-1' dangles.\n\nThe same applies to check runs. The wrappers generate lowercase uuid ids, so only agent-supplied or third-party ids can collide. That is why this is LOW. It is still an immutability bypass on the daemon's primary platform.",
+  "definitionOfDone": [
+    "record_candidate and record_check_run refuse an id that equals an existing record's id case-insensitively, or normalize ids to one case, and the rule is documented in docs/SCHEMA.md",
+    "A test per store fails on the old behaviour (a case-variant id is recorded as a new record)",
+    "cd packages/moe-daemon && npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 212.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T20:45:48.838Z",
+  "updatedAt": "2026-09-18T20:45:48.838Z"
+}

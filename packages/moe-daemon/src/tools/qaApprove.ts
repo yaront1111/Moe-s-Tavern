@@ -12,6 +12,7 @@ import {
   deliveryEvidenceRefusal,
   evaluateDeliveryEvidence,
   readDeliveryAttestations,
+  requiredCheckCommand,
   resolveDeliveryPolicy,
 } from '../delivery/policy.js';
 
@@ -215,6 +216,9 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
           metrics: nextMetrics,
           needsHumanReview: undefined,
           critiqueBlockCount: undefined,
+          // The check this DONE owes, bound now under every policy, so a later
+          // settings edit or sibling archive cannot change it (delivery/policy.ts).
+          requiredCheckAtDone: requiredCheckCommand(state, task),
           ...(deliveryEvidence
             ? { deliveryEvidence }
             : task.deliveryEvidence !== undefined ? { deliveryEvidence: undefined } : {}),
