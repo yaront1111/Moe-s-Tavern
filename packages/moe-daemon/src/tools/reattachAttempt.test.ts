@@ -3,10 +3,13 @@ import fs from 'fs';
 import path from 'path';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { reattachAttemptTool } from './reattachAttempt.js';
+import { claimNextTaskTool } from './claimNextTask.js';
 import { getTools } from './index.js';
-import { openAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { StateManager } from '../state/StateManager.js';
+import { openAttempt, reconcileRunningAttempts, setAttemptPhase } from '../state/attemptStore.js';
+import { checkReconcileWindow } from '../state/sweeps.js';
 import { MoeError } from '../util/errors.js';
-import type { ExecutionAttempt } from '../types/schema.js';
+import type { ExecutionAttempt, Task } from '../types/schema.js';
 
 // =============================================================================
 // moe.reattach_attempt, at the unit level.
@@ -241,5 +244,162 @@ describe('moe.reattach_attempt', () => {
     const err = await refusal({ ...identity, generation: 1.5 });
     expect(err.code).toBe(-32602);
     expect(readAttempt('attempt-L-1').phase).toBe('reconciling');
+  });
+});
+
+// =============================================================================
+// The restart path with no seeded attempt (task-bd799955). Every attempt here
+// is opened by a real moe.claim_next_task carrying the runner's identity. A
+// daemon-only restart then parks it, in the load, park and purge order index.ts
+// runs, and only then does the runner come back. Before that card no claim
+// recorded an identity, so no production attempt could ever be reattached:
+// identityMismatch answered 'processStartedAt (none recorded)' for all of them.
+// =============================================================================
+describe('moe.reattach_attempt — an attempt a real claim opened, across a daemon-only restart', () => {
+  const h = new ToolTestHarness();
+  // Shaped like the ps1 wrapper's value, `<pid>@<round-trip UTC start>`: seven
+  // fractional digits, which a Date round trip would cut to three.
+  const STARTED_AT = '4242@2026-09-18T09:15:30.1234567Z';
+  const HOST = 'build-box-7';
+  const IDENTITY = { processStartedAt: STARTED_AT, host: HOST };
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder({ schemaVersion: 6 });
+    h.createEpic();
+    h.createTask({ id: 'task-L', status: 'WORKING' });
+    await h.state.load();
+  });
+
+  afterEach(() => {
+    h.state.clearEmitter();
+    h.cleanup();
+  });
+
+  const taskFile = () => path.join(h.moePath, 'tasks', 'task-L.json');
+  const workerFile = () => path.join(h.moePath, 'workers', 'worker-W.json');
+  const attemptFile = (id: string) => path.join(h.moePath, 'attempts', `${id}.json`);
+  const readTask = () => JSON.parse(fs.readFileSync(taskFile(), 'utf8')) as Task;
+  const readAttempt = (id: string) => JSON.parse(fs.readFileSync(attemptFile(id), 'utf8')) as ExecutionAttempt;
+
+  /** A real claim of task-L by worker-W, carrying whatever identity the runner sends. */
+  async function claimWith(identity: Record<string, string>): Promise<{ attemptId: string; generation: number }> {
+    const result = (await claimNextTaskTool(h.state).handler(
+      { statuses: ['WORKING'], workerId: 'worker-W', ...identity },
+      h.state
+    )) as Record<string, unknown>;
+    expect(result.hasNext).toBe(true);
+    return { attemptId: String(result.attemptId), generation: Number(result.generation) };
+  }
+
+  /**
+   * A daemon-only restart in index.ts's startup order: a fresh StateManager
+   * loads .moe/, parks every running attempt whose seat still holds its task,
+   * then purges workers. The seat survives the purge because it owns an open
+   * attempt, so nothing here asserts that its record is gone.
+   */
+  async function restartDaemon(): Promise<void> {
+    h.state.clearEmitter();
+    h.state = new StateManager({ projectPath: h.testDir });
+    await h.state.load();
+    await h.state.runExclusive(() => reconcileRunningAttempts(h.state));
+    await h.state.purgeAllWorkers();
+  }
+
+  function reattach(args: Record<string, unknown>): Promise<unknown> {
+    return reattachAttemptTool(h.state).handler(
+      { taskId: 'task-L', workerId: 'worker-W', runnerId: 'runner-pilot', ...args },
+      h.state
+    );
+  }
+
+  async function refused(args: Record<string, unknown>): Promise<MoeError> {
+    const err = await reattach(args).then(
+      () => { throw new Error('expected a MoeError refusal, but the reattach resolved'); },
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(MoeError);
+    return err as MoeError;
+  }
+
+  /** A clock past the reconcile window, however late in the test the park happened. */
+  const pastTheWindow = () => Date.now() + h.state.reconcileWindowMs + 1;
+
+  it('reattaches with the identity its claim recorded, keeps the row, and the window then releases nothing', async () => {
+    const { attemptId, generation } = await claimWith(IDENTITY);
+    await restartDaemon();
+    expect(readAttempt(attemptId).phase).toBe('reconciling');
+    expect(readTask().assignedWorkerId).toBe('worker-W');
+    const taskBefore = fs.readFileSync(taskFile(), 'utf8');
+    const workerBefore = fs.readFileSync(workerFile(), 'utf8');
+
+    const result = await reattach({ attemptId, generation, ...IDENTITY });
+
+    expect(result).toMatchObject({ success: true, attemptId, generation: 1, phase: 'running' });
+    expect(readAttempt(attemptId).phase).toBe('running');
+    expect(fs.readFileSync(taskFile(), 'utf8')).toBe(taskBefore);
+    expect(fs.readFileSync(workerFile(), 'utf8')).toBe(workerBefore);
+
+    // Running again, so no longer reconciling: the give-up has nothing to close.
+    expect(await checkReconcileWindow(h.state, pastTheWindow())).toEqual([]);
+    expect(readAttempt(attemptId).phase).toBe('running');
+    expect(fs.readFileSync(taskFile(), 'utf8')).toBe(taskBefore);
+  });
+
+  it.each([
+    ['processStartedAt', { processStartedAt: '4242@2026-09-18T09:15:31.1234567Z' }],
+    ['host', { host: 'build-box-8' }],
+  ])('refuses a %s that differs from what the claim recorded, writing nothing', async (field, override) => {
+    const { attemptId, generation } = await claimWith(IDENTITY);
+    await restartDaemon();
+    const bytes = fs.readFileSync(attemptFile(attemptId), 'utf8');
+
+    const err = await refused({ attemptId, generation, ...IDENTITY, ...override });
+
+    expect(err.codeName).toBe('ATTEMPT_IDENTITY_MISMATCH');
+    // The field that differs, never '(none recorded)': the claim did record one.
+    expect(err.context).toMatchObject({ field });
+    expect(fs.readFileSync(attemptFile(attemptId), 'utf8')).toBe(bytes);
+    expect(readAttempt(attemptId).phase).toBe('reconciling');
+  });
+
+  it('matches the recorded string exactly: the same instant spelled another way is refused', async () => {
+    const offsetSpelling = '2026-09-18T12:15:30.123+03:00';
+    const { attemptId, generation } = await claimWith({ processStartedAt: offsetSpelling, host: HOST });
+    await restartDaemon();
+
+    // The same instant in UTC. A claim that normalised what it recorded, or a
+    // reattach that compared dates, would accept this spelling.
+    const err = await refused({ attemptId, generation, processStartedAt: '2026-09-18T09:15:30.123Z', host: HOST });
+    expect(err.codeName).toBe('ATTEMPT_IDENTITY_MISMATCH');
+    expect(err.context).toMatchObject({ field: 'processStartedAt' });
+
+    const result = await reattach({ attemptId, generation, processStartedAt: offsetSpelling, host: HOST });
+    expect(result).toMatchObject({ success: true, phase: 'running' });
+  });
+
+  it('leaves an attempt whose claim sent no identity unmatchable after the restart', async () => {
+    const { attemptId, generation } = await claimWith({});
+    await restartDaemon();
+
+    const err = await refused({ attemptId, generation, ...IDENTITY });
+
+    expect(err.codeName).toBe('ATTEMPT_IDENTITY_MISMATCH');
+    expect(err.context).toMatchObject({ field: 'processStartedAt (none recorded)' });
+    expect(readAttempt(attemptId).phase).toBe('reconciling');
+  });
+
+  it('still gives up a seat that never reattaches: the window closes its attempt and releases the row', async () => {
+    const { attemptId } = await claimWith(IDENTITY);
+    await restartDaemon();
+
+    const closed = await checkReconcileWindow(h.state, pastTheWindow());
+
+    // A recorded identity buys no extra patience: the window is the only bound.
+    expect(closed.map((a) => a.id)).toEqual([attemptId]);
+    expect(readAttempt(attemptId).phase).toBe('closed');
+    const task = readTask();
+    expect(task.assignedWorkerId).toBeNull();
+    expect(task.status).toBe('WORKING');
   });
 });

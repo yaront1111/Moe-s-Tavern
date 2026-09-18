@@ -1269,3 +1269,162 @@ describe('moe.claim_next_task — finalizing attempt refusal', () => {
     expect((result.task as { id: string }).id).toBe('task-2');
   });
 });
+
+// =============================================================================
+// The runner's process identity (task-bd799955). A wrapper-opened claim may
+// carry the runner's processStartedAt and host; the attempt records them
+// exactly as sent, so moe.reattach_attempt can later match the process that
+// opened it. The pair is optional and all-or-nothing, a malformed value is
+// refused before any write, and a claim that sends neither writes today's
+// record byte for byte.
+// =============================================================================
+describe('moe.claim_next_task — runner process identity', () => {
+  const h = new ToolTestHarness();
+  // Shaped like the sh wrapper's value, `<pid>@<ps lstart>`, inner spaces and all.
+  const STARTED_AT = '4242@Fri Sep 18 09:15:30 2026';
+  const HOST = 'Build-Box-7.corp.example';
+  const IDENTITY = { processStartedAt: STARTED_AT, host: HOST };
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING' });
+    await h.state.load();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    h.state.clearEmitter();
+    h.cleanup();
+  });
+
+  async function claim(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return await claimNextTaskTool(h.state).handler({ statuses: ['WORKING'], ...args }, h.state) as Record<string, unknown>;
+  }
+
+  /** The attempt file's bytes: what a restarted daemon reads, not the in-memory copy. */
+  function attemptText(attemptId: unknown): string {
+    return fs.readFileSync(path.join(h.moePath, 'attempts', `${String(attemptId)}.json`), 'utf8');
+  }
+
+  /** The identity keys the attempt file actually holds; `{}` when it holds neither. */
+  function identityOnDisk(attemptId: unknown): Record<string, unknown> {
+    const record = JSON.parse(attemptText(attemptId)) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(record).filter(([key]) => key === 'processStartedAt' || key === 'host'));
+  }
+
+  /** Refused with a MoeError before the claim wrote anything at all. */
+  async function refusedBeforeAnyWrite(args: Record<string, unknown>): Promise<MoeError> {
+    const taskFile = path.join(h.moePath, 'tasks', 'task-1.json');
+    const taskBytes = fs.readFileSync(taskFile, 'utf8');
+    const updates = vi.spyOn(h.state, 'updateTask');
+    const writes = vi.spyOn(h.state, 'writeEntity');
+
+    const err = await claim({ workerId: 'worker-1', ...args }).then(
+      () => { throw new Error('expected a MoeError refusal, but the claim resolved'); },
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MoeError);
+    expect(updates).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+    expect(fs.readFileSync(taskFile, 'utf8')).toBe(taskBytes);
+    expect(listAttempts(h.state, 'task-1')).toEqual([]);
+    expect(h.state.workers.has('worker-1')).toBe(false);
+    return err as MoeError;
+  }
+
+  it('records the identity on the attempt file exactly as the claim sent it', async () => {
+    const result = await claim({ workerId: 'worker-1', ...IDENTITY });
+
+    expect(result.hasNext).toBe(true);
+    // Verbatim: not trimmed, re-cased or re-parsed. The runner presents these
+    // same strings at reattach time, and they are compared exactly.
+    expect(identityOnDisk(result.attemptId)).toEqual(IDENTITY);
+  });
+
+  it('accepts each value at its bound: 200 characters of start time, 255 of host', async () => {
+    const atBounds = { processStartedAt: 's'.repeat(200), host: 'h'.repeat(255) };
+
+    const result = await claim({ workerId: 'worker-1', ...atBounds });
+
+    expect(identityOnDisk(result.attemptId)).toEqual(atBounds);
+  });
+
+  it('writes a claim that sends no identity byte for byte as before: no key, not even a null one', async () => {
+    const result = await claim({ workerId: 'worker-1' });
+
+    const text = attemptText(result.attemptId);
+    const record = JSON.parse(text) as Record<string, unknown>;
+    // Today's record, key for key and in today's order. Comparing bytes rather
+    // than checking for `undefined` is what catches a key written as null.
+    expect(text).toBe(JSON.stringify({
+      id: result.attemptId,
+      taskId: 'task-1',
+      workerId: 'worker-1',
+      runnerId: 'worker-1',
+      generation: 1,
+      workspace: h.state.projectPath,
+      phase: 'running',
+      startedAt: record.startedAt,
+      lastPhaseAt: record.lastPhaseAt,
+    }, null, 2));
+  });
+
+  it.each([
+    ['processStartedAt', 'blank', { processStartedAt: '   ', host: HOST }],
+    ['processStartedAt', 'null, which is not the same as absent', { processStartedAt: null, host: null }],
+    ['processStartedAt', 'carrying a line break', { processStartedAt: '4242@Fri Sep 18\n09:15:30 2026', host: HOST }],
+    ['processStartedAt', 'over 200 characters', { processStartedAt: 's'.repeat(201), host: HOST }],
+    ['host', 'empty', { processStartedAt: STARTED_AT, host: '' }],
+    ['host', 'not a string', { processStartedAt: STARTED_AT, host: ['build-box-7'] }],
+    ['host', 'carrying an escape character', { processStartedAt: STARTED_AT, host: `build-box${String.fromCharCode(0x1b)}[2J` }],
+    ['host', 'over 255 characters', { processStartedAt: STARTED_AT, host: 'h'.repeat(256) }],
+  ])('refuses a %s that is %s with INVALID_INPUT, before any write', async (field, _how, identity) => {
+    const err = await refusedBeforeAnyWrite(identity);
+
+    expect(err.codeName).toBe('INVALID_INPUT');
+    expect(err.context).toMatchObject({ field });
+    expect(err.message).toContain(field);
+  });
+
+  it.each([
+    ['host', { processStartedAt: STARTED_AT }],
+    ['processStartedAt', { host: HOST }],
+  ])('refuses a half identity, naming the missing %s, before any write', async (missing, half) => {
+    const err = await refusedBeforeAnyWrite(half);
+
+    // Recording half would store something no later reattach can reproduce:
+    // reattach_attempt requires both and compares both exactly.
+    expect(err.codeName).toBe('INVALID_INPUT');
+    expect(err.context).toMatchObject({ field: missing });
+    // The message, not just the field: MoeError.context does not cross the MCP
+    // wire, so the both-or-neither rule has to be IN the text a runner reads.
+    // 'must be a non-blank string when supplied' would misdescribe an omission.
+    expect(err.message).toContain('must be supplied together with');
+  });
+
+  it.each([
+    ['the identity its opening claim recorded', IDENTITY],
+    ['no identity when its opening claim sent none', {}],
+  ])('a resume by the holder keeps %s, whatever the resuming claim presents', async (_what, opening) => {
+    const first = await claim({ workerId: 'worker-1', ...opening });
+    const bytes = attemptText(first.attemptId);
+
+    const resumed = await claim({
+      workerId: 'worker-1',
+      taskId: 'task-1',
+      processStartedAt: '9999@Sat Sep 19 01:02:03 2026',
+      host: 'another-box',
+    });
+
+    // Adopted, not reopened and not rewritten: a claim presenting other values
+    // must never re-point a live execution at another process.
+    expect(resumed.attemptId).toBe(first.attemptId);
+    expect(resumed.generation).toBe(1);
+    expect(attemptText(first.attemptId)).toBe(bytes);
+    expect(identityOnDisk(first.attemptId)).toEqual(opening);
+    expect(fs.readdirSync(path.join(h.moePath, 'attempts'))).toEqual([`${String(first.attemptId)}.json`]);
+  });
+});

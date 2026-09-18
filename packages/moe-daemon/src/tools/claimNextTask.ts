@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
-import { MoeError, missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
@@ -40,12 +40,60 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
 };
 
 /**
+ * Bounds on the runner's process identity. host matches the delivery receipt
+ * target's 255; a start time is a timestamp or a `<pid>@<token>` pair, never
+ * prose, so 200 is generous.
+ */
+const IDENTITY_MAX_CHARS = { processStartedAt: 200, host: 255 } as const;
+
+/** The runner's process identity, exactly as it sent it. */
+type ProcessIdentity = Record<keyof typeof IDENTITY_MAX_CHARS, string>;
+
+function readIdentityField(field: keyof typeof IDENTITY_MAX_CHARS, value: unknown): string {
+  if (typeof value !== 'string') throw invalidInput(field, 'must be a non-blank string when supplied');
+  // The bound comes before the two checks that walk the string, because both
+  // allocate over its whole length and this handler holds the state mutex: a
+  // caller that sends megabytes must be refused in O(1), not scanned first.
+  const max = IDENTITY_MAX_CHARS[field];
+  if (value.length > max) throw invalidInput(field, `must be ${max} characters or fewer`);
+  if (value.trim() === '') throw invalidInput(field, 'must be a non-blank string when supplied');
+  // C0 controls and DEL, the rule the delivery receipt target follows.
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) throw invalidInput(field, 'must not contain control characters');
+  }
+  return value;
+}
+
+/**
+ * The runner's process identity from a claim, or null when it sent none. The
+ * runner supplies both values exactly as it will present them to
+ * moe.reattach_attempt; the daemon never derives, probes or defaults either.
+ *
+ * A malformed value is REFUSED, never dropped: a dropped value reads as a
+ * successful claim and costs the seat its reattachability hours later, at a
+ * restart, with nothing in the log. Half an identity is refused the same way,
+ * because reattach requires both and compares both exactly, so half could
+ * never match. Omitting both is fully supported and changes nothing.
+ */
+function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessIdentity | null {
+  if (processStartedAt === undefined && host === undefined) return null;
+  if (processStartedAt === undefined) throw invalidInput('processStartedAt', 'must be supplied together with host');
+  if (host === undefined) throw invalidInput('host', 'must be supplied together with processStartedAt');
+  return {
+    processStartedAt: readIdentityField('processStartedAt', processStartedAt),
+    host: readIdentityField('host', host),
+  };
+}
+
+/**
  * Open the attempt for a claim whose assignment write has ALREADY succeeded,
  * or adopt the one still open on a genuine resume. Three arms:
  *  1. Nothing open: open a fresh attempt (generation = max over prior + 1).
  *  2. ATTEMPT_ALREADY_OPEN on a resume — this worker held the seat before this
  *     claim and the open attempt is its own: adopt it. A respawned CLI coming
- *     back to its task is the same execution, not a second one.
+ *     back to its task is the same execution, not a second one, so the attempt
+ *     keeps the identity its opening claim recorded; a resume never rewrites it.
  *  3. ATTEMPT_ALREADY_OPEN otherwise: a `running` or `reconciling` leftover of
  *     a seat that was given up without closing it (a crash between a release's
  *     two writes, or a hand-back that predates closing on hand-back), so close
@@ -64,16 +112,20 @@ async function openClaimAttempt(
   state: StateManager,
   taskId: string,
   workerId: string,
-  resumingOwnSeat: boolean
+  resumingOwnSeat: boolean,
+  identity: ProcessIdentity | null
 ): Promise<ExecutionAttempt> {
   const params = {
     taskId,
     workerId,
-    // The claim knows the worker and the project, nothing more. A distinct
-    // runner identity and a per-attempt workspace arrive with the reattachment
-    // work; they are deliberately not invented here.
+    // The claim knows the worker and the project. runnerId stays the worker id
+    // (reattach never compares it) and no per-attempt workspace is invented.
     runnerId: workerId,
     workspace: state.projectPath,
+    // The runner's process identity, recorded exactly as it was sent so that
+    // moe.reattach_attempt can match it after a restart. No identity, no keys:
+    // the record is then byte for byte what it was before identities existed.
+    ...identity,
   };
   try {
     return await openAttempt(state, params);
@@ -185,6 +237,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         },
         epicId: { type: 'string' },
         workerId: { type: 'string' },
+        processStartedAt: {
+          type: 'string',
+          description: 'Optional; send together with host or not at all. The runner process start time as the runner itself records it (e.g. `<pid>@<start token>`): supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 200 chars.'
+        },
+        host: {
+          type: 'string',
+          description: 'Optional; send together with processStartedAt or not at all. The host the runner process runs on: supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 255 chars.'
+        },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
         taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
         preferAdjacentInEpic: {
@@ -211,11 +271,16 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           replaceExisting?: boolean;
           taskId?: string;
           preferAdjacentInEpic?: boolean;
+          processStartedAt?: unknown;
+          host?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
           throw missingRequired('statuses');
         }
+        // Refused here, before any other check or write, so a claim with a
+        // malformed identity assigns nobody (see readProcessIdentity).
+        const identity = readProcessIdentity(params.processStartedAt, params.host);
 
         if (!state.project) {
           throw invalidState('StateManager', 'unloaded', 'loaded');
@@ -520,7 +585,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // exist to remove; first it hands back the seat it just took (a resume
           // took nothing new, so there is nothing to hand back).
           try {
-            claimedAttempt = await openClaimAttempt(state, candidate.id, params.workerId, resumingOwnSeat);
+            claimedAttempt = await openClaimAttempt(state, candidate.id, params.workerId, resumingOwnSeat, identity);
           } catch (err: unknown) {
             if (!resumingOwnSeat) await handBackUnrecordedClaim(state, candidate.id, params.workerId);
             throw err;
