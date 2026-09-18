@@ -155,7 +155,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:04:10.992Z",
-  "updatedAt": "2026-09-18T22:11:02.327Z",
+  "updatedAt": "2026-09-18T22:15:45.752Z",
   "planRevision": 34,
   "metrics": {
     "firstClaimAt": "2026-09-18T12:08:02.975Z",
@@ -239,7 +239,8 @@
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json",
     ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
-    ".moe/tasks/task-808869c56228430ca5b15cb901497544.json"
+    ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+    ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json"
   ],
   "completionSummary": "Round 2, docs only; fixes QA's 11 DoD-5 items. Details in comment-a5bbe2f9.\n- ARCHITECTURE Delivery Path: Candidate, CheckRun and Receipt are gated-only, Review needs a candidate (new \"Exists for\" column, no-gate paragraph). The daemon's one git call is the read-only status fingerprint. An explicit claim is refused; the pool and wait_for_task skip. Dependents are skipped, and only an explicit claim gets DEPENDENCY_EVIDENCE_MISSING. REVIEW self-heal named.\n- SCHEMA ExecutionAttempt: finalize is closed-idempotent before the fence; new reconciling->finalizing row; the durable record is task.commits, plus a receipt when gated.\n- CONFIGURATION/MCP_SERVER: set_task_status reopens keep the round anchor; MOE_DISABLE_QUALITY_GATE and no-git named.\nSame drift also fixed: \"never runs git\" in the Wave 1 record docs; the MCP finalize \"Fenced.\" bullet and 2 history lines; SCHEMA gains requiredCheckAtDone; stale ps1-verbatim clause dropped.\nFiled task-16aac8b4 (LOW): 7 pre-Wave-1 \"never runs git\" lines.\nEvidence, HEAD 5ac6807:\n- Acceptance 6/6 in 7.5 s: live tree and clean export.\n- Daemon tsc 0; 2145/2145 (+36 from peers' landings).\n- Docs test taskTimeBudgetDocs 17/17; lint 0; docs stay CRLF.\n- Not re-run per QA: proxy 62, plugin 13, JetBrains 197, VS Code 113+compile, postflight.sh 64+28, parity PASS.\nPilot re-run on HEAD from a clean export (pwsh):\n- Success, 27 PASS: gen-1 attempt; finalizing refused QA claim and qa_approve (ATTEMPT_FINALIZING); candidate frozen; gate exit 0 in a private tree; target 6710612->29b3160; receipt; closed. Reject, then gen 3 ->9fbcf26. Stale candidate refused CANDIDATE_MISMATCH; current approved, token == recorded command. B claimable only then.\n- --gate-fails, 15 PASS: exit 7; target unmoved; rescue ref holds the edit; MOE_COMMIT_FAILED_GATE + PUSH-BLOCKED; no receipt. qa_approve refused -32003; B refused DEPENDENCY_EVIDENCE_MISSING naming required-check:node gate.cjs.",
   "commits": [
@@ -339,6 +340,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "0b9bcb4c36f89f315235232db7557e1eae46a128",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-9a371c33@2026-09-18T21:43:31Z",
+      "paths": [
+        ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+        ".moe/tasks/task-808869c56228430ca5b15cb901497544.json"
+      ],
+      "recordedBy": "qa-9a371c33",
+      "recordedAt": "2026-09-18T22:15:45.752Z",
+      "treeId": "10c69d57b474c226de842026e0d58347f3c9bc6b",
+      "status": "REVIEW",
+      "pushed": false
     }
   ],
   "touchedFiles": [
@@ -356,9 +373,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-161b9959@2026-09-18T21:22:52Z",
-    "at": "2026-09-18T21:43:30.790Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-9a371c33@2026-09-18T21:43:31Z",
+    "at": "2026-09-18T22:15:45.752Z"
   },
   "priorHandoffs": [
     {
