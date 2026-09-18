@@ -80,10 +80,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 206.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-58968ba9f6734f528a5543cd14125755",
+      "author": "governor-39911495",
+      "content": "Governor note for QA. The initFiles.ts diff in completion 8fbc17e carries more than this task's change: 4 ponytail table rows and 3 new `moe-generated: sha=` stamps in the architect/qa/worker reference-doc strings.\n- Source: the human's uncommitted ponytail edits in docs/roles/*.reference.md, which were dirty before this task started. `npm run generate-init-files` embedded them, and step 4's declare_files made the whole generated file ASSERTED, so it landed as-is. At 8fbc17e the committed sources still have 0 ponytail lines, which leaves the generated file ahead of its sources until the human commits that work.\n- It is not the worker's scope creep, and a whole-file landing cannot split hunks. The task's own change is the gitignore work: RUNTIME_RECORD_DIRS, GITIGNORE_HEADER, writeGitignore, and the matching generator and test edits.\n- I've flagged it to the human, who owns that work.",
+      "timestamp": "2026-09-18T20:24:31.504Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:26:55.783Z",
-  "updatedAt": "2026-09-18T20:23:47.599Z",
+  "updatedAt": "2026-09-18T20:24:31.504Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:05:10.233Z",
     "plannedStepCount": 4,
@@ -142,7 +149,51 @@
     "packages/moe-daemon/src/generated/initFiles.ts",
     ".gitignore",
     "docs/ARCHITECTURE.md",
-    "CLAUDE.md"
+    "CLAUDE.md",
+    ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json"
   ],
-  "completionSummary": "Decision: .moe/attempts, candidates, checks, reviews and receipts are local runtime state, gitignored like resources/ and never committed. Shared evidence is the git commit plus task.commits, lastCommitOutcome, completionSummary and reviewSummary.\n- Root .gitignore: 5 `.moe/<dir>/` lines. `git check-ignore -v` cites .gitignore:69-73, and `git status` no longer shows the untracked dirs.\n- Generator (scripts/generate-init-files.ts): GITIGNORE_CONTENT is built from one RUNTIME_RECORD_DIRS list and GITIGNORE_HEADER. A new writeGitignore() creates a missing file. A file carrying the bundled header gets only the missing dirs appended (CRLF-safe, no-trailing-newline safe, idempotent), so older daemon- and JetBrains-scaffolded projects heal on the next daemon start. Any other file stays byte-identical, so this repo's custom .moe/.gitignore is untouched. There is no try/catch; the existing callers handle errors.\n- src/generated/initFiles.ts was regenerated via `npm run generate-init-files` (no build/prebuild).\n- Test pins in initFiles.test.ts: the template lists the dirs, the root .gitignore lists them, and it.each append cases. RED on HEAD: 4 failed; now 11/11.\n- Targeted regression: qaCommitPolicy + initProject + claudeHook.integration 14/14. `tsc --noEmit` 0. The full suite was not run, per the plan.\n- Docs: ARCHITECTURE.md File System Layout marks each dir gitignored, and Delivery Path has a paragraph with one verified reason per dir. CLAUDE.md's runtime-subset parenthetical names all five plus resources/.\n- Wording deviation: I did not write the plan's receipts clause \"cloning one would hide a real landing\", because I could not verify it. The doc says instead that the gitdir partner never leaves the clone and the landing travels as the commit.\n- CAVEAT: generated/initFiles.ts also carries 10 lines of the pre-existing uncommitted ponytail WIP from 2026-09-17 (3 sha markers + 4 role-doc rows from the dirty docs/roles/*.reference.md). They were present before this task and"
+  "completionSummary": "Decision: .moe/attempts, candidates, checks, reviews and receipts are local runtime state, gitignored like resources/ and never committed. Shared evidence is the git commit plus task.commits, lastCommitOutcome, completionSummary and reviewSummary.\n- Root .gitignore: 5 `.moe/<dir>/` lines. `git check-ignore -v` cites .gitignore:69-73, and `git status` no longer shows the untracked dirs.\n- Generator (scripts/generate-init-files.ts): GITIGNORE_CONTENT is built from one RUNTIME_RECORD_DIRS list and GITIGNORE_HEADER. A new writeGitignore() creates a missing file. A file carrying the bundled header gets only the missing dirs appended (CRLF-safe, no-trailing-newline safe, idempotent), so older daemon- and JetBrains-scaffolded projects heal on the next daemon start. Any other file stays byte-identical, so this repo's custom .moe/.gitignore is untouched. There is no try/catch; the existing callers handle errors.\n- src/generated/initFiles.ts was regenerated via `npm run generate-init-files` (no build/prebuild).\n- Test pins in initFiles.test.ts: the template lists the dirs, the root .gitignore lists them, and it.each append cases. RED on HEAD: 4 failed; now 11/11.\n- Targeted regression: qaCommitPolicy + initProject + claudeHook.integration 14/14. `tsc --noEmit` 0. The full suite was not run, per the plan.\n- Docs: ARCHITECTURE.md File System Layout marks each dir gitignored, and Delivery Path has a paragraph with one verified reason per dir. CLAUDE.md's runtime-subset parenthetical names all five plus resources/.\n- Wording deviation: I did not write the plan's receipts clause \"cloning one would hide a real landing\", because I could not verify it. The doc says instead that the gitdir partner never leaves the clone and the landing travels as the commit.\n- CAVEAT: generated/initFiles.ts also carries 10 lines of the pre-existing uncommitted ponytail WIP from 2026-09-17 (3 sha markers + 4 role-doc rows from the dirty docs/roles/*.reference.md). They were present before this task and",
+  "commits": [
+    {
+      "sha": "8fbc17e9c28d53278b8a2f4923320313b4609844",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-18T20:16:01Z",
+      "paths": [
+        ".gitignore",
+        ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "packages/moe-daemon/scripts/generate-init-files.ts",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/util/initFiles.test.ts"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-18T20:23:57.966Z",
+      "treeId": "41b95e496ad6d35951a04fed8bbd912751503f94",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/scripts/generate-init-files.ts",
+    "docs/ARCHITECTURE.md",
+    "CLAUDE.md",
+    ".gitignore",
+    "packages/moe-daemon/src/util/initFiles.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-161b9959@2026-09-18T20:16:01Z",
+    "at": "2026-09-18T20:23:57.966Z"
+  }
 }

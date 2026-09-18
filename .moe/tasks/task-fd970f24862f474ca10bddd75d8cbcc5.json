@@ -86,7 +86,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T18:31:05.637Z",
-  "updatedAt": "2026-09-18T20:51:59.337Z",
+  "updatedAt": "2026-09-18T20:52:35.648Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:35:53.210Z",
     "plannedStepCount": 4,
@@ -139,7 +139,74 @@
     "packages/moe-daemon/src/tools/qaApprove.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
     "packages/moe-daemon/src/util/reopen.ts",
-    "docs/CONFIGURATION.md"
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+    ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+    ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json",
+    ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json",
+    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
   ],
-  "completionSummary": "Decision: bind the required check to what was due at delivery. qa_approve writes task.requiredCheckAtDone = requiredCheckCommand(state, task) (trimmed gate, or null) on the DONE update under every policy, legacy included. delivery/policy.ts checkShortfall() is the single read site: a DONE/ARCHIVED task with a snapshot owes that check (null/blank = none; any other type -> logger.warn + new token 'unreadable-required-check', never throws, never satisfied); a task not yet DONE, or one without a snapshot, uses the live rule, so held-out criterion 2 stays green unedited. WebSocketServer UPDATE_TASK_DENYLIST gains requiredCheckAtDone. docs/CONFIGURATION.md deliveryPolicy row states judge-time vs delivery-time settings.\nTwo plan deviations, both mutation-proven: (1) absent is detected with `=== undefined`, not hasOwnProperty, because taskStore.updateTask spreads updates, so a `field: undefined` write leaves an own key holding undefined in memory; (2) util/reopen.ts buildReopenClearingUpdates now clears the snapshot. Without that, DONE -> reopen -> DONE via set_task_status or the board would reuse a stale null and release dependents with no check (fail-open vs today).\nTests: the archive probe and the qualityGate-change probe (both red on old code with the issue's exact tokens), the qa_approve snapshot on disk and in memory (trimmed gate, null mid-epic, null autoCommit=false, legacy writes), malformed/blank snapshot reads, not-DONE ignores snapshot, reopen drops snapshot (real set_task_status path), and the WS forgery case. Red: 11 failed before the fix. Regression: 40 related files, 1175/1175 pass. tsc clean."
+  "completionSummary": "Decision: bind the required check to what was due at delivery. qa_approve writes task.requiredCheckAtDone = requiredCheckCommand(state, task) (trimmed gate, or null) on the DONE update under every policy, legacy included. delivery/policy.ts checkShortfall() is the single read site: a DONE/ARCHIVED task with a snapshot owes that check (null/blank = none; any other type -> logger.warn + new token 'unreadable-required-check', never throws, never satisfied); a task not yet DONE, or one without a snapshot, uses the live rule, so held-out criterion 2 stays green unedited. WebSocketServer UPDATE_TASK_DENYLIST gains requiredCheckAtDone. docs/CONFIGURATION.md deliveryPolicy row states judge-time vs delivery-time settings.\nTwo plan deviations, both mutation-proven: (1) absent is detected with `=== undefined`, not hasOwnProperty, because taskStore.updateTask spreads updates, so a `field: undefined` write leaves an own key holding undefined in memory; (2) util/reopen.ts buildReopenClearingUpdates now clears the snapshot. Without that, DONE -> reopen -> DONE via set_task_status or the board would reuse a stale null and release dependents with no check (fail-open vs today).\nTests: the archive probe and the qualityGate-change probe (both red on old code with the issue's exact tokens), the qa_approve snapshot on disk and in memory (trimmed gate, null mid-epic, null autoCommit=false, legacy writes), malformed/blank snapshot reads, not-DONE ignores snapshot, reopen drops snapshot (real set_task_status path), and the WS forgery case. Red: 11 failed before the fix. Regression: 40 related files, 1175/1175 pass. tsc clean.",
+  "commits": [
+    {
+      "sha": "97df78f493b0c83e53b2ad9b326fabb638074019",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-18T20:40:49Z",
+      "paths": [
+        ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+        ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+        ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+        ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json",
+        ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json",
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/reopen.ts"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-18T20:52:35.648Z",
+      "treeId": "57fdd145f94cf54c2ce6e4d458f845f18e9c9a77",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        },
+        {
+          "path": "packages/moe-daemon/src/delivery/policy.ts",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        },
+        {
+          "path": "packages/moe-daemon/src/tools/qaApprove.test.ts",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
+    "packages/moe-daemon/src/util/reopen.ts",
+    "docs/CONFIGURATION.md",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-161b9959@2026-09-18T20:40:49Z",
+    "at": "2026-09-18T20:52:35.648Z"
+  }
 }
