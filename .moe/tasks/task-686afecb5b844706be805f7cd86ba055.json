@@ -130,7 +130,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -167,20 +167,29 @@
       "author": "worker-d0c3b06e",
       "content": "Tail of the completion summary. The 2000-char cap cut it off:\n- STALE COMMENTS, NOT TOUCHED (outside the plan's 10-file budget; left for the next card). Each still names only finalize_attempt/deregister as the end of a finalizing attempt. That is incomplete, not false.\n  - qaApprove.ts ~69-70\n  - claimNextTask.ts ~54-56 and ~335-336\n  - claimEligibility.ts ~58-62\n- INERT until the daemon is rebuilt and restarted. Live .moe/attempts had 0 of 25 records in phase finalizing on 2026-09-18, so activation strands nothing.\n- Self-review: comment-ce1e8ac6eadc4c47a974177d176c73d0.\n- For QA, deviations from the plan text. Same files; each has a test that is red without it:\n  - (a) deleteTask closes BEFORE cancelSpeedModeTimeout, not after.\n  - (b) deleteWorker keeps a DEAD record whose close fails again.\n  - (c) The terminal guard is a small exported helper, assertNoFinalizingAttempt in taskStore, shared by updateTask and archive_epic. The find+throw is not duplicated.\n- Check the landing: task.commits should include docs/MCP_SERVER.md, which is contested with task-e47284ef. Its 13 hunks are all this task's.",
       "timestamp": "2026-09-18T09:12:28.069Z"
+    },
+    {
+      "id": "comment-5190d11f7842444faab8d9e6c25bd233",
+      "author": "qa-a36819c3",
+      "content": "QA evidence (qa-a36819c3, 2026-09-18), reviewed at completion commit ed5483d.\n\nRE-RUN\n- Repo (packages/moe-daemon): `npx tsc --noEmit` exit 0; `npm test` exit 0: 122 files, 2083 passed | 2 skipped. That count includes the peer-dirty recommendSkill test.\n- Clean scratch of ed5483d (git archive packages/moe-daemon scripts docs, node_modules junctioned): `none` gave 2082 passed | 2 skipped, 0 failed, both first and last.\n- New test code typechecked under a scratch tsconfig. The daemon tsconfig excludes tests, so this needs its own config. Exit 0.\n\nINDEPENDENT MUTATION REPLAY (full suite per mutant, one at a time, restored and sha256-verified after each)\n- old (the 5 code files swapped to ed5483d^, final tests kept): 13 red, all behavioural. The idle-purge guard stays green.\n- no-delete-close: 5 red (cases 1-4 and SPEED).\n- delete-close-swallowed: 2 red.\n- delete-close-after-cancel: 1 red (SPEED: 'AWAITING_APPROVAL' vs 'WORKING').\n- delete-close-after-unlink: 2 red.\n- no-reconcile-finalizing: 1 red (case 5).\n- reconcile-close-any-finalizing: 3 red (cases 11 and 12, plus workerStore 'reconciles only running attempts').\n- no-terminal-guard: 1 red (case 6).\n- late-terminal-guard: 1 red (case 6, via the writeEntity spy: 'called 1 times').\n- no-archive-epic-check: 1 red (case 7: 'ARCHIVED' vs 'BACKLOG').\n- no-dead-close-deleteWorker: 2 red.\n- deleteWorker-any-status: 1 red (the existing IDLE 'pruned record' case).\n- no-keep-dead-record: 1 red.\n- no-dead-close-purge: 1 red (case 10).\n- purge-any-status: 1 red (case 11).\n- deleteWorker-closeOpen: 1 red (case 9).\n- purge-closeOpen: 1 red (case 12).\n- terminal-guard-any-status: 32 red.\n\nDESIGN CHECKS\n- DEAD is set in one place only, workerLifecycle.ts:261, in deregisterWorker after its own close.\n- A claim revives a DEAD record.\n- A DEAD record is always prune-eligible (sweeps.ts:595), so the deleteWorker backstop can actually be reached.\n- set_task_status, archive_task, WS UPDATE_TASK and ARCHIVE_DONE_TASKS write nothing before updateTask.\n- delete_epic cascades through deleteTask.\n- No forbidden patterns, `git diff --check` is clean, and the test file is +280/-0.\n\nLANDING\n- ed5483d is a completion commit with 12 paths. It includes the contested docs/MCP_SERVER.md, and it is the remote tip of moe/work-2026-09-13.\n- The worker's attempt gen 2 closed at 09:13:21Z.\n- No candidate is recorded for this task.\n\nFOLLOW-UP DEBT (non-blocking, deferred by the plan)\nThese code comments still say only finalize_attempt or deregister can end a finalizing attempt:\n- qaApprove.ts:66-70\n- claimNextTask.ts:54-56 and :335-336\n- claimEligibility.ts:58-62\n\nThe scratch tree is torn down (junction unlinked first), and the repo sources match ed5483d.",
+      "timestamp": "2026-09-18T09:25:02.843Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-14T19:45:02.746Z",
-  "updatedAt": "2026-09-18T09:12:28.069Z",
+  "updatedAt": "2026-09-18T09:25:11.137Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T08:17:41.553Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-18T09:25:11.137Z",
+    "wallClockMs": 4049584
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
-    "worker-d0c3b06e"
+    "worker-d0c3b06e",
+    "qa-a36819c3"
   ],
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -246,7 +255,65 @@
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/util/claimGuards.ts",
     "packages/moe-daemon/src/tools/deregisterWorker.ts",
-    "packages/moe-daemon/src/tools/recordCandidate.ts"
+    "packages/moe-daemon/src/tools/recordCandidate.ts",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-686afecb5b844706be805f7cd86ba055.json"
   ],
-  "completionSummary": "Every finalizing attempt now has an end, and none of those ends reads an idle signal.\nCODE:\n(1) taskStore.deleteTask runs closeOpenAttempts (all phases) FIRST, before the SPEED-timer cancel and the unlink. The close fails closed: a failed close throws and changes nothing.\n(2) attemptStore.reconcileRunningAttempts closes a finalizing attempt only when its task is missing.\n(3) taskStore.updateTask refuses any move into DONE/ARCHIVED with retryable -32002 ATTEMPT_FINALIZING, before any write, through the exported assertNoFinalizingAttempt. That covers set_task_status, archive_task, WS UPDATE_TASK and ARCHIVE_DONE_TASKS. archive_epic checks every task up front, so it stays atomic.\n(4) closeOwnFinalizingAttempts is now exported. deleteWorker and purgeAllWorkers run it for DEAD records only (only deregister ever sets DEAD). A DEAD record whose close fails again is kept for the next pass.\n(5) The per-task releases in deleteWorker and the purge now use closeHandedBackAttempts. They spare another worker's finalizing attempt; HEAD closed it on the idle prune and purge.\nTESTS: attemptHandback.test.ts, +280/-0, 14 cases. Red on HEAD: 11 of the 12 planned cases. The idle-purge guard is green on HEAD by design. The 2 cases added in self-review are red on HEAD and red on the pre-fix code. 18 mutants were each replayed on the full suite, and each turns only its own cases red (step 7/8 notes).\nDOCS: MCP_SERVER.md now lists every end under finalize_attempt's 'Every end of a finalizing attempt' and names the governor/human escape. It also fixes the old claims that only finalize_attempt/deregister end one. claimGuards refuser list, deregister_worker description, recordCandidate comment.\nCONTESTED PATH: docs/MCP_SERVER.md is peer-declared by task-e47284ef. It was edited with the Edit tool (TOOL tier), and every diff hunk is mine. Check task.commits after landing.\nSTALE, NOT TOUCHED (file budget): the qaApprove.ts ~69-70, claimNextTask.ts ~54-56/~335-336 and claimEligibility.ts ~58-62 co"
+  "completionSummary": "Every finalizing attempt now has an end, and none of those ends reads an idle signal.\nCODE:\n(1) taskStore.deleteTask runs closeOpenAttempts (all phases) FIRST, before the SPEED-timer cancel and the unlink. The close fails closed: a failed close throws and changes nothing.\n(2) attemptStore.reconcileRunningAttempts closes a finalizing attempt only when its task is missing.\n(3) taskStore.updateTask refuses any move into DONE/ARCHIVED with retryable -32002 ATTEMPT_FINALIZING, before any write, through the exported assertNoFinalizingAttempt. That covers set_task_status, archive_task, WS UPDATE_TASK and ARCHIVE_DONE_TASKS. archive_epic checks every task up front, so it stays atomic.\n(4) closeOwnFinalizingAttempts is now exported. deleteWorker and purgeAllWorkers run it for DEAD records only (only deregister ever sets DEAD). A DEAD record whose close fails again is kept for the next pass.\n(5) The per-task releases in deleteWorker and the purge now use closeHandedBackAttempts. They spare another worker's finalizing attempt; HEAD closed it on the idle prune and purge.\nTESTS: attemptHandback.test.ts, +280/-0, 14 cases. Red on HEAD: 11 of the 12 planned cases. The idle-purge guard is green on HEAD by design. The 2 cases added in self-review are red on HEAD and red on the pre-fix code. 18 mutants were each replayed on the full suite, and each turns only its own cases red (step 7/8 notes).\nDOCS: MCP_SERVER.md now lists every end under finalize_attempt's 'Every end of a finalizing attempt' and names the governor/human escape. It also fixes the old claims that only finalize_attempt/deregister end one. claimGuards refuser list, deregister_worker description, recordCandidate comment.\nCONTESTED PATH: docs/MCP_SERVER.md is peer-declared by task-e47284ef. It was edited with the Edit tool (TOOL tier), and every diff hunk is mine. Check task.commits after landing.\nSTALE, NOT TOUCHED (file budget): the qaApprove.ts ~69-70, claimNextTask.ts ~54-56/~335-336 and claimEligibility.ts ~58-62 co",
+  "commits": [
+    {
+      "sha": "ed5483d0b124b487b96b4393e13698d38389f9ad",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T08:38:28Z",
+      "paths": [
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-686afecb5b844706be805f7cd86ba055.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/deregisterWorker.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T09:13:21.591Z",
+      "treeId": "adf3fc4fff54e1b03c0a130159ccd1bba77beab0",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-e47284ef038c423b85a2ebd304e0f4a6"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/workerStore.ts",
+    "packages/moe-daemon/src/state/workerLifecycle.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/archiveEpic.ts",
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "packages/moe-daemon/src/state/attemptHandback.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/deregisterWorker.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d0c3b06e@2026-09-18T08:38:28Z",
+    "at": "2026-09-18T09:13:21.591Z"
+  },
+  "completedAt": "2026-09-18T09:25:11.137Z",
+  "reviewCompletedAt": "2026-09-18T09:25:11.137Z",
+  "reviewSummary": "Approved at completion commit ed5483d (pushed, remote tip of moe/work-2026-09-13; 12 paths incl. contested docs/MCP_SERVER.md). Worker attempt gen2 closed 09:13:21Z. No candidate recorded.\nRe-ran: `cd packages/moe-daemon && npx tsc --noEmit && npm test` exit 0 — 2083 passed | 2 skipped (repo); clean scratch of ed5483d 2082/0 first+last. New test code typechecks (scratch tsconfig, exit 0).\nDoD1: deleteTask closeOpenAttempts first, fail-closed; cases 1-4 + SPEED; runner claims task-2 after delete. DoD2: updateTask guard before derivePlanRevision/writeEntity; case 6 asserts -32002 ATTEMPT_FINALIZING ctx {attemptId,generation,taskId,workerId,retryable}, zero writeEntity, zero events, REVIEW after each of set_task_status DONE/ARCHIVED + archive_task, then DONE succeeds after finalize; archive_epic atomic (case 7). DoD3: DEAD close in deleteWorker (case 8, keep-on-failed-close) and purge (case 10); non-DEAD never closes (existing IDLE pruned-record case, cases 9/11/12). DoD4: MCP_SERVER.md 'Every end of a finalizing attempt' lists all 5 ends + governor/human finalize_attempt escape.\nIndependent mutation replay: old = 13 red (all behavioural, idle guard green); 17 single-site mutants each bite only their own cases (terminal-guard-any-status 32). Rails: DEAD set only by deregisterWorker (workerLifecycle.ts:261); no lastActivityAt read in any close; no git; no forbidden patterns; test file +280/-0. Evidence: comment-5190d11f7842444faab8d9e6c25bd233. Non-blocking debt: stale comments qaApprove.ts:66-70, claimNextTask.ts:54-56/:335-336, claimEligibility.ts:58-62."
 }
