@@ -121,7 +121,7 @@
     }
   ],
   "planRevision": 15,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -147,16 +147,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-17T17:04:17.294Z",
-  "updatedAt": "2026-09-18T17:12:48.028Z",
+  "updatedAt": "2026-09-18T18:08:01.691Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T12:48:56.735Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-18T18:08:01.691Z",
+    "wallClockMs": 19144956
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
-    "worker-d0c3b06e"
+    "worker-d0c3b06e",
+    "qa-a36819c3"
   ],
   "dependsOn": [
     "task-bd7999555b244be0869c2f460db554bb"
@@ -220,7 +223,64 @@
     "scripts/tests/parity-check.sh",
     "scripts/tests/parity-check.ps1",
     "CLAUDE.md",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json"
+  ],
+  "completionSummary": "Runner half of the reattach, in both wrappers.\n- Identity: sh \"$$@<proc_start_token>\" (/proc starttime, ps lstart fallback) + live_marker_host; ps1 \"$PID@<StartTime UTC ticks>\" + Get-MoeLiveMarkerHost. It reuses the live-marker helpers and is computed once. Both values or neither, with a WARN.\n- Every claim sends the pair.\n- The heartbeat sidecar reattaches on attempt-reconciling for the pinned attempt, using the pinned generation. Other reasons are logged once; a refusal is never retried.\n- The main loop also reattaches the seat's reconciling attempts after the claim (before the pin) and after the CLI exits.\n- Files: moe-agent.{sh,ps1}, postflight.{sh,ps1}, parity-check.{sh,ps1}, CLAUDE.md, docs/MCP_SERVER.md (DoD 4). No daemon file changed.\n\nArms: identity-claim, reattach-sidecar, reattach-refused, reattach-postflight, reattach-none, plus reattach-preflight. checkpoint-/manual-reconciling updated.\n- RED on HEAD: all fail on the identity check.\n- Mutants redden each arm on its own assertion: M1 no-reattach, M2 no main loop, M3 retry-refused (sh and ps1).\n- GREEN: frozen 64, scope 28 on sh (rc=0 rerun), pwsh (400 s) and 5.1 (419 s). Parity PASS on sh/pwsh/5.1. Daemon tsc 0; npm test 2105 passed | 1 skipped (= baseline).\n\nOn-disk proof, real daemon + real proxy + new wrapper, abrupt daemon restart mid-CLI (D:/moe-t5e09-e2e/e2e.mjs):\n- The attempt recorded 737300@73504691/yaron-pc (sh), 56680@639253420725444419 (pwsh), 59468@639253420858687705 (5.1).\n- Reconciling -> running within 3 s via the sidecar; task still assigned.\n- Stranger '1@1': ATTEMPT_IDENTITY_MISMATCH.\n\nCaveats:\n- The fleet daemon (started 2026-09-17 20:00Z) predates bd799955. It accepts the pair but ignores it (probed), so nothing is recorded until a human rebuilds and restarts it.\n- MCP_SERVER.md is shared with task-808869c5: by agreement my commit carries only my 3 hunks, and worker-f0cb282e restores theirs afterwards.",
+  "commits": [
+    {
+      "sha": "7728e7b9f0524f7cb554015252dd52569372e3b5",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T14:33:10Z",
+      "paths": [
+        ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        "CLAUDE.md",
+        "docs/MCP_SERVER.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T17:13:27.713Z",
+      "treeId": "962da857e7dfd71197663fed7af42b4fad799eae",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/parity-check.sh",
+    "scripts/moe-agent.sh",
+    "CLAUDE.md",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/postflight.ps1",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "Runner half of the reattach, in both wrappers.\n- Identity: sh \"$$@<proc_start_token>\" (/proc starttime, ps lstart fallback) + live_marker_host; ps1 \"$PID@<StartTime UTC ticks>\" + Get-MoeLiveMarkerHost. It reuses the live-marker helpers and is computed once. Both values or neither, with a WARN.\n- Every claim sends the pair.\n- The heartbeat sidecar reattaches on attempt-reconciling for the pinned attempt, using the pinned generation. Other reasons are logged once; a refusal is never retried.\n- The main loop also reattaches the seat's reconciling attempts after the claim (before the pin) and after the CLI exits.\n- Files: moe-agent.{sh,ps1}, postflight.{sh,ps1}, parity-check.{sh,ps1}, CLAUDE.md, docs/MCP_SERVER.md (DoD 4). No daemon file changed.\n\nArms: identity-claim, reattach-sidecar, reattach-refused, reattach-postflight, reattach-none, plus reattach-preflight. checkpoint-/manual-reconciling updated.\n- RED on HEAD: all fail on the identity check.\n- Mutants redden each arm on its own assertion: M1 no-reattach, M2 no main loop, M3 retry-refused (sh and ps1).\n- GREEN: frozen 64, scope 28 on sh (rc=0 rerun), pwsh (400 s) and 5.1 (419 s). Parity PASS on sh/pwsh/5.1. Daemon tsc 0; npm test 2105 passed | 1 skipped (= baseline).\n\nOn-disk proof, real daemon + real proxy + new wrapper, abrupt daemon restart mid-CLI (D:/moe-t5e09-e2e/e2e.mjs):\n- The attempt recorded 737300@73504691/yaron-pc (sh), 56680@639253420725444419 (pwsh), 59468@639253420858687705 (5.1).\n- Reconciling -> running within 3 s via the sidecar; task still assigned.\n- Stranger '1@1': ATTEMPT_IDENTITY_MISMATCH.\n\nCaveats:\n- The fleet daemon (started 2026-09-17 20:00Z) predates bd799955. It accepts the pair but ignores it (probed), so nothing is recorded until a human rebuilds and restarts it.\n- MCP_SERVER.md is shared with task-808869c5: by agreement my commit carries only my 3 hunks, and worker-f0cb282e restores theirs afterwards."
+  "unattributedPaths": [
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/util/claimEligibility.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d0c3b06e@2026-09-18T14:33:10Z",
+    "at": "2026-09-18T17:13:27.713Z"
+  },
+  "completedAt": "2026-09-18T18:08:01.691Z",
+  "reviewCompletedAt": "2026-09-18T18:08:01.691Z",
+  "reviewSummary": "Verified 7728e7b (pushed; 8 files, no daemon file) from a byte-verified HEAD snapshot.\nDoD1: bd799955 real-restart test passes. Real-daemon e2e (HEAD src + real proxy + new wrapper, daemon SIGKILLed mid-CLI): claim recorded the pair on sh/pwsh/5.1; reattach accepted, reconciling->running, row kept.\nDoD2: MOE_POSTFLIGHT_TIMEOUT_SEC=400 postflight.sh rc=0 (frozen 64, scope 28); postflight.ps1 rc=0 on pwsh and 5.1 (64/28); parity PASS sh/pwsh/5.1, guard proven (one literal dropped fails both). Old 3bbd474 wrappers fail the arms. Mutants red on 'exactly one reattach': sidecar-only off, refusal retried, main loop off (sh+ps1 each). Real sweep: 5.1 e2e, reconcileWindowMs=15000, through the real 5-min tick: live seat kept (running, assigned); no-heartbeat control seat released (attempt closed, row unassigned).\nDoD3: real daemon refuses stranger by pid@token and by host (ATTEMPT_IDENTITY_MISMATCH); wrapper logs refusal once, no retry; give-up unchanged.\nDoD4: MCP_SERVER.md 3 hunks + CLAUDE.md restart story match shipped code; ARCHITECTURE.md left to task-808869c5 per plan. Clean HEAD: tsc rc=0, npm test 122 files 2104 passed | 1 skipped (worker's 2105 = peer-dirty tests in shared tree).\nRails: no release/idle logic, both twins, harness twins identical, no forbidden patterns. Old Sep-17 fleet daemon accepts+ignores the pair (probe PASS): reattach inert live until daemon rebuild+restart."
 }

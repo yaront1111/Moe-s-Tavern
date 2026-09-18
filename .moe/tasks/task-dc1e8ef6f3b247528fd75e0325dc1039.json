@@ -1,0 +1,29 @@
+{
+  "id": "task-dc1e8ef6f3b247528fd75e0325dc1039",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "Decide whether the Wave 1 record directories are tracked or runtime, and make git status agree in every project",
+  "description": "Found by the Wave 1 integration gate (task-808869c5). .moe/attempts, candidates, checks, reviews and receipts are neither gitignored nor committed:\n- The repository .gitignore lists .moe/resources/ and the other runtime directories, but none of these five.\n- The init template's .moe/.gitignore lists only workers/ and proposals/.\n- The wrappers' DENY tier never stages .moe/** outside the task's own BOARD path.\n\nThe result is permanent untracked noise in `git status` of every Moe project. This repository shows `?? .moe/attempts/`, `?? .moe/candidates/` and `?? .moe/reviews/` today. The delivery evidence also exists on one machine only. The held-out acceptance contract calls these resourceStore-pattern records, and resources/ is gitignored.",
+  "definitionOfDone": [
+    "A recorded decision per directory (runtime state vs tracked evidence) with its reason",
+    "The repository .gitignore and the init .moe/.gitignore template implement that decision (template regenerated through the daemon prebuild), or the wrappers stage the tracked ones as BOARD paths",
+    "A test pins the template entries so a new record directory cannot ship unlisted again",
+    "docs/ARCHITECTURE.md and CLAUDE.md say for each record directory whether it is committed"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 206.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T17:26:55.783Z",
+  "updatedAt": "2026-09-18T17:26:55.783Z"
+}

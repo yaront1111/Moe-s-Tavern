@@ -1,0 +1,29 @@
+{
+  "id": "task-8fc35d31f71440bd85e5c08708ed71fe",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: the ps1 wrapper runs a whitespace-only qualityGate and rescues every completion, while the sh twin and the policy see no gate",
+  "description": "Found by the Wave 1 integration gate (task-808869c5, adversarial pass). The two wrappers read settings.qualityGate differently:\n- sh trims it (`v.strip()` where the post-flight reads the setting).\n- delivery/policy.ts trims it (requiredCheckCommand).\n- ps1 stores it verbatim: `$s.qualityGate = $qg` in Read-MoeCommitSettings.\n\nConsequences:\n1. Whitespace-only value (a hand-edited `\"qualityGate\": \"   \"`). sh and the policy see no gate. ps1 sees a truthy string, and this happens on every completion:\n   - Invoke-MoeFrozenGate runs `cmd /d /s /c \"   \"`.\n   - record_check_run refuses the blank command, so Send-MoeCheckRun throws 'qualityGate check persistence failed'.\n   - The landing becomes MOE_COMMIT_FAILED_GATE: a rescue ref, a \"PUSH-BLOCKED: qualityGate failed ... (exit 0)\" line, and the worker loop stops.\n2. Padded value (\"  node gate.cjs  \"). ps1 records the check command padded, and the policy compared it exactly, so a PASSING gate withheld dependents and refused qa_approve. The pilot reproduced this: `node scripts/tests/wave1-pilot.mjs --gate-command \"  node gate.cjs  \"`. task-808869c5 fixed it consumer-side (policy.ts now compares the trimmed recorded command), but the evidence ps1 records is still not canonical.\n3. Parity nit: the sh gate-failure line is \"🚫 PUSH-BLOCKED: …\", the marker the role docs use. The ps1 chat line and task comment lack the 🚫 prefix.",
+  "definitionOfDone": [
+    "scripts/moe-agent.ps1 trims settings.qualityGate when it reads it, exactly as the sh twin does: a whitespace-only value means no gate, and a padded one runs and records the trimmed command",
+    "A frozen-candidate mode in both postflight twins lands a completion under a whitespace-only qualityGate with no candidate, no check run and no rescue ref, and that mode fails on the pre-fix ps1",
+    "The ps1 gate-failure chat line and task comment carry the same '🚫 PUSH-BLOCKED:' marker as the sh twin, pinned by parity-check.{sh,ps1}",
+    "postflight.sh, postflight.ps1 (pwsh and PS 5.1) and both parity checks pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 205.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T17:26:46.752Z",
+  "updatedAt": "2026-09-18T17:26:46.752Z"
+}

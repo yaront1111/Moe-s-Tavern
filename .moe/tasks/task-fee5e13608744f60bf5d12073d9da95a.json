@@ -1,0 +1,28 @@
+{
+  "id": "task-fee5e13608744f60bf5d12073d9da95a",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "JetBrains task detail shows any latest check as \"Reported check passed\", even a run the delivery policy does not count",
+  "description": "Found by the Wave 1 integration gate (task-808869c5, client-contract check). deliveryProjection serves latestCheckRun as {command, exitCode} of the LAST run recorded on the current candidate. It carries no `source`, and it does not say whether the run is the required gate. delivery/policy.ts counts only runner-observed exit-0 runs of the trimmed gate command.\n\nSo the detail view can read \"Reported check passed - exit code 0\" for an agent-reported run while qa_approve refuses required-check:<gate>. It can also show a later failing non-gate run although the gate passed. The label honestly says \"Reported\", but nothing tells the reader whether the policy counts that run.",
+  "definitionOfDone": [
+    "The daemon projection serves the run's source and whether delivery/policy.ts counts it for the required check (or the required-check status itself), with a daemon test",
+    "JetBrains parses and renders it, pinned by a headless presentation test, and an agent-reported or non-gate pass never reads as a satisfied required check",
+    "VS Code keeps ignoring the field without error (npm test + compile)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 208.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T17:27:05.853Z",
+  "updatedAt": "2026-09-18T17:27:05.853Z"
+}
