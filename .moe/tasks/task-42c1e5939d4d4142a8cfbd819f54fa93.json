@@ -1,0 +1,27 @@
+{
+  "id": "task-42c1e5939d4d4142a8cfbd819f54fa93",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "docs: policy.ts hasPassingCheck comment still says the ps1 wrapper records qualityGate verbatim",
+  "description": "Found by QA of task-8fc35d31 (completion f1399a3). That card makes scripts/moe-agent.ps1 trim settings.qualityGate where Read-MoeCommitSettings reads it (moe-agent.ps1:1980, `$qg.Trim()`), so both wrappers now run and record the trimmed command. Its approved plan limited it to five script files, so this daemon comment was out of its scope.\n\npackages/moe-daemon/src/delivery/policy.ts:170-172 (hasPassingCheck doc comment, from bb5e7e2 / task-808869c5) still justifies the recorded-command trim with: \"the ps1 wrapper records settings.qualityGate verbatim (the sh one trims it)\". That is now false.\n\nKeep the trim itself. It still protects CheckRun records written by a pre-fix ps1 wrapper and already on disk, an IDE plugin that still bundles the old wrapper, and any direct moe.record_check_run caller (recordCheckRun.ts:63 stores `command` verbatim). Only the stated reason is stale. Comment-only; no behaviour change.",
+  "definitionOfDone": [
+    "packages/moe-daemon/src/delivery/policy.ts hasPassingCheck doc comment no longer claims either wrapper records settings.qualityGate verbatim, and names why the recorded-command trim stays (records written before task-8fc35d31, older bundled wrappers, direct record_check_run callers)",
+    "The diff changes only that comment (no code); the daemon build (npm run build in packages/moe-daemon) passes"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 214.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T23:52:56.320Z",
+  "updatedAt": "2026-09-18T23:52:56.320Z"
+}
