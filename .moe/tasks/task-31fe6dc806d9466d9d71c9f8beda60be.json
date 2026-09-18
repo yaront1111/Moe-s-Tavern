@@ -98,7 +98,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -130,18 +130,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:01.259Z",
-  "updatedAt": "2026-09-18T22:14:52.264Z",
+  "updatedAt": "2026-09-18T22:20:59.128Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:40:31.589Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 10,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-18T22:20:59.128Z",
+    "wallClockMs": 6027539
   },
   "contextFetchedBy": [
     "worker-3c030e77",
-    "qa-5e66a826"
+    "qa-5e66a826",
+    "qa-9a371c33"
   ],
   "dependsOn": [
     "task-fd970f24862f474ca10bddd75d8cbcc5",
@@ -304,7 +307,7 @@
     "sessionId": "worker-3c030e77@2026-09-18T22:03:58Z",
     "at": "2026-09-18T22:14:52.264Z"
   },
-  "reviewCompletedAt": "2026-09-18T22:03:47.727Z",
+  "reviewCompletedAt": "2026-09-18T22:20:59.128Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Each shape rule and renderGot is defined once and imported everywhere it is checked; exported-symbol allowlist tests are updated"
@@ -381,5 +384,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-18T22:20:59.128Z",
+  "reviewSummary": "Round 3 QA on completion 862a99f: recorded after the latest rejection and pushed. It lists all 5 round-2 paths, including the contested SCHEMA.md. The worktree equals HEAD on all task paths.\nDoD 1:\n- The renderUntrusted copy is gone. The body grep `a value of type ${kind}` gives 1 hit (candidateStore.ts:83).\n- The plan grep gives only the 3 definitions (candidateStore :41/:48/:80).\n- The hex census finds no other Wave 1 shape check. Every consumer imports the shared symbols.\n- md5 is identical across 7 bodies (bc94fb2b): the new export, the removed renderUntrusted and the 5 old copies.\n- The new enforcement->candidateStore edge is acyclic: the closure is util/* + attemptStore, and only tools/* import enforcement.\n- Red proof: the new candidateStore.test.ts against the f1399a3 store gives 1 failed | 35 passed; on the new store, 36/36.\nDoD 2:\n- Clean git-archive exports of f1399a3, db8c16f, b84da46 and 862a99f, with MOE_PROJECT_PATH/MOE_WORKER_ID unset (npx vitest run --reporter=json): each gives 122 files / 2145 passed.\n- 0 per-file count or title diffs for round 1, round 2 and the whole span.\n- tsc --noEmit exits 0.\nDoD 3: CLAUDE.md:88 names the completionCommitsForReview work-round rule. schema.ts:766, SCHEMA.md:495 and TROUBLESHOOTING.md:689 now match.\nNo forbidden patterns were added. Scratch removed."
 }

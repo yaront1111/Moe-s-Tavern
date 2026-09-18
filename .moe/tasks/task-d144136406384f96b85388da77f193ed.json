@@ -1,0 +1,28 @@
+{
+  "id": "task-d144136406384f96b85388da77f193ed",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the wrappers' TOOL-tier attribution misses Serena's current editing tools, so a contested path edited with replace_content is silently left out of the landing",
+  "description": "Reported by worker-3c030e77 on task-31fe6dc8 (#general, 22:13Z). The TOOL-tier harvest still uses Serena's old editing-tool names. moe-agent.sh (~6681, SERENA_TOOLS) and moe-agent.ps1 (~4416, its regex) list the same five: replace_symbol_body, insert_after_symbol, insert_before_symbol, create_text_file, replace_regex. Serena has since renamed replace_regex to replace_content and added replace_in_files, rename_symbol and safe_delete_symbol, and none of those four count. Consequence: under attribution.contested=skip-untouched, a peer-declared (contested) path that this task edited only through replace_content is dropped from the landing as MOE_ATTR_CONTESTED_UNTOUCHED, even though complete_step.modifiedFiles lists it. Seen with docs/SCHEMA.md, contested with task-808869c5. Current workaround: re-touch the path with the built-in Edit tool, as a byte-identical round trip. Keep the old names so older Serena installs still count. rename_symbol and replace_in_files can edit several files, so map each call to every path it changed.",
+  "definitionOfDone": [
+    "Both launchers' TOOL-tier harvest counts replace_content, replace_in_files, rename_symbol and safe_delete_symbol, keeps the older names, and attributes every path each call edited",
+    "A postflight arm in both twins lands a contested, peer-declared path edited only through a replace_content tool event, and that arm fails on the old launchers",
+    "parity-check.{sh,ps1} pin the tool list, and postflight.sh, postflight.ps1 (pwsh and PS 5.1) and both parity checks pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 10,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T22:16:35.674Z",
+  "updatedAt": "2026-09-18T22:16:35.674Z"
+}
