@@ -114,7 +114,7 @@
     }
   ],
   "planRevision": 34,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -175,11 +175,17 @@
       "author": "worker-d0c3b06e",
       "content": "STEP 8, rework round 2 (worker-d0c3b06e): adversarial self-review.\n\nScope of this round: one test file, packages/moe-daemon/src/state/attemptHandback.test.ts (+34/-1, LF). No production code or docs changed; cmp shows claimNextTask.ts identical to HEAD, and git diff --stat HEAD is empty for every production file on the plan.\n\nPlan questions (1)-(8): the answers in comment-5b6a63bb still hold, since the code they describe is unchanged. This round strengthens one of them:\n- (6) ORDERING, \"both refusals run before any write on the explicit path\", is now pinned by a test, not just argued.\n\nReview of this round's diff:\n- Mutation proof, run in scratch tree D:/moe-758423-r2-scratch (never the shared checkout). The driver restores both targets before and after each run and checks sha256.\n  - none: 26/0\n  - guard (:331-340 deleted): exactly 2 red\n    - case 1: `expected [ 'TASK_UPDATED', 'TASK_UPDATED' ] to deeply equal []`\n    - new workerId-less case: `expected null to be an instance of MoeError`\n  - guard-spy-only (same mutant, events assertion removed): the updateTask spy fails independently with `expected \"updateTask\" to not be called at all, but actually been called 2 times`\n  - guard-old-test (round-1 test file): 25/0, which reproduces QA's finding\n  - backstop (:85-86 alone): 26/0, since no tool path reaches it (as the plan says)\n  - both: 4 red\n  - none (rerun): 26/0\n- Leaks between cases: the helper unsubscribes and calls mockRestore on success. On an assertion failure, afterEach runs vi.restoreAllMocks and clearEmitter, so no spy or subscriber reaches the next case.\n- Timing: events are observed synchronously. The guard mutant produced the two TASK_UPDATED events before the unsubscribe, so the empty-events assertion is not vacuous.\n- Scope of the no-write check: only updateTask and published events are watched, which is what QA asked for. It does not claim that the attempt store saw no writes, because attempt writes publish no event. phases() equality covers the attempt store.\n- The message check pins the docs \"Finding one\" promise: \"held by worker worker-1's attempt <id> (generation 1)\" names the holder, the attempt id and the generation.",
       "timestamp": "2026-09-18T05:03:58.926Z"
+    },
+    {
+      "id": "comment-986fd587783745a78b28a07bdbedfd38",
+      "author": "qa-a36819c3",
+      "content": "QA EVIDENCE, round 2 (qa-a36819c3, 2026-09-18). Verdict: APPROVE.\n\nSCOPE\n- The rework is tests only, as the round-1 reject asked.\n- Completion commit a5fe0f9 is pushed to moe/work-2026-09-13. It contains attemptHandback.test.ts (+34/-1) and 3 board JSON files.\n- docs/MCP_SERVER.md was skipped as contested (Moe-Contested with task-e47284ef), so the stray `cl` on line 1 in the working tree did NOT land. It is still dirty debris for the governor.\n- No production file changed between ac58202 and a5fe0f9 except fedba17 (task-c628902e, unrelated).\n\nRE-RUN\n- Repo, packages/moe-daemon:\n  - `npx tsc --noEmit -p tsconfig.json`: exit 0.\n  - `npm test`: 122 files, 2069 passed | 2 skipped. The extra test is the peer-dirty recommendSkill.test.ts.\n- Candidate a5fe0f9, extracted with git archive (packages/moe-daemon, scripts, docs) into a scratch tree outside the repo, node_modules junctioned:\n  - tsc exits 0.\n  - The test file typechecks under strict, through a scratch tsconfig that includes it (--listFilesOnly confirms it is included).\n  - Full suite: 2068 passed | 2 skipped, which is 2067 at 9361971 plus the 1 new case.\n  - attemptHandback.test.ts: 26/26 on 5 repeat runs.\n\nMUTATION PROOF\nThe driver restored all 3 targets from sha-checked pristine copies before and after each run. Test file: attemptHandback.test.ts.\n- none: 26/0, both first and last.\n- guard (claimNextTask.ts:337-340 deleted, i.e. the explicit block): 24/2. The only reds:\n  - case 1 with `expected [ 'TASK_UPDATED', 'TASK_UPDATED' ] to deeply equal []`\n  - the new workerId-less case with `expected null to be an instance of MoeError`\n- guard with the events assertion removed: the spy fails alone with `expected \"updateTask\" to not be called at all, but actually been called 2 times`.\n- guard with the spy assertion removed: the events assertion fails alone.\n- guard-needs-worker (the explicit guard skipped when there is no workerId): 25/1. Only the new case is red, so \"a caller without a workerId counts as foreign\" is pinned on the explicit path.\n- backstop (:85-86 deleted): 26/0. Tools cannot reach it; the plan calls it defense in depth.\n- both: 22/4.\n- message-no-attempt (attempt id dropped from the foreignFinalizingRefusal message): 24/2.\n- guard-old-test (round-1 test file with the guard deleted): 25/0. That reproduces the round-1 gap, which is now closed.\n\nDoD\n- DoD 2: \"refused claim writes nothing\" and \"a workerId-less explicit claim is refused\" are both pinned. Case 1 still covers:\n  - complete_task\n  - the refused QA claim\n  - record_candidate and finalize_attempt with the worker's pinned identity\n  - qa_approve refused with ATTEMPT_FINALIZING\n  - the retry claim at gen 2 and approval with the candidate\n- DoD 1 and DoD 3: code is unchanged since the round-1 verification (comment-2e82addf).\n- DoD 4: the docs rule is in HEAD at MCP_SERVER.md :493, :1116, :1118 and :1780. No task commit touches scripts/, so the harnesses were not required.\n- Live check: attempt records show worker gen 4 (attempt-53c66ec5) closed at 05:07:32.387Z, right after the completion was recorded (05:07:32.178Z). QA gen 5 opened at 05:07:58Z. There is no rescue ref for this task.",
+      "timestamp": "2026-09-18T05:13:35.679Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-14T19:05:33.152Z",
-  "updatedAt": "2026-09-18T05:06:36.523Z",
+  "updatedAt": "2026-09-18T05:13:41.617Z",
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
@@ -207,7 +213,9 @@
     "firstClaimAt": "2026-09-14T21:31:16.735Z",
     "executedStepCount": 16,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-09-18T05:13:41.617Z",
+    "wallClockMs": 286944882
   },
   "planningNotes": {
     "approachesConsidered": "Option A-refuse (chosen): no seat other than the attempt's own worker may claim a task whose execution attempt is finalizing — explicit claims refuse with a retryable ATTEMPT_FINALIZING, the ranked pool and wait_for_task skip the row, a real finalize wakes waiters through one state-side helper, and deregister_worker closes its own worker's finalizing attempts (keyed on the attempt, so a pruned record is covered). It keeps every evidence property (record_candidate and finalize_attempt stay fenced to the current attempt), restores both holds, and makes the wrapper's exactly-one-open pre-check pass through the landing. Option A-keep-acknowledgeable (rejected): a finalizing attempt beside a new QA running attempt breaks assertNoOpenAttempt, currentAttempt and the equality fence in assertAttemptCurrent, and both wrappers' readers hard-fail on two open attempts. A persisted supersede marker (rejected): schema addition, and finalize_attempt persists no outcome. Option B wrapper-only (not this card): it cannot restore qa_approve's hold, and a gated landing still needs a candidate the fence refuses; its wrapper half belongs to task-49ec8755's rework. A refusal without a close path would wedge any row whose runner exits without finalizing, so the deregister close is part of this card; idle-free backstops for DEAD records, deleted tasks and REVIEW→DONE bypasses are split to task-686afecb5b844706be805f7cd86ba055.",
@@ -231,7 +239,8 @@
   "planApprovedAt": "2026-09-14T19:59:51.584Z",
   "contextFetchedBy": [
     "qa-17c2d0c8",
-    "worker-d0c3b06e"
+    "worker-d0c3b06e",
+    "qa-a36819c3"
   ],
   "workStartedAt": "2026-09-14T21:32:37.156Z",
   "commits": [
@@ -414,6 +423,30 @@
       "treeId": "c1d0a4a9096a4444484e1b4b9ba8cdfbb44047a9",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "a5fe0f9ffff2ecf767b0d58a02c33042f49f59c9",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T04:56:46Z",
+      "paths": [
+        ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+        ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+        ".moe/tasks/task-c628902ee8ba45188660e7a28f0e0bdd.json",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T05:07:32.178Z",
+      "treeId": "d6ffc4e365fb804cb8ac45617564bca843e6f43a",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-e47284ef038c423b85a2ebd304e0f4a6"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -426,7 +459,10 @@
     "packages/moe-daemon/src/state/workerLifecycle.ts",
     "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
     "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-49ec8755a9ad4fa29c87294adf61804d.json",
+    ".moe/tasks/task-758423de874f461199b8ed17cfd847a1.json",
+    ".moe/tasks/task-c628902ee8ba45188660e7a28f0e0bdd.json"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/tools/claimNextTask.ts",
@@ -442,9 +478,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-17c2d0c8@2026-09-17T17:45:53Z",
-    "at": "2026-09-17T18:03:27.379Z"
+    "kind": "completion",
+    "sessionId": "worker-d0c3b06e@2026-09-18T04:56:46Z",
+    "at": "2026-09-18T05:07:32.178Z"
   },
   "declaredFiles": [
     "packages/moe-daemon/src/util/claimEligibility.ts",
@@ -467,7 +503,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "Rework round 2 changes tests only, as the QA reject asked. The only file touched is packages/moe-daemon/src/state/attemptHandback.test.ts (+34/-1, LF). No production code or docs changed.\n\n1. New helper refusedWithoutWrites. It spies on state.updateTask and records every published state event around a claim, then requires a MoeError, zero updateTask calls and no events.\n2. Case 1's refused qa-1 claim now goes through that helper. This pins \"a refused claim writes nothing\". Before, the post-write arm-3 backstop plus handBackUnrecordedClaim ended in the same state and masked it.\n3. New case: an explicit claim with no workerId, claimNextTaskTool { statuses:['REVIEW'], taskId:'task-W' }, while the attempt is finalizing. It gets -32002 ATTEMPT_FINALIZING with context { attemptId, generation:1, taskId, workerId:'worker-1', retryable:true }. The message contains \"held by worker worker-1's attempt <id> (generation 1)\", the row stays unassigned, phases stay [[1,'finalizing']], and nothing is written. This pins the docs \"Finding one\" operator recipe.\n\nRed proof, run in a scratch tree outside the checkout: deleting claimNextTask.ts:331-340 turns exactly those two red, and the other 24 cases stay green. The same mutant against the round-1 test file stays 25/0.\n\nThe rest of the delivered rule is unchanged from ac58202:\n- Third-party explicit claims of a row whose attempt is finalizing are refused with retryable ATTEMPT_FINALIZING before any write.\n- The ranked pool and wait_for_task skip that row through the same predicate.\n- A real finalize_attempt publishes TASK_UPDATED and wakes waiters.\n- deregister_worker closes its own worker's finalizing attempts, even after a record prune.\n- A governor or human can finalize with outcome 'failed' to escape.\n\ntsc exits 0. npm test: 122 files, 2069 passed | 2 skipped. That is 2067 at HEAD, +1 new case here, +1 from a peer's uncommitted recommendSkill.test.ts.\n\nLaunchers are unchanged. Self-review: comment-85e84d87.\n\nUnrelated: docs/MCP_SERV",
-  "reviewCompletedAt": "2026-09-17T18:01:56.443Z",
+  "reviewCompletedAt": "2026-09-18T05:13:41.617Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Tests cover complete_task, then a QA claim, then record_candidate and finalize_attempt from the worker's pinned identity, and enforce the chosen rule (claim refusal, or a superseded finalizing attempt that stays acknowledgeable)"
@@ -522,5 +558,7 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-09-18T05:13:41.617Z",
+  "reviewSummary": "APPROVED. Full evidence is in comment-986fd587.\n\nRound 2 is tests only, as round 1 asked. Completion commit a5fe0f9 (pushed) carries attemptHandback.test.ts +34/-1. The contested docs/MCP_SERVER.md with its stray `cl` was skipped. No production code changed since ac58202.\n\nRe-run:\n- Repo: tsc exits 0; npm test gives 2069 passed | 2 skipped (+1 from a peer-dirty test).\n- Candidate scratch tree: tsc exits 0 and the test file typechecks under strict. The suite gives 2068 passed | 2 skipped. The file passed 26/26 on 5 repeat runs.\n\nMutation results, each target restored by sha:\n- none: 26/0, first and last.\n- Explicit guard deleted (claimNextTask.ts:337-340): exactly the 2 new assertions go red, with events [TASK_UPDATED x2] and `expected null to be an instance of MoeError`.\n- The spy and the events check each fail alone.\n- Guard skipped when there is no workerId: only the new case goes red.\n- backstop: 26/0.\n- both: 4 red.\n- Attempt id dropped from the message: 2 red.\n- Round-1 test file: 25/0, which reproduces the gap it closed.\n\nDoD 1, 3 and 4 hold as verified in round 1, since the code is unchanged. The docs rule is at MCP_SERVER.md :1116-1118 and :1780. Launchers are untouched."
 }
