@@ -88,7 +88,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:05.853Z",
-  "updatedAt": "2026-09-18T21:37:19.615Z",
+  "updatedAt": "2026-09-18T21:37:45.857Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:40:54.778Z",
     "plannedStepCount": 4,
@@ -146,7 +146,8 @@
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
-    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
+    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json",
+    ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json"
   ],
   "completionSummary": "The daemon's /ws delivery projection (packages/moe-daemon/src/state/deliveryProjection.ts) now serves two more things. First, latestCheckRun.source, but only when it is exactly runner-observed or agent-reported. Other values are omitted and the run is still served. Second, a separate requiredCheckSatisfied boolean, which is the delivery policy's verdict and not the latest run's: false while evaluateDeliveryEvidence reports a required-check:<cmd> or unreadable-required-check token, true when a check is owed and satisfied. It is omitted under the legacy policy, when no check is owed (autoCommit=false, blank gate), when the deliveryPolicy is unrecognised (caught by readEvidence, so it does not throw), and for tasks with no evidence (still byte-identical).\n\nDeviation from the plan: sibling fd970f24 has landed (97df78f). So \"owed\" copies policy.ts checkShortfall's choice: a DONE/ARCHIVED requiredCheckAtDone snapshot first, then the live requiredCheckCommand. Otherwise a DONE task with a null or malformed snapshot would read as counted. policy.ts is untouched (0-line diff).\n\nJetBrains: DeliveryCheckRun.source and TaskDelivery.requiredCheckSatisfied. MoeJson keeps only the exact source values and a real JSON boolean. DeliveryPresentation keeps checkPassed/Failed as the reported rows and adds checkSource plus requiredCheckCounted (yes, PASS) or requiredCheckNotCounted (no, FAIL). There is no row when the verdict is null. Three bundle keys added.\n\nTests:\n- daemon deliveryProjection 56/56; mutations of the helper each make it fail (plan-literal live-only rule: 3, no try/catch: 1, unvalidated source: 4, never-false: 5, no legacy skip: 1)\n- full daemon npm test: 2144/2144; tsc exit 0\n- JetBrains full gradlew test: 200 tests, 0 failures. Red first: 5 failed before the implementation.\n- VS Code: npm test 113/113 and compile exit 0 (the field is ignored).",
   "commits": [
@@ -172,6 +173,22 @@
       "treeId": "a5a61a790ab217c86124496e4f9548b1300f8404",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "d394b43326162e20d94998ecdef130336181fdc5",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7100be29@2026-09-18T21:31:21Z",
+      "paths": [
+        ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json",
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
+      ],
+      "recordedBy": "qa-7100be29",
+      "recordedAt": "2026-09-18T21:37:45.857Z",
+      "treeId": "e47ac4140a36e224198b26ddc1823e55ca206d6c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -187,9 +204,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-161b9959@2026-09-18T20:53:07Z",
-    "at": "2026-09-18T21:04:12.786Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7100be29@2026-09-18T21:31:21Z",
+    "at": "2026-09-18T21:37:45.857Z"
   },
   "completedAt": "2026-09-18T21:37:19.614Z",
   "reviewCompletedAt": "2026-09-18T21:37:19.614Z",

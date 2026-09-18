@@ -37,7 +37,7 @@
     }
   ],
   "planRevision": 5,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -50,16 +50,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:10.584Z",
-  "updatedAt": "2026-09-18T21:08:45.043Z",
+  "updatedAt": "2026-09-18T21:39:28.957Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:43:58.447Z",
     "plannedStepCount": 2,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 2,
+    "doneAt": "2026-09-18T21:39:28.957Z",
+    "wallClockMs": 3330510
   },
   "contextFetchedBy": [
     "architect-4323a407",
-    "worker-161b9959"
+    "worker-161b9959",
+    "qa-9a371c33"
   ],
   "stepsCompleted": [
     "step-1",
@@ -86,7 +89,41 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-claude-plugin/tests/postToolUse.test.ts",
+    ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json"
+  ],
+  "completionSummary": "Test-only fix in packages/moe-claude-plugin/tests/postToolUse.test.ts; src/postToolUse.ts untouched (the production MOE_PROJECT_PATH preference is load-bearing for the PowerShell launcher). The runPostToolUseHook describe's beforeEach now saves and deletes MOE_PROJECT_PATH, capturing it per test rather than at module load. afterEach restores it first, before closing wss/server, so a failing close cannot strand the launcher binding. As a pin, the forwards-envelope test now starts with expect(process.env.MOE_PROJECT_PATH).toBeUndefined(). The per-test MOE_WORKER_ID save/restore is unchanged.\nRed/green without touching the live daemon: a scratch decoy harness (a WS server behind a temp .moe/daemon.json, not committed, since deleted) ran the suite with MOE_PROJECT_PATH pointed at it. At HEAD: 2 failed, 11 passed, and the decoy received 2 leaked worker-test AGENT_TOOL_EVENT frames. With only the pin added, the pin failed with \"expected 'C:\\...\\Temp\\moe…' to be undefined\". After the fix: 13/13 passed and 0 frames leaked.\nLive .moe/activity.log has no new worker-test events from the with-env runs; the only 4 are from the 2026-09-18 17:25Z gate run. Standalone strict tsc on the test file: exit 0.",
+  "commits": [
+    {
+      "sha": "f38e01c31046c3bc70552b420f857b51ae69bd3f",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-18T21:04:43Z",
+      "paths": [
+        ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+        ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+        "packages/moe-claude-plugin/tests/postToolUse.test.ts"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-18T21:09:20.988Z",
+      "treeId": "09d12e59791e8d19507ba151007e0cc642f8b505",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-claude-plugin/tests/postToolUse.test.ts"
   ],
-  "completionSummary": "Test-only fix in packages/moe-claude-plugin/tests/postToolUse.test.ts; src/postToolUse.ts untouched (the production MOE_PROJECT_PATH preference is load-bearing for the PowerShell launcher). The runPostToolUseHook describe's beforeEach now saves and deletes MOE_PROJECT_PATH, capturing it per test rather than at module load. afterEach restores it first, before closing wss/server, so a failing close cannot strand the launcher binding. As a pin, the forwards-envelope test now starts with expect(process.env.MOE_PROJECT_PATH).toBeUndefined(). The per-test MOE_WORKER_ID save/restore is unchanged.\nRed/green without touching the live daemon: a scratch decoy harness (a WS server behind a temp .moe/daemon.json, not committed, since deleted) ran the suite with MOE_PROJECT_PATH pointed at it. At HEAD: 2 failed, 11 passed, and the decoy received 2 leaked worker-test AGENT_TOOL_EVENT frames. With only the pin added, the pin failed with \"expected 'C:\\...\\Temp\\moe…' to be undefined\". After the fix: 13/13 passed and 0 frames leaked.\nLive .moe/activity.log has no new worker-test events from the with-env runs; the only 4 are from the 2026-09-18 17:25Z gate run. Standalone strict tsc on the test file: exit 0."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-161b9959@2026-09-18T21:04:43Z",
+    "at": "2026-09-18T21:09:20.988Z"
+  },
+  "completedAt": "2026-09-18T21:39:28.957Z",
+  "reviewCompletedAt": "2026-09-18T21:39:28.957Z",
+  "reviewSummary": "Completion commit f38e01c checked: it is on moe/work-2026-09-13 and on origin. The diff is +11 lines, test-only, in packages/moe-claude-plugin/tests/postToolUse.test.ts. src/ is untouched (git diff f38e01c~1 f38e01c -- src is empty), and the plugin tree matches HEAD.\n\nDoD 1: the runPostToolUseHook describe's beforeEach saves and deletes MOE_PROJECT_PATH per test. afterEach restores it before closing wss/server, and it runs even when a test fails. The forwards test opens with a pin, expect(process.env.MOE_PROJECT_PATH).toBeUndefined(). The per-test MOE_WORKER_ID save/restore is unchanged.\n\nDoD 2, re-run by me in PowerShell from packages/moe-claude-plugin:\n- $env:MOE_PROJECT_PATH='D:\\projexts\\moes'; npm test: 13/13, exit 0.\n- Remove-Item Env:MOE_PROJECT_PATH; npm test: 13/13, exit 0.\n- Unrelated live project: a scratch copy (HEAD blobs, node_modules junction) ran with MOE_PROJECT_PATH pointing at a decoy whose .moe/daemon.json names a counting WS server. Result: 13/13, and the decoy received 0 frames.\n\nRed proof on the same decoy: the pre-fix test file (f38e01c~1) gave 2 failed, 11 passed, with the exact assertions in the task report, and the decoy received 2 leaked worker-test AGENT_TOOL_EVENTs. Mutation check: removing only the delete line makes the pin fire and the unreachable case fail.\n\nLive .moe/activity.log still has exactly 4 worker-test events, all from the 2026-09-18 pre-fix runs. Strict tsc --noEmit on the test file: exit 0. Rails: no forbidden patterns, and no MCP contract or .moe state change.\n\nKnown limit, accepted by the plan: in CI, where the variable is unset, the pin checks nothing. The leak cannot happen there either."
 }
