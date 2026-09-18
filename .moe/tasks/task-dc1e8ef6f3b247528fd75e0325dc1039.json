@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -90,16 +90,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:26:55.783Z",
-  "updatedAt": "2026-09-18T20:24:31.504Z",
+  "updatedAt": "2026-09-18T21:30:24.099Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:05:10.233Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-09-18T21:30:24.099Z",
+    "wallClockMs": 5113866
   },
   "contextFetchedBy": [
     "architect-4323a407",
-    "worker-161b9959"
+    "worker-161b9959",
+    "qa-7100be29"
   ],
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -195,5 +198,8 @@
     "kind": "completion",
     "sessionId": "worker-161b9959@2026-09-18T20:16:01Z",
     "at": "2026-09-18T20:23:57.966Z"
-  }
+  },
+  "completedAt": "2026-09-18T21:30:24.099Z",
+  "reviewCompletedAt": "2026-09-18T21:30:24.099Z",
+  "reviewSummary": "Completion 8fbc17e checked: pushed, recorded after reviewStartedAt, no later commit touches its paths, worktree == HEAD. +244/-14 over 7 paths.\nDoD1: ARCHITECTURE.md Delivery Path gives one reason per dir, each checked in code: ExecutionAttempt fields, immutable candidates, run_frozen_gate mktemp + worktree add --detach, append-only reviewStore, <gitdir>/moe/receipt/<id>.json in both wrappers, and lastCommitOutcome.code MOE_COMMIT_FAILED_GATE.\nDoD2: root .gitignore:69-73 is cited by git check-ignore -v. No files are tracked under the 5 dirs, and git status is clean. A scratch regen from HEAD sources reproduces generated/initFiles.ts except the 7 disclosed ponytail WIP lines, so there is no hand-edit drift. Every released template and the JetBrains initializer carry the bundled header, so the dirs are appended on daemon start. This repo's pre-release header is covered by the root .gitignore. Callers index.ts:523/936 catch errors; :990 and initProject:171 are fresh-init.\nDoD3: 4 pins. RED against 8fbc17e^ generated file + .gitignore: 4 failed, 7 passed. Mutations killed: header guard, separator, append-all, dropped dir, rewrite.\nDoD4: CLAUDE.md and ARCHITECTURE.md both say gitignored and never committed.\nCommands: vitest initFiles.test.ts 11/11 exit 0 (live tree + HEAD scratch); tsc --noEmit 0; full daemon suite on HEAD scratch 122 files / 2145 tests pass, so the carried ROLE_DOCS lines break nothing, and prebuild regenerates them.\nFollow-ups, not DoD gaps:\n- The pin is a hand-kept list; a 6th dir must be added manually.\n- The consumer template still omits resources/, teams/, messages/ and activity.log (scoped out by the plan)."
 }
