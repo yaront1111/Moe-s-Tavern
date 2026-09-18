@@ -198,7 +198,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-13T19:53:40.916Z",
-  "updatedAt": "2026-09-18T14:10:31.369Z",
+  "updatedAt": "2026-09-18T14:12:12.956Z",
   "dependsOn": [
     "task-49ec8755a9ad4fa29c87294adf61804d",
     "task-2a7e0f5b3926471a8a26d999cae96ff4"
@@ -285,7 +285,8 @@
     ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json",
     ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
     ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
-    ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json"
+    ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json",
+    ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json"
   ],
   "completionSummary": "Wrapper-only. The card's premise had already been answered by task-49ec8755: both twins carry the exact-identity finalize ladder (sh finalize_attempt_rpc + moe_pinned_attempt_phase + moe_seat_finalizing_attempts; ps1 Send-MoeFinalize + Get-MoePinnedAttemptPhase + Find-MoeSeatFinalizingAttempts), and the ps1 loop stop is wired through $moeStopLoop, not the plan's $postflightBreak. Step 1 verified that line by line and the step-1 comment says what was skipped and why; the wrappers are untouched here (sha dee8d9eb / b6e0bf6a).\n\nTHE RULE THIS TASK LOCKS IN: the post-flight acknowledges only the seat's own FINALIZING attempt, under the identity pinned at claim time, read from that one record. Closed or running is a silent no-op; missing, reconciling, or any identity difference (a bumped generation included) logs `[finalize] no finalizing attempt for this seat on task <id>; nothing to acknowledge.` and the loop goes on; a finalizing attempt with NO pinned identity is never acknowledged and stops the loop; an exhausted acknowledgement stops the loop.\n\nDELIVERED\n1. Harnesses (the embedded suite stays byte-identical in postflight.sh and postflight.ps1): 4 new frozen --loop modes. Group [freed seat], FAKE_TASK_STATUS=BLOCKED, the seat-freeing report_blocked shape: freed-closed (the hand-back closed the attempt in place, DoD 3), freed-generation-bump, freed-corrupt-sibling. Each asserts a second claim, 0 candidate/check/finalize/gate rows, the notice count (1 for the bump, 0 otherwise), no `Attempt identity unavailable` line, and exactly one `wip(task-postflight) ... [status=BLOCKED` commit carrying the bytes. Group [finalizing seat]: finalizing-acked-continues, where one landed acknowledgement does not stop the loop. Plus a general assertion that every finalize row in the suite carries the pinned attempt-postflight/7.\n2. Parity: registered `Attempt identity unavailable:` and `Missing/stale attempt identity; candidate completion will fail closed.` in both lists.\n3. Docs: CONFI",
   "commits": [
@@ -316,6 +317,54 @@
       "treeId": "16e3bdcae05027b93d8a5a0a07048f5ab4de92df",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "65bfc9764b57113e98ef14c2890ed528684d814e",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T12:08:15Z",
+      "paths": [
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        ".moe/tasks/task-808869c56228430ca5b15cb901497544.json",
+        ".moe/tasks/task-bd7999555b244be0869c2f460db554bb.json",
+        ".moe/tasks/task-e47284ef038c423b85a2ebd304e0f4a6.json"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T14:12:12.956Z",
+      "treeId": "07210da1d5e09b0110aaff3862b41844e9c8013a",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        },
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/parity-check.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/parity-check.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-5e096de99bc94b7d81231bb855603e76"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -327,9 +376,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-f0cb282e@2026-09-18T08:48:49Z",
-    "at": "2026-09-18T12:03:58.150Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-a36819c3@2026-09-18T12:08:15Z",
+    "at": "2026-09-18T14:12:12.956Z"
   },
   "completedAt": "2026-09-18T14:10:31.369Z",
   "reviewCompletedAt": "2026-09-18T14:10:31.369Z",
