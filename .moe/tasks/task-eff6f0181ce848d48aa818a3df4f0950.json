@@ -1,0 +1,35 @@
+{
+  "id": "task-eff6f0181ce848d48aa818a3df4f0950",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: a sibling session's landing marks the shared task baseline landed=1 under a live rework session, so that session's crash is never recovered",
+  "description": "DEFECT (governor-filed 2026-09-18, second occurrence). The per-task baseline `<gitdir>/moe/baseline/<taskId>.tsv` is shared by every session that holds the task. Every landing rewrites it with `landed=1`: moe-agent.ps1:3816 after a committed landing, :3647 and :3747 for nothing/refused. It does this even when the baseline was last taken by ANOTHER session that is still open and has not landed. The recovery gate (Invoke-MoeRecoveryCheck, ps1:3934-3970) skips recovery whenever `landed=1`. So if that other session later dies, the next pre-flight never lands its bytes as a recovered checkpoint. It then re-takes the baseline over the dirty tree instead, and ps1:4005-4007 files any dirty path that is not ASSERTED/touched/unattributed/inferred as \"inter-session dirt presumed foreign\".\n\nTRIGGER: every qa_reject followed by an immediate rework claim. The QA wrapper lands its exit checkpoint a few minutes AFTER the worker's pre-flight has taken the baseline, so every rework session runs under a baseline that says landed=1.\n\nEVIDENCE, task-49ec8755:\n- 09-17 17:41:53Z: qa-17c2d0c8 rejects (reopen #2). worker-3b5de06f claims the rework in the same second; its pre-flight writes the baseline (landed=0) and its live marker.\n- 17:45:20Z: QA's exit landing commits checkpoint 1549402 and rewrites the baseline with landed=1 (file mtime 17:45:20Z).\n- 18:57-18:59Z: the worker completes steps 5-6 (both launchers, both harnesses, both parity checks, docs/CONFIGURATION.md) and starts step 7. It then loses its seat to the 20:00:44Z daemon restart with no landing and no rescue ref (WORKER_TIMEOUT 21:05:44Z).\n- 09-18 05:08:03Z: worker-d0c3b06e's pre-flight reads landed=1. It skips recovery (no MOE_CHECKPOINT_RECOVERED, no commit) and re-takes the baseline; header is now `at=2026-09-18T05:08:03Z head=a5fe0f9 landed=0`.\n- The bytes survived only because all 7 paths were completed-step modifiedFiles (ASSERTED).\nFIRST OCCURRENCE: task-9e851 on 09-14. QA's pre-flight at 19:26:33Z re-took the baseline over 4 dirty rework files without recovering (governor #governors 19:31Z; qa-f0f9ea9e suspected landed=1).\n\nWHAT STRANDS: a path the dead session changed that is not ASSERTED and has no TOOL witness. Example: the edits of an IN_PROGRESS step on a codex/grok/gemini seat, which have no tool hook. That path lands in the new baseline's B set, becomes PREEXISTING, and no session ever commits it. It is not deleted, but it stays unlanded until some later edit touches the same file. The clean split of the dead session's bytes into their own checkpoint is lost too.\n\nDIRECTION (the architect decides): scope `landed` to the session that took the baseline. For example, the header could record the pre-flight session id, and a landing would set landed=1 only when that id is its own; otherwise it prunes B and keeps landed=0. Another option is to key the flag to the live-marker owner. A session's own completed landing must still suppress replay on idle polls. The sh twin has the same flag (baseline_landed / baseline_write … 1 / baseline_mark_landed); verify it mirrors the ps1 path.",
+  "definitionOfDone": [
+    "Both postflight harnesses (sh and ps1) gain a case that fails on the current launchers. Session A pre-flights task T and edits a planned path that is not asserted. Session B, another seat on T, lands a checkpoint. A then dies without landing. Session C's pre-flight on T must land MOE_CHECKPOINT_RECOVERED containing A's edit.",
+    "A landing never sets landed=1 on a baseline whose latest pre-flight belongs to a different, still-open session. A session's own completed landing still sets it, and the existing no-replay-on-idle-poll cases stay green.",
+    "The ps1 and sh twins behave identically, and parity-check.sh and parity-check.ps1 both pass.",
+    "The stale-marker recovery path (the 2026-08-28 lost-code fix) is unchanged: a dead owner's un-landed baseline is still recovered."
+  ],
+  "taskRails": [
+    "Wrapper-only change: scripts/moe-agent.ps1 and scripts/moe-agent.sh plus their harnesses; keep both twins in exact parity.",
+    "Never weaken recovery of a dead owner's un-landed bytes; when unsure, recover (a spurious checkpoint is recoverable, a stranded edit is not)."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-49ec8755a9ad4fa29c87294adf61804d"
+  ],
+  "priority": "MEDIUM",
+  "order": 206,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T06:23:10.074Z",
+  "updatedAt": "2026-09-18T06:23:10.074Z"
+}

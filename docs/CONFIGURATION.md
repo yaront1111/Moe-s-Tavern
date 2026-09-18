@@ -232,17 +232,31 @@ outcome reporting, `finalize_attempt` acknowledges the exact attempt's result;
 it does not persist receipt evidence. The post-flight acknowledges only the
 seat's own `finalizing` attempt under the identity pinned at claim time. A
 closed, running, reconciling, missing or no-longer-matching attempt is nothing
-to acknowledge, so ordinary checkpoints and `autoCommit=false` exits make no
-call and the worker keeps claiming; a reconciling, missing or mismatched record
-logs `[finalize] no finalizing attempt for this seat on task <id>; nothing to
-acknowledge.` A finalizing attempt with no pinned
+to acknowledge, so an ordinary checkpoint exit — whose attempt is still
+`running` — makes no call and the worker keeps claiming; a reconciling, missing
+or mismatched record logs `[finalize] no finalizing attempt for this seat on
+task <id>; nothing to acknowledge.` A finalizing attempt with no pinned
 identity is never acknowledged and stops the loop, as does an acknowledgement
 still unanswered after three identical tries, because the daemon refuses the
 seat's next claim while its attempt is finalizing. `autoCommit=false` and no-git
-projects create no candidates, checks or gate worktrees; finalizing attempts
-acknowledge no Git delivery. Gate opt-out and epic deferral policies are
-unchanged. `commitHooks` retains its separate private-index/original-working-
+projects create no candidates, checks or gate worktrees; a finalizing attempt
+there acknowledges `nothing-to-commit`. Gate opt-out and epic deferral policies
+are unchanged. `commitHooks` retains its separate private-index/original-working-
 directory contract above.
+
+The acknowledgement carries what the exit actually did with the bytes: `landed`
+with the 40-hex commit for a branch commit, `nothing-to-commit` for a no-change
+landing and for a deliberate no-git or `autoCommit=false` exit, `rescued` when
+the bytes were parked on a rescue ref, and `failed` for a refusal or an
+unrescued failure. An interrupted session (Ctrl+C, a terminating error) reports
+the same way from its exit path — after the teardown rescue and before
+`moe.deregister_worker`, which would otherwise close the attempt with nothing
+said. A landing interrupted in its push or ledger record keeps the outcome it
+already reached — a branch commit is still `landed`, a no-change landing still
+`nothing-to-commit` — and nothing is parked on a rescue ref a second time; a
+session interrupted before its landing reached an outcome is `rescued` once the
+teardown parks its bytes, and `failed` when there was nothing to park. A pre-flight recovery checkpoint belongs to the
+previous session and is never reported as this one's landing.
 
 ### Session touch evidence
 

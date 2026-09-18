@@ -3511,19 +3511,27 @@ function Invoke-MoeLanding {
         [bool]$RunGate = $false,
         [bool]$IsEpicFinal = $true
     )
+    # 'pending' is the interruption sentinel: EVERY return below sets a real
+    # outcome, so an Outcome still reading 'pending' in the finally means the
+    # pipeline was stopped (Ctrl+C) before this landing reached one.
     $res = @{
-        Outcome = 'nothing'; Kind = $Kind; Sha = ''; Ref = ''; Code = ''; Branch = ''
+        Outcome = 'pending'; Kind = $Kind; Sha = ''; Ref = ''; Code = ''; Branch = ''
         PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0
         Pushed = $false; StopLoop = $false
     }
+    $recovered = ($Reason -eq 'recovered')
     $script:MoeFrozen=$null
-    $script:MoeLandingResult=$res
+    # A `recovered` landing lands a PREVIOUS session's bytes from the pre-flight
+    # or an idle path: it is not this session's landing, so it must not become
+    # the finalize outcome nor suppress the teardown rescue. Same rule as the sh
+    # twin, which resets LAND_OUTCOME/MOE_LANDING_DONE after preflight_landing.
+    if (-not $recovered) { $script:MoeLandingResult=$res }
     $casOk=$false
+    $recorded=$false
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     $idx = Join-Path (Join-Path $Git.GitDir 'moe') "idx-$TaskId-$myPid"
     $msgFile = ''
-    $recovered = ($Reason -eq 'recovered')
     $statusText = if ($Status) { $Status } else { 'UNKNOWN' }
     try {
         $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
@@ -3772,7 +3780,14 @@ function Invoke-MoeLanding {
             }
             $oldArg = if ($old) { $old } else { '0000000000000000000000000000000000000000' }
             $ur = Invoke-MoeGit -Top $Git.Top -GitArgs @('update-ref', "refs/heads/$branch", $new, $oldArg) -MergeStderr
-            if ($ur.Rc -eq 0) { $casOk = $true; break }
+            if ($ur.Rc -eq 0) {
+                # The branch now carries this commit. Say so IMMEDIATELY: a Ctrl+C
+                # in the push or the ledger record below must not leave the result
+                # reading 'pending'/'nothing' and report a landed commit as unlanded.
+                $casOk = $true
+                $res.Outcome = 'committed'; $res.Sha = $new; $res.Ref = "refs/heads/$branch"
+                break
+            }
             Write-Host "[branch] $branch moved under us (attempt $attempt/3); rebuilding the commit on the new tip." -ForegroundColor Yellow
         }
         if (-not $casOk) {
@@ -3839,6 +3854,7 @@ function Invoke-MoeLanding {
             contested = @(@($attr.Contested) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); taskId = $_.TaskId } })
         }
         Send-MoeRecordCommit $recArgs | Out-Null
+        $recorded=$true
         return $res
     } catch {
         Write-Host "[WARN] landing failed for task $($TaskId): $_; baseline kept." -ForegroundColor Yellow
@@ -3846,6 +3862,7 @@ function Invoke-MoeLanding {
             $res.Outcome='committed'; $res.Sha=$new
             Send-MoeRecordCommit @{taskId=$TaskId;outcome='committed';kind=$Kind;sha=$new;ref="refs/heads/$branch";
                 workerId=$WorkerId;role=$Role;sessionId=$Sid;status=$Status} | Out-Null
+            $recorded=$true
         } else { $res.Outcome='failed'; $res.Code='MOE_COMMIT_FAILED' }
         $res.StopLoop=$true
         return $res
@@ -3858,6 +3875,14 @@ function Invoke-MoeLanding {
                 $script:MoeGate.Recorded=$true
                 Send-MoeCheckRun $script:MoeFrozen $script:MoeGate | Out-Null
             }
+            if ($casOk -and -not $recorded) {
+                # Interrupted after the CAS, in the push or the ledger record.
+                # The commit is on the branch: re-send its ledger row (the daemon
+                # is idempotent by sha) and never park it on a rescue ref.
+                Send-MoeRecordCommit @{taskId=$TaskId;outcome='committed';kind=$Kind;sha=$res.Sha;ref="refs/heads/$branch";
+                    workerId=$WorkerId;role=$Role;sessionId=$Sid;status=$Status} | Out-Null
+                $recorded=$true
+            }
             if ($res.Outcome -eq 'failed' -and -not $res.Ref) {
                 $reason=if ($interrupted) { 'teardown' } else { 'commit-failed' }
                 $rescue=Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason $reason -Title $Title -Status $Status -Sid $Sid -Attr $attr
@@ -3865,7 +3890,11 @@ function Invoke-MoeLanding {
                 Send-MoeRecordCommit @{taskId=$TaskId;outcome='failed';kind=$Kind;workerId=$WorkerId;role=$Role;
                     sessionId=$Sid;status=$Status;code=$res.Code} | Out-Null
             }
-            $script:moeLandingDone=$true
+            # A `recovered` landing is not this session's, and an Outcome still
+            # reading 'pending' means Ctrl+C hit before this one reached any
+            # outcome (attribution, a commit hook, the peel): leave the flag off
+            # so the outer teardown parks the bytes, as the sh twin's EXIT trap does.
+            if (-not $recovered -and $res.Outcome -ne 'pending') { $script:moeLandingDone=$true }
         } catch { Write-Host "[WARN] landing cleanup evidence failed: $_" -ForegroundColor Yellow; $res.StopLoop=$true }
         $null = Remove-MoeGateWorkspace
         Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
@@ -4049,6 +4078,11 @@ function Invoke-MoeIdleRecovery([string]$TaskId, [string]$Status) {
     }
 }
 
+# The landing result this session actually produced, acknowledged on the pinned
+# finalizing attempt: committed -> landed, a deliberate no-landing exit (no
+# result at all: autoCommit=false, no git, a role that does not land) or an empty
+# one -> nothing-to-commit, parked bytes -> rescued, everything else -> failed.
+# Idempotent, and a running or closed attempt stays silent inside Send-MoeFinalize.
 function Complete-MoePostflight {
     if ($script:MoeFinalizeDone) { return $true }
     $script:MoeFinalizeDone=$true
@@ -4067,17 +4101,32 @@ function Complete-MoePostflight {
 # session tears down (Ctrl+C, terminating error, exit 1) before its
 # post-flight landed. Idempotent; the baseline stays so the next session's
 # pre-flight lands the work on the branch.
+#
+# It also leaves the landing result for the Complete-MoePostflight call that
+# follows it, with the same mapping as the sh twin's teardown_rescue:
+#   bytes parked on a rescue ref                       -> rescued
+#   deliberate autoCommit=false, or no git repo at all -> nothing-to-commit
+#   anything else (no baseline, nothing parked)        -> failed
+# (A landing that already reached an outcome sets $moeLandingDone and returns
+# above -- a branch commit included, even one interrupted in its push or ledger
+# record -- so that outcome is what gets acknowledged.)
 function Invoke-MoeTeardownRescue {
     if ($script:MoeTeardownDone) { return }
     $script:MoeTeardownDone = $true
     try {
         if (-not $preflightTaskId -or $moeLandingDone) { return }
+        $teardown = @{ Outcome = 'nothing'; Kind = 'rescue'; Sha = ''; Ref = ''; Code = '' }
+        $script:MoeLandingResult = $teardown
+        $settings = if ($null -ne $moeSettings) { $moeSettings } else { Read-MoeCommitSettings }
+        if (-not $settings.autoCommit) { return }
+        if ($null -eq $moeGit -and $null -eq (Get-MoeGitTop)) { return }
+        $teardown.Outcome = 'failed'
         if ($null -eq $moeGit -or $null -eq $moeSettings) { return }
-        if (-not $moeSettings.autoCommit) { return }
         $baselinePath = Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId
         if (-not $baselinePath -or -not (Test-Path -LiteralPath $baselinePath)) { return }
         Write-Host "[rescue] session ended before landing task $preflightTaskId — parking its changes on a rescue ref." -ForegroundColor Yellow
-        Invoke-MoeRescueRef -Git $moeGit -TaskId $preflightTaskId -Reason 'teardown' -Title $preflightTaskTitle -Status '' -Sid $moeSid | Out-Null
+        $rescue = Invoke-MoeRescueRef -Git $moeGit -TaskId $preflightTaskId -Reason 'teardown' -Title $preflightTaskTitle -Status '' -Sid $moeSid
+        if ($rescue) { $teardown.Ref = $rescue.Ref; $teardown.Sha = $rescue.Sha }
     } catch {}
 }
 

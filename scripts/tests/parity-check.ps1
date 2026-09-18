@@ -62,6 +62,10 @@ $required = [ordered]@{
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
     'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
+    # The landing outcomes finalize_attempt carries: both wrappers map every exit
+    # (the interrupted one included) onto the same words. 'failed' is too common a
+    # word to be a needle; the teardown-no-baseline arm proves it on both engines.
+    'finalize outcomes' = @('landed', 'nothing-to-commit', 'rescued')
     'context fields' = @('isEpicFinal')
     'blocked-hold prose' = @('only resource-lease waits and third-party blocks hold a seat now')
     # Attempt finalize ladder, candidate-evidence and gate-cleanup prose.

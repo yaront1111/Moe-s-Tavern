@@ -77,7 +77,8 @@ done
 
 # Baseline / temp-index plumbing (identical file formats and git invocations).
 for lit in '#moe-baseline v1' 'moe/baseline' ':(literal)' \
-  '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths' \n  'update-index --no-assume-unchanged --no-skip-worktree -z --stdin'; do
+  '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths' \
+  'update-index --no-assume-unchanged --no-skip-worktree -z --stdin'; do
   require_both "baseline/index" "$lit"
 done
 
@@ -151,6 +152,13 @@ done
 
 for field in attemptId generation candidateId treeSha runnerId runner-observed; do
   require_both "candidate evidence field" "$field"
+done
+
+# The landing outcomes finalize_attempt carries: both wrappers map every exit
+# (the interrupted one included) onto the same words. 'failed' is too common a
+# word to be a needle; the teardown-no-baseline arm proves it on both engines.
+for outcome in landed nothing-to-commit rescued; do
+  require_both "finalize outcome" "$outcome"
 done
 
 # Daemon get_context fields both wrappers must consume identically (the

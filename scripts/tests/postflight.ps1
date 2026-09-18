@@ -216,6 +216,20 @@ function finalizeReply() {
     && readRows(rpcLog).filter(r=>r.tool === tool).length === 1)) return null;
   return payload;
 }
+// Teardown arms hold ONE call until the supervisor has interrupted the wrapper:
+// the post-flight landing's get_commit_scope (teardown-scope: no outcome yet), or
+// the completion's ledger row once it reached one (teardown-landed: a branch CAS,
+// teardown-nothing: nothing to commit). A proxy the interrupt kills never got its
+// call through, so a held call is logged only once its hold is over.
+function holdForInterrupt() {
+  const mode = process.env.FAKE_EVIDENCE_MODE, ready = path.join(moe, 'gate-ready');
+  const scope = mode === 'teardown-scope' && tool === 'get_commit_scope' && args.phase === 'postflight';
+  const ledger = tool === 'record_commit' && args.kind === 'completion'
+    && args.outcome === {'teardown-landed': 'committed', 'teardown-nothing': 'nothing'}[mode];
+  if (!(scope || ledger) || fs.existsSync(ready)) return;
+  fs.writeFileSync(ready, 'ready');
+  for (let i = 0; i < 1200 && !fs.existsSync(ready + '.sent'); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+}
 function evidenceRpc() {
   appendRpc();
   if (['record_commit','deregister_worker','add_comment'].includes(tool)) return false;
@@ -231,6 +245,7 @@ function evidenceRpc() {
   } catch(e) { refusal(e.message); }
   return true;
 }
+holdForInterrupt();
 if (['record_candidate','record_check_run','finalize_attempt','record_commit','deregister_worker','add_comment'].includes(tool)) {
   if (evidenceRpc()) process.exit(0);
 }
@@ -442,9 +457,13 @@ switch (tool) {
     $frozenSuite = Join-Path $tempRoot 'frozen-candidate.cjs'
     [IO.File]::WriteAllText($frozenSuite, @'
 
-const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),assert=require('node:assert/strict');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cp=require('node:child_process'),assert=require('node:assert/strict');
 const [platform,wrapper,proxy,parent,engine]=process.argv.slice(2),win=platform==='ps1';
 const root=fs.mkdtempSync(path.join(parent,'frozen gate é '));
+// The loop supervisor hard-kills its wrapper, so that wrapper's own exit cleanup
+// never runs: point its temp files (sh SECURE_TEMP_DIR, ps1 MCP config and system
+// prompt) at a dir this suite owns and deletes, never the shared %TEMP%.
+const wrapperTmp=fs.mkdtempSync(path.join(os.tmpdir(),'moe-frozen-wrapper-'));
 const read=f=>fs.readFileSync(f,'utf8');
 const write=(f,b)=>{fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,b);};
 const rows=f=>fs.existsSync(f)?read(f).trim().split('\n').filter(Boolean).map(JSON.parse):[];
@@ -454,13 +473,30 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
 'finalize-loss-once','finalize-loss','no-change','disabled','deferred','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned','unborn','cleanup-retry','hidden-mutation',
-...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term'])];
+...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen.
 const loopModes=['nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned'];
 const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','gate-qa-claimed'];
+// Teardown modes interrupt the wrapper once complete_task has left the attempt
+// finalizing: mid-CLI, in the post-flight landing before it reached any outcome
+// (teardown-scope), or once it reached one (a branch CAS, or nothing to commit)
+// but before its ledger row got out. That exit must acknowledge the attempt
+// exactly once, before deregister_worker, with what it actually did to the bytes.
+// teardown-running is the control: its attempt is still `running` (no
+// complete_task), so the very same exit path must acknowledge NOTHING.
+const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit',
+  'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
+  'teardown-nothing':'nothing-to-commit','teardown-running':''};
+const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
 const noFinal=['missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt',...loopModes];
 const EMPTY_TREE='4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+// An interrupted wrapper still has to stop the gate, park a rescue ref,
+// acknowledge the attempt and deregister -- several node spawns on a loaded
+// box -- so the Windows cancellation bound tracks MOE_POSTFLIGHT_TIMEOUT_SEC
+// rather than a fixed 30 s. The outer spawnSync timeout is still the real cap.
+const CANCEL_MS=Math.max(30000,(Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-30)*1000);
 let count=0;
 try {
 if(!win){const source=read(wrapper),stop=source.slice(source.indexOf('stop_gate_child() {'),source.indexOf('cleanup_gate_workspace() {'));
@@ -500,12 +536,13 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   const settings={qualityGate:'node gate.cjs',qualityGateScope:'everyTask',commitBoardState:false,attribution:{undeclared:'never'}};
   if(mode==='disabled'||mode==='nogate-qa-claimed')settings.qualityGate='';
   if(mode==='deferred')settings.qualityGateScope='epicFinal';
-  if(mode==='manual'||mode.startsWith('manual-'))settings.autoCommit=false;
+  if(mode==='manual'||mode.startsWith('manual-')||mode==='teardown-manual')settings.autoCommit=false;
   const ownedPaths=mode==='unborn'?['owned.txt','gate.cjs']:['owned.txt'];
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  if(mode!=='no-git'){
+  const noGit=mode==='no-git'||mode==='teardown-no-git';
+  if(!noGit){
     git(repo,'init','-q');git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
     if(mode==='unborn')git(repo,'symbolic-ref','HEAD','refs/heads/moe/frozen');
     else{git(repo,'add','--','seed.txt','nested project é/owned.txt','nested project é/gate.cjs');
@@ -519,12 +556,17 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   }
   write(path.join(nested,'helper.txt'),'dirty helper\n');write(path.join(nested,'peer.txt'),'peer bytes\n');
   write(path.join(nested,'.codex','dirty.txt'),'denied bytes\n');
+  // A previous session of the task ended without landing: the pre-flight lands
+  // this lingering baseline as a recovery checkpoint before the CLI starts.
+  const baselineFile=path.join(repo,'.git','moe','baseline','task-postflight.tsv');
+  if(mode==='teardown-recovered'){write(owned,'recovered owned\n');
+    write(baselineFile,'#moe-baseline v1 task=task-postflight at=2026-01-01T00:00:00Z head='+git(repo,'rev-parse','HEAD')+' landed=0\n');}
   const cliJs=path.join(root,mode+'-cli.cjs');
   write(cliJs,`
 const fs=require('fs'),path=require('path'),dir=process.env.MOE_PROJECT_PATH,mode=process.env.FROZEN_MODE;
-if(mode!=='no-change')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
+if(mode!=='no-change'&&mode!=='teardown-nothing')fs.writeFileSync(path.join(dir,'owned.txt'),'frozen owned\\n');
 const file=path.join(dir,'.moe','attempts','attempt-postflight.json');
-const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual)-/.test(mode);
+const qaClaimed=mode.endsWith('-qa-claimed'),exitOnly=/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running';
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
 if(mode.endsWith('-reconciling'))a.phase='reconciling';
 if(mode==='closed-attempt'||qaClaimed)a.phase='closed';if(mode==='stale-attempt')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
@@ -532,6 +574,9 @@ const stamp=new Date().toISOString();
 if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json'),JSON.stringify({id:'attempt-qa',generation:8,taskId:'task-postflight',
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
 if(mode.endsWith('-unpinned'))fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
+if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
+if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
+ const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
   const cli=path.join(root,mode+(win?'.cmd':'.sh'));
   write(cli,win?'@echo off\r\nchcp 65001 >nul\r\nnode "'+cliJs+'"\r\nexit /b %errorlevel%\r\n':
@@ -540,8 +585,8 @@ if(mode.endsWith('-unpinned'))fs.writeFileSync(path.join(dir,'.moe','attempts','
   write(race,"const fs=require('fs'),cp=require('child_process');fs.writeFileSync('break-gate.txt','advanced');"+
     "cp.execFileSync('git',['add','--','break-gate.txt']);cp.execFileSync('git',['commit','-qm','peer-race','--','break-gate.txt']);");
   write(path.join(nested,'.moe','daemon.json'),JSON.stringify({port:9876,projectPath:nested}));
-  const before=mode==='no-git'||mode==='unborn'?'':git(repo,'rev-parse','HEAD'),index=path.join(repo,'.git','index');
-  const beforeIndex=mode==='no-git'||!fs.existsSync(index)?null:fs.readFileSync(index);
+  const before=noGit||mode==='unborn'?'':git(repo,'rev-parse','HEAD'),index=path.join(repo,'.git','index');
+  const beforeIndex=noGit||!fs.existsSync(index)?null:fs.readFileSync(index);
   const env={...process.env,MOE_PROXY_PATH:proxy,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',
     FAKE_TASK_STATUS:'REVIEW',FAKE_SCOPE_PEERS_ACTIVE:'1',FAKE_SCOPE_PEER_DECLARED:'peer.txt:task-peer',
     FROZEN_FIXTURE:nested,FROZEN_MODE:mode,HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),
@@ -552,7 +597,7 @@ if(mode.endsWith('-unpinned'))fs.writeFileSync(path.join(dir,'.moe','attempts','
     [wrapper,'--project',nested,'--worker-id','worker-frozen','--role','worker','--team','Smoke','--no-start-daemon',
     '--command',cli,'--no-loop','--poll-interval','0'];
 
-  if(/^(checkpoint|manual)-/.test(mode))env.FAKE_TASK_STATUS='WORKING';
+  if(/^(checkpoint|manual)-/.test(mode)||mode==='teardown-running')env.FAKE_TASK_STATUS='WORKING';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
   if(mode==='finalize-loss'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
@@ -561,7 +606,7 @@ if(mode.endsWith('-unpinned'))fs.writeFileSync(path.join(dir,'.moe','attempts','
   let runEngine=engine,runArgs=args;
   const secondClaim=path.join(nested,'.moe','second-claim');
   if(loopModes.includes(mode)){
-    env.FAKE_CLAIM_ONCE='1';
+    env.FAKE_CLAIM_ONCE='1';env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
     const supervisor=path.join(root,'loop-supervisor.cjs');
     write(supervisor,`
 const cp=require('child_process'),fs=require('fs');
@@ -579,12 +624,12 @@ child.on('exit',(code,signal)=>{clearInterval(poll);clearTimeout(deadline);
     runEngine=process.execPath;
     runArgs=[supervisor,secondClaim,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
   }
-  if(mode.startsWith('interrupt-')){
+  if(/^(interrupt|teardown)-/.test(mode)){
     const supervisor=path.join(root,mode+(win?'-supervisor.ps1':'-supervisor.sh'));
     if(win){
       write(path.join(root,'interrupt-args.json'),JSON.stringify(args));
       write(supervisor,`
-param([string]$Engine,[string]$ArgsFile,[string]$Ready,[string]$Log)
+param([string]$Engine,[string]$ArgsFile,[string]$Ready,[string]$Log,[int]$LimitMs)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $global:OutputEncoding=[Console]::OutputEncoding
@@ -604,7 +649,8 @@ try {
   if(-not [GateSignal]::AttachConsole($p.Id)){throw 'AttachConsole to OWNED wrapper failed'}
   [GateSignal]::SetConsoleCtrlHandler([IntPtr]::Zero,$true)|Out-Null
   if(-not [GateSignal]::GenerateConsoleCtrlEvent(0,0)){throw 'owned Ctrl+C failed'}
-  if(-not $p.WaitForExit(30000)){throw 'gate cancellation failed to finish'}
+  [IO.File]::WriteAllText("$Ready.sent",'sent')
+  if(-not $p.WaitForExit($LimitMs)){throw 'gate cancellation failed to finish'}
   Get-Content -LiteralPath $Log
   Get-Content -LiteralPath "$Log.err"
   exit $p.ExitCode
@@ -615,7 +661,7 @@ try {
 }
 `);
       runArgs=['-NoProfile','-File',supervisor,engine,path.join(root,'interrupt-args.json'),
-        path.join(nested,'.moe','gate-ready'),path.join(root,'interrupt-child.log')];
+        path.join(nested,'.moe','gate-ready'),path.join(root,'interrupt-child.log'),String(CANCEL_MS)];
     }else{
       write(supervisor,`
 #!/usr/bin/env bash
@@ -627,12 +673,13 @@ trap 'kill -TERM "$child" 2>/dev/null || true' EXIT
 for ((i=0;i<1200;i++)); do [ ! -f "$ready" ] || break; sleep 0.1; done
 [ -f "$ready" ] || exit 98
 kill "-$signal" "$child" || exit 97
+: > "$ready.sent"
 wait "$child"
 rc=$?
 trap - EXIT
 exit "$rc"
 `);
-      runArgs=[supervisor,path.join(nested,'.moe','gate-ready'),mode==='interrupt-int'?'INT':'TERM',engine,...args];
+      runArgs=[supervisor,path.join(nested,'.moe','gate-ready'),mode==='interrupt-term'?'TERM':'INT',engine,...args];
     }
   }
   const run=cp.spawnSync(runEngine,runArgs,{env,encoding:'utf8',timeout:Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)*1000,maxBuffer:4*1024*1024});
@@ -643,11 +690,54 @@ exit "$rc"
     seen=rows(path.join(nested,'.moe','gate-observations.jsonl'));
   const failed=['dirty-helper','race-fail','tracked-mutation','exit-tail','missing-attempt','stale-attempt','claim-missing','claim-malformed','closed-attempt','workspace-failure','interrupt-int','interrupt-term',
     'gate-qa-claimed','hidden-mutation'].includes(mode)||mode.startsWith('record_');
-  const after=mode==='no-git'?'':git(repo,'rev-parse','HEAD');
+  const after=noGit?'':git(repo,'rev-parse','HEAD');
   const lastCommit=rpc.filter(r=>r.tool==='record_commit').at(-1);
   const pushBlocked=rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('PUSH-BLOCKED'))||
     rpc.some(r=>r.tool==='add_comment'&&String(r.args.content).includes('PUSH-BLOCKED'));
   if(loopModes.includes(mode))assert.equal(fs.existsSync(secondClaim),true,'the worker loop must go on claiming after this exit\n'+log);
+  if(mode.startsWith('teardown-')){
+    const want=teardownOutcome[mode],commits=rpc.filter(r=>r.tool==='record_commit'),at=r=>rpc.indexOf(r);
+    const refs=noGit?[]:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/').split('\n').filter(Boolean);
+    const attempt=JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json')));
+    const deregisterAt=rpc.findIndex(r=>r.tool==='deregister_worker');
+    // Proof the interrupt really cut this session short: a post-flight that ran
+    // to its end announces it, and an uninterrupted run could reach the same outcome.
+    assert.equal(rows(path.join(nested,'.moe','messages','chan-general.jsonl')).some(m=>String(m.content).includes('worker session ended: task=')),
+      false,'the interrupt must land before the post-flight announces a normal end\n'+log);
+    assert.equal(finals.length,want?1:0,'the interrupted exit acknowledges its finalizing attempt exactly once\n'+log);
+    if(want){
+      assert.equal(finals[0].args.outcome,want,log);
+      assert.equal(attempt.phase,'closed',log);
+      assert.ok(deregisterAt>at(finals[0]),'finalize_attempt must precede deregister_worker\n'+log);
+    }else assert.equal(attempt.phase,'running','a running attempt is never acknowledged\n'+log);
+    if(mode==='teardown-landed'){
+      assert.equal(refs.length,0,'a landed commit is never parked again on a rescue ref\n'+log);
+      assert.notEqual(after,before,log);assert.equal(finals[0].args.landedRevision,after);
+      assert.equal(git(repo,'rev-parse','HEAD^{tree}'),candidates.at(-1)?.args.treeSha,log);
+      assert.ok(commits.some(r=>r.args.outcome==='committed'&&r.args.kind==='completion'&&r.args.sha===after),log);
+      assert.equal(commits.filter(r=>r.args.outcome!=='committed').length,0,'a landed commit records no failure\n'+log);
+    }else if(mode==='teardown-nothing'){
+      assert.equal(refs.length,0,'a no-change landing is never parked on a rescue ref\n'+log);
+      assert.equal(after,before,log);assert.equal(read(owned),'base\n');
+      assert.deepEqual(checks.map(r=>r.args.exitCode),[0],'its gate ran once and passed\n'+log);
+      assert.equal(commits.filter(r=>r.args.outcome!=='nothing').length,0,'a no-change landing records no failure\n'+log);
+    }else{
+      assert.equal(candidates.length+checks.length+seen.length,0,'no landing ran, so no candidate and no gate\n'+log);
+      if(teardownRescued.includes(mode)){
+        assert.equal(refs.length,1,'the teardown parks the unlanded bytes\n'+log);
+        assert.equal(git(repo,'show',refs[0]+':nested project é/owned.txt'),'frozen owned');
+        const rescue=commits.find(r=>r.args.kind==='rescue');
+        assert.ok(rescue&&at(rescue)<(want?at(finals[0]):deregisterAt),'the rescue is recorded before the finalize\n'+log);
+      }else{assert.equal(refs.length,0,log);assert.equal(commits.length,0,'this exit reports no git activity\n'+log);}
+      if(mode==='teardown-recovered'){assert.match(git(repo,'log','-1','--format=%s'),/^wip\(task-postflight\).* recovered$/);
+        assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'recovered owned');}
+      else{assert.equal(after,before,log);if(!noGit)assert.deepEqual(fs.readFileSync(index),beforeIndex);}
+    }
+    assert.equal(read(path.join(nested,'helper.txt')),'dirty helper\n');assert.equal(read(path.join(nested,'peer.txt')),'peer bytes\n');
+    if(!noGit)assert.equal(git(repo,'worktree','list','--porcelain').split('\n').filter(l=>l.startsWith('worktree ')).length,1);
+    for(const o of seen)assert.equal(fs.existsSync(path.dirname(o.cwd)),false,'owned gate workspace must be deleted');
+    count++;continue;
+  }
   if(mode.startsWith('manual-')||mode.startsWith('checkpoint-')){
     assert.equal(candidates.length+checks.length+finals.length+seen.length,0,log);
     assert.ok(log.includes('[finalize] no finalizing attempt for this seat on task task-postflight'),log);
@@ -764,7 +854,7 @@ exit "$rc"
 }
 console.log('PASS frozen candidate scenarios: '+count);
 }catch(e){console.error('FROZEN FIXTURE '+root);throw e;}
-finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
+finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp])fs.rmSync(d,{recursive:true,force:true,maxRetries:10,retryDelay:200});}
 
 '@, [Text.UTF8Encoding]::new($false))
     & node $frozenSuite ps1 $wrapper $fakeProxy $tempRoot $psExe

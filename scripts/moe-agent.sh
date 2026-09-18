@@ -127,7 +127,15 @@ cleanup_temp() {
     if [ "$(type -t teardown_rescue)" = "function" ]; then
         teardown_rescue || true
     fi
-    if [ "${MOE_LANDING_DONE:-false}" = true ] && [ "$(type -t finalize_postflight)" = function ]; then
+    # Finalize BEFORE deregister, on every exit that holds a task: a completed
+    # post-flight already acknowledged its own landing (idempotent), and
+    # teardown_rescue above leaves LAND_OUTCOME/LAND_RESCUE_SHA describing what
+    # THIS exit did with the bytes. Only a pinned finalizing attempt is
+    # acknowledged -- a running or closed one stays silent -- so a plain Ctrl+C
+    # mid-CLI still sends nothing. Same order as the ps1 twin's outer finally,
+    # and it must stay ahead of the deregister below: deregister_worker closes
+    # this seat's finalizing attempts, which would swallow the outcome.
+    if [ "$(type -t finalize_postflight)" = function ]; then
         finalize_postflight || true
     fi
     if [ "$(type -t cleanup_gate_workspace)" = function ]; then cleanup_gate_workspace || true; fi
@@ -4272,7 +4280,7 @@ run_landing() {
     mkdir -p "$work"
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
-    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""
+    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -4412,6 +4420,17 @@ run_landing() {
         echo -e "${YELLOW}[attribution]${NC} these changed paths were neither declared by the task nor written by its tools while other workers were active; report them via complete_step.modifiedFiles or moe.declare_files."
     fi
 
+    # The landing has reached its outcome, and a failed one has already parked
+    # its rescue ref. An interrupt from here on (the push, the ledger record)
+    # reports THIS outcome: the EXIT trap's teardown must not rescue a second
+    # time -- for a no-change completion whose gate passed, that would park the
+    # frozen tree as 'qualityGate interrupted'. The ps1 twin sets $res.Outcome
+    # before its push/record the same way. A committed landing interrupted here
+    # still gets its ledger row re-sent: teardown_rescue checks that first.
+    # A pre-flight recovery is the previous session's landing and never marks
+    # this one done here (the ps1 twin's `recovered` rule).
+    [ "${LAND_RECOVERED:-false}" = true ] || MOE_LANDING_DONE=true
+
     # Push policy: completion pushes as today (also after refusals/nothing AND
     # after a failed commit, so pre-existing local commits reach origin -- same
     # as the ps1 twin; push_branch itself announces PUSH FAILED when the push
@@ -4446,6 +4465,7 @@ run_landing() {
             LAND_TREE=$(git -C "$MOE_TOP" rev-parse "$found^{tree}" 2>/dev/null) || LAND_TREE=""
         fi
         record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
+        LAND_RECORDED=true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" 1
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
         record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "MOE_COMMIT_NOTHING_TO_COMMIT" "" "" "" "" || true
@@ -4707,6 +4727,14 @@ PYEOF
 # completed a landing, park a single-snapshot rescue ref (policy never, no CAS
 # loop, no push). Best-effort, idempotent; the persisted baseline stays the
 # primary recovery (the next pre-flight lands it on the branch).
+#
+# It also leaves the landing result for the finalize cleanup_temp runs right
+# after it, with the same mapping as the ps1 twin's Invoke-MoeTeardownRescue:
+#   a branch commit already made (interrupted during its push/record) -> landed
+#   any other outcome the landing reached before its push/record      -> kept
+#   bytes parked on a rescue ref                                      -> rescued
+#   deliberate autoCommit=false, or no git repo at all                -> nothing
+#   anything else (no baseline, nothing parked)                       -> failed
 MOE_TEARDOWN_DONE=false
 teardown_rescue() {
     [ "$MOE_TEARDOWN_DONE" = true ] && return 0
@@ -4714,18 +4742,32 @@ teardown_rescue() {
     set +e
     local tid="${PREFLIGHT_TASK_ID:-}"
     [ -n "$tid" ] || return 0
+    if [ "${LAND_OUTCOME:-}" = "committed" ] && [ -n "${LAND_SHA:-}" ]; then
+        # This session's CAS already moved the branch and the interrupt landed
+        # after it (push, ledger row). The commit IS on the branch: never park
+        # it again on a rescue ref and never report it as unlanded. The ledger
+        # row is re-sent only when it did not get out; record_commit is
+        # idempotent by sha either way. Checked before MOE_LANDING_DONE, which
+        # run_landing sets ahead of its push and ledger record.
+        [ "${LAND_RECORDED:-}" = "true" ] || record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "${LAND_PUSHED:-}" "${LAND_STAGED_FILE:-}" "${LAND_DROPPED_FILE:-}" || true
+        MOE_LANDING_DONE=true
+        return 0
+    fi
     [ "${MOE_LANDING_DONE:-}" = "true" ] && return 0
+    LAND_RESCUE_SHA=""
+    LAND_OUTCOME=nothing
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
+    git -C "$PROJECT" rev-parse --show-toplevel >/dev/null 2>&1 || return 0
+    LAND_OUTCOME=failed
     [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
     [ -f "$(baseline_path "$tid")" ] || return 0
     [ "$(type -t run_landing)" = "function" ] || return 0
     echo ""
     echo -e "${YELLOW}[rescue]${NC} session ending with task $tid unlanded -- taking a rescue snapshot before deregistering."
     if [ -n "${FROZEN_TREE:-}" ]; then
-        LAND_OUTCOME=failed; LAND_CODE=MOE_COMMIT_FAILED_GATE
+        LAND_CODE=MOE_COMMIT_FAILED_GATE
         rescue_ref "teardown" "" || true
         record_commit_rpc failed "$LAND_KIND" "" "" "$LAND_CODE" "qualityGate interrupted" "" "" "" || true
-        finalize_postflight || true
         MOE_LANDING_DONE=true
         return 0
     fi
@@ -4853,7 +4895,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
     MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
-    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
     MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
@@ -5835,8 +5877,12 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         preflight_landing "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}" launch || true
         # A recovery landing in there belongs to the PREVIOUS session; this
-        # session's own landing is still ahead of us.
+        # session's own landing is still ahead of us. Its outcome must not be
+        # read as this session's either: the EXIT trap's teardown maps
+        # LAND_OUTCOME onto the finalize outcome. Same rule as the ps1 twin,
+        # where a `recovered` landing sets neither flag.
         MOE_LANDING_DONE=""
+        LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
         LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
         if [ -n "$MOE_PREFLIGHT_NOTICE" ]; then
             DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
