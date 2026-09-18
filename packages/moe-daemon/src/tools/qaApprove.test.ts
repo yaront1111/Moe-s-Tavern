@@ -780,6 +780,30 @@ describe('reviewStore — refusals, list order and copies', () => {
     expect(h.state.reviews.size).toBe(1);
   });
 
+  // Review-1.json and review-1.json are ONE file on NTFS and a default APFS volume,
+  // so recording review-1 would silently overwrite Review-1.
+  it('refuses an id that differs from a stored review only by case', async () => {
+    const first = await recordReview(h.state, { ...VALID, id: 'Review-1' });
+    const bytesBefore = fs.readFileSync(reviewFile('Review-1'), 'utf8');
+
+    const err = await refusalOf(recordReview(h.state, { ...VALID, id: 'review-1', summary: 'rewritten' }));
+
+    expect({ code: err.code, codeName: err.codeName, message: err.message, context: err.context }).toEqual({
+      code: -32002,
+      codeName: 'REVIEW_ID_CASE_COLLISION',
+      message:
+        '[REVIEW_ID_CASE_COLLISION] Review id review-1 differs only by case from the existing review Review-1; ' +
+        'each record is one file (<id>.json), and NTFS and a default APFS volume treat those two names as the same file, ' +
+        'so recording this one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, ' +
+        'and references match it exactly.',
+      context: { reviewId: 'Review-1', requestedId: 'review-1' },
+    });
+    expect(h.state.reviews.size).toBe(1);
+    expect(getReview(h.state, 'Review-1')).toEqual(first);
+    expect(fs.readFileSync(reviewFile('Review-1'), 'utf8')).toBe(bytesBefore);
+    expect(fs.readdirSync(path.join(h.moePath, 'reviews'))).toEqual(['Review-1.json']);
+  });
+
   it('replays an identical same-id review: the stored copy comes back with its createdAt, and nothing is written', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-11T03:00:00.000Z'));

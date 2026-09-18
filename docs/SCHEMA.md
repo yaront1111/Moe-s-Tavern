@@ -1062,7 +1062,8 @@ The exact bytes a task is offering for delivery, frozen so that review and check
 ```typescript
 interface Candidate {
   readonly id: string;             // "cand-<32 hex>" when the daemon generates it; a caller-supplied
-                                   // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+                                   // id must match [A-Za-z0-9_-]{1,128} and must not differ from an
+                                   // existing candidate's id only by case. Also the filename.
   readonly attemptId: string;      // The ExecutionAttempt (.moe/attempts/) that produced the bytes;
                                    // must exist and belong to taskId when the candidate is recorded
   readonly taskId: string;
@@ -1074,6 +1075,8 @@ interface Candidate {
 ```
 
 **Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe.
+
+**Ids are compared case-insensitively for existence.** A record is one file, `<id>.json`, and NTFS and a default APFS volume treat `Cand-1.json` and `cand-1.json` as the same file, so recording `cand-1` beside a stored `Cand-1` would silently overwrite it. Such an id is refused `-32002` / `CANDIDATE_ID_CASE_COLLISION`, with `context.candidateId` (the stored id) and `context.requestedId`, whatever its fields, and nothing is written. The rule holds on every filesystem, so a `.moe/` directory stays safe to open on any of them. A stored id keeps the case it was given, and reference fields such as a check run's `candidateId` are matched exactly. Check runs and reviews follow the same rule. Not covered: records that already collided before this rule (two files written on a case-sensitive filesystem) are left alone, and an operator resolves those by hand.
 
 **Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never consults git about them, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
 
@@ -1104,7 +1107,8 @@ One QA decision, bound to the exact [Candidate](#candidate) it was made against.
 ```typescript
 interface Review {
   readonly id: string;          // "review-<32 hex>" when the daemon generates it; a caller-supplied
-                                // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+                                // id must match [A-Za-z0-9_-]{1,128} and must not differ from an
+                                // existing review's id only by case. Also the filename.
   readonly taskId: string;
   readonly candidateId: string; // The Candidate the decision was made against — the task's CURRENT
                                 // candidate, already checked against the one the reviewer named
@@ -1115,7 +1119,7 @@ interface Review {
 }
 ```
 
-**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
+**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. Nor can an id that differs from a stored one only by case: on NTFS and a default APFS volume it names the same file, so it is refused `-32002` / `REVIEW_ID_CASE_COLLISION`, with `context.reviewId` (the stored id) and `context.requestedId`, and nothing is written (the rule, and what it does not cover, is under [Candidate](#candidate)). A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
 
 **Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
 
@@ -1148,7 +1152,8 @@ What a check reported about one [Candidate](#candidate)'s exact bytes: the comma
 ```typescript
 interface CheckRun {
   readonly id: string;           // "check-<32 hex>" when the daemon generates it; a caller-supplied
-                                 // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+                                 // id must match [A-Za-z0-9_-]{1,128} and must not differ from an
+                                 // existing check run's id only by case. Also the filename.
   readonly candidateId: string;  // The Candidate whose bytes were checked; must exist when recorded
   readonly treeSha: string;      // The tree the reporter says it checked (7-40 hex). Must equal the
                                  // candidate's treeSha exactly when recorded: no prefix match, no case folding
@@ -1168,7 +1173,7 @@ interface CheckRun {
 
 **Many runs per candidate.** A candidate accumulates check runs. There is never one row per candidate that a later run overwrites: running a check again is a new record under a new id, and the history keeps every result, failures included.
 
-**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused.
+**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused. An id that differs from a stored run's id only by case is refused too (`CHECK_RUN_ID_CASE_COLLISION`, below): on NTFS and a default APFS volume it names the same file (the rule, and what it does not cover, is under [Candidate](#candidate)).
 
 **Refusals.** Checked in this order; every refusal writes nothing:
 
@@ -1176,6 +1181,7 @@ interface CheckRun {
 2. `candidateId` names no candidate: `-32001` `CANDIDATE_NOT_FOUND`, with `context.candidateId`. No candidate is ever created on the caller's behalf.
 3. `treeSha` is not exactly the candidate's tree: `-32002` `CHECK_RUN_TREE_MISMATCH`, with `context.candidateId`, `context.expectedTreeSha` and `context.actualTreeSha`.
 4. The id already holds a different run: `-32002` `CHECK_RUN_IMMUTABLE`, with `context.checkRunId` and `context.differingFields`.
+5. The id differs from a stored run's id only by case: `-32002` `CHECK_RUN_ID_CASE_COLLISION`, with `context.checkRunId` (the stored id) and `context.requestedId`.
 
 A failed write reaches the caller as an error, and the run is published nowhere.
 
@@ -1703,14 +1709,14 @@ function generateId(prefix: string): string {
 - Malformed or below-minimum values that reach the stored file by other means degrade to the defaults at resolve time rather than erroring
 
 ### Candidate
-- Immutable: no field changes after the first record. A same-id record that differs in any field is refused (`CANDIDATE_IMMUTABLE`); a byte-identical one is an idempotent no-op
+- Immutable: no field changes after the first record. A same-id record that differs in any field is refused (`CANDIDATE_IMMUTABLE`); a byte-identical one is an idempotent no-op. An `id` that differs from a stored candidate's id only by case is refused (`CANDIDATE_ID_CASE_COLLISION`)
 - `attemptId` must name an existing attempt of the same `taskId` (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`)
 - `baseRevision` and `treeSha` must be 7-40 hex characters. They are validated for shape only and never coerced
 - `deliveryTarget` must be non-blank, with no leading or trailing whitespace and no control characters, and at most 255 chars
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### Review
-- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included
+- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included. An `id` that differs from a stored review's id only by case is refused (`REVIEW_ID_CASE_COLLISION`)
 - `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
 - `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
 - `decision` must be exactly `approve` or `reject`
@@ -1718,7 +1724,7 @@ function generateId(prefix: string): string {
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### CheckRun
-- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included
+- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included. An `id` that differs from a stored run's id only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`)
 - `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
 - `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
 - `command` must be a non-blank string of at most 500 characters, stored verbatim

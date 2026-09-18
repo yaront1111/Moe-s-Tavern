@@ -693,7 +693,7 @@ All seven are required; `additionalProperties` is `false`.
 
 **Notes:**
 - **Fenced before anything is written.** The caller's `attemptId`, plus `generation` when supplied, goes through `assertAttemptCurrent`. A superseded or closed attempt is refused and leaves no candidate behind.
-- **Immutable.** A candidate is never edited, so a changed tree needs a **new** `id`. Re-recording an existing `id` with any field different is refused (`CANDIDATE_IMMUTABLE`).
+- **Immutable.** A candidate is never edited, so a changed tree needs a **new** `id`. Re-recording an existing `id` with any field different is refused (`CANDIDATE_IMMUTABLE`). So is an `id` that differs from an existing candidate's `id` only by case (`CANDIDATE_ID_CASE_COLLISION`): each record is one file, `<id>.json`, and NTFS and a default APFS volume treat the two names as one file. A stored id keeps the case it was given, and references to it match exactly.
 - **A byte-identical re-record is idempotent.** Re-recording an existing `id` with identical fields is safe: it returns the existing candidate (`duplicate: true`, original `createdAt`) and writes nothing. A runner that may retry after a crash should therefore choose the `id` itself and reuse it on the retry. If the daemon generated the id, a retry records a second candidate.
 - **The shas are runner-reported.** The daemon never consults git about them. It records `baseRevision` and `treeSha` exactly as reported and checks their shape only, and nothing in the record claims the daemon verified them.
 - `createdAt` is the daemon's clock. The tool emits no activity event, no chat line and no board broadcast, because nothing consumes one yet.
@@ -704,6 +704,7 @@ All seven are required; `additionalProperties` is `false`.
 - `-32001 TASK_NOT_FOUND`: unknown `taskId`
 - `-32001 ATTEMPT_NOT_FOUND` / `-32002 ATTEMPT_ID_TASK_MISMATCH`: the attempt does not exist, or belongs to another task. These are reachable only on a task with no attempt records, where the fence has nothing to compare against.
 - `-32002 CANDIDATE_IMMUTABLE`: the `id` already exists and a field differs. The message names the differing fields; record the change under a new id.
+- `-32002 CANDIDATE_ID_CASE_COLLISION`: the supplied `id` differs only by case from an existing candidate's `id`; supply a distinct id. `context.candidateId` is the stored id, `context.requestedId` the one sent.
 - `-32602 INVALID_INPUT`: a malformed field, such as a bad sha shape, a blank or padded `deliveryTarget`, an invalid `id`, a `generation` that is not a positive integer, or non-object arguments
 - `-32602 MISSING_REQUIRED`: `taskId`, `attemptId`, `baseRevision`, `treeSha` or `deliveryTarget` is absent or `null`
 
@@ -773,7 +774,7 @@ Sending the identical report again, for example after a runner crash, returns th
 - **Recorded, not approved.** `success: true` only acknowledges that the run was persisted. A nonzero `exitCode` is acknowledged exactly like a pass. The tool never marks a task `DONE`, never approves a review and never releases a dependent task.
 - **`source` is declared provenance.** The daemon never executes `command` and does not authenticate the caller, so `runner-observed` is what the report says, not proof that the command ran or of who ran it. `source` is required, never defaulted, and never inferred from `workerId`.
 - **Bound to one candidate's tree.** The candidate must exist and `treeSha` must be exactly its tree, with no prefix match and no case folding. No candidate is created on the caller's behalf, and a run recorded for one candidate or tree is never rebound to another.
-- **Immutable, with an idempotent retry.** Re-recording an existing `id` is compared field by field after normalization: the bounded tail, and `""` for an absent one. An identical report returns the stored run (`duplicate: true`, original `createdAt`) and writes nothing. Any difference is refused, so a changed result (another exit code, command, tail or source) is a new run and needs a fresh `id`. If the daemon generated the id, a retry records a second run.
+- **Immutable, with an idempotent retry.** Re-recording an existing `id` is compared field by field after normalization: the bounded tail, and `""` for an absent one. An identical report returns the stored run (`duplicate: true`, original `createdAt`) and writes nothing. Any difference is refused, so a changed result (another exit code, command, tail or source) is a new run and needs a fresh `id`. If the daemon generated the id, a retry records a second run. An `id` that differs from an existing run's `id` only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`), because on NTFS and a default APFS volume both name one file.
 - **Output tail: 16384 UTF-8 bytes, not characters.** The kept portion is the end of the log and always starts on a whole character; malformed input such as a lone UTF-16 surrogate is first normalized to U+FFFD. This bound is deliberately different from `complete_task`'s `verification.outputTail`, which still keeps the last 2000 characters. Details: docs/SCHEMA.md `## CheckRun`.
 - `createdAt` is the daemon's clock, never the caller's. The tool emits no activity event, no chat line and no board broadcast.
 - **No ownership, status or attempt gate.** The runner reports after `complete_task`, when QA may already hold the `REVIEW` task and the attempt may be closed. The tool is not `blocking`, so dispatch serializes it under the state mutex: two concurrent identical reports make one write and one `duplicate: true`.
@@ -783,6 +784,7 @@ Sending the identical report again, for example after a runner crash, returns th
 - `-32001 CANDIDATE_NOT_FOUND`: `candidateId` names no candidate
 - `-32002 CHECK_RUN_TREE_MISMATCH`: `treeSha` is not exactly the candidate's tree. The message names both trees.
 - `-32002 CHECK_RUN_IMMUTABLE`: the `id` already holds a different run. The message names the differing fields; record the change under a new id.
+- `-32002 CHECK_RUN_ID_CASE_COLLISION`: the same for a check run: the supplied `id` differs only by case from an existing run's `id`; supply a distinct id. `context.checkRunId` is the stored id, `context.requestedId` the one sent.
 - A failed write (a full disk, a permission error) reaches the caller as a `-32000` error carrying the write's message. No run is recorded or published, and no success is returned.
 
 ---

@@ -29,55 +29,87 @@
     {
       "stepId": "step-2",
       "description": "THE SHARED CHECK plus the candidate guard, in state/candidateStore.ts. It is the home the sibling stores already import from (checkRunStore, receiptStore and reviewStore all import it, and it imports none of them, so no cycle: stateModules.test.ts fails on a runtime cycle inside src/state).\n\n1. New export:\n     export function caseVariantId(ids: Iterable<string>, id: string): string | undefined\n   It returns the first stored id that is NOT equal to `id` but equals it after toLowerCase(), else undefined.\n   Its doc comment must carry the why: every record is persisted as <id>.json, NTFS and a default APFS volume treat 'Cand-1.json' and 'cand-1.json' as ONE file, the in-memory map is case-sensitive, so the same-id immutability check never sees the collision and the second write silently overwrites the first. After a reload only one record exists and every check run, review or receipt bound to the other one dangles.\n   Note in the comment that it is a linear scan and why that is fine: a record is written about once per landing, so the scan is nothing next to the write it guards.\n2. In recordCandidate, right after the exact-match branch ('const stored = state.candidates.get(id); if (stored) return ...'), add: if caseVariantId(state.candidates.keys(), id) returns an existing id, throw a MoeError(MoeErrorCode.STATE_CONFLICT, ..., { candidateId: <existing>, requestedId: <id> }, 'CANDIDATE_ID_CASE_COLLISION').\n   Message: `Candidate id <id> differs only by case from the existing candidate <existing>; each record is one file (<id>.json), and NTFS and a default APFS volume treat those two names as the same file, so recording this one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, and references match it exactly.`\n3. Order matters: the exact-id replay stays FIRST, so an idempotent retry after a crash is untouched, and the collision check runs before assertAttemptOfTask and before any write.\n4. Error handling: the new check only reads the in-memory map and throws the same MoeError shape as its neighbours, so every refusal still writes no file and publishes no event, and a caller sees one -32002 with a codeName it can branch on. The helper itself cannot throw.\n5. Add 'caseVariantId' to the export allowlist in state/candidateStore.test.ts, which task-31fe6dc8 also edits.\n6. Run the candidate test: it is GREEN now.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/candidateStore.ts",
         "packages/moe-daemon/src/state/candidateStore.test.ts"
       ],
-      "startedAt": "2026-09-18T22:24:18.687Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/candidateStore.test.ts"
+      ],
+      "note": "Guard written by the prior session of this seat and already on the branch in checkpoint 3adfc6c (cli-exit=1 sessions after it landed nothing of this task); re-verified on disk this session, worktree == HEAD for both files.\n- candidateStore.ts: new export caseVariantId(ids, id) (linear scan, doc comment carries the NTFS/APFS why and the ponytail-style cost note). recordCandidate: exact-id replay FIRST, then caseVariantId -> MoeError STATE_CONFLICT (-32002) codeName CANDIDATE_ID_CASE_COLLISION, context {candidateId: existing, requestedId: id}, before assertAttemptOfTask and before any write. recordCandidate JSDoc names the new order.\n- candidateStore.test.ts: 'caseVariantId' in the export allowlist; extra unit it() for caseVariantId (never returns the id itself).\n- Evidence: npx vitest run src/state/candidateStore.test.ts src/state/checkRunStore.test.ts -> candidateStore all green; checkRunStore 1 failed | 89 passed, the failing one is 'refuses an id that differs from a stored check run only by case' (\"expected a MoeError refusal, but the call succeeded\") = still RED until step-3, as planned.\n- Dirty paths not mine (peer/pre-existing, untouched): .moe/roles/*, .moe/skills/*, docs/roles/*, docs/skills/*, generated/skillFiles.ts, tools/startStep.ts, util/contextNextAction.ts, util/recommendSkill*.ts, .moe/tasks/task-808869c5*.json.",
+      "startedAt": "2026-09-18T22:24:18.687Z",
+      "completedAt": "2026-09-18T23:42:47.146Z"
     },
     {
       "stepId": "step-3",
       "description": "CHECK-RUN GUARD in state/checkRunStore.ts. Import caseVariantId from './candidateStore.js' (it already imports getCandidate from there) and apply it in recordCheckRun right after its exact-match branch, before the write.\n\nThrow MoeError(MoeErrorCode.STATE_CONFLICT, ..., { checkRunId: <existing>, requestedId: <id> }, 'CHECK_RUN_ID_CASE_COLLISION'), with the same message shape as the candidate one, reading 'Check run id ...' and 'the existing check run ...'.\n\nKeep the existing order: validate, assertTreeOfCandidate, exact-id replay or refusal, then this check. So a caller with a bad tree still gets CHECK_RUN_TREE_MISMATCH, and an exact-id retry still replays. Error handling matches the candidate store exactly: refuse before the write, one -32002, nothing persisted.\n\nRun the check-run test: GREEN.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/checkRunStore.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/checkRunStore.ts"
+      ],
+      "note": "checkRunStore.ts: imports caseVariantId from './candidateStore.js' (same import line as getCandidate/renderGot/SHA_RE). recordCheckRun order kept: validate -> assertTreeOfCandidate -> exact-id replay/CHECK_RUN_IMMUTABLE -> NEW caseVariantId(state.checkRuns.keys(), id) -> MoeError STATE_CONFLICT (-32002) codeName CHECK_RUN_ID_CASE_COLLISION, context {checkRunId: existing, requestedId: id}, message 'Check run id <id> differs only by case from the existing check run <existing>; ...' (same shape as the candidate one) -> write. Refusal happens before writeEntity, so nothing persisted. JSDoc of recordCheckRun names the new step. Edited with the built-in Edit tool (LF kept).\nRED->GREEN: before the edit 'refuses an id that differs from a stored check run only by case' failed ('expected a MoeError refusal, but the call succeeded'); after: npx vitest run src/state/checkRunStore.test.ts src/state/candidateStore.test.ts -> Test Files 2 passed, Tests 128 passed.",
+      "startedAt": "2026-09-18T23:42:51.054Z",
+      "completedAt": "2026-09-18T23:43:22.053Z"
     },
     {
       "stepId": "step-4",
       "description": "SIBLING HARDENING, reviewStore. Deliberately beyond the DoD's two stores, and called out here so a reviewer can weigh it: recordReview has the identical shape (optional caller-supplied id, exact-match map lookup, one <id>.json per record), so the same overwrite exists there. It is unreachable today, because qa_approve and qa_reject never pass an id, which is why it is hardening and not a second bug. Leaving the third sibling different is how this slice keeps drifting (see the copies task-31fe6dc8 had to re-align).\n\n1. state/reviewStore.ts: import caseVariantId and apply it in recordReview right after its exact-match branch, throwing MoeError(MoeErrorCode.STATE_CONFLICT, ..., { reviewId: <existing>, requestedId: <id> }, 'REVIEW_ID_CASE_COLLISION') with the same message shape and the same refuse-before-write ordering.\n2. tools/qaApprove.test.ts already drives recordReview directly (the REVIEW_IMMUTABLE tests use ids like 'review-x'). Add one it() there in the same style: a stored 'Review-1', then 'review-1' with a different summary, refused with REVIEW_ID_CASE_COLLISION, and state.reviews.size still 1.\n3. If a reviewer would rather keep this task to its DoD, this step can be dropped whole: nothing in the other steps depends on it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/reviewStore.ts",
         "packages/moe-daemon/src/tools/qaApprove.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/reviewStore.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts"
+      ],
+      "note": "Sibling hardening kept (plan step 4; droppable as a unit, nothing else depends on it).\nRED first: qaApprove.test.ts new it 'refuses an id that differs from a stored review only by case' (in 'reviewStore — refusals, list order and copies', after the REVIEW_IMMUTABLE it.each): stored 'Review-1', then 'review-1' with summary 'rewritten' -> expects -32002 REVIEW_ID_CASE_COLLISION, exact message, context {reviewId:'Review-1', requestedId:'review-1'}, reviews.size 1, getReview('Review-1') unchanged, file bytes unchanged, .moe/reviews == ['Review-1.json']. Before the guard: 'Error: expected a MoeError refusal, but the call resolved' (1 failed | 133 skipped).\nGREEN: reviewStore.ts imports caseVariantId from './candidateStore.js'; recordReview: exact-id replay/REVIEW_IMMUTABLE first, then caseVariantId(state.reviews.keys(), id) -> MoeError STATE_CONFLICT REVIEW_ID_CASE_COLLISION, before writeEntity. JSDoc names the step. npx vitest run src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/state/stateModules.test.ts -> 3 files, 158 passed (no runtime cycle: candidateStore still imports none of its siblings).",
+      "startedAt": "2026-09-18T23:43:24.878Z",
+      "completedAt": "2026-09-18T23:44:07.726Z"
     },
     {
       "stepId": "step-5",
       "description": "DOCS.\n1. docs/SCHEMA.md, in the Candidate, CheckRun and Review sections:\n   - In each interface block, extend the `id` comment: a caller-supplied id must match [A-Za-z0-9_-]{1,128} AND must not differ from an existing record's id only by case.\n   - In each Immutability or Append-only paragraph, add one sentence: ids are compared case-insensitively for EXISTENCE, because a record is one file, <id>.json, and NTFS and a default APFS volume treat 'Cand-1.json' and 'cand-1.json' as the same file. A colliding id is refused (CANDIDATE_ID_CASE_COLLISION, CHECK_RUN_ID_CASE_COLLISION, REVIEW_ID_CASE_COLLISION), a stored id keeps the case it was given, and reference fields such as candidateId are matched exactly.\n   - Say plainly what is NOT covered: records that already collided before this rule (two files written on a case-sensitive filesystem) are left alone, and an operator resolves those by hand.\n2. docs/MCP_SERVER.md: add the refusal to the error list of moe.record_candidate and moe.record_check_run, in their existing style:\n   `-32002 CANDIDATE_ID_CASE_COLLISION`: the supplied id differs only by case from an existing candidate's id; supply a distinct id.\n   `-32002 CHECK_RUN_ID_CASE_COLLISION`: the same for a check run.\n   Also extend each tool's 'Immutable' note with one clause, so the rule is where a reader of the tool contract meets it. No review tool takes an id, so nothing is added there.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "All edits with the built-in Edit tool (TOOL tier, in case either doc is peer-declared); git diff --stat: SCHEMA.md 22 +-, MCP_SERVER.md 6 +-, EOLs unchanged (SCHEMA w/crlf, MCP_SERVER w/lf, index lf).\ndocs/SCHEMA.md:\n- Candidate/Review/CheckRun interface `id` comments: must match [A-Za-z0-9_-]{1,128} AND must not differ from an existing record's id only by case.\n- Candidate: new paragraph after Immutability, '**Ids are compared case-insensitively for existence.**' - one file per record, NTFS/APFS same-file, refused -32002 CANDIDATE_ID_CASE_COLLISION with context.candidateId (stored) + context.requestedId, nothing written; rule holds on every filesystem; stored id keeps its case, references (a check run's candidateId) match exactly; check runs and reviews follow the same rule; NOT covered: records that already collided before this rule are left alone, an operator resolves them by hand.\n- Review Append-only paragraph and CheckRun Immutability paragraph: one sentence each naming REVIEW_ID_CASE_COLLISION / CHECK_RUN_ID_CASE_COLLISION and pointing to Candidate for the rule and what it does not cover.\n- CheckRun 'Refusals. Checked in this order' list: added item 5 CHECK_RUN_ID_CASE_COLLISION (after CHECK_RUN_IMMUTABLE, matching code order) - the list claims completeness, so leaving it out would be a doc-vs-code gap.\n- Validation-rules bullets (### Candidate/Review/CheckRun 'Immutable'/'Append-only'): one clause each with the codeName.\ndocs/MCP_SERVER.md: moe.record_candidate Immutable note + Errors entry '-32002 CANDIDATE_ID_CASE_COLLISION'; moe.record_check_run Immutable note + Errors entry '-32002 CHECK_RUN_ID_CASE_COLLISION' placed after CHECK_RUN_IMMUTABLE (the list is 'Checked in this order'). No review tool takes an id, so nothing added there.",
+      "startedAt": "2026-09-18T23:44:10.437Z",
+      "completedAt": "2026-09-18T23:45:42.644Z"
     },
     {
       "stepId": "step-6",
       "description": "VERIFY.\n1. cd packages/moe-daemon && npx tsc --noEmit: prints nothing.\n2. cd packages/moe-daemon && npm test: green. A file that flakes under fleet load is rerun alone and reported (mem:moes-test-env-quirks).\n3. Prove the guard is in all three stores and nowhere else: grep -rn 'caseVariantId' packages/moe-daemon/src --include=*.ts. Expect the definition plus one call in each of candidateStore, checkRunStore and reviewStore. Paste it.\n4. Prove the file-level effect on this box, which is NTFS, so it is the real platform: in a scratch project, record 'Cand-1' then 'cand-1' through the store and confirm .moe/candidates has exactly one file and the first record's bytes are unchanged. A two-line node script against a ToolTestHarness-style temp dir is enough; do not add it to the suite.\n5. For complete_task, verification is 'cd packages/moe-daemon && npm test' with its tail as outputTail.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY (no repo files changed in this step).\n1. cd packages/moe-daemon && npx tsc --noEmit -> no output, exit 0.\n2. cd packages/moe-daemon && npm test (MOE_PROJECT_PATH/MOE_WORKER_ID unset) -> exit 0, 'Test Files 122 passed (122) / Tests 2150 passed (2150)', 16.17s. Count check: 2145 baseline (task-31fe6dc8 clean export) + 4 new its here (candidate case refusal, caseVariantId unit, check-run case refusal, review case refusal) = 2149, +1 from a peer's dirty util/recommendSkill.test.ts = 2150. No flakes.\n3. git grep -n caseVariantId -- 'packages/moe-daemon/src/*.ts': definition candidateStore.ts:194; calls candidateStore.ts:256, checkRunStore.ts:270, reviewStore.ts:155; imports checkRunStore.ts:37, reviewStore.ts:37; tests candidateStore.test.ts:6,218-223,257. Nowhere else.\n4. NTFS proof (C: and D: are NTFS): scratch tsx script OUTSIDE the repo (%TEMP%, deleted afterwards) on a ToolTestHarness temp dir, through recordCandidate:\n   - 'cand-1.json resolves to the Cand-1 file on this volume: true'\n   - 'refused: -32002 CANDIDATE_ID_CASE_COLLISION {\"candidateId\":\"Cand-1\",\"requestedId\":\"cand-1\"}'\n   - 'after refusal -> files: [ Cand-1.json ] | map size: 1 | Cand-1 bytes unchanged: true'\n   - control, the write the OLD code made (state.writeEntity('candidates','cand-1',...)): 'files: [ cand-1.json ] | Cand-1 bytes unchanged: false' -> the rename replaces the Cand-1 file (even taking the new name), which is the reported overwrite, reproduced on this box.\n5. complete_task verification will be 'cd packages/moe-daemon && npm test' with its tail.",
+      "startedAt": "2026-09-18T23:45:44.970Z",
+      "completedAt": "2026-09-18T23:47:26.415Z"
     },
     {
       "stepId": "step-7",
       "description": "SELF-REVIEW, posted as a task comment:\n1. Does an exact-id retry still replay byte-identically, and does a differing exact-id record still get CANDIDATE_IMMUTABLE, CHECK_RUN_IMMUTABLE or REVIEW_IMMUTABLE? The new check must run AFTER that branch.\n2. Does any refusal write a file or publish an event? All three refuse before the write.\n3. Do reference lookups still match exactly? A check run naming 'cand-1' when the candidate is 'Cand-1' still gets CANDIDATE_NOT_FOUND, which is the honest answer; explain why normalizing ids instead would have forced every reference field to normalize too.\n4. The scan is over the whole store map. Say what n is in practice and why it is irrelevant here.\n5. What about records that ALREADY collide from a case-sensitive filesystem? Named as out of scope in docs/SCHEMA.md; confirm the wording is there.\n6. Do the wrappers still work unchanged? They generate lowercase cand-<uuid> and check-<uuid> ids, so no live seat can hit this refusal; confirm nothing in scripts/ needs a change.\n7. git diff --stat: only the 8 planned files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review posted as comment-c062b727bb7f4e0b84fe73260bd711b9 and covers all 7 plan items:\n- exact-id branch runs first in all 3 stores;\n- nothing is written on refusal;\n- references still match exactly (normalizing ids was rejected);\n- the scan's n is hundreds to low thousands, so its cost is irrelevant;\n- the pre-collided-records wording is in SCHEMA.md;\n- wrappers mint lowercase uuid ids (ps1:3703,3710; sh:3878,3895) and need no change;\n- the diff is exactly the 8 planned files.\nExtra checks: only these 3 stores accept a caller id (receipts and attempts are daemon-generated), validateEntityId is ASCII-only, and reserved device names are harmless on this Win11 build. Workers and resources share the one-file-per-caller-id layout and are noted as out of scope.\nNo repo files changed in this step.",
+      "startedAt": "2026-09-18T23:47:30.286Z",
+      "completedAt": "2026-09-18T23:49:48.853Z"
     }
   ],
-  "planRevision": 4,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3c030e77",
+  "planRevision": 15,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,15 +118,22 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 212.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-c062b727bb7f4e0b84fe73260bd711b9",
+      "author": "worker-3c030e77",
+      "content": "SELF-REVIEW (step-7), worker-3c030e77\n1. Exact-id first: in recordCandidate / recordCheckRun / recordReview the `map.get(id)` branch (replay, or *_IMMUTABLE) still returns/throws BEFORE caseVariantId runs. The existing replay and CANDIDATE_/CHECK_RUN_/REVIEW_IMMUTABLE tests are untouched and green (full suite 2150/2150). A crash retry that reuses its own id is unaffected.\n2. No write on refusal: each throw sits before writeEntity and map.set, and the stores publish no events. The 3 new tests assert map size 1, unchanged bytes and a one-file directory. NTFS scratch proof: the refusal left `[Cand-1.json]` with its bytes intact. The control write the old code made (writeEntity 'cand-1') replaced that file.\n3. References stay exact: getCandidate is `candidates.get(candidateId)`, so a check run naming 'cand-1' for a stored 'Cand-1' gets CANDIDATE_NOT_FOUND. That is the honest answer. Normalizing ids instead would have changed the stored id away from what the caller sent, which breaks the wrapper's echo check. It would also have forced every reference to normalize: check-run candidateId, review and receipt candidateId, the delivery projection and policy lookups. Otherwise a caller that recorded 'Cand-1' would get NOT_FOUND for its own candidate.\n4. Scan cost: n is the number of records of that kind in the project. Wrappers record about 1 candidate and 1 or 2 check runs per landing, so n is hundreds to low thousands over a project's life. The cost is one toLowerCase per stored id (at most 128 ASCII chars), which is microseconds, next to an atomic temp-file-and-rename write. It runs under state.mutex like the existing same-id check, so there is no new race.\n5. Pre-existing collisions: SCHEMA.md `## Candidate` states that records that already collided before this rule (two files written on a case-sensitive filesystem) are left alone and resolved by an operator by hand. The Review and CheckRun paragraphs point to it.\n6. Wrappers need no change: ps1 mints `'cand-'+[guid]::NewGuid().ToString('N')` / `'check-'+...` (moe-agent.ps1:3703,3710), and sh mints `uuid.uuid4().hex` (moe-agent.sh:3878,3895). Both are lowercase and unique, so no live seat can hit these refusals, and a retry reuses the same id through the exact-id replay. Nothing in scripts/ changed.\n7. Diff: exactly the 8 planned files. Checkpoint 3adfc6c has candidateStore.ts, candidateStore.test.ts and checkRunStore.test.ts. The worktree has checkRunStore.ts, reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md and docs/MCP_SERVER.md. No other commit touched them since 3adfc6c~1.\nOther checks:\n- Only these 3 stores take a caller id (`?? generateId(`). Receipts always generate theirs, and attempts get an id only from the claim path, which never passes one.\n- validateEntityId is ASCII-only `[a-zA-Z0-9_-]`, so toLowerCase folding is exact.\n- CON/NUL/AUX/COM1/LPT1 + .json write and rename as ordinary files on this Win11 build, so that is not a second hazard here.\nOut of scope, noted for an architect: workers (`.moe/workers/<id>.json`, id from MOE_WORKER_ID) and resources (`.moe/resources/<id>.json`, mixed-case ids allowed) use the same one-file-per-caller-id layout. They are mutable records, so this refuse-on-create guard does not transfer as is.\nLanding note: docs/MCP_SERVER.md is peer-declared by task-d5b7e6a2 (contested, skip-untouched). It was written with the built-in Edit tool in this session so it lands as TOOL tier, and the file holds only this task's 4 hunks. QA: `git show --stat <completion sha>` should list MCP_SERVER.md.",
+      "timestamp": "2026-09-18T23:49:43.844Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T20:45:48.838Z",
-  "updatedAt": "2026-09-18T23:26:38.974Z",
+  "updatedAt": "2026-09-18T23:50:28.432Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T21:29:51.250Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 1
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
@@ -107,7 +146,13 @@
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-18T21:34:55.307Z",
@@ -257,12 +302,14 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
-    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
     "packages/moe-daemon/src/state/candidateStore.test.ts",
-    "packages/moe-daemon/src/state/candidateStore.ts",
     "packages/moe-daemon/src/state/checkRunStore.test.ts",
-    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json"
+    "packages/moe-daemon/src/state/candidateStore.ts",
+    "packages/moe-daemon/src/state/checkRunStore.ts",
+    "packages/moe-daemon/src/state/reviewStore.ts",
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/state/checkRunStore.test.ts",
@@ -275,5 +322,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-3c030e77@2026-09-18T23:26:33Z",
     "at": "2026-09-18T23:26:38.974Z"
-  }
+  },
+  "reviewStartedAt": "2026-09-18T23:50:28.430Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "npx tsc --noEmit -> exit 0 (no output)\nnpm test (MOE_PROJECT_PATH/MOE_WORKER_ID unset) -> exit 0\n Test Files  122 passed (122)\n      Tests  2150 passed (2150)\n   Start at  02:50:01\n   Duration  14.31s (tests 88%, transform 8%, import 4%)\n2150 = 2145 baseline + 4 new tests from this task + 1 from a peer's dirty util/recommendSkill.test.ts",
+    "reportedAt": "2026-09-18T23:50:28.430Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Case-variant record ids are now refused instead of silently overwriting a file on NTFS/APFS.\n- candidateStore.ts: new export caseVariantId(ids, id), a linear scan that returns the stored id differing from `id` only by case. recordCandidate refuses such an id with -32002 CANDIDATE_ID_CASE_COLLISION, context {candidateId: stored, requestedId}. The check runs AFTER the exact-id replay/CANDIDATE_IMMUTABLE branch and before the attempt check and any write.\n- checkRunStore.ts: the same guard, CHECK_RUN_ID_CASE_COLLISION, context {checkRunId, requestedId}. It runs after assertTreeOfCandidate and the exact-id branch.\n- reviewStore.ts: REVIEW_ID_CASE_COLLISION, planned sibling hardening (step 4). No tool passes a review id today.\nStored ids keep their case, and references still match exactly, so nothing is normalized.\n- Tests, one per store, each RED on the old code ('the call succeeded'/'resolved'):\n  - candidateStore.test.ts: refusal for different and for identical content, plus a caseVariantId unit test and the export-allowlist entry;\n  - checkRunStore.test.ts: refusal with the candidate binding kept valid;\n  - qaApprove.test.ts: review refusal.\n  Each asserts map size 1, unchanged bytes and a one-file directory.\n- Docs:\n  - SCHEMA.md: id comments, the Candidate rule paragraph (why it exists, stored case kept, references exact, pre-collided records out of scope), Review/CheckRun sentences, the CheckRun refusal list item 5, and the validation bullets.\n  - MCP_SERVER.md: Immutable notes and error entries for record_candidate and record_check_run.\n- NTFS proof (scratch script, not in the suite): the guard leaves [Cand-1.json] with its bytes intact. The old-code write replaces that file.\n- Wrappers mint lowercase uuid ids and need no change.\nLanding: steps 1-2 are in checkpoint 3adfc6c; steps 3-5 are in the worktree (5 paths). docs/MCP_SERVER.md is peer-declared by task-d5b7e6a2 and was written with the built-in Edit tool (TOOL tier). QA: `git show --stat <completion sha>` sh"
 }

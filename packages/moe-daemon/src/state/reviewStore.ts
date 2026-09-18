@@ -34,7 +34,7 @@ import type { Review, ReviewDecision } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
-import { listCandidatesForTask, renderGot } from './candidateStore.js';
+import { caseVariantId, listCandidatesForTask, renderGot } from './candidateStore.js';
 
 /** The only two decisions a review may carry. A third value is refused, never coerced. */
 const DECISIONS: readonly ReviewDecision[] = ['approve', 'reject'] as const;
@@ -139,9 +139,10 @@ function replayOrRefuse(stored: Review, incoming: RecordReviewParams): Review {
 
 /**
  * Append one review. In order: validate without coercing; replay or refuse a
- * same-id record; then persist BEFORE publishing. createdAt is the daemon's
- * clock, never the caller's. There is no counterpart that edits or removes what
- * this writes, and a reused id cannot become one.
+ * same-id record; refuse an id that differs from a stored one only by case
+ * (REVIEW_ID_CASE_COLLISION); then persist BEFORE publishing. createdAt is the
+ * daemon's clock, never the caller's. There is no counterpart that edits or
+ * removes what this writes, and a reused id cannot become one.
  */
 export async function recordReview(
   state: StateManager,
@@ -151,6 +152,18 @@ export async function recordReview(
   const id = input.id ?? generateId('review');
   const stored = state.reviews.get(id);
   if (stored) return replayOrRefuse(stored, input);
+  const existing = caseVariantId(state.reviews.keys(), id);
+  if (existing) {
+    throw new MoeError(
+      MoeErrorCode.STATE_CONFLICT,
+      `Review id ${id} differs only by case from the existing review ${existing}; each record is one file ` +
+        '(<id>.json), and NTFS and a default APFS volume treat those two names as the same file, so recording this ' +
+        'one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, and ' +
+        'references match it exactly.',
+      { reviewId: existing, requestedId: id },
+      'REVIEW_ID_CASE_COLLISION'
+    );
+  }
 
   const review: Review = {
     id,
