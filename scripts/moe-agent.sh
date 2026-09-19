@@ -426,6 +426,7 @@ elif [ "$CMD_BASE" = "gemini" ]; then
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
 fi
+
 # Codex is interactive (TUI) for every role unless --codex-exec opts the seat
 # into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
 # default to exec because the codex TUI never exits on its own, so an
@@ -626,6 +627,13 @@ PROJECT=$(normalize_path "$PROJECT")
 
 # Resolve to absolute path
 PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd || echo "$PROJECT")
+
+# Shared policy applies to every resolved project before task claim/model calls.
+PROMPT_CACHE_HELPER="$SCRIPT_DIR/prompt-cache.mjs"
+if [ "$CLI_TYPE" = "claude" ] || [ "$CLI_TYPE" = "codex" ]; then
+    parse_command_into_argv "$COMMAND"
+    "$NODE_CMD" "$PROMPT_CACHE_HELPER" check "$CLI_TYPE" "$PROJECT" "${COMMAND_ARGV[@]}" || exit 1
+fi
 if [ ! -d "$PROJECT" ]; then
     echo -e "${RED}Project path not found: $PROJECT${NC}"
     if is_wsl; then
@@ -902,7 +910,7 @@ reasoning_effort = sys.argv[8] if len(sys.argv) > 8 else "xhigh"
 top_level_lines = [
     'model_instructions_file = "agent-instructions.md"',
     'model_reasoning_effort = ' + json.dumps(reasoning_effort),
-    'developer_instructions = """You are a ' + role + ' agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly."""',
+    'developer_instructions = """You are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly."""',
 ]
 top_level_block = "\n".join(top_level_lines)
 
@@ -2386,17 +2394,31 @@ sys.stdout.write('\x1f'.join(fields) + '\x1f')
     return 0
 }
 
-# git_top -- resolve TOP / REL / GITDIR for $PROJECT. Returns 1 when not a repo.
+# git_top -- resolve TOP / REL / GITDIR for $PROJECT. Returns 1 when not a repo,
+# and for a sha256 repository: Moe's delivery records hold SHA-1 ids only, so such
+# a project lands nothing, exactly as a no-git one, and the wrapper says so once
+# (a hot reload starts over). See docs/CONFIGURATION.md autoCommit. Twin: Get-MoeGitTop.
+MOE_OBJECT_FORMAT_WARNED=false
 git_top() {
     MOE_TOP=""
     MOE_REL=""
     MOE_GITDIR=""
-    local top rel gitdir
+    local top rel gitdir fmt
     top=$(git -C "$PROJECT" rev-parse --show-toplevel 2>/dev/null) || top=""
     [ -n "$top" ] || return 1
     rel=$(git -C "$PROJECT" rev-parse --show-prefix 2>/dev/null) || rel=""
     gitdir=$(git -C "$PROJECT" rev-parse --absolute-git-dir 2>/dev/null) || gitdir=""
     [ -n "$gitdir" ] || return 1
+    # Any other answer proceeds: a git older than 2.29 echoes the unknown flag
+    # back, and it cannot open a sha256 repository anyway.
+    fmt=$(git -C "$PROJECT" rev-parse --show-object-format 2>/dev/null) || fmt=""
+    if [ "$fmt" = "sha256" ]; then
+        if [ "$MOE_OBJECT_FORMAT_WARNED" != true ]; then
+            MOE_OBJECT_FORMAT_WARNED=true
+            echo -e "${YELLOW}[WARN]${NC} MOE_COMMIT_REFUSED_OBJECT_FORMAT: $top uses the sha256 object format; Moe's delivery records hold SHA-1 ids only, so this seat lands nothing there, as in a no-git project."
+        fi
+        return 1
+    fi
     MOE_TOP="$top"
     MOE_REL="$rel"
     MOE_GITDIR="$gitdir"
@@ -5204,7 +5226,9 @@ teardown_rescue() {
     LAND_RESCUE_SHA=""
     LAND_OUTCOME=nothing
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
-    git -C "$PROJECT" rev-parse --show-toplevel >/dev/null 2>&1 || return 0
+    # Through the probe, in a subshell so MOE_TOP stays as the session left it:
+    # a sha256 repository it refuses is a no-git exit, not a failed one.
+    [ -n "${MOE_TOP:-}" ] || (git_top) || return 0
     LAND_OUTCOME=failed
     [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
     [ -f "$(baseline_path "$tid")" ] || return 0
@@ -6090,9 +6114,10 @@ $ROLE_DOC"
     # present. Full manifest is on disk at .moe/skills/manifest.json if the agent
     # ever needs to browse what's available; we don't dump it into the prompt.
 
-    # Append known issues
+    # Team identity and live issue context are not part of the reusable prefix.
+    SESSION_SETTINGS=""
     if [ -n "$KNOWN_ISSUES" ]; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
+        SESSION_SETTINGS="$SESSION_SETTINGS
 
 # Known Issues
 $KNOWN_ISSUES"
@@ -6100,7 +6125,7 @@ $KNOWN_ISSUES"
 
     # Append team context
     if [ -n "$TEAM_CONTEXT" ]; then
-        SYSTEM_APPEND="$SYSTEM_APPEND
+        SESSION_SETTINGS="$SESSION_SETTINGS
 
 # Team
 $TEAM_CONTEXT"
@@ -6247,6 +6272,8 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
 If moe.wait_for_task returns hasChatMessage:true, your NEXT calls MUST be moe.chat_read on chatMessage.channel, then moe.chat_send with your reply, THEN moe.wait_for_task again. Do not claim a new task while a routed mention is unanswered.
 If hasPendingQuestion:true, call moe.get_pending_questions and answer with moe.add_comment."
     fi
+    DYNAMIC_CONTEXT="$SESSION_SETTINGS
+$DYNAMIC_CONTEXT"
 
     # Priority banner for unread messages routed at THIS worker. Goes LAST in
     # the dynamic context so it's the most recent text before the role-specific
@@ -6379,6 +6406,10 @@ $PROMPT_BODY"
         MOE_SKIP_LAUNCH=true
     fi
 
+    if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ] || [ "$CLI_TYPE" = codex ]; }; then
+        # Settings can change between tasks in a long-lived wrapper.
+        "$NODE_CMD" "$PROMPT_CACHE_HELPER" check "$CLI_TYPE" "$PROJECT" "${COMMAND_ARGV[@]}" || exit 1
+    fi
     CLI_LAUNCHED_AT=$(date +%s)
     start_heartbeat_sidecar "$WORKER_ID"
 
@@ -6396,22 +6427,18 @@ $PROMPT_BODY"
             exit 1
         fi
 
-        # Keep the identity-free role document in the project for Codex's
-        # project-doc fallback, but never use it for per-seat context. Two
-        # concurrent seats can overwrite this shared file between launch and
-        # Codex's read, so each process also gets a private instructions file
-        # passed through model_instructions_file below.
+        # Keep the shared fallback role-neutral so another seat cannot change
+        # this seat's prefix. Role instructions and task context are private,
+        # separate files; only stable instructions become model_instructions_file.
         AGENT_INSTRUCTIONS_PATH="$PROJECT/.codex/agent-instructions.md"
         mkdir -p "$(dirname "$AGENT_INSTRUCTIONS_PATH")"
-        printf '%s' "$SYSTEM_APPEND" > "$AGENT_INSTRUCTIONS_PATH"
+        printf '%s' 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.' > "$AGENT_INSTRUCTIONS_PATH"
         CODEX_SEAT_INSTRUCTIONS_FILE="$(create_secure_temp)/moe-codex-instructions-${ROLE}-$$.md"
         CODEX_FILE_BODY="$SYSTEM_APPEND"
         CODEX_USES_FILE_CONTEXT=false
+        CODEX_SESSION_CONTEXT_FILE="$(dirname "$CODEX_SEAT_INSTRUCTIONS_FILE")/session-context.md"
         if [ -n "$DYNAMIC_CONTEXT" ]; then
-            CODEX_FILE_BODY="$CODEX_FILE_BODY
-
-# Session Context (per-iteration)
-$DYNAMIC_CONTEXT"
+            printf '%s' "$DYNAMIC_CONTEXT" > "$CODEX_SESSION_CONTEXT_FILE"
             CODEX_USES_FILE_CONTEXT=true
         fi
         printf '%s' "$CODEX_FILE_BODY" > "$CODEX_SEAT_INSTRUCTIONS_FILE"
@@ -6420,8 +6447,8 @@ $DYNAMIC_CONTEXT"
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
         # 1. AGENTS.md → loaded automatically as project docs (generic project context)
-        # 2. .codex/agent-instructions.md → loaded via model_instructions_file (full role doc + agent context + pre-flight results)
-        # 3. developer_instructions in config.toml → injected into session (role identity reinforcement)
+        # 2. model_instructions_file → private stable role instructions
+        # 3. developer_instructions in config.toml → stable role-neutral Moe guidance
         # 4. SHORT_PROMPT below → the user message prompt (role-aware first action)
         if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ]; then
             SHORT_PROMPT="$PROMPT"
@@ -6445,13 +6472,13 @@ $DYNAMIC_CONTEXT"
 
         # When pre-flight produced per-task context, keep arbitrary task JSON
         # and routed-message text out of native argv. The private file is the
-        # Codex system-instructions source; the user prompt only carries the
-        # role directive (or a pointer when there is no role body).
+        # user-context source; the user prompt carries a pointer and directive.
         if [ "$CODEX_USES_FILE_CONTEXT" = true ]; then
+            CONTEXT_POINTER="First read the private session context file at $CODEX_SESSION_CONTEXT_FILE. It contains your task binding, inbox and routed mentions."
             if [ -n "$PROMPT_BODY" ]; then
-                SHORT_PROMPT="$PROMPT_BODY"
+                SHORT_PROMPT="$CONTEXT_POINTER $PROMPT_BODY"
             else
-                SHORT_PROMPT="Session context (routed mentions, pre-flight data) is in $CODEX_SEAT_INSTRUCTIONS_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
+                SHORT_PROMPT="$CONTEXT_POINTER If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
             fi
         fi
 
@@ -6516,7 +6543,7 @@ $DYNAMIC_CONTEXT"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
@@ -6536,7 +6563,7 @@ $DYNAMIC_CONTEXT"
             echo ""
             # The banner is the line the launch-failure hint tells the operator to re-run by
             # hand, so it carries every argv token the real launch does (ps1 twin parity).
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID ${CODEX_EXEC_OVERRIDES[*]} exec -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
             set +e
 
             # Per-seat overrides on argv (PS twin parity): codex does not
@@ -6546,9 +6573,9 @@ $DYNAMIC_CONTEXT"
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
                 -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
-                "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"
+                "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
-            CLI_EXIT_CODE=$?
+            CLI_EXIT_CODE=${PIPESTATUS[0]}
 
             set -e
         else
@@ -6571,6 +6598,7 @@ $DYNAMIC_CONTEXT"
         # wrapper. The EXIT trap also removes the secure temp directory on
         # signals and other process exits.
         rm -f "$CODEX_SEAT_INSTRUCTIONS_FILE" 2>/dev/null || true
+        rm -f "$CODEX_SESSION_CONTEXT_FILE" 2>/dev/null || true
     elif [ "$CLI_TYPE" = "gemini" ]; then
         # Check gemini is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
@@ -7051,7 +7079,7 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "$PROMPT")
@@ -7063,7 +7091,7 @@ PYEOF
             set +e
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" 2>&1) | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max)

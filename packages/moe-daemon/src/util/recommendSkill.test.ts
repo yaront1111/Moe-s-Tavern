@@ -30,6 +30,13 @@ describe('recommendSkillFor', () => {
     });
   });
 
+  it('recommends ponytail for worker on a mid-plan implementation step', () => {
+    expect(recommendSkillFor('worker', 'implementation_step')).toMatchObject({
+      name: 'ponytail',
+      reason: expect.any(String),
+    });
+  });
+
   it('recommends adversarial-self-review for worker on the final step', () => {
     expect(recommendSkillFor('worker', 'final_step')).toMatchObject({
       name: 'adversarial-self-review',
@@ -71,6 +78,7 @@ describe('recommendSkillFor', () => {
       ['architect', 'before_submit_plan'],
       ['worker', 'first_start_step'],
       ['worker', 'test_step'],
+      ['worker', 'implementation_step'],
       ['worker', 'final_step'],
       ['worker', 'before_complete_task'],
       ['worker', 'task_blocked'],
@@ -95,6 +103,7 @@ describe('recommendSkillFor', () => {
       'moe-epic-breakdown',
       'moe-planning',
       'moe-qa-loop',
+      'ponytail',
       'receiving-code-review',
       'systematic-debugging',
       'test-driven-development',

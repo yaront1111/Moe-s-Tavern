@@ -25,10 +25,10 @@ import type { ProviderDescriptor } from './providerDescriptor.js';
 const BASH_LAUNCH_INTERACTIVE =
   '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" -C "$PROJECT" "$SHORT_PROMPT"';
 const BASH_LAUNCH_EXEC =
-  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"';
+  '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"';
 const PS_LAUNCH_INTERACTIVE = '& $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"';
 const PS_LAUNCH_EXEC =
-  '& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs "$shortPrompt"';
+  '& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"';
 /** PowerShell builds the per-seat overrides once and splats them into both launches. */
 const PS_SEAT_ARG_WORKER_ID = '$codexSeatArgs += @(\'-c\', "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId")';
 const PS_SEAT_ARG_INSTRUCTIONS = "$codexSeatArgs += @('-c', \"model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\\', '/'))\")";
@@ -99,8 +99,8 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
       'exec-headless': {
         agreement: 'shared',
         // `[--sandbox <mode>]` is the scripts' own notation: MOE_CODEX_SANDBOX=inherit omits the flag.
-        value: ['-c', 'model_instructions_file=<seat file>', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=<workerId>', '-c', 'approvals_reviewer=user', 'exec', '-C', '<project>', '[--sandbox <mode>]', '<prompt>'],
-        presentInBoth: ['approvals_reviewer=user', 'exec -C', '--sandbox'],
+        value: ['-c', 'model_instructions_file=<seat file>', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=<workerId>', '-c', 'approvals_reviewer=user', 'exec', '--json', '-C', '<project>', '[--sandbox <mode>]', '<prompt>'],
+        presentInBoth: ['approvals_reviewer=user', 'exec --json', '--sandbox'],
         emitterEvidence: { bash: [BASH_LAUNCH_EXEC], powershell: [PS_LAUNCH_EXEC] },
       },
     },
@@ -155,8 +155,8 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
     },
     promptDelivery: {
       agreement: 'shared',
-      value: 'a positional argv string; per-iteration context travels in the seat instructions file, not on argv',
-      presentInBoth: ['Session context (routed mentions, pre-flight data) is in '],
+      value: 'a positional user directive references a private task-context file; model instructions contain stable role text only',
+      presentInBoth: ['First read the private session context file at '],
     },
   },
 
@@ -196,7 +196,7 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
         agreement: 'divergent',
         bash: 'developer_instructions = """<the sentence on one line>"""',
         powershell: 'developer_instructions = """<newline><the sentence><newline>"""',
-        onlyInBash: ['developer_instructions = """You are a '],
+        onlyInBash: ['developer_instructions = """You are an agent '],
         onlyInPowershell: ['developer_instructions = """`n'],
         divergenceReason:
           'Same key and same sentence, different bytes: the PowerShell here-string wraps the value in literal newlines. Harmless today, but it means the config the two wrappers write is not byte-identical.',
@@ -443,8 +443,8 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
           // bash (the two launches are the others); pin it so a change there
           // cannot slip past the per-mode launch literals.
           emitterEvidence: {
-            bash: ['-c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1'],
-            powershell: ['(& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)'],
+            bash: ['-c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1'],
+            powershell: ['(& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)'],
           },
         },
         escalation: {

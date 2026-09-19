@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=e6856d2d3801 -->
+<!-- moe-generated: sha=b0ef035a319f -->
 
 # Worker — Reference
 
@@ -10,6 +10,7 @@ Deep-dive material trimmed out of `worker.md`. Read this on demand; it is not lo
 |---|---|
 | "This step is trivial, I can skip TDD/explore/etc." | Simple steps fail when skills are skipped. |
 | "I already know what this skill says" | Skills evolve. Read the current version. |
+| "ponytail says YAGNI, so I can skip this step" | No. The plan, the DoD and the rails are the requested tier. A step you believe is pointless is a `complete_step { note }`, a `report_blocked`, or a `propose_rail` — never a silent skip. |
 | "I'll run adversarial-self-review mentally instead of loading it" | No — load it and walk the checklist. |
 | "I can ship without verification-before-completion" | You can't. No complete-claim without fresh evidence. |
 | "receiving-code-review is just common sense, I'll just fix the feedback" | That's exactly the failure the skill prevents. Load it first. |
@@ -20,6 +21,7 @@ Deep-dive material trimmed out of `worker.md`. Read this on demand; it is not lo
 |-------|-------|--------------|
 | First step in unfamiliar code | `explore-before-assume` | Before referencing any symbol you haven't grepped for |
 | Test-touching step | `test-driven-development` | RED-GREEN-REFACTOR with mutation-resistant assertions |
+| Any other implementation step | `ponytail` | Climb the ladder before you write code: reuse what this repo has, then stdlib, then native, then one line. Never trims a plan step, a DoD item, or a rail — those are requested work |
 | Stuck on a bug or repeated step failure | `systematic-debugging` | 4-phase root-cause method, before proposing fixes |
 | Final step before `complete_step` | `adversarial-self-review` | Read your own diff as an attacker — concurrency, null, embarrassment checklist |
 | Before `complete_task` | `regression-check` | Run the broader suite; capture counts in your summary |

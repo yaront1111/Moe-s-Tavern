@@ -20,6 +20,17 @@ const manifest = bundle ? path.join(bundle, 'daemon/package.json') : path.join(r
 const expectedVersion = JSON.parse(fs.readFileSync(manifest, 'utf8')).version;
 assert.ok(fs.existsSync(daemonEntry), 'Build moe-daemon first');
 assert.ok(fs.existsSync(proxyEntry), 'Build moe-proxy first');
+if (bundle) {
+  const cacheHelper = path.join(bundle, 'scripts/prompt-cache.mjs');
+  for (const file of ['prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs']) {
+    assert.ok(fs.existsSync(path.join(bundle, 'scripts', file)), `Missing bundled ${file}`);
+  }
+  const report = execFileSync(process.execPath, [cacheHelper, 'codex-stream'], {
+    input: JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 900 } }),
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.match(report, /provider=codex input=1000 read=900 write=unknown uncached=100 hit=90.0%/);
+}
 const require = createRequire(proxyEntry);
 const WebSocket = require('ws');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-onboarding-'));

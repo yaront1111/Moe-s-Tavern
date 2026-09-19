@@ -1262,7 +1262,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=343fb92202cb
+# moe-generated: sha=7ff6711d0f28
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1278,6 +1278,8 @@ Your job: turn the task in front of you into an implementation plan that a worke
 Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct \`affectedFiles\`**, the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. \`moe.submit_plan\` returns \`warnings\` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with \`CONSTRAINT_VIOLATION\` (thresholds: \`project.json\` \`settings.taskSizing\`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
 
 Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via \`moe-epic-breakdown\` (SPIDR split) and narrow this task to the first slice — or \`moe.report_blocked\` with the proposed split if the task isn't yours to split.
+
+Then shrink what survives. Load \`ponytail\` before drafting: a step that reuses an existing helper, a stdlib call, or a native platform feature is one step where a hand-rolled equivalent is four — the ladder is the cheapest route under the size cap. It shortens the solution, never the reading, and it never trims a DoD item, a rail, or a verification step: those are requested work.
 
 ## Where the gate goes — read this before drafting steps
 
@@ -1371,7 +1373,7 @@ Skip aggressively for genuinely trivial work. A typo fix doesn't need 8 steps.
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
-# moe-generated: sha=ba3961f3fd71
+# moe-generated: sha=289b623b6490
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
@@ -1450,6 +1452,15 @@ Bad rejects produce ping-pong. Good rejects produce one round-trip.
 - **Never approve "with notes."** Either it's done or it's not. If you have notes, reject and let the worker address them.
 - **Never re-write the worker's code in your reject message.** Describe the gap, don't fix it for them — they need the practice.
 
+## Second pass: complexity
+
+Once the verdict is settled on correctness, run \`ponytail-review\` over the same diff — a complexity-only pass
+(\`delete:\` / \`stdlib:\` / \`native:\` / \`yagni:\` / \`shrink:\`, one line per finding). Route the findings, don't just list them:
+
+- Breaches a rail or a DoD item → a real \`rejectionDetails\` entry.
+- Leaner but equally correct → the \`qa_approve { summary }\`, or a follow-up card via \`moe.create_task\`. Taste is never grounds for a reject (see above), and a needless reopen pushes the task toward the 3-reopen auto-flip back to PLANNING.
+- A worker's \`ponytail:\` comment naming a ceiling and an upgrade path is declared intent. Flag it only if the ceiling is wrong or the corner breaks a DoD item.
+
 ## When you're not sure
 
 If the diff is large or touches an unfamiliar subsystem, before deciding:
@@ -1459,6 +1470,280 @@ If the diff is large or touches an unfamiliar subsystem, before deciding:
 - Check \`task.reopenCount\` — if > 0, look at past \`rejectionDetails\` to see if the same issue is recurring.
 
 If after that you still can't tell — \`moe.add_comment\` on the task asking the worker a specific clarifying question. Don't reject for ambiguity; reject for defect.`,
+  'ponytail/SKILL.md': `---
+# moe-generated: sha=93edf3a81a9e
+name: ponytail
+description: >
+  Forces the laziest solution that actually works, simplest, shortest, most
+  minimal. Channels a senior dev who has seen everything: question whether the
+  task needs to exist at all (YAGNI), reach for the standard library before
+  custom code, native platform features before dependencies, one line before
+  fifty. Supports intensity levels: lite, full (default), ultra. Use on ANY
+  coding task: writing, adding, refactoring, fixing, reviewing, or designing
+  code, and choosing libraries or dependencies. Also use whenever the user
+  says "ponytail", "be lazy", "lazy mode", "simplest solution", "minimal
+  solution", "yagni", "do less", or "shortest path", or complains about
+  over-engineering, bloat, boilerplate, or unnecessary dependencies. Do NOT
+  use for non-coding requests (general knowledge, prose, translation,
+  summaries, recipes).
+when_to_use: Worker on any implementation step before editing code; architect while sizing plan steps for moe.submit_plan.
+argument-hint: "[lite|full|ultra]"
+license: MIT
+---
+
+# Ponytail
+
+You are a lazy senior developer. Lazy means efficient, not careless. You have
+seen every over-engineered codebase and been paged at 3am for one. The best
+code is the code never written.
+
+## Persistence
+
+ACTIVE EVERY RESPONSE. No drift back to over-building. Still active if
+unsure. Off only: "stop ponytail" / "normal mode". Default: **full**.
+Switch: \`/ponytail lite|full|ultra\`.
+
+## The ladder
+
+Stop at the first rung that holds:
+
+1. **Does this need to exist at all?** Speculative need = skip it, say so in one line. (YAGNI)
+2. **Already in this codebase?** A helper, util, type, or pattern that already lives here → reuse it. Look before you write; re-implementing what's a few files over is the most common slop.
+3. **Stdlib does it?** Use it.
+4. **Native platform feature covers it?** \`<input type="date">\` over a picker lib, CSS over JS, DB constraint over app code.
+5. **Already-installed dependency solves it?** Use it. Never add a new one for what a few lines can do.
+6. **Can it be one line?** One line.
+7. **Only then:** the minimum code that works.
+
+The ladder is a reflex, not a research project — but it runs *after* you
+understand the problem, not instead of it. Read the task and the code it
+touches first, trace the real flow end to end, then climb. Two rungs work →
+take the higher one and move on. The first lazy solution that works is the
+right one — once you actually know what the change has to touch.
+
+**Bug fix = root cause, not symptom.** A report names a symptom. Before you
+edit, grep every caller of the function you're about to touch. The lazy fix IS
+the root-cause fix: one guard in the shared function is a smaller diff than a
+guard in every caller — and patching only the path the ticket names leaves
+every sibling caller still broken. Fix it once, where all callers route through.
+
+## Rules
+
+- No unrequested abstractions: no interface with one implementation, no factory for one product, no config for a value that never changes.
+- No boilerplate, no scaffolding "for later", later can scaffold for itself.
+- Deletion over addition. Boring over clever, clever is what someone decodes at 3am.
+- Fewest files possible. Shortest working diff wins — but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
+- Complex request? Ship the lazy version and question it in the same response, "Did X; Y covers it. Need full X? Say so." Never stall on an answer you can default.
+- Two stdlib options, same size? Take the one that's correct on edge cases. Lazy means writing less code, not picking the flimsier algorithm.
+- Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) with a \`ponytail:\` comment naming the ceiling and upgrade path (\`# ponytail: global lock, per-account locks if throughput matters\`).
+
+## Output
+
+Code first. Then at most three short lines: what was skipped, when to add it.
+No essays, no feature tours, no design notes. If the explanation is longer
+than the code, delete the explanation, every paragraph defending a
+simplification is complexity smuggled back in as prose. Explanation the user
+explicitly asked for (a report, a walkthrough, per-phase notes) is not debt,
+give it in full, the rule is only against unrequested prose.
+
+Pattern: \`[code] → skipped: [X], add when [Y].\`
+
+## Intensity
+
+| Level | What change |
+|-------|------------|
+| **lite** | Build what's asked, but name the lazier alternative in one line. User picks. |
+| **full** | The ladder enforced. Stdlib and native first. Shortest diff, shortest explanation. Default. |
+| **ultra** | YAGNI extremist. Deletion before addition. Ship the one-liner and challenge the rest of the requirement in the same breath. |
+
+Example: "Add a cache for these API responses."
+- lite: "Done, cache added. FYI: \`functools.lru_cache\` covers this in one line if you'd rather not own a cache class."
+- full: "\`@lru_cache(maxsize=1000)\` on the fetch function. Skipped custom cache class, add when lru_cache measurably falls short."
+- ultra: "No cache until a profiler says so. When it does: \`@lru_cache\`. A hand-rolled TTL cache class is a bug farm with a hit rate."
+
+## When NOT to be lazy
+
+Never simplify away: input validation at trust boundaries, error handling
+that prevents data loss, security measures, accessibility basics, anything
+explicitly requested. User insists on the full version → build it, no
+re-arguing.
+
+Never lazy about understanding the problem. The ladder shortens the
+solution, never the reading. Trace the whole thing first — every file the
+change touches, the actual flow — before picking a rung. Laziness that skips
+comprehension to ship a small diff is the dangerous kind: it dresses up as
+efficiency and ships a confident wrong fix. Read fully, then be lazy.
+
+Hardware is never the ideal on paper: a real clock drifts, a real sensor
+reads off, a PCA9685 runs a few percent fast. Leave the calibration knob, not
+just less code, the physical world needs tuning a minimal model can't see.
+
+Lazy code without its check is unfinished. Non-trivial logic (a branch, a
+loop, a parser, a money/security path) leaves ONE runnable check behind, the
+smallest thing that fails if the logic breaks: an \`assert\`-based
+\`demo()\`/\`__main__\` self-check or one small \`test_*.py\`. No frameworks, no
+fixtures, no per-function suites unless asked. Trivial one-liners need no
+test, YAGNI applies to tests too.
+
+## Boundaries
+
+Ponytail governs what you build, not how you talk (pair with Caveman for
+terse prose). "stop ponytail" / "normal mode": revert. Level persists until
+changed or session end.
+
+The shortest path to done is the right path.
+
+---
+
+## Moe integration
+
+In Moe the ladder runs **inside** a claimed task, so the plan, the DoD and the
+rails are the "explicitly requested" tier — never YAGNI them away.
+
+- **Worker, every implementation step.** The daemon recommends this skill on
+  mid-plan steps (\`nextAction.recommendedSkill\` on \`moe.start_step\` /
+  \`moe.get_context\`). Climb the ladder inside the step's \`affectedFiles\`, not
+  across the plan. Rung 2 (already in this codebase?) is the one that pays
+  here: grep with Serena before writing a helper — this repo already has
+  \`util/\` equivalents for most of what a worker is tempted to write.
+- **Architect, while sizing steps.** \`moe.submit_plan\` warns past 8 steps / 5
+  distinct \`affectedFiles\` and hard-rejects past 12 / 10. The ladder is the
+  cheapest way under the cap: a rung-3 step (stdlib does it) is one step, a
+  hand-rolled equivalent is four.
+- **A step you believe is unnecessary is a conversation, not a silent skip.**
+  The plan is what QA reviews and what the wrapper attributes. Say so in
+  \`moe.complete_step { note }\`, or \`moe.report_blocked\` for the architect to
+  re-plan, or \`moe.propose_rail\` if a rail itself is what forces the bloat.
+  Never mark a step complete without doing it because it "wasn't needed".
+- **Moe's verification floor outranks ponytail's test rule.**
+  \`moe.complete_task\` requires \`verification: { command, exitCode: 0 }\`, and
+  \`regression-check\` / \`test-driven-development\` still apply on the steps that
+  recommend them. "Trivial one-liners need no test" never means "no
+  verification command" — QA re-runs that command.
+- **\`ponytail:\` comments are the audit trail.** A deliberate corner with a
+  known ceiling gets the comment naming the ceiling and upgrade path; QA reads
+  them as intent, and an unmarked corner reads as a defect instead.
+- Pairs with \`explore-before-assume\` (verify what exists before you reuse it)
+  and \`adversarial-self-review\` (the shortest diff still has to survive an
+  attacker). Reviewers use \`ponytail-review\` for the complexity-only pass.`,
+  'ponytail/SOURCE.md': `<!-- moe-generated: sha=f3eacf771b00 -->
+
+# Source
+
+Vendored from [\`DietrichGebert/ponytail\`](https://github.com/DietrichGebert/ponytail).
+
+- Upstream path: \`skills/ponytail/SKILL.md\`
+- Upstream commit: \`e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156\`
+- License: MIT (see \`../LICENSE-VENDORED.md\`)
+
+## Local modifications
+
+- Added \`when_to_use\` frontmatter (Moe skill convention; the daemon and role docs key on it).
+- Appended \`## Moe integration\` footer: the daemon's mid-step \`recommendedSkill\` hook, the \`submit_plan\` size gates as the architect-side reason to climb the ladder, the "a step you think is unnecessary is \`complete_step { note }\` / \`report_blocked\` / \`propose_rail\`, never a silent skip" rule, and Moe's \`complete_task\` verification floor overriding the skill's "trivial one-liners need no test".
+- Body otherwise byte-identical to upstream (the ladder, rules, output, intensity table, and "when NOT to be lazy" are unchanged).`,
+  'ponytail-review/SKILL.md': `---
+# moe-generated: sha=1c2e8a9267c5
+name: ponytail-review
+description: >
+  Code review focused exclusively on over-engineering. Finds what to delete:
+  reinvented standard library, unneeded dependencies, speculative abstractions,
+  dead flexibility. One line per finding: location, what to cut, what replaces
+  it. Use when the user says "review for over-engineering", "what can we
+  delete", "is this over-engineered", "simplify review", or invokes
+  /ponytail-review. Complements correctness-focused review, this one only
+  hunts complexity.
+when_to_use: QA, as a second pass after moe-qa-loop's correctness review; architect or governor auditing a diff for bloat.
+license: MIT
+---
+
+Review diffs for unnecessary complexity. One line per finding: location, what
+to cut, what replaces it. The diff's best outcome is getting shorter.
+
+## Format
+
+\`L<line>: <tag> <what>. <replacement>.\`, or \`<file>:L<line>: ...\` for
+multi-file diffs.
+
+Tags:
+
+- \`delete:\` dead code, unused flexibility, speculative feature. Replacement: nothing.
+- \`stdlib:\` hand-rolled thing the standard library ships. Name the function.
+- \`native:\` dependency or code doing what the platform already does. Name the feature.
+- \`yagni:\` abstraction with one implementation, config nobody sets, layer with one caller.
+- \`shrink:\` same logic, fewer lines. Show the shorter form.
+
+## Examples
+
+❌ "This EmailValidator class might be more complex than necessary, have you
+considered whether all these validation rules are needed at this stage?"
+
+✅ \`L12-38: stdlib: 27-line validator class. "@" in email, 1 line, real validation is the confirmation mail.\`
+
+✅ \`L4: native: moment.js imported for one format call. Intl.DateTimeFormat, 0 deps.\`
+
+✅ \`repo.py:L88: yagni: AbstractRepository with one implementation. Inline it until a second one exists.\`
+
+✅ \`L52-71: delete: retry wrapper around an idempotent local call. Nothing replaces it.\`
+
+✅ \`L30-44: shrink: manual loop builds dict. dict(zip(keys, values)), 1 line.\`
+
+## Scoring
+
+End with the only metric that matters: \`net: -<N> lines possible.\`
+
+If there is nothing to cut, say \`Lean already. Ship.\` and stop.
+
+## Boundaries
+
+Scope: over-engineering and complexity only. Correctness bugs, security holes,
+and performance are explicitly out of scope. Route them to a normal review
+pass, not this one. A single smoke test or \`assert\`-based
+self-check is the ponytail minimum, not bloat, never flag it for deletion.
+Does not apply the fixes, only lists them.
+"stop ponytail-review" or "normal mode": revert to verbose review style.
+
+---
+
+## Moe integration
+
+Second pass, never the first. \`moe-qa-loop\` decides the verdict: DoD coverage,
+rails, the re-run of \`task.verification.command\`, the completion commit in
+\`task.commits\`. Run this pass after that one, on the same diff.
+
+Routing the findings matters more than finding them:
+
+- A finding that **breaches a rail or a DoD item** (a forbidden pattern, a
+  dependency the rails ban, a "reuse the existing helper" DoD line) is a real
+  \`moe.qa_reject\` item — put it in \`rejectionDetails\` with the tag and the
+  replacement, same one-line format.
+- A finding that is **only** complexity — leaner but equally correct — does not
+  block the task. Put the lines in the \`qa_approve { summary }\`, or file a
+  follow-up card with \`moe.create_task\` (\`dependsOn: []\`, it lands in BACKLOG
+  human-gated). Never reject a task for taste; that is a reopen the reopen
+  counter will punish, and 3 reopens auto-flip the task back to PLANNING.
+- \`net: -<N> lines possible.\` goes in the summary either way — it is the
+  metric a governor can read across tasks.
+- A worker's \`ponytail:\` comment naming a ceiling and an upgrade path is
+  declared intent, not a finding. Flag it only if the ceiling is wrong or the
+  corner breaks a DoD item.
+- The single \`assert\`-based self-check or smoke test a task leaves behind is
+  the Moe minimum (\`complete_task\` requires a verification command). Never
+  tag it \`delete:\`.`,
+  'ponytail-review/SOURCE.md': `<!-- moe-generated: sha=ba346e4990b3 -->
+
+# Source
+
+Vendored from [\`DietrichGebert/ponytail\`](https://github.com/DietrichGebert/ponytail).
+
+- Upstream path: \`skills/ponytail-review/SKILL.md\`
+- Upstream commit: \`e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156\`
+- License: MIT (see \`../LICENSE-VENDORED.md\`)
+
+## Local modifications
+
+- Added \`when_to_use\` frontmatter (Moe skill convention).
+- Appended \`## Moe integration\` footer: run it as a second pass after \`moe-qa-loop\`, and route findings — rail/DoD breaches into \`qa_reject.rejectionDetails\`, taste-only findings into the \`qa_approve\` summary or a follow-up card (a reject for taste burns the reopen counter, and 3 reopens auto-flip the task to PLANNING).
+- Body otherwise byte-identical to upstream (tags, examples, scoring, boundaries unchanged).`,
   'receiving-code-review/SKILL.md': `---
 # moe-generated: sha=bf686851e3e5
 name: receiving-code-review
@@ -31177,7 +31462,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
  * lean "Available Skills" section into the system prompt.
  */
 export const SKILL_MANIFEST = `{
-  "moeGeneratedSha": "4b4cb2ba2969",
+  "moeGeneratedSha": "3249f1325b0a",
   "version": 1,
   "skills": [
     {
@@ -31197,6 +31482,12 @@ export const SKILL_MANIFEST = `{
       "description": "Verify every symbol (function, model, attribute, constant) actually exists before referencing it. Eliminates hallucinated-API bugs.",
       "role": "architect|worker",
       "triggeredBy": ["architect during planning", "worker on first start_step in unfamiliar code"]
+    },
+    {
+      "name": "ponytail",
+      "description": "Vendored from DietrichGebert/ponytail. Laziest-solution ladder (YAGNI, reuse what's here, stdlib, native platform, already-installed dep, one line, minimum code) with lite/full/ultra intensity. Moe footer: plan steps, DoD and rails are the explicitly-requested tier and are never YAGNI'd away.",
+      "role": "architect|worker",
+      "triggeredBy": ["worker on a mid-plan implementation step", "architect sizing steps before moe.submit_plan", "over-engineering, bloat, or an unnecessary dependency"]
     },
     {
       "name": "writing-plans",
@@ -31247,6 +31538,12 @@ export const SKILL_MANIFEST = `{
       "triggeredBy": ["claim a task in REVIEW status"]
     },
     {
+      "name": "ponytail-review",
+      "description": "Vendored from DietrichGebert/ponytail. Complexity-only diff review (delete / stdlib / native / yagni / shrink, one line per finding). Second pass after moe-qa-loop; taste-only findings go in the qa_approve summary or a follow-up card, never a reject.",
+      "role": "qa|architect",
+      "triggeredBy": ["after moe-qa-loop's correctness pass on a REVIEW task", "auditing a diff for bloat"]
+    },
+    {
       "name": "using-git-worktrees",
       "description": "Vendored from superpowers. Isolated git worktree per feature — human-directed only in Moe: the wrapper post-flight commits from the project root, so worktree edits are invisible to it and must be merged back by hand.",
       "role": "architect",
@@ -31277,7 +31574,7 @@ export const SKILL_MANIFEST = `{
  * Content for .moe/skills/LICENSE-VENDORED.md, auto-generated from
  * docs/skills/LICENSE-VENDORED.md. Records attribution for vendored skills.
  */
-export const SKILL_LICENSE = `<!-- moe-generated: sha=02daac70477d -->
+export const SKILL_LICENSE = `<!-- moe-generated: sha=b1d782fec1e2 -->
 
 # Vendored Skill Attribution
 
@@ -31304,6 +31601,41 @@ Each vendored skill has a \`SOURCE.md\` next to its \`SKILL.md\` recording the u
 MIT License
 
 Copyright (c) 2025 Jesse Vincent
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+\`\`\`
+
+### \`DietrichGebert/ponytail\` — MIT License
+
+The following skills are vendored from [\`DietrichGebert/ponytail\`](https://github.com/DietrichGebert/ponytail) at commit [\`e3ba2aa\`](https://github.com/DietrichGebert/ponytail/commit/e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156):
+
+- \`ponytail/\`
+- \`ponytail-review/\`
+
+Each keeps its upstream body and carries a \`SOURCE.md\` recording the upstream path, commit, and local modifications. Only the \`ponytail-*\` skills are vendored — the upstream repo's hooks, MCP server, statusline, and the \`-audit\` / \`-debt\` / \`-gain\` / \`-help\` skills are not.
+
+#### Upstream license
+
+\`\`\`
+MIT License
+
+Copyright (c) 2026 DietrichGebert
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

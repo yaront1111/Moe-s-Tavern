@@ -39,8 +39,11 @@ export function contextNextAction(state: StateManager, task: Task | null, worker
         tool: 'moe.start_step',
         args: { taskId: task.id, stepId: nextStep.stepId, workerId: workerId || undefined },
         reason: `Begin step: ${nextStep.description.slice(0, 80)}`,
+        // A reopen outranks the phase skill; otherwise the first step gets
+        // explore-before-assume and every later step gets ponytail (that slot
+        // was empty, so a mid-plan step was recommended nothing).
         recommendedSkill: reopenedSkill
-          ?? (isFirstStep ? recommendSkillFor('worker', 'first_start_step') : undefined),
+          ?? recommendSkillFor('worker', isFirstStep ? 'first_start_step' : 'implementation_step'),
       };
     }
     return {

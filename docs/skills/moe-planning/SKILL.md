@@ -15,6 +15,8 @@ Count before you draft. If an honest plan needs **more than 8 steps or more than
 
 Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via `moe-epic-breakdown` (SPIDR split) and narrow this task to the first slice — or `moe.report_blocked` with the proposed split if the task isn't yours to split.
 
+Then shrink what survives. Load `ponytail` before drafting: a step that reuses an existing helper, a stdlib call, or a native platform feature is one step where a hand-rolled equivalent is four — the ladder is the cheapest route under the size cap. It shortens the solution, never the reading, and it never trims a DoD item, a rail, or a verification step: those are requested work.
+
 ## Where the gate goes — read this before drafting steps
 
 Verification is a real cost. Paying it on every step of every task is how a 12-task epic turns into work that is 80% ceremony. Concentrate it instead:

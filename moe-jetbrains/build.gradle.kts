@@ -162,6 +162,10 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(bundledAgentScript) {
         into("$pluginContentRoot/scripts")
     }
+    from(repoRoot.resolve("scripts")) {
+        include("prompt-cache*.mjs")
+        into("$pluginContentRoot/scripts")
+    }
     from(listOf(bundledAgentScriptSh, bundledCallScriptSh)) {
         into("$pluginContentRoot/scripts")
         // A CRLF working-tree checkout (core.autocrlf) would ship a script WSL bash can't parse.

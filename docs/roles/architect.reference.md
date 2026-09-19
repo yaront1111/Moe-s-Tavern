@@ -22,6 +22,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 | Drafting the plan | `moe-planning` | After `moe.get_context`, every PLANNING task |
 | Naming symbols / referencing existing code | `explore-before-assume` | Before referencing a function, model, attribute, constant |
 | Step-level granularity inside the plan | `writing-plans` | Companion to `moe-planning` for fine-grained steps |
+| Sizing steps under the `submit_plan` cap | `ponytail` | Before drafting: a stdlib or native-platform step is one step where a hand-rolled equivalent is four. Shortens the solution, never the reading, and never a DoD item or rail |
 
 ## Why small tasks
 

@@ -16,6 +16,7 @@ Deep-dive material trimmed out of `qa.md`. Read this on demand; it is not loaded
 |-------|-------|--------------|
 | Claiming a task in REVIEW | `moe-qa-loop` | Structured `qa_approve` vs `qa_reject` decision flow + actionable `rejectionDetails` |
 | Reading the diff | `adversarial-self-review` | Same checklist the worker should have run — apply it again as the second pair of eyes |
+| After the correctness verdict | `ponytail-review` | Complexity-only second pass. Rail/DoD breaches become `rejectionDetails`; taste-only findings go in the approve summary or a follow-up card — never a reject |
 
 ## Review order (do not skip)
 
