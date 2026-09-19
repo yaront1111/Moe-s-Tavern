@@ -167,7 +167,6 @@ cleanup_temp() {
     fi
 }
 trap cleanup_temp EXIT
-create_secure_temp >/dev/null
 
 # Path normalization for cross-platform support
 # Converts Windows paths (backslashes) to Unix paths (forward slashes)
@@ -337,6 +336,12 @@ if [ "$LOOP_REQUESTED" = true ] && [ "$NO_LOOP" = true ]; then
     echo "Choose either --loop for polling mode or --no-loop for single-shot mode." >&2
     exit 2
 fi
+
+# Create the temp dir in THIS shell before any `$(create_secure_temp)` subshell
+# runs, or each subshell makes its own dir that cleanup_temp never sees. Kept
+# below the option parser on purpose: --help and bad options exit without one,
+# which a minimal GUI-launch PATH with no mktemp relies on (agent-runtime.test.mjs).
+create_secure_temp >/dev/null
 
 # Validate role
 if [[ ! "$ROLE" =~ ^(architect|worker|qa|governor)$ ]]; then
