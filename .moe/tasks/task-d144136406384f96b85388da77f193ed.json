@@ -105,7 +105,7 @@
   ],
   "planRevision": 15,
   "status": "REVIEW",
-  "assignedWorkerId": "qa-7100be29",
+  "assignedWorkerId": "qa-2fd44536",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:16:35.674Z",
-  "updatedAt": "2026-09-19T12:20:44.219Z",
+  "updatedAt": "2026-09-19T13:07:02.754Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:40:08.713Z",
     "plannedStepCount": 7,
@@ -134,7 +134,9 @@
   "contextFetchedBy": [
     "architect-e52c9adc",
     "worker-161b9959",
-    "qa-7100be29"
+    "qa-7100be29",
+    "governor-710f6d69",
+    "qa-2fd44536"
   ],
   "dependsOn": [
     "task-eff6f0181ce848d48aa818a3df4f0950",
@@ -409,6 +411,21 @@
       "treeId": "18a45e923fd14682d53444a119a6df79aab1fa89",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "96eb6b6b21badc2f1c34129ac43b27411836800d",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7100be29@2026-09-19T12:35:45Z",
+      "paths": [
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+      ],
+      "recordedBy": "qa-7100be29",
+      "recordedAt": "2026-09-19T12:35:53.651Z",
+      "treeId": "ccc5858779d592ee7424cc46c217452f0f05e177",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -424,7 +441,17 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-7100be29@2026-09-19T12:20:36Z",
-    "at": "2026-09-19T12:20:44.219Z"
-  }
+    "sessionId": "qa-7100be29@2026-09-19T12:35:45Z",
+    "at": "2026-09-19T12:35:53.651Z"
+  },
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Worker finished all 7 steps; review started 10:15Z. qa-7100be29 was re-reading context at 12:51-13:00Z after the provider-limit backoff; no QA verdict recorded.",
+      "whatRemains": "Full QA review of the 7-path diff (both launchers, both postflight harnesses, both parity checks, docs/CONFIGURATION.md) against the 3 DoD items; then qa_approve or qa_reject.",
+      "pitfalls": "The sh postflight harness takes ~36 min; run it with MOE_POSTFLIGHT_TIMEOUT_SEC>=180 on a quiet box. Launch postflight.ps1 from PowerShell, not Git Bash.",
+      "releasedAt": "2026-09-19T13:06:52.100Z",
+      "releasedBy": "governor-710f6d69",
+      "reason": "Confirmed crash: qa-7100be29 has no wrapper or CLI process on the host (old moes fleet gone ~13:00Z). Released with the human's approval so qa-2fd44536 can take the review now instead of waiting for the 30-min review-stale sweep."
+    }
+  ]
 }
