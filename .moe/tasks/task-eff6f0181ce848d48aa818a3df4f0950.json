@@ -96,7 +96,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -122,20 +122,29 @@
       "author": "worker-161b9959",
       "content": "Adversarial self-review (step 6), diff read hostile, both twins side by side.\n1. Concurrent landings on one baseline: both still read the header at landing start and write it at the end; last writer wins, exactly as before. The new rule only chooses the flag/session value written. Worst new interleaving: owner + sibling land at once and the sibling writes last -> landed=0 survives -> the next pre-flight lands a spurious (often nothing-to-commit) recovered checkpoint: the rail's preferred direction, no loss. The pre-existing window where a landing that began before a peer's pre-flight re-take writes back the older header is unchanged (seconds wide).\n2. Session-id collision: `<workerId>@<UTC second>` repeats only when two seats with the SAME worker id pre-flight in the same second = the duplicate-seat operator error; then one clone's landing can mark the other's baseline landed (= today's behaviour, no worse). Compare is case-sensitive (-ceq / bash =); an empty sid or an empty/absent header session never counts as own.\n3. Rollout: an older wrapper mid-session keeps the old rule (writes landed=1, drops session=) until it restarts at its next loop boundary (repo-launched ps1 seats hot-reload). A session-less header belongs to nobody, so its flag is kept. Readers are substring/regex based: old twins read new headers (` landed=1`, head=, at=) and the new twins read legacy ones (scenario M and M2 a-e run on legacy headers, green on sh/pwsh/PS5.1).\n4. Marker-gap residual (planningNotes.risks #1) is unchanged and out of scope: a session that pre-flighted under a live peer's marker holds no marker once that peer exits; a third seat pre-flighting in that window recovers its live bytes as `recovered` = misattribution, not loss.\n5. set -e: baseline_session / baseline_landed_flag print only, set no globals and always `return 0` (the head|sed pipeline ends in `|| true`); callers assign via `x=\"$(...)\"` on their own lines with `local` declared separately; baseline_landed is only used in an `elif` condition. baseline_write keeps its return-1 contract and every caller keeps `|| true`.\n6. EOL/BOM: CRLF=0 in all four files by byte count, UTF-8 BOM kept on both .ps1. `git diff --numstat -- scripts/`: moe-agent.ps1 +45/-16, moe-agent.sh +74/-19, postflight.ps1 +167/-4, postflight.sh +178/-2. No other path of mine is dirty.\n7. Rails: no daemon, docs or parity-check file touched; daemon stays state-only. Twins write byte-identical headers for identical inputs (cmp, at= masked) and parse each other's files; M3 + the mutation table are identical on sh, pwsh and PS 5.1. docs/CONFIGURATION.md:378 describes only the header prefix (task/at/head), so nothing went stale. Pre-existing edge left as is: a baseline file that exists but cannot be READ is 'missing' to ps1 (flag 1, fail-closed policy) but 'present' to sh (flag 0 -> at worst a spurious recovery).\n8. Embarrassment test: worst case = a session's own landing stops marking its baseline, so every idle poll / next pre-flight replays a recovered checkpoint (noise, no loss). Caught by M3 (a)[5], M3 (d) and ps1 M (mutations m2/m3/m4 prove each bites). The opposite regression (a sibling marks landed=1 again = this bug) is caught by M3 (a)[1], (b), (c) (m1/m5 bite; red on the pre-change wrappers on sh, pwsh, PS 5.1).",
       "timestamp": "2026-09-19T02:18:03.735Z"
+    },
+    {
+      "id": "comment-8443065640f64e53b0ea86cfc74672a7",
+      "author": "qa-7100be29",
+      "content": "QA progress (qa-7100be29): red/green + mutations + ps1 full runs + parity + acceptance all green so far; full postflight.sh re-run in progress (~45 min, started 02:51:31Z). Verdict after it finishes.",
+      "timestamp": "2026-09-19T03:01:43.501Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T06:23:10.074Z",
-  "updatedAt": "2026-09-19T02:19:07.088Z",
+  "updatedAt": "2026-09-19T03:41:52.732Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T19:14:06.243Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-09-19T03:41:52.732Z",
+    "wallClockMs": 30466489
   },
   "contextFetchedBy": [
     "architect-27b30f41",
-    "worker-161b9959"
+    "worker-161b9959",
+    "qa-7100be29"
   ],
   "stepsCompleted": [
     "step-1",
@@ -179,20 +188,44 @@
       "treeId": "45ec98f68a23eb44ebdcac9adf0bffd5a20dc92f",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "117426917b85c6b04b3176d730e536d2a94190be",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-19T00:38:00Z",
+      "paths": [
+        ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+        ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
+        ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-19T02:20:17.854Z",
+      "treeId": "51e64ce2b23b2d7a53acf93cc3970a35a54c4854",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/moe-agent.ps1",
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.sh",
-    "scripts/tests/postflight.ps1"
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+    ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
+    ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-161b9959@2026-09-19T00:38:00Z",
-    "at": "2026-09-19T00:38:03.097Z"
+    "at": "2026-09-19T02:20:17.854Z"
   },
   "workStartedAt": "2026-09-19T00:38:39.334Z",
   "declaredFiles": [
@@ -209,5 +242,14 @@
     "reportedAt": "2026-09-19T02:19:07.086Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Fix (wrapper-only, both twins): the baseline header now records the pre-flight's session: `#moe-baseline v1 task= at= head= landed=<0|1> session=<workerId>@<pre-flight UTC second>` (the Moe-Session id). Only 3 landings may write landed=1: the session named in the header, a recovery (idle polls recover under a fresh sid, so it must set it), or a landing that found no baseline (ps1 Get-MoeBaselineLandedFlag / sh baseline_landed_flag). Every other landing (committed/nothing/refused, and the deliberate no-landing Set-MoeBaselineLanded/baseline_mark_landed) keeps the header's flag AND session. Pre-flight writes `0 <own sid>`. Recovery gate untouched (DoD 4). Session-less legacy headers belong to nobody. Both twins write byte-identical headers.\n\nTests: scenario M3 in postflight.sh + postflight.ps1 (scope count 28->29): (a) sibling qa B lands a checkpoint under A's re-taken baseline, A's planned edit comes after, C must land MOE_CHECKPOINT_RECOVERED with exactly impl.txt; pins: B kept A's landed=0+session, pre-flight header shape, C's own landing sets landed=1; (b) nothing-to-commit sibling keeps landed=0; (c) checkpointCommits=false sibling keeps landed=0; (d) idle recovery sets landed=1 keeping the dead session, poll 2 never replays.\nRed on pre-change wrappers (sh, pwsh, PS 5.1): a,b,c fail with their defect messages; d passes no-replay, fails only the session pin.\n\nVerification (sequential, scratch copy == repo bytes): postflight.sh RC0 66 frozen + 29 scope (~45 min); postflight.ps1 RC0 66+29 on pwsh (419 s) and PS 5.1 (468 s); parity-check.sh PASS; parity-check.ps1 PASS pwsh + PS 5.1; acceptance.test.ts 6/6; bash -n + PS parser clean.\nMutations (both twins, same result): m1 flag always 1 -> a[1],b; m2 recovery not forced -> d; m3 never 1 -> a[5] + ps1 M; m4 empty pre-flight session -> a[4] (+ps1 M); m5 mark_landed 1 -> c; m6 landing writes own session -> a[3],b,d.\nSelf-review: comment-d0be93c2."
+  "completionSummary": "Fix (wrapper-only, both twins): the baseline header now records the pre-flight's session: `#moe-baseline v1 task= at= head= landed=<0|1> session=<workerId>@<pre-flight UTC second>` (the Moe-Session id). Only 3 landings may write landed=1: the session named in the header, a recovery (idle polls recover under a fresh sid, so it must set it), or a landing that found no baseline (ps1 Get-MoeBaselineLandedFlag / sh baseline_landed_flag). Every other landing (committed/nothing/refused, and the deliberate no-landing Set-MoeBaselineLanded/baseline_mark_landed) keeps the header's flag AND session. Pre-flight writes `0 <own sid>`. Recovery gate untouched (DoD 4). Session-less legacy headers belong to nobody. Both twins write byte-identical headers.\n\nTests: scenario M3 in postflight.sh + postflight.ps1 (scope count 28->29): (a) sibling qa B lands a checkpoint under A's re-taken baseline, A's planned edit comes after, C must land MOE_CHECKPOINT_RECOVERED with exactly impl.txt; pins: B kept A's landed=0+session, pre-flight header shape, C's own landing sets landed=1; (b) nothing-to-commit sibling keeps landed=0; (c) checkpointCommits=false sibling keeps landed=0; (d) idle recovery sets landed=1 keeping the dead session, poll 2 never replays.\nRed on pre-change wrappers (sh, pwsh, PS 5.1): a,b,c fail with their defect messages; d passes no-replay, fails only the session pin.\n\nVerification (sequential, scratch copy == repo bytes): postflight.sh RC0 66 frozen + 29 scope (~45 min); postflight.ps1 RC0 66+29 on pwsh (419 s) and PS 5.1 (468 s); parity-check.sh PASS; parity-check.ps1 PASS pwsh + PS 5.1; acceptance.test.ts 6/6; bash -n + PS parser clean.\nMutations (both twins, same result): m1 flag always 1 -> a[1],b; m2 recovery not forced -> d; m3 never 1 -> a[5] + ps1 M; m4 empty pre-flight session -> a[4] (+ps1 M); m5 mark_landed 1 -> c; m6 landing writes own session -> a[3],b,d.\nSelf-review: comment-d0be93c2.",
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completedAt": "2026-09-19T03:41:52.732Z",
+  "reviewCompletedAt": "2026-09-19T03:41:52.732Z",
+  "reviewSummary": "Verified completion 1174269 (pushed to origin/moe/work-2026-09-13; parent c6b856f). Diff = 4 script files as planned (ps1 +45/-16, sh +74/-19, postflight.ps1 +167/-4, postflight.sh +178/-2); CR=0, ps1 BOMs kept. Read both twins: every baseline writer goes through Get-MoeBaselineLandedFlag / baseline_landed_flag (1 only for own session, recovery, or no baseline; otherwise the header's flag and session are kept). Pre-flight writes 0+own sid. Recovery gate code unchanged (comment only) = DoD4. sh helpers are print-only and return 0 (set -e safe).\nRed proof, my own scratch, M3-only subsets built from the real harnesses against c6b856f wrappers: sh, pwsh and PS5.1 (a) fail with the defect message; the log shows impl.txt MOE_ATTR_PREEXISTING, i.e. stranded. (b) and (c) also fail with their defect messages, and (d) fails only the session pin. New wrappers: a-d + M green on all 3.\nMutations I re-ran (both twins agree): m2 -> d; m3 -> a[5] + ps1 M; m6 -> a[3], b, d.\nFull runs from a scratch copy byte-identical to 1174269: postflight.sh RC=0, 66 frozen + 29 scope (02:51-03:41Z); postflight.ps1 RC=0, 66+29 on pwsh (436 s) and PS 5.1 (489 s). M, M2 (incl. M2-c stale-marker recovery), M3 and H ok.\nAlso passing: parity-check.sh, parity-check.ps1 on pwsh and PS5.1; PS parser 0 errors on both engines; acceptance.test.ts 6/6 from a clean HEAD export.\nLive evidence: this QA seat's pre-flight wrote `landed=0 session=qa-7100be29@2026-09-19T02:20:40Z` in production.\nResiduals are documented and out of scope: marker gap; sid collision on a duplicate seat; unreadable-baseline edge. docs/CONFIGURATION.md:378 names only the header prefix, so it is not stale."
 }
