@@ -105,7 +105,7 @@
   ],
   "planRevision": 15,
   "status": "REVIEW",
-  "assignedWorkerId": "qa-2fd44536",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:16:35.674Z",
-  "updatedAt": "2026-09-19T13:07:02.754Z",
+  "updatedAt": "2026-09-19T13:23:27.396Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:40:08.713Z",
     "plannedStepCount": 7,
@@ -190,7 +190,9 @@
     "scripts/tests/parity-check.ps1",
     "docs/CONFIGURATION.md",
     ".moe/tasks/task-a5fb02e977f74ea2802f24053c44a1c6.json",
-    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+    ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+    ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json"
   ],
   "completionSummary": "Both launchers' TOOL-tier harvest now counts Serena's current editing tools and keeps the old names (replace_symbol_body, insert_after/before_symbol, create_text_file, replace_regex).\nRules:\n- replace_content and the optional delete_lines, replace_lines and insert_at_line witness their relative_path on any non-error result.\n- safe_delete_symbol witnesses its relative_path only on 'OK'. Its 'Cannot delete' refusal is a normal result and witnesses nothing.\n- rename_symbol witnesses only its declaring relative_path, and only on 'Successfully renamed'. Its referencing files are the documented gap.\n- replace_in_files witnesses exactly the files listed after its 'Replaced N occurrence(s) in M file(s):' header, which must be the first line. A dry run or failed guard witnesses nothing.\n- Result text may be a string or a [{type:text}] list (the real MCP shape), and Serena's diagnostics JSON envelope is unwrapped. Anything malformed fails closed.\nsh (moe-agent.sh STREAM_JSON_PARSER): new result_text and serena_changed; the tool_result call site is wrapped in try/except. Also fixed a pre-existing crash: a non-object JSON line killed the parser.\nps1 (moe-agent.ps1):\n- New Get-MoeToolResultText and Get-MoeSerenaResultPaths.\n- Register stores a gated call as a NUL-tagged (tool, relative_path) pair, which Complete-MoeToolWrite resolves inside try/catch.\n- The 256-char id limit, the 500/2048/8192 caps, the conflicting-repeat rule and is_error handling are unchanged.\nTests: K2 is in both harnesses, with 6 contested paths plus refused.txt (named only by a refusal, a dry run and a failed rename). It was RED on the old wrappers on sh, pwsh and PS 5.1 ('got [owned-a.txt]') and is green now.\nParity: parity-check.{sh,ps1} pin all 12 names plus 'occurrence(s) in'. Dropping replace_content fails both on all engines.\nDocs: CONFIGURATION.md 'Session touch evidence'.\nVerified: full postflight.sh PASS; postflight.ps1 PASS on pwsh and PS 5.1 (30 scope scenarios each); importee-guard.ps1 48/48 on",
   "commits": [
@@ -426,6 +428,23 @@
       "treeId": "ccc5858779d592ee7424cc46c217452f0f05e177",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "25d5b54bbbe3e3da235e4f9fd47d291bcc6ee605",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-2fd44536@2026-09-19T13:07:02Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+      ],
+      "recordedBy": "qa-2fd44536",
+      "recordedAt": "2026-09-19T13:07:05.911Z",
+      "treeId": "788d30f49d4c70177d2adddf1bf524b616a11a8d",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -441,10 +460,18 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-7100be29@2026-09-19T12:35:45Z",
-    "at": "2026-09-19T12:35:53.651Z"
+    "sessionId": "qa-2fd44536@2026-09-19T13:07:02Z",
+    "at": "2026-09-19T13:07:05.911Z"
   },
   "priorHandoffs": [
+    {
+      "whatIsDone": "The worker finished all 7 steps; the completion landed as 8260852 (pushed). qa-2fd44536 claimed the review at 13:07Z and was still reading context when its seat died at 13:11Z. No verdict was recorded.",
+      "whatRemains": "The full QA review of the 7-path diff against the 3 DoD items: both launchers' TOOL-tier harvest of Serena editing tools, the K2 arm in both postflight harnesses, both parity checks, and docs/CONFIGURATION.md.",
+      "pitfalls": "Run postflight.ps1 from PowerShell, not Git Bash. The sh harness takes ~36 min; use MOE_POSTFLIGHT_TIMEOUT_SEC=400. This task gates task-84150869 and task-07474ee4.",
+      "releasedAt": "2026-09-19T13:23:27.394Z",
+      "releasedBy": "governor-daa92494",
+      "reason": "Confirmed crash: PyCharm restarted at 13:11:34Z and took every seat launched at 13:01-13:07Z with it. qa-2fd44536 has no wrapper or CLI process on the host, and the daemon restart at 13:11:46Z parked its attempt in reconciling, so it can never reattach. Released with the human's approval so a live QA can take the review."
+    },
     {
       "whatIsDone": "Worker finished all 7 steps; review started 10:15Z. qa-7100be29 was re-reading context at 12:51-13:00Z after the provider-limit backoff; no QA verdict recorded.",
       "whatRemains": "Full QA review of the 7-path diff (both launchers, both postflight harnesses, both parity checks, docs/CONFIGURATION.md) against the 3 DoD items; then qa_approve or qa_reject.",

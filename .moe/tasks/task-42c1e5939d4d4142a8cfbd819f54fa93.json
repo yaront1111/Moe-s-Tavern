@@ -39,7 +39,7 @@
     }
   ],
   "planRevision": 5,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -52,16 +52,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T23:52:56.320Z",
-  "updatedAt": "2026-09-19T13:21:20.213Z",
+  "updatedAt": "2026-09-19T13:24:13.814Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T13:12:10.949Z",
     "plannedStepCount": 2,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 2,
+    "doneAt": "2026-09-19T13:24:13.814Z",
+    "wallClockMs": 722865
   },
   "contextFetchedBy": [
     "architect-74607b1b",
-    "worker-0966ef4c"
+    "worker-0966ef4c",
+    "qa-8df1fc47"
   ],
   "stepsCompleted": [
     "step-1",
@@ -92,7 +95,41 @@
     "source": "agent-reported"
   },
   "filesModified": [
+    "packages/moe-daemon/src/delivery/policy.ts",
+    ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+  ],
+  "completionSummary": "Comment-only fix in packages/moe-daemon/src/delivery/policy.ts, the hasPassingCheck JSDoc (lines 171-176). It replaced the stale claim \"the ps1 wrapper records settings.qualityGate verbatim (the sh one trims it)\" with the current facts: both wrappers now trim before they run and record. It also names the three sources that can still hand the compare a padded command: runs the ps1 wrapper recorded before task-8fc35d31, older wrappers bundled in IDE plugins, and direct moe.record_check_run callers (checkRunStore keeps `command` as sent). Code untouched: both trims (requiredCheckCommand and hasPassingCheck `run.command.trim()`) and the try/catch stay.\n\nDiff: `git diff --numstat` = 5 2, only ` *` JSDoc lines, no added `*/`, file stays LF (i/lf w/lf, 0 CR bytes). `grep verbatim policy.ts` finds nothing.\n\nEvery claim was checked against code:\n- ps1 trims at moe-agent.ps1:2036, runs that value (3886 -> 3806) and records it (1416).\n- sh strips at moe-agent.sh:7333, runs it via `bash -c` (3963) and records it (1996).\n- checkRunStore.ts:106-114 keeps `command` untrimmed.\n- recordCheckRun.ts:63 says \"never trimmed\".\n\nBuild ran in a scratch export (temp index, HEAD + policy.ts, tree 61450b42, `git diff --stat HEAD T` = policy.ts only), never in the shared checkout: its prebuild would regenerate initFiles.ts from peers' dirty docs and `clean` would wipe the live dist. Scratch was torn down, junction unlinked first, live node_modules checked. src/generated matches the pre-task state (only the peer's skillFiles.ts M). Stale wording in qaApprove.test.ts / deliveryProjection.test.ts is out of scope (follow-up task-6177c9c4).",
+  "commits": [
+    {
+      "sha": "249ec63a1c3d23dbcecb214e514511c12f79ba7a",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0966ef4c@2026-09-19T13:18:50Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "recordedBy": "worker-0966ef4c",
+      "recordedAt": "2026-09-19T13:21:40.626Z",
+      "treeId": "a799b9e01dbdac091dba67ae505bc9a8b441b9b0",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "packages/moe-daemon/src/delivery/policy.ts"
   ],
-  "completionSummary": "Comment-only fix in packages/moe-daemon/src/delivery/policy.ts, the hasPassingCheck JSDoc (lines 171-176). It replaced the stale claim \"the ps1 wrapper records settings.qualityGate verbatim (the sh one trims it)\" with the current facts: both wrappers now trim before they run and record. It also names the three sources that can still hand the compare a padded command: runs the ps1 wrapper recorded before task-8fc35d31, older wrappers bundled in IDE plugins, and direct moe.record_check_run callers (checkRunStore keeps `command` as sent). Code untouched: both trims (requiredCheckCommand and hasPassingCheck `run.command.trim()`) and the try/catch stay.\n\nDiff: `git diff --numstat` = 5 2, only ` *` JSDoc lines, no added `*/`, file stays LF (i/lf w/lf, 0 CR bytes). `grep verbatim policy.ts` finds nothing.\n\nEvery claim was checked against code:\n- ps1 trims at moe-agent.ps1:2036, runs that value (3886 -> 3806) and records it (1416).\n- sh strips at moe-agent.sh:7333, runs it via `bash -c` (3963) and records it (1996).\n- checkRunStore.ts:106-114 keeps `command` untrimmed.\n- recordCheckRun.ts:63 says \"never trimmed\".\n\nBuild ran in a scratch export (temp index, HEAD + policy.ts, tree 61450b42, `git diff --stat HEAD T` = policy.ts only), never in the shared checkout: its prebuild would regenerate initFiles.ts from peers' dirty docs and `clean` would wipe the live dist. Scratch was torn down, junction unlinked first, live node_modules checked. src/generated matches the pre-task state (only the peer's skillFiles.ts M). Stale wording in qaApprove.test.ts / deliveryProjection.test.ts is out of scope (follow-up task-6177c9c4)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-0966ef4c@2026-09-19T13:18:50Z",
+    "at": "2026-09-19T13:21:40.626Z"
+  },
+  "completedAt": "2026-09-19T13:24:13.814Z",
+  "reviewCompletedAt": "2026-09-19T13:24:13.814Z",
+  "reviewSummary": "DoD 1 PASS: the policy.ts:171-176 hasPassingCheck JSDoc no longer calls either wrapper verbatim. It names all three reasons the trim stays: pre-8fc35d31 ps1 records, older bundled wrappers, and direct record_check_run callers.\n\nClaims checked against code:\n- ps1 trims with `$qg.Trim()` at 2036 (added by f1399a3; before that it assigned verbatim).\n- ps1 runs and records that value: 3886 to 4051 Invoke-MoeFrozenGate, then 1416 command=$Gate.Command.\n- sh strips at 7333, runs it at 3963, records it at 1996.\n- checkRunStore requireCommand keeps it verbatim; recordCheckRun.ts:63 says \"never trimmed\".\n\nDoD 2 PASS: commit 249ec63 changes policy.ts by 5+/2-, all ` *` lines. No `*/` added, both trims (:159, :185) and the try/catch are intact, the file is still LF, and the working tree matches HEAD. The commit's other paths are wrapper board-state (this task's JSON, and task-e92b2cb3's governor promotion).\n\nRe-ran `npm run build` in a scratch `git archive 249ec63 packages/moe-daemon docs` with node_modules junctioned: exit 0, and dist/delivery/policy.js has the new text. qaApprove.test.ts and deliveryProjection.test.ts pass 190/190 there. The scratch is torn down (junction unlinked first, live node_modules OK), and the shared src/generated is unchanged.\n\nLedger: 249ec63 is a completion commit, pushed, recorded after workStartedAt. The task has no candidate record.\n\nRails: comment-only, and the DoD forbids code, so the failing-test rail has no behaviour to pin. No forbidden patterns. The stale test wording is follow-up task-6177c9c4."
 }
