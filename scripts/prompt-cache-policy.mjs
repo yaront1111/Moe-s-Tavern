@@ -7,8 +7,11 @@ const fail = (code, detail) => { throw new Error(`${code}: ${detail}`); };
 
 function checkEnv(env, source) {
   for (const [key, value] of Object.entries(env ?? {})) {
-    if ((/^DISABLE_PROMPT_CACHING(?:_[A-Z0-9_]+)?$/.test(key) && disabled(value)) ||
-        (key === 'MOE_NO_DYNAMIC_PROMPT_EXCLUDE' && value)) {
+    // Windows resolves environment names without regard to case, including
+    // settings.env entries when Claude applies them to its process environment.
+    const name = process.platform === 'win32' ? key.toUpperCase() : key;
+    if ((/^DISABLE_PROMPT_CACHING(?:_[A-Z0-9_]+)?$/.test(name) && disabled(value)) ||
+        (name === 'MOE_NO_DYNAMIC_PROMPT_EXCLUDE' && value)) {
       fail('MOE_PROMPT_CACHE_DISABLED', `${key} in ${source}; remove the disabling control or explicitly use MOE_PROMPT_CACHE_MODE=inherit.`);
     }
   }

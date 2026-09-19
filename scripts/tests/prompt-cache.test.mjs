@@ -44,6 +44,24 @@ test('strict policy refuses disable controls and malformed local settings withou
   assert.throws(() => checkPolicy({ ...base, args: ['--settings', '{"env":{"DISABLE_PROMPT_CACHING":"1"}}'] }), /MOE_PROMPT_CACHE_DISABLED/);
 });
 
+test('strict policy respects platform environment-name casing for inherited and settings controls', async t => {
+  const { checkPolicy } = await import('../prompt-cache-policy.mjs');
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe policy casing '));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const base = { provider: 'claude', project: dir, cwd: dir, home: dir, managedPaths: [], env: {} };
+  for (const key of ['disable_prompt_caching', 'Disable_Prompt_Caching_Sonnet', 'moe_no_dynamic_prompt_exclude']) {
+    const controls = { [key]: '1' };
+    for (const options of [{ env: controls }, { args: ['--settings', JSON.stringify({ env: controls })] }]) {
+      const check = () => checkPolicy({ ...base, ...options });
+      if (process.platform === 'win32') {
+        assert.throws(check, /MOE_PROMPT_CACHE_DISABLED/, `${key} disables caching on Windows`);
+      } else {
+        assert.equal(check(), 'strict', `${key} is a distinct environment name on Unix`);
+      }
+    }
+  }
+});
+
 test('Codex stream reports each turn once and preserves useful output', () => {
   assert.ok(existsSync(helper), 'shared cache helper must exist');
   const events = [
