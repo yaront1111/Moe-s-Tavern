@@ -120,7 +120,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -140,17 +140,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:55.919Z",
-  "updatedAt": "2026-09-19T06:16:25.444Z",
+  "updatedAt": "2026-09-19T07:29:43.684Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:05:34.837Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-09-19T07:29:43.684Z",
+    "wallClockMs": 41048847
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
     "worker-161b9959",
-    "worker-3c030e77"
+    "worker-3c030e77",
+    "qa-7100be29"
   ],
   "dependsOn": [
     "task-8fc35d31f71440bd85e5c08708ed71fe",
@@ -298,6 +301,29 @@
       "treeId": "f828b435044c326761e80317079c0db20e0e4fea",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "1e6cd4ee303d8aec26ae671c7434696436bc9da1",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3c030e77@2026-09-19T04:30:24Z",
+      "paths": [
+        ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-3c030e77",
+      "recordedAt": "2026-09-19T06:16:43.931Z",
+      "treeId": "10f32e9c117b885404efede0a28699f18eccc0a7",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -308,14 +334,15 @@
     "scripts/tests/parity-check.sh",
     "scripts/tests/parity-check.ps1",
     "docs/CONFIGURATION.md",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-3c030e77@2026-09-19T04:15:17Z",
-    "at": "2026-09-19T04:15:23.789Z"
+    "kind": "completion",
+    "sessionId": "worker-3c030e77@2026-09-19T04:30:24Z",
+    "at": "2026-09-19T06:16:43.931Z"
   },
   "reviewStartedAt": "2026-09-19T06:16:25.442Z",
   "verification": {
@@ -325,5 +352,16 @@
     "reportedAt": "2026-09-19T06:16:25.442Z",
     "source": "agent-reported"
   },
-  "completionSummary": "All three receipt-replay crash windows are closed in BOTH wrappers. No daemon change.\nW1, ledger row lost between update-ref and record_commit:\n- J0 journals the owed row as ledger {sessionId, role, status}.\n- The post-record rewrite drops it only when record_commit acked.\n- The replay re-sends it before the receipt (idempotent by sha), then rewrites the journal without it.\nW2, pull --rebase rewrote the landed commit:\n- When targetAfter is not an ancestor, the replay reads its Moe-Session.\n- It then finds the copy with --fixed-strings --all-match --grep=Moe-Session:<sid> --grep=Moe-Kind: completion over <targetBefore>..<tip> (the tip alone when unborn).\n- The receipt is re-sent verbatim; the ledger sha and landedRevision use the copy.\nW3, foreign seat:\n- Any seat finalizes the journaled attempt, workerId = the journal owner.\n- The attempt file must match id/task/worker/generation and be finalizing.\nEvery git or RPC failure keeps the journal; the replay still runs after claim_next_task.\nTests, red on today's wrappers first (sh + pwsh), each failing on its defect:\n- receipt-ledger-replay, receipt-rebase-replay, receipt-foreign-replay.\n- The frozen suite is still byte-identical in both harnesses; existing assertions are untouched.\nMutations a-d (ledger re-send, copy search, own-seat guard, ledger drop) each fail their arm on both twins; run from a scratch copy.\nVerification on the final bytes:\n- postflight.sh rc 0: 69 frozen (66+3) + 29 scope.\n- postflight.ps1: pwsh rc 0 and PS 5.1 rc 0, 69+29 each.\n- parity-check PASS on sh, pwsh and PS 5.1.\n- acceptance.test.ts 6/6, unedited.\nDocs (CONFIGURATION.md Delivery receipts, MCP_SERVER.md finalize_attempt) now describe the owed row, the rewritten copy and the any-seat close. They also list the residuals and the remote-push recovery command.\nSelf-review: comment-0349c6ce."
+  "completionSummary": "All three receipt-replay crash windows are closed in BOTH wrappers. No daemon change.\nW1, ledger row lost between update-ref and record_commit:\n- J0 journals the owed row as ledger {sessionId, role, status}.\n- The post-record rewrite drops it only when record_commit acked.\n- The replay re-sends it before the receipt (idempotent by sha), then rewrites the journal without it.\nW2, pull --rebase rewrote the landed commit:\n- When targetAfter is not an ancestor, the replay reads its Moe-Session.\n- It then finds the copy with --fixed-strings --all-match --grep=Moe-Session:<sid> --grep=Moe-Kind: completion over <targetBefore>..<tip> (the tip alone when unborn).\n- The receipt is re-sent verbatim; the ledger sha and landedRevision use the copy.\nW3, foreign seat:\n- Any seat finalizes the journaled attempt, workerId = the journal owner.\n- The attempt file must match id/task/worker/generation and be finalizing.\nEvery git or RPC failure keeps the journal; the replay still runs after claim_next_task.\nTests, red on today's wrappers first (sh + pwsh), each failing on its defect:\n- receipt-ledger-replay, receipt-rebase-replay, receipt-foreign-replay.\n- The frozen suite is still byte-identical in both harnesses; existing assertions are untouched.\nMutations a-d (ledger re-send, copy search, own-seat guard, ledger drop) each fail their arm on both twins; run from a scratch copy.\nVerification on the final bytes:\n- postflight.sh rc 0: 69 frozen (66+3) + 29 scope.\n- postflight.ps1: pwsh rc 0 and PS 5.1 rc 0, 69+29 each.\n- parity-check PASS on sh, pwsh and PS 5.1.\n- acceptance.test.ts 6/6, unedited.\nDocs (CONFIGURATION.md Delivery receipts, MCP_SERVER.md finalize_attempt) now describe the owed row, the rewritten copy and the any-seat close. They also list the residuals and the remote-push recovery command.\nSelf-review: comment-0349c6ce.",
+  "touchedFiles": [
+    "scripts/moe-agent.ps1",
+    "docs/CONFIGURATION.md",
+    "scripts/tests/parity-check.sh",
+    "scripts/moe-agent.sh",
+    "docs/MCP_SERVER.md",
+    "scripts/tests/parity-check.ps1"
+  ],
+  "completedAt": "2026-09-19T07:29:43.684Z",
+  "reviewCompletedAt": "2026-09-19T07:29:43.684Z",
+  "reviewSummary": "Verified on completion 1e6cd4e (pushed, in task.commits); the task's commits b1d2a09..1e6cd4e touch only the 8 planned files plus task records; no daemon change. Ran everything from a scratch copy of scripts/ whose bytes equal HEAD (sha1 checked). DoD1: read both wrapper diffs against the plan. W1: J0 journals ledger{sessionId,role,status}, which is dropped only on a record_commit ack; the replay re-sends it before the receipt. W2: the rewritten-copy search uses --fixed-strings --all-match on Moe-Session and Moe-Kind: completion over base..tip (tip only when unborn). W3: any seat finalizes with workerId = journal owner, fenced by the attempt file's id/task/worker/gen. Checked in daemon source: finalize_attempt, record_delivery_receipt and record_commit have no owner gate; receiptStore does not compare workerId; record_commit merges a repeated sha. DoD2 red: the 3 new arms run against b1d2a09's wrappers FAIL on both sh and pwsh, each on its own defect: owed row 0!=1; old code logs 'never moved the ref' so 1!=2 receipts; finalize 0!=1. My own mutants a-d on both twins each killed their arm: a/b/c on the new arms, d (never drop ledger) on receipt-refused. Harness diffs remove only the planned hold-condition lines; the frozen suite is byte-identical in both harnesses. DoD3 green: MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh rc0 2679s (PASS frozen 69 = 66+3, scope 29, PASS postflight.sh). postflight.ps1 pwsh rc0 425s 69+29; PS5.1 rc0 439s 69+29. Arm subsets: 7 receipt arms + teardown-landed + loop-land-twice + 3 new green (pwsh 12/12, PS5.1 5/5). parity-check PASS on sh/pwsh/PS5.1, and a misspelled new needle fails both. acceptance.test.ts has no diff and passes 6/6. Docs (CONFIGURATION.md Delivery receipts, MCP_SERVER.md finalize_attempt) match the code. Line endings unchanged. Non-blocking: the --all-match and base-range guards are not pinned by an arm (defense in depth)."
 }
