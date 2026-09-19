@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,16 +92,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T21:40:47.793Z",
-  "updatedAt": "2026-09-19T07:38:44.561Z",
+  "updatedAt": "2026-09-19T07:42:21.173Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T21:43:29.507Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-09-19T07:42:21.173Z",
+    "wallClockMs": 35931666
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
-    "worker-161b9959"
+    "worker-161b9959",
+    "qa-7100be29"
   ],
   "dependsOn": [
     "task-31fe6dc806d9466d9d71c9f8beda60be",
@@ -150,7 +153,51 @@
     "docs/SCHEMA.md",
     "docs/CONFIGURATION.md",
     "docs/MCP_SERVER.md",
+    "docs/DEVELOPMENT.md",
+    ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json",
+    ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json"
+  ],
+  "completionSummary": "Docs only, plus one new doc-contract guard test. Nine doc lines claimed the daemon \"never runs git\", which is false. Eight are reworded to say what holds, using ARCHITECTURE.md \"Delivery Path\" wording: the daemon never writes git state, lands, pushes or runs the gate, and never checks reported values against git. Its one git call is the read-only `git --no-optional-locks status --porcelain=v2 --branch` handoff fingerprint in util/diskState.ts, called from claim_next_task and release_task. The ninth line was a duplicate on the same MCP_SERVER.md line (450) and is covered by that rewrite.\n\nSites:\n- CLAUDE.md:86, which names the fingerprint\n- SCHEMA.md:108 and :448\n- CONFIGURATION.md:156\n- MCP_SERVER.md:261, :450 and :568\n- DEVELOPMENT.md:184, which the task description missed\n\nThe new packages/moe-daemon/src/util/daemonGitDocs.test.ts checks two things:\n(1) A recursive scan of CLAUDE.md and docs/**/*.md finds no /never (runs|executes|touches) git|runs no git|does not run git/i. An arrayContaining guard makes an empty or non-recursive walk fail.\n(2) ARCHITECTURE.md contains the exact command, and diskState.ts contains the same GIT_STATUS_ARGS array.\nRed-green: step 1 was red, listing all 8 sites; after the rewrites it is green.\n\nTwo wordings deviate from the plan so they are true in context. SCHEMA.md:448 says \"their callers\", because declare_files is agent-called. MCP_SERVER.md:450 says \"these reports\", because that bullet covers three reported values.\n\nVerification: the two doc tests pass 19/19. tsc is clean, and the test file also typechecks alone under strict. Lint passes. Full daemon suite 2152/2152.\n\nThe self-review is comment-f724b231. It lists the code comments and MCP tool descriptions that still say \"never runs git\", as a follow-up candidate: recordCandidate.ts:39 and recordDeliveryReceipt.ts:41 descriptions, plus comments in policy.ts, candidateStore.ts, receiptStore.ts, finalizeAttempt.ts, providerDescriptor.ts and schema.ts. The epic-3d096d59 rail is left ",
+  "commits": [
+    {
+      "sha": "d09ef1e9574e44dcac975af12a905a77a307b135",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-19T07:29:59Z",
+      "paths": [
+        ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json",
+        ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
+        "CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "docs/DEVELOPMENT.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/util/daemonGitDocs.test.ts"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-19T07:39:12.473Z",
+      "treeId": "6e058680bd13d25f6be31608c223a261f9b1cb09",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/daemonGitDocs.test.ts",
+    "docs/CONFIGURATION.md",
+    "docs/SCHEMA.md",
+    "CLAUDE.md",
+    "docs/MCP_SERVER.md",
     "docs/DEVELOPMENT.md"
   ],
-  "completionSummary": "Docs only, plus one new doc-contract guard test. Nine doc lines claimed the daemon \"never runs git\", which is false. Eight are reworded to say what holds, using ARCHITECTURE.md \"Delivery Path\" wording: the daemon never writes git state, lands, pushes or runs the gate, and never checks reported values against git. Its one git call is the read-only `git --no-optional-locks status --porcelain=v2 --branch` handoff fingerprint in util/diskState.ts, called from claim_next_task and release_task. The ninth line was a duplicate on the same MCP_SERVER.md line (450) and is covered by that rewrite.\n\nSites:\n- CLAUDE.md:86, which names the fingerprint\n- SCHEMA.md:108 and :448\n- CONFIGURATION.md:156\n- MCP_SERVER.md:261, :450 and :568\n- DEVELOPMENT.md:184, which the task description missed\n\nThe new packages/moe-daemon/src/util/daemonGitDocs.test.ts checks two things:\n(1) A recursive scan of CLAUDE.md and docs/**/*.md finds no /never (runs|executes|touches) git|runs no git|does not run git/i. An arrayContaining guard makes an empty or non-recursive walk fail.\n(2) ARCHITECTURE.md contains the exact command, and diskState.ts contains the same GIT_STATUS_ARGS array.\nRed-green: step 1 was red, listing all 8 sites; after the rewrites it is green.\n\nTwo wordings deviate from the plan so they are true in context. SCHEMA.md:448 says \"their callers\", because declare_files is agent-called. MCP_SERVER.md:450 says \"these reports\", because that bullet covers three reported values.\n\nVerification: the two doc tests pass 19/19. tsc is clean, and the test file also typechecks alone under strict. Lint passes. Full daemon suite 2152/2152.\n\nThe self-review is comment-f724b231. It lists the code comments and MCP tool descriptions that still say \"never runs git\", as a follow-up candidate: recordCandidate.ts:39 and recordDeliveryReceipt.ts:41 descriptions, plus comments in policy.ts, candidateStore.ts, receiptStore.ts, finalizeAttempt.ts, providerDescriptor.ts and schema.ts. The epic-3d096d59 rail is left "
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-161b9959@2026-09-19T07:29:59Z",
+    "at": "2026-09-19T07:39:12.473Z"
+  },
+  "completedAt": "2026-09-19T07:42:21.173Z",
+  "reviewCompletedAt": "2026-09-19T07:42:21.173Z",
+  "reviewSummary": "Verified completion commit d09ef1e: it is in task.commits, pushed, and HEAD of moe/work-2026-09-13. It touches the 6 planned paths plus board records, and the task paths are clean in the worktree.\nDoD1: I read the word-diff of every hunk. Each is one line with no churn (numstat 1/1 x3, 3/3, 2/2; the index blobs are LF). All 8 sites (the task's 7 plus DEVELOPMENT.md:184) now say something true and match ARCHITECTURE.md:167-176. CLAUDE.md names the read-only fingerprint, and no site contradicts it.\nChecked against the code:\n- The only git subprocess is diskState.ts:43, called only from claimNextTask and releaseTask.\n- getCommitScope, recordCommit, declareFiles and completeTask import no fs, child_process or git code. recordCommit checks shape only, and currentBranch is a caller input.\n- SCHEMA's ledger holds declaredFiles, so \"their callers\" is correct.\nA broader probe of all *.md finds no other false claim.\nRed/green on clean git-archive exports: the guard FAILS on d09ef1e~1, listing exactly the 8 sites, and passes 2/2 on d09ef1e.\nDoD2: the daemonGitDocs + taskTimeBudgetDocs vitest run exits 0 (19/19), and npm run lint exits 0.\nAlso: tsc --noEmit is clean, the new test typechecks alone under --strict, and CI runs Node 24, so readdirSync recursive is safe. No forbidden patterns. The rails hold: a regression test was added, and this is docs only.\nFollow-up (out of scope, the task is docs only): 13 code comments and 2 MCP tool descriptions still say \"never runs git\" (recordCandidate.ts:39, recordDeliveryReceipt.ts:41; see comment-f724b231)."
 }
