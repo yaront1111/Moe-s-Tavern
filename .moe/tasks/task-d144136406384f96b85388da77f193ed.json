@@ -105,7 +105,7 @@
   ],
   "planRevision": 15,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-7100be29",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:16:35.674Z",
-  "updatedAt": "2026-09-19T10:15:00.430Z",
+  "updatedAt": "2026-09-19T10:16:05.620Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:40:08.713Z",
     "plannedStepCount": 7,
@@ -133,7 +133,8 @@
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
-    "worker-161b9959"
+    "worker-161b9959",
+    "qa-7100be29"
   ],
   "dependsOn": [
     "task-eff6f0181ce848d48aa818a3df4f0950",
@@ -185,7 +186,50 @@
     "scripts/moe-agent.ps1",
     "scripts/tests/parity-check.sh",
     "scripts/tests/parity-check.ps1",
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-a5fb02e977f74ea2802f24053c44a1c6.json",
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+  ],
+  "completionSummary": "Both launchers' TOOL-tier harvest now counts Serena's current editing tools and keeps the old names (replace_symbol_body, insert_after/before_symbol, create_text_file, replace_regex).\nRules:\n- replace_content and the optional delete_lines, replace_lines and insert_at_line witness their relative_path on any non-error result.\n- safe_delete_symbol witnesses its relative_path only on 'OK'. Its 'Cannot delete' refusal is a normal result and witnesses nothing.\n- rename_symbol witnesses only its declaring relative_path, and only on 'Successfully renamed'. Its referencing files are the documented gap.\n- replace_in_files witnesses exactly the files listed after its 'Replaced N occurrence(s) in M file(s):' header, which must be the first line. A dry run or failed guard witnesses nothing.\n- Result text may be a string or a [{type:text}] list (the real MCP shape), and Serena's diagnostics JSON envelope is unwrapped. Anything malformed fails closed.\nsh (moe-agent.sh STREAM_JSON_PARSER): new result_text and serena_changed; the tool_result call site is wrapped in try/except. Also fixed a pre-existing crash: a non-object JSON line killed the parser.\nps1 (moe-agent.ps1):\n- New Get-MoeToolResultText and Get-MoeSerenaResultPaths.\n- Register stores a gated call as a NUL-tagged (tool, relative_path) pair, which Complete-MoeToolWrite resolves inside try/catch.\n- The 256-char id limit, the 500/2048/8192 caps, the conflicting-repeat rule and is_error handling are unchanged.\nTests: K2 is in both harnesses, with 6 contested paths plus refused.txt (named only by a refusal, a dry run and a failed rename). It was RED on the old wrappers on sh, pwsh and PS 5.1 ('got [owned-a.txt]') and is green now.\nParity: parity-check.{sh,ps1} pin all 12 names plus 'occurrence(s) in'. Dropping replace_content fails both on all engines.\nDocs: CONFIGURATION.md 'Session touch evidence'.\nVerified: full postflight.sh PASS; postflight.ps1 PASS on pwsh and PS 5.1 (30 scope scenarios each); importee-guard.ps1 48/48 on",
+  "commits": [
+    {
+      "sha": "8260852df5bc405cb17b19cc08c78d4f78937203",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-19T08:45:28Z",
+      "paths": [
+        ".moe/tasks/task-a5fb02e977f74ea2802f24053c44a1c6.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+        "docs/CONFIGURATION.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-19T10:16:00.894Z",
+      "treeId": "99a66b10c1d3e059e6ed346e9b2bbadb1b37b4f2",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/postflight.ps1",
     "docs/CONFIGURATION.md"
   ],
-  "completionSummary": "Both launchers' TOOL-tier harvest now counts Serena's current editing tools and keeps the old names (replace_symbol_body, insert_after/before_symbol, create_text_file, replace_regex).\nRules:\n- replace_content and the optional delete_lines, replace_lines and insert_at_line witness their relative_path on any non-error result.\n- safe_delete_symbol witnesses its relative_path only on 'OK'. Its 'Cannot delete' refusal is a normal result and witnesses nothing.\n- rename_symbol witnesses only its declaring relative_path, and only on 'Successfully renamed'. Its referencing files are the documented gap.\n- replace_in_files witnesses exactly the files listed after its 'Replaced N occurrence(s) in M file(s):' header, which must be the first line. A dry run or failed guard witnesses nothing.\n- Result text may be a string or a [{type:text}] list (the real MCP shape), and Serena's diagnostics JSON envelope is unwrapped. Anything malformed fails closed.\nsh (moe-agent.sh STREAM_JSON_PARSER): new result_text and serena_changed; the tool_result call site is wrapped in try/except. Also fixed a pre-existing crash: a non-object JSON line killed the parser.\nps1 (moe-agent.ps1):\n- New Get-MoeToolResultText and Get-MoeSerenaResultPaths.\n- Register stores a gated call as a NUL-tagged (tool, relative_path) pair, which Complete-MoeToolWrite resolves inside try/catch.\n- The 256-char id limit, the 500/2048/8192 caps, the conflicting-repeat rule and is_error handling are unchanged.\nTests: K2 is in both harnesses, with 6 contested paths plus refused.txt (named only by a refusal, a dry run and a failed rename). It was RED on the old wrappers on sh, pwsh and PS 5.1 ('got [owned-a.txt]') and is green now.\nParity: parity-check.{sh,ps1} pin all 12 names plus 'occurrence(s) in'. Dropping replace_content fails both on all engines.\nDocs: CONFIGURATION.md 'Session touch evidence'.\nVerified: full postflight.sh PASS; postflight.ps1 PASS on pwsh and PS 5.1 (30 scope scenarios each); importee-guard.ps1 48/48 on"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-161b9959@2026-09-19T08:45:28Z",
+    "at": "2026-09-19T10:16:00.894Z"
+  }
 }
