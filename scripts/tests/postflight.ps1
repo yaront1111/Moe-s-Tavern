@@ -1463,6 +1463,90 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         Start-Sleep -Seconds 3
         $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
 
+        # --- Hot reload keeps ONE wrapper process. An edit to moe-agent.ps1
+        # reloads every live seat at the top of its next iteration. df42861
+        # handed over with `& <exe> <args>`: the seat kept its console, but the
+        # old wrapper stayed blocked on its child for good, one more process
+        # per seat per edit (45 wrappers / 5.5 GB after one night, 2026-09-19).
+        # Two edits to a COPY (repo-launched seats reload on every edit of the
+        # real file) must leave one wrapper process, one runner identity on
+        # every claim, and a seat that goes on claiming. ---
+        $reloadWrapper = Join-Path $tempRoot 'reload\scripts\moe-agent.ps1'
+        $reloadProject = Join-Path $tempRoot 'reload\project'
+        New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
+        Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload.out'
+        function Get-ReloadRows {
+            $lines = @(); try { $lines = @(Get-Content -LiteralPath $reloadRpcLog -ErrorAction Stop) } catch {}
+            foreach ($line in $lines) { try { $line | ConvertFrom-Json } catch {} }
+        }
+        # c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister.
+        function Get-ReloadSequence {
+            -join @(Get-ReloadRows | ForEach-Object {
+                if ($_.tool -eq 'claim_next_task') { 'c' }
+                elseif ($_.tool -eq 'deregister_worker') { if ($_.args.reason -eq 'wrapper_restart') { 'r' } else { 'x' } }
+            })
+        }
+        function Get-ReloadWrapperPids {
+            @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" |
+                Where-Object { $_.CommandLine -and $_.CommandLine.Contains($reloadWrapper) } | ForEach-Object { $_.ProcessId })
+        }
+        function Wait-ReloadSequence([string]$Pattern, [string]$What) {
+            $deadline = (Get-Date).AddSeconds($wrapperTimeoutSec)
+            while ((Get-Date) -lt $deadline -and -not $reloadProc.HasExited) {
+                if ((Get-ReloadSequence) -match $Pattern) { return }
+                Start-Sleep -Milliseconds 250
+            }
+            throw "HOT RELOAD FAILED: no $What (waited up to ${wrapperTimeoutSec}s; wrapper exited: $($reloadProc.HasExited); RPC sequence '$(Get-ReloadSequence)')"
+        }
+        # The seat hashes its own file every iteration; that read can refuse a
+        # concurrent write for a moment.
+        function Set-ReloadWrapperText([string]$Text) {
+            for ($i = 1; ; $i++) {
+                try { [IO.File]::WriteAllText($reloadWrapper, $Text, (New-Object System.Text.UTF8Encoding($true))); return }
+                catch { if ($i -ge 20) { throw }; Start-Sleep -Milliseconds 100 }
+            }
+        }
+        $reloadProc = $null
+        $reloadCounts = @()
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $env:MOE_DISABLE_HEARTBEAT = '1'
+        try {
+            $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', 'worker-reload', '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+            $null = $reloadProc.Handle
+            Wait-ReloadSequence '^c' 'first claim'
+            # Edit 1 rewrites the restart announcement, which the SECOND reload
+            # prints from the reloaded bytes: a reload runs the file on disk.
+            $reloadText = [IO.File]::ReadAllText($reloadWrapper)
+            $reloadEdited = $reloadText.Replace('restarting to load it"', 'restarting to load it (edit 1 loaded)"')
+            if ($reloadEdited -eq $reloadText) { throw 'HOT RELOAD FAILED: the restart announcement is missing from the wrapper' }
+            Set-ReloadWrapperText $reloadEdited
+            Wait-ReloadSequence '^c+rc' 'claim after reload 1'
+            $reloadCounts += @(Get-ReloadWrapperPids).Count
+            Set-ReloadWrapperText ($reloadEdited + "# reload 2`n")
+            Wait-ReloadSequence '^c+rc+rc' 'claim after reload 2'
+            $reloadCounts += @(Get-ReloadWrapperPids).Count
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
+            if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+            foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+        }
+        $reloadSeq = Get-ReloadSequence
+        $reloadIds = @(Get-ReloadRows | Where-Object { $_.tool -eq 'claim_next_task' } | ForEach-Object { "$($_.args.processStartedAt)|$($_.args.host)" } | Sort-Object -Unique)
+        $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+        $reloadProblems = @()
+        if ($reloadSeq -notmatch '^c+rc+rc+$') { $reloadProblems += "expected claims, then exactly two wrapper_restart deregisters each followed by claims; RPC sequence '$reloadSeq'" }
+        if (($reloadCounts -join ',') -ne '1,1') { $reloadProblems += "expected exactly 1 wrapper process after each reload; counted $($reloadCounts -join ' then ')" }
+        if ($reloadIds.Count -ne 1 -or $reloadIds[0] -like '|*') { $reloadProblems += "expected every claim to carry one runner identity; got $($reloadIds.Count): $($reloadIds -join '; ')" }
+        if ($reloadLog -notlike '*restarting to load it (edit 1 loaded)*') { $reloadProblems += 'the second reload did not run the edited bytes' }
+        if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
+        Write-Host '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity'
+
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no
         # branch commit (the edits go to a rescue ref), PUSH-BLOCKED chat

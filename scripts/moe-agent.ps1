@@ -63,6 +63,38 @@
     [string]$Model = ""
 )
 
+# ---- Hot-reload supervisor --------------------------------------------------
+# One process and one console per seat, however many reloads. The first
+# invocation in a process runs every pass of this file with `&` and loops while
+# a pass asks for a reload (the restart check in the main loop, then the
+# hand-over at the bottom of this file). `&` re-reads the file, so each pass
+# runs the bytes on disk now, and the previous pass has fully returned (its
+# finally ran, its seat deregistered) before the next one starts. df42861
+# relaunched through `& <exe> <args>` instead: the seat kept its console, but
+# the old wrapper stayed blocked on its child for the child's whole life, one
+# more process per seat per edit -- 45 wrappers / 6.2 GB after one night of
+# launcher landings, 38 of them blocked parents holding 5.5 GB (measured
+# 2026-09-19). An `exit N` anywhere in a pass returns N here and the process
+# exits with it; Ctrl+C stops the whole pipeline, so it never reloads.
+if (-not $global:MoeWrapperSupervised -and $PSCommandPath) {
+    $global:MoeWrapperSupervised = $true
+    $moeReloaded = $false
+    try {
+        do {
+            $global:MoeWrapperReload = $false; $global:LASTEXITCODE = 0
+            & $PSCommandPath @PSBoundParameters
+            $moeRc = $LASTEXITCODE
+            $moeReloaded = $global:MoeWrapperReload
+        } while ($moeReloaded)
+    } catch {
+        # A reloaded file that no longer parses, rejects the bound parameters or
+        # is gone stops the seat, as a failed child relaunch did before.
+        if ($moeReloaded) { Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow }
+        throw
+    } finally { $global:MoeWrapperSupervised = $false }
+    exit $moeRc
+}
+
 # Fail fast on unhandled cmdlet errors. Per-call `-ErrorAction SilentlyContinue`
 # overrides this for spots that intentionally rely on non-terminating errors
 # (Resolve-Path with missing paths, Get-Process for stale PIDs, etc.).
@@ -363,6 +395,17 @@ function Invoke-MoeDeregister {
     try { Invoke-MoeRpc -Tool "deregister_worker" -Args @{ workerId = $WorkerId; reason = $Reason } | Out-Null } catch {}
 }
 # PowerShell.Exiting fires for normal exits AND console-window close in 5.1.
+# Its action resolves Invoke-MoeDeregister only while this pass is on the stack
+# (measured 2026-09-19: at process exit after the pass returned, the name is not
+# recognized), so the outer finally stays the deregister of record. A reload
+# reruns this file in the same process (the supervisor at the top): drop the
+# previous pass's subscriber and its job first so exactly one exists, and touch
+# only ours (a -Command launch that loads a profile may own others).
+try {
+    Get-EventSubscriber -SourceIdentifier PowerShell.Exiting -ErrorAction SilentlyContinue |
+        Where-Object { "$($_.Action.Command)" -match 'Invoke-MoeDeregister' } |
+        ForEach-Object { Unregister-Event -SubscriptionId $_.SubscriptionId; Remove-Job -Id $_.Action.Id -Force -ErrorAction SilentlyContinue }
+} catch {}
 try { Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action { Invoke-MoeDeregister } | Out-Null } catch {}
 # Do not attach a PowerShell scriptblock to Console.CancelKeyPress: its foreign
 # thread has no runspace. In 5.1 it was inert; in 7.x it aborts the process before
@@ -3622,6 +3665,14 @@ function Update-MoeSharedIndex([string]$Top, [array]$Paths) {
 }
 
 
+# .NET, not Get-FileHash: Windows PowerShell 5.1 started by node under pwsh (the
+# CI 5.1 leg) inherits pwsh's PSModulePath and cannot resolve Get-FileHash at
+# all, which silently turned the hot reload below off there.
+function Get-MoeSha256Hex([byte[]]$Bytes) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '') } finally { $sha.Dispose() }
+}
+
 # Suspended launch + an owned kill-on-close job closes the child-registration
 # race. One inherited log handle captures both streams without memory buffering.
 $script:MoeGateProcessDefinition = @"
@@ -3692,9 +3743,13 @@ public sealed class MoeFrozenGateProcess : IDisposable {
     public void Dispose() { if(job!=IntPtr.Zero) {CloseHandle(job);job=IntPtr.Zero;} if(process!=IntPtr.Zero){CloseHandle(process);process=IntPtr.Zero;} }
 }
 "@
+# A compiled type lives as long as the process, and a hot reload reruns this
+# file in the same process: the class is named after its source, so a changed
+# definition compiles under a new name instead of silently keeping the old code.
+$script:MoeGateTypeName = 'MoeFrozenGateProcess' + (Get-MoeSha256Hex ([Text.Encoding]::UTF8.GetBytes($script:MoeGateProcessDefinition))).Substring(0, 12)
 function Initialize-MoeGateProcess {
-    if ('MoeFrozenGateProcess' -as [type]) { return }
-    Add-Type -TypeDefinition $script:MoeGateProcessDefinition -ErrorAction Stop
+    if ($script:MoeGateTypeName -as [type]) { return }
+    Add-Type -TypeDefinition $script:MoeGateProcessDefinition.Replace('MoeFrozenGateProcess', $script:MoeGateTypeName) -ErrorAction Stop
 }
 function Test-MoeGateIntegrity([hashtable]$Frozen) {
     $top = $script:MoeGate.Workspace
@@ -3803,7 +3858,7 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
         $vars['MOE_PROJECT_PATH']=$cwd
         $block=(@($vars.Keys | Sort-Object | ForEach-Object { "$_=$($vars[$_])" }) -join [char]0)+[char]0+[char]0
         Write-Host "Post-flight: quality gate: $Command" -ForegroundColor Cyan
-        $gate.Process=New-Object MoeFrozenGateProcess($env:ComSpec,$Command,$cwd,$block,$gate.Log)
+        $gate.Process=New-Object -TypeName $script:MoeGateTypeName -ArgumentList @($env:ComSpec,$Command,$cwd,$block,$gate.Log)
         $gate.Started=$true
         while (-not $gate.Process.Wait(100)) { } # No idle-output timeout.
         $gate.ExitCode=$gate.Process.ExitCode; $gate.Finished=$true
@@ -4741,21 +4796,16 @@ if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [in
 # while every copy on disk already carried the fix.
 #
 # The hash is captured ONCE, here, so one on-disk change triggers exactly one
-# restart: the relaunched process captures the new hash and cannot thrash if the
+# restart: the reloaded pass captures the new hash and cannot thrash if the
 # file is touched again mid-flight.
 $script:MoeWrapperPath = $PSCommandPath
 $script:MoeWrapperLaunchHash = $null
-$script:MoeWrapperHostExe = $null
-$script:MoeWrapperRelaunchArgs = @()
 # Set by the restart check below and read once, past the outer finally, by the
 # hand-over at the very bottom of this file.
 $script:MoeWrapperRelaunchRequested = $false
 try {
     if ($script:MoeWrapperPath -and (Test-Path -LiteralPath $script:MoeWrapperPath)) {
-        $script:MoeWrapperLaunchHash =
-            (Get-FileHash -Algorithm SHA256 -LiteralPath $script:MoeWrapperPath).Hash
-        $script:MoeWrapperHostExe = (Get-Process -Id $PID).Path
-        $script:MoeWrapperRelaunchArgs = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)
+        $script:MoeWrapperLaunchHash = Get-MoeSha256Hex ([IO.File]::ReadAllBytes($script:MoeWrapperPath))
     }
 } catch {
     # FAIL-OPEN. A wrapper that dies because it could not stat itself is a fleet
@@ -4782,26 +4832,25 @@ do {
     if ($script:MoeWrapperLaunchHash) {
         $moeCurrentHash = $null
         try {
-            $moeCurrentHash =
-                (Get-FileHash -Algorithm SHA256 -LiteralPath $script:MoeWrapperPath).Hash
+            $moeCurrentHash = Get-MoeSha256Hex ([IO.File]::ReadAllBytes($script:MoeWrapperPath))
         } catch {
             $moeCurrentHash = $null   # FAIL-OPEN: keep running the current bytes
         }
         if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash) {
             Write-Host "wrapper source changed on disk; restarting to load it"
             # The hand-over itself happens past the outer finally, IN THIS
-            # CONSOLE. Until 2026-09-18 this was a `Start-Process`, which gives
-            # the relaunched wrapper its OWN console window and leaves the
-            # launching terminal at a prompt: the operator reads that as a dead
-            # seat and relaunches the same worker id, so two wrapper loops share
-            # it and both resume the held task. Measured that day on
+            # PROCESS AND CONSOLE (the supervisor at the top of this file runs
+            # the file again). Until 2026-09-18 this was a `Start-Process`,
+            # which gives the relaunched wrapper its OWN console window and
+            # leaves the launching terminal at a prompt: the operator reads that
+            # as a dead seat and relaunches the same worker id, so two wrapper
+            # loops share it and both resume the held task. Measured that day on
             # qa-a36819c3 (two CLIs reviewing one REVIEW row, one deleting the
             # other's harness log) and on worker-d0c3b06e. The sh twin `exec`s
-            # in place for the same reason; PowerShell has no exec, so this
-            # process stays alive as the relaunched wrapper's parent.
+            # in place for the same reason.
             # Deregister BEFORE handing over (sh twin parity, same reason
-            # string): the relaunched wrapper registers afresh, and the
-            # post-flight above has already landed this session's work.
+            # string): the next pass registers afresh, and the post-flight
+            # above has already landed this session's work.
             Invoke-MoeDeregister -Reason 'wrapper_restart'
             $script:MoeWrapperRelaunchRequested = $true
             break
@@ -6475,18 +6524,13 @@ $mentionsJson
 
 # ---- Self-restart hand-over (see the restart check inside the loop) ---------
 # Runs only after the finally above has released this session's temp files,
-# gate workspace, live marker and seat, so the relaunched wrapper starts from a
-# clean slate. The call operator keeps the CHILD IN THIS CONSOLE: the operator's
-# terminal still shows the seat, Ctrl+C still reaches it, and nobody mistakes a
-# hand-over for a dead seat and launches a second loop on the same worker id.
-if ($script:MoeWrapperRelaunchRequested -and $script:MoeWrapperHostExe) {
-    $moeRelaunchExe = $script:MoeWrapperHostExe
-    $moeRelaunchArgs = @($script:MoeWrapperRelaunchArgs)
-    try {
-        & $moeRelaunchExe @moeRelaunchArgs
-        exit $LASTEXITCODE
-    } catch {
-        Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow
-        exit 1
-    }
-}
+# gate workspace, live marker and seat, so the next pass starts from a clean
+# slate. The supervisor at the top of this file runs that pass IN THIS PROCESS
+# AND CONSOLE: one process and one console per seat however many reloads, the
+# operator's terminal still shows the seat, Ctrl+C still reaches it, and nobody
+# mistakes a hand-over for a dead seat and launches a second loop on the same
+# worker id. The runner identity (<pid>@<start token>) belongs to the process,
+# so it survives the reload and a held attempt can still reattach afterwards.
+if ($script:MoeWrapperRelaunchRequested) { $global:MoeWrapperReload = $true }
+# Explicit, so the supervisor never reads a stale native exit code.
+exit 0

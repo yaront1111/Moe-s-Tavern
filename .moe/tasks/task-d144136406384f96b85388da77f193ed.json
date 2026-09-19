@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:16:35.674Z",
-  "updatedAt": "2026-09-19T14:40:53.829Z",
+  "updatedAt": "2026-09-19T14:41:49.659Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:40:08.713Z",
     "plannedStepCount": 7,
@@ -197,7 +197,8 @@
     ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
     ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
     ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
-    ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json"
+    ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
   ],
   "completionSummary": "Both launchers' TOOL-tier harvest now counts Serena's current editing tools and keeps the old names (replace_symbol_body, insert_after/before_symbol, create_text_file, replace_regex).\nRules:\n- replace_content and the optional delete_lines, replace_lines and insert_at_line witness their relative_path on any non-error result.\n- safe_delete_symbol witnesses its relative_path only on 'OK'. Its 'Cannot delete' refusal is a normal result and witnesses nothing.\n- rename_symbol witnesses only its declaring relative_path, and only on 'Successfully renamed'. Its referencing files are the documented gap.\n- replace_in_files witnesses exactly the files listed after its 'Replaced N occurrence(s) in M file(s):' header, which must be the first line. A dry run or failed guard witnesses nothing.\n- Result text may be a string or a [{type:text}] list (the real MCP shape), and Serena's diagnostics JSON envelope is unwrapped. Anything malformed fails closed.\nsh (moe-agent.sh STREAM_JSON_PARSER): new result_text and serena_changed; the tool_result call site is wrapped in try/except. Also fixed a pre-existing crash: a non-object JSON line killed the parser.\nps1 (moe-agent.ps1):\n- New Get-MoeToolResultText and Get-MoeSerenaResultPaths.\n- Register stores a gated call as a NUL-tagged (tool, relative_path) pair, which Complete-MoeToolWrite resolves inside try/catch.\n- The 256-char id limit, the 500/2048/8192 caps, the conflicting-repeat rule and is_error handling are unchanged.\nTests: K2 is in both harnesses, with 6 contested paths plus refused.txt (named only by a refusal, a dry run and a failed rename). It was RED on the old wrappers on sh, pwsh and PS 5.1 ('got [owned-a.txt]') and is green now.\nParity: parity-check.{sh,ps1} pin all 12 names plus 'occurrence(s) in'. Dropping replace_content fails both on all engines.\nDocs: CONFIGURATION.md 'Session touch evidence'.\nVerified: full postflight.sh PASS; postflight.ps1 PASS on pwsh and PS 5.1 (30 scope scenarios each); importee-guard.ps1 48/48 on",
   "commits": [
@@ -468,6 +469,22 @@
       "treeId": "f18df4fcd38c156d9d2d90846d1326e3da7c2106",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "a9c5f8a21c74179eed55b6418521c9dec57f17f1",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8df1fc47@2026-09-19T13:25:04Z",
+      "paths": [
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "qa-8df1fc47",
+      "recordedAt": "2026-09-19T14:41:49.659Z",
+      "treeId": "937dadfd1684c18f098a3f33c7e6918a1844d8a2",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -484,7 +501,7 @@
     "outcome": "committed",
     "kind": "checkpoint",
     "sessionId": "qa-8df1fc47@2026-09-19T13:25:04Z",
-    "at": "2026-09-19T13:25:06.490Z"
+    "at": "2026-09-19T14:41:49.659Z"
   },
   "priorHandoffs": [
     {

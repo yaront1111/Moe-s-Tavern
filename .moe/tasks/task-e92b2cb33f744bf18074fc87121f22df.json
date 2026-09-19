@@ -28,9 +28,16 @@
           "reason": "The sh argv fix (step 2) landed early as hotfix 45633c7 (human: \"do whats needed\"), so the red proof now restores the pre-fix capture in a scratch copy. The stage logic and regexes were pre-validated on Git Bash.",
           "amendedBy": "architect-74607b1b",
           "amendedAt": "2026-09-19T14:22:37.772Z"
+        },
+        {
+          "amendmentId": "amend-2",
+          "description": "VERIFY ONLY. The sh hot-reload case LANDED as cd6bdee on moe/work-2026-09-13 (\"test(wrapper): cover the sh hot reload in postflight.sh and pin its literals\"). Do not rewrite it.\n\nWhere it is in scripts/tests/postflight.sh: after the heartbeat-sidecar checks, before `# --- Quality gate (settings.qualityGate)`. It opens with the comment `# --- Hot reload: the wrapper re-execs itself` and ends with `echo \"[hot reload] ok: 2 restarts, each re-registered, none without an edit\"`.\n\nWhat it does:\n1. Copies scripts/ into $TMP_DIR/reload. The restart deregisters through moe-call.sh, so the project there gets a daemon.json.\n2. Runs the copy as worker-reload with --loop --poll-interval 1, FAKE_CLAIM_MODE=idle and MOE_DISABLE_HEARTBEAT=1.\n3. Reads .moe/evidence-rpcs.jsonl through $TMP_DIR/reload-sequence.cjs: c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister. This is the same mapping as the ps1 arm's Get-ReloadSequence.\n4. Stages:\n   - wait for ^c;\n   - edit 1 rewrites 'restarting to load it\"' to 'restarting to load it (edit 1 loaded)\"' (exactly once, via node), then wait for ^c+rcc;\n   - edit 2 appends '# reload 2', then wait for ^c+rc{2,}rcc.\n   Each stage has a deadline of $POSTFLIGHT_TIMEOUT_SEC and fails at once on x, on more restarts than edits, or on a wrapper that is gone ('HOT RELOAD FAILED: <why> (RPC sequence ...)').\n5. Final checks: the snapshot matches ^c+rc{2,}rc{2,}$, and the log contains 'restarting to load it (edit 1 loaded)' (the relaunch ran the file on disk).\n6. The pid sits in LIVE_PIDS while the wrapper runs.\n\nWorker checks:\n(a) The block is still present and byte-identical to cd6bdee: `git diff cd6bdee -- scripts/tests/postflight.sh` shows nothing inside it. task-07474ee4 edits this file in between, so if it changed the block, reconcile rather than overwrite.\n(b) The subset harness passes: anchor-built as [0, `FROZEN_SUITE=`) + that block + `echo \"PASS postflight.sh\"`, placed under a scratch root with a copy of scripts/.\nArchitect evidence for cd6bdee (Git Bash): the fixed wrapper passed in 42 s. The failing variants are recorded in step 2.",
+          "reason": "The sh case already landed as cd6bdee (architect session, human: \"continue\"). It mirrors task-84150869's ps1 arm: same edits, the same [hot reload] labels, and the same c/r/x mapping. The worker only verifies it.",
+          "amendedBy": "architect-74607b1b",
+          "amendedAt": "2026-09-19T15:58:04.528Z"
         }
       ],
-      "activeAmendmentId": "amend-1"
+      "activeAmendmentId": "amend-2"
     },
     {
       "stepId": "step-2",
@@ -46,9 +53,16 @@
           "reason": "The fix itself landed early as 45633c7 (architect session with the human's go-ahead; every launcher change was killing sh seats). This step now verifies it and proves the case against mutants of the fixed wrapper; no wrapper edit unless the fix was lost.",
           "amendedBy": "architect-74607b1b",
           "amendedAt": "2026-09-19T14:22:14.640Z"
+        },
+        {
+          "amendmentId": "amend-2",
+          "description": "VERIFY ONLY: the sh argv fix and the sh red proofs.\n\nWhat already landed:\n- The fix is 45633c7: `MOE_WRAPPER_ARGV=(\"$@\")` now sits above `# Parse arguments` in scripts/moe-agent.sh. Before it, the self-restart exec'd with no arguments and the relaunch died with 'Error: Provide --project or --project-name'.\n- The case is cd6bdee (see step 1).\n\nDo NOT re-edit scripts/moe-agent.sh unless the fix was lost; task-07474ee4 edits this file first. Confirm exactly one `MOE_WRAPPER_ARGV=(\"$@\")`, above `# Parse arguments`. If it is missing or back below the hash, re-apply exactly 45633c7's hunk with the built-in Edit tool (the path is contested; see mem:gotcha-contested-path-needs-edit-tool-to-land). Error handling in the wrapper is unchanged: the fail-open hash capture and the 'wrapper relaunch failed; continuing on current bytes' fallback stay.\n\nRe-run the four subset variants. Each goes in its own scratch copy of scripts/, never the live file, which live sh seats hash.\n(a) Current wrapper: PASS.\n(b) Pre-fix, via `git show 45633c7^:scripts/moe-agent.sh`: FAIL 'the wrapper exited', sequence cr, with the Provide --project error. If 07474ee4 has since changed that file, move the capture back below the hash in the copy instead.\n(c) S1, the restart deregister's reason spelled terminal_closed: FAIL 'a deregister other than wrapper_restart', sequence cx.\n(d) S2, the launch hash taken of /dev/null: FAIL 'a restart with no edit behind it', sequence r.\n\nThe architect's results on Git Bash, 2026-09-19, match exactly: PASS in 42 s / cr / cx / r. Also run bash -n scripts/moe-agent.sh. Paste the verdict lines into the step note. Report scripts/moe-agent.sh in modifiedFiles ONLY if you had to re-apply the fix.",
+          "reason": "Both the fix (45633c7) and its sh red proofs are done. The worker re-runs the four subset variants as fresh evidence for QA.",
+          "amendedBy": "architect-74607b1b",
+          "amendedAt": "2026-09-19T15:58:12.523Z"
         }
       ],
-      "activeAmendmentId": "amend-1"
+      "activeAmendmentId": "amend-2"
     },
     {
       "stepId": "step-3",
@@ -56,7 +70,17 @@
       "status": "PENDING",
       "affectedFiles": [
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "ps1 TWIN: extend task-84150869's arm, which dependsOn guarantees is DONE. The arm sits in scripts/tests/postflight.ps1 right after the heartbeat case: `# --- Hot reload keeps ONE wrapper process`, ending with `Write-Host '[hot reload] ok: ...'`.\n\nIt already has:\n- Get-ReloadSequence, a native c/r/x mapping identical to the sh twin's;\n- Wait-ReloadSequence;\n- Set-ReloadWrapperText, which retries writes against Get-FileHash's read lock;\n- the edit-1 announcement rewrite plus a '# reload 2' append;\n- a process count after each reload, a one-runner-identity check, the 'edit 1 loaded' log check;\n- a finally that runs taskkill /T /F and sweeps every pwsh/powershell whose CommandLine contains the copied wrapper path.\nKeep ALL of that. Do not add a node summarizer: native parsing is fine, because only the semantics have to match the sh twin.\n\nBring it up to the sh twin (cd6bdee):\n1. Fail fast inside Wait-ReloadSequence on every poll:\n   - the sequence contains 'x' => throw 'HOT RELOAD FAILED: a deregister other than wrapper_restart ...';\n   - the count of 'r' exceeds the edits made so far => throw '... a restart with no edit behind it ...'. Pass the edit count in as a parameter.\n   It already throws when the wrapper has exited or the time runs out.\n2. Quiet windows, the same regexes as sh:\n   - the stage after edit 1 waits for '^c+rcc';\n   - the stage after edit 2 waits for '^c+rc{2,}rcc';\n   - the final check becomes '^c+rc{2,}rc{2,}$'.\n   Keep the process count right after each stage's wait.\n3. Error handling stays: each failure message carries the RPC sequence and prints the captured log, and the existing sweep keeps a relaunch that escaped the tree from outliving the harness.\n\nRED PROOF (DoD 2, the literal pre-df42861 behaviour), in a scratch copy of scripts/:\n- In the copy's moe-agent.ps1 restart check (anchor: Write-Host \"wrapper source changed on disk; restarting to load it\"), replace `Invoke-MoeDeregister -Reason 'wrapper_restart'` and the line that requests the hand-over (84150869's reload flag) with:\n  `Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1) -WorkingDirectory (Get-Location).Path | Out-Null`\n  and keep `break`. The exit path then deregisters as terminal_closed.\n- Run the scratch postflight.ps1 under pwsh 7 AND PS 5.1, launched from PowerShell, never Git Bash. Use the full harness (about 7 min per engine) or an anchor subset.\n- Expect a FAIL with a sequence showing x and no r.\n- Confirm no process whose CommandLine contains the scratch path survives. An unmutated control must PASS.\n- Also run S1 and S2 (as in step 2) on the ps1 copy: expect cx and a restart with no edit behind it.\nPaste every verdict line into the step note.",
+          "reason": "task-84150869's ps1 arm now exists (uncommitted at amend time, in its worker's step 5). It already has a native c/r/x sequence, a sweep of stray processes and a retry on writes. The shared node summarizer is dropped; only the sh twin's fail-fast checks and quiet windows remain to add.",
+          "amendedBy": "architect-74607b1b",
+          "amendedAt": "2026-09-19T15:58:25.468Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-4",
@@ -65,7 +89,17 @@
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "VERIFY ONLY (DoD 4). The parity entries LANDED in cd6bdee:\n- scripts/tests/parity-check.sh has a 'hot reload' loop after the runner-reattach prose loop.\n- scripts/tests/parity-check.ps1 has a 'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart') group before 'claimed prompt contract'.\nBoth checkers keep their existing error handling: collect every failure, then exit 1.\n\nWorker checks:\n(a) Both entries are still present after task-07474ee4's edits.\n(b) bash scripts/tests/parity-check.sh passes, and so does parity-check.ps1 under both pwsh and powershell.\n(c) Bite check: in a scratch copy of scripts/, rename wrapper_restart in moe-agent.sh ONLY. Both checkers, run from that scratch root, must FAIL with \"'wrapper_restart' missing from moe-agent.sh\". The architect saw exactly that on 2026-09-19.\nIf the ps1 extension in step 3 asserts any NEW literal from a wrapper, add it to both groups.",
+          "reason": "The parity entries landed in cd6bdee, and their bite check was proven by the architect. The worker only verifies.",
+          "amendedBy": "architect-74607b1b",
+          "amendedAt": "2026-09-19T15:58:29.943Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-5",
@@ -80,7 +114,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 3,
+  "planRevision": 7,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -103,11 +137,17 @@
       "author": "architect-74607b1b",
       "content": "HOTFIX LANDED EARLY: 45633c7 on moe/work-2026-09-13, \"fix(wrapper): relaunch the sh self-restart with its launch arguments\". Human go-ahead in the architect REPL: \"do whats needed\".\n\nWhat changed: scripts/moe-agent.sh only, 7 lines added and 1 removed. `MOE_WRAPPER_ARGV=(\"$@\")` moved above `# Parse arguments`, with a comment explaining why.\n\nWhy it could not wait: the file is contested (planned by d1441364 and 07474ee4), and an interactive architect session has no TOOL-tier harvest. A wrapper landing would therefore have dropped the change, so it was committed by hand with `git commit --only -- scripts/moe-agent.sh`. There are no hooks, nothing else was staged, and peers' index entries were untouched.\n\nEvidence (standalone driver on Git Bash with the same stage logic and regexes as plan step 1; scratch copies under the postflight fake proxy; idle --loop --poll-interval 1; two appended probes):\n- PRE-FIX (HEAD bytes): \"FAIL: the wrapper exited (sequence: cr)\"; output \"Error: Provide --project or --project-name\".\n- FIXED: stages c, crcc, crccrcc; \"VERDICT GREEN (final sequence: crccrcc, banners: 2)\".\n- S1 (restart reason terminal_closed): \"FAIL: a deregister other than wrapper_restart (sequence: cx)\".\n- S2 (launch hash of /dev/null): \"FAIL: restart with no on-disk change behind it (sequence: r)\".\n- bash -n passed; parity-check.sh PASS.\n\nPlan steps 1 and 2 are amended (amend-1). The red proof now restores `45633c7^:scripts/moe-agent.sh` in a scratch copy, and step 2 only verifies the fix and runs the mutants.\n\nOperational note: any sh seat that was running the old bytes died once on this commit's reload and needs relaunching by hand.",
       "timestamp": "2026-09-19T14:22:52.724Z"
+    },
+    {
+      "id": "comment-0f879a4590b74c3188089eb984c8e71d",
+      "author": "architect-74607b1b",
+      "content": "SH HALF LANDED: cd6bdee on moe/work-2026-09-13, \"test(wrapper): cover the sh hot reload in postflight.sh and pin its literals\". The human's instruction in the architect REPL was \"continue\". The three files were committed by hand with `git commit --only` (contested paths, interactive session); task-84150869's uncommitted moe-agent.ps1 and postflight.ps1 were left untouched.\n\nWhat landed:\n- postflight.sh: a '[hot reload]' case after the heartbeat case. It mirrors task-84150869's ps1 arm: the same edit-1 announcement rewrite and '# reload 2' append, the same c/r/x mapping, and the same 'HOT RELOAD FAILED:' prefix. It adds fail-fast checks (x; more restarts than edits; wrapper gone) and quiet windows (^c+rcc, ^c+rc{2,}rcc, final ^c+rc{2,}rc{2,}$), and requires the 'edit 1 loaded' log line.\n- Both parity checkers: a 'hot reload' group with 'wrapper source changed on disk; restarting to load it' and 'wrapper_restart'.\n\nEvidence (Git Bash, subset harness = setup + this case, run on scratch copies):\n- fixed: PASS in 42 s;\n- pre-fix (45633c7^): \"HOT RELOAD FAILED: the wrapper exited (RPC sequence 'cr')\", after \"Provide --project or --project-name\";\n- S1: \"a deregister other than wrapper_restart (RPC sequence 'cx')\";\n- S2: \"a restart with no edit behind it (RPC sequence 'r')\".\nparity-check.sh PASS; parity-check.ps1 PASS on pwsh and PS 5.1. Bite check: renaming wrapper_restart in a scratch copy of the sh wrapper makes both checkers FAIL, naming it.\n\nPlan steps 1, 2 and 4 are now VERIFY ONLY (amended). Step 3 was amended to extend 84150869's existing arm with the same fail-fast checks and quiet windows, and to run the ps1 red proof. A full MOE_POSTFLIGHT_TIMEOUT_SEC=180 postflight.sh run was started at about 14:40Z; its result follows in a later comment.",
+      "timestamp": "2026-09-19T15:58:45.026Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T11:58:26.168Z",
-  "updatedAt": "2026-09-19T14:22:52.724Z",
+  "updatedAt": "2026-09-19T15:58:45.026Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T13:06:56.720Z",
     "plannedStepCount": 6,
