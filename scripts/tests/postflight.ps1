@@ -2032,10 +2032,10 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
                 function Get-M2Subjects([string]$dir) {
                     return @(& git -C $dir log --pretty=%s --fixed-strings --grep='Moe-Task: task-resume' 2>$null | Where-Object { $_ })
                 }
-                function Invoke-M2Run([string]$dir, [string]$outFile, [string]$ClaimMode, [string]$Status, [string]$Role, [string]$WorkerId) {
+                function Invoke-M2Run([string]$dir, [string]$outFile, [string]$ClaimMode, [string]$Status, [string]$Role, [string]$WorkerId, [string]$Command = '', [string]$Scenario = 'M2') {
                     $env:FAKE_CLAIM_MODE = $ClaimMode
                     try {
-                        Assert-ScopeRun 'M2' (Invoke-GateWrapper $dir $outFile -Status $Status -Role $Role -WorkerId $WorkerId) $outFile
+                        Assert-ScopeRun $Scenario (Invoke-GateWrapper $dir $outFile -Status $Status -Role $Role -WorkerId $WorkerId -Command $Command) $outFile
                     } finally { Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue }
                 }
 
@@ -2165,6 +2165,169 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
                 Stop-Process -Id $m2LivePid -Force -ErrorAction SilentlyContinue
                 $scopeScenariosRun++
                 Write-Host '[scenario M2] ok'
+
+                # Scenario M3 — the baseline's landed flag belongs to the session
+                # whose pre-flight took it. On 2026-09-17 (task-49ec8755) QA's
+                # exit landing, minutes after a rework claim's pre-flight re-took
+                # the shared baseline, rewrote it to landed=1; the rework session
+                # then died and the next pre-flight skipped its recovery. A
+                # sibling's landing (committed, nothing to commit, or a deliberate
+                # no-landing exit) must keep the other session's flag AND session.
+                # A session's own landing still sets it, and so does a recovery,
+                # or an idle poll would replay the recovery the previous poll
+                # landed. Twin: scenario M3 in postflight.sh.
+                Write-Host '[scenario M3] a sibling session''s landing never marks another session''s baseline landed'
+                # task-resume planned (not asserted) on impl.txt, its record tracked and clean.
+                function New-M3Project([string]$dir, [hashtable]$Settings = $null) {
+                    New-ScopeProject $dir @('ignored.txt') -Settings $Settings
+                    Write-TaskRecord $dir @() 'WORKING' @(@{ stepId = 's1'; title = 'rework'; status = 'IN_PROGRESS'; affectedFiles = @('impl.txt') }) 'task-resume' 'Resume smoke'
+                    & git -C $dir add .moe/tasks/task-resume.json 2>$null | Out-Null
+                    & git -C $dir commit -qm record 2>$null | Out-Null
+                }
+                function Get-M3Header([string]$dir) {
+                    $f = Join-Path $dir '.git\moe\baseline\task-resume.tsv'
+                    if (-not (Test-Path -LiteralPath $f)) { return '' }
+                    return [System.IO.File]::ReadAllLines($f)[0]
+                }
+                # The sibling CLI plays session A's pre-flight while B's CLI is
+                # still running: it re-takes ONLY the header under A's session
+                # (every B/U row byte-identical) and leaves B's LIVE marker alone,
+                # as a real pre-flight does — the QA-reject-then-rework shape.
+                # SIBLING_TOUCH_RECORD=1 also rewrites the task record the way
+                # qa_reject does, so B's checkpoint has a board path to land.
+                $m3SiblingJs = Join-Path $tempRoot 'sibling-cli.cjs'
+                [System.IO.File]::WriteAllText($m3SiblingJs, @'
+const fs = require('fs'), path = require('path');
+const bl = path.join(process.env.MOE_PROJECT_PATH, '.git', 'moe', 'baseline', 'task-resume.tsv');
+if (!fs.existsSync(bl)) { console.error('sibling-cli fixture fault: no baseline at ' + bl); process.exit(3); }
+const text = fs.readFileSync(bl, 'utf8'), nl = text.indexOf('\n'), header = text.slice(0, nl);
+fs.writeFileSync(process.env.SIBLING_HEADER_OUT, header + '\n');
+const head = (/ head=(\S*)/.exec(header) || ['', ''])[1];
+fs.writeFileSync(bl + '.sibling', '#moe-baseline v1 task=task-resume at=2026-09-17T17:41:53Z head=' + head + ' landed=0 session=worker-a@2026-09-17T17:41:53Z' + text.slice(nl));
+fs.renameSync(bl + '.sibling', bl);
+if (process.env.SIBLING_TOUCH_RECORD === '1') {
+  const rec = path.join(process.env.MOE_PROJECT_PATH, '.moe', 'tasks', 'task-resume.json');
+  const t = JSON.parse(fs.readFileSync(rec, 'utf8').replace(/^﻿/, ''));
+  t.reopenCount = 1;
+  fs.writeFileSync(rec, JSON.stringify(t) + '\n');
+}
+'@, (New-Object System.Text.UTF8Encoding($false)))
+                $m3SiblingCmd = Join-Path $tempRoot 'sibling-cli.cmd'
+                Set-Content -Path $m3SiblingCmd -Encoding ASCII -Value "@echo off`r`nnode `"%~dp0sibling-cli.cjs`"`r`nexit /b %ERRORLEVEL%`r`n"
+
+                # M3-a — the measured trigger. B (a qa exit) lands a checkpoint
+                # under the baseline A's pre-flight re-took; A edits a planned
+                # path AFTER B's landing (before it, B's checkpoint would have
+                # committed the edit), then A dies without landing. The next
+                # pre-flight (C) must recover A's edit.
+                $scopeM3aDir = Join-Path $tempRoot 'scope-m3a'
+                New-M3Project $scopeM3aDir
+                $scopeM3aOutB = Join-Path $tempRoot 'scope-m3a-b.out'
+                $scopeM3aPre = Join-Path $tempRoot 'm3a-b-preflight.txt'
+                $env:SIBLING_HEADER_OUT = $scopeM3aPre
+                $env:SIBLING_TOUCH_RECORD = '1'
+                try {
+                    Invoke-M2Run $scopeM3aDir $scopeM3aOutB 'resume' 'WORKING' 'qa' 'qa-scope-m3a' $m3SiblingCmd 'M3'
+                } finally { Remove-Item Env:SIBLING_HEADER_OUT, Env:SIBLING_TOUCH_RECORD -ErrorAction SilentlyContinue }
+                $scopeM3aSubjects = @(Get-M2Subjects $scopeM3aDir)
+                if ($scopeM3aSubjects.Count -ne 1) {
+                    Get-Content $scopeM3aOutB -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO M3 FAILED: (a) B must land exactly one task-resume checkpoint; got [$($scopeM3aSubjects -join ' | ')]"
+                }
+                if (-not ($scopeM3aSubjects[0].StartsWith('wip(task-resume): ') -and $scopeM3aSubjects[0].EndsWith('[status=WORKING role=qa cli-exit=0]'))) {
+                    Get-Content $scopeM3aOutB -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO M3 FAILED: (a) B's landing must be a role=qa checkpoint, not a recovery; got [$($scopeM3aSubjects[0])]"
+                }
+                $scopeM3aAfterB = Get-M3Header $scopeM3aDir
+                # C is a new claim: the fixture attempt B's claim opened is not C's.
+                Remove-Item -Recurse -Force -LiteralPath (Join-Path $scopeM3aDir '.moe\attempts') -ErrorAction SilentlyContinue
+                Set-Content -Path (Join-Path $scopeM3aDir 'impl.txt') -Value 'rework'
+                $scopeM3aOutC = Join-Path $tempRoot 'scope-m3a-c.out'
+                Invoke-M2Run $scopeM3aDir $scopeM3aOutC 'resume' 'WORKING' 'worker' 'worker-scope-m3c' '' 'M3'
+                $scopeM3aTextC = Get-Content -Raw -Path $scopeM3aOutC
+                if (-not $scopeM3aTextC.Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Write-Host $scopeM3aTextC
+                    throw 'SCENARIO M3 FAILED: (a) a sibling''s landing marked session A''s baseline landed, so the next pre-flight never recovered A''s edit'
+                }
+                $scopeM3aRecovered = @(& git -C $scopeM3aDir log --format='%H %s' --fixed-strings --grep='Moe-Task: task-resume' 2>$null | Where-Object { $_.EndsWith(' recovered') })
+                if ($scopeM3aRecovered.Count -eq 0) { throw 'SCENARIO M3 FAILED: (a) no ''... recovered'' checkpoint was landed for A''s edit' }
+                $scopeM3aFiles = Get-CommittedPaths $scopeM3aDir ($scopeM3aRecovered[0].Split(' ')[0])
+                if ($scopeM3aFiles -ne 'impl.txt') { throw "SCENARIO M3 FAILED: (a) the recovered checkpoint must carry EXACTLY A's edit impl.txt; got [$scopeM3aFiles]" }
+                if (-not $scopeM3aAfterB.Contains(' landed=0 session=worker-a@2026-09-17T17:41:53Z')) {
+                    throw "SCENARIO M3 FAILED: (a) B's landing must keep session A's landed=0 AND A's session; got [$scopeM3aAfterB]"
+                }
+                $scopeM3aPreLine = if (Test-Path -LiteralPath $scopeM3aPre) { [System.IO.File]::ReadAllLines($scopeM3aPre)[0] } else { '' }
+                if ($scopeM3aPreLine -cnotmatch '^#moe-baseline v1 task=task-resume at=[^ ]+ head=[0-9a-f]* landed=0 session=qa-scope-m3a@[^ ]+$') {
+                    throw "SCENARIO M3 FAILED: (a) B's pre-flight must write landed=0 and its own session into the header; got [$scopeM3aPreLine]"
+                }
+                $scopeM3aAfterC = Get-M3Header $scopeM3aDir
+                if ($scopeM3aAfterC -cnotmatch '^#moe-baseline v1 task=task-resume at=[^ ]+ head=[0-9a-f]* landed=1 session=worker-scope-m3c@[^ ]+$') {
+                    throw "SCENARIO M3 FAILED: (a) a session's own landing must still mark its own baseline landed; got [$scopeM3aAfterC]"
+                }
+
+                # M3-b — B's landing has nothing to commit.
+                $scopeM3bDir = Join-Path $tempRoot 'scope-m3b'
+                New-M3Project $scopeM3bDir
+                $scopeM3bOut = Join-Path $tempRoot 'scope-m3b.out'
+                $env:SIBLING_HEADER_OUT = Join-Path $tempRoot 'm3b-b-preflight.txt'
+                try {
+                    Invoke-M2Run $scopeM3bDir $scopeM3bOut 'resume' 'WORKING' 'qa' 'qa-scope-m3b' $m3SiblingCmd 'M3'
+                } finally { Remove-Item Env:SIBLING_HEADER_OUT -ErrorAction SilentlyContinue }
+                $scopeM3bText = Get-Content -Raw -Path $scopeM3bOut
+                if (-not $scopeM3bText.Contains('MOE_COMMIT_NOTHING_TO_COMMIT')) { Write-Host $scopeM3bText; throw 'SCENARIO M3 FAILED: (b) B''s landing must be nothing-to-commit' }
+                if (@(Get-M2Subjects $scopeM3bDir).Count -ne 0) { throw 'SCENARIO M3 FAILED: (b) a nothing-to-commit landing must land no commit' }
+                $scopeM3bAfterB = Get-M3Header $scopeM3bDir
+                if (-not $scopeM3bAfterB.Contains(' landed=0 session=worker-a@2026-09-17T17:41:53Z')) {
+                    throw "SCENARIO M3 FAILED: (b) a sibling's nothing-to-commit landing marked another session's baseline landed; got [$scopeM3bAfterB]"
+                }
+
+                # M3-c — B's exit is a deliberate no-landing (checkpointCommits=false).
+                $scopeM3cDir = Join-Path $tempRoot 'scope-m3c'
+                New-M3Project $scopeM3cDir @{ checkpointCommits = $false }
+                $scopeM3cOut = Join-Path $tempRoot 'scope-m3c.out'
+                $env:SIBLING_HEADER_OUT = Join-Path $tempRoot 'm3c-b-preflight.txt'
+                try {
+                    Invoke-M2Run $scopeM3cDir $scopeM3cOut 'resume' 'WORKING' 'qa' 'qa-scope-m3c' $m3SiblingCmd 'M3'
+                } finally { Remove-Item Env:SIBLING_HEADER_OUT -ErrorAction SilentlyContinue }
+                $scopeM3cText = Get-Content -Raw -Path $scopeM3cOut
+                if (-not $scopeM3cText.Contains('no landing for task task-resume')) { Write-Host $scopeM3cText; throw 'SCENARIO M3 FAILED: (c) B''s exit must be the deliberate no-landing branch' }
+                $scopeM3cAfterB = Get-M3Header $scopeM3cDir
+                if (-not $scopeM3cAfterB.Contains(' landed=0 session=worker-a@2026-09-17T17:41:53Z')) {
+                    throw "SCENARIO M3 FAILED: (c) a sibling's deliberate no-landing exit marked another session's baseline landed; got [$scopeM3cAfterB]"
+                }
+
+                # M3-d — the recovery exception. The idle paths recover under a
+                # fresh session id on every poll, so a recovery must set the flag
+                # itself (keeping the dead session's header session), or every
+                # later poll replays it. The ps1 fake answers the BLOCKED hold
+                # with task-resume.
+                $scopeM3dDir = Join-Path $tempRoot 'scope-m3d'
+                New-M2Project $scopeM3dDir 'BLOCKED'
+                $scopeM3dBl = Join-Path $scopeM3dDir '.git\moe\baseline\task-resume.tsv'
+                $scopeM3dLines = [System.IO.File]::ReadAllLines($scopeM3dBl)
+                $scopeM3dLines[0] += ' session=worker-dead@2026-09-17T18:59:00Z'
+                [System.IO.File]::WriteAllText($scopeM3dBl, (($scopeM3dLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+                $scopeM3dOut1 = Join-Path $tempRoot 'scope-m3d-1.out'
+                Invoke-M2Run $scopeM3dDir $scopeM3dOut1 'blocked' 'BLOCKED' 'worker' 'worker-scope-m3d' '' 'M3'
+                if (-not (Get-Content -Raw -Path $scopeM3dOut1).Contains('MOE_CHECKPOINT_RECOVERED task=task-resume')) {
+                    Get-Content $scopeM3dOut1 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO M3 FAILED: (d) run 1 must recover the dead session''s baseline'
+                }
+                $scopeM3dAfter1 = Get-M3Header $scopeM3dDir
+                Set-Content -Path (Join-Path $scopeM3dDir 'impl.txt') -Value 'again'
+                $scopeM3dOut2 = Join-Path $tempRoot 'scope-m3d-2.out'
+                Invoke-M2Run $scopeM3dDir $scopeM3dOut2 'blocked' 'BLOCKED' 'worker' 'worker-scope-m3d' '' 'M3'
+                $scopeM3dSubjects = @(Get-M2Subjects $scopeM3dDir)
+                $scopeM3dStatus = @(& git -C $scopeM3dDir status --porcelain 2>$null)
+                if (((Get-Content -Raw -Path $scopeM3dOut2).Contains('MOE_CHECKPOINT_RECOVERED')) -or ($scopeM3dSubjects.Count -ne 1) -or ($scopeM3dStatus -notcontains ' M impl.txt')) {
+                    Write-Host "subjects: [$($scopeM3dSubjects -join ' | ')] status: [$($scopeM3dStatus -join ' | ')]"
+                    throw 'SCENARIO M3 FAILED: (d) an idle poll replayed the recovery the previous poll already landed'
+                }
+                if (-not $scopeM3dAfter1.Contains(' landed=1 session=worker-dead@2026-09-17T18:59:00Z')) {
+                    throw "SCENARIO M3 FAILED: (d) a recovery must set landed=1 and keep the dead session's header session; got [$scopeM3dAfter1]"
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario M3] ok'
 
                 # Scenario N — plumbing keeps the shared index intact: a peer's
                 # pre-staged entry survives (B under plumbing) AND the landed
@@ -2795,8 +2958,8 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 28) {
-                    throw "Expected 28 commit-scope scenarios (A-V, M2, X-Z, AA, AB); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 29) {
+                    throw "Expected 29 commit-scope scenarios (A-V, M2, M3, X-Z, AA, AB); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

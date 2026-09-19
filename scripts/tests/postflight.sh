@@ -2458,6 +2458,182 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario M2] ok"
 
+  # Scenario M3 -- the baseline's landed flag belongs to the session whose
+  # pre-flight took it. On 2026-09-17 (task-49ec8755) QA's exit landing, minutes
+  # after a rework claim's pre-flight re-took the shared baseline, rewrote it to
+  # landed=1; the rework session then died and the next pre-flight skipped its
+  # recovery. A sibling's landing (committed, nothing to commit, or a deliberate
+  # no-landing exit) must keep the other session's flag AND session. A session's
+  # own landing still sets it, and so does a recovery, or an idle poll would
+  # replay the recovery the previous poll landed.
+  echo "[scenario M3] a sibling session's landing never marks another session's baseline landed"
+  m3_project() { # $1 dir, [$2 settings JSON] -- task-resume planned (not asserted) on impl.txt
+    local dir="$1"
+    make_scope_project "$dir" '["ignored.txt"]' REVIEW '[]' "${2:-}"
+    write_task_record "$dir" '[]' WORKING '[{"stepId":"s1","title":"rework","status":"IN_PROGRESS","affectedFiles":["impl.txt"]}]' task-resume
+    git -C "$dir" add .moe/tasks/task-resume.json >/dev/null
+    git -C "$dir" commit -qm record >/dev/null
+  }
+  m3_header() { # $1 dir, $2 taskId, $3 out file -- the baseline's header line
+    head -n1 "$1/.git/moe/baseline/$2.tsv" > "$3" 2>/dev/null || : > "$3"
+  }
+  # SIBLING_CLI plays session A's pre-flight while B's CLI is still running: it
+  # re-takes ONLY the header under A's session (every B/U row byte-identical)
+  # and leaves B's LIVE marker alone, as a real pre-flight does -- the
+  # QA-reject-then-rework shape. SIBLING_TOUCH_RECORD=1 also rewrites the task
+  # record the way qa_reject does, so B's checkpoint has a board path to land.
+  SIBLING_CLI="$TMP_DIR/sibling-cli"
+  cat > "$SIBLING_CLI" <<'EOF'
+#!/usr/bin/env bash
+bl="$MOE_PROJECT_PATH/.git/moe/baseline/task-resume.tsv"
+if [ ! -f "$bl" ]; then
+  echo "sibling-cli fixture fault: no baseline at $bl" >&2
+  exit 3
+fi
+head -n1 "$bl" > "$SIBLING_HEADER_OUT"
+h="$(sed -n '1s/.* head=\([^ ]*\).*/\1/p' "$bl")"
+{
+  printf '#moe-baseline v1 task=task-resume at=2026-09-17T17:41:53Z head=%s landed=0 session=worker-a@2026-09-17T17:41:53Z\n' "$h"
+  tail -n +2 "$bl"
+} > "$bl.sibling" && mv -f "$bl.sibling" "$bl"
+if [ "${SIBLING_TOUCH_RECORD:-0}" = "1" ]; then
+  node -e 'const fs=require("fs"),f=process.argv[1],t=JSON.parse(fs.readFileSync(f,"utf8"));t.reopenCount=1;fs.writeFileSync(f,JSON.stringify(t)+"\n");' \
+    "$MOE_PROJECT_PATH/.moe/tasks/task-resume.json"
+fi
+exit 0
+EOF
+  chmod +x "$SIBLING_CLI"
+
+  # M3-a: the measured trigger. B (a qa exit) lands a checkpoint under the
+  # baseline A's pre-flight re-took; A edits a planned path AFTER B's landing
+  # (before it, B's checkpoint would have committed the edit), then A dies
+  # without landing. The next pre-flight (C) must recover A's edit.
+  SCOPE_M3A_DIR="$TMP_DIR/scope-m3a"
+  m3_project "$SCOPE_M3A_DIR"
+  set +e
+  FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING SIBLING_TOUCH_RECORD=1 SIBLING_HEADER_OUT="$TMP_DIR/m3a-b-preflight.txt" \
+    run_scope_wrapper "$SCOPE_M3A_DIR" "$TMP_DIR/scope-m3a-b.out" "$SIBLING_CLI" qa qa-scope-m3a
+  scope_m3a_code=$?
+  set -e
+  [ "$scope_m3a_code" -eq 0 ] || scope_fail M3 "(a) B's wrapper exited with $scope_m3a_code" "$TMP_DIR/scope-m3a-b.out"
+  m2_subjects "$SCOPE_M3A_DIR" task-resume "$TMP_DIR/m3a-b-subjects.txt"
+  if [ "$(wc -l < "$TMP_DIR/m3a-b-subjects.txt" | tr -d '[:space:]')" != "1" ]; then
+    cat "$TMP_DIR/m3a-b-subjects.txt" >&2
+    scope_fail M3 "(a) B must land exactly one task-resume checkpoint" "$TMP_DIR/scope-m3a-b.out"
+  fi
+  case "$(cat "$TMP_DIR/m3a-b-subjects.txt")" in
+    "wip(task-resume): "*"[status=WORKING role=qa cli-exit=0]") : ;;
+    *) scope_fail M3 "(a) B's landing must be a role=qa checkpoint, not a recovery; got [$(cat "$TMP_DIR/m3a-b-subjects.txt")]" "$TMP_DIR/scope-m3a-b.out" ;;
+  esac
+  m3_header "$SCOPE_M3A_DIR" task-resume "$TMP_DIR/m3a-after-b.txt"
+  # C is a new claim: the fixture attempt B's claim opened is not C's.
+  rm -rf "$SCOPE_M3A_DIR/.moe/attempts"
+  echo rework > "$SCOPE_M3A_DIR/impl.txt"
+  set +e
+  FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING run_scope_wrapper "$SCOPE_M3A_DIR" "$TMP_DIR/scope-m3a-c.out" /bin/true worker worker-scope-m3c
+  scope_m3a_code=$?
+  set -e
+  [ "$scope_m3a_code" -eq 0 ] || scope_fail M3 "(a) C's wrapper exited with $scope_m3a_code" "$TMP_DIR/scope-m3a-c.out"
+  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m3a-c.out"; then
+    scope_fail M3 "(a) a sibling's landing marked session A's baseline landed, so the next pre-flight never recovered A's edit" "$TMP_DIR/scope-m3a-c.out"
+  fi
+  git -C "$SCOPE_M3A_DIR" log --format='%H %s' --fixed-strings --grep='Moe-Task: task-resume' > "$TMP_DIR/m3a-log.txt" 2>/dev/null || : > "$TMP_DIR/m3a-log.txt"
+  scope_m3a_sha="$(awk '/ recovered$/ { print $1; exit }' "$TMP_DIR/m3a-log.txt")"
+  [ -n "$scope_m3a_sha" ] || scope_fail M3 "(a) no '... recovered' checkpoint was landed for A's edit" "$TMP_DIR/scope-m3a-c.out"
+  scope_m3a_files="$(git -C "$SCOPE_M3A_DIR" show --pretty=format: --name-only "$scope_m3a_sha" | sed '/^$/d' | sort | tr '\n' ' ')"
+  if [ "$scope_m3a_files" != "impl.txt " ]; then
+    scope_fail M3 "(a) the recovered checkpoint must carry EXACTLY A's edit impl.txt; got [$scope_m3a_files]" "$TMP_DIR/scope-m3a-c.out"
+  fi
+  if ! grep -Fq ' landed=0 session=worker-a@2026-09-17T17:41:53Z' "$TMP_DIR/m3a-after-b.txt"; then
+    cat "$TMP_DIR/m3a-after-b.txt" >&2
+    scope_fail M3 "(a) B's landing must keep session A's landed=0 AND A's session" "$TMP_DIR/scope-m3a-b.out"
+  fi
+  if ! grep -Eq '^#moe-baseline v1 task=task-resume at=[^ ]+ head=[0-9a-f]* landed=0 session=qa-scope-m3a@[^ ]+$' "$TMP_DIR/m3a-b-preflight.txt"; then
+    cat "$TMP_DIR/m3a-b-preflight.txt" >&2
+    scope_fail M3 "(a) B's pre-flight must write landed=0 and its own session into the header" "$TMP_DIR/scope-m3a-b.out"
+  fi
+  m3_header "$SCOPE_M3A_DIR" task-resume "$TMP_DIR/m3a-after-c.txt"
+  if ! grep -Eq '^#moe-baseline v1 task=task-resume at=[^ ]+ head=[0-9a-f]* landed=1 session=worker-scope-m3c@[^ ]+$' "$TMP_DIR/m3a-after-c.txt"; then
+    cat "$TMP_DIR/m3a-after-c.txt" >&2
+    scope_fail M3 "(a) a session's own landing must still mark its own baseline landed" "$TMP_DIR/scope-m3a-c.out"
+  fi
+
+  # M3-b: B's landing has nothing to commit.
+  SCOPE_M3B_DIR="$TMP_DIR/scope-m3b"
+  m3_project "$SCOPE_M3B_DIR"
+  set +e
+  FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING SIBLING_HEADER_OUT="$TMP_DIR/m3b-b-preflight.txt" \
+    run_scope_wrapper "$SCOPE_M3B_DIR" "$TMP_DIR/scope-m3b.out" "$SIBLING_CLI" qa qa-scope-m3b
+  scope_m3b_code=$?
+  set -e
+  [ "$scope_m3b_code" -eq 0 ] || scope_fail M3 "(b) wrapper exited with $scope_m3b_code" "$TMP_DIR/scope-m3b.out"
+  grep -Fq 'MOE_COMMIT_NOTHING_TO_COMMIT' "$TMP_DIR/scope-m3b.out" \
+    || scope_fail M3 "(b) B's landing must be nothing-to-commit" "$TMP_DIR/scope-m3b.out"
+  m2_subjects "$SCOPE_M3B_DIR" task-resume "$TMP_DIR/m3b-subjects.txt"
+  if [ -s "$TMP_DIR/m3b-subjects.txt" ]; then
+    cat "$TMP_DIR/m3b-subjects.txt" >&2
+    scope_fail M3 "(b) a nothing-to-commit landing must land no commit" "$TMP_DIR/scope-m3b.out"
+  fi
+  m3_header "$SCOPE_M3B_DIR" task-resume "$TMP_DIR/m3b-after-b.txt"
+  if ! grep -Fq ' landed=0 session=worker-a@2026-09-17T17:41:53Z' "$TMP_DIR/m3b-after-b.txt"; then
+    cat "$TMP_DIR/m3b-after-b.txt" >&2
+    scope_fail M3 "(b) a sibling's nothing-to-commit landing marked another session's baseline landed" "$TMP_DIR/scope-m3b.out"
+  fi
+
+  # M3-c: B's exit is a deliberate no-landing (checkpointCommits=false).
+  SCOPE_M3C_DIR="$TMP_DIR/scope-m3c"
+  m3_project "$SCOPE_M3C_DIR" '{"checkpointCommits":false}'
+  set +e
+  FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING SIBLING_HEADER_OUT="$TMP_DIR/m3c-b-preflight.txt" \
+    run_scope_wrapper "$SCOPE_M3C_DIR" "$TMP_DIR/scope-m3c.out" "$SIBLING_CLI" qa qa-scope-m3c
+  scope_m3c_code=$?
+  set -e
+  [ "$scope_m3c_code" -eq 0 ] || scope_fail M3 "(c) wrapper exited with $scope_m3c_code" "$TMP_DIR/scope-m3c.out"
+  grep -Fq 'no landing for task task-resume' "$TMP_DIR/scope-m3c.out" \
+    || scope_fail M3 "(c) B's exit must be the deliberate no-landing branch" "$TMP_DIR/scope-m3c.out"
+  m3_header "$SCOPE_M3C_DIR" task-resume "$TMP_DIR/m3c-after-b.txt"
+  if ! grep -Fq ' landed=0 session=worker-a@2026-09-17T17:41:53Z' "$TMP_DIR/m3c-after-b.txt"; then
+    cat "$TMP_DIR/m3c-after-b.txt" >&2
+    scope_fail M3 "(c) a sibling's deliberate no-landing exit marked another session's baseline landed" "$TMP_DIR/scope-m3c.out"
+  fi
+
+  # M3-d: the recovery exception. The idle paths recover under a fresh session
+  # id on every poll, so a recovery must set the flag itself (keeping the dead
+  # session's header session), or every later poll replays it.
+  SCOPE_M3D_DIR="$TMP_DIR/scope-m3d"
+  make_m2_project "$SCOPE_M3D_DIR" task-blocked BLOCKED
+  m3d_bl="$SCOPE_M3D_DIR/.git/moe/baseline/task-blocked.tsv"
+  { printf '%s session=worker-dead@2026-09-17T18:59:00Z\n' "$(head -n1 "$m3d_bl")"; tail -n +2 "$m3d_bl"; } > "$m3d_bl.new"
+  mv -f "$m3d_bl.new" "$m3d_bl"
+  set +e
+  FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M3D_DIR" "$TMP_DIR/scope-m3d-1.out" /bin/true worker worker-scope-m3d
+  scope_m3d_code=$?
+  set -e
+  [ "$scope_m3d_code" -eq 0 ] || scope_fail M3 "(d) run 1 exited with $scope_m3d_code" "$TMP_DIR/scope-m3d-1.out"
+  grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m3d-1.out" \
+    || scope_fail M3 "(d) run 1 must recover the dead session's baseline" "$TMP_DIR/scope-m3d-1.out"
+  m3_header "$SCOPE_M3D_DIR" task-blocked "$TMP_DIR/m3d-after-1.txt"
+  echo again > "$SCOPE_M3D_DIR/impl.txt"
+  set +e
+  FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M3D_DIR" "$TMP_DIR/scope-m3d-2.out" /bin/true worker worker-scope-m3d
+  scope_m3d_code=$?
+  set -e
+  [ "$scope_m3d_code" -eq 0 ] || scope_fail M3 "(d) run 2 exited with $scope_m3d_code" "$TMP_DIR/scope-m3d-2.out"
+  m2_subjects "$SCOPE_M3D_DIR" task-blocked "$TMP_DIR/m3d-subjects.txt"
+  git -C "$SCOPE_M3D_DIR" status --porcelain > "$TMP_DIR/m3d-status.txt" 2>/dev/null || : > "$TMP_DIR/m3d-status.txt"
+  if grep -Fq 'MOE_CHECKPOINT_RECOVERED' "$TMP_DIR/scope-m3d-2.out" \
+    || [ "$(wc -l < "$TMP_DIR/m3d-subjects.txt" | tr -d '[:space:]')" != "1" ] \
+    || ! grep -q '^ M impl\.txt$' "$TMP_DIR/m3d-status.txt"; then
+    cat "$TMP_DIR/m3d-subjects.txt" "$TMP_DIR/m3d-status.txt" >&2
+    scope_fail M3 "(d) an idle poll replayed the recovery the previous poll already landed" "$TMP_DIR/scope-m3d-2.out"
+  fi
+  if ! grep -Fq ' landed=1 session=worker-dead@2026-09-17T18:59:00Z' "$TMP_DIR/m3d-after-1.txt"; then
+    cat "$TMP_DIR/m3d-after-1.txt" >&2
+    scope_fail M3 "(d) a recovery must set landed=1 and keep the dead session's header session" "$TMP_DIR/scope-m3d-1.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario M3] ok"
+
   # Scenario N -- scenario B under PLUMBING: the temp-index landing must leave
   # a peer's pre-staged shared-index entry alone AND the index refresh must
   # make `git status` clean for exactly the landed paths.
@@ -3361,8 +3537,8 @@ EOF
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 28 ]; then
-    echo "Expected 28 commit-scope scenarios (A-P, M2, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 29 ]; then
+    echo "Expected 29 commit-scope scenarios (A-P, M2, M3, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

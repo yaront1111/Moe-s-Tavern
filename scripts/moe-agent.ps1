@@ -2141,12 +2141,17 @@ function Get-MoeBaselinePath([string]$GitDir, [string]$TaskId) {
     return (Join-Path $GitDir "moe/baseline/$TaskId.tsv")
 }
 
-# TSV: header `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1>`,
+# TSV: header `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1> session=<sid>`,
 # then `B<TAB><blob|D><TAB><path>` rows (dirty-before-the-task) and
 # `U<TAB><blob><TAB><path>` rows (locally persisted unattributed set).
-# `landed=1` marks a session that completed a landing (committed/nothing/
-# refused), so the next pre-flight does not replay a "recovered" checkpoint;
-# an absent field (older twin) means recover.
+# `session` is the Moe-Session id (<workerId>@<pre-flight UTC second>) of the
+# pre-flight that took this baseline. `landed=1` marks that session's
+# completed landing (committed/nothing/refused), so the next pre-flight does
+# not replay a "recovered" checkpoint; an absent field (older twin) means
+# recover. Only three writers may put landed=1: that session's own landing, a
+# recovery landing, or a landing that found no baseline
+# (Get-MoeBaselineLandedFlag). A header with no session= (older twin) belongs
+# to nobody. Twin: baseline_path / baseline_landed_flag.
 function Read-MoeBaseline([string]$Path) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
     $b = @{}
@@ -2154,6 +2159,7 @@ function Read-MoeBaseline([string]$Path) {
     $head = ''
     $at = ''
     $landed = $false
+    $session = ''
     try {
         $utf8 = New-Object System.Text.UTF8Encoding($false)
         foreach ($line in [System.IO.File]::ReadAllLines($Path, $utf8)) {
@@ -2162,6 +2168,7 @@ function Read-MoeBaseline([string]$Path) {
                 if ($line -match 'head=([0-9a-fA-F]+)') { $head = $matches[1] }
                 if ($line -match 'at=(\S+)') { $at = $matches[1] }
                 if ($line -match ' landed=1') { $landed = $true }
+                if ($line -match ' session=(\S+)') { $session = $matches[1] }
                 continue
             }
             $parts = $line.Split("`t")
@@ -2177,17 +2184,17 @@ function Read-MoeBaseline([string]$Path) {
     } catch {
         return $null
     }
-    return @{ Head = $head; At = $at; B = $b; U = $u; Landed = $landed }
+    return @{ Head = $head; At = $at; B = $b; U = $u; Landed = $landed; Session = $session }
 }
 
-function Write-MoeBaseline([string]$Path, [string]$TaskId, [string]$Head, [hashtable]$B, [hashtable]$U, [int]$Landed = 0) {
+function Write-MoeBaseline([string]$Path, [string]$TaskId, [string]$Head, [hashtable]$B, [hashtable]$U, [int]$Landed = 0, [string]$Session = '') {
     if (-not $Path) { return $false }
     try {
         $dir = Split-Path -Parent $Path
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
         $at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
         $sb = New-Object System.Text.StringBuilder
-        [void]$sb.Append("#moe-baseline v1 task=$TaskId at=$at head=$Head landed=$Landed`n")
+        [void]$sb.Append("#moe-baseline v1 task=$TaskId at=$at head=$Head landed=$Landed session=$Session`n")
         if ($B) { foreach ($k in ($B.Keys | Sort-Object)) { $r = $B[$k]; [void]$sb.Append("B`t$($r.Blob)`t$($r.Path)`n") } }
         if ($U) { foreach ($k in ($U.Keys | Sort-Object)) { $r = $U[$k]; [void]$sb.Append("U`t$($r.Blob)`t$($r.Path)`n") } }
         $tmp = "$Path.tmp"
@@ -2231,16 +2238,31 @@ function Write-MoeReceiptJournal([string]$Path, $Report) {
     }
 }
 
+# The landed flag a landing writes back. It belongs to the session whose
+# pre-flight took the baseline: on 2026-09-17 (task-49ec8755) QA's exit landing
+# rewrote a live rework session's baseline to landed=1, and that session's
+# crash was never recovered. So 1 only for that session's own landing, a
+# recovery (the idle paths recover under a fresh sid per poll and would replay
+# it forever) or a landing that found no baseline; any other landing keeps the
+# header's flag. Twin: baseline_landed_flag.
+function Get-MoeBaselineLandedFlag($Bl, [string]$Sid, [bool]$Recovered) {
+    if ($null -eq $Bl -or $Recovered) { return 1 }
+    if ($Bl.Session -and $Bl.Session -ceq $Sid) { return 1 }
+    return [int]$Bl.Landed
+}
+
 # Flip an existing baseline's header to landed=1 in place. Called on the
 # DELIBERATE mode='none' post-flight exit (checkpointCommits=false or a role
 # with no landing) so the next pre-flight does not replay this session's edits
-# as a "recovered" checkpoint the operator turned off. Twin: baseline_mark_landed.
-function Set-MoeBaselineLanded([string]$GitDir, [string]$TaskId) {
+# as a "recovered" checkpoint the operator turned off. A sibling's deliberate
+# exit must not mark another session's baseline landed, so the flag goes
+# through Get-MoeBaselineLandedFlag. Twin: baseline_mark_landed.
+function Set-MoeBaselineLanded([string]$GitDir, [string]$TaskId, [string]$Sid) {
     $p = Get-MoeBaselinePath $GitDir $TaskId
     if (-not $p -or -not (Test-Path -LiteralPath $p)) { return }
     $bl = Read-MoeBaseline $p
     if ($null -eq $bl) { return }
-    Write-MoeBaseline $p $TaskId $bl.Head $bl.B $bl.U 1 | Out-Null
+    Write-MoeBaseline $p $TaskId $bl.Head $bl.B $bl.U (Get-MoeBaselineLandedFlag $bl $Sid $false) $bl.Session | Out-Null
 }
 
 # ---- live-session marker ----------------------------------------------------
@@ -3784,6 +3806,10 @@ function Invoke-MoeLanding {
         $bl = Read-MoeBaseline $baselinePath
         $B = if ($bl) { $bl.B } else { @{} }
         $U = if ($bl) { $bl.U } else { @{} }
+        # Every baseline write below keeps the header's session: a landing never
+        # takes over another session's baseline, it only prunes B and replaces U.
+        $landedFlag = Get-MoeBaselineLandedFlag $bl $Sid $recovered
+        $blSession = if ($bl) { $bl.Session } else { $Sid }
         # Fail CLOSED on missing evidence: with no readable baseline every
         # pre-session dirty path would read as "changed since baseline" and the
         # MEASURED tier would sweep foreign debris into this task's commit. The
@@ -3890,7 +3916,7 @@ function Invoke-MoeLanding {
             }
             $res.Outcome = $outcome
             $res.Code = $code
-            if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
+            if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU $landedFlag $blSession | Out-Null }
             # Any commits the worker made mid-session are already pathspec-scoped
             # and must still reach the remote (today's behaviour for completions).
             if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $res.Branch $Kind $TaskId }
@@ -4000,7 +4026,7 @@ function Invoke-MoeLanding {
                 foreach ($d in $dropped) { Write-Host "[skip] $($d.Path) $($d.Code)" -ForegroundColor Yellow }
                 Write-Host "[info] MOE_COMMIT_NOTHING_TO_COMMIT: task $TaskId — the attributable paths already match $branch." -ForegroundColor Cyan
                 $res.Outcome = 'nothing'; $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
-                if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU 1 | Out-Null }
+                if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU $landedFlag $blSession | Out-Null }
                 if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
                 Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } | Out-Null
                 return $res
@@ -4082,7 +4108,7 @@ function Invoke-MoeLanding {
             Remove-MoeBaseline $baselinePath
         } else {
             $head = if ($bl) { $bl.Head } else { $sha }
-            Write-MoeBaseline $baselinePath $TaskId $head $B $newU 1 | Out-Null
+            Write-MoeBaseline $baselinePath $TaskId $head $B $newU $landedFlag $blSession | Out-Null
         }
         $res.Outcome = 'committed'
         $res.Sha = $sha
@@ -4204,7 +4230,10 @@ function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]
     if (-not $Title -and $scope.Title) { $Title = $scope.Title }
     # A baseline whose header says landed=1 belongs to a session that finished
     # a landing (committed/nothing/refused); replaying a "recovered" checkpoint
-    # from it would only re-land board-state noise on every poll.
+    # from it would only re-land board-state noise on every poll. Only the
+    # session named in its header, a recovery, or a landing that found no
+    # baseline sets that flag (Get-MoeBaselineLandedFlag): a sibling session's
+    # landing keeps it, so a live rework session's crash stays recoverable.
     $blPrev = Read-MoeBaseline $baselinePath
     # The predicate above is true for a crashed session AND for one still
     # running and about to commit. Ask the live-session marker which it is
@@ -4285,7 +4314,7 @@ function Invoke-MoePreflightBaseline([hashtable]$Git, [hashtable]$Settings, [str
         $head = ''
         $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD')
         if ($h.Rc -eq 0 -and $h.Out.Count -gt 0) { $head = ($h.Out -join '').Trim() }
-        Write-MoeBaseline $baselinePath $TaskId $head $B $uLocal | Out-Null
+        Write-MoeBaseline $baselinePath $TaskId $head $B $uLocal 0 $Sid | Out-Null
         # Claim the bytes this baseline arms: a session gets both or neither.
         # This runs on the launch path AND the resume path (a resumed session
         # is exactly as live as a fresh one). A marker already held by a LIVE
@@ -6194,7 +6223,7 @@ $mentionsJson
             # session's edits as a wip(...) recovered commit the operator
             # turned off.
             if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }
-            if ($moeGit) { Set-MoeBaselineLanded $moeGit.GitDir $preflightTaskId }
+            if ($moeGit) { Set-MoeBaselineLanded $moeGit.GitDir $preflightTaskId $moeSid }
         }
         if ($moeMode -ne 'none') {
             if ($null -eq $moeGit) { $moeGit = Get-MoeGitTop }

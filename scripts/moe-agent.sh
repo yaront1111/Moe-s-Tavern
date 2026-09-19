@@ -2451,12 +2451,17 @@ git_dirty_snapshot() {
 }
 
 # ---- baseline TSV: header + B/U rows ----------------------------------------
-# `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1>` then
+# `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1> session=<sid>` then
 # `B\t<blob|D>\t<path>` rows (dirty state presumed foreign) and `U\t<blob>\t<path>`
-# rows (the locally persisted unattributed set). `landed=1` marks a session that
-# ended with a completed landing so the next pre-flight does not replay a
-# recovery checkpoint for nothing; absent (a twin that does not write it) means
-# "recover". Written .tmp + rename.
+# rows (the locally persisted unattributed set). `session` is the Moe-Session id
+# (<workerId>@<pre-flight UTC second>) of the pre-flight that took this baseline.
+# `landed=1` marks that session's completed landing so the next pre-flight does
+# not replay a recovery checkpoint for nothing; absent (a twin that does not
+# write it) means "recover". Only three writers may put landed=1: that session's
+# own landing, a recovery landing, or a landing that found no baseline
+# (baseline_landed_flag). A header with no session= (older twin) belongs to
+# nobody. Written .tmp + rename. Twin: Read-MoeBaseline /
+# Get-MoeBaselineLandedFlag.
 baseline_path() {
     printf '%s/moe/baseline/%s.tsv' "$MOE_GITDIR" "$1"
 }
@@ -2483,12 +2488,12 @@ baseline_landed() { # $1 taskId -- 0 when the header says landed=1
     head -n1 "$f" 2>/dev/null | grep -q ' landed=1' 2>/dev/null
 }
 
-baseline_write() { # $1 taskId, $2 head, $3 B rows file, $4 U rows file, $5 landed(0|1)
+baseline_write() { # $1 taskId, $2 head, $3 B rows file, $4 U rows file, $5 landed(0|1), $6 session
     local dir="$MOE_GITDIR/moe/baseline" line
     mkdir -p "$dir" 2>/dev/null || return 1
     local f="$dir/$1.tsv" tmp="$dir/$1.tsv.tmp.$$"
     {
-        printf '#moe-baseline v1 task=%s at=%s head=%s landed=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${5:-0}"
+        printf '#moe-baseline v1 task=%s at=%s head=%s landed=%s session=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${5:-0}" "${6:-}"
         if [ -f "$3" ]; then
             while IFS= read -r line || [ -n "$line" ]; do
                 [ -n "$line" ] && printf 'B\t%s\n' "$line"
@@ -2511,18 +2516,60 @@ baseline_delete() {
     return 0
 }
 
+# baseline_session TASKID -- print the header's session= value; '' when the
+# token or the file is absent. Prints only and always returns 0, so it is safe
+# inside $(...) under set -e.
+baseline_session() {
+    local f
+    f="$(baseline_path "$1")"
+    [ -f "$f" ] || return 0
+    head -n1 "$f" 2>/dev/null | sed -n 's/.* session=\([^ ]*\).*/\1/p' 2>/dev/null || true
+    return 0
+}
+
+# baseline_landed_flag TASKID RECOVERED(true|false) -- print the landed flag a
+# landing writes back. It belongs to the session whose pre-flight took the
+# baseline: on 2026-09-17 (task-49ec8755) QA's exit landing rewrote a live
+# rework session's baseline to landed=1, and that session's crash was never
+# recovered. So 1 only for that session's own landing (header session ==
+# MOE_SID), a recovery (the idle paths recover under a fresh sid per poll and
+# would replay it forever) or a landing that found no baseline; any other
+# landing keeps the header's flag. Prints only and always returns 0 (safe in
+# $(...) under set -e). Twin: Get-MoeBaselineLandedFlag.
+baseline_landed_flag() {
+    local sess
+    if [ ! -f "$(baseline_path "$1")" ] || [ "${2:-false}" = "true" ]; then
+        printf '1'
+        return 0
+    fi
+    sess="$(baseline_session "$1")"
+    if [ -n "$sess" ] && [ "$sess" = "${MOE_SID:-}" ]; then
+        printf '1'
+    elif baseline_landed "$1"; then
+        printf '1'
+    else
+        printf '0'
+    fi
+    return 0
+}
+
 # baseline_mark_landed TASKID -- flip the header's landed flag in place.
 # Caller: the post-flight's deliberate LANDING_MODE=none exit (checkpoint
 # commits off / a role with no landing), so the next pre-flight does not
-# replay a "recovered" checkpoint the operator turned off.
+# replay a "recovered" checkpoint the operator turned off. A sibling's
+# deliberate exit must not mark another session's baseline landed, so the
+# flag goes through baseline_landed_flag (MOE_SID is this iteration's
+# pre-flight id) and the header's session is kept.
 baseline_mark_landed() {
-    local f work b u head
+    local f work b u head flag sess
     f="$(baseline_path "$1")"
     [ -f "$f" ] || return 0
+    flag="$(baseline_landed_flag "$1" false)"
+    sess="$(baseline_session "$1")"
     work="$(create_secure_temp)"
     baseline_read "$1" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" || true
     head=$(head -n1 "$f" 2>/dev/null | sed -n 's/.* head=\([^ ]*\).*/\1/p') || head=""
-    baseline_write "$1" "$head" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 1 || true
+    baseline_write "$1" "$head" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" "$flag" "$sess" || true
     rm -f "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 2>/dev/null || true
     return 0
 }
@@ -4372,11 +4419,13 @@ PYEOF
     return 0
 }
 
-# baseline_after_landing TASKID B_FILE U_SRC STAGED_FILE LANDED -- remove the
-# landed paths from B, replace U with this pass's unattributed set, keep the
-# file (it lives until the task is DONE/ARCHIVED), refresh head.
+# baseline_after_landing TASKID B_FILE U_SRC STAGED_FILE LANDED SESSION -- remove
+# the landed paths from B, replace U with this pass's unattributed set, keep the
+# file (it lives until the task is DONE/ARCHIVED), refresh head. LANDED and
+# SESSION come from run_landing (baseline_landed_flag / the header's session):
+# a landing never takes over another session's baseline.
 baseline_after_landing() {
-    local tid="$1" bfile="$2" unattr="$3" staged="$4" landed="$5" work head
+    local tid="$1" bfile="$2" unattr="$3" staged="$4" landed="$5" session="${6:-}" work head
     work="$(create_secure_temp)"
     $PYTHON_CMD - "$bfile" "$staged" "$unattr" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" <<'PYEOF' 2>/dev/null || return 0
 import sys
@@ -4417,7 +4466,7 @@ with open(out_u, 'w', encoding='utf-8', errors='surrogateescape', newline='') as
         pass
 PYEOF
     head=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head=""
-    baseline_write "$tid" "$head" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" "$landed" || true
+    baseline_write "$tid" "$head" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" "$landed" "$session" || true
     rm -f "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" 2>/dev/null || true
     return 0
 }
@@ -4587,7 +4636,13 @@ run_landing() {
         policy_override="never"
         echo -e "${YELLOW}[attribution]${NC} moe.get_commit_scope unavailable -- disk fallback (declared-only, peers assumed active)."
     fi
+    # Every baseline write below keeps the header's session: a landing never
+    # takes over another session's baseline, it only prunes B and replaces U.
+    local bl_flag bl_session
+    bl_flag="$(baseline_landed_flag "$LAND_TASK_ID" "${LAND_RECOVERED:-false}")"
+    bl_session="$(baseline_session "$LAND_TASK_ID")"
     if ! baseline_read "$LAND_TASK_ID" "$work/B.tsv" "$work/U.tsv"; then
+        bl_session="${MOE_SID:-}"
         # Fail CLOSED on missing evidence: with no readable baseline every
         # pre-session dirty path would read as "changed since baseline" and the
         # MEASURED tier would sweep foreign debris into this task's commit. The
@@ -4761,7 +4816,7 @@ run_landing() {
         fi
         record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
         LAND_RECORDED=true
-        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" 1
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" "$bl_flag" "$bl_session"
         if [ -n "${RECEIPT_LANDED:-}" ]; then
             local report
             report=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$LAND_PUSH_RESULT") || report=""
@@ -4770,10 +4825,10 @@ run_landing() {
         fi
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
         record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "MOE_COMMIT_NOTHING_TO_COMMIT" "" "" "" "" || true
-        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session"
     elif [ "$LAND_OUTCOME" = "refused" ]; then
         record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
-        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session"
     else
         record_commit_rpc "failed" "$LAND_KIND" "" "$LAND_BRANCH" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
     fi
@@ -4986,7 +5041,7 @@ PYEOF
     # A dead merge (B-new.tsv absent) must NOT write a header-only baseline:
     # an empty B reads as "everything changed since baseline" and re-arms the
     # MEASURED sweep the landing's fail-closed guard exists to prevent.
-    if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0; then
+    if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0 "$MOE_SID"; then
         MOE_BASELINE_PATH="$bp"
         echo -e "${BLUE}[attribution]${NC} baseline written for $tid (${k_foreign:-0} dirty path(s) belong to other sessions or are pre-existing)"
         # Claim the bytes this baseline arms: a session gets both or neither.
