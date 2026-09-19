@@ -216,6 +216,13 @@ GROK_EXEC=false
 INTERACTIVE_REQUESTED=""
 MODEL=""
 
+# Launch argv for the self-restart's `exec` (see "Self-restart when this
+# script's own bytes change on disk"). Captured BEFORE the parser below, which
+# shifts every argument away: captured after it, the relaunch got no arguments
+# and died with "Provide --project or --project-name" -- every sh seat, on its
+# first hot reload (a0646b3 until 2026-09-19).
+MOE_WRAPPER_ARGV=("$@")
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -5283,7 +5290,6 @@ if [ -f "$MOE_WRAPPER_PATH" ]; then
     # outage; a stale wrapper is merely the status quo this guard improves on.
     MOE_WRAPPER_LAUNCH_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
 fi
-MOE_WRAPPER_ARGV=("$@")
 
 while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
