@@ -1,0 +1,320 @@
+{
+  "id": "task-5e096de99bc94b7d81231bb855603e76",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: no runner ever reattaches, so a daemon restart releases every live seat's row once the reconcile window passes",
+  "description": "CONTRACT DRIFT between Wave 1 slices. Filed by the governor on 2026-09-17 after verifying it in source; no live incident on a live seat yet.\n\nTHE DAEMON HALF SHIPPED\n- task-58f7db9a: a restart parks running attempts in `reconciling`.\n- task-d7fa98f4: runReconcileWindowSweep gives up on an attempt that stays `reconciling` longer than reconcileWindowMs (2h by default, counted from lastPhaseAt). It then unassigns a row that is still assigned to that attempt's owner. There is deliberately no liveness check.\n- task-06b658be: moe.heartbeat answers `reattachRequired: true, reattachWith: 'moe.reattach_attempt'` for a reconciling attempt (src/tools/heartbeat.ts:46-62, 103).\n- moe.reattach_attempt returns the attempt to `running` only when the caller's processStartedAt and host match what the attempt recorded.\n\nTHE RUNNER HALF WAS NEVER BUILT\n1. A real claim records no process identity. openClaimAttempt passes only taskId, workerId, runnerId=workerId and workspace, and its comment says \"A distinct runner identity and a per-attempt workspace arrive with the reattachment work\" (src/tools/claimNextTask.ts:69-76). claim_next_task takes no processStartedAt or host.\n2. Reattach therefore never matches a production attempt: src/tools/reattachAttempt.ts:109 refuses one with 'processStartedAt (none recorded)'.\n3. Neither launcher calls it: `grep -i reattach scripts/moe-agent.ps1 scripts/moe-agent.sh` finds nothing. The heartbeat sidecar ignores reattachRequired.\n4. Wave 1 acceptance case 4 (\"restarting only the daemon during a long build preserves ownership\") passes only because its fixture writes processStartedAt and host straight into the attempt record and then plays the runner itself (src/delivery/acceptance.test.ts:1690-1718).\n\nCONSEQUENCE IN THE REAL FLEET\nAfter any daemon restart:\n- Every live seat's attempt is parked.\n- Once the window passes, the sweep unassigns the row out from under that still-running seat.\nUntil task-c628902e is built, that seat keeps calling start_step and complete_step on the now-unassigned row without any refusal (the assertWorkerOwns early return). Meanwhile a second worker can claim the same row, so two seats do the same work. After c628902e, the seat gets TASK_NOT_CLAIMED and must re-claim under a new generation.\nRelated evidence:\n- task-49ec8755's QA reject, issue 2, measured the wrapper side: a `reconciling` attempt stops the loop, and \"the wrappers never reattach\".\n- 2026-09-17: dead worker-a7127038's row was released through exactly this sweep path at 16:53:38Z. That was correct for a dead seat, and a live seat is treated the same way.\n\nWHY IT MATTERS NOW\nActivating task-2a7e0f5b's fix needs a daemon rebuild and restart, and the restart window is the human's call. Every restart from now on is subject to this gap.\n\nDIRECTION (the architect decides, probably via a SPIDR split; it spans the daemon, both launchers and the harnesses)\n- Claims opened by a runner record that runner's process identity.\n- The runner (the wrapper, which outlives CLI respawns) reacts to the heartbeat's reattachRequired by calling moe.reattach_attempt with that identity before the window expires.\n- The give-up half stays as it is for seats that really are dead.",
+  "definitionOfDone": [
+    "An attempt opened by a wrapper-launched claim records the runner's processStartedAt and host, and moe.reattach_attempt accepts that identity after a daemon-only restart (daemon test with a real restart, not a fixture-seeded attempt record).",
+    "Both wrappers reattach: after a daemon-only restart, a live seat whose heartbeat answers reattachRequired calls moe.reattach_attempt, the attempt returns to running, and the reconcile-window sweep no longer releases that row. Proven in the launcher harness for sh and ps1; parity-check passes.",
+    "A different process (mismatched processStartedAt or host) still cannot reattach, and a seat that never reattaches is still given up after reconcileWindowMs exactly as task-d7fa98f4 shipped.",
+    "docs/MCP_SERVER.md (claim_next_task, heartbeat, reattach_attempt) and the restart story in CLAUDE.md/docs/ARCHITECTURE.md describe the runner reattach path as shipped; daemon npm test and npx tsc --noEmit pass."
+  ],
+  "taskRails": [
+    "The daemon stays state-only; process identity is supplied by the runner, never probed by the daemon.",
+    "Do not add any idle-based release of WORKING/PLANNING tasks, and do not weaken the give-up for seats that never reattach.",
+    "Both launchers or neither: moe-agent.ps1 and moe-agent.sh change together."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phases 1+2 — verify the daemon half landed, re-read the anchors, record baselines. No repo edits.\n\nThis card is the RUNNER half; read comment-c14c7609 first. Its prerequisite task-bd799955 must be DONE and merged, or the identity a claim sends is dropped on the floor and every arm below is vacuous. Check with get_context epicSiblings or `git log --grep 'Moe-Task: task-bd799955'`, and confirm in source that claim_next_task's input schema now carries processStartedAt and host and that openClaimAttempt forwards them.\n\nAnchors to re-read by grep, never by line number:\n- sh: `start_heartbeat_sidecar()` (the background subshell that pipes one request through moe_rpc and discards the reply), `stop_heartbeat_sidecar`, the claim_next_task call in the pre-flight, MOE_ATTEMPT_ID / MOE_ATTEMPT_GENERATION, `moe_attempt_read`, and the finalize ladder that already reads the pinned attempt record from `.moe/attempts/<id>.json`.\n- ps1: `Start-HeartbeatSidecar` (Start-Job script block, same discard), `Stop-HeartbeatSidecar`, `$script:MoeAttemptId` / `$script:MoeAttemptGeneration`, `Read-MoeAttempt`, `Set-MoeAttemptIdentity`.\n- Daemon, read-only: heartbeat answers `{ok:false, reattachRequired:true, reason, reattachWith, attemptId, phase}` — note there is NO generation in it, so the sidecar must carry the one pinned at claim; reattach_attempt requires taskId, workerId, runnerId, attemptId, generation, processStartedAt and host, compares the last two as EXACT strings, and refuses an attempt that recorded none.\n\nBaselines with counts and exit codes: `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`, `bash scripts/tests/parity-check.sh`, both ps1 twins launched from PowerShell (mem:gotcha-ps-harness-ctrlc-from-git-bash), and `cd packages/moe-daemon && npm test` (nothing daemon-side changes here, so it must stay exactly where it was).\n\nDecide and record the identity spelling before writing code, because a value that cannot be reproduced by the SAME process later refuses every reattach:\n- sh: `<pid>@<token>`, where token is field 22 of /proc/$$/stat when readable (Linux, WSL and Git Bash's MSYS all have it) and `ps -p $$ -o lstart=` with whitespace collapsed otherwise (macOS). Host from `hostname`.\n- ps1: `<pid>@<(Get-Process -Id $PID).StartTime in UTC ISO-8601>`. Host from [Environment]::MachineName.\n- Both: computed ONCE at wrapper start, cached in a script variable, never recomputed. pid alone is not enough (reuse), start time alone is not enough (two processes can share a tick); the pair plus host is.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Step 1: no repo edits. Baselines were taken on HEAD 9221738, exported with git archive to D:/moe-t5e09-base-20146.\n\nPREREQUISITE LANDED. task-bd799955 is DONE; completion f8ecb8e is merged into moe/work-2026-09-13 (epicSiblings landing.merged=true). Verified in source:\n- claimNextTask.ts takes optional processStartedAt/host: both-or-neither, max 200/255 chars, no control characters, otherwise INVALID_INPUT.\n- openClaimAttempt spreads the pair into the openAttempt params. The adopt arm never rewrites it.\n- heartbeat.ts answers {ok:false, reattachRequired, reason, reattachWith, attemptId, phase}. There is NO generation in the answer.\n- reattachAttempt.ts compares generation, processStartedAt and host as exact strings. It refuses 'none recorded'. It does not compare workerId or runnerId.\n- purgeAllWorkers spares any seat with an open attempt. So after a restart, a live seat's heartbeat answers attempt-reconciling, not no-worker-record.\n- complete_task moves a reconciling attempt to finalizing.\n\nANCHORS re-read by grep:\n- sh: start_heartbeat_sidecar used to discard the reply. Also read: moe_attempt_read (accepts running|finalizing only), pin_attempt_identity, moe_pinned_attempt_phase, finalize_attempt_rpc, the claim_next_task call sites and MOE_RUNNER_ID (per iteration).\n- ps1: Start-HeartbeatSidecar (Start-Job, reply discarded), Stop-HeartbeatSidecar, Read-MoeAttempt, Set-MoeAttemptIdentity, and the claim sites.\n- Real failure mode found: a resume after a restart reads a reconciling attempt. The pin fails, the completion's evidence then fails closed (bytes rescued) and finalize is refused. So the main-loop reattach has to sit BEFORE the pin.\n\nIDENTITY SPELLING (decided here). I reuse the existing live-session-marker helpers, which answer the same question (\"which process on which host\"). This deviates from the plan's ps1 spelling on purpose: one source of truth.\n- sh: \"$$@$(proc_start_token $$)\", where the token is field 22 of /proc/<pid>/stat. Where /proc is absent (macOS), it falls back to `ps -o lstart` with whitespace squeezed; that fallback is for the identity only, and the helper itself is unchanged. host = live_marker_host (hostname, lowercased).\n- ps1: \"$PID@$(Get-MoeProcStartToken $PID)\", which is StartTime in UTC ticks. host = Get-MoeLiveMarkerHost (COMPUTERNAME, lowercased).\n- Both are computed once, at wrapper start. Measured on this box: sh 653108@71790695 host=yaron-pc; ps1 55716@639253407988233083 host=yaron-pc.\n\nBASELINES:\n- daemon (live tree): npx tsc --noEmit rc=0. npm test rc=0, 122 files, 2105 passed | 1 skipped (12.7 s).\n- parity-check.sh PASS rc=0. parity-check.ps1 PASS rc=0 on both pwsh and powershell 5.1.\n- postflight.sh on the HEAD export, MOE_POSTFLIGHT_TIMEOUT_SEC=400: \"PASS frozen candidate scenarios: 57\". The scope scenarios were still running at close; the final line goes in the step-2 note.\n- The ps1 full-suite baselines are queued behind the RED runs; the box is loaded.\n\nSHARED TREE:\n- The daemon files dirty from other sessions are untouched (generated/, startStep.ts, recommendSkill.* and others).\n- The bfe2f04e wrapper bytes were self-landed by QA in 9221738 during this step.\n- worker-f0cb282e (task-32ecce5d) has uncommitted hunks in postflight.{sh,ps1}. We agreed a landing-order swap (their option (a)) over SendMessage, so their completion cannot land my harness asserts without my wrappers.",
+      "startedAt": "2026-09-18T14:34:53.580Z",
+      "completedAt": "2026-09-18T15:12:51.787Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Phase 3 — harness arms first, byte-identical in scripts/tests/postflight.sh and scripts/tests/postflight.ps1. Edit with the Edit tool (mem:gotcha-serena-edit-rewrites-crlf-on-windows, mem:gotcha-bash-tool-json-escapes-generated-code).\n\n(a) Fake proxy: record every claim_next_task's processStartedAt and host into the rpc log, answer moe.heartbeat with the reattach-required shape when FAKE_HEARTBEAT_REATTACH is set (`{ok:false, reattachRequired:true, reason:'attempt-reconciling', reattachWith:'moe.reattach_attempt', attemptId:<the fixture attempt>, phase:'reconciling'}`), and validate moe.reattach_attempt like the real tool: refuse with ATTEMPT_IDENTITY_MISMATCH unless attemptId, generation, processStartedAt and host all equal what the claim recorded, and answer success with phase 'running' when they do. FAKE_REATTACH_REFUSE forces the mismatch refusal.\n\n(b) Arms:\n- `identity-claim`: every claim_next_task carries a non-blank processStartedAt and host. Under --loop with two claims, BOTH carry the SAME pair — a per-iteration recomputation is the defect this arm exists to catch.\n- `reattach-sidecar`: with the heartbeat answering reattach-required, exactly one moe.reattach_attempt follows, carrying the identity from that wrapper's own claim, and the wrapper's session continues normally (the landing and finalize behave exactly as the equivalent arm without the heartbeat).\n- `reattach-refused`: the fixture refuses the reattach with ATTEMPT_IDENTITY_MISMATCH. The wrapper logs it ONCE, does not retry it on every later ping, does not stop the loop, and still lands and finalizes exactly as today.\n- `reattach-postflight`: the pinned attempt record on disk reads `reconciling` when the CLI exits. The wrapper reattaches BEFORE the candidate/landing path rather than failing closed on a reconciling attempt, and the landing then records its candidate and check as usual.\n- `reattach-none`: heartbeat answers the other two reasons (`no-worker-record`, `no-open-attempt`). No reattach_attempt is sent at all — there is nothing to reattach — and the wrapper carries on.\n\n(c) Error handling in the arms: assertions carry the captured wrapper log; a sidecar failure must never fail the session, so each arm also asserts the landing and finalize rows are unchanged from the equivalent baseline arm.\n\nProve every arm RED against today's wrappers (`MOE_FROZEN_TEST_ONLY=<mode>`, one run each, ps1 from PowerShell) and record the first failing assertion per arm. `reattach-none` may be green today — it is a guard, and the step note must say so rather than claiming a red.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Harness arms landed in both twins. The two shared regions are byte-identical across the twins (python compare): the fake-proxy evidence region, 15766 B, and the frozen suite, 50222 B. All edits used the Edit tool; after editing: 0 CRLF, 0 raw control bytes, JS passes `node --check`, and bash -n / the PS parser on both engines report 0 errors.\n\n(a) FAKE PROXY\n- claim_next_task: mirrors readProcessIdentity. Both-or-neither, non-blank, max 200/255, no control characters, else INVALID_INPUT. Every claim is logged to evidence-rpcs.jsonl with its args.\n- attemptFixture: records the pair verbatim. FAKE_ATTEMPT_PHASE=reconciling opens the attempt already parked.\n- FAKE_HEARTBEAT_REATTACH=1: mirrors heartbeat.ts over the caller's attempt on disk (attempt-reconciling while parked, else ok). `other` alternates no-worker-record / no-open-attempt. `.moe/heartbeat-count` counts the pings.\n- reattach_attempt: validates like reattachAttempt.ts. It answers ATTEMPT_NOT_FOUND, ATTEMPT_ID_TASK_MISMATCH, ATTEMPT_IDENTITY_MISMATCH (generation, processStartedAt or host; nothing recorded never matches) or ATTEMPT_NOT_REATTACHABLE. On a match it sets phase running and answers success. FAKE_REATTACH_REFUSE=1 forces the mismatch.\n\n(b) ARMS\n- A general assertion on EVERY frozen mode: every claim carries a non-blank pair, all equal.\n- identity-claim (loop): >=2 claims carry one pair, and the attempt the claim opened records it.\n- reattach-sidecar: exactly 1 reattach with the claim's pair, id attempt-postflight and generation 7, plus one success line. The landing, candidate, gate, receipt and finalize are pass-like.\n- reattach-refused (loop): exactly 1 reattach, refusal line exactly once over 3+ later pings, the loop goes on, pass-like landing and finalize.\n- reattach-postflight: reconciling at CLI exit. The reattach row precedes record_candidate; the landing and finalize are pass-like.\n- reattach-preflight: parked before the pin. The CLI sees 'running', the log has no 'Missing/stale attempt identity', pass-like landing.\n- reattach-none: 0 reattach, each other reason logged exactly once.\n- Every other mode must send 0 reattach calls.\n\nDEVIATIONS\n- One extra arm, reattach-preflight: the pre-flight call site needed its own test.\n- checkpoint-reconciling and manual-reconciling changed expectation. They now expect 1 reattach, and the '[finalize] no finalizing attempt' line is ABSENT: the post-flight reattach runs first, so the ladder finds the attempt running.\n- Fixed a race in my own CLI fixture: it now waits for one more ping after 'running', so the sequential sidecar has printed its line before the wrapper stops it.\n\nRED against HEAD 9221738 wrappers (one run per mode):\n- sh: all 8 modes fail first at frozen-candidate.cjs:305 'every claim carries the runner identity'.\n- ps1 (pwsh, launched from PowerShell): the same 8, same line.\n- reattach-none is also red on HEAD, through that general check. Its own guard reddens only under M1 below.\n\nRED on mutants of the NEW wrappers, to show each arm bites on its own logic:\n- M1 (identity sent, nothing reacts):\n  - identity-claim is green.\n  - sidecar, refused, postflight, preflight, checkpoint-reconciling and manual-reconciling are red at :313 'exactly one reattach'.\n  - reattach-none is red at :325 'each other reason is logged once'.\n- M2 (sidecar only, main-loop reattach disabled):\n  - sidecar, refused and none are green.\n  - postflight, preflight, checkpoint-reconciling and manual-reconciling are red at :313.\n- M3 (a refusal is not remembered): reattach-refused is red at :313 (more than one reattach).\n- ps1 pm1 = M1 (all 7 red at the same lines). ps1 pm3 = M3 (red at :313).\n\nGREEN on the new wrappers: sh 8/8; pwsh 8/8 (42 s); powershell 5.1 8/8 (44 s).\n\nHONEST NOTE: the harness and the wrappers were drafted in the same pass. RED is proven against HEAD and against mutants, not by sequencing.",
+      "startedAt": "2026-09-18T15:12:58.727Z",
+      "completedAt": "2026-09-18T15:28:57.002Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Phase 4a — capture the identity and send it at claim time, in both twins.\n\n- Compute the pair once, at wrapper start, into MOE_PROCESS_STARTED_AT and MOE_HOST (sh) and $script:MoeProcessStartedAt / $script:MoeHost (ps1), with the spellings fixed in step 1. Log them once at pre-flight, at the same verbosity as the other one-line pre-flight facts.\n- Add both to every claim_next_task call the wrapper makes, including the resume path. They are optional daemon-side, so an older daemon ignores them and nothing breaks.\n- Do NOT send them on any other tool call: they are the claim's record of which process opened the attempt, not a general header.\n\nError handling: if either value cannot be determined (an unreadable /proc, a Get-Process failure, an empty hostname), send NEITHER, log one `[WARN]` naming what failed, and continue. A partial identity is worse than none: it records something no later reattach can reproduce, and a claim must never fail because of it.\n\nArm `identity-claim` from step 2 turns green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "The identity is captured once and sent on every claim, in both twins.\n\nsh (moe_runner_identity, defined and called once, top-level, right after proc_start_token):\n- Token is \"$$@$(proc_start_token $$)\". Where /proc is absent (macOS) it falls back to ps lstart with whitespace squeezed.\n- Host is live_marker_host. These are the SAME helpers the live-session marker already uses (ponytail rung 2: no second probe of \"which process on which host\").\n- Validation matches the daemon's: non-empty, no [[:cntrl:]], at most 200/255.\n- Results go to MOE_PROCESS_STARTED_AT and MOE_HOST (shell variables, not exported) and CLAIM_RPC_JSON (CLAIM_JSON plus the pair, built by json.dumps).\n- Both claim_next_task RPCs (pre-flight, taskless-wait retry) use CLAIM_RPC_JSON. That covers the resume path too: the resume is the same claim call.\n\nps1 (the same block right after Get-MoeProcStartToken):\n- Token is \"$PID@$(Get-MoeProcStartToken $PID)\" (StartTime UTC ticks). Host is Get-MoeLiveMarkerHost.\n- A [char]::IsControl scan and length bounds are applied.\n- Results go to $script:MoeProcessStartedAt, $script:MoeHost and $claimRpcArgs (the claim object plus the two NoteProperties). Both claim_next_task RPCs use $claimRpcArgs.\n\nOne pre-flight line, printed once at start: \"Runner identity: processStartedAt=<v> host=<h>\".\n- If either value cannot be read, NEITHER is sent and one \"[WARN] Runner identity unavailable (<why>); claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.\" is logged.\n- The claim itself is never failed for this.\n\nNot sent on any other call:\n- The prompts' CLAIM_JSON / $claimJson (the text the CLI sees) is unchanged.\n- reattach_attempt carries the pair because that tool requires it.\n\nEvidence:\n- identity-claim is green on sh, pwsh and 5.1. The general 'every claim carries the runner identity' check passes on all 8 arms.\n- Real daemon plus real proxy (scratch e2e, see the step-6 note): the attempt the claim opened records exactly the pair the wrapper printed.\n  - sh: 737300@73504691 / yaron-pc.\n  - pwsh: 56680@639253420725444419 / yaron-pc.\n  - 5.1: 59468@639253420858687705 / yaron-pc.\n- Measured: a bash exec hot-reload keeps the same pid and start token, so the identity is stable across it. A ps1 self-restart is a new process with a new identity, which is correct: it deregisters first.",
+      "startedAt": "2026-09-18T15:29:00.516Z",
+      "completedAt": "2026-09-18T15:29:15.017Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Phase 4b — react to reattachRequired, in both twins. This is the half that keeps a live seat's row after a daemon restart.\n\n(a) The heartbeat sidecar stops discarding the reply. Pass it the pinned identity at start (taskId, attemptId, generation, processStartedAt, host alongside the workerId it already gets), then on each ping parse the answer:\n- `reattachRequired` with reason `attempt-reconciling` AND an attemptId equal to the pinned one → send moe.reattach_attempt with taskId, workerId, runnerId, attemptId, generation, processStartedAt and host. The heartbeat carries no generation, which is exactly why the sidecar holds the pinned one.\n- Any other reason, or an attemptId that is not this seat's → do nothing but log once. There is nothing this process may reattach.\n- A refusal → log once and STOP attempting for that attempt id. ATTEMPT_IDENTITY_MISMATCH never heals, and a per-ping retry would spam the daemon every 60 s for hours.\n- A successful reattach → log once and go back to plain pings.\n\n(b) The main loop reattaches too, for the window the sidecar cannot cover: when the wrapper reads its own pinned attempt record and finds phase `reconciling` — at pre-flight before launching the CLI, and after the CLI exits before the landing path — send the same call first. Without it, a restart during a CLI run leaves record_candidate and the finalize ladder failing closed on a reconciling attempt and the bytes parked for no reason.\n\n(c) Error handling, and it decides whether this is safe to ship: the sidecar is best-effort and must never throw, never exit its loop early, and never fail the session. Every parse and every RPC is wrapped; an unparseable reply is ignored; a transport failure is one log line and the next tick tries again. The main-loop reattach is the same: a failure logs one `[WARN]` and the landing proceeds exactly as it does today, because a reattach that could not be sent is not a reason to lose bytes.\n\nArms `reattach-sidecar`, `reattach-refused`, `reattach-postflight` and `reattach-none` from step 2 turn green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Both twins now react to reattachRequired.\n\n(a) SIDECAR\n- sh: the start_heartbeat_sidecar subshell inherits the pinned MOE_ATTEMPT_ID, MOE_ATTEMPT_GENERATION, PREFLIGHT_TASK_ID, MOE_RUNNER_ID and the identity at fork.\n- ps1: Start-HeartbeatSidecar passes a $pin hashtable to the job through -ArgumentList. The job cannot see script variables.\n- Each ping now reads the reply:\n  - attempt-reconciling naming the pinned attempt id, with an identity present: send moe.reattach_attempt with the pinned generation (the answer carries none), then log one line.\n  - Any other reason or attempt id: log once per reason per sidecar ('... pinned no such reconciling attempt; nothing to reattach.').\n  - A refusal (a daemon error carrying a codeName): log once and set refused, so that attempt is never asked again in this sidecar.\n  - No usable answer: '[WARN] ... retrying later.', and the next ping tries again.\n- sh pre-checks the reply for 'reattachRequired' before spending a python parse, so a plain {ok:true} costs nothing extra.\n- ps1 prints the job's lines in Stop-HeartbeatSidecar from ChildJobs.Output. Receive-Job throws 'The Persistence Path does not exist' on 5.1 when the profile path is absent, which is exactly the harness's fake USERPROFILE. Found by the 5.1 arm run. Memory: gotcha-ps51-receive-job-persistence-path.\n\n(b) MAIN LOOP\n- reattach_own_attempts / Invoke-MoeReattachOwnAttempts reattach every attempt THIS worker owns in `reconciling` (read from .moe/attempts).\n- Where it runs:\n  - right after the pre-flight claim, BEFORE pin_attempt_identity / Set-MoeAttemptIdentity (a resume after a restart would otherwise fail the pin closed);\n  - right after the CLI exits, before status resolution and the landing.\n- Its refusals are remembered for the life of the wrapper process.\n- Deviation, argued: I scan the seat's own reconciling attempts on disk rather than only the pinned id. That covers a resume, where nothing is pinned yet, and BLOCKED holds. The daemon's identity check still decides who may reattach.\n- Shared RPC helper: moe_reattach / Invoke-MoeReattach. Returns 0/'running', 1/'refused', 2/'none'.\n\n(c) SAFETY\n- The sh sidecar runs under set +e. Every RPC and parse is `|| continue`, so a failure costs one tick and the loop never exits early.\n- The ps1 job body is try/catch per tick.\n- The main-loop calls are `|| true`, and the helpers never return non-zero to the caller under set -e. An RPC failure logs one WARN and the landing proceeds unchanged.\n\nEvidence:\n- sh: 5/5 reattach arms green, plus identity-claim and the two reconciling arms.\n- pwsh and PowerShell 5.1: 8/8 each.\n- REAL daemon + real proxy + new wrapper, abrupt daemon-only restart mid-CLI (scratch e2e):\n  - sh, pwsh and 5.1 each saw attempt -> reconciling -> running within 2-3 s via the sidecar, same generation, task still assigned (WORKING).\n  - The wrapper logged '[reattach] attempt <id> (generation 1) on task task-e2e is running again after a daemon restart.'",
+      "startedAt": "2026-09-18T15:29:32.552Z",
+      "completedAt": "2026-09-18T15:29:46.935Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Phase 4c+6 — parity and the restart story.\n\n(a) scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1: register every operator-visible literal this card adds in BOTH lists — the reattach success line, the refusal line, the 'identity unavailable' WARN, and the env/variable names MOE_PROCESS_STARTED_AT and MOE_HOST. Harness-only FAKE_* names are never registered. Prove the guard once: delete one new literal from a single wrapper, confirm BOTH parity scripts fail, restore it.\n\n(b) CLAUDE.md, in the dead-worker/restart paragraph that already explains attempts and the 120 s presence window: describe the path as shipped — a claim records the runner's process start time and host; a daemon restart parks that attempt in `reconciling` and HOLDS the row; the wrapper's heartbeat sidecar sees reattachRequired and calls moe.reattach_attempt with the identity it pinned, which returns the attempt to `running`; a seat that never reattaches is still given up after reconcileWindowMs; and a match narrows WHICH process, it is never evidence that the process is alive. docs/ARCHITECTURE.md is deliberately left alone — task-808869c5's docs sweep owns it right now, and two cards editing it would collide.\n\nKeep both twins in step: this card's rail is both launchers or neither.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "CLAUDE.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Parity registrations, the restart story, and the MCP docs are updated.\n\n(a) PARITY. Both lists gain two groups.\n- 'runner reattach': reattach_attempt, processStartedAt, attempt-reconciling, reattachRequired, [reattach].\n- 'runner reattach prose': the lines below.\n  - 'Runner identity: processStartedAt='\n  - 'Runner identity unavailable ('\n  - 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.'\n  - 'is running again after a daemon restart.'\n  - 'moe.reattach_attempt refused for attempt'\n  - '; not retrying it.'\n  - 'moe.reattach_attempt got no answer for attempt'\n  - '; retrying later.'\n  - 'heartbeat asks for reattachment ('\n  - 'but this wrapper pinned no such reconciling attempt; nothing to reattach.'\n- Lists are one-liners, so there are no backslash continuations.\n- DEVIATION: MOE_PROCESS_STARTED_AT and MOE_HOST are NOT registered.\n  - They are not env names: plain sh shell variables, never exported and never read from the environment. The ps1 twin uses $script:MoeProcessStartedAt / $script:MoeHost, as plan step 3 itself names them.\n  - Registering them would mean planting a dead literal in the ps1.\n  - The operator-visible identity line is registered instead.\n- FAKE_* names: none are registered.\n- Guard proven on a scratch copy (live tree untouched): I reworded 'Runner identity: processStartedAt=' in the ps1 wrapper only.\n  - parity-check.sh: rc=1, \"PARITY FAIL: runner reattach prose 'Runner identity: processStartedAt=' missing from: moe-agent.ps1\".\n  - parity-check.ps1: rc=1 on both pwsh and 5.1, same literal named.\n- Live: PASS on sh, pwsh and 5.1.\n- EOL: parity-check.ps1 is now all-CRLF (126). The Edit tool normalized the 2 lone LF lines; git normalizes the file, and git diff shows only +5.\n\n(b) CLAUDE.md (CRLF kept, +2/-2 lines).\n- Run section: the stale \"purges ALL worker records\" now says the purge spares recently active and mid-execution seats, which are held until their wrapper reattaches.\n- Dead-worker paragraph: the first clause is corrected the same way.\n- New **Restart hold + runner reattach** passage covers:\n  - the claim records <wrapper pid>@<start token> plus host, computed once per wrapper;\n  - a restart parks the running attempt as reconciling and HOLDS the row;\n  - the sidecar gets attempt-reconciling and calls moe.reattach_attempt with the pinned id, generation and identity, and the attempt is running again;\n  - the main loop repeats this after the claim and after the CLI exit;\n  - a refusal (ATTEMPT_IDENTITY_MISMATCH, e.g. a respawned wrapper) is logged once and never retried;\n  - a seat that never reattaches is given up after reconcileWindowMs (2h) and its row released;\n  - a match narrows WHICH process and is never evidence that the process is alive.\n- docs/ARCHITECTURE.md is untouched: task-808869c5 owns it.\n\n(c) docs/MCP_SERVER.md. Scope growth beyond the plan's 7 files, driven by DoD 4, which names claim_next_task, heartbeat and reattach_attempt.\n- Two stale sentences are replaced: \"The wrappers do not send the pair yet (task-5e096de9...)\" in claim_next_task, and \"The wrappers do not send it yet ... task-5e096de9\" in reattach_attempt. They now say what the shipped wrappers send (spelling per twin, computed once, both-or-neither) and when they call reattach.\n- moe.heartbeat gains one Notes bullet on what the shipped wrappers do with each reason.\n- The file was not dirty before; it is LF, 0 raw control bytes.",
+      "startedAt": "2026-09-18T15:29:51.201Z",
+      "completedAt": "2026-09-18T15:30:05.685Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Phase 5 — regression, sequentially, on a quiet box (mem:moes-test-env-quirks).\n\n1. `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` from Git Bash (about 36 minutes; background it and read the tail).\n2. `MOE_POSTFLIGHT_TIMEOUT_SEC=180 pwsh -NoProfile -File scripts/tests/postflight.ps1`, then the same under powershell.exe, both launched FROM PowerShell.\n3. `bash scripts/tests/parity-check.sh` and the ps1 twin.\n4. `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`: nothing daemon-side changes in this card, so both must match step 1's baseline exactly. A moved count means this card reached further than it should have.\n\nEach harness run ends with its PASS lines, the frozen count higher than the baseline by exactly the number of arms added, and the commit-scope count unchanged. Rerun a flaky harness alone before concluding; never paper over a real failure.\n\nAlso run the one live-ish check this card can afford: with the fleet quiet, confirm from a real seat's attempt record that a claim now carries processStartedAt and host on disk (`.moe/attempts/<id>.json`), which is the only evidence that the pair survives the real proxy and the real daemon rather than just the fake one.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Regression is green on every suite. All runs used the snapshot D:/moe-t5e09-final, and the live files are byte-identical to it (cmp). MOE_POSTFLIGHT_TIMEOUT_SEC=400 was used instead of 180 because the box was under fleet load (the documented knob, mem:gotcha-postflight-loop-mode-supervisor-deadline).\n\n1. `bash scripts/tests/postflight.sh`\n   - Run 2: rc=0. 'PASS frozen candidate scenarios: 64', 'commit-scope scenarios run: 28', 'PASS postflight.sh'. 16:11:19Z-16:57:11Z (45.9 min).\n   - Run 1: rc=1 at 'SCENARIO W FAILED: a teardown rescue must never move HEAD' (the log shows a normal landing, no trap).\n   - Classified as a load-timing flake. W sends SIGINT at baseline + ~1 s against a 5 s CLI, and MSYS bash does run a trapped INT mid-child (verified).\n   - W alone (a w-only.sh built from the harness) passed 3/3 on BOTH the HEAD 9221738 wrapper and the new wrapper.\n   - Neither of my new calls sits in W's window: the pre-flight scan precedes the baseline, and the post-flight scan follows the CLI.\n2. `postflight.ps1`, launched from PowerShell:\n   - pwsh 7.6.6: rc=0, frozen 64, scope 28, 400 s.\n   - powershell 5.1: rc=0, frozen 64, scope 28, 419 s.\n3. parity-check: .sh PASS; .ps1 PASS on both pwsh and 5.1.\n4. packages/moe-daemon: `npx tsc --noEmit` rc=0; `npm test` rc=0, 122 files, 2105 passed | 1 skipped. That matches the step-1 baseline exactly; this card touched no daemon file.\n\nFROZEN COUNT\n- Step-1 baseline at 9221738: 57.\n- Now 64 = 57 + my 6 new modes + 1 from task-32ecce5d, whose loop-land-twice landed mid-card as 462c665.\n- Against the current HEAD 462c665 (58) that is exactly +6. Commit-scope stays 28.\n\nHARNESS LANDING-ORDER SWAP with task-32ecce5d (agreed option (a) over SendMessage)\n- I saved my two harness files and put their pristine copies (HEAD + their hunks) live.\n- They landed 462c665. Its blobs equal the pristine hashes 86d73f4b and 206b110d.\n- I restored mine. The diff vs 462c665 is now exactly my hunks: -7/+111 per file.\n\nLIVE-ISH CHECK\n- Not possible on the fleet today. The fleet daemon (pid 1460, started 2026-09-17T20:00:44Z) runs the 2026-09-17 dist, which predates bd799955. Its claimNextTask.js has no processStartedAt at all.\n- A probe of that exact old dist (scratch, isolated HOME): a claim carrying the pair SUCCEEDS and the attempt records no pair. So hot-reloaded seats keep working. Recording and reattaching wait for a human rebuild + restart.\n- Substitute evidence, stronger than a disk check: a real daemon (current source via tsx, isolated HOME and project), the real moe-proxy, and the new wrappers, with an abrupt daemon kill and restart while the CLI runs.\n  - sh (e2e.mjs): claim recorded 737300@73504691 / yaron-pc. After restart the attempt was 'reconciling'; the sidecar reattached it within 3 s; still generation 1, task still WORKING and assigned. A stranger with processStartedAt '1@1' got -32002 ATTEMPT_IDENTITY_MISMATCH. The wrapper logged the [reattach] line and exited 0.\n  - pwsh: the same result (56680@639253420725444419).\n  - powershell 5.1: the same result (59468@639253420858687705).",
+      "startedAt": "2026-09-18T15:30:10.588Z",
+      "completedAt": "2026-09-18T16:57:41.048Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Phases 7+8 — adversarial self-review, then complete. Answer in ONE task comment:\n1. Identity stability: show the value is computed once and reused, and say what happens on a wrapper respawn (a new process, a new identity, no reattach — which is correct: that execution really is gone).\n2. The give-up still works: a seat that never reattaches is still released after reconcileWindowMs. Name the arm or test that proves you did not weaken it, and confirm you added no idle-based release anywhere (task rail 2).\n3. A stranger cannot reattach: a mismatched processStartedAt or host is refused, and the wrapper stops retrying. Say what the daemon does and what the wrapper does, separately.\n4. Sidecar safety: it runs in a separate process and cannot fail the session. Walk the failure modes — unparseable reply, dead transport, daemon restarted mid-ping, refusal, wrapper already exited — and name the guard for each.\n5. Timing: 60 s pings against a 2 h window. Say what happens if the interval is raised past the window (MOE_HEARTBEAT_INTERVAL_SEC) and whether anything warns.\n6. The main-loop reattach: why a restart during a CLI run would otherwise park bytes for no reason, and which arm covers it.\n7. Both twins: diff the added blocks and show they are the same rule, and that parity passes.\n8. Would I be embarrassed if this broke in production? Name the worst case and whether an arm covers it.\n\nThen: delete any scratch tree (unlink junctions first), call moe.declare_files for exactly the files this plan names, and moe.complete_task with verification `{ command: 'MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh', exitCode: 0, outputTail }` and a summary naming the identity spelling, the five arms, the ps1 results for both engines, and the on-disk evidence that a real claim now records the pair.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "CLAUDE.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "The self-review is posted as ONE comment (comment-11d3aeac) answering all 8 questions. It includes a correction to my step-3 note: on MSYS, bash exec keeps the pid but CHANGES the /proc start token (measured). This is harmless, because the hot-reload path deregisters before it execs.\n\nScratch trees are deleted: 14 dirs. A PowerShell scan found 0 reparse points, so there were no junctions to unlink. D:/moe-t5e09-e2e is kept on purpose for QA:\n- e2e.mjs: a real daemon + proxy + wrapper restart run (node e2e.mjs sh|ps1|ps51).\n- old-daemon.mjs.\n- The full sh log.\n- The MCP_SERVER.md safety copy.\n\ndeclare_files covers the plan's 7 files plus docs/MCP_SERVER.md (the DoD-4 growth).\n\ndocs/MCP_SERVER.md is contested with task-808869c5 (worker-f0cb282e). They chose option (a) over SendMessage:\n- The live file is now HEAD plus only my 3 hunks, which is what my landing will commit. `git diff` shows @@549, @@1135 and @@+2659.\n- Their 4 hunks (670, 1795, 1809, 1816) are saved by them at D:/moe-t8088-out/MCP_SERVER.md.808869c5-with-peer (sha256 471cb328, verified equal to the pre-swap live file).\n- One of their hunks documents an unlanded policy.ts fix, so it must not reach HEAD early.\n- They restore it after my feat(task-5e096de9) lands.\n\nThe live scripts equal the snapshot every suite ran against (sha256 prefixes 88a5972a / 3ed1301c / 3f2f435c / f071cb03). Parity-check.sh PASS just now.",
+      "startedAt": "2026-09-18T16:58:14.759Z",
+      "completedAt": "2026-09-18T17:08:26.594Z"
+    }
+  ],
+  "planRevision": 15,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 4,
+  "comments": [
+    {
+      "id": "comment-c14c7609318743e28cad01d5871ce900",
+      "author": "architect-aa5a6c1e",
+      "content": "ARCHITECT SPLIT (architect-aa5a6c1e, 2026-09-18), as the card's DIRECTION asked for. The human chose the split in the architect REPL.\n\nWhole, this was about 10 files — the plan-size ceiling — across the daemon, both launchers, both harnesses, both parity checks and the docs. It is now two cards:\n\n- **task-bd7999555b244be0869c2f460db554bb (new, BACKLOG, order 204.5): the daemon half.** claim_next_task accepts optional processStartedAt and host and passes them through openClaimAttempt to openAttempt, so a real attempt can be matched at all; plus the restart-then-reattach daemon test that uses no fixture-seeded attempt record, the mismatch refusal, the unchanged give-up, and MCP_SERVER.md. About 3 files. It needs a human to promote it out of BACKLOG.\n- **This card: the runner half.** Both wrappers compute a stable process identity once, send it on every claim, and reattach when the heartbeat answers reattachRequired — plus the harness arms for sh and ps1, parity, and the restart story in CLAUDE.md.\n\nThis card now dependsOn the new one, so its WORKING claim waits until the daemon half is DONE. Its DoD item 1 is delivered there and re-verified here end to end; QA reading item 1 against this card's diff alone will not find it.\n\nFacts checked in source while planning, so neither card re-derives them:\n- attemptStore.openAttempt ALREADY persists processStartedAt and host when supplied, so the store needs no change.\n- reattachAttempt.identityMismatch compares attemptId, generation, processStartedAt and host as exact strings, and deliberately does NOT compare workerId or runnerId.\n- moe.heartbeat already answers `{ok:false, reattachRequired:true, reason:'attempt-reconciling', reattachWith:'moe.reattach_attempt', attemptId, phase}`. It carries no generation, so the sidecar must hold the one it pinned at claim time.\n- Both sidecars today pipe one JSON-RPC request through the proxy and DISCARD the reply (moe-agent.sh start_heartbeat_sidecar, moe-agent.ps1 Start-HeartbeatSidecar), which is why nothing reacts.\n- The default ping is every 60 s against a 2 h reconcile window, so a live seat has ample margin to reattach after a restart.",
+      "timestamp": "2026-09-18T12:57:21.215Z"
+    },
+    {
+      "id": "comment-11d3aeacebf141878241669809b260bd",
+      "author": "worker-d0c3b06e",
+      "content": "ADVERSARIAL SELF-REVIEW (step 7), worker-d0c3b06e. Diff: 8 files, +493/-36. The scripts are byte-identical to the snapshot every suite ran against.\n\n1. IDENTITY STABILITY\n- Computed once, at wrapper start, then cached:\n  - sh: moe_runner_identity is called once at top level. The value goes into MOE_PROCESS_STARTED_AT/MOE_HOST and is folded into CLAIM_RPC_JSON.\n  - ps1: a top-level block fills $script:MoeProcessStartedAt/$script:MoeHost and $claimRpcArgs.\n- Every claim, the sidecar $pin and the main-loop reattach reuse those cached values. Nothing recomputes them, so a later hostname change cannot desynchronise them.\n- Proof: identity-claim (loop, >=2 claims, one pair). A general check on all 64 frozen modes: every claim carries one pair.\n- Wrapper respawn: a new process means a new pid and start token. Its reattach of the old attempt is refused with ATTEMPT_IDENTITY_MISMATCH, logged once and remembered. The row is given up after reconcileWindowMs. That is correct: that execution is gone.\n- Caveat: a resume ADOPTS the opener's recorded identity. A wrapper that resumed a predecessor's attempt cannot reattach it after a later restart. That is the daemon's rule; I left it alone.\n- CORRECTION to my step-3 note: on Git Bash (MSYS), bash `exec` keeps the pid but CHANGES the /proc starttime (measured: 741284@73624917 -> 741284@73624973). On Linux both survive. It is harmless: the hot-reload exec path deregisters before exec, so no attempt stays pinned to the old identity.\n\n2. GIVE-UP UNCHANGED\n- No daemon file touched. npm test is identical to the baseline (122 files, 2105 passed | 1 skipped), and it includes bd799955's give-up tests (checkReconcileWindow closes the attempt and releases the row).\n- The wrappers add exactly one daemon call, reattach_attempt, which moves a matching reconciling attempt back to running.\n- There is no release_task, no idle signal and no lastActivityAt read anywhere in the added lines (grep of the + lines). Task rail 2 holds.\n\n3. STRANGER\n- Daemon: refuses before any write with -32002 ATTEMPT_IDENTITY_MISMATCH. Seen live in my real-daemon e2e: processStartedAt '1@1' refused on sh, pwsh and 5.1.\n- Wrapper, sidecar: any daemon error carrying a codeName sets `refused`, logs once, and is never asked again that session.\n- Wrapper, main loop: remembers the attempt id for the wrapper's life.\n- Covered by reattach-refused (1 row across 3+ later pings) and the M3/pm3 mutants (a forgotten refusal reddens it).\n\n4. SIDECAR SAFETY (separate process: sh subshell / ps1 Start-Job; its status is ignored)\n- Unparseable reply: sh `python ... || continue`; ps1 ConvertFrom-Json inside a per-tick try/catch.\n- Dead transport: sh `moe_rpc ... || continue`. ps1 Send-SidecarRpc returns $null, so there is no ask. A dead reattach call is 'none', gets one WARN, and the next ping retries.\n- Daemon restarted mid-ping: the ping fails or reaches the new daemon. Proven by the e2e: abrupt kill mid-CLI, then reconciling -> running within ~3 s.\n- Refusal: see 3.\n- Wrapper already exited: `kill -0` / Get-Process break (unchanged). Every stop path is unchanged.\n- ps1 5.1: Receive-Job throws under a missing profile path, so lines are read from ChildJobs.Output inside a try.\n- The sidecar cannot fail the session. The main-loop calls are `|| true` and never return non-zero under set -e.\n\n5. TIMING\n- 60 s pings against a 2 h window is about 120 chances.\n- If MOE_HEARTBEAT_INTERVAL_SEC is raised past 7200, or MOE_HEARTBEAT_MAX_DURATION_SEC ends early, or MOE_DISABLE_HEARTBEAT=1: the sweep can give the attempt up before the next ping. The ping then answers no-open-attempt or no-worker-record (logged once), and the row is released.\n- The only remaining cover is the main loop, at the next claim or CLI exit.\n- NOTHING warns. It is not clamped, per the plan.\n\n6. MAIN-LOOP REATTACH\n- The case: a restart between sessions, or inside a session that ended before the next ping, leaves the attempt reconciling at the next pre-flight.\n- Without the reattach: moe_attempt_read accepts only running|finalizing, so the resume pin fails. The completion's candidate evidence is then 'unavailable', the bytes go to a rescue ref, and finalize is refused. The loop stops.\n- Arms: reattach-preflight (pre-flight site). reattach-postflight, checkpoint-reconciling and manual-reconciling (post-flight site).\n- M2 (sidecar-only mutant) reddens all four.\n\n7. TWINS\n- Same rules. Identity: pid@start-token + lowercased host, both-or-neither. Sidecar: pinned id + pinned generation. Other reasons: noted once. Refusal: stop. None: retry. Main loop: own reconciling attempts on disk, right after the claim and after the CLI, refusals remembered.\n- Only mechanics differ (subshell vs Start-Job).\n- Parity PASS on sh, pwsh and 5.1. The guard is proven: a reworded literal in one twin fails all three.\n- The harness shared regions are byte-identical, and the same 8 arms are green on sh, pwsh and 5.1.\n\n8. EMBARRASSMENT\n- Worst case 1: the fleet daemon (started 2026-09-17T20:00Z) predates bd799955. Nothing is recorded or reattachable until a human rebuilds and restarts it.\n  - The wrappers are compatible: I probed the old dist, and a claim with the pair succeeds with the pair ignored.\n  - This must be said to whoever schedules the restart.\n- Worst case 2: repo-launched ps1 seats hot-reload this wrapper as soon as it is on disk.\n  - Mitigations: parse 0 errors on both engines; full ps1 suites green on both (64/28); a real-daemon e2e green on both.\n- Worst case 3: a seat whose attempt a respawned wrapper resumed cannot reattach, so its row is released after 2 h (pre-existing class).\n  - reattach-refused covers that the wrapper stays sane. The release itself is daemon-side and unchanged.\n\nScratch: all trees are deleted; none had junctions (verified, 0 reparse points). Kept for QA: D:/moe-t5e09-e2e/e2e.mjs (real daemon + proxy + wrapper restart run: `node e2e.mjs sh|ps1|ps51`), old-daemon.mjs, and the full sh log.",
+      "timestamp": "2026-09-18T17:03:00.276Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-17T17:04:17.294Z",
+  "updatedAt": "2026-09-18T18:09:16.601Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T12:48:56.735Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 7,
+    "doneAt": "2026-09-18T18:08:01.691Z",
+    "wallClockMs": 19144956
+  },
+  "contextFetchedBy": [
+    "architect-aa5a6c1e",
+    "worker-d0c3b06e",
+    "qa-a36819c3"
+  ],
+  "dependsOn": [
+    "task-bd7999555b244be0869c2f460db554bb"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T12:58:47.824Z",
+  "planningNotes": {
+    "approachesConsidered": "The card asked for a SPIDR split and the human chose it: the daemon half is now task-bd799955 (claim_next_task records the identity; ~3 files) and this card is the runner half. Whole, it was about 10 files — the plan-size ceiling — with no room for a surprise.\n\n- The heartbeat sidecar is the actor, because it is the only part of the wrapper that is alive while the CLI blocks the main loop for the whole session. It already pings every 60 s against a 2 h reconcile window, so the margin is enormous.\n- The main loop reattaches too, but only where it reads its own pinned attempt and finds it reconciling. Without that, a restart during a CLI run leaves record_candidate and the finalize ladder failing closed and parks bytes for no reason.\n- Identity is `<pid>@<process start token>` plus host, computed once. pid alone is not enough (reuse), the start token alone is not enough (shared ticks), and a recomputed value would refuse every reattach — the daemon compares exact strings.\n- Rejected: having the daemon derive or probe the identity (task rail 1, and the daemon never touches processes). Rejected: reattaching from a respawned wrapper — that is a different process and must not adopt the old execution. Rejected: retrying a refused reattach on every ping — ATTEMPT_IDENTITY_MISMATCH never heals and the retry would spam the daemon for hours. Rejected: touching docs/ARCHITECTURE.md, which task-808869c5's docs sweep currently owns.",
+    "codebaseInsights": "- attemptStore.openAttempt already persists processStartedAt and host when supplied; only claim_next_task never offered them (the prerequisite card closes that).\n- reattachAttempt compares attemptId, generation, processStartedAt and host as exact strings, and deliberately does NOT compare workerId or runnerId — claim opens attempts with runnerId = workerId, so comparing them would refuse every genuine reattach.\n- moe.heartbeat's reattach answer carries reason, reattachWith, attemptId and phase, but NO generation, so the sidecar must hold the generation it pinned at claim time.\n- Both sidecars today build one JSON-RPC request, pipe it through the proxy and discard the reply (sh: a background subshell using moe_rpc; ps1: a Start-Job script block piping into node). Both can capture and parse it with what they already have.\n- Wave 1 acceptance case 4 passes only because its fixture writes the identity into the attempt record and plays the runner itself; it stays untouched here.\n- The wrapper already reads its pinned attempt record from .moe/attempts/<id>.json in the finalize ladder, so the main-loop reattach needs no new read path.",
+    "risks": "1. Gated on task-bd799955: until the daemon records the identity, every arm here is vacuous. Step 1 verifies it in source, not just on the board.\n2. Identity portability: /proc/$$/stat exists on Linux, WSL and Git Bash's MSYS but not macOS, where `ps -p $$ -o lstart=` is the fallback. Whitespace must be collapsed or the same process can spell it two ways.\n3. A partial identity (one value resolved, the other not) is worse than none: it records something no reattach can reproduce. Send neither.\n4. The sidecar is a separate process that outlives a careless wrapper exit; keep its stop paths exactly as they are.\n5. MOE_HEARTBEAT_INTERVAL_SEC raised past reconcileWindowMs would let the window expire between pings. Call it out in the self-review; do not silently clamp it.\n6. Both launchers or neither, and parity must stay green.\n7. postflight.sh is about 36 minutes and the ps1 twin must be launched from PowerShell.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "packages/moe-daemon/src/tools/heartbeat.ts",
+      "packages/moe-daemon/src/tools/reattachAttempt.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "CLAUDE.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T12:58:47.893Z",
+  "workStartedAt": "2026-09-18T14:34:53.580Z",
+  "declaredFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "CLAUDE.md",
+    "docs/MCP_SERVER.md"
+  ],
+  "reviewStartedAt": "2026-09-18T17:12:48.026Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "PASS frozen candidate scenarios: 64\n...\n[scenario W] SIGINT mid-CLI parks a teardown rescue ref and still deregisters\n[scenario W] ok\n...\n[scenario AA] ok\n[scenario AB] a chat-only session that adopts a task refuses to land, loudly\n[scenario AB] ok\ncommit-scope scenarios run: 28\nPASS postflight.sh\nrc=0\n2026-09-18T16:57:11Z (run started 16:11:19Z, from a cmp-verified byte-identical snapshot of scripts/; 400 s = documented knob under fleet load). Run 1 failed only at scenario W (load timing; W alone 3/3 on HEAD and new). Fresh in-turn subset from the live repo: MOE_FROZEN_TEST_ONLY=<8 reattach modes> rc=0, PASS 8.",
+    "reportedAt": "2026-09-18T17:12:48.026Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "CLAUDE.md",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+    ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+    ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+    ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
+  ],
+  "completionSummary": "Runner half of the reattach, in both wrappers.\n- Identity: sh \"$$@<proc_start_token>\" (/proc starttime, ps lstart fallback) + live_marker_host; ps1 \"$PID@<StartTime UTC ticks>\" + Get-MoeLiveMarkerHost. It reuses the live-marker helpers and is computed once. Both values or neither, with a WARN.\n- Every claim sends the pair.\n- The heartbeat sidecar reattaches on attempt-reconciling for the pinned attempt, using the pinned generation. Other reasons are logged once; a refusal is never retried.\n- The main loop also reattaches the seat's reconciling attempts after the claim (before the pin) and after the CLI exits.\n- Files: moe-agent.{sh,ps1}, postflight.{sh,ps1}, parity-check.{sh,ps1}, CLAUDE.md, docs/MCP_SERVER.md (DoD 4). No daemon file changed.\n\nArms: identity-claim, reattach-sidecar, reattach-refused, reattach-postflight, reattach-none, plus reattach-preflight. checkpoint-/manual-reconciling updated.\n- RED on HEAD: all fail on the identity check.\n- Mutants redden each arm on its own assertion: M1 no-reattach, M2 no main loop, M3 retry-refused (sh and ps1).\n- GREEN: frozen 64, scope 28 on sh (rc=0 rerun), pwsh (400 s) and 5.1 (419 s). Parity PASS on sh/pwsh/5.1. Daemon tsc 0; npm test 2105 passed | 1 skipped (= baseline).\n\nOn-disk proof, real daemon + real proxy + new wrapper, abrupt daemon restart mid-CLI (D:/moe-t5e09-e2e/e2e.mjs):\n- The attempt recorded 737300@73504691/yaron-pc (sh), 56680@639253420725444419 (pwsh), 59468@639253420858687705 (5.1).\n- Reconciling -> running within 3 s via the sidecar; task still assigned.\n- Stranger '1@1': ATTEMPT_IDENTITY_MISMATCH.\n\nCaveats:\n- The fleet daemon (started 2026-09-17 20:00Z) predates bd799955. It accepts the pair but ignores it (probed), so nothing is recorded until a human rebuilds and restarts it.\n- MCP_SERVER.md is shared with task-808869c5: by agreement my commit carries only my 3 hunks, and worker-f0cb282e restores theirs afterwards.",
+  "commits": [
+    {
+      "sha": "7728e7b9f0524f7cb554015252dd52569372e3b5",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T14:33:10Z",
+      "paths": [
+        ".moe/tasks/task-32ecce5df28e4d72ad72b2ff079f53ba.json",
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        "CLAUDE.md",
+        "docs/MCP_SERVER.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T17:13:27.713Z",
+      "treeId": "962da857e7dfd71197663fed7af42b4fad799eae",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "aa426d59e843d850285cd2c7125e98034e215ca1",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T17:13:50Z",
+      "paths": [
+        ".moe/tasks/task-31fe6dc806d9466d9d71c9f8beda60be.json",
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        ".moe/tasks/task-8fc35d31f71440bd85e5c08708ed71fe.json",
+        ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json",
+        "CLAUDE.md"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T18:09:16.601Z",
+      "treeId": "593b9ff7c459b9a56bfee774231c28457fe23d06",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-808869c56228430ca5b15cb901497544"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/parity-check.sh",
+    "scripts/moe-agent.sh",
+    "CLAUDE.md",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/postflight.ps1",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
+    "packages/moe-daemon/src/util/claimEligibility.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-a36819c3@2026-09-18T17:13:50Z",
+    "at": "2026-09-18T18:09:16.601Z"
+  },
+  "completedAt": "2026-09-18T18:08:01.691Z",
+  "reviewCompletedAt": "2026-09-18T18:08:01.691Z",
+  "reviewSummary": "Verified 7728e7b (pushed; 8 files, no daemon file) from a byte-verified HEAD snapshot.\nDoD1: bd799955 real-restart test passes. Real-daemon e2e (HEAD src + real proxy + new wrapper, daemon SIGKILLed mid-CLI): claim recorded the pair on sh/pwsh/5.1; reattach accepted, reconciling->running, row kept.\nDoD2: MOE_POSTFLIGHT_TIMEOUT_SEC=400 postflight.sh rc=0 (frozen 64, scope 28); postflight.ps1 rc=0 on pwsh and 5.1 (64/28); parity PASS sh/pwsh/5.1, guard proven (one literal dropped fails both). Old 3bbd474 wrappers fail the arms. Mutants red on 'exactly one reattach': sidecar-only off, refusal retried, main loop off (sh+ps1 each). Real sweep: 5.1 e2e, reconcileWindowMs=15000, through the real 5-min tick: live seat kept (running, assigned); no-heartbeat control seat released (attempt closed, row unassigned).\nDoD3: real daemon refuses stranger by pid@token and by host (ATTEMPT_IDENTITY_MISMATCH); wrapper logs refusal once, no retry; give-up unchanged.\nDoD4: MCP_SERVER.md 3 hunks + CLAUDE.md restart story match shipped code; ARCHITECTURE.md left to task-808869c5 per plan. Clean HEAD: tsc rc=0, npm test 122 files 2104 passed | 1 skipped (worker's 2105 = peer-dirty tests in shared tree).\nRails: no release/idle logic, both twins, harness twins identical, no forbidden patterns. Old Sep-17 fleet daemon accepts+ignores the pair (probe PASS): reattach inert live until daemon rebuild+restart."
+}

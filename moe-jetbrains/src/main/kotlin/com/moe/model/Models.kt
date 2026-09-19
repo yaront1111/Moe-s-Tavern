@@ -147,7 +147,9 @@ data class TaskDelivery(
     val currentCandidate: DeliveryCandidate? = null,
     val latestCheckRun: DeliveryCheckRun? = null,
     val deliveryReceipt: DeliveryReceipt? = null,
-    val attemptPhase: String? = null
+    val attemptPhase: String? = null,
+    /** The delivery policy's required-check verdict, separate from what latestCheckRun reports; null when none applies. */
+    val requiredCheckSatisfied: Boolean? = null
 )
 
 data class DeliveryCandidate(
@@ -157,7 +159,7 @@ data class DeliveryCandidate(
     val baseRevision: String? = null
 )
 
-data class DeliveryCheckRun(val command: String? = null, val exitCode: Int? = null)
+data class DeliveryCheckRun(val command: String? = null, val exitCode: Int? = null, val source: String? = null)
 
 data class DeliveryReceipt(val target: String? = null, val landedRevision: String? = null)
 

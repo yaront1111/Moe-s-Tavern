@@ -105,7 +105,7 @@ interface ProjectSettings {
   commitPattern: string;         // default: "feat({epicId}): {taskTitle}"
 
   // Master switch for the agent wrapper's land-on-every-exit post-flight
-  // (the daemon never runs git). true (default): a worker exit at REVIEW/DONE
+  // (the daemon writes no git state and never lands or pushes). true (default): a worker exit at REVIEW/DONE
   // makes a completion commit (feat|fix(task-<id>)) and pushes; any other
   // exit that holds a task (worker/architect/qa) makes a wip(task-<id>)
   // checkpoint; gate/peel/commit failures and Ctrl+C teardown go to a rescue
@@ -438,9 +438,14 @@ interface Task {
     recordedBy: string;          // Approving worker, or 'human' on the IDE/human path
     recordedAt: string;          // ISO timestamp
   };
+  requiredCheckAtDone?: string | null; // The gate command the task owed at DONE (trimmed), or null when none was
+                                 // owed. qa_approve snapshots it under every deliveryPolicy, so a later settings
+                                 // edit or sibling archive cannot change it; absent = never snapshotted (an older
+                                 // row, or DONE reached outside qa_approve) and judged on live settings. Every
+                                 // reopen clears it. See deliveryPolicy in docs/CONFIGURATION.md
 
   // Commit ledger — written only by moe.record_commit (wrapper post-flight)
-  // and moe.declare_files; the daemon never runs git. Additive, no
+  // and moe.declare_files; the daemon stores what their callers report and never checks it against git. Additive, no
   // schemaVersion bump. Never cleared by reopen/qa_reject.
   commits?: TaskCommit[];        // Every landed commit (completion/checkpoint/rescue); idempotent by sha,
                                  // capped at MAX_COMMITS_PER_TASK (50, newest kept)
@@ -487,7 +492,7 @@ interface Task {
   // Timestamps
   createdAt: string;
   updatedAt: string;
-  reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts only completion commits recorded at/after it
+  reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts completion commits from the current work round: at/after the latest rejection, else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)
   reviewCompletedAt?: string;
 }
 
@@ -1008,6 +1013,46 @@ interface ResourceQueueEntry {
 
 ---
 
+## ExecutionAttempt
+
+**File:** `.moe/attempts/{attempt-id}.json` (one file per attempt)
+
+One execution of one task by one worker seat. `moe.claim_next_task` opens one whenever it assigns a named worker, and returns its `attemptId` and `generation` beside `task`. A [Candidate](#candidate) names the attempt that produced its bytes. `moe.record_candidate` and `moe.release_task` refuse an attempt that is no longer the task's current one with `ATTEMPT_SUPERSEDED`. `moe.finalize_attempt` answers an attempt that is already `closed` with an idempotent success before that fence, and a superseded attempt is always `closed`, so it refuses `ATTEMPT_SUPERSEDED` only when the `generation` it is given does not match the open attempt's. Only `packages/moe-daemon/src/state/attemptStore.ts` writes the file, and it persists before it publishes. Purely additive: no `schemaVersion` bump and no migration.
+
+```typescript
+interface ExecutionAttempt {
+  id: string;                 // "attempt-<32 hex>", also the filename
+  taskId: string;
+  workerId: string;           // The seat that opened it; not necessarily the row's current assignee
+  runnerId: string;           // The runner session; a claim-opened attempt records the worker id
+  generation: number;         // Fencing token: per task, starts at 1, (max over every prior attempt) + 1, never reused
+  workspace: string;          // The checkout it runs against; a claim records the project path
+  phase: 'running' | 'finalizing' | 'reconciling' | 'closed';
+  startedAt: string;          // ISO 8601
+  lastPhaseAt: string;        // ISO 8601, when `phase` last changed; the reconcile window counts from it
+  processStartedAt?: string;  // The runner's process identity exactly as the claim sent it (both or neither).
+  host?: string;              // A hint that narrows which process, never proof that it is alive
+  presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'; // Latest moe.heartbeat self-report, not verified
+  presenceAt?: string;        // When it was reported; never touches lastPhaseAt
+}
+```
+
+**Phases.** A task has at most one attempt that is not `closed`.
+
+| From | To | By |
+|---|---|---|
+| (none) | `running` | a claim that names a worker. A genuine resume adopts the worker's own open attempt; any other claim first closes a leftover `running` or `reconciling` attempt of the task |
+| `running` | `finalizing` | `moe.complete_task`: the row goes to REVIEW unassigned, but the bytes are not landed yet |
+| `reconciling` | `finalizing` | `moe.complete_task` from a CLI that outlived a daemon restart and completes before its runner reattaches; the same REVIEW hand-off |
+| `running` | `reconciling` | a daemon restart, when the task is still assigned to the attempt's worker: the row is held, not released |
+| `reconciling` | `running` | `moe.reattach_attempt` with the exact recorded identity |
+| `running`, `reconciling` | `closed` | a hand-back of the row (a release, `qa_reject`, a seat-freeing `report_blocked`, …), the worker's `moe.deregister_worker`, a restart that finds the seat already gave the task up, or `reconcileWindowMs` (default 2 h) without a reattach |
+| `finalizing` | `closed` | only the ends listed under `moe.finalize_attempt` → **Every end of a finalizing attempt** in docs/MCP_SERVER.md, the runner's own `moe.finalize_attempt` first; never an idle signal |
+
+While an attempt is `finalizing`, its worker's next claim, an explicit-`taskId` `moe.claim_next_task` of the task by any other seat, `moe.qa_approve` and a move of the task into `DONE` or `ARCHIVED` are refused with retryable `-32002` / `ATTEMPT_FINALIZING`; the ranked claim pool and `moe.wait_for_task` skip the row instead of refusing it. The outcome a runner reports to `moe.finalize_attempt` is not stored on the attempt. The durable landing record is the completion entry `moe.record_commit` writes into `task.commits`, plus a [DeliveryReceipt](#deliveryreceipt) when the landing ran a quality gate.
+
+---
+
 ## Candidate
 
 **File:** `.moe/candidates/{candidate-id}.json` (one file per candidate)
@@ -1017,7 +1062,8 @@ The exact bytes a task is offering for delivery, frozen so that review and check
 ```typescript
 interface Candidate {
   readonly id: string;             // "cand-<32 hex>" when the daemon generates it; a caller-supplied
-                                   // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+                                   // id must match [A-Za-z0-9_-]{1,128} and must not differ from an
+                                   // existing candidate's id only by case. Also the filename.
   readonly attemptId: string;      // The ExecutionAttempt (.moe/attempts/) that produced the bytes;
                                    // must exist and belong to taskId when the candidate is recorded
   readonly taskId: string;
@@ -1030,7 +1076,9 @@ interface Candidate {
 
 **Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe.
 
-**Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never runs git, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
+**Ids are compared case-insensitively for existence.** A record is one file, `<id>.json`, and NTFS and a default APFS volume treat `Cand-1.json` and `cand-1.json` as the same file, so recording `cand-1` beside a stored `Cand-1` would silently overwrite it. Such an id is refused `-32002` / `CANDIDATE_ID_CASE_COLLISION`, with `context.candidateId` (the stored id) and `context.requestedId`, whatever its fields, and nothing is written. The rule holds on every filesystem, so a `.moe/` directory stays safe to open on any of them. A stored id keeps the case it was given, and reference fields such as a check run's `candidateId` are matched exactly. Check runs and reviews follow the same rule. Not covered: records that already collided before this rule (two files written on a case-sensitive filesystem) are left alone, and an operator resolves those by hand.
+
+**Provenance.** `baseRevision` and `treeSha` are what the runner *reported*. The daemon is state-only and never consults git about them, so it checks their shape and nothing else. The shape is 7-40 hex, the same one `moe.record_commit` accepts for `sha`. The daemon has neither observed nor verified these values, so a consumer that needs proof must re-derive it from the repository.
 
 **Queries.** Candidates are listed per task or per attempt, ordered by `createdAt` and then `id`, so ties are deterministic.
 
@@ -1059,7 +1107,8 @@ One QA decision, bound to the exact [Candidate](#candidate) it was made against.
 ```typescript
 interface Review {
   readonly id: string;          // "review-<32 hex>" when the daemon generates it; a caller-supplied
-                                // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+                                // id must match [A-Za-z0-9_-]{1,128} and must not differ from an
+                                // existing review's id only by case. Also the filename.
   readonly taskId: string;
   readonly candidateId: string; // The Candidate the decision was made against — the task's CURRENT
                                 // candidate, already checked against the one the reviewer named
@@ -1070,7 +1119,7 @@ interface Review {
 }
 ```
 
-**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
+**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. Nor can an id that differs from a stored one only by case: on NTFS and a default APFS volume it names the same file, so it is refused `-32002` / `REVIEW_ID_CASE_COLLISION`, with `context.reviewId` (the stored id) and `context.requestedId`, and nothing is written (the rule, and what it does not cover, is under [Candidate](#candidate)). A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
 
 **Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
 
@@ -1103,7 +1152,8 @@ What a check reported about one [Candidate](#candidate)'s exact bytes: the comma
 ```typescript
 interface CheckRun {
   readonly id: string;           // "check-<32 hex>" when the daemon generates it; a caller-supplied
-                                 // id must match [A-Za-z0-9_-]{1,128}. Also the filename.
+                                 // id must match [A-Za-z0-9_-]{1,128} and must not differ from an
+                                 // existing check run's id only by case. Also the filename.
   readonly candidateId: string;  // The Candidate whose bytes were checked; must exist when recorded
   readonly treeSha: string;      // The tree the reporter says it checked (7-40 hex). Must equal the
                                  // candidate's treeSha exactly when recorded: no prefix match, no case folding
@@ -1123,7 +1173,7 @@ interface CheckRun {
 
 **Many runs per candidate.** A candidate accumulates check runs. There is never one row per candidate that a later run overwrites: running a check again is a new record under a new id, and the history keeps every result, failures included.
 
-**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused.
+**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused. An id that differs from a stored run's id only by case is refused too (`CHECK_RUN_ID_CASE_COLLISION`, below): on NTFS and a default APFS volume it names the same file (the rule, and what it does not cover, is under [Candidate](#candidate)).
 
 **Refusals.** Checked in this order; every refusal writes nothing:
 
@@ -1131,6 +1181,7 @@ interface CheckRun {
 2. `candidateId` names no candidate: `-32001` `CANDIDATE_NOT_FOUND`, with `context.candidateId`. No candidate is ever created on the caller's behalf.
 3. `treeSha` is not exactly the candidate's tree: `-32002` `CHECK_RUN_TREE_MISMATCH`, with `context.candidateId`, `context.expectedTreeSha` and `context.actualTreeSha`.
 4. The id already holds a different run: `-32002` `CHECK_RUN_IMMUTABLE`, with `context.checkRunId` and `context.differingFields`.
+5. The id differs from a stored run's id only by case: `-32002` `CHECK_RUN_ID_CASE_COLLISION`, with `context.checkRunId` (the stored id) and `context.requestedId`.
 
 A failed write reaches the caller as an error, and the run is published nowhere.
 
@@ -1178,7 +1229,7 @@ interface DeliveryReceipt {
 
 There is no `createdAt`: the seven fields above are the whole record, so a repeated report can leave the file byte-identical.
 
-**Reported, never verified.** A receipt is what a wrapper *reported* about a landing it performed. The daemon is state-only and never runs git: it neither performs the landing nor inspects the target ref, and it checks only the shape of each field and that the candidate exists. A receipt therefore cannot prove on its own that the bytes are where it says; a consumer that needs proof must re-derive it from the repository. Recording does not compare `target` with the candidate's `deliveryTarget`, or `targetAfter` with `landedRevision`: refusing a landing that already happened would leave a real ref move unrecorded, so the receipt says what was reported and a later policy decides what it is worth.
+**Reported, never verified.** A receipt is what a wrapper *reported* about a landing it performed. The daemon is state-only: it neither performs the landing nor inspects the target ref, and it checks only the shape of each field and that the candidate exists. A receipt therefore cannot prove on its own that the bytes are where it says; a consumer that needs proof must re-derive it from the repository. Recording does not compare `target` with the candidate's `deliveryTarget`, or `targetAfter` with `landedRevision`: refusing a landing that already happened would leave a real ref move unrecorded, so the receipt says what was reported and a later policy decides what it is worth.
 
 **One receipt per candidate, never rewritten.** The candidate, not a caller-chosen id, is the key, because a crash replay re-sends the same report with no id. A report for a candidate that already has a receipt is compared field by field with the stored one, where an absent `pushResult` and `null` count as the same:
 
@@ -1658,14 +1709,14 @@ function generateId(prefix: string): string {
 - Malformed or below-minimum values that reach the stored file by other means degrade to the defaults at resolve time rather than erroring
 
 ### Candidate
-- Immutable: no field changes after the first record. A same-id record that differs in any field is refused (`CANDIDATE_IMMUTABLE`); a byte-identical one is an idempotent no-op
+- Immutable: no field changes after the first record. A same-id record that differs in any field is refused (`CANDIDATE_IMMUTABLE`); a byte-identical one is an idempotent no-op. An `id` that differs from a stored candidate's id only by case is refused (`CANDIDATE_ID_CASE_COLLISION`)
 - `attemptId` must name an existing attempt of the same `taskId` (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`)
 - `baseRevision` and `treeSha` must be 7-40 hex characters. They are validated for shape only and never coerced
 - `deliveryTarget` must be non-blank, with no leading or trailing whitespace and no control characters, and at most 255 chars
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### Review
-- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included
+- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included. An `id` that differs from a stored review's id only by case is refused (`REVIEW_ID_CASE_COLLISION`)
 - `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
 - `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
 - `decision` must be exactly `approve` or `reject`
@@ -1673,7 +1724,7 @@ function generateId(prefix: string): string {
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### CheckRun
-- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included
+- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included. An `id` that differs from a stored run's id only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`)
 - `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
 - `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
 - `command` must be a non-blank string of at most 500 characters, stored verbatim

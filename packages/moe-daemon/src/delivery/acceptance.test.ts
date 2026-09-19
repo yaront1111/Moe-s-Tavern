@@ -63,7 +63,8 @@
 //   3 reviewing A cannot approve B   task-5b85773867594a8eb0cea350f2c6008f
 //   4 daemon restart keeps ownership task-58f7db9a9e44469e9351b2cdea73b47d
 //   5 delayed generation N           task-b6c48bf029bf4170a603a91c12451df7
-//   6 crash between effect + record  task-b1c9850824fe4437a8c70b4ee083602b
+//   6 crash between effect + record  task-bfe2f04ea25941cbbeaa9d07bd4dc1e7
+//                                    (prereq task-b1c9850824fe4437a8c70b4ee083602b)
 //
 // OLD-BEHAVIOUR COUNTEREXAMPLE each owner must demonstrate after unskipping
 // (a missing module or a compile failure is NOT the counterexample):
@@ -1841,6 +1842,9 @@ describe('Wave 1 acceptance: a delayed generation-N call cannot alter generation
   // UNSKIP OWNER: task-b6c48bf029bf4170a603a91c12451df7 (attempt lifecycle wired
   // into claim/release). Not the guard-only task-a135d4d63554410286a369a95e60c2a8:
   // a guard with no tool wiring cannot make this end-to-end case pass.
+  // Its owner shipped; the Wave 1 integration gate
+  // (task-808869c56228430ca5b15cb901497544) unskipped it unchanged. It passed as
+  // shipped, and removing release_task's attempt fence makes it fail.
   //
   // OLD-BEHAVIOUR COUNTEREXAMPLE the owner must show first (STALE RELEASE
   // LANDS): on today's code a generation-1 release_task that arrives late — after
@@ -1849,7 +1853,7 @@ describe('Wave 1 acceptance: a delayed generation-N call cannot alter generation
   //
   // Generation fencing guards DAEMON state only. Nothing here claims it stops an
   // external process from writing shared files.
-  it.skip('refuses a late generation-1 release after the same worker re-claimed as generation 2', async () => {
+  it('refuses a late generation-1 release after the same worker re-claimed as generation 2', async () => {
     const h = new ToolTestHarness();
     h.init();
     try {
@@ -1979,8 +1983,9 @@ describe('Wave 1 acceptance: a delayed generation-N call cannot alter generation
 // repeat the effect
 // =============================================================================
 describe('Wave 1 acceptance: a crash between an external effect and its bookkeeping does not repeat the effect', () => {
-  // UNSKIP OWNER: task-b1c9850824fe4437a8c70b4ee083602b (DeliveryReceipt store,
-  // moe.record_delivery_receipt, and crash recovery in BOTH wrappers).
+  // UNSKIP OWNER: task-bfe2f04ea25941cbbeaa9d07bd4dc1e7 (crash recovery in BOTH
+  // wrappers); its prerequisite task-b1c9850824fe4437a8c70b4ee083602b delivered the
+  // DeliveryReceipt store and moe.record_delivery_receipt.
   //
   // OLD-BEHAVIOUR COUNTEREXAMPLE the owner must show first (REPEATED GIT
   // EFFECT): a recovery that simply re-runs delivery after a crash between the
@@ -1993,7 +1998,7 @@ describe('Wave 1 acceptance: a crash between an external effect and its bookkeep
   // here at runtime; every business call reaches the production McpAdapter. The
   // crash is a whole-tree kill while the first record_delivery_receipt request
   // is held in flight; the ref move before it is the real wrapper's own.
-  it.skip(
+  it(
     'lands once, crashes before the receipt, and the rerun records one receipt without a second landing',
     async () => {
       const h = new ToolTestHarness();

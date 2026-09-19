@@ -724,6 +724,11 @@ export interface Task {
    */
   deliveryEvidence?: TaskDeliveryEvidence;
   /**
+   * Gate command that was due at the DONE transition (qa_approve), or null if none was.
+   * Absent (undefined) means not snapshotted: a record written before this field, or a DONE that skipped qa_approve. Additive; no schemaVersion bump.
+   */
+  requiredCheckAtDone?: string | null;
+  /**
    * The worker's own account of what was delivered — the `summary` param of
    * moe.complete_task, persisted (it used to be accepted and discarded).
    * Surfaced to QA and to dependent tasks via get_context's epicSiblings.
@@ -758,7 +763,9 @@ export interface Task {
    * Git landings recorded for this task by moe.record_commit (newest last,
    * capped at MAX_COMMITS_PER_TASK). Survives qa_reject reopens — it is
    * history, not completion evidence; qa_approve looks for a completion
-   * commit recorded after `reviewStartedAt`.
+   * commit recorded in the current work round: at or after the most recent
+   * rejection, else the first step start (`workStartedAt`), else
+   * `reviewStartedAt` (completionCommitsForReview in delivery/policy.ts).
    */
   commits?: TaskCommit[];
   /** Paths explicitly declared via moe.declare_files (ASSERTED tier; governor/worker lever). */

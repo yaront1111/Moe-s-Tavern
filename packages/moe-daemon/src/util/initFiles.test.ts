@@ -7,6 +7,28 @@ import { writeInitFiles, ROLE_DOCS, SUBAGENT_DOCS, GITIGNORE_CONTENT } from '../
 
 const MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
 
+// Daemon-written record directories under .moe/ are local runtime state. A new
+// one must be added to this list, to GITIGNORE_CONTENT
+// (scripts/generate-init-files.ts), and to the repository root .gitignore.
+const WAVE1_RUNTIME_DIRS = ['attempts/', 'candidates/', 'checks/', 'reviews/', 'receipts/'] as const;
+// The .moe/.gitignore every project got before the Wave 1 directories existed.
+const BUNDLED_GITIGNORE_V1 = '# Moe runtime files (not shared)\ndaemon.json\ndaemon.lock\nworkers/\nproposals/\n';
+
+const trimmedLines = (text: string) => text.split(/\r?\n/).map((line) => line.trim());
+
+describe('Wave 1 record directories are gitignored', () => {
+  it('GITIGNORE_CONTENT lists every Wave 1 record directory as its own trimmed line', () => {
+    expect(trimmedLines(GITIGNORE_CONTENT)).toEqual(expect.arrayContaining([...WAVE1_RUNTIME_DIRS]));
+  });
+
+  it('repository .gitignore ignores the Wave 1 record directories', () => {
+    const rootGitignore = fs.readFileSync(new URL('../../../../.gitignore', import.meta.url), 'utf-8');
+    expect(trimmedLines(rootGitignore)).toEqual(
+      expect.arrayContaining(WAVE1_RUNTIME_DIRS.map((dir) => `.moe/${dir}`))
+    );
+  });
+});
+
 describe('writeInitFiles — sha-marker scaffold refresh', () => {
   let moeDir: string;
 
@@ -68,6 +90,24 @@ describe('writeInitFiles — sha-marker scaffold refresh', () => {
     fs.writeFileSync(gitignorePath, 'custom-ignore\n');
     writeInitFiles(moeDir);
     expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe('custom-ignore\n');
+  });
+
+  it.each([
+    ['historical template', BUNDLED_GITIGNORE_V1],
+    ['CRLF, no trailing newline, attempts/ already listed', '# Moe runtime files (not shared)\r\nworkers/\r\nattempts/'],
+  ])('writeInitFiles appends missing Wave 1 dirs onto a bundled-style .moe/.gitignore (%s)', (_label, existing) => {
+    const gitignorePath = path.join(moeDir, '.gitignore');
+    fs.writeFileSync(gitignorePath, existing);
+    writeInitFiles(moeDir);
+    const onDisk = fs.readFileSync(gitignorePath, 'utf-8');
+    writeInitFiles(moeDir); // every daemon start runs it again: no second append
+    expect(fs.readFileSync(gitignorePath, 'utf-8')).toBe(onDisk);
+
+    expect(onDisk.startsWith(existing)).toBe(true); // appended, user lines untouched
+    const lines = trimmedLines(onDisk);
+    for (const dir of WAVE1_RUNTIME_DIRS) {
+      expect(lines.filter((line) => line === dir)).toEqual([dir]);
+    }
   });
 
   it('writes subagent docs frontmatter-first, with the marker inside the frontmatter', () => {

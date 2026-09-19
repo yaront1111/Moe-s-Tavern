@@ -412,6 +412,25 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('UPDATE_TASK strips requiredCheckAtDone, so a board client cannot wipe the check a DONE task owes', async () => {
+      await state.updateTask('task-1', { requiredCheckAtDone: 'node gate.cjs' });
+
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+
+      ws.send(JSON.stringify({
+        type: 'UPDATE_TASK',
+        payload: { taskId: 'task-1', updates: { title: 'Renamed Yet Again', requiredCheckAtDone: null } },
+      }));
+
+      const parsed = await nextTaskUpdated(nextMessage);
+      expect(parsed.payload.title).toBe('Renamed Yet Again');
+      expect(state.getTask('task-1')!.requiredCheckAtDone).toBe('node gate.cjs');
+
+      ws.close();
+    });
+
     it('UPDATE_TASK WORKING→REVIEW releases the worker even when the payload echoes the old owner', async () => {
       await state.createWorker({
         id: 'w-owner',

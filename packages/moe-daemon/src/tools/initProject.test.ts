@@ -47,7 +47,10 @@ describe('moe.init_project Claude hook opt-in', () => {
 
     await initProject(projectPath);
 
-    expect(fs.existsSync(path.join(projectPath, '.claude'))).toBe(false);
+    // .claude/skills/ is provisioned unconditionally (util/claudeSkills.ts), so
+    // the opt-in governs only the hook files themselves.
+    expect(fs.existsSync(path.join(projectPath, '.claude', 'settings.json'))).toBe(false);
+    expect(fs.existsSync(path.join(projectPath, '.claude', 'hooks'))).toBe(false);
   });
 
   it('emits Claude hook files when enableClaudeHook is true', async () => {

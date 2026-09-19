@@ -1,21 +1,31 @@
 // Serving-only evidence. Never attach it to a stored Task or write it to disk.
-import type { Candidate, CheckRun, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
+import type { Candidate, CheckRun, CheckRunSource, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import type { StateManager } from './StateManager.js';
-import { listCandidatesForTask } from './candidateStore.js';
+import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js';
 import { listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
+import { evaluateDeliveryEvidence, EVIDENCE_TOKENS, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand } from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
 export interface TaskDelivery {
   currentCandidate?: Pick<Candidate, 'id' | 'treeSha' | 'baseRevision'> & { shortSha: string };
-  latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'>;
+  /** The LAST run reported on the current candidate, counted or not. A stored source that is not a CheckRunSource is omitted. */
+  latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source'>>;
+  /**
+   * delivery/policy.ts on the required check: false while it reports the check
+   * missing, true once an owed check is satisfied. Absent under the legacy policy,
+   * when no check is owed, or when the policy cannot be read.
+   */
+  requiredCheckSatisfied?: boolean;
   deliveryReceipt?: Pick<DeliveryReceipt, 'target' | 'landedRevision'>;
   attemptPhase?: ExecutionAttempt['phase'];
 }
 
-const isSha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40}$/i.test(value);
+const isCandidateSha = (value: unknown): value is string => typeof value === 'string' && SHA_RE.test(value);
+const isLandedRevision = (value: unknown): value is string => typeof value === 'string' && REVISION_RE.test(value);
 const isString = (value: unknown): value is string => typeof value === 'string';
+const isCheckSource = (value: unknown): value is CheckRunSource => value === 'runner-observed' || value === 'agent-reported';
 
 /** Bad persisted metadata must not take down a board connection. No record is repaired here. */
 function readEvidence<T>(taskId: string, kind: string, read: () => T | undefined | null): T | undefined {
@@ -38,7 +48,7 @@ function candidateFor(state: StateManager, task: Task): Candidate | undefined {
     const candidates = listCandidatesForTask(state, task.id);
     return valid(candidates[candidates.length - 1], c =>
       isString(c.id) && isString(c.attemptId) && isString(c.createdAt) &&
-      isSha(c.treeSha) && isSha(c.baseRevision));
+      isCandidateSha(c.treeSha) && isCandidateSha(c.baseRevision));
   });
 }
 
@@ -47,14 +57,35 @@ function checkFor(state: StateManager, task: Task, candidate: Candidate): TaskDe
     const checks = listCheckRunsForCandidate(state, candidate.id);
     const check = valid(checks[checks.length - 1], c => isString(c.command) &&
       Number.isSafeInteger(c.exitCode) && c.treeSha === candidate.treeSha);
-    return check ? { command: check.command, exitCode: check.exitCode } : undefined;
+    return check ? {
+      command: check.command, exitCode: check.exitCode, ...(isCheckSource(check.source) ? { source: check.source } : {}),
+    } : undefined;
+  });
+}
+
+/** Whether a check is owed, decided as policy.ts checkShortfall decides it: a DONE task's snapshot, else the live rule. */
+function checkOwed(state: StateManager, task: Task): boolean {
+  const snapshot: unknown = task.requiredCheckAtDone;
+  if ((task.status === 'DONE' || task.status === 'ARCHIVED') && snapshot !== undefined) {
+    return typeof snapshot === 'string' && snapshot.trim() !== '';
+  }
+  return requiredCheckCommand(state, task) !== null;
+}
+
+/** The policy's verdict on the required check, never the latest run's: a pass it does not count reads false. */
+function requiredCheckSatisfiedFor(state: StateManager, task: Task): boolean | undefined {
+  return readEvidence(task.id, 'required-check', () => {
+    const { policy, missingEvidence } = evaluateDeliveryEvidence(state, task);
+    if (policy === 'legacy') return undefined;
+    if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck)) return false;
+    return checkOwed(state, task) ? true : undefined;
   });
 }
 
 function receiptFor(state: StateManager, task: Task, candidate: Candidate): TaskDelivery['deliveryReceipt'] {
   return readEvidence(task.id, 'receipt', () => {
     const receipt = valid(getDeliveryReceiptForCandidate(state, candidate.id), r =>
-      isString(r.target) && isSha(r.landedRevision));
+      isString(r.target) && isLandedRevision(r.landedRevision));
     return receipt ? { target: receipt.target, landedRevision: receipt.landedRevision } : undefined;
   });
 }
@@ -74,11 +105,13 @@ export function deliveryProjection(state: StateManager, task: Task): TaskDeliver
   const deliveryReceipt = candidate ? receiptFor(state, task, candidate) : undefined;
   const attemptPhase = phaseFor(state, task, candidate);
   if (!candidate && !attemptPhase) return undefined;
+  const requiredCheckSatisfied = requiredCheckSatisfiedFor(state, task);
   return {
     ...(candidate ? { currentCandidate: {
       id: candidate.id, treeSha: candidate.treeSha, shortSha: candidate.treeSha.slice(0, 8), baseRevision: candidate.baseRevision,
     } } : {}),
     ...(latestCheckRun ? { latestCheckRun } : {}),
+    ...(requiredCheckSatisfied === undefined ? {} : { requiredCheckSatisfied }),
     ...(deliveryReceipt ? { deliveryReceipt } : {}),
     ...(attemptPhase ? { attemptPhase } : {}),
   };

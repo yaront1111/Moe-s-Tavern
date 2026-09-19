@@ -4,7 +4,7 @@ import type { TaskCommit } from '../types/schema.js';
 import { missingRequired, notFound, invalidState, invalidInput } from '../util/errors.js';
 import { assertWorkerOwns, assertContextFetched } from '../util/enforcement.js';
 import { listAttempts } from '../state/attemptStore.js';
-import { attemptFinalizingRefusal } from '../util/claimGuards.js';
+import { nonHolderFinalizingRefusal } from '../util/claimGuards.js';
 import { recordReview, resolveReviewedCandidate } from '../state/reviewStore.js';
 import {
   attestationLabel,
@@ -12,6 +12,7 @@ import {
   deliveryEvidenceRefusal,
   evaluateDeliveryEvidence,
   readDeliveryAttestations,
+  requiredCheckCommand,
   resolveDeliveryPolicy,
 } from '../delivery/policy.js';
 
@@ -67,7 +68,9 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       // attempt open in `finalizing`, because the wrapper only lands the bytes
       // after the CLI exits — so an approval arriving in the same second would
       // drive DONE over work that has not landed anywhere. Refuse until
-      // moe.finalize_attempt closes it.
+      // moe.finalize_attempt closes it. The refusal is addressed to a
+      // non-holder, because the approver never owns the landing: it says wait
+      // for the runner, never close the boundary yourself.
       //
       // Scoped by TASK, never by worker: the IDE/human approval path carries no
       // workerId at all (and the WORKING->REVIEW handoff already cleared
@@ -78,12 +81,15 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       // side effect, so a refused approval moves not one byte.
       const finalizing = listAttempts(state, task.id).find((a) => a.phase === 'finalizing');
       if (finalizing) {
-        throw attemptFinalizingRefusal({
-          attemptId: finalizing.id,
-          generation: finalizing.generation,
-          taskId: finalizing.taskId,
-          workerId: finalizing.workerId,
-        });
+        throw nonHolderFinalizingRefusal(
+          {
+            attemptId: finalizing.id,
+            generation: finalizing.generation,
+            taskId: finalizing.taskId,
+            workerId: finalizing.workerId,
+          },
+          'approving this task'
+        );
       }
 
       assertWorkerOwns(task, params.workerId);
@@ -215,6 +221,9 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
           metrics: nextMetrics,
           needsHumanReview: undefined,
           critiqueBlockCount: undefined,
+          // The check this DONE owes, bound now under every policy, so a later
+          // settings edit or sibling archive cannot change it (delivery/policy.ts).
+          requiredCheckAtDone: requiredCheckCommand(state, task),
           ...(deliveryEvidence
             ? { deliveryEvidence }
             : task.deliveryEvidence !== undefined ? { deliveryEvidence: undefined } : {}),

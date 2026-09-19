@@ -11,8 +11,10 @@ $ps1Path = Join-Path $root 'scripts\moe-agent.ps1'
 $shPath = Join-Path $root 'scripts\moe-agent.sh'
 if (-not (Test-Path -LiteralPath $ps1Path)) { Write-Host "FAIL parity-check.ps1: missing $ps1Path"; exit 1 }
 if (-not (Test-Path -LiteralPath $shPath)) { Write-Host "FAIL parity-check.ps1: missing $shPath"; exit 1 }
-$ps1 = Get-Content -Raw -LiteralPath $ps1Path
-$sh = Get-Content -Raw -LiteralPath $shPath
+# UTF-8 explicitly: PS 5.1 reads a BOM-less file (moe-agent.sh) as ANSI, which
+# garbles every non-ASCII needle below.
+$ps1 = Get-Content -Raw -Encoding UTF8 -LiteralPath $ps1Path
+$sh = Get-Content -Raw -Encoding UTF8 -LiteralPath $shPath
 
 $failures = New-Object System.Collections.Generic.List[string]
 
@@ -50,7 +52,9 @@ $required = [ordered]@{
         'MOE_ATTR_EXCLUDED', 'MOE_ATTR_CONTESTED', 'MOE_ATTR_PEER_DECLARED', 'MOE_ATTR_PREEXISTING', 'MOE_ATTR_MISSING', 'MOE_ATTR_CONCURRENT',
         'MOE_CHECKPOINT_RECOVERED', 'MOE_RESCUE_REF', 'MOE_ATTRIBUTION_UNRESOLVED'
     )
-    'chat prefixes' = @('PUSH-BLOCKED:', 'PUSH FAILED', 'CHECKPOINT-UNPUSHED', 'MOE_RESCUE_REF task=')
+    # The gate-failure line's marker (the status-lookup line carries none in
+    # either), spelled by code point: this file has no BOM for PS 5.1 to go by.
+    'chat prefixes' = @("$([char]::ConvertFromUtf32(0x1F6AB)) PUSH-BLOCKED:", 'PUSH FAILED', 'CHECKPOINT-UNPUSHED', 'MOE_RESCUE_REF task=')
     'log prefixes' = @('[attribution]', '[skip]', '[rescue]', '[branch]')
     'commit trailers' = @('Moe-Task:', 'Moe-Kind:', 'Moe-Session:', 'Moe-Status:', 'Moe-Paths:', 'Moe-Inferred:', 'Moe-Contested:', 'Moe-Reason:')
     'commit subjects' = @('wip(', 'rescue(', 'Completed via Moe worker session.', 'not a completion.', 'Checkpoint via Moe', 'Rescue snapshot via Moe', 'refs/moe/rescue/', 'retry after qa_reject #')
@@ -59,10 +63,18 @@ $required = [ordered]@{
         'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
         'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
-    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths')
-    'RPC tools' = @('get_commit_scope', 'record_commit')
+    'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
+    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')
+    'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
+    # The landing outcomes finalize_attempt carries: both wrappers map every exit
+    # (the interrupted one included) onto the same words. 'failed' is too common a
+    # word to be a needle; the teardown-no-baseline arm proves it on both engines.
+    'finalize outcomes' = @('landed', 'nothing-to-commit', 'rescued')
     'context fields' = @('isEpicFinal')
     'blocked-hold prose' = @('only resource-lease waits and third-party blocks hold a seat now')
+    # Attempt finalize ladder, candidate-evidence and gate-cleanup prose.
+    'attempt/gate prose' = @('[finalize] no finalizing attempt for this seat on task', 'has no pinned identity; not acknowledging.', 'finalize_attempt acknowledgement exhausted; stopping new-task loop', 'qualityGate not run: candidate evidence unavailable', 'Cannot remove owned qualityGate workspace', 'cleanup will be retried',
+        'Attempt identity unavailable:', 'Missing/stale attempt identity; candidate completion will fail closed.')
     # Agent-CLI parity: every CLI the launchers support is wired the same way in
     # both wrappers - its config dir is a DENY-tier attribution prefix, its
     # cliType literal exists, and its mode/config banners are grep-stable.
@@ -72,6 +84,16 @@ $required = [ordered]@{
     # accepts and the fallback warning, spelled identically.
     'codex vocabulary' = @('read-only', 'workspace-write', 'danger-full-access', 'approvals_reviewer=user', 'MOE_CLI_ARGV_REJECTED', 'MOE_DISABLE_ARGV_PROBE', 'is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access.', 'default_tools_approval_mode = "approve"', "rejects the wrapper's launch argv")
     'cli banners' = @('Grok MCP config written to:', 'Grok mode: headless', 'Grok mode: interactive', 'Grok folder trust granted:', 'trusted_folders.toml', 'moe__moe_<name>', 'tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }')
+    # Delivery receipts: the journal, the receipt call, its crash replay, the push
+    # result it reports and the reused-gate line, spelled identically in both.
+    'delivery receipt' = @('moe/receipt', '[receipt]', 'record_delivery_receipt', 'DELIVERY_RECEIPT_CONFLICT', 'targetBefore', 'targetAfter', 'landedRevision', 'pushResult', 'Moe-Kind: completion')
+    'delivery receipt prose' = @('delivery receipt not recorded for candidate', 'for the next pre-flight to replay.', 'already has a delivery receipt that differs from this report; keeping the recorded one, not retrying.', 'a crash before the receipt would leave this landing without one.', 'replaying the delivery receipt of task', 'that landing never moved the ref; dropping', 'kept: malformed journal', 'is still finalizing after its replayed receipt; its finalizing holds stay until it closes.', 'recording the owed ledger row of task', 'did not record the owed ledger row', 'a pull --rebase rewrote', 'push result unknown: the landing stopped before its push finished', 'no git remote configured; push skipped, the commit stays local on', 'push failed: ', 'git push failed', 'qualityGate result reused: the rebuilt candidate has the same tree and base.')
+    # Runner identity and reattach: the identity line and its warning, the reattach
+    # call and its three outcomes, and the heartbeat's other reasons, spelled
+    # identically in both.
+    'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]')
+    'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this wrapper pinned no such reconciling attempt; nothing to reattach.')
+    'claimed prompt contract' = @('the wrapper will pick up the next task in a fresh session', 'INTERACTIVE session: this TUI stays open after you stop')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {

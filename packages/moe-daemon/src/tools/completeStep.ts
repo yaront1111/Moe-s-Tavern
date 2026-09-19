@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
-import { assertContextFetched, assertWorkerOwns } from '../util/enforcement.js';
+import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
 
@@ -37,7 +37,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'WORKING');
       }
 
-      assertWorkerOwns(task, params.workerId, 'moe.complete_step');
+      assertWorkerHoldsTask(task, params.workerId, 'moe.complete_step');
       assertContextFetched(task, params.workerId, 'moe.complete_step');
 
       if (!task.implementationPlan || task.implementationPlan.length === 0) {

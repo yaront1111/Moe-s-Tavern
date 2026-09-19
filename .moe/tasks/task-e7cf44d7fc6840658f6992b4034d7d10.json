@@ -1,0 +1,227 @@
+{
+  "id": "task-e7cf44d7fc6840658f6992b4034d7d10",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: qa_approve and DONE/ARCHIVED moves answer ATTEMPT_FINALIZING with the holder's advice, and finalize_attempt lets any caller follow it",
+  "description": "Found by QA of the Wave 1 integration gate (task-808869c5). The gate's adversarial pass did not record it. Code refs are at HEAD 09513e0.\n\nContract drift between Wave 1 slices:\n- task-758423de gave the claim path a refusal worded for QA, `claimEligibility.foreignFinalizingRefusal`. Its own comment (util/claimEligibility.ts:122-124) calls the holder's advice \"the wrong advice for a QA caller\".\n- Two non-holder paths still throw `claimGuards.attemptFinalizingRefusal`: `qa_approve` (tools/qaApprove.ts:79-86) and taskStore.updateTask's DONE/ARCHIVED guard (state/taskStore.ts:265-273, also reached from archive_epic).\n- That refusal's message names the attempt id and generation and says \"Close the boundary with moe.finalize_attempt, then retry\".\n- `moe.finalize_attempt` checks only the attempt id/generation fence (tools/finalizeAttempt.ts:204-209) and has no caller or role check. That is by design, so a governor or human can close a dead runner's attempt with outcome 'failed'.\n\nFailure scenario (combined paths, no single slice tests it):\n1. The worker calls complete_task. Attempt A goes to finalizing; the row goes to REVIEW, unassigned.\n2. A QA agent or governor calls qa_approve {taskId}. An unassigned REVIEW row passes the ownership check.\n3. It is refused with A's id and generation, plus the advice to finalize.\n4. It calls finalize_attempt {attemptId: A, generation, outcome: 'failed'}, which is accepted.\n5. The retried qa_approve succeeds under the default legacy policy, so the task is DONE before its bytes landed.\n6. When a qualityGate applies, the wrapper's candidate read finds no open attempt, the \"evidence unavailable\" path (scripts/moe-agent.sh:1890-1891, 1964-1966; moe-agent.ps1:1281-1296). The completion is parked on a rescue ref that no pre-flight recovers, because a DONE task is never claimed again.\n\nAlso stale: util/claimGuards.ts:93, \"The refusal both holds raise.\" attemptFinalizingRefusal now has three non-claim callers (claimNextTask's own-worker hold, qa_approve, the DONE/ARCHIVED guard). The other-seat hold throws foreignFinalizingRefusal instead.",
+  "definitionOfDone": [
+    "qa_approve's and the DONE/ARCHIVED guard's ATTEMPT_FINALIZING refusal addresses a non-holder: wait for the runner to finalize, or close with outcome 'failed' only after confirming the runner is gone. It keeps code -32002, codeName ATTEMPT_FINALIZING, the context keys and retryable:true, and still names the held attempt.",
+    "A test per path pins the message and fails on the old holder-voiced text",
+    "util/claimGuards.ts:93 comment corrected to the builder's actual callers",
+    "cd packages/moe-daemon && npm test green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED FIRST: pin the non-holder message on both paths, before any source change. Both refusals are built by claimGuards.attemptFinalizingRefusal today, so both tests fail on the holder-voiced text.\n\nThe agreed message, built by the new builder in step 2 (action is its only variable part):\n  `Task <taskId> is held by worker <workerId>'s attempt <attemptId> (generation <generation>) in phase finalizing: its bytes are not landed yet, so <action> would finish it over work that has not landed. This is a RETRYABLE refusal (context.retryable), NOT a fatal error: wait for that worker's runner to call moe.finalize_attempt. Do NOT close the boundary to get past this refusal - only once you have confirmed that runner is gone may a governor or human close it with moe.finalize_attempt { taskId, attemptId, generation, outcome: 'failed' }.`\n  action is 'approving this task' for qa_approve, and 'moving this task into DONE or ARCHIVED' for the terminal-column guard.\n\n1. tools/finalizeAttempt.test.ts, in the existing describe 'moe.qa_approve - finalizing hold': add one it(), for example 'tells a non-holder to wait for the runner, never to close the boundary itself'. With a finalizing attempt in place, take the refusal from approve() and assert that err.message:\n   - contains \"is held by worker worker-1's attempt\" and the attempt id and generation;\n   - contains 'approving this task';\n   - contains \"wait for that worker's runner to call moe.finalize_attempt\";\n   - contains 'Do NOT close the boundary to get past this refusal';\n   - does NOT contain 'Close the boundary with moe.finalize_attempt, then retry' (the holder text this bug is about).\n   Keep the existing context and code assertions where they are; do not weaken them.\n2. state/attemptHandback.test.ts, in the describe that holds 'refuses every move into DONE or ARCHIVED before any write while the landing is finalizing': add one it() that takes the refusal from one set_task_status DONE move and one archive_epic call, and asserts the same five points, with 'moving this task into DONE or ARCHIVED' as the action phrase. archive_epic reaches the identical builder through taskStore.assertNoFinalizingAttempt, so pinning it here proves the whole guard.\n3. Run: cd packages/moe-daemon && npx vitest run src/tools/finalizeAttempt.test.ts src/state/attemptHandback.test.ts. Both new tests must FAIL on today's text. Paste both failures into the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts"
+      ],
+      "note": "RED pinned on both paths, no source change yet.\n- tools/finalizeAttempt.test.ts, describe 'moe.qa_approve — finalizing hold': new it 'tells a non-holder to wait for the runner, never to close the boundary itself' (approve() human path). Pins \"is held by worker worker-1's attempt\", `<id> (generation <n>)`, 'approving this task', \"wait for that worker's runner to call moe.finalize_attempt\", 'Do NOT close the boundary to get past this refusal', and NOT 'Close the boundary with moe.finalize_attempt, then retry'.\n- state/attemptHandback.test.ts, describe 'every finalizing attempt has a close path (task-686afecb)' (beside the DONE/ARCHIVED + archive_epic guards): new it looping over one set_task_status DONE refusal and one archive_epic refusal; expectHeldForWorker1 (envelope) + the same five points with 'moving this task into DONE or ARCHIVED'.\nRun: npx vitest run src/tools/finalizeAttempt.test.ts src/state/attemptHandback.test.ts -> Tests 2 failed | 62 passed (64). Both failures:\n  FAIL finalizeAttempt.test.ts > moe.qa_approve — finalizing hold > tells a non-holder ... : expected '[ATTEMPT_FINALIZING] Worker worker-1 …' to contain 'is held by worker worker-1\\'s attempt' (Received: \"... Worker worker-1 still holds attempt attempt-c925... (generation 1) on task task-1 in phase finalizing: its bytes are not landed yet. Close the boundary with moe.finalize_attempt, then retry — ...\")\n  FAIL attemptHandback.test.ts > ... > tells a non-holder moving the row into DONE or ARCHIVED ... : same assertion, Received \"... Worker worker-1 still holds attempt attempt-512e... (generation 1) on task task-W ... Close the boundary with moe.finalize_attempt, then retry — ...\"\nShared checkout: 30+ dirty paths from other sessions (.moe/roles, .moe/skills, docs/skills, scripts/*, src/tools/startStep.ts, src/util/recommendSkill*.ts, contextNextAction.ts, generated/skillFiles.ts); none are this task's 5 files, untouched.",
+      "startedAt": "2026-09-18T21:11:37.827Z",
+      "completedAt": "2026-09-18T21:13:23.999Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the non-holder builder to util/claimGuards.ts, beside attemptFinalizingRefusal, and correct the stale comment.\n\n1. New export:\n     export function nonHolderFinalizingRefusal(attempt: FinalizingAttemptRef, action: string): MoeError\n   It builds the step-1 message and returns the SAME envelope as attemptFinalizingRefusal: MoeErrorCode.STATE_CONFLICT (-32002), codeName ATTEMPT_FINALIZING, and context { attemptId, generation, taskId, workerId, retryable: true } with the same keys in the same order. The only difference is the message, so every existing context assertion keeps passing.\n   Its doc comment must say WHY it exists: the holder's advice tells its reader to close the boundary, and a non-holder following that advice closes a live runner's landing, so qa_approve reaches DONE before any byte lands and, under a quality gate, the wrapper finds no open attempt and parks the completion on a rescue ref that no pre-flight recovers, because a DONE task is never claimed again.\n2. Correct the comment above attemptFinalizingRefusal (currently 'The refusal both holds raise'). It now has ONE caller: claim_next_task's own-worker hold, the only refused caller whose own runner closes the boundary. Name the two sibling builders and who uses them: nonHolderFinalizingRefusal for qa_approve and for taskStore's DONE/ARCHIVED guard (archive_task, set_task_status and archive_epic all reach it), and claimEligibility.foreignFinalizingRefusal for another seat's claim of the held row.\n3. Keep attemptFinalizingRefusal's text exactly as it is: attemptHandback.test.ts pins it for the holder path.\n4. claimEligibility.foreignFinalizingRefusal stays as it is too. Its message is claim-specific ('no other seat may claim it') and its tests pin it; three builders with one envelope is the deliberate outcome, and the corrected comment is what keeps them findable.\n5. Error handling: the builder only builds an error. It reads no state, cannot throw, and the callers keep raising before any write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "note": "util/claimGuards.ts (+44/-1):\n- New export nonHolderFinalizingRefusal(attempt: FinalizingAttemptRef, action: string): MoeError, placed right after attemptFinalizingRefusal. Envelope identical: MoeErrorCode.STATE_CONFLICT, codeName ATTEMPT_FINALIZING, context {attemptId, generation, taskId, workerId, retryable: true} in the same key order. Message is the plan's agreed text verbatim, with one character choice: the plan's ' - ' before 'only once you have confirmed' is written as ' — ' (em dash), matching both sibling builders' idiom (the plan also renders the source's em dash in the describe name 'moe.qa_approve — finalizing hold' as '-'). No test pins that character. Doc comment says why it exists: the holder's advice, followed by a non-holder, closes a live runner's landing -> qa_approve DONE before any byte lands -> under a quality gate the wrapper finds no open attempt and parks the completion on a rescue ref no pre-flight recovers (a DONE task is never claimed again). Pure builder: reads no state, cannot throw.\n- Stale comment above attemptFinalizingRefusal ('The refusal both holds raise') replaced: its one caller is claim_next_task's own-worker hold (the only refused caller whose own runner closes the boundary); names nonHolderFinalizingRefusal (qa_approve + taskStore DONE/ARCHIVED guard, reached by set_task_status, archive_task, archive_epic) and claimEligibility.foreignFinalizingRefusal (another seat's claim of the held row).\n- attemptFinalizingRefusal text byte-identical; claimEligibility.ts untouched.\nnpx tsc --noEmit: exit 0, no output.",
+      "startedAt": "2026-09-18T21:13:26.497Z",
+      "completedAt": "2026-09-18T21:14:17.282Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Switch the two non-holder call sites. Both are a one-line swap plus a comment touch-up, and neither changes when the refusal fires or what it carries.\n\n1. tools/qaApprove.ts (the finalizing check before every mutation): call nonHolderFinalizingRefusal({ attemptId, generation, taskId, workerId }, 'approving this task'). Update the import. Its block comment already explains the race; add one sentence saying the refusal is addressed to a non-holder, because the approver never owns the landing.\n2. state/taskStore.ts assertNoFinalizingAttempt: call nonHolderFinalizingRefusal(..., 'moving this task into DONE or ARCHIVED'). Update the import, and fix the comment that currently calls it \"qa_approve's retryable ATTEMPT_FINALIZING\" so it names the shared non-holder builder instead.\n3. Do NOT touch tools/claimNextTask.ts: its own-worker hold is the holder path and keeps attemptFinalizingRefusal.\n4. Do not add any caller or role check to moe.finalize_attempt. The open escape is deliberate, so a governor or human can close a dead runner's boundary; this task changes what the refusal tells them, not who may call it.\n5. Run the two step-1 test files again: both new tests must now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "note": "Call sites switched, position unchanged (still before every mutation/write):\n- tools/qaApprove.ts: import attemptFinalizingRefusal -> nonHolderFinalizingRefusal; the finalizing check now throws nonHolderFinalizingRefusal({attemptId, generation, taskId, workerId}, 'approving this task'). Block comment +1 sentence: the refusal is addressed to a non-holder because the approver never owns the landing (wait for the runner, never close the boundary yourself).\n- state/taskStore.ts: import swapped; assertNoFinalizingAttempt throws nonHolderFinalizingRefusal(..., 'moving this task into DONE or ARCHIVED'). Doc comment no longer says \"qa_approve's retryable ATTEMPT_FINALIZING\"; it names claimGuards.nonHolderFinalizingRefusal, the non-holder refusal qa_approve raises too.\n- tools/claimNextTask.ts untouched (holder path keeps attemptFinalizingRefusal); finalize_attempt untouched (no caller/role check added).\nRun: npx tsc --noEmit -> exit 0, no output. npx vitest run src/tools/finalizeAttempt.test.ts src/state/attemptHandback.test.ts -> Test Files 2 passed (2), Tests 64 passed (64): both step-1 tests now green, every existing context/no-write assertion untouched and passing.",
+      "startedAt": "2026-09-18T21:14:19.645Z",
+      "completedAt": "2026-09-18T21:14:45.393Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY.\n1. cd packages/moe-daemon && npx tsc --noEmit (must print nothing).\n2. cd packages/moe-daemon && npm test. The whole suite must be green. Under fleet load a file can flake; rerun that file alone and say so in the note (mem:moes-test-env-quirks).\n3. Prove the call sites: grep -rn 'attemptFinalizingRefusal\\|nonHolderFinalizingRefusal' packages/moe-daemon/src --include=*.ts. Expected: attemptFinalizingRefusal defined in claimGuards.ts and called only from tools/claimNextTask.ts; nonHolderFinalizingRefusal defined there and called from tools/qaApprove.ts and state/taskStore.ts. Paste the output.\n4. Confirm the envelope did not move: the existing context assertions in finalizeAttempt.test.ts and attemptHandback.test.ts (expectHeldForWorker1) still pass untouched, and delivery/acceptance.test.ts's ATTEMPT_FINALIZING codeName assertions still pass.\n5. For complete_task, verification is 'cd packages/moe-daemon && npm test' with the tail as outputTail.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY, all fresh on the working tree:\n1. cd packages/moe-daemon && npx tsc --noEmit -> exit 0, printed nothing.\n2. cd packages/moe-daemon && npm test -> exit 0: \"Test Files 122 passed (122) / Tests 2146 passed (2146) / Duration 14.17s\". No flake, no rerun needed.\n3. grep -rn 'attemptFinalizingRefusal\\|nonHolderFinalizingRefusal' packages/moe-daemon/src --include=*.ts:\n  state/taskStore.ts:28 import { nonHolderFinalizingRefusal }; :261 (comment); :270 throw nonHolderFinalizingRefusal(\n  tools/claimNextTask.ts:21 import attemptFinalizingRefusal; :360 throw attemptFinalizingRefusal({\n  tools/qaApprove.ts:7 import { nonHolderFinalizingRefusal }; :84 throw nonHolderFinalizingRefusal(\n  util/claimEligibility.ts:121 (comment only, still accurate)\n  util/claimGuards.ts:99, :137 (comments); :109 export function attemptFinalizingRefusal; :141 export function nonHolderFinalizingRefusal\n  => attemptFinalizingRefusal called only from claimNextTask.ts; nonHolderFinalizingRefusal called from qaApprove.ts and taskStore.ts, as planned.\n4. Envelope unchanged: finalizeAttempt.test.ts 'refuses the human path with a retryable ATTEMPT_FINALIZING state conflict' (code -32002 + context toEqual), attemptHandback.test.ts expectHeldForWorker1 (all callers incl. 'refuses every move into DONE or ARCHIVED...' and archive_epic) and delivery/acceptance.test.ts:1103-1106 (qa_approve code/codeName/context.attemptId/retryable) all pass untouched in the green run above.\nDocs re-checked: MCP_SERVER.md :493/:1298/:1806 and SCHEMA.md:1046 only paraphrase (retry after the runner finalizes, do not escalate) — consistent with the new text, no doc change.",
+      "startedAt": "2026-09-18T21:14:47.698Z",
+      "completedAt": "2026-09-18T21:15:28.411Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "SELF-REVIEW, posted as a task comment:\n1. Does any refusal fire earlier or later than before? Both call sites are unchanged in position, so a refused call still writes nothing. Confirm with the existing 'moves not one byte' and 'before any write' tests.\n2. Is the context object identical on all three builders (keys, order, retryable:true)? A client keying on context must see no change.\n3. Does the new message survive the MCP wire? context is not forwarded, so the message alone has to name the attempt, the holder, the wait and the escape. Re-read it as a QA agent and as a human in the IDE.\n4. Is the holder path untouched? claim_next_task's own-worker hold must still read 'Close the boundary with moe.finalize_attempt, then retry'.\n5. Does the escape still work? A governor closing a dead runner's boundary with outcome 'failed' is still accepted; this task removed the ADVICE to do it, not the ability.\n6. Are the three builders findable from each other? Check that the corrected comment names all three and their callers.\n7. git diff --stat: only the 5 planned files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/claimGuards.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts"
+      ],
+      "note": "Self-review posted as task comment comment-1c1ead4e. All 7 checks hold: timing unchanged (no-write tests pass untouched); envelope identical across all three builders (same code, codeName, context keys in the same order); McpAdapter forwards the message whole; holder path byte-identical and still pinned; finalize_attempt escape untouched and its governor 'failed' test passes; the three builders cross-reference each other; diff = exactly the 5 planned files (+107/-20), CRLF consistent with HEAD. This step edited no file; modifiedFiles re-lists the task's 5 paths for attribution. Residuals noted in the comment: em dash for the plan's ' - ', and the \"would finish it\" wording on an ARCHIVED move (the agreed plan text).",
+      "startedAt": "2026-09-18T21:15:31.163Z",
+      "completedAt": "2026-09-18T21:16:20.436Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human approved promotion: QA-filed Wave 1 contract-drift bug, code refs included, architects idle.",
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 211.5,
+  "comments": [
+    {
+      "id": "comment-1c1ead4e9e4743d29b626bb1651387c2",
+      "author": "worker-161b9959",
+      "content": "SELF-REVIEW (step-5), diff read cold:\n1. Timing: unchanged. Both call sites swap only the builder call, in place: qaApprove still refuses before assertWorkerOwns and every mutation; assertNoFinalizingAttempt still runs from updateTask before any write and from archive_epic's up-front loop. Proof: 'moves not one byte of the task when it refuses' (finalizeAttempt.test.ts) and 'refuses every move into DONE or ARCHIVED before any write while the landing is finalizing' + 'archive_epic refuses before archiving anything...' (attemptHandback.test.ts) pass untouched.\n2. Envelope: identical on all three builders: STATE_CONFLICT (-32002), codeName ATTEMPT_FINALIZING, context literal {attemptId, generation, taskId, workerId, retryable: true} in the same key order (claimGuards attemptFinalizingRefusal / nonHolderFinalizingRefusal, claimEligibility foreignFinalizingRefusal). Pinned by expectHeldForWorker1 on every path, the qa_approve toEqual context test, and acceptance.test.ts:1103-1106.\n3. Wire: McpAdapter.ts:308-315 forwards toolError.message whole ({code, message, data:{tool, codeName}}), no truncation. Rendered qa_approve text: \"[ATTEMPT_FINALIZING] Task T is held by worker W's attempt A (generation N) in phase finalizing: its bytes are not landed yet, so approving this task would finish it over work that has not landed. This is a RETRYABLE refusal (context.retryable), NOT a fatal error: wait for that worker's runner to call moe.finalize_attempt. Do NOT close the boundary to get past this refusal — only once you have confirmed that runner is gone may a governor or human close it with moe.finalize_attempt { taskId, attemptId, generation, outcome: 'failed' }.\" As QA: names the holder, the attempt + generation, says wait/retry, forbids the self-close. As a human in the IDE: same, plus the exact escape args for a confirmed-dead runner.\n4. Holder path: claimNextTask.ts untouched; attemptFinalizingRefusal's text byte-identical (only its doc comment changed); 'still refuses the attempt owner its next claim with the worker-scoped refusal' still pins 'Close the boundary with moe.finalize_attempt' and passes.\n5. Escape: finalizeAttempt.ts untouched, no caller/role check added; 'lets a governor close an abandoned boundary with outcome failed...' passes.\n6. Findability: the comment above attemptFinalizingRefusal now names all three builders and their callers (holder: claim_next_task own-worker hold; nonHolderFinalizingRefusal: qa_approve + taskStore DONE/ARCHIVED guard reached by set_task_status/archive_task/archive_epic; claimEligibility.foreignFinalizingRefusal: another seat's claim). The new builder's comment points back to \"the holder's refusal above\".\n7. git diff --stat: exactly the 5 planned files, 107 insertions / 20 deletions. Line endings consistent (CRLF throughout, same as HEAD).\nResiduals (theoretical, not fixed): the plan's ' - ' is written as ' — ' to match the sibling builders; no test pins it. For an ARCHIVED move the phrase \"would finish it\" is loose (archiving shelves the row), but it is the agreed plan text. Verification: tsc --noEmit clean; npm test 122 files / 2146 tests passed.",
+      "timestamp": "2026-09-18T21:16:14.461Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T20:45:37.590Z",
+  "updatedAt": "2026-09-18T21:35:34.247Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T21:08:28.171Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-09-18T21:35:09.371Z",
+    "wallClockMs": 1601200
+  },
+  "contextFetchedBy": [
+    "architect-e52c9adc",
+    "worker-161b9959",
+    "qa-9a371c33"
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T21:11:23.395Z",
+  "planningNotes": {
+    "approachesConsidered": "- Reuse claimEligibility.foreignFinalizingRefusal for qa_approve and the terminal-column guard: rejected. Its message is claim-specific ('so no other seat may claim it'), and its tests pin that text.\n- Give attemptFinalizingRefusal a voice flag: rejected. Every caller would have to pass it, and a missing flag would silently fall back to the wrong voice. A separate named builder makes the wrong choice visible at the call site.\n- Add a caller or role check to moe.finalize_attempt: rejected, and out of scope. The open escape is deliberate, so a governor or human can close a dead runner's boundary. The DoD asks to fix the advice, not the permission.\n- Unify all three builders into one: rejected here. It would rewrite the claim-path messages that existing tests pin, for no gain on this bug.",
+    "codebaseInsights": "- attemptFinalizingRefusal has exactly three callers: claimNextTask's own-worker hold (the holder), qaApprove, and taskStore.assertNoFinalizingAttempt (reached by set_task_status, archive_task and archive_epic).\n- claimEligibility.foreignFinalizingRefusal already carries the non-holder voice for a competing claim, and its own comment calls the holder's advice 'the wrong advice for a QA caller'. That is the wording model to follow.\n- Existing tests: the holder text is pinned in state/attemptHandback.test.ts ('still refuses the attempt owner its next claim'). The qa_approve hold is covered in tools/finalizeAttempt.test.ts, in the describe 'moe.qa_approve - finalizing hold'. The DONE/ARCHIVED guard and archive_epic are covered in state/attemptHandback.test.ts, with the helper expectHeldForWorker1 pinning the context.\n- No doc quotes the message: docs/MCP_SERVER.md only paraphrases it and already tells a refused caller to retry rather than escalate, so no doc change is needed.\n- The context envelope is identical across the builders, which is why only the message may change.",
+    "risks": "- Do not weaken the existing assertions while adding the message pins. The context, the code and the no-write proofs must stay.\n- Keep the envelope identical: same MoeErrorCode, same codeName, same context keys, retryable:true. A client keys on codeName and on context.\n- Keep the holder message byte-identical; attemptHandback.test.ts pins it.\n- archive_epic must stay atomic: the guard runs up front for every task of the epic, and this change does not move it.\n- No in-flight sibling touches these five files (task-31fe6dc8 touches tools/finalizeAttempt.ts but not its test), so no dependsOn is set. Re-check with git status before editing.\n- The full suite can flake under fleet load; rerun a failing file alone and report it.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+      "packages/moe-daemon/src/state/attemptHandback.test.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T21:11:23.486Z",
+  "workStartedAt": "2026-09-18T21:11:37.827Z",
+  "reviewStartedAt": "2026-09-18T21:17:06.094Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": " Test Files  122 passed (122)\n      Tests  2146 passed (2146)\n   Start at  00:16:26\n   Duration  13.39s (tests 88%, transform 7%, import 4%)",
+    "reportedAt": "2026-09-18T21:17:06.094Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+    "packages/moe-daemon/src/state/attemptHandback.test.ts",
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json",
+    ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+    ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json"
+  ],
+  "completionSummary": "qa_approve and the DONE/ARCHIVED terminal-column guard no longer give a non-holder the holder's \"Close the boundary with moe.finalize_attempt, then retry\" advice.\n- util/claimGuards.ts: new nonHolderFinalizingRefusal(attempt, action). Same envelope as attemptFinalizingRefusal: -32002, codeName ATTEMPT_FINALIZING, context {attemptId, generation, taskId, workerId, retryable:true} with the same key order. Message: \"Task T is held by worker W's attempt A (generation N) in phase finalizing: its bytes are not landed yet, so <action> would finish it over work that has not landed. This is a RETRYABLE refusal (context.retryable), NOT a fatal error: wait for that worker's runner to call moe.finalize_attempt. Do NOT close the boundary to get past this refusal — only once you have confirmed that runner is gone may a governor or human close it with moe.finalize_attempt { taskId, attemptId, generation, outcome: 'failed' }.\" The plan's ' - ' is written as ' — ' to match the sibling builders.\n- The stale comment \"The refusal both holds raise\" is rewritten. It now names the holder caller (claim_next_task's own-worker hold) and both siblings with their callers.\n- tools/qaApprove.ts uses action 'approving this task'; state/taskStore.ts assertNoFinalizingAttempt (reached by set_task_status, archive_task, archive_epic) uses 'moving this task into DONE or ARCHIVED'. Neither call moved, so a refused call still writes nothing.\n- Unchanged: claimNextTask's holder text (still pinned), claimEligibility.foreignFinalizingRefusal, and finalize_attempt (no caller/role check; the governor 'failed' escape test passes).\n- Tests: one new it() per path, in finalizeAttempt.test.ts (qa_approve) and attemptHandback.test.ts (set_task_status DONE + archive_epic). Each pins the new phrases and asserts the old holder text is absent. Both were red on the old text (step-1 note) and pass now.\n- Diff: exactly 5 files, +107/-20. Self-review: comment-1c1ead4e.",
+  "commits": [
+    {
+      "sha": "fa5d8bb79a36376eda066e87e57634f74805711d",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-18T21:11:24Z",
+      "paths": [
+        ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json",
+        "packages/moe-daemon/src/state/attemptHandback.test.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/util/claimGuards.ts"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-18T21:17:16.167Z",
+      "treeId": "9eef0e5e714deb6e5c66dcefc760882556eb498a",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/qaApprove.ts",
+          "taskId": "task-fd970f24862f474ca10bddd75d8cbcc5"
+        }
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "71aac69f1cafdc8bada66650f716a3cef897c717",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-9a371c33@2026-09-18T21:30:18Z",
+      "paths": [
+        ".moe/tasks/task-dad7eda464734535b1e7fb489f367793.json",
+        ".moe/tasks/task-dc1e8ef6f3b247528fd75e0325dc1039.json",
+        ".moe/tasks/task-e7cf44d7fc6840658f6992b4034d7d10.json"
+      ],
+      "recordedBy": "qa-9a371c33",
+      "recordedAt": "2026-09-18T21:35:34.247Z",
+      "treeId": "0f9e50056d6243b09e1980e1c40f3f617942b3e4",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/claimGuards.ts",
+    "packages/moe-daemon/src/state/attemptHandback.test.ts",
+    "packages/moe-daemon/src/tools/finalizeAttempt.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-9a371c33@2026-09-18T21:30:18Z",
+    "at": "2026-09-18T21:35:34.247Z"
+  },
+  "completedAt": "2026-09-18T21:35:09.371Z",
+  "reviewCompletedAt": "2026-09-18T21:35:09.371Z",
+  "reviewSummary": "Verified completion commit fa5d8bb (git show; on origin/moe/work-2026-09-13): 5 planned source files + own task JSON, no foreign hunks (Moe-Contested qaApprove.ts diff holds only this task's import/comment/throw). DoD1: new claimGuards.nonHolderFinalizingRefusal says wait for the holder's runner, forbids self-close, gives the governor/human outcome:'failed' escape only for a confirmed-gone runner, and names attempt id + generation. Envelope unchanged: STATE_CONFLICT=-32002 (errors.ts:25), codeName ATTEMPT_FINALIZING, same context keys/order, retryable:true. Callers per grep: attemptFinalizingRefusal only at claimNextTask.ts:360 (holder, text byte-identical, still pinned at attemptHandback.test.ts:605); the new builder at qaApprove.ts:84 and taskStore.ts:270 (reached by set_task_status/archive_task/archive_epic/board). Neither call site moved; the no-write tests still pass. Wrappers never call set_task_status/archive/qa_approve, so a holder runner never gets the non-holder text. DoD2: RED proof in a HEAD scratch export with the 3 source files reverted to fa5d8bb^: exactly the 2 new tests fail (\"expected '[ATTEMPT_FINALIZING] Worker worker-1 …' to contain 'is held by worker worker-1's attempt'\"), 62/64 pass; green after restore. DoD3: the claimGuards comment now names its one holder caller and both sibling builders with their callers. DoD4: live tree tsc --noEmit clean; npm test gave 122 files / 2146 tests passed, exit 0. Clean HEAD snapshot gave 122/2145, exit 0. Earlier snapshot runs failed first on a missing repo .gitignore (export artifact), then on a waitForTask timing flake that passes alone. Docs (MCP_SERVER.md:493/1298/1806, SCHEMA.md:1046) only paraphrase the refusal and stay consistent. Rails: no git/DB/forbidden patterns; tests fail on the old behaviour."
+}

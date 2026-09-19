@@ -5,6 +5,7 @@ import { ToolTestHarness } from './toolTestHarness.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
 import { getContextTool } from './getContext.js';
+import { setTaskStatusTool } from './setTaskStatus.js';
 import { MoeError } from '../util/errors.js';
 import { getReview, listReviewsForTask, recordReview, type RecordReviewParams } from '../state/reviewStore.js';
 import { StateManager } from '../state/StateManager.js';
@@ -779,6 +780,30 @@ describe('reviewStore — refusals, list order and copies', () => {
     expect(h.state.reviews.size).toBe(1);
   });
 
+  // Review-1.json and review-1.json are ONE file on NTFS and a default APFS volume,
+  // so recording review-1 would silently overwrite Review-1.
+  it('refuses an id that differs from a stored review only by case', async () => {
+    const first = await recordReview(h.state, { ...VALID, id: 'Review-1' });
+    const bytesBefore = fs.readFileSync(reviewFile('Review-1'), 'utf8');
+
+    const err = await refusalOf(recordReview(h.state, { ...VALID, id: 'review-1', summary: 'rewritten' }));
+
+    expect({ code: err.code, codeName: err.codeName, message: err.message, context: err.context }).toEqual({
+      code: -32002,
+      codeName: 'REVIEW_ID_CASE_COLLISION',
+      message:
+        '[REVIEW_ID_CASE_COLLISION] Review id review-1 differs only by case from the existing review Review-1; ' +
+        'each record is one file (<id>.json), and NTFS and a default APFS volume treat those two names as the same file, ' +
+        'so recording this one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, ' +
+        'and references match it exactly.',
+      context: { reviewId: 'Review-1', requestedId: 'review-1' },
+    });
+    expect(h.state.reviews.size).toBe(1);
+    expect(getReview(h.state, 'Review-1')).toEqual(first);
+    expect(fs.readFileSync(reviewFile('Review-1'), 'utf8')).toBe(bytesBefore);
+    expect(fs.readdirSync(path.join(h.moePath, 'reviews'))).toEqual(['Review-1.json']);
+  });
+
   it('replays an identical same-id review: the stored copy comes back with its createdAt, and nothing is written', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-09-11T03:00:00.000Z'));
@@ -899,10 +924,11 @@ describe('moe.qa_approve — deliveryPolicy gate', () => {
   const readTaskFile = (): Record<string, unknown> =>
     JSON.parse(fs.readFileSync(taskFile(), 'utf8')) as Record<string, unknown>;
 
-  async function seed(settings: Record<string, unknown>, task: Partial<Task> = {}): Promise<void> {
+  async function seed(settings: Record<string, unknown>, task: Partial<Task> = {}, siblings: Array<Partial<Task>> = []): Promise<void> {
     h.setupMoeFolder({ settings: { ...HARNESS_SETTINGS, ...settings } as never });
     h.createEpic();
     h.createTask({ id: 'task-1', status: 'REVIEW', reviewStartedAt: REVIEW_STARTED_AT, ...task });
+    for (const sibling of siblings) h.createTask(sibling);
     await h.state.load();
     vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
   }
@@ -1220,6 +1246,41 @@ describe('moe.qa_approve — deliveryPolicy gate', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('records the trimmed gate that was due at DONE on the task, in memory and on disk', async () => {
+    writeCandidateRecord('cand-A');
+    await seed(
+      { deliveryPolicy: 'local-branch', qualityGate: '  node gate.cjs  ', qualityGateScope: 'everyTask' },
+      { commits: [completion()] }
+    );
+    await recordCheckRun(h.state, {
+      id: 'check-A-pass',
+      candidateId: 'cand-A',
+      treeSha: TREE_A,
+      command: 'node gate.cjs',
+      exitCode: 0,
+      runnerId: 'runner-1',
+      source: 'runner-observed',
+    });
+
+    expect((await approve({ candidateId: 'cand-A' })).status).toBe('DONE');
+
+    expect(h.state.getTask('task-1')).toHaveProperty('requiredCheckAtDone', 'node gate.cjs');
+    expect(readTaskFile()).toHaveProperty('requiredCheckAtDone', 'node gate.cjs');
+  });
+
+  it.each<[string, Record<string, unknown>, Array<Partial<Task>>, string | null]>([
+    ['null for a mid-epic task under the default epicFinal scope', { deliveryPolicy: 'local-branch', qualityGate: 'node gate.cjs' }, [{ id: 'task-2', status: 'WORKING', order: 2 }], null],
+    ['null for an autoCommit=false project, where the wrapper runs no gate', { autoCommit: false, qualityGate: 'node gate.cjs', qualityGateScope: 'everyTask' }, [], null],
+    ['the gate under the default policy too, which enforces nothing', { qualityGate: 'node gate.cjs', qualityGateScope: 'everyTask' }, [], 'node gate.cjs'],
+  ])('records requiredCheckAtDone as %s', async (_label, settings, siblings, expected) => {
+    await seed(settings, { commits: [completion()] }, siblings);
+
+    expect((await approve()).status).toBe('DONE');
+
+    expect(h.state.getTask('task-1')).toHaveProperty('requiredCheckAtDone', expected);
+    expect(readTaskFile()).toHaveProperty('requiredCheckAtDone', expected);
+  });
+
   it('names every missing piece of evidence at once: the landing first, then the required check', async () => {
     writeCandidateRecord('cand-A');
     await seed({ deliveryPolicy: 'remote-push', qualityGate: 'node gate.cjs', qualityGateScope: 'everyTask' });
@@ -1387,6 +1448,19 @@ describe('delivery policy — evaluateDeliveryEvidence', () => {
     expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
   });
 
+  it('accepts a pass recorded with a padded qualityGate verbatim, as the PowerShell wrapper records it', async () => {
+    // A hand-edited project.json can pad the gate. The sh wrapper trims it before
+    // running and recording; the ps1 wrapper records it verbatim. No shell sees
+    // the padding, so both runs are the gate the policy requires.
+    const padded = `  ${GATE}  `;
+    const task = await seedPrerequisite({
+      settings: { ...STRICT_SETTINGS, qualityGate: padded },
+      checks: [run('check-P-current-padded-pass', { command: padded })],
+    });
+
+    expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+  });
+
   it.each<[string, Record<string, unknown>]>([
     ['an exit code stored as a string', { exitCode: '0' }],
     ['no source', { source: undefined }],
@@ -1493,6 +1567,58 @@ describe('delivery policy — evaluateDeliveryEvidence', () => {
     expect([isEpicFinalTask(h.state, midEpic), isEpicFinalTask(h.state, final)]).toEqual([false, true]);
     expect(evaluateDeliveryEvidence(h.state, midEpic).missingEvidence).toEqual([]);
     expect(evaluateDeliveryEvidence(h.state, final).missingEvidence).toEqual(['required-check:node gate.cjs']);
+  });
+
+  // A DONE task is judged against the check that was due when it was approved
+  // (task.requiredCheckAtDone), not against today's settings or epic shape.
+  it('does not start requiring a check of a DONE task that archiving its epic-final sibling made epic-final', async () => {
+    const midEpic = await seedPrerequisite({
+      settings: { ...STRICT_SETTINGS, qualityGateScope: 'epicFinal' },
+      task: { requiredCheckAtDone: null },
+      siblings: [{ id: 'task-final', status: 'DONE', order: 2 }],
+    });
+    expect(evaluateDeliveryEvidence(h.state, midEpic)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+
+    await h.state.updateTask('task-final', { status: 'ARCHIVED' });
+
+    const after = h.state.getTask('task-P')!;
+    expect(isEpicFinalTask(h.state, after)).toBe(true);
+    expect(evaluateDeliveryEvidence(h.state, after)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+  });
+
+  it('keeps judging a DONE task against the gate it was approved under after settings.qualityGate changes', async () => {
+    const task = await seedPrerequisite({ checks: [RUNNER_PASS], task: { requiredCheckAtDone: GATE } });
+    expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+
+    await h.state.updateSettings({ qualityGate: 'node other-gate.cjs' });
+
+    expect(evaluateDeliveryEvidence(h.state, h.state.getTask('task-P')!)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+  });
+
+  it.each<[string, unknown, string[]]>([
+    ['whitespace only as no check due', '   ', []],
+    ['a number as unreadable, reported missing rather than thrown', 42, ['unreadable-required-check']],
+    ['an object as unreadable, reported missing rather than thrown', { command: GATE }, ['unreadable-required-check']],
+  ])('reads a snapshot of %s', async (_label, snapshot, missing) => {
+    const task = await seedPrerequisite({ checks: [RUNNER_PASS], settings: { ...STRICT_SETTINGS, qualityGate: 'node other-gate.cjs' }, task: { requiredCheckAtDone: snapshot as string } });
+
+    expect(evaluateDeliveryEvidence(h.state, task).missingEvidence).toEqual(missing);
+  });
+
+  it('ignores a snapshot on a task that is not DONE or ARCHIVED: until DONE the check owed is the live one', async () => {
+    const task = await seedPrerequisite({ task: { status: 'REVIEW', requiredCheckAtDone: null } });
+
+    expect(evaluateDeliveryEvidence(h.state, task).missingEvidence).toEqual(['completion-commit', 'required-check:node gate.cjs']);
+  });
+
+  it('drops the snapshot on reopen, so a DONE reached again outside qa_approve is judged live', async () => {
+    const task = await seedPrerequisite({ task: { requiredCheckAtDone: null } });
+    expect(evaluateDeliveryEvidence(h.state, task).missingEvidence).toEqual([]);
+
+    const setStatus = setTaskStatusTool(h.state);
+    for (const status of ['WORKING', 'REVIEW', 'DONE']) await setStatus.handler({ taskId: 'task-P', status }, h.state);
+
+    expect(evaluateDeliveryEvidence(h.state, h.state.getTask('task-P')!).missingEvidence).toEqual(['required-check:node gate.cjs']);
   });
 
   // The wrapper runs the gate on get_context's isEpicFinal, so the policy must never demand a check the runner skipped.

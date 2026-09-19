@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
-import { deliveryProjection } from './deliveryProjection.js';
+import { deliveryProjection, type TaskDelivery } from './deliveryProjection.js';
+import { recordCandidate } from './candidateStore.js';
+import { recordCheckRun } from './checkRunStore.js';
+import { recordDeliveryReceipt } from './receiptStore.js';
 import type { Candidate, CheckRun, DeliveryReceipt, ExecutionAttempt, Task } from '../types/schema.js';
 import { createServer } from 'http';
 import { once } from 'events';
@@ -31,7 +34,7 @@ const attempt: ExecutionAttempt = {
 };
 const expected = {
   currentCandidate: { id: candidate.id, treeSha: SHA, shortSha: SHA.slice(0, 8), baseRevision: BASE },
-  latestCheckRun: { command: check.command, exitCode: -1 },
+  latestCheckRun: { command: check.command, exitCode: -1, source: 'runner-observed' },
   deliveryReceipt: { target: receipt.target, landedRevision: SHA },
   attemptPhase: 'finalizing',
 };
@@ -58,6 +61,44 @@ describe('deliveryProjection', () => {
   it('projects the current candidate, latest check, receipt and owning attempt', () => {
     seed();
     expect(deliveryProjection(h.state, task)).toEqual(expected);
+  });
+
+  it.each([7, 12, 39, 40].flatMap(length => [
+    [length, 'tree', SHA.slice(0, length), BASE] as const,
+    [length, 'base', SHA, BASE.slice(0, length)] as const,
+    [length, 'tree and base', SHA.slice(0, length), BASE.slice(0, length)] as const,
+  ]))('projects store-valid %i-character %s tokens with a closed owner', async (_, __, treeSha, baseRevision) => {
+    h.state.attempts.set(attempt.id, { ...attempt, phase: 'closed' });
+    await recordCandidate(h.state, { ...candidate, treeSha, baseRevision });
+    await recordCheckRun(h.state, { ...check, treeSha });
+    await recordDeliveryReceipt(h.state, receipt);
+    expect(deliveryProjection(h.state, task)).toEqual({
+      ...expected,
+      currentCandidate: { id: candidate.id, treeSha, shortSha: treeSha.slice(0, 8), baseRevision },
+      attemptPhase: 'closed',
+    });
+  });
+
+  it.each(['123456', SHA + 'a', 'g'.repeat(7), 1234567])('omits invalid candidate token %s without coercion', value => {
+    seed();
+    for (const field of ['treeSha', 'baseRevision']) {
+      h.state.candidates.set(candidate.id, { ...candidate, [field]: value } as Candidate);
+      expect(deliveryProjection(h.state, task)).toEqual({ attemptPhase: 'finalizing' });
+    }
+  });
+
+  it.each([7, 12, 39])('omits a %i-character receipt revision without losing other evidence', length => {
+    seed();
+    h.state.receipts.set(receipt.id, { ...receipt, landedRevision: SHA.slice(0, length) });
+    const { deliveryReceipt: _, ...withoutReceipt } = expected;
+    expect(deliveryProjection(h.state, task)).toEqual(withoutReceipt);
+  });
+
+  it.each([SHA.toLowerCase(), SHA.slice(0, 7)])('omits a check bound to a different SHA spelling %s', treeSha => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, treeSha });
+    const { latestCheckRun: _, ...withoutCheck } = expected;
+    expect(deliveryProjection(h.state, task)).toEqual(withoutCheck);
   });
 
   it('returns undefined with no evidence and preserves byte-identical task payloads', () => {
@@ -90,7 +131,7 @@ describe('deliveryProjection', () => {
     seed();
     h.state.checkRuns.set('check-2', { ...check, id: 'check-2', command: 'new', exitCode: 0 });
     h.state.checkRuns.set('check-z', { ...check, id: 'check-z', createdAt: undefined });
-    expect(deliveryProjection(h.state, task)).toEqual({ ...expected, latestCheckRun: { command: 'new', exitCode: 0 } });
+    expect(deliveryProjection(h.state, task)).toEqual({ ...expected, latestCheckRun: { command: 'new', exitCode: 0, source: 'runner-observed' } });
   });
 
   it('uses the candidate owning attempt, not a newer task attempt', () => {
@@ -152,7 +193,75 @@ describe('deliveryProjection', () => {
     h.state.checkRuns.set('check-0', { ...check, id: 'check-0', candidateId: newer.id, createdAt: '2026-09-14T00:00:00Z', exitCode: 5 });
     expect(deliveryProjection(h.state, task)).toEqual({
       currentCandidate: { ...expected.currentCandidate, id: newer.id },
-      latestCheckRun: { command: check.command, exitCode: 5 }, attemptPhase: 'finalizing',
+      latestCheckRun: { command: check.command, exitCode: 5, source: 'runner-observed' }, attemptPhase: 'finalizing',
+    });
+  });
+
+  it.each(['bogus', 42, null, undefined])('omits unrecognised check source %s and still serves the run', source => {
+    seed();
+    h.state.checkRuns.set(check.id, { ...check, source } as unknown as CheckRun);
+    expect(deliveryProjection(h.state, task)).toStrictEqual({ ...expected, latestCheckRun: { command: check.command, exitCode: -1 } });
+  });
+
+  describe('required check verdict', () => {
+    const GATE = 'node gate.cjs';
+    /** The qa_approve strict block: a gate the wrapper runs on every task, under local-branch. */
+    function strict(settings: Record<string, unknown> = {}): void {
+      h.state.project!.settings = {
+        ...h.state.project!.settings, autoCommit: true, qualityGate: GATE, qualityGateScope: 'everyTask',
+        deliveryPolicy: 'local-branch', ...settings,
+      } as never;
+    }
+    /** Projects `target` with check-1 rewritten as `run`: an exit-0, runner-observed run of the gate unless overridden. */
+    function latest(run: Partial<CheckRun>, target: Task = task): TaskDelivery | undefined {
+      seed();
+      h.state.checkRuns.set(check.id, { ...check, command: GATE, exitCode: 0, ...run });
+      return deliveryProjection(h.state, target);
+    }
+    const served = (run: Partial<CheckRun>, satisfied?: boolean) => ({
+      ...expected,
+      latestCheckRun: { command: run.command ?? GATE, exitCode: run.exitCode ?? 0, source: run.source ?? 'runner-observed' },
+      ...(satisfied === undefined ? {} : { requiredCheckSatisfied: satisfied }),
+    });
+
+    it.each<[string, Partial<CheckRun>, boolean]>([
+      ['an agent-reported pass of the gate', { source: 'agent-reported' }, false],
+      ['a runner-observed pass of another command', { command: 'node lint.cjs' }, false],
+      ['a runner-observed failure of the gate', { exitCode: 1 }, false],
+      ['a runner-observed pass of the gate', {}, true],
+      ['a runner-observed pass of the gate, padded as the ps1 wrapper records it', { command: `  ${GATE} ` }, true],
+    ])('serves %s with its source and the policy verdict', (_, run, satisfied) => {
+      strict();
+      expect(latest(run)).toStrictEqual(served(run, satisfied));
+    });
+
+    it('still counts the gate when a later non-gate run fails', () => {
+      strict();
+      seed();
+      h.state.checkRuns.set(check.id, { ...check, command: GATE, exitCode: 0 });
+      h.state.checkRuns.set('check-2', { ...check, id: 'check-2', command: 'node lint.cjs', exitCode: 1, createdAt: '2026-09-13T02:00:00Z' });
+      expect(deliveryProjection(h.state, task)).toStrictEqual(served({ command: 'node lint.cjs', exitCode: 1 }, true));
+    });
+
+    it.each<[string, Record<string, unknown>]>([
+      ['the legacy default policy, even with a gate configured', { deliveryPolicy: undefined }],
+      ['autoCommit=false, where the wrapper runs no gate', { autoCommit: false }],
+      ['a whitespace-only qualityGate', { qualityGate: '   ' }],
+      ['an unrecognised deliveryPolicy, without throwing', { deliveryPolicy: 'local-brnach' }],
+    ])('omits the verdict under %s', (_, settings) => {
+      strict(settings);
+      expect(latest({ source: 'agent-reported' })).toStrictEqual(served({ source: 'agent-reported' }));
+    });
+
+    it.each<[string, unknown, Record<string, unknown>, Partial<CheckRun>, boolean | undefined]>([
+      ['no check owed at DONE, though a gate is configured now', null, {}, { source: 'agent-reported' }, undefined],
+      ['an unreadable snapshot', 42, {}, {}, false],
+      ['a snapshotted gate that passed, though the gate was removed since', GATE, { qualityGate: '' }, {}, true],
+      ['a snapshotted gate with only an agent-reported pass', GATE, {}, { source: 'agent-reported' }, false],
+    ])('judges a DONE task by its requiredCheckAtDone snapshot: %s', (_, requiredCheckAtDone, settings, run, satisfied) => {
+      strict(settings);
+      const done = { ...task, status: 'DONE', requiredCheckAtDone } as unknown as Task;
+      expect(latest(run, done)).toStrictEqual(served(run, satisfied));
     });
   });
 
@@ -191,7 +300,7 @@ describe('deliveryProjection', () => {
       expect(snapshot.payload.tasks[0]).toEqual({ ...task, delivery: expected });
       h.state.checkRuns.set('check-2', { ...check, id: 'check-2', exitCode: 0 });
       expect(JSON.parse(await update())).toEqual({
-        type: 'TASK_UPDATED', payload: { ...task, delivery: { ...expected, latestCheckRun: { command: check.command, exitCode: 0 } } },
+        type: 'TASK_UPDATED', payload: { ...task, delivery: { ...expected, latestCheckRun: { command: check.command, exitCode: 0, source: 'runner-observed' } } },
       });
       expect(h.state.tasks.get(task.id)).toBe(task);
       expect(task).not.toHaveProperty('delivery');

@@ -34,13 +34,11 @@ import type { CheckRun, CheckRunSource } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
-import { getCandidate } from './candidateStore.js';
+import { caseVariantId, getCandidate, renderGot, SHA_RE } from './candidateStore.js';
 
 /** The most output a check run keeps: the END of the log, counted in UTF-8 BYTES, not characters. */
 export const MAX_CHECK_LOG_BYTES = 16384;
 
-/** The sha shape candidateStore and tools/recordCommit.ts accept (7-40 hex) — deliberately the same one. */
-const SHA_RE = /^[0-9a-f]{7,40}$/i;
 /** The bound complete_task already puts on a verification command. */
 const MAX_COMMAND_CHARS = 500;
 /** The only two sources a report may declare. A third value is refused, never coerced or defaulted. */
@@ -74,15 +72,6 @@ export interface RecordCheckRunResult {
 }
 
 type RawCheckRunParams = { [K in keyof RecordCheckRunParams]?: unknown };
-
-/** Bounded rendering of an untrusted value: it cannot throw and cannot flood a message. */
-function renderGot(value: unknown): string {
-  if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
-  const text = kind === 'string' ? JSON.stringify(value) : String(value);
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
-}
 
 /** Absent (undefined or null) is MISSING_REQUIRED; present but not a string is INVALID_INPUT. */
 function requireString(field: string, value: unknown): string {
@@ -265,8 +254,9 @@ function replayOrRefuse(stored: CheckRun, incoming: ValidCheckRunParams): CheckR
  * Record a check run. In this order, and every refusal writes nothing: validate
  * and normalize without coercing; require the candidate (CANDIDATE_NOT_FOUND);
  * require its exact tree (CHECK_RUN_TREE_MISMATCH); replay or refuse a same-id
- * report (CHECK_RUN_IMMUTABLE); then persist BEFORE publishing. createdAt is the
- * daemon's clock, never the caller's. A failed write propagates to the caller.
+ * report (CHECK_RUN_IMMUTABLE); refuse an id that differs from a stored one only
+ * by case (CHECK_RUN_ID_CASE_COLLISION); then persist BEFORE publishing. createdAt
+ * is the daemon's clock, never the caller's. A failed write propagates to the caller.
  */
 export async function recordCheckRun(
   state: StateManager,
@@ -277,6 +267,18 @@ export async function recordCheckRun(
   const id = input.id ?? generateId('check');
   const stored = state.checkRuns.get(id);
   if (stored) return { checkRun: replayOrRefuse(stored, input), duplicate: true };
+  const existing = caseVariantId(state.checkRuns.keys(), id);
+  if (existing) {
+    throw new MoeError(
+      MoeErrorCode.STATE_CONFLICT,
+      `Check run id ${id} differs only by case from the existing check run ${existing}; each record is one file ` +
+        '(<id>.json), and NTFS and a default APFS volume treat those two names as the same file, so recording this ' +
+        'one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, and ' +
+        'references match it exactly.',
+      { checkRunId: existing, requestedId: id },
+      'CHECK_RUN_ID_CASE_COLLISION'
+    );
+  }
 
   const checkRun: CheckRun = {
     id,

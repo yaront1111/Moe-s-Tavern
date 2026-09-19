@@ -408,6 +408,47 @@ describe('moe.complete_task', () => {
     // Step 2 should fall back to affectedFiles
     expect(result.stats.filesModified).toContain('fallback.ts');
   });
+
+  // A supplied workerId on an unassigned row is refused before the REVIEW write.
+  // The old guard no-oped here, so the row went to REVIEW and touchWorker set the
+  // caller IDLE with currentTaskId null although it never claimed the row.
+  it('refuses a worker that never claimed the unassigned row and leaves task and worker untouched', async () => {
+    await h.state.createWorker({
+      id: 'worker-x',
+      type: 'CLAUDE',
+      projectId: 'proj-test',
+      epicId: 'epic-1',
+      currentTaskId: 'task-other',
+      status: 'CODING',
+    });
+
+    const call = completeTaskTool(h.state).handler(
+      { taskId: 'task-1', workerId: 'worker-x', verification: { command: 'npm test', exitCode: 0 }, summary: 's' },
+      h.state
+    );
+    await expect(call).rejects.toMatchObject({
+      code: MoeErrorCode.STATE_CONFLICT,
+      codeName: 'TASK_NOT_CLAIMED',
+      context: {
+        retryable: true,
+        nextAction: {
+          tool: 'moe.claim_next_task',
+          args: { taskId: 'task-1', statuses: ['WORKING'], workerId: 'worker-x' },
+        },
+      },
+    });
+
+    const task = h.state.getTask('task-1')!;
+    expect(task.status).toBe('WORKING');
+    expect(task.assignedWorkerId).toBeNull();
+    expect(task.verification).toBeUndefined();
+    expect(task.reviewStartedAt).toBeUndefined();
+    expect(task.completionSummary).toBeUndefined();
+    expect(task.filesModified).toBeUndefined();
+    const worker = h.state.getWorker('worker-x')!;
+    expect(worker.status).toBe('CODING');
+    expect(worker.currentTaskId).toBe('task-other');
+  });
 });
 
 

@@ -31,11 +31,17 @@ export const STEP_LEASE_HELD = 'STEP_LEASE_HELD';
  * An attempt is still in the `finalizing` phase. complete_task hands the task to
  * QA but deliberately leaves that attempt OPEN, because the bytes are only
  * landed once the session exits and the wrapper commits them — so the boundary
- * is NOT closed until moe.finalize_attempt acknowledges it. Two callers refuse
- * on it, with deliberately different scopes: claim_next_task refuses THIS
- * WORKER's next claim (starting task B would open a second attempt across the
- * first), and qa_approve refuses an approval of THAT TASK (a fast QA would
- * otherwise reach DONE before the runner had landed a byte).
+ * is NOT closed until moe.finalize_attempt acknowledges it. The refusers, with
+ * deliberately different scopes:
+ * - claim_next_task refuses THIS WORKER's next claim (starting task B would
+ *   open a second attempt across the first);
+ * - claim_next_task and wait_for_task refuse or skip THAT TASK for every other
+ *   seat (util/claimEligibility.ts, with its own message for the refused seat);
+ * - qa_approve refuses an approval of THAT TASK (a fast QA would otherwise
+ *   reach DONE before the runner had landed a byte);
+ * - taskStore.updateTask refuses a move of THAT TASK into DONE or ARCHIVED
+ *   (nothing claims a terminal row, so the hold would never end), and
+ *   archive_epic checks every task of the epic up front so it stays atomic.
  *
  * THROWN, and the retryable rail is carried by `context.retryable: true` rather
  * than by the shape of the response. A wrapper reads that flag to decide the
@@ -84,8 +90,17 @@ export interface FinalizingAttemptRef {
 }
 
 /**
- * The refusal both holds raise. A STATE_CONFLICT, not a permission failure: the
+ * The HOLDER's refusal. Its one caller is claim_next_task's own-worker hold: the
+ * only refused caller whose own runner closes the boundary, so the only one this
+ * message may tell to finalize. A STATE_CONFLICT, not a permission failure: the
  * caller is entitled to do this, just not yet.
+ *
+ * Two sibling builders raise the same envelope in a non-holder's voice:
+ * - nonHolderFinalizingRefusal below, for qa_approve and for taskStore's
+ *   DONE/ARCHIVED guard (set_task_status, archive_task and archive_epic all
+ *   reach it);
+ * - claimEligibility.foreignFinalizingRefusal, for another seat's claim of the
+ *   held row.
  *
  * Takes the attempt fields as arguments rather than a StateManager on purpose —
  * this module has no state import today and must stay a pure guard module, so
@@ -98,6 +113,40 @@ export function attemptFinalizingRefusal(attempt: FinalizingAttemptRef): MoeErro
       `${attempt.generation}) on task ${attempt.taskId} in phase finalizing: its bytes are not ` +
       'landed yet. Close the boundary with moe.finalize_attempt, then retry — this is a ' +
       'RETRYABLE refusal (context.retryable), NOT a fatal error.',
+    {
+      attemptId: attempt.attemptId,
+      generation: attempt.generation,
+      taskId: attempt.taskId,
+      workerId: attempt.workerId,
+      retryable: true,
+    },
+    ATTEMPT_FINALIZING
+  );
+}
+
+/**
+ * The refusal for a caller that does NOT hold the landing: an approver, or
+ * anyone moving the task into DONE or ARCHIVED. `action` names what was refused.
+ *
+ * Why not the holder's refusal above: it tells its reader to close the boundary.
+ * A non-holder following that advice closes a LIVE runner's landing, so
+ * qa_approve reaches DONE before any byte lands, and under a quality gate the
+ * wrapper then finds no open attempt and parks the completion on a rescue ref
+ * that no pre-flight recovers, because a DONE task is never claimed again.
+ *
+ * Same envelope as attemptFinalizingRefusal; only the message differs. That
+ * message names the attempt, the wait and the escape, because MoeError.context
+ * is not forwarded over the MCP wire.
+ */
+export function nonHolderFinalizingRefusal(attempt: FinalizingAttemptRef, action: string): MoeError {
+  return new MoeError(
+    MoeErrorCode.STATE_CONFLICT,
+    `Task ${attempt.taskId} is held by worker ${attempt.workerId}'s attempt ${attempt.attemptId} ` +
+      `(generation ${attempt.generation}) in phase finalizing: its bytes are not landed yet, so ${action} ` +
+      'would finish it over work that has not landed. This is a RETRYABLE refusal (context.retryable), NOT ' +
+      "a fatal error: wait for that worker's runner to call moe.finalize_attempt. Do NOT close the boundary " +
+      'to get past this refusal — only once you have confirmed that runner is gone may a governor or human ' +
+      "close it with moe.finalize_attempt { taskId, attemptId, generation, outcome: 'failed' }.",
     {
       attemptId: attempt.attemptId,
       generation: attempt.generation,

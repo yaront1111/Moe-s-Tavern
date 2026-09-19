@@ -181,7 +181,7 @@ Key flags:
 
 ### Wrapper post-flight
 
-`moe-agent.sh` and `moe-agent.ps1` run a post-flight block after each agent CLI exit; it is the fleet's only git actor (the daemon is state-only and never runs git). Both wrappers stay in lock-step — same helper names, reason codes, banners and settings keys — and `scripts/tests/parity-check.{sh,ps1}` fails on any asymmetry. In order:
+`moe-agent.sh` and `moe-agent.ps1` run a post-flight block after each agent CLI exit; it is the fleet's only git actor (the daemon is state-only: it writes no git state and never lands, pushes or runs the gate). Both wrappers stay in lock-step — same helper names, reason codes, banners and settings keys — and `scripts/tests/parity-check.{sh,ps1}` fails on any asymmetry. In order:
 
 1. **Status**: `get_context { taskId }` by exact id (a failed lookup is loud — `[WARN]` + `PUSH-BLOCKED: post-flight status lookup failed …` in `#general` — and still lands a checkpoint with `status=UNKNOWN`), plus the epic-final lookup for the gate.
 2. **Mode**: `completion` for a worker at `REVIEW`/`DONE`; `checkpoint` for any other exit of a worker/architect/qa session that holds a task (`settings.checkpointCommits`, `MOE_DISABLE_CHECKPOINT`); `none` when `settings.autoCommit=false` (logged, never silent).

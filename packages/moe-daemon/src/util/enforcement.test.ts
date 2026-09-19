@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   assertWorkerOwns,
+  assertWorkerHoldsTask,
   assertContextFetched,
   assertAllStepsCompleted,
   assertAttemptCurrent,
+  TASK_NOT_CLAIMED,
   type AttemptIdentity,
 } from './enforcement.js';
 import { missingRequired, MoeError, MoeErrorCode, notAllowed, notFound } from './errors.js';
@@ -606,5 +608,74 @@ describe('existing guards are unchanged by the attempt fence', () => {
       MoeErrorCode.NOT_ALLOWED,
       'NOT_ALLOWED'
     );
+  });
+});
+
+// The execution tools (start_step, complete_step, complete_task) refuse a caller
+// that never claimed an unassigned row; assertWorkerOwns keeps its no-op for the
+// other callers (pinned above by 'assertWorkerOwns still no-ops on an unassigned task').
+describe('assertWorkerHoldsTask', () => {
+  it('refuses a supplied workerId on an unassigned task with a retryable STATE_CONFLICT naming the claim', () => {
+    const err = expectMoeError(
+      () => assertWorkerHoldsTask(makeTask({ assignedWorkerId: null }), 'worker-x', 'moe.start_step'),
+      MoeErrorCode.STATE_CONFLICT,
+      'TASK_NOT_CLAIMED'
+    );
+    expect(TASK_NOT_CLAIMED).toBe('TASK_NOT_CLAIMED');
+    expect(err.context).toEqual({
+      taskId: 'task-1',
+      workerId: 'worker-x',
+      retryable: true,
+      nextAction: {
+        tool: 'moe.claim_next_task',
+        args: { taskId: 'task-1', statuses: ['WORKING'], workerId: 'worker-x' },
+        reason: expect.any(String),
+      },
+    });
+    expect(err.message).toContain('moe.claim_next_task');
+    expect(err.message).toContain('task-1');
+    expect(err.message).toContain('moe.start_step');
+  });
+
+  it('renders a bare tool name with the moe. prefix in the refusal message', () => {
+    const err = expectMoeError(
+      () => assertWorkerHoldsTask(makeTask({ assignedWorkerId: null }), 'worker-x', 'complete_step'),
+      MoeErrorCode.STATE_CONFLICT,
+      'TASK_NOT_CLAIMED'
+    );
+    expect(err.message).toContain('moe.complete_step');
+  });
+
+  it('keeps the legacy tolerance for a missing or empty workerId on an unassigned task', () => {
+    const unassigned = makeTask({ assignedWorkerId: null });
+    expect(() => assertWorkerHoldsTask(unassigned, undefined, 'moe.start_step')).not.toThrow();
+    expect(() => assertWorkerHoldsTask(unassigned, '', 'moe.start_step')).not.toThrow();
+  });
+
+  it('accepts the worker the task is assigned to', () => {
+    expect(() =>
+      assertWorkerHoldsTask(makeTask({ assignedWorkerId: 'worker-x' }), 'worker-x', 'moe.start_step')
+    ).not.toThrow();
+  });
+
+  it('refuses a different worker with NOT_ALLOWED, exactly as assertWorkerOwns does', () => {
+    const err = expectMoeError(
+      () => assertWorkerHoldsTask(makeTask({ assignedWorkerId: 'worker-a' }), 'worker-b', 'moe.start_step'),
+      MoeErrorCode.NOT_ALLOWED,
+      'NOT_ALLOWED'
+    );
+    expect(err.context).toEqual({ taskId: 'task-1', owner: 'worker-a', caller: 'worker-b' });
+  });
+
+  it('tolerates an omitted workerId on an assigned task through the legacy warning path', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const claimed = makeTask({ id: 'task-holds-legacy', assignedWorkerId: 'worker-a' });
+      expect(() => assertWorkerHoldsTask(claimed, undefined, 'moe.start_step')).not.toThrow();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toEqual({ taskId: 'task-holds-legacy', tool: 'moe.start_step' });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

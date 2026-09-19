@@ -3,6 +3,7 @@ import type { Task, TaskVerification } from '../types/schema.js';
 // state layer in at runtime and no import cycle can form through it.
 import type { StateManager } from '../state/StateManager.js';
 import { currentAttempt, listAttempts, MAX_ATTEMPT_GENERATION } from '../state/attemptStore.js';
+import { renderGot } from '../state/candidateStore.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from './errors.js';
 import { logger } from './logger.js';
 
@@ -53,6 +54,48 @@ export function assertWorkerOwns(task: Task, workerId: string | undefined, toolN
   );
 }
 
+/** codeName of assertWorkerHoldsTask's refusal: a workerId was supplied on a row nobody claimed. */
+export const TASK_NOT_CLAIMED = 'TASK_NOT_CLAIMED';
+
+/**
+ * assertWorkerOwns, strict about an unassigned row, for the execution tools
+ * (start_step, complete_step, complete_task). On 2026-09-13 both ownership guards
+ * returned early on an unassigned WORKING row, so start_step stamped
+ * worker-c8e523ea CODING with a currentTaskId for a row it never claimed and no
+ * attempt was opened. assertWorkerOwns keeps its unassigned no-op on purpose:
+ * report_blocked (a seat-freeing path), submit_plan, qa_approve/qa_reject,
+ * request_replan, acquire_resource and wait_for_resource rely on it.
+ *
+ * STATE_CONFLICT, not NOT_ALLOWED: the caller becomes entitled once it claims (the
+ * claimGuards.ts ATTEMPT_* convention). A missing or empty workerId stays on the
+ * legacy path. statuses is ['WORKING'] because every caller has already refused a
+ * non-WORKING row, and the message names the claim call because MoeError.context
+ * never crosses MCP.
+ */
+export function assertWorkerHoldsTask(task: Task, workerId: string | undefined, toolName = 'unknown'): void {
+  if (workerId && !task.assignedWorkerId) {
+    const tool = displayToolName(toolName);
+    throw new MoeError(
+      MoeErrorCode.STATE_CONFLICT,
+      `Task ${task.id} is not claimed by any worker, so ${workerId} cannot call ${tool} on it. ` +
+        `Claim it first with moe.claim_next_task { taskId: "${task.id}", statuses: ["WORKING"] }, then retry — ` +
+        'this is a RETRYABLE refusal (context.retryable), NOT a fatal error.',
+      {
+        taskId: task.id,
+        workerId,
+        retryable: true,
+        nextAction: {
+          tool: 'moe.claim_next_task',
+          args: { taskId: task.id, statuses: ['WORKING'], workerId },
+          reason: `Claim task ${task.id}, then retry ${tool} (call moe.get_context first if you have not fetched it).`,
+        },
+      },
+      TASK_NOT_CLAIMED
+    );
+  }
+  assertWorkerOwns(task, workerId, toolName);
+}
+
 // =============================================================================
 // Attempt fencing
 // =============================================================================
@@ -85,15 +128,6 @@ function firstAttemptNotice(key: string): boolean {
   return true;
 }
 
-/** Bounded rendering of an untrusted value that cannot throw (no String() on objects). */
-function renderUntrusted(value: unknown): string {
-  if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
-  const text = kind === 'string' ? JSON.stringify(value) : String(value);
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
-}
-
 /**
  * Refuse a malformed token, never coerce it (the plan-revision token rule). Checks
  * are `!== undefined`, not truthiness: generation 0 and attemptId '' are falsy but
@@ -104,7 +138,7 @@ function validateAttemptIdentity(identity: AttemptIdentity): AttemptIdentity {
   const { attemptId, generation } = identity;
   if (attemptId !== undefined) {
     if (typeof attemptId !== 'string' || attemptId.trim() === '') {
-      const got = renderUntrusted(attemptId);
+      const got = renderGot(attemptId);
       throw invalidInput('attemptIdentity.attemptId', `must be a non-blank string (got ${got})`);
     }
     validated.attemptId = attemptId;
@@ -114,7 +148,7 @@ function validateAttemptIdentity(identity: AttemptIdentity): AttemptIdentity {
     // attemptStore refuses a stored value below 1.
     const inDomain = typeof generation === 'number' && Number.isSafeInteger(generation);
     if (!inDomain || generation < 1 || generation > MAX_ATTEMPT_GENERATION) {
-      const got = renderUntrusted(generation);
+      const got = renderGot(generation);
       throw invalidInput('attemptIdentity.generation', `must be a positive safe integer (got ${got})`);
     }
     validated.generation = generation;

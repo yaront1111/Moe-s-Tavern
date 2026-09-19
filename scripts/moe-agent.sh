@@ -118,6 +118,7 @@ cleanup_temp() {
     if [ "$(type -t stop_heartbeat_sidecar)" = "function" ]; then
         stop_heartbeat_sidecar
     fi
+    if [ "$(type -t finish_gate_observation)" = function ]; then finish_gate_observation || true; fi
     # Teardown rescue BEFORE deregister: if this session holds a task with a
     # baseline and never completed a landing (Ctrl+C mid-CLI, set -e abort),
     # park its edits on refs/moe/rescue/<taskId>/<ts> so a peer re-claiming
@@ -126,6 +127,18 @@ cleanup_temp() {
     if [ "$(type -t teardown_rescue)" = "function" ]; then
         teardown_rescue || true
     fi
+    # Finalize BEFORE deregister, on every exit that holds a task: a completed
+    # post-flight already acknowledged its own landing (idempotent), and
+    # teardown_rescue above leaves LAND_OUTCOME/LAND_RESCUE_SHA describing what
+    # THIS exit did with the bytes. Only a pinned finalizing attempt is
+    # acknowledged -- a running or closed one stays silent -- so a plain Ctrl+C
+    # mid-CLI still sends nothing. Same order as the ps1 twin's outer finally,
+    # and it must stay ahead of the deregister below: deregister_worker closes
+    # this seat's finalizing attempts, which would swallow the outcome.
+    if [ "$(type -t finalize_postflight)" = function ]; then
+        finalize_postflight || true
+    fi
+    if [ "$(type -t cleanup_gate_workspace)" = function ]; then cleanup_gate_workspace || true; fi
     # Drop this session's live-session marker. This is the union of BOTH
     # abnormal exit paths -- the INT/TERM trap ends in `exit 0`, which fires
     # this EXIT trap -- so a Ctrl+C, a window close through SIGTERM or a
@@ -324,6 +337,12 @@ if [ "$LOOP_REQUESTED" = true ] && [ "$NO_LOOP" = true ]; then
     exit 2
 fi
 
+# Create the temp dir in THIS shell before any `$(create_secure_temp)` subshell
+# runs, or each subshell makes its own dir that cleanup_temp never sees. Kept
+# below the option parser on purpose: --help and bad options exit without one,
+# which a minimal GUI-launch PATH with no mktemp relies on (agent-runtime.test.mjs).
+create_secure_temp >/dev/null
+
 # Validate role
 if [[ ! "$ROLE" =~ ^(architect|worker|qa|governor)$ ]]; then
     echo -e "${RED}Invalid role: $ROLE${NC}"
@@ -339,6 +358,15 @@ COMMAND_BIN=""
 COMMAND_ARGV=()
 parse_command_into_argv() {
     local line="$1"
+    # A string that names an existing path is one binary, spaces and all
+    # ("/opt/my tools/claude"). Same rule as the ps1 twin's
+    # Resolve-CommandParts, which splits -Command only when the whole string
+    # is not an existing path; shlex below would cut it at every space.
+    if [ -e "$line" ]; then
+        COMMAND_BIN="$line"
+        COMMAND_ARGV=()
+        return 0
+    fi
     local python_bin="${PYTHON_CMD:-python3}"
     if command -v "$python_bin" &> /dev/null; then
         # \x1f-separated so argv elements containing whitespace survive read.
@@ -1814,14 +1842,14 @@ moe_rpc() {
     local args_json="${2:-}"
     if [ -z "$args_json" ]; then args_json='{}'; fi
     local rpc
-    rpc=$($PYTHON_CMD -c "
+    rpc=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c "
 import json, sys
 tool = sys.argv[1]
-args = json.loads(sys.argv[2]) if sys.argv[2] else {}
+args = json.load(sys.stdin)
 if not tool.startswith('moe.'):
     tool = 'moe.' + tool
 print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':tool,'arguments':args}}))
-" "$tool" "$args_json" 2>/dev/null) || return 1
+" "$tool" 2>/dev/null <<< "$args_json") || return 1
 
     local raw=""
     if [ -n "${TEAM_PROXY:-}" ]; then
@@ -1832,7 +1860,7 @@ print(json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':
         return 1
     fi
 
-    $PYTHON_CMD -c "
+    PYTHONIOENCODING=utf-8 $PYTHON_CMD -c "
 import json, sys
 raw = sys.stdin.read().strip()
 if not raw:
@@ -1850,6 +1878,8 @@ for line in reversed(raw.split('\n')):
         sys.exit(1)
     if 'result' in d:
         r = d['result']
+        if isinstance(r, dict) and r.get('isError') is True:
+            sys.stderr.write('MCP daemon refusal\\n'); sys.exit(1)
         if isinstance(r, dict) and 'content' in r:
             for c in r['content']:
                 if c.get('type') == 'text':
@@ -1859,6 +1889,258 @@ for line in reversed(raw.split('\n')):
         sys.exit(0)
 sys.exit(1)
 " <<< "$raw"
+}
+
+
+# Candidate evidence is pinned outside the CLI's mutable context projection.
+# Reading the existing store does not claim, repair or write an attempt.
+moe_attempt_read() {
+    $PYTHON_CMD - "$PROJECT" "$WORKER_ID" "$PREFLIGHT_TASK_ID" "$1" "$2" <<'PY'
+import glob,json,os,re,sys
+project,worker,task,aid,generation=sys.argv[1:]
+try:
+    records=[json.load(open(p,encoding='utf-8-sig')) for p in glob.glob(os.path.join(project,'.moe','attempts','*.json'))]
+    records=[a for a in records if a.get('taskId')==task]
+    opened=[a for a in records if a.get('phase')!='closed']
+    if len(opened)!=1: raise ValueError('ambiguous or missing open attempt')
+    a=opened[0]; g=a.get('generation')
+    if a.get('workerId')!=worker or type(g)!=int or not 0<g<=9007199254740991: raise ValueError('identity')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a.get('id','')): raise ValueError('id')
+    if a.get('phase') not in ('running','finalizing'): raise ValueError('phase')
+    if aid and (a['id']!=aid or str(g)!=generation): raise ValueError('stale identity')
+    print(json.dumps(a))
+except Exception as e:
+    sys.stderr.write('Attempt identity unavailable: '+str(e)+'\n'); sys.exit(1)
+PY
+}
+
+pin_attempt_identity() {
+    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
+    local pinned tokens
+    tokens=$($PYTHON_CMD -c '
+import json,re,sys
+c=json.load(sys.stdin); a=c.get("attemptId"); g=c.get("generation")
+if a is None and g is None and c.get("alreadyAssigned"): print("resume"); sys.exit(0)
+if not isinstance(a,str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}",a): sys.exit(1)
+if type(g)!=int or not 0<g<=9007199254740991: sys.exit(1)
+print(a+" "+str(g))
+' <<< "$CLAIM_RESULT") || return 1
+    if [ "$tokens" = resume ]; then
+        pinned=$(moe_attempt_read "" "") || return 1
+        tokens=$($PYTHON_CMD -c 'import json,sys;a=json.load(sys.stdin);print(a["id"]+" "+str(a["generation"]))' <<< "$pinned") || return 1
+    fi
+    read -r MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION <<< "$tokens"
+    moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" >/dev/null
+}
+
+moe_evidence_rpc() {
+    local tool="$1" args="$2" tries="${3:-1}" result n
+    local expected="$SECURE_TEMP_DIR/evidence-expected.json" reply="$SECURE_TEMP_DIR/evidence-reply.json"
+    printf '%s' "$args" > "$expected" || return 1
+    for ((n=1;n<=tries;n++)); do
+        if result=$(moe_rpc "$tool" "$args"); then
+            printf '%s' "$result" > "$reply" || return 1
+            if $PYTHON_CMD - "$tool" "$expected" "$reply" <<'PY'
+import json,sys
+try:
+    tool,p,r=sys.argv[1:]; p=json.load(open(p,encoding='utf-8')); r=json.load(open(r,encoding='utf-8'))
+    assert isinstance(r,dict) and r.get('success') is True
+    if tool=='finalize_attempt':
+        assert r.get('phase')=='closed'
+        keys=('taskId','attemptId','generation','outcome','landedRevision'); record=r
+    else:
+        record=r.get({'record_candidate':'candidate','record_delivery_receipt':'receipt'}.get(tool,'checkRun'))
+        keys=[k for k in p if k not in ('workerId','generation')]
+        assert isinstance(record,dict) and isinstance(r.get('duplicate'),bool)
+    assert all(record.get(k)==p.get(k) and type(record.get(k))==type(p.get(k)) for k in keys)
+except Exception:
+    sys.exit(1)
+PY
+            then return 0; fi
+            echo "[WARN] $tool invalid payload acknowledgement; not persisted evidence." >&2
+        else
+            echo "[WARN] $tool transport failure or daemon refusal; not persisted evidence." >&2
+        fi
+    done
+    return 1
+}
+
+# Candidate evidence needs this seat's CURRENT attempt. When the pinned attempt is
+# missing, closed or superseded by another claim, or parked, no gate result can
+# be bound to it: GATE_EVIDENCE_UNAVAILABLE tells the landing to park the frozen
+# bytes without running the gate and without announcing a gate failure.
+record_candidate_rpc() {
+    local args detail
+    GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
+    if [ -z "$MOE_ATTEMPT_ID" ] || [ -z "$MOE_ATTEMPT_GENERATION" ]; then
+        GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="no pinned attempt identity"; return 1
+    fi
+    if ! detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then
+        GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="${detail:-attempt not current}"; return 1
+    fi
+    args=$($PYTHON_CMD -c '
+import json,sys
+t,a,g,w,c,b,s,r=sys.argv[1:]
+print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,id=c,baseRevision=b,treeSha=s,deliveryTarget=r)))
+' "$LAND_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$FROZEN_CANDIDATE_ID" "$FROZEN_BASE_REVISION" "$FROZEN_TREE" "refs/heads/$LAND_BRANCH") || return 1
+    moe_evidence_rpc record_candidate "$args" && return 0
+    # A claim can supersede the attempt between the read above and the RPC.
+    if ! detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then
+        GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="${detail:-attempt not current}"
+    fi
+    return 1
+}
+
+record_check_run_rpc() {
+    local args
+    args=$($PYTHON_CMD - "$FROZEN_CANDIDATE_ID" "$FROZEN_TREE" "$QUALITY_GATE" "$GATE_RC" "$MOE_RUNNER_ID" "$GATE_CHECK_ID" "$GATE_LOG" "$WORKER_ID" <<'PY'
+import json,sys
+c,t,command,rc,runner,cid,log,worker=sys.argv[1:]
+with open(log,'rb') as f:
+    f.seek(0,2); f.seek(max(0,f.tell()-16384)); b=f.read(16384)
+while b and b[0]&0xc0==0x80: b=b[1:]
+tail=b.decode('utf-8','replace').encode('utf-8')[-16384:].decode('utf-8','ignore')
+print(json.dumps(dict(id=cid,candidateId=c,treeSha=t,command=command,exitCode=int(rc),
+    runnerId=runner,source='runner-observed',outputTail=tail,workerId=worker)))
+PY
+    ) || return 1
+    moe_evidence_rpc record_check_run "$args"
+}
+
+# The post-flight acknowledges only this seat's own FINALIZING attempt, under the
+# identity pinned at claim time. A closed, running, reconciling, missing or
+# no-longer-matching attempt is nothing to acknowledge: no RPC, and the loop
+# goes on. A finalizing attempt with no pinned identity is never acknowledged,
+# and it stops the loop, as an exhausted acknowledgement does: the daemon
+# refuses this seat's next claim while an attempt of it is finalizing.
+finalize_attempt_rpc() {
+    [ "$ROLE" = worker ] && [ -n "${PREFLIGHT_TASK_ID:-}" ] || return 0
+    local outcome="$1" sha="${2:-}" phase ids args
+    if [ -z "${MOE_ATTEMPT_ID:-}" ] || [ -z "${MOE_ATTEMPT_GENERATION:-}" ]; then
+        ids=$(moe_seat_finalizing_attempts) || ids=""
+        if [ -n "$ids" ]; then
+            echo "[WARN] finalize refused: finalizing attempt $ids on task $PREFLIGHT_TASK_ID has no pinned identity; not acknowledging." >&2
+            return 1
+        fi
+        echo "[finalize] no finalizing attempt for this seat on task $PREFLIGHT_TASK_ID; nothing to acknowledge."
+        return 0
+    fi
+    phase=$(moe_pinned_attempt_phase)
+    case "$phase" in
+        finalizing) ;;
+        closed|running) return 0 ;;
+        *) echo "[finalize] no finalizing attempt for this seat on task $PREFLIGHT_TASK_ID; nothing to acknowledge."; return 0 ;;
+    esac
+    args=$($PYTHON_CMD -c '
+import json,sys
+t,a,g,w,r,o,s=sys.argv[1:]
+p=dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome=o)
+if o=="landed": p["landedRevision"]=s
+print(json.dumps(p))
+' "$PREFLIGHT_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$MOE_RUNNER_ID" "$outcome" "$sha") || return 1
+    if moe_evidence_rpc finalize_attempt "$args" 3; then return 0; fi
+    echo "[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect)." >&2
+    return 1
+}
+
+# Phase of the pinned attempt record; "mismatch" when the file is missing,
+# unreadable or no longer carries this seat's exact identity. Optional
+# ATTEMPT_ID TASK_ID GENERATION WORKER name an identity pinned elsewhere (a
+# receipt journal, whose worker may be another seat).
+moe_pinned_attempt_phase() {
+    $PYTHON_CMD - "$PROJECT" "${1:-$MOE_ATTEMPT_ID}" "${2:-$PREFLIGHT_TASK_ID}" "${4:-$WORKER_ID}" "${3:-$MOE_ATTEMPT_GENERATION}" <<'PY' 2>/dev/null || echo mismatch
+import json,os,sys
+project,aid,task,worker,generation=sys.argv[1:]
+try:
+    a=json.load(open(os.path.join(project,'.moe','attempts',aid+'.json'),encoding='utf-8-sig'))
+    g=a.get('generation')
+    same=a.get('id')==aid and a.get('taskId')==task and a.get('workerId')==worker and type(g)==int and str(g)==generation
+    print(a['phase'] if same and isinstance(a.get('phase'),str) else 'mismatch')
+except Exception:
+    print('mismatch')
+PY
+}
+
+# This seat's finalizing attempts on the task (space-separated ids). A sibling
+# file that cannot be parsed is skipped, never fatal.
+moe_seat_finalizing_attempts() {
+    $PYTHON_CMD - "$PROJECT" "$PREFLIGHT_TASK_ID" "$WORKER_ID" <<'PY'
+import glob,json,os,sys
+project,task,worker=sys.argv[1:]
+ids=[]
+for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
+    try:
+        a=json.load(open(p,encoding='utf-8-sig'))
+    except Exception:
+        continue
+    if isinstance(a,dict) and a.get('taskId')==task and a.get('workerId')==worker and a.get('phase')=='finalizing':
+        ids.append(str(a.get('id')))
+print(' '.join(ids))
+PY
+}
+
+# moe_reattach TASK_ID ATTEMPT_ID GENERATION -- a daemon restart parked this
+# seat's attempt in `reconciling`: present its id and generation with THIS
+# process's identity so it runs again instead of being given up after the
+# reconcile window. 0 running again; 1 refused, which never heals (the same
+# values are refused again), so callers stop asking; 2 no usable answer, ask
+# again later. One line either way, and it never fails its caller.
+# Twin: Invoke-MoeReattach.
+moe_reattach() {
+    local args out rc=0 verdict
+    args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,p,h=sys.argv[1:];print(json.dumps(dict(taskId=t,workerId=w,runnerId=r,attemptId=a,generation=int(g),processStartedAt=p,host=h)))' \
+        "$1" "$2" "$3" "$WORKER_ID" "$MOE_RUNNER_ID" "$MOE_PROCESS_STARTED_AT" "$MOE_HOST" 2>/dev/null) || return 2
+    out=$(moe_rpc reattach_attempt "$args" 2>&1) || rc=$?
+    verdict=$($PYTHON_CMD -c '
+import json,sys
+rc,out=sys.argv[1:]
+try: d=json.loads(out)
+except Exception: d=None
+d=d if isinstance(d,dict) else {}
+data=d.get("data") if isinstance(d.get("data"),dict) else {}
+if rc=="0" and d.get("success") is True and d.get("phase")=="running": print("running")
+elif rc!="0" and data.get("codeName"): print("refused "+str(data["codeName"]))
+else: print("none")
+' "$rc" "$out" 2>/dev/null) || verdict=none
+    case "$verdict" in
+        running) echo -e "${GREEN}[reattach]${NC} attempt $2 (generation $3) on task $1 is running again after a daemon restart."; return 0 ;;
+        refused\ *) echo -e "${YELLOW}[reattach]${NC} moe.reattach_attempt refused for attempt $2 (${verdict#refused }); not retrying it."; return 1 ;;
+    esac
+    echo -e "${YELLOW}[WARN]${NC} moe.reattach_attempt got no answer for attempt $2; retrying later."
+    return 2
+}
+
+# The main loop's half, for what the sidecar cannot see: the pre-flight (a
+# restart between two sessions leaves a resumed attempt parked, and the pin
+# would fail closed on it) and the moment the CLI exits (a restart inside a
+# session that ended before the sidecar's next ping). Every attempt this seat
+# owns in `reconciling` is reattached once; a refusal is remembered for the life
+# of this wrapper. Twin: Invoke-MoeReattachOwnAttempts.
+MOE_REATTACH_REFUSED=" "
+reattach_own_attempts() {
+    [ -n "$MOE_PROCESS_STARTED_AT" ] && [ -n "$PYTHON_CMD" ] || return 0
+    local parked tid aid gen rc
+    parked=$($PYTHON_CMD - "$PROJECT" "$WORKER_ID" <<'PY' 2>/dev/null
+import glob,json,os,re,sys
+project,worker=sys.argv[1:]
+safe=lambda v: isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',v)
+for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
+    try:
+        a=json.load(open(p,encoding='utf-8-sig'))
+        g=a.get('generation')
+        if a.get('workerId')==worker and a.get('phase')=='reconciling' and type(g)==int and 0<g<=9007199254740991 and safe(a.get('id')) and safe(a.get('taskId')):
+            print(a['taskId'],a['id'],g)
+    except Exception:
+        continue
+PY
+    ) || return 0
+    while read -r tid aid gen; do
+        [ -n "$gen" ] || continue
+        case "$MOE_REATTACH_REFUSED" in *" $aid "*) continue ;; esac
+        rc=0; moe_reattach "$tid" "$aid" "$gen" || rc=$?
+        [ "$rc" -ne 1 ] || MOE_REATTACH_REFUSED="$MOE_REATTACH_REFUSED$aid "
+    done <<< "$parked"
+    return 0
 }
 
 # The CLI invocation below blocks this process for the CLI's entire runtime
@@ -1887,12 +2169,29 @@ start_heartbeat_sidecar() {
     local wrapper_pid=$$
     (
         set +e
+        refused="" noted=" "
         end_time=$(( $(date +%s) + max_duration_sec ))
         while [ "$(date +%s)" -lt "$end_time" ]; do
             sleep "$interval_sec"
             # The wrapper that owns this job is gone: stop heartbeating for a dead seat.
             kill -0 "$wrapper_pid" 2>/dev/null || break
-            moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" >/dev/null 2>&1
+            reply=$(moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" 2>/dev/null) || continue
+            # A daemon restart parked the attempt this wrapper pinned at claim time:
+            # reattach it with the pinned generation (the answer carries none). Any
+            # other reason names nothing this process may reattach: say so once. A
+            # refusal never heals, so it is not asked again on every later ping.
+            case "$reply" in *reattachRequired*) ;; *) continue ;; esac
+            ask=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.stdin.read());print(str(d.get("reason") or "?")+" "+str(d.get("attemptId") or "-"))' <<< "$reply" 2>/dev/null) || continue
+            reason="${ask%% *}"
+            if [ "$reason" = attempt-reconciling ] && [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_PROCESS_STARTED_AT" ] && [ "${ask#* }" = "$MOE_ATTEMPT_ID" ]; then
+                [ -z "$refused" ] || continue
+                moe_reattach "$PREFLIGHT_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION"
+                [ $? -ne 1 ] || refused=1
+            else
+                case "$noted" in *" $reason "*) continue ;; esac
+                noted="$noted$reason "
+                echo "[reattach] heartbeat asks for reattachment ($reason) but this wrapper pinned no such reconciling attempt; nothing to reattach."
+            fi
         done
     ) &
     HEARTBEAT_PID=$!
@@ -2167,12 +2466,17 @@ git_dirty_snapshot() {
 }
 
 # ---- baseline TSV: header + B/U rows ----------------------------------------
-# `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1>` then
+# `#moe-baseline v1 task=<id> at=<iso> head=<sha> landed=<0|1> session=<sid>` then
 # `B\t<blob|D>\t<path>` rows (dirty state presumed foreign) and `U\t<blob>\t<path>`
-# rows (the locally persisted unattributed set). `landed=1` marks a session that
-# ended with a completed landing so the next pre-flight does not replay a
-# recovery checkpoint for nothing; absent (a twin that does not write it) means
-# "recover". Written .tmp + rename.
+# rows (the locally persisted unattributed set). `session` is the Moe-Session id
+# (<workerId>@<pre-flight UTC second>) of the pre-flight that took this baseline.
+# `landed=1` marks that session's completed landing so the next pre-flight does
+# not replay a recovery checkpoint for nothing; absent (a twin that does not
+# write it) means "recover". Only three writers may put landed=1: that session's
+# own landing, a recovery landing, or a landing that found no baseline
+# (baseline_landed_flag). A header with no session= (older twin) belongs to
+# nobody. Written .tmp + rename. Twin: Read-MoeBaseline /
+# Get-MoeBaselineLandedFlag.
 baseline_path() {
     printf '%s/moe/baseline/%s.tsv' "$MOE_GITDIR" "$1"
 }
@@ -2199,12 +2503,12 @@ baseline_landed() { # $1 taskId -- 0 when the header says landed=1
     head -n1 "$f" 2>/dev/null | grep -q ' landed=1' 2>/dev/null
 }
 
-baseline_write() { # $1 taskId, $2 head, $3 B rows file, $4 U rows file, $5 landed(0|1)
+baseline_write() { # $1 taskId, $2 head, $3 B rows file, $4 U rows file, $5 landed(0|1), $6 session
     local dir="$MOE_GITDIR/moe/baseline" line
     mkdir -p "$dir" 2>/dev/null || return 1
     local f="$dir/$1.tsv" tmp="$dir/$1.tsv.tmp.$$"
     {
-        printf '#moe-baseline v1 task=%s at=%s head=%s landed=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${5:-0}"
+        printf '#moe-baseline v1 task=%s at=%s head=%s landed=%s session=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "${5:-0}" "${6:-}"
         if [ -f "$3" ]; then
             while IFS= read -r line || [ -n "$line" ]; do
                 [ -n "$line" ] && printf 'B\t%s\n' "$line"
@@ -2227,18 +2531,60 @@ baseline_delete() {
     return 0
 }
 
+# baseline_session TASKID -- print the header's session= value; '' when the
+# token or the file is absent. Prints only and always returns 0, so it is safe
+# inside $(...) under set -e.
+baseline_session() {
+    local f
+    f="$(baseline_path "$1")"
+    [ -f "$f" ] || return 0
+    head -n1 "$f" 2>/dev/null | sed -n 's/.* session=\([^ ]*\).*/\1/p' 2>/dev/null || true
+    return 0
+}
+
+# baseline_landed_flag TASKID RECOVERED(true|false) -- print the landed flag a
+# landing writes back. It belongs to the session whose pre-flight took the
+# baseline: on 2026-09-17 (task-49ec8755) QA's exit landing rewrote a live
+# rework session's baseline to landed=1, and that session's crash was never
+# recovered. So 1 only for that session's own landing (header session ==
+# MOE_SID), a recovery (the idle paths recover under a fresh sid per poll and
+# would replay it forever) or a landing that found no baseline; any other
+# landing keeps the header's flag. Prints only and always returns 0 (safe in
+# $(...) under set -e). Twin: Get-MoeBaselineLandedFlag.
+baseline_landed_flag() {
+    local sess
+    if [ ! -f "$(baseline_path "$1")" ] || [ "${2:-false}" = "true" ]; then
+        printf '1'
+        return 0
+    fi
+    sess="$(baseline_session "$1")"
+    if [ -n "$sess" ] && [ "$sess" = "${MOE_SID:-}" ]; then
+        printf '1'
+    elif baseline_landed "$1"; then
+        printf '1'
+    else
+        printf '0'
+    fi
+    return 0
+}
+
 # baseline_mark_landed TASKID -- flip the header's landed flag in place.
 # Caller: the post-flight's deliberate LANDING_MODE=none exit (checkpoint
 # commits off / a role with no landing), so the next pre-flight does not
-# replay a "recovered" checkpoint the operator turned off.
+# replay a "recovered" checkpoint the operator turned off. A sibling's
+# deliberate exit must not mark another session's baseline landed, so the
+# flag goes through baseline_landed_flag (MOE_SID is this iteration's
+# pre-flight id) and the header's session is kept.
 baseline_mark_landed() {
-    local f work b u head
+    local f work b u head flag sess
     f="$(baseline_path "$1")"
     [ -f "$f" ] || return 0
+    flag="$(baseline_landed_flag "$1" false)"
+    sess="$(baseline_session "$1")"
     work="$(create_secure_temp)"
     baseline_read "$1" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" || true
     head=$(head -n1 "$f" 2>/dev/null | sed -n 's/.* head=\([^ ]*\).*/\1/p') || head=""
-    baseline_write "$1" "$head" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 1 || true
+    baseline_write "$1" "$head" "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" "$flag" "$sess" || true
     rm -f "$work/bl-b-$$.tsv" "$work/bl-u-$$.tsv" 2>/dev/null || true
     return 0
 }
@@ -2292,6 +2638,42 @@ proc_start_token() {
     [ -r "/proc/$1/stat" ] || return 0
     sed -n 's/.*) //p' "/proc/$1/stat" 2>/dev/null | awk '{print $20}' | tr -d '[:space:]'
 }
+
+# Runner process identity: which process opened an attempt. Every claim this
+# wrapper makes records it, so moe.reattach_attempt can match it after a daemon
+# restart parks that attempt in `reconciling`. It is THIS wrapper process (it
+# outlives every CLI respawn): <pid>@<start token> plus the host, the same pair
+# the live-session marker names, computed ONCE -- the daemon compares exact
+# strings, so a value this process could spell differently later would refuse
+# every reattach. Without /proc (macOS) the token is `ps` lstart, whitespace
+# squeezed. Both are sent or neither: a partial identity records something no
+# reattach can ever reproduce. A match narrows WHICH process; it is never
+# evidence that the process is alive. Twin: the same block in moe-agent.ps1.
+MOE_PROCESS_STARTED_AT=""; MOE_HOST=""; CLAIM_RPC_JSON="$CLAIM_JSON"
+moe_runner_identity() {
+    local token host why="" claim
+    token="$(proc_start_token "$$")"
+    [ -n "$token" ] || token="$(ps -p "$$" -o lstart= 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //;s/ $//')"
+    host="$(live_marker_host)"
+    if [ -z "$token" ]; then why="process start time unreadable"
+    elif [ -z "$host" ]; then why="hostname empty"
+    else
+        token="$$@$token"
+        case "$token$host" in *[[:cntrl:]]*) why="control characters" ;; esac
+        if [ -z "$why" ] && { [ "${#token}" -gt 200 ] || [ "${#host}" -gt 255 ]; }; then why="too long"; fi
+    fi
+    if [ -z "$why" ]; then
+        claim=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.argv[1]);d.update(processStartedAt=sys.argv[2],host=sys.argv[3]);print(json.dumps(d))' \
+            "$CLAIM_JSON" "$token" "$host" 2>/dev/null) || why="claim arguments unbuildable"
+    fi
+    if [ -n "$why" ]; then
+        echo -e "${YELLOW}[WARN]${NC} Runner identity unavailable ($why); claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart."
+        return 0
+    fi
+    MOE_PROCESS_STARTED_AT="$token"; MOE_HOST="$host"; CLAIM_RPC_JSON="$claim"
+    echo "Runner identity: processStartedAt=$MOE_PROCESS_STARTED_AT host=$MOE_HOST"
+}
+moe_runner_identity
 
 # live_marker_write TASKID -- claim the task's dirty bytes for THIS session.
 # Best-effort by design: a marker that cannot be written is a warning and the
@@ -3492,6 +3874,110 @@ moe_commit_with_hooks() {
     return "$rc"
 }
 
+
+# One disposable checkout per frozen CAS candidate. No shared helpers copied.
+gate_git() {
+    (unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+     git -C "$GATE_WORKSPACE" "$@")
+}
+gate_integrity() {
+    [ "$(gate_git rev-parse HEAD 2>/dev/null)" = "$FROZEN_COMMIT" ] || return 1
+    [ "$(gate_git write-tree 2>/dev/null)" = "$FROZEN_TREE" ] || return 1
+    gate_git ls-files -z | gate_git update-index --no-assume-unchanged --no-skip-worktree -z --stdin || return 1
+    gate_git diff-files --quiet --ignore-submodules=none --
+}
+stop_gate_child() {
+    [ -n "${GATE_PID:-}" ] || return 0
+    # Job control gave this invocation its OWN process group, descendants included.
+    kill -TERM -- "-$GATE_PID" 2>/dev/null || true
+    # Explicit shutdown, never an idle timeout: TERM may be ignored by a gate.
+    kill -KILL -- "-$GATE_PID" 2>/dev/null || true
+    if [ "${GATE_FINISHED:-false}" != true ]; then
+        if wait "$GATE_PID"; then GATE_RC=0; else GATE_RC=$?; fi
+        GATE_FINISHED=true
+    fi
+    wait "$GATE_PID" 2>/dev/null || true
+    GATE_PID=""
+}
+# Removes every owned gate checkout this run still holds: the current one and any
+# earlier one whose removal failed. A failure is reported and kept for the next
+# cleanup point (the next gate, the end of the iteration, the EXIT trap); it
+# never changes a landing decision and never stops the loop.
+GATE_PENDING_ROOTS=""
+remove_gate_root() {
+    if [ -e "$1/tree/.git" ]; then
+        git -C "$MOE_TOP" worktree remove --force "$1/tree" >/dev/null 2>&1 || return 1
+    fi
+    rm -rf -- "$1"
+}
+cleanup_gate_workspace() {
+    stop_gate_child
+    if [ -n "${GATE_ROOT:-}" ]; then
+        GATE_PENDING_ROOTS="${GATE_PENDING_ROOTS:-}$GATE_ROOT"$'\n'
+        GATE_ROOT=""; GATE_WORKSPACE=""; GATE_LOG=""
+    fi
+    local root kept=""
+    while IFS= read -r root; do
+        [ -n "$root" ] || continue
+        if ! remove_gate_root "$root"; then
+            kept="$kept$root"$'\n'
+            echo "[WARN] Cannot remove owned qualityGate workspace: $root; cleanup will be retried." >&2
+        fi
+    done <<< "${GATE_PENDING_ROOTS:-}"
+    GATE_PENDING_ROOTS="$kept"
+    [ -z "$kept" ]
+}
+freeze_candidate() {
+    local old="$1" tree="$2"
+    FROZEN_TREE="$tree"; FROZEN_BASE="$old"; FROZEN_COMMIT=""
+    FROZEN_BASE_REVISION="$old"
+    if [ -n "$old" ]; then
+        FROZEN_COMMIT=$(printf '%s\n' 'Moe frozen candidate snapshot' | git -C "$MOE_TOP" commit-tree "$tree" -p "$old") || return 1
+    else
+        FROZEN_BASE_REVISION=$(git -C "$MOE_TOP" hash-object -w -t tree --stdin </dev/null) || return 1
+        FROZEN_COMMIT=$(printf '%s\n' 'Moe frozen candidate snapshot' | git -C "$MOE_TOP" commit-tree "$tree") || return 1
+    fi
+    FROZEN_CANDIDATE_ID=$($PYTHON_CMD -c 'import uuid;print("cand-"+uuid.uuid4().hex)') || return 1
+    record_candidate_rpc
+}
+run_frozen_gate() {
+    [ -n "${QUALITY_GATE:-}" ] || return 0
+    cleanup_gate_workspace || true
+    # Assignment runs in the parent; never create_secure_temp in a subshell.
+    GATE_ROOT=$(mktemp -d -t moe-gate.XXXXXXXX) || return 1
+    GATE_WORKSPACE="$GATE_ROOT/tree"; GATE_LOG="$GATE_ROOT/output.log"
+    GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
+    GATE_RC=0; GATE_OUT=""; GATE_PID=""
+    if ! git -C "$MOE_TOP" -c core.hooksPath=/dev/null -c core.sparseCheckout=false \
+        -c core.sparseCheckoutCone=false worktree add --detach "$GATE_WORKSPACE" "$FROZEN_COMMIT" >"$GATE_LOG" 2>&1; then
+        echo "[WARN] qualityGate workspace materialization failed." >&2; return 1
+    fi
+    gate_integrity || { echo "[WARN] qualityGate initial tree integrity failed." >&2; return 1; }
+    [ -d "$GATE_WORKSPACE/$MOE_REL" ] || return 1
+    GATE_CHECK_ID=$($PYTHON_CMD -c 'import uuid;print("check-"+uuid.uuid4().hex)') || return 1
+    echo -e "$BLUE Post-flight: quality gate: $QUALITY_GATE$NC"
+    set -m
+    (unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+     cd "$GATE_WORKSPACE/$MOE_REL" || exit 125
+     export MOE_PROJECT_PATH="$PWD"
+     exec bash -c "$QUALITY_GATE") >"$GATE_LOG" 2>&1 &
+    GATE_PID=$!; GATE_STARTED=true
+    set +m
+    if wait "$GATE_PID"; then GATE_RC=0; else GATE_RC=$?; fi
+    GATE_FINISHED=true
+    stop_gate_child
+    GATE_RECORDED=true
+    record_check_run_rpc || return 1
+    if [ "$GATE_RC" -ne 0 ]; then
+        echo "[WARN] qualityGate failed (exit $GATE_RC); refusing branch commit." >&2; return 1
+    fi
+    gate_integrity || { echo "[WARN] qualityGate tracked tree/index/HEAD mutation; refusing branch commit." >&2; return 1; }
+    echo -e "$GREEN[OK]$NC qualityGate passed."
+    # Landing is decided by the exit code and integrity above; a failed removal
+    # of the disposable checkout is reported and retried, never a gate failure.
+    cleanup_gate_workspace || true
+}
+
 # land_commit KIND -- §7: branch (peel), then plumbing (temp index +
 # commit-tree + update-ref CAS, 3 attempts). With commitHooks=true, a private
 # ordinary commit runs hooks against the validated index before the same CAS.
@@ -3532,13 +4018,39 @@ land_plumbing() {
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: could not build the landing index for task $LAND_TASK_ID."
             return 1
         fi
-        if ! moe_temp_index_has_changes "$old"; then
+        local changed=true
+        moe_temp_index_has_changes "$old" || changed=false
+        write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
+        tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
+        # Only a completion that will actually run a gate freezes and records a
+        # candidate. A completion with no gate to run (unset, disabled, deferred)
+        # lands exactly as before, whoever owns the attempt by now.
+        if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
+            GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
+            # A retry whose rebuilt tree AND base both equal the gated candidate's IS
+            # that candidate, so its passed gate stands. Any other difference, or a
+            # pair that cannot be read back, re-freezes a new candidate and reruns
+            # the gate: a result from another tree or base is never evidence here.
+            if [ "$attempt" -gt 1 ] && [ -n "$tree" ] && [ -n "${FROZEN_CANDIDATE_ID:-}" ] && [ -n "${FROZEN_TREE:-}" ] \
+                && [ "$tree" = "$FROZEN_TREE" ] && [ "$old" = "${FROZEN_BASE:-}" ]; then
+                echo -e "${BLUE}[info]${NC} qualityGate result reused: the rebuilt candidate has the same tree and base."
+            elif [ -z "$tree" ] || ! freeze_candidate "$old" "$tree" || ! run_frozen_gate; then
+                LAND_OUTCOME="failed"; LAND_CODE="MOE_COMMIT_FAILED_GATE"
+                if [ "$GATE_EVIDENCE_UNAVAILABLE" = true ]; then
+                    LAND_MESSAGE="qualityGate not run: candidate evidence unavailable ($GATE_EVIDENCE_DETAIL)"
+                else
+                    GATE_FAILED=true
+                fi
+                rescue_ref "gate-failed" "$ATTR_DIR/candidates" || true
+                moe_temp_index_drop
+                return 4
+            fi
+        fi
+        if [ "$changed" = false ]; then
             moe_temp_index_drop
             LAND_OUTCOME="nothing"
             return 2
         fi
-        write_commit_message "$LAND_KIND" "$msgfile" "$TI_N_STAGED" "$TI_N_INFERRED"
-        tree=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" write-tree 2>"$err") || tree=""
         if [ -n "$tree" ]; then
             if [ "$LAND_KIND" = "completion" ] && [ "$CS_COMMIT_HOOKS" = "true" ]; then
                 if moe_commit_with_hooks "$old" "$tree" "$TI_INDEX" "$msgfile" "$err"; then
@@ -3568,12 +4080,26 @@ land_plumbing() {
             unset MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF
             (cd "$MOE_TOP" && bash -c "$hook") >/dev/null 2>&1 || true
         fi
+        if [ "$LAND_KIND" = completion ] && [ -n "${QUALITY_GATE:-}" ]; then
+            # The receipt report is journaled BEFORE the ref can move. targetBefore
+            # is the CAS base: the candidate's baseRevision, git's zero id if unborn.
+            RECEIPT_BEFORE="${old:-$MOE_ZERO_OID}"; RECEIPT_LANDED="$new"
+            RECEIPT_JOURNAL="$(receipt_journal_path "$LAND_TASK_ID")"
+            local pending="push result unknown: the landing stopped before its push finished"
+            if no_git_remote; then pending=""; fi
+            receipt_journal_write "$RECEIPT_JOURNAL" "$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$pending" 1)"
+        fi
         if [ -n "$old" ]; then
             if git -C "$MOE_TOP" update-ref "$ref" "$new" "$old" >/dev/null 2>&1; then rc=0; else rc=1; fi
         else
             if git -C "$MOE_TOP" update-ref "$ref" "$new" "$MOE_ZERO_OID" >/dev/null 2>&1; then rc=0; else rc=1; fi
         fi
         moe_temp_index_drop
+        if [ "$rc" -ne 0 ] && [ -n "${RECEIPT_LANDED:-}" ]; then
+            # The ref never moved, so this attempt's report describes nothing.
+            [ -z "$RECEIPT_JOURNAL" ] || rm -f "$RECEIPT_JOURNAL"
+            RECEIPT_LANDED=""
+        fi
         if [ "$rc" -eq 0 ]; then
             LAND_SHA="$new"
             LAND_TREE="$tree"
@@ -3583,6 +4109,7 @@ land_plumbing() {
             index_refresh "$LAND_STAGED_FILE" || true
             return 0
         fi
+        # FROZEN_* stay: the next attempt compares its rebuilt tree and base to them.
         echo -e "${YELLOW}[branch]${NC} $ref moved while landing task $LAND_TASK_ID (attempt $attempt/3); rebuilding on the new tip."
     done
     LAND_OUTCOME="failed"
@@ -3594,6 +4121,36 @@ land_plumbing() {
 }
 
 # ---- rescue refs -------------------------------------------------------------
+
+rescue_frozen_tree() {
+    local reason="$1" file sha
+    file="$SECURE_TEMP_DIR/frozen-rescue-msg.txt"
+    write_rescue_message "$reason" "$file"
+    local -a args=(commit-tree "$FROZEN_TREE" -F "$file")
+    [ -z "$FROZEN_BASE" ] || args+=(-p "$FROZEN_BASE")
+    sha=$(git -C "$MOE_TOP" "${args[@]}" 2>/dev/null) || return 1
+    RESCUE_STAGED_FILE="${LAND_STAGED_FILE:-}"
+    rescue_ref_from_commit "$sha" "$reason"
+}
+finish_gate_observation() {
+    stop_gate_child
+    if [ "${GATE_STARTED:-false}" = true ] && [ "${GATE_RECORDED:-false}" != true ]; then
+        GATE_RECORDED=true
+        record_check_run_rpc || return 1
+    fi
+}
+finalize_postflight() {
+    [ "${MOE_FINALIZE_DONE:-false}" != true ] || return 0
+    MOE_FINALIZE_DONE=true
+    local outcome=failed
+    case "${LAND_OUTCOME:-nothing}" in
+        committed) outcome=landed ;;
+        nothing) outcome=nothing-to-commit ;;
+        *) [ -z "${LAND_RESCUE_SHA:-}" ] || outcome=rescued ;;
+    esac
+    finalize_attempt_rpc "$outcome" "${LAND_SHA:-}"
+}
+
 # rescue_ref REASON CAND_FILE -- park the candidate snapshot on
 # refs/moe/rescue/<taskId>/<utc-ts> (tree built exactly like §7.2 against
 # HEAD; commit-tree -p HEAD, no parent when unborn). HEAD, the branch and the
@@ -3605,6 +4162,7 @@ rescue_ref() {
     LAND_RESCUE_REF=""
     LAND_RESCUE_SHA=""
     RESCUE_STAGED_FILE=""
+    if [ -n "${FROZEN_TREE:-}" ]; then rescue_frozen_tree "$reason"; return $?; fi
     if [ ! -s "$cand" ]; then
         echo -e "${BLUE}[rescue]${NC} nothing to rescue for task $LAND_TASK_ID (no candidate paths) [reason=$reason]"
         return 1
@@ -3670,6 +4228,14 @@ rescue_ref_from_commit() {
 }
 
 # ---- push --------------------------------------------------------------------
+# no_git_remote -- 0 only when git positively reports no remote at all. A probe
+# that fails is "remote unknown" (1), so it can never silently stop a push.
+# Twin: Test-MoeNoRemote.
+no_git_remote() {
+    local remotes
+    remotes=$(git -C "$MOE_TOP" remote 2>/dev/null) && [ -z "$remotes" ]
+}
+
 announce_checkpoint_unpushed() { # $1 taskId, $2 branch
     local msg="CHECKPOINT-UNPUSHED task=$1 -- checkpoint committed locally only on $2; push when the remote is reachable"
     echo -e "${YELLOW}[WARN]${NC} $msg"
@@ -3688,9 +4254,18 @@ announce_checkpoint_unpushed() { # $1 taskId, $2 branch
 # `CHECKPOINT-UNPUSHED task=<id>`. Note `pull --rebase` refuses in a tree with
 # unstaged tracked changes, so the retry usually fails in a busy fleet --
 # unpushed is a visibility problem, not a loss. Returns 0 when pushed.
+# LAND_PUSH_RESULT is what a delivery receipt reports: empty (null) when no push
+# was attempted (the repository has no remote at all), else one bounded line. A
+# `git remote` probe that fails falls through to the push, so it can never
+# silently stop one.
 push_branch() {
-    local kind="$1" branch="$LAND_BRANCH" tid="$LAND_TASK_ID" PUSH_OUT="" REBASE_OUT="" ok=false
+    local kind="$1" branch="$LAND_BRANCH" tid="$LAND_TASK_ID" PUSH_OUT="" REBASE_OUT="" ok=false why
+    LAND_PUSH_RESULT=""
     [ -n "$branch" ] || return 1
+    if no_git_remote; then
+        echo -e "${BLUE}[info]${NC} no git remote configured; push skipped, the commit stays local on $branch."
+        return 1
+    fi
     if git -C "$MOE_TOP" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' > /dev/null 2>&1; then
         if PUSH_OUT=$(git -C "$MOE_TOP" push 2>&1); then
             ok=true
@@ -3735,8 +4310,14 @@ push_branch() {
     if [ "$ok" = true ]; then
         printf '%s\n' "$PUSH_OUT" | tail -5
         echo -e "${GREEN}[OK]${NC} Pushed task $tid to $branch."
+        LAND_PUSH_RESULT="pushed $branch"
         return 0
     fi
+    # One line from git's own diagnosis, never raw push output: the receipt
+    # refuses more than 2000 chars rather than truncating them.
+    why=$(printf '%s\n' "$PUSH_OUT" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -m1 -E '^(fatal|error): ' || true)
+    LAND_PUSH_RESULT="push failed: ${why:-git push failed}"
+    LAND_PUSH_RESULT="${LAND_PUSH_RESULT:0:500}"
     if [ "$kind" = "completion" ]; then
         announce_push_failure "$tid"
     else
@@ -3749,6 +4330,7 @@ push_branch() {
 # record_commit_rpc OUTCOME KIND SHA REF CODE MESSAGE PUSHED STAGED_FILE DROPPED_FILE
 # Best-effort moe.record_commit with every outcome; never breaks the loop.
 # Paths go back ROOT-relative (REL stripped); lists are capped daemon-side too.
+# Returns 0 only when the daemon answered (callers that do not care add || true).
 record_commit_rpc() {
     local args=""
     args=$(MOE_RC_TASK="$LAND_TASK_ID" MOE_RC_OUTCOME="$1" MOE_RC_KIND="$2" MOE_RC_SHA="${3:-}" MOE_RC_REF="${4:-}" \
@@ -3848,16 +4430,18 @@ if contested:
 print(json.dumps(d))
 PYEOF
     ) || args=""
-    [ -n "$args" ] || return 0
-    moe_rpc record_commit "$args" >/dev/null 2>&1 || true
+    [ -n "$args" ] || return 1
+    moe_rpc record_commit "$args" >/dev/null 2>&1 || return 1
     return 0
 }
 
-# baseline_after_landing TASKID B_FILE U_SRC STAGED_FILE LANDED -- remove the
-# landed paths from B, replace U with this pass's unattributed set, keep the
-# file (it lives until the task is DONE/ARCHIVED), refresh head.
+# baseline_after_landing TASKID B_FILE U_SRC STAGED_FILE LANDED SESSION -- remove
+# the landed paths from B, replace U with this pass's unattributed set, keep the
+# file (it lives until the task is DONE/ARCHIVED), refresh head. LANDED and
+# SESSION come from run_landing (baseline_landed_flag / the header's session):
+# a landing never takes over another session's baseline.
 baseline_after_landing() {
-    local tid="$1" bfile="$2" unattr="$3" staged="$4" landed="$5" work head
+    local tid="$1" bfile="$2" unattr="$3" staged="$4" landed="$5" session="${6:-}" work head
     work="$(create_secure_temp)"
     $PYTHON_CMD - "$bfile" "$staged" "$unattr" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" <<'PYEOF' 2>/dev/null || return 0
 import sys
@@ -3898,8 +4482,206 @@ with open(out_u, 'w', encoding='utf-8', errors='surrogateescape', newline='') as
         pass
 PYEOF
     head=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head=""
-    baseline_write "$tid" "$head" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" "$landed" || true
+    baseline_write "$tid" "$head" "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" "$landed" "$session" || true
     rm -f "$work/bl-next-b-$$.tsv" "$work/bl-next-u-$$.tsv" 2>/dev/null || true
+    return 0
+}
+
+# ---- delivery receipt ----------------------------------------------------------
+# <gitdir>/moe/receipt/<taskId>.json, beside the baseline. A gated completion
+# writes its whole receipt report here BEFORE update-ref can move the target,
+# rewrites it once the push resolved, and deletes it once
+# moe.record_delivery_receipt holds the receipt. A crash between the ref move and
+# that answer leaves the journal for receipt_replay to re-send verbatim: a
+# recomputed report is exactly what a replay conflicts on.
+# Twin: Get-MoeReceiptJournalPath / Write-MoeReceiptJournal.
+receipt_journal_path() {
+    case "$1" in ''|*[!A-Za-z0-9_.-]*) return 0 ;; esac
+    printf '%s/moe/receipt/%s.json' "$MOE_GITDIR" "$1"
+}
+
+# receipt_report TARGET_BEFORE LANDED PUSH_RESULT [LEDGER] -- the report as one
+# JSON line from the landing's globals ('' PUSH_RESULT = null). A non-empty
+# LEDGER adds `ledger`, the committed ledger row this landing owes until
+# moe.record_commit acknowledges it (the sessionId record_commit_rpc sends).
+receipt_report() {
+    $PYTHON_CMD -c '
+import json,sys
+t,w,a,g,c,target,before,landed,push,owed,sid,role,status=sys.argv[1:]
+d=dict(taskId=t,workerId=w,attemptId=a,generation=int(g),candidateId=c,target=target,
+    targetBefore=before,targetAfter=landed,landedRevision=landed,pushResult=push or None)
+if owed: d["ledger"]=dict(sessionId=sid,role=role,status=status)
+print(json.dumps(d))
+' "$LAND_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$FROZEN_CANDIDATE_ID" "refs/heads/$LAND_BRANCH" "$1" "$2" "$3" \
+        "${4:-}" "${MOE_SID:-$WORKER_ID@unknown}" "$ROLE" "${LAND_STATUS:-}"
+}
+
+# receipt_journal_write PATH REPORT -- atomic (.tmp + rename) and best-effort: an
+# unwritable journal never blocks a landing.
+receipt_journal_write() {
+    [ -n "$1" ] || return 0
+    if [ -n "$2" ] && mkdir -p "$(dirname "$1")" 2>/dev/null && printf '%s' "$2" > "$1.tmp.$$" 2>/dev/null \
+        && mv -f "$1.tmp.$$" "$1" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$1.tmp.$$" 2>/dev/null || true
+    echo -e "${YELLOW}[WARN]${NC} receipt journal not written ($1); a crash before the receipt would leave this landing without one."
+    return 0
+}
+
+# receipt_send REPORT JOURNAL -- the delivery receipt, the landing's last daemon
+# call. Bookkeeping only: 1 (a refusal, a lost answer) never rolls back, re-lands
+# or stops the loop, and keeps the journal for the next pre-flight to replay.
+# DELIVERY_RECEIPT_CONFLICT means a receipt already records this candidate's
+# landing: logged, never retried. Twin: Send-MoeReceipt.
+receipt_send() {
+    local report="$1" journal="$2" parsed args cand err="$SECURE_TEMP_DIR/receipt-err.txt"
+    parsed=$($PYTHON_CMD -c '
+import json,sys
+d=json.load(sys.stdin)
+p={k:d[k] for k in ("candidateId","target","targetBefore","targetAfter","landedRevision")}
+if d.get("pushResult") is not None: p["pushResult"]=d["pushResult"]
+p["workerId"]=sys.argv[1]
+print(d["candidateId"]); print(json.dumps(p))
+' "$WORKER_ID" <<< "$report") || return 1
+    cand="${parsed%%$'\n'*}"; args="${parsed#*$'\n'}"
+    if moe_evidence_rpc record_delivery_receipt "$args" 2>"$err"; then
+        cat "$err" >&2 2>/dev/null || true
+        [ -z "$journal" ] || rm -f "$journal"
+        return 0
+    fi
+    cat "$err" >&2 2>/dev/null || true
+    if grep -q '"codeName": *"DELIVERY_RECEIPT_CONFLICT"' "$err" 2>/dev/null; then
+        echo -e "${YELLOW}[WARN]${NC} candidate $cand already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
+        [ -z "$journal" ] || rm -f "$journal"
+        return 0
+    fi
+    echo -e "${YELLOW}[WARN]${NC} delivery receipt not recorded for candidate $cand; journal kept at $journal for the next pre-flight to replay."
+    return 1
+}
+
+# receipt_journal_fields JOURNAL -- the replay's fields of a well-formed journal,
+# \x1f-separated (the last is 1 while it owes a ledger row); 1 when malformed.
+# The optional `ledger` must be {sessionId, role, status?} inside the bounds
+# moe.record_commit takes. Twin: Invoke-MoeReceiptReplay's check + Test-MoeOwedLedger.
+receipt_journal_fields() {
+    $PYTHON_CMD - "$1" <<'PY' 2>/dev/null
+import json,os,re,sys
+f=sys.argv[1]; d=json.load(open(f,encoding='utf-8'))
+rev=re.compile(r'[0-9a-fA-F]{40}'); ids=re.compile(r'[A-Za-z0-9_-]{1,128}'); g=d.get('generation'); l=d.get('ledger')
+ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z0-9_.-]+',str(d.get('taskId')))
+    and all(isinstance(d.get(k),str) and ids.fullmatch(d[k]) for k in ('candidateId','attemptId'))
+    and type(g)==int and 0<g<=9007199254740991 and isinstance(d.get('workerId'),str) and d['workerId']
+    and isinstance(d.get('target'),str) and d['target']
+    and all(isinstance(d.get(k),str) and rev.fullmatch(d[k]) for k in ('targetBefore','targetAfter','landedRevision'))
+    and (l is None or (isinstance(l,dict) and all(isinstance(l.get(k),str) and l[k].strip() and len(l[k])<=n
+        for k,n in (('sessionId',255),('role',64))) and (l.get('status') is None or isinstance(l['status'],str)))))
+if not ok: sys.exit(1)
+print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1']))
+PY
+}
+
+# receipt_landed_as TARGET AFTER BEFORE -- where a journal's target shows its
+# landing: AFTER itself, or the copy a pull --rebase in the push rewrote it into
+# -- a commit after the CAS base that carries the landing's own Moe-Session and
+# Moe-Kind: completion trailers (a session lands at most one completion, and its
+# pre-flight recovery checkpoint is a wip commit already under the base).
+# Prints that commit, or nothing when the ref never moved; returns 1 with the
+# reason printed when git cannot answer. Twin: Find-MoeJournaledLanding.
+receipt_landed_as() {
+    local target="$1" after="$2" before="$3" tip rc msg line sid="" range
+    if tip=$(git -C "$MOE_TOP" rev-parse -q --verify "$target^{commit}" 2>/dev/null); then :; else
+        rc=$?; [ "$rc" -ne 1 ] || return 0
+        echo "git rev-parse exited $rc"; return 1
+    fi
+    if git -C "$MOE_TOP" merge-base --is-ancestor "$after" "$tip" 2>/dev/null; then echo "$after"; return 0; else rc=$?; fi
+    [ "$rc" -eq 1 ] || { echo "git merge-base --is-ancestor exited $rc"; return 1; }
+    if msg=$(git -C "$MOE_TOP" log -1 --format=%B "$after" 2>/dev/null); then :; else rc=$?; echo "git log exited $rc"; return 1; fi
+    while IFS= read -r line; do
+        case "$line" in 'Moe-Session: '*) sid="${line#Moe-Session: }"; sid="${sid%$'\r'}"; break ;; esac
+    done <<< "$msg"
+    [ -n "$sid" ] || return 0
+    range="$before..$tip"; [ "$before" != "$MOE_ZERO_OID" ] || range="$tip"
+    if msg=$(git -C "$MOE_TOP" log -n1 --format=%H --fixed-strings --all-match --grep="Moe-Session: $sid" \
+        --grep="Moe-Kind: completion" "$range" 2>/dev/null); then :; else rc=$?; echo "git log exited $rc"; return 1; fi
+    printf '%s\n' "$msg"
+}
+
+# receipt_ledger_send JOURNAL SHA -- the committed ledger row a journal still
+# owes, recorded for the commit git shows on the target (the daemon merges a
+# repeated sha). pushed follows the journaled push result and is omitted while
+# that is unknown. 0 once moe.record_commit answered. Twin: Send-MoeOwedLedgerRow.
+receipt_ledger_send() {
+    local row
+    row=$($PYTHON_CMD - "$1" "$2" "$WORKER_ID" <<'PY' 2>/dev/null
+import json,sys
+f,sha,worker=sys.argv[1:]; d=json.load(open(f,encoding='utf-8')); l=d['ledger']; push=d.get('pushResult')
+row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=d['target'],role=l['role'],sessionId=l['sessionId'],workerId=worker)
+if l.get('status'): row['status']=l['status']
+if push is None or str(push).startswith('push failed: '): row['pushed']=False
+elif str(push).startswith('pushed '): row['pushed']=True
+print(json.dumps(row))
+PY
+    ) || return 1
+    moe_rpc record_commit "$row" >/dev/null 2>&1
+}
+
+# receipt_replay -- crash replay of delivery receipts, run right AFTER the
+# pre-flight claim: a seat's still-finalizing attempt makes that claim refuse
+# (ATTEMPT_FINALIZING), which also keeps a single-shot run out of the taskless
+# wait -- close the attempt first and the claim would answer "nothing
+# claimable" and wait. For each journal whose task no other live session holds:
+# git shows its revision on the target, or the copy a pull --rebase rewrote it
+# into -> record the ledger row the journal still owes (then drop it from the
+# journal, so a receipt refused from there on never re-sends it), re-send the
+# journaled report verbatim, and close the journaled attempt as landed while it
+# is still finalizing under the journal's worker, whichever seat replays
+# (finalize_attempt is fenced by attempt id + generation); git shows neither ->
+# the ref never moved, drop the journal (the baseline recovery owns those
+# bytes). Reads git, never moves a ref, never re-freezes or re-gates. Each step
+# is safe to repeat. Best-effort: a failure logs and keeps that journal. The git
+# globals are local, so the pre-flight's own probe is untouched.
+# Twin: Invoke-MoeReceiptReplay.
+receipt_replay() {
+    [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed landed args report
+    git_top || return 0
+    [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
+    for f in "$MOE_GITDIR"/moe/receipt/*.json; do
+        [ -f "$f" ] || continue
+        if ! fields=$(receipt_journal_fields "$f"); then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: malformed journal"
+            continue
+        fi
+        IFS=$'\x1f' read -r tid target after aid gen owner before owed <<< "$fields" || true
+        if live_marker_foreign_live "$tid"; then continue; fi
+        if ! landed=$(receipt_landed_as "$target" "$after" "$before"); then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: $landed"
+            continue
+        fi
+        if [ -z "$landed" ]; then
+            echo -e "${BLUE}[receipt]${NC} $target does not contain $after: that landing never moved the ref; dropping $f."
+            rm -f "$f"
+            continue
+        fi
+        [ "$landed" = "$after" ] || echo -e "${BLUE}[receipt]${NC} a pull --rebase rewrote $after; $target carries it as $landed."
+        echo -e "${BLUE}[receipt]${NC} replaying the delivery receipt of task $tid from $f"
+        if [ -n "$owed" ]; then
+            echo -e "${BLUE}[receipt]${NC} recording the owed ledger row of task $tid: $landed on $target"
+            if ! receipt_ledger_send "$f" "$landed"; then
+                echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: moe.record_commit did not record the owed ledger row"
+                continue
+            fi
+            report=$($PYTHON_CMD -c 'import json,sys;d=json.load(open(sys.argv[1],encoding="utf-8"));d.pop("ledger",None);print(json.dumps(d))' "$f" 2>/dev/null) || report=""
+            receipt_journal_write "$f" "$report"
+        fi
+        receipt_send "$(cat "$f")" "$f" || continue
+        [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" = finalizing ] || continue
+        args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,s=sys.argv[1:];print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome="landed",landedRevision=s)))' \
+            "$tid" "$aid" "$gen" "$owner" "$MOE_RUNNER_ID" "$landed") || continue
+        moe_evidence_rpc finalize_attempt "$args" 3 \
+            || echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; its finalizing holds stay until it closes."
+    done
     return 0
 }
 
@@ -3916,13 +4698,15 @@ PYEOF
 # loop), 4 gate-failed (stop the loop). Sets MOE_LANDING_DONE on every path so
 # the teardown rescue never double-parks a session that already landed.
 run_landing() {
+    FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
     local work rc=0 snap tool head_before head_after n_skipped
     work="$(create_secure_temp)/landing-$$"
     rm -rf "$work" 2>/dev/null || true
     mkdir -p "$work"
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
-    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""
+    LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""; LAND_PUSH_RESULT=""
+    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -3934,7 +4718,13 @@ run_landing() {
         policy_override="never"
         echo -e "${YELLOW}[attribution]${NC} moe.get_commit_scope unavailable -- disk fallback (declared-only, peers assumed active)."
     fi
+    # Every baseline write below keeps the header's session: a landing never
+    # takes over another session's baseline, it only prunes B and replaces U.
+    local bl_flag bl_session
+    bl_flag="$(baseline_landed_flag "$LAND_TASK_ID" "${LAND_RECOVERED:-false}")"
+    bl_session="$(baseline_session "$LAND_TASK_ID")"
     if ! baseline_read "$LAND_TASK_ID" "$work/B.tsv" "$work/U.tsv"; then
+        bl_session="${MOE_SID:-}"
         # Fail CLOSED on missing evidence: with no readable baseline every
         # pre-session dirty path would read as "changed since baseline" and the
         # MEASURED tier would sweep foreign debris into this task's commit. The
@@ -3995,7 +4785,9 @@ run_landing() {
         return 4
     fi
 
-    if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ]; then
+    if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] || {
+        [ "$LAND_KIND" = completion ] && [ "${ATTR_N_DECLARED:-0}" -gt 0 ] &&
+        [ "${ATTR_ALL_ASSERTED_MISSING:-0}" != 1 ]; }; then
         head_before=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head_before=""
         if land_commit "$LAND_KIND"; then rc=0; else rc=$?; fi
         if [ "$rc" -eq 0 ]; then
@@ -4060,13 +4852,24 @@ run_landing() {
         echo -e "${YELLOW}[attribution]${NC} these changed paths were neither declared by the task nor written by its tools while other workers were active; report them via complete_step.modifiedFiles or moe.declare_files."
     fi
 
+    # The landing has reached its outcome, and a failed one has already parked
+    # its rescue ref. An interrupt from here on (the push, the ledger record)
+    # reports THIS outcome: the EXIT trap's teardown must not rescue a second
+    # time -- for a no-change completion whose gate passed, that would park the
+    # frozen tree as 'qualityGate interrupted'. The ps1 twin sets $res.Outcome
+    # before its push/record the same way. A committed landing interrupted here
+    # still gets its ledger row re-sent: teardown_rescue checks that first.
+    # A pre-flight recovery is the previous session's landing and never marks
+    # this one done here (the ps1 twin's `recovered` rule).
+    [ "${LAND_RECOVERED:-false}" = true ] || MOE_LANDING_DONE=true
+
     # Push policy: completion pushes as today (also after refusals/nothing AND
     # after a failed commit, so pre-existing local commits reach origin -- same
     # as the ps1 twin; push_branch itself announces PUSH FAILED when the push
     # cannot reach the remote). Checkpoints only when settings.checkpointPush.
     # Ref-contention skips the push: the branch is moving under a peer.
     LAND_PUSHED=""
-    if [ "$rc" -ne 3 ]; then
+    if [ "$rc" -ne 3 ] && [ "$rc" -ne 4 ]; then
         if [ "$LAND_KIND" = "completion" ]; then
             if [ "$LAND_OUTCOME" = "failed" ] && [ "${LAND_CODE:-}" = "MOE_COMMIT_FAILED_REF_CONTENTION" ]; then
                 LAND_PUSHED=""
@@ -4093,14 +4896,23 @@ run_landing() {
             LAND_SHA="$found"
             LAND_TREE=$(git -C "$MOE_TOP" rev-parse "$found^{tree}" 2>/dev/null) || LAND_TREE=""
         fi
-        record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
-        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" 1
+        local owed=1
+        if record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then owed=""; fi
+        LAND_RECORDED=true
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" "$bl_flag" "$bl_session"
+        if [ -n "${RECEIPT_LANDED:-}" ]; then
+            local report
+            # Only an acknowledged row leaves the journal; a lost one is replayed.
+            report=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$LAND_PUSH_RESULT" "$owed") || report=""
+            receipt_journal_write "$RECEIPT_JOURNAL" "$report"
+            [ -z "$report" ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
+        fi
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
         record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "MOE_COMMIT_NOTHING_TO_COMMIT" "" "" "" "" || true
-        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session"
     elif [ "$LAND_OUTCOME" = "refused" ]; then
         record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
-        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" 1
+        baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session"
     else
         record_commit_rpc "failed" "$LAND_KIND" "" "$LAND_BRANCH" "${LAND_CODE:-MOE_COMMIT_FAILED}" "${LAND_MESSAGE:-}" "" "" "$LAND_DROPPED_FILE" || true
     fi
@@ -4313,7 +5125,7 @@ PYEOF
     # A dead merge (B-new.tsv absent) must NOT write a header-only baseline:
     # an empty B reads as "everything changed since baseline" and re-arms the
     # MEASURED sweep the landing's fail-closed guard exists to prevent.
-    if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0; then
+    if [ -f "$work/B-new.tsv" ] && baseline_write "$tid" "$head" "$work/B-new.tsv" "$work/U.tsv" 0 "$MOE_SID"; then
         MOE_BASELINE_PATH="$bp"
         echo -e "${BLUE}[attribution]${NC} baseline written for $tid (${k_foreign:-0} dirty path(s) belong to other sessions or are pre-existing)"
         # Claim the bytes this baseline arms: a session gets both or neither.
@@ -4355,6 +5167,14 @@ PYEOF
 # completed a landing, park a single-snapshot rescue ref (policy never, no CAS
 # loop, no push). Best-effort, idempotent; the persisted baseline stays the
 # primary recovery (the next pre-flight lands it on the branch).
+#
+# It also leaves the landing result for the finalize cleanup_temp runs right
+# after it, with the same mapping as the ps1 twin's Invoke-MoeTeardownRescue:
+#   a branch commit already made (interrupted during its push/record) -> landed
+#   any other outcome the landing reached before its push/record      -> kept
+#   bytes parked on a rescue ref                                      -> rescued
+#   deliberate autoCommit=false, or no git repo at all                -> nothing
+#   anything else (no baseline, nothing parked)                       -> failed
 MOE_TEARDOWN_DONE=false
 teardown_rescue() {
     [ "$MOE_TEARDOWN_DONE" = true ] && return 0
@@ -4362,13 +5182,35 @@ teardown_rescue() {
     set +e
     local tid="${PREFLIGHT_TASK_ID:-}"
     [ -n "$tid" ] || return 0
+    if [ "${LAND_OUTCOME:-}" = "committed" ] && [ -n "${LAND_SHA:-}" ]; then
+        # This session's CAS already moved the branch and the interrupt landed
+        # after it (push, ledger row). The commit IS on the branch: never park
+        # it again on a rescue ref and never report it as unlanded. The ledger
+        # row is re-sent only when it did not get out; record_commit is
+        # idempotent by sha either way. Checked before MOE_LANDING_DONE, which
+        # run_landing sets ahead of its push and ledger record.
+        [ "${LAND_RECORDED:-}" = "true" ] || record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "${LAND_PUSHED:-}" "${LAND_STAGED_FILE:-}" "${LAND_DROPPED_FILE:-}" || true
+        MOE_LANDING_DONE=true
+        return 0
+    fi
     [ "${MOE_LANDING_DONE:-}" = "true" ] && return 0
+    LAND_RESCUE_SHA=""
+    LAND_OUTCOME=nothing
     [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
+    git -C "$PROJECT" rev-parse --show-toplevel >/dev/null 2>&1 || return 0
+    LAND_OUTCOME=failed
     [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
     [ -f "$(baseline_path "$tid")" ] || return 0
     [ "$(type -t run_landing)" = "function" ] || return 0
     echo ""
     echo -e "${YELLOW}[rescue]${NC} session ending with task $tid unlanded -- taking a rescue snapshot before deregistering."
+    if [ -n "${FROZEN_TREE:-}" ]; then
+        LAND_CODE=MOE_COMMIT_FAILED_GATE
+        rescue_ref "teardown" "" || true
+        record_commit_rpc failed "$LAND_KIND" "" "" "$LAND_CODE" "qualityGate interrupted" "" "" "" || true
+        MOE_LANDING_DONE=true
+        return 0
+    fi
     local work
     work="$(create_secure_temp)/teardown-$$"
     rm -rf "$work" 2>/dev/null
@@ -4384,6 +5226,7 @@ teardown_rescue() {
     if [ -z "$tool" ] || [ ! -f "$tool" ]; then tool="$work/tool.txt"; : > "$tool"; fi
     LAND_TOOL_FILE_EFFECTIVE="$tool"
     resolve_attribution "rescue" "$tid" "$work/S.tsv" "$work/B.tsv" "$work/U.tsv" "$tool" "$work/scope.json" "$ATTR_DIR" "never" || return 0
+    LAND_OUTCOME=failed
     rescue_ref "teardown" "$ATTR_DIR/candidates" || true
     MOE_LANDING_DONE=true
     return 0
@@ -4491,6 +5334,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Claim the next task, fetch context, read chat backlog.
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
+    MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
+    GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
+    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
+    MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
     PREFLIGHT_TASK_ID=""
     PREFLIGHT_TASK_TITLE=""
     PREFLIGHT_TASK_CHANNEL=""
@@ -4584,7 +5432,10 @@ except Exception:
             fi
             CLAIM_RESULT='{"hasNext":false}'
         else
-            CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+            CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
+            receipt_replay || true
+            # Before the pin below reads the attempt: a restart may have parked it.
+            [ -z "$CLAIM_RESULT" ] || reattach_own_attempts || true
         fi
 
         # Role-group tag for @architects/@workers/@qa routing. Computed HERE
@@ -4670,7 +5521,7 @@ except Exception:
                 while [ "$TASKLESS_WAITED" -lt "$MOE_TASKLESS_WAIT_SEC" ]; do
                     sleep "$MOE_TASKLESS_POLL_SEC"
                     TASKLESS_WAITED=$((TASKLESS_WAITED + MOE_TASKLESS_POLL_SEC))
-                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_JSON" 2>/dev/null || echo "")
+                    CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
                     if [ -z "$CLAIM_RESULT" ]; then
                         # Unreachable daemon/proxy. Falling through to a launch
                         # is exactly the hole being closed, so stop waiting and
@@ -4845,6 +5696,8 @@ except Exception:
     pass
 " <<< "$CLAIM_RESULT" 2>/dev/null || echo "")
                 fi
+
+                pin_attempt_identity || echo "[WARN] Missing/stale attempt identity; candidate completion will fail closed."
 
                 # 5. Fetch context for the claimed task
                 if [ -n "$PREFLIGHT_TASK_ID" ]; then
@@ -5414,13 +6267,13 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
             # per-task content; system prompt stays stable for cache hits.
             case $ROLE in
                 architect)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After submission, poll moe.check_approval. Once approved, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings), then moe.wait_for_task to pick up the next PLANNING task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     ;;
                 worker)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before waiting for the next task, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Finally call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code, run tests), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     ;;
                 qa)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Then use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern), and call moe.wait_for_task. If moe.wait_for_task wakes with hasChatMessage:true, moe.chat_read + moe.chat_send reply BEFORE claiming a new task."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its full context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then verify the implementation against definitionOfDone and rails. Run the tests. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     ;;
             esac
             if [ "$PREFLIGHT_IS_RESUME" = true ] && [ -n "$PROMPT_BODY" ]; then
@@ -5457,6 +6310,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # (--prompt-file --yolo) is the same one-shot shape and gets it too.
     if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
         PROMPT_BODY="$PROMPT_BODY CRITICAL (one-shot session): this CLI process exits the moment you end your turn, and any background jobs/builds/tests die with it — a completion notification can NEVER arrive after you stop. Run verification in the foreground or poll it to completion. Do NOT call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
+    elif { [ "$CLI_TYPE" = claude ] || [ "$CLI_TYPE" = grok ]; } && [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
+        # An interactive TUI stays open after the agent stops, and the wrapper
+        # claims the next task only once the CLI exits: without this line the
+        # seat parks after every task until the operator notices.
+        PROMPT_BODY="$PROMPT_BODY INTERACTIVE session: this TUI stays open after you stop, and the wrapper claims the next task only once the CLI exits. End your one-line summary with: 'Exit this CLI session (e.g. /exit; keep the terminal tab open) to start the next task.'"
     fi
 
     # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
@@ -5467,8 +6325,12 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         preflight_landing "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}" launch || true
         # A recovery landing in there belongs to the PREVIOUS session; this
-        # session's own landing is still ahead of us.
+        # session's own landing is still ahead of us. Its outcome must not be
+        # read as this session's either: the EXIT trap's teardown maps
+        # LAND_OUTCOME onto the finalize outcome. Same rule as the ps1 twin,
+        # where a `recovered` landing sets neither flag.
         MOE_LANDING_DONE=""
+        LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
         LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
         if [ -n "$MOE_PREFLIGHT_NOTICE" ]; then
             DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
@@ -6185,6 +7047,9 @@ PYEOF
         POSTFLIGHT_SNAPSHOT="$(create_secure_temp)/S-post-$$.tsv"
         git_dirty_snapshot "$POSTFLIGHT_SNAPSHOT" || POSTFLIGHT_SNAPSHOT=""
     fi
+    # A restart inside the session the sidecar did not catch in time: reattach
+    # before the landing reads the attempt, or its evidence would fail closed.
+    if [ "$AUTO_CLAIM" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then reattach_own_attempts || true; fi
     # The session-ended chat line (post_flight) runs AFTER the landing now so
     # it can carry commit=<sha> kind=<k> paths=<n> -- see the end of the block.
     POSTFLIGHT_BREAK=false
@@ -6381,6 +7246,7 @@ except Exception:
             else
                 echo -e "${BLUE}Post-flight: auto-commit+push (settings.autoCommit=true, mode=$LANDING_MODE, status=$LANDING_STATUS)...${NC}"
                 GATE_FAILED=false
+                GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
                 GATE_RC=0
                 GATE_OUT=""
                 QUALITY_GATE=""
@@ -6426,24 +7292,7 @@ except Exception:
                         echo -e "${BLUE}[info]${NC} qualityGate deferred: task $PREFLIGHT_TASK_ID is mid-epic (scope=epicFinal; the epic-final task runs the full gate)."
                         QUALITY_GATE=""
                     fi
-                    if [ -n "$QUALITY_GATE" ]; then
-                        echo -e "${BLUE}Post-flight: quality gate: $QUALITY_GATE${NC}"
-                        # Capture output AND exit code separately so `set -e`
-                        # can't abort on a failing gate.
-                        if GATE_OUT=$(cd "$PROJECT" && bash -c "$QUALITY_GATE" 2>&1); then
-                            GATE_RC=0
-                        else
-                            GATE_RC=$?
-                        fi
-                        if [ "$GATE_RC" -ne 0 ]; then
-                            echo "$GATE_OUT" | tail -15
-                            echo -e "${YELLOW}[WARN]${NC} qualityGate failed (exit $GATE_RC); skipping commit+push for task $PREFLIGHT_TASK_ID."
-                            echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID will be parked on a rescue ref (never a branch commit) -- stopping the worker loop after the rescue so the failed tree can't be absorbed by a later task."
-                            GATE_FAILED=true
-                        else
-                            echo -e "${GREEN}[OK]${NC} qualityGate passed."
-                        fi
-                    fi
+
                 fi
                 LAND_KIND="$LANDING_MODE"
                 LAND_TASK_ID="$PREFLIGHT_TASK_ID"
@@ -6457,14 +7306,11 @@ except Exception:
                 LAND_SNAPSHOT_FILE="$POSTFLIGHT_SNAPSHOT"
                 LAND_TOOL_FILE="$MOE_TOOL_WRITES_FILE"
                 LAND_SCOPE_FILE=""
-                # A gate that ran may have rewritten files (formatters): the
-                # pre-gate snapshot would then drop every touched path as
-                # MOE_ATTR_CONCURRENT, so re-snapshot after it.
-                if [ -n "$QUALITY_GATE" ]; then
-                    LAND_SNAPSHOT_FILE=""
-                fi
                 if run_landing; then LAND_RC=0; else LAND_RC=$?; fi
                 if [ "$GATE_FAILED" = true ]; then
+                    if [ -n "${GATE_LOG:-}" ] && [ -f "$GATE_LOG" ]; then
+                        GATE_OUT=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c 'import sys;f=open(sys.argv[1],"rb");f.seek(0,2);f.seek(max(0,f.tell()-16384));print(f.read().decode("utf-8","ignore"))' "$GATE_LOG")
+                    fi
                     announce_gate_failure "$PREFLIGHT_TASK_ID" "$QUALITY_GATE" "$GATE_RC" "$GATE_OUT"
                     echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)} -- stopping the worker loop."
                     POSTFLIGHT_BREAK=true
@@ -6478,9 +7324,17 @@ except Exception:
                     # identical to the ps1 twin.
                     echo -e "${YELLOW}[WARN]${NC} task $PREFLIGHT_TASK_ID could not be landed on a safe branch; its edits are parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)} -- stopping the worker loop."
                     POSTFLIGHT_BREAK=true
+                elif [ "${GATE_EVIDENCE_UNAVAILABLE:-false}" = true ]; then
+                    # No gate ran, so no gate failed: this seat no longer holds a
+                    # current attempt (a QA claim superseded it, or none was
+                    # pinned). The frozen bytes stay parked for the task's next
+                    # session; finalize below decides whether the loop goes on.
+                    echo -e "${YELLOW}[WARN]${NC} qualityGate not run: candidate evidence unavailable for task $PREFLIGHT_TASK_ID ($GATE_EVIDENCE_DETAIL); the completion is parked on ${LAND_RESCUE_REF:-no rescue ref (nothing to rescue)}."
                 fi
             fi
         fi
+        cleanup_gate_workspace || true
+        if ! finalize_postflight; then POSTFLIGHT_BREAK=true; fi
         # Whatever happened above, this session's bytes have been handled
         # (committed, parked on a rescue ref, refused, nothing to land, or a
         # deliberate policy skip): the teardown rescue in the EXIT trap must

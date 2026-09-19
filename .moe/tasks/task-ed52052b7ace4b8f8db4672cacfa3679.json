@@ -1,0 +1,225 @@
+{
+  "id": "task-ed52052b7ace4b8f8db4672cacfa3679",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: every FileWatcher reload restarts the periodic sweep timers, so a busy fleet can starve the self-heal sweeps",
+  "description": "DEFECT, filed by the governor on 2026-09-17 from live measurement. Nothing is stalled yet; so far it has only delayed one self-heal by about 4 minutes.\n\nMECHANISM (source at HEAD, same as the live 09-13 dist)\n- StateManager.load() ends by calling startBlockedTimeoutCheck, startProposalPurgeInterval, startStaleWorkerWatcher and startReconcileWindowCheck (packages/moe-daemon/src/state/StateManager.ts:1139-1142).\n- Each start* first calls its stop* and then a fresh setInterval (src/state/sweeps.ts:58, 87, 124, 147), so the sweep's phase starts again from zero.\n- The FileWatcher callback in src/index.ts calls state.load() on every .moe change that self-write suppression lets through.\n- Net effect: after every reload, a 5-minute sweep needs another 5 reload-free minutes before it fires, and the 60s stale-worker watcher needs 60s.\n\nWHAT TRIGGERED RELOADS (observed)\n- The observed reloads followed claim_next_task.\n- Self-write suppression (src/state/FileWatcher.ts:22, 52-54, 98-99) is a Set keyed by path. An entry is deleted on the first matching event and expires after 500ms.\n- The claim writes the task file twice about 180ms apart, and the worker file three times within about 400ms. With awaitWriteFinish stabilityThreshold 100, that can produce two chokidar events for a single Set entry, and the second one reloads.\n- Each reload also broadcasts an unfiltered STATE_SNAPSHOT (ARCHIVED tasks included: 308 tasks vs 171 on connect).\n\nEVIDENCE, 2026-09-17\nLive daemon pid 22572 started 16:44:23Z; passive /ws listener attached.\n1. The reconcile-window sweep closed its past-window attempts at 16:53:38.35Z. These were attempt-fcb4df2f, attempt-6f430bd3 and attempt-91637830, all with lastPhaseAt 2026-09-15, so they had been eligible since boot. The boot-armed tick, due by 16:49:23Z, never acted. 16:53:38Z is exactly 5 minutes after architect-259309b5's claim at 16:48:37.9Z.\n2. worker-3b5de06f's claim wrote files between 16:53:57.56Z and 16:53:57.96Z. The reload's STATE_SNAPSHOT broadcast went out at 16:53:58.102Z. The blocked-timeout sweep's Layer-3 prune of worker-a7127038 then emitted its STATE_SNAPSHOT at 16:58:58.101Z, exactly 5:00.000 later.\n\nCONSEQUENCE\nIf fleet-wide claims (or any other unsuppressed .moe writes) arrive more often than every 5 minutes, these never run:\n- checkBlockedTimeouts: blocked-timeout alerts and parking, the resource lease reaper, the stale-worker prune, and the REVIEW self-heal for a crashed QA\n- runReconcileWindowSweep\nIf reloads arrive more often than every 60s, the stale-worker alerts also go silent. These are the recovery paths for dead seats.\n\nDIRECTION (the architect decides)\n- Arm each sweep once per process instead of re-arming it on every load(). For example, load() skips any start* whose interval is already armed, or index.ts arms the sweeps once after the first load.\n- Keep the outside-the-lock arming and the mutex.exit detachment described in the load() comment.\n- Reloads do not need re-arming: the sweep intervals are constants, and thresholds are read from state at tick time.\n- Tightening self-write suppression (for example a per-path pending-write count) is a possible follow-up, not required here.",
+  "definitionOfDone": [
+    "A FileWatcher-driven state.load() does not restart an already-armed sweep interval: a fake-timer test shows a load() 4 minutes after arming does not push back the 5-minute blocked-timeout and reconcile-window ticks, or the 60s stale-worker tick. The test fails on HEAD.",
+    "The first load() still arms every sweep outside the locked section, still detached via mutex.exit, and stop()/shutdown still clears every interval; the existing sweeps and StateManager tests stay green.",
+    "docs/ARCHITECTURE.md or the load() comment states that the sweeps are armed once per process and that reloads do not reset them.",
+    "npm test and npx tsc --noEmit pass in packages/moe-daemon."
+  ],
+  "taskRails": [
+    "Daemon-only change; no launcher edits.",
+    "Do not introduce any idle-based release of WORKING/PLANNING tasks; only sweep scheduling changes."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phases 1+2 — confirm the mechanism in source and record the baseline. No repo edits.\n\nVerified while planning; re-check by grep, never by line number:\n- `StateManager.load()` ends by calling `this.startBlockedTimeoutCheck()`, `this.startProposalPurgeInterval()`, `this.startStaleWorkerWatcher()` and `this.startReconcileWindowCheck()`, under a comment explaining why they are armed OUTSIDE the locked section and detached via `mutex.exit`.\n- Each `start*` in state/sweeps.ts begins with its own `stop*` and then a fresh `setInterval`, so every call restarts the phase from zero. That is correct for an explicit caller and wrong for a reload.\n- The ONLY non-test callers are those four lines in load(). The only test caller is sweeps.test.ts's 'arms one interval and genuinely clears it on stop', which deliberately calls `stopReconcileWindowCheck` first — so keeping the restart semantics of `start*` breaks nothing.\n- `state.stop()` clears all four handles, so a later load() re-arms from scratch. That must keep working.\n\nCheck one thing the card's DIRECTION asserts, rather than assuming it: that a reload genuinely has nothing to re-read. Walk each tick closure and say in the step note which values are captured at ARM time and which are read from `state` at TICK time. Measured expectation: `checkBlockedTimeouts` and `checkReconcileWindow` read `state.staleWorkerTimeoutMs` / `state.reviewStaleTimeoutMs` / `state.reconcileWindowMs` at tick time, while `startStaleWorkerWatcher` captures `livenessTimeoutMs` in its closure — but load() always arms it with the default, so arming once freezes exactly the value a re-arm would have restored. If any closure turns out to capture a settings-derived value that a reload would legitimately change, say so before writing code; that would change the fix.\n\nBaseline: `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`, with counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "No repo edits. Mechanism confirmed at HEAD 7728e7b by grep:\n- StateManager.load() tail (after `await withTimeout(loadOperation, ...)`, outside the lock) calls this.startBlockedTimeoutCheck/startProposalPurgeInterval/startStaleWorkerWatcher/startReconcileWindowCheck. Those four lines are the ONLY non-test callers of start*.\n- Each start* in state/sweeps.ts calls its own stop* and then `state.mutex.exit(() => setInterval(...))` + unref, so every call restarts the phase. Only 4 setInterval calls exist in non-test src, all in sweeps.ts.\n- FileWatcher callback in src/index.ts: `await state.load(); wsServer.broadcast(STATE_SNAPSHOT)`.\n- PLAN CORRECTION: StateManager has no `stop()`. The method that clears all four handles is `clearEmitter()` (calls the four stop*, then clears subscribers/emitter); index.ts shutdown calls `state.clearEmitter()`. The tests will use clearEmitter().\n- Only test caller of start*: sweeps.test.ts 'arms one interval and genuinely clears it on stop' (stops first, then arms 60_000). StateManager.test.ts 'purges stale resolved proposals on load and starts purge interval' checks proposalPurgeInterval defined after load and undefined after clearEmitter.\n\nArm-time vs tick-time walk:\n- blocked-timeout tick: `state.checkBlockedTimeouts()` captures nothing but `state`; runBlockedTimeoutSweep reads state.blockedTimeoutMs (readonly, ctor), state.reviewStaleTimeoutMs and state.staleWorkerTimeoutMs at TICK time.\n- reconcile tick: `state.checkReconcileWindow()` captures nothing; runReconcileWindowSweep reads state.reconcileWindowMs at TICK time.\n- proposal purge tick: `state.purgeResolvedProposals()` reads the module constant PROPOSAL_PURGE_AGE_MS (env at import) and state.proposals; load() also runs a purge inline on every load.\n- stale-worker tick: captures `livenessTimeoutMs` at ARM time, but load() always arms via the wrapper defaults (60_000, 120_000). It is not settings-derived, so arming once freezes exactly what a re-arm would restore.\n- Cadences are constants (300000, PROPOSAL_PURGE_INTERVAL_MS, 60_000, RECONCILE_WINDOW_CHECK_INTERVAL_MS). No closure captures a settings-derived value, so the plan's fix stands unchanged.\n\nBaseline (packages/moe-daemon): `npx tsc --noEmit` exit 0; `npm test` exit 0, 122 files, 2107 passed (2107). Per file: sweeps.test.ts 10/10, StateManager.test.ts 115/115, StateManager.fixes 7/7, FileWatcher.test 11/11, FileWatcher.paths 7/7, server/* 5+21+15+30+2+9+26+7. EOL: sweeps.ts CRLF; StateManager.ts and sweeps.test.ts LF (use Edit, which keeps EOL).\nShared checkout has ~28 peer-dirty paths (docs/*, .moe/*, delivery/*, tools/claimNextTask.ts, etc.); none are this task's three files, and none touched.",
+      "startedAt": "2026-09-18T17:27:29.293Z",
+      "completedAt": "2026-09-18T17:29:38.530Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Phase 3 — the test first, in packages/moe-daemon/src/state/sweeps.test.ts, beside the existing 'arms one interval and genuinely clears it on stop' case. It must fail on HEAD.\n\nFake ONLY the interval clock: `vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })`. load() runs real fs work behind `withTimeout`, which is a setTimeout — faking every timer risks hanging the load instead of testing the sweeps.\n\nCase 1, the defect (the card's DoD 1):\n- `await h.state.load()` arms the four sweeps.\n- Capture the four interval handles.\n- Spy on `checkBlockedTimeouts`, `checkReconcileWindow` and `checkStaleWorkers` so a tick is observable without doing sweep work.\n- Advance 4 minutes, then `await h.state.load()` again — the FileWatcher-driven reload, which the governor measured following every claim_next_task.\n- Advance 1 more minute plus a second.\n- Assert: each 5-minute sweep ran exactly ONCE, the 60-second watcher ran at least five times, and — the assertion that does not depend on timing at all — all four handles are the SAME objects (`toBe`) after the reload as before it.\n- On HEAD both halves fail: the handles are new and the 5-minute sweeps have run zero times. Record both failure messages as the red proof.\n\nCase 2, the guard for what must not change:\n- The first load() arms all four handles (none undefined).\n- `state.stop()` clears all four, and a load() after it arms four NEW handles — so the once-per-process rule does not turn a stopped daemon into a permanently unswept one.\n- An explicit `startReconcileWindowCheck(h.state, 60_000)` after a load() still restarts that interval with the new cadence: the helpers keep their restart semantics for callers that mean it.\n\nKeep the existing case untouched; it already pins arm-then-clear.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/sweeps.test.ts"
+      ],
+      "note": "Test written first and proven red against unfixed code in a scratch tree (D:/moe-w-d0c3b06e-ed52/tree, a src copy that matches the repo: 122 files / 2107 passed, the same as the repo baseline). It is NOT in the repo yet: a red test in the shared checkout would turn every peer's `npm test` red until the fix. It lands in the repo with the fix in step 3 as a byte-identical append (pristine + draft, LF), and step 3 reports sweeps.test.ts in modifiedFiles.\n\nNew describe 'periodic sweep arming' appended after the existing describe; the existing cases are untouched. It fakes ONLY setInterval/clearInterval in beforeEach, and afterEach runs clearEmitter + useRealTimers.\n- Case 1, 'a reload does not restart an armed sweep, so its ticks keep their phase'. Spies on checkBlockedTimeouts/checkReconcileWindow/checkStaleWorkers. Timeline: load at 0:00 (asserts all four handles armed), reload at 4:00, reload at 4:30, advance to 5:01. One toEqual covers handle identity for all four sweeps plus tick counts.\n  DEVIATION from the plan (on purpose): a SECOND reload at 4:30. A reload at exactly 4:00 sits on the 60 s watcher's phase, so HEAD re-arms it to 5:00, the same tick as the fix: the 60 s assertion would pass on HEAD. The 4:30 reload is what pins that watcher. The expected stale count is exact (5), not >=5, because the fake clock is deterministic.\n- Case 2a, 'clearEmitter() stops every sweep, and the next load() arms all four again'. (The plan's `state.stop()` is clearEmitter(); StateManager has no stop().) Checks: all four armed after the first load, all four undefined after clearEmitter, all four armed after the next load.\n- Case 2b, 'an explicit start* still restarts its sweep on the cadence the caller passes'. startReconcileWindowCheck(h.state, 60_000) after load gives a new handle and exactly 5 ticks in 5 min: the new cadence, and no 6th tick from the load-armed interval, so the old one was cleared.\n\nRED on HEAD sources (scratch): sweeps.test.ts 12 passed / 1 failed (13). Only case 1 is red, both halves in one diff:\nsameHandle {blockedTimeout,proposalPurge,reconcileWindow,staleWorker}: expected true, received false (all four replaced);\nticks: blockedTimeout expected 1 received 0, reconcileWindow 1 vs 0, staleWorker 5 vs 4.\nCases 2a/2b are green on HEAD, as intended: they guard behaviour that must not change.\nThe new test code typechecks under strict (scratch tsconfig.tests.json extending tsconfig.json, including sweeps.test.ts): tsc exit 0. The daemon tsconfig excludes *.test.ts, so `npx tsc --noEmit` never checks tests.",
+      "startedAt": "2026-09-18T17:33:47.464Z",
+      "completedAt": "2026-09-18T17:33:56.111Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Phase 4 — the fix, in state/sweeps.ts and state/StateManager.ts.\n\n(a) sweeps.ts: add `armPeriodicSweeps(state)`, which calls each `start*` ONLY when its handle is currently undefined. Document, on the function, why: a FileWatcher reload must not restart a sweep's phase, because a fleet whose reloads arrive faster than the cadence starves every self-heal behind it — the blocked-timeout alerts and parking, the resource lease reaper, the stale-worker prune, the REVIEW self-heal and the reconcile-window pass. Cite the 2026-09-17 measurement: two claims 3m59s apart reset the 5-minute timers twice without either firing, with only two active seats.\n\n(b) StateManager.ts: replace the four calls at the end of load() with one `armPeriodicSweeps(this)`. Keep the existing comment about arming outside the locked section and about `mutex.exit`, and extend it with the once-per-process rule and why a reload needs no re-arm: the cadences are module constants and the thresholds each tick reads come from `state` at tick time, so a re-armed interval would restore nothing and only move the next tick further away.\n\nWhat deliberately does NOT change:\n- `start*` keeps restarting, for callers that pass a cadence on purpose.\n- `stop*` and `state.stop()` are untouched, so shutdown still clears every interval and a later load() arms fresh ones.\n- No sweep body, threshold or cadence changes, and nothing here touches task release (task rail 2).\n\nError handling: arming stays exception-free by construction and this card adds no try/catch. If `setInterval` or `mutex.exit` ever threw, the error propagates out of load() exactly as it does today — loudly. Swallowing it would be a new silent path in which the fleet runs with no self-heal at all, which is the failure this card exists to remove.\n\nBoth cases from step 2 turn green. DoD 3 is satisfied by these two comments; docs/ARCHITECTURE.md is deliberately left alone, because task-808869c5's documentation sweep owns that file right now and two cards editing it would collide.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/sweeps.test.ts"
+      ],
+      "note": "Fix landed. Edit order kept the shared tree valid at every point: export first, then import, then call site, then tests.\n(a) sweeps.ts (+24/-0, CRLF kept): new `armPeriodicSweeps(state)` after stopReconcileWindowCheck. It calls each module start* ONLY when that handle `=== undefined`; `=== undefined` is the exact unarmed state that stop* writes. Its doc comment gives the why:\n- the FileWatcher reload restarts each sweep's phase;\n- starved self-heals: blocked-timeout alerts/parking, lease reaper, stale-worker prune, REVIEW self-heal, reconcile-window pass;\n- the 2026-09-17 measurement: 3m59s, two seats;\n- why a reload has nothing to re-arm: cadences and the stale liveness window are constants, and settings thresholds are read from state at tick time;\n- that stop*/clearEmitter clear the handles, and that start* keep restart semantics.\n(b) StateManager.ts (+11/-4, LF kept): `armPeriodicSweeps` imported from './sweeps.js'. load()'s four start* calls are replaced by `armPeriodicSweeps(this)`, still after `await withTimeout(loadOperation, ...)`, so it stays outside the locked section and start* still arm via mutex.exit. The existing lock comment is kept verbatim and extended with the once-per-process rule and why a reload needs no re-arm (DoD 3).\n(c) sweeps.test.ts (+108/-0): the step-2 draft landed byte-for-byte. Before cp, I ran `cmp pristine repo`, so no peer had edited it; after cp, `cmp full repo`. numstat shows insertions only, so no existing case was touched.\nUnchanged, on purpose: start*/stop* bodies, clearEmitter, cadences, thresholds, sweep bodies, and any task release. No try/catch was added, so an arming failure still propagates out of load() loudly.\ndocs/ARCHITECTURE.md untouched (task-808869c5 owns it).\nVerification (repo): `npx tsc --noEmit` exit 0; `npx vitest run src/state/sweeps.test.ts` 13/13 passed (was 12/13 red on HEAD sources); sweeps + StateManager + StateManager.fixes = 135/135.",
+      "startedAt": "2026-09-18T17:33:58.902Z",
+      "completedAt": "2026-09-18T17:35:16.996Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Phase 5 — regression and mutation proof, from packages/moe-daemon.\n\n(a) `npm test` and `npx tsc --noEmit`. The only count that may move is sweeps.test.ts. Pay attention to the suites most likely to notice a scheduling change: state/sweeps.test.ts, state/StateManager.test.ts (including 'timers armed inside runExclusive do not inherit the lock'), state/FileWatcher*.test.ts and server/*.test.ts. A moved count anywhere else means the change reached further than load()'s tail.\n\n(b) Mutation replay in a scratch tree (mem:pattern-red-proof-by-scratch-tree-mutation-vitest), one site at a time, restoring from pristine before each, unmutated first and last:\n- Restore the four `start*` calls in load(): case 1 goes red on both halves (new handles, zero ticks).\n- Make `armPeriodicSweeps` arm unconditionally: same red, which proves the guard itself is what the case pins and not the refactor.\n- Guard only the blocked-timeout sweep and leave the other three unconditional: case 1 goes red on the reconcile and stale assertions only — proof that each sweep is pinned separately rather than by one lucky assertion.\n- Skip arming when a handle exists but never arm on the first load: case 2's 'all four armed' assertion goes red.\n- Drop the `stop()` clearing: case 2's re-arm-after-stop assertion goes red.\nEvery failure must be behavioural, not a missing symbol.\n\n(c) Say plainly in the step note what this fix does NOT address, so nobody reads it as more than it is: the reload rate itself is unchanged (self-write suppression is still a 500 ms per-path Set, and a claim's burst can still produce a second chokidar event), and each reload still broadcasts an unfiltered STATE_SNAPSHOT. The card scoped both out; if either still looks harmful after this lands, file it rather than widening this card. The same goes for the governor's request for a log line naming the reload's trigger path: it lives in src/index.ts, outside this card's files, and is a diagnostic rather than part of the DoD.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "(a) Regression (repo, packages/moe-daemon):\n- The first `npm test` after step 3 was RED on one test: stateModules.test.ts 'keeps StateManager.ts under the size budget' (\"1500 lines (budget 1500)\"). My 9-line load() comment pushed the file to the cap. I shortened it to 3 lines (\"Armed ONCE per process: a reload never resets an armed sweep ... See armPeriodicSweeps\"); the full why lives on armPeriodicSweeps in sweeps.ts. StateManager.ts is now +5/-4, 1493 lines (split count 1494, budget <1500), a net +1 over HEAD.\n- Rerun: `npx tsc --noEmit` exit 0; full vitest exit 0, 122 files, 2110 passed (baseline 2107).\n- A per-file diff against the baseline JSON shows exactly ONE moved count: sweeps.test.ts 10 -> 13. Unchanged: StateManager.test 115/115 (including 'timers armed inside runExclusive do not inherit the lock'), StateManager.fixes 7/7, stateModules 3/3, FileWatcher.test 11/11, FileWatcher.paths 7/7, server/* all equal.\n\n(b) Mutation replay, scratch tree only (D:/moe-w-d0c3b06e-ed52/tree, junctioned node_modules). A driver restores all 3 targets from final/ (sha256-verified) before and after each mutant, every anchor matches exactly once (`--check` passed for all), and the whole suite runs per mutant.\n- none (first): 2110/2110, exit 0.\n- restore-start-calls (HEAD's four start* in load()): 1 red, case 1. Diff: sameHandle all four true->false; ticks blocked 1->0, reconcile 1->0, stale 5->4.\n- unconditional (armPeriodicSweeps without guards): 1 red, case 1, the identical diff. So the guard is what's pinned, not the refactor.\n- guard-blocked-only: 1 red, case 1. The diff shows ONLY proposalPurge/reconcileWindow/staleWorker false and ticks reconcile 0, stale 4; the blockedTimeout fields match. Each sweep is pinned separately.\n- never-arm-first (inverted guard): 3 red. Case 1 and case 2a fail on \"expected ['blockedTimeout',...] to deeply equal []\", plus the existing StateManager.test purge-interval case.\n- no-stop-clearing (clearEmitter without the stop* calls): 2 red. Case 2a fails on \"expected [] to deeply equal ['blockedTimeout',...]\", plus StateManager.test purge-interval.\nExtras beyond the plan:\n- stop-keeps-handles (stop* leave the handle set, so the guard would never re-arm): 3 red, case 2a among them.\n- module-flag (literal once-per-process boolean): 3 red, case 1 and case 2a among them.\n- idempotent-start (the rejected design): 1 red, case 2b, \"expected handle not to be\" the same.\n- start-no-stop (explicit restart leaks the old interval): 1 red, case 2b, \"called 5 times, but got 6\".\n- none (last): 2110/2110, exit 0.\nEvery red is behavioural; there are no load failures or missing symbols. Afterwards `cmp` shows repo == scratch == final for all 3 files, and a grep for mutant text in the repo finds 0.\n\n(c) NOT addressed, on purpose (the card scoped these out):\n- The reload RATE is unchanged. Self-write suppression is still a 500 ms per-path Set, and a claim's write burst can still yield a second chokidar event and a reload.\n- Each reload still broadcasts an unfiltered STATE_SNAPSHOT (ARCHIVED tasks included).\n- The governor's per-reload trigger-path log line lives in src/index.ts and was not added.\nAfter this fix those reloads no longer starve the sweeps. They still cost a full reload plus a broadcast each, so file a follow-up if that shows up in profiles.",
+      "startedAt": "2026-09-18T17:35:19.954Z",
+      "completedAt": "2026-09-18T17:40:18.676Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Phases 7+8 — self-review, then complete. Answer in ONE task comment:\n1. The mechanism, restated from the code as it now stands: what re-armed the timers, what arms them now, and why a reload needs nothing re-read (name the values captured at arm time versus read at tick time, from step 1's walk).\n2. Shutdown and restart: `state.stop()` still clears all four, a load() after a stop arms fresh ones, and an explicit `start*` with a cadence still restarts. Name the case that proves each.\n3. The lock rules are intact: arming still happens outside the locked section and still goes through `mutex.exit`, so a tick's `runExclusive` genuinely acquires. Name the existing regression test you re-ran.\n4. No behaviour of any sweep changed: same cadences, same thresholds, same bodies, and no idle-based release anywhere (task rail 2).\n5. What is still true after this fix: reloads happen just as often, and each still broadcasts an unfiltered snapshot. Say whether you filed anything for those.\n6. Would I be embarrassed if this broke in production? The worst case is a sweep that silently never arms — name the case that would catch it.\n\nThen: delete any scratch tree (unlink junctions first), cmp the repo sources against your final copies to prove no mutant leaked, call moe.declare_files for exactly the three files this plan names, and moe.complete_task with verification `{ command: 'cd packages/moe-daemon && npx tsc --noEmit && npm test', exitCode: 0, outputTail }` plus a summary naming the two cases, the mutation results and the before/after suite counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/sweeps.test.ts"
+      ],
+      "note": "Self-review posted as ONE task comment (comment-6169cbaa), answering items 1-6. It covers: the mechanism now; arm-time vs tick-time values; shutdown via clearEmitter (StateManager has no stop()); the lock rules with the ALS regression test re-run; sweep behaviour unchanged, with no idle release; what remains out of scope (reload rate, unfiltered snapshot, trigger log; nothing filed); and the never-arms guard cases.\nAdversarial checklist:\n- Concurrent loads: armPeriodicSweeps is synchronous, so check-then-arm cannot interleave, and a second load skips armed handles (no double arming).\n- clearEmitter racing an in-flight load: that load can re-arm after shutdown, exactly as before; the intervals are unref'd.\n- A failed or timed-out load skips arming, as before: old handles stay armed on a reload.\n- Only stop* ever set the handles to undefined, and they clear the interval first.\nAll theoretical and all pre-existing; none needed a change.\nCleanup:\n- `cmp` showed repo == final for all 3 files BEFORE deleting scratch.\n- Junction unlinked first; the repo node_modules/vitest/vitest.mjs was verified present; D:/moe-w-d0c3b06e-ed52 was removed.\n- declare_files covers exactly the 3 plan files.\nFresh verification: `cd packages/moe-daemon && npx tsc --noEmit && npm test` exit 0: Test Files 122 passed (122), Tests 2110 passed (2110).\nMemories: task handoff written; new gotcha-statemanager-1500-line-budget; convention-daemon-sweep-lifecycle updated (new sweeps go in armPeriodicSweeps, never as a bare start in load()); gotcha-vitest-fake-timers-order-and-real-io updated (off-phase reload trick).",
+      "startedAt": "2026-09-18T17:40:21.461Z",
+      "completedAt": "2026-09-18T17:42:23.132Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 3,
+  "comments": [
+    {
+      "id": "comment-4a54b45df7fd48f2929d06be878c99fe",
+      "author": "governor-82389379",
+      "content": "GOVERNOR, 17:36Z: reload rate measured with a passive /ws listener (plugin endpoint) from 16:52Z to 17:36Z, with 2 active seats (1 worker, 1 QA) plus 1 architect.\n- Reloads came at 16:53:58.102Z, 17:11:01.189Z and 17:26:03.049Z, inferred from unfiltered STATE_SNAPSHOT broadcasts that did not land on the 5-minute sweep grid. Another one around 16:48:38Z is inferred from when the reconcile sweep fired. That's roughly one reload every 5-15 minutes, so the 5-minute sweeps are delayed but still run at this fleet size. A bigger fleet (more claims and transitions) is where they starve.\n- Not every write reloads. start_step and complete_step pairs (~3 s apart), submit_plan, and the idle-worker 30 s polls produced no snapshot. The 16:53:58Z reload came 150 ms after a claim's burst of writes (task file twice ~180 ms apart, worker file 3 times within 400 ms). I did not pin down the triggers for 17:11:01Z (5.6 s after complete_task) and 17:26:03Z (316 ms after a chat_send to #governors; channels/*.json is watched).\n- A daemon-side log line on each FileWatcher-triggered reload, naming the event path, would make the trigger easy to see; the daemon logs to plugin-captured stdout only.",
+      "timestamp": "2026-09-17T17:36:30.984Z"
+    },
+    {
+      "id": "comment-defa0043c4b643aa853eb4b179789d4b",
+      "author": "governor-82389379",
+      "content": "GOVERNOR, 17:47Z: the listener ran until 17:47Z, and every claim was followed by a reload:\n- worker-3b5de06f claimed 758423de at 16:53:57.56Z; the reload snapshot followed at 16:53:58.10Z.\n- worker-3b5de06f claimed 49ec8755 at 17:41:53.91Z; reload at 17:41:54.39Z.\n- qa-17c2d0c8 claimed 758423de at 17:45:53.28Z; reload at 17:45:53.70Z.\nThe last two reloads were 3m59s apart, so the 5-minute sweep timers were reset twice in a row without firing. That happened with only 2 active seats. claim_next_task is a reliable reload trigger, and a fix test can use it as the reproduction.",
+      "timestamp": "2026-09-17T17:48:11.295Z"
+    },
+    {
+      "id": "comment-6169cbaaa51f448abe7daedf9df4fe98",
+      "author": "worker-d0c3b06e",
+      "content": "Self-review (worker-d0c3b06e), step 5\n\n1. Mechanism, from the code as it now stands\n- Before: load() ended with the four `this.start*()` calls. Each start* begins with its stop* and a fresh setInterval, and the FileWatcher callback (src/index.ts) calls `state.load()` on every unsuppressed .moe write. So every reload restarted every sweep's phase.\n- Now: load() ends with `armPeriodicSweeps(this)` (state/sweeps.ts). It calls a start* only when that handle `=== undefined`, so a reload leaves an armed interval alone.\n- Why nothing needs re-reading, from the step-1 walk:\n  - checkBlockedTimeouts reads state.blockedTimeoutMs, reviewStaleTimeoutMs and staleWorkerTimeoutMs at TICK time.\n  - checkReconcileWindow reads state.reconcileWindowMs at TICK time.\n  - purgeResolvedProposals reads the module constant PROPOSAL_PURGE_AGE_MS; load() also purges inline on every load.\n  - The only ARM-time capture is the stale watcher's livenessTimeoutMs. load() always armed it with the 120_000 default, so it is a constant.\n  - The cadences (300000, PROPOSAL_PURGE_INTERVAL_MS, 60_000, RECONCILE_WINDOW_CHECK_INTERVAL_MS) are constants.\n\n2. Shutdown and restart\n- The plan's `state.stop()` is `clearEmitter()`: StateManager has no stop(), and index.ts shutdown calls clearEmitter. It is untouched and still clears all four handles.\n- Case 'clearEmitter() stops every sweep, and the next load() arms all four again' proves the clear and the fresh re-arm. Mutants no-stop-clearing, stop-keeps-handles and module-flag all turn it red.\n- Case 'an explicit start* still restarts its sweep on the cadence the caller passes' proves explicit restart semantics. Mutant idempotent-start turns it red (same handle); start-no-stop turns it red (\"called 5 times, but got 6\").\n\n3. Lock rules\n- armPeriodicSweeps(this) still runs after `await withTimeout(loadOperation, ...)`, where loadOperation = this.mutex.runExclusive(...), so it is outside the locked section.\n- The start* bodies are unchanged and still arm via `state.mutex.exit(() => setInterval(...))`.\n- Re-ran green: StateManager.test.ts 'timers armed inside runExclusive do not inherit the lock (ALS leak regression)' (StateManager.test 115/115).\n\n4. No sweep behaviour changed. Cadences, thresholds, sweep bodies, start*/stop* bodies and clearEmitter are all byte-identical to HEAD. No idle-based release was added anywhere (rail 2). The diff is load()'s tail, one new function and tests.\n\n5. Still true after this fix\n- Reloads happen just as often: self-write suppression is still a 500 ms per-path Set, so a claim's burst can still yield a second chokidar event.\n- Each reload still broadcasts an unfiltered STATE_SNAPSHOT.\n- The governor's per-reload trigger log (src/index.ts) was not added.\n- I filed nothing. The card scoped all three out, and after this fix they cost reload work and bandwidth, not starved self-heals.\n- Note for the governor: the sweeps that a busy fleet starved (blocked-timeout parking, lease reaper, stale prune, REVIEW self-heal, reconcile pass) WILL start acting again once the daemon restarts on a rebuilt dist. Until then this is inert.\n\n6. Embarrassment test. The worst case is a sweep that silently never arms. Four things catch it:\n- case 1's `unarmed(armed)` === [];\n- case 2a's all-four-armed check before and after clearEmitter (never-arm-first turns both red);\n- the existing StateManager.test 'purges stale resolved proposals on load and starts purge interval';\n- the stop-keeps-handles mutant, which proves a stop that forgot to reset a handle cannot leave the daemon unswept without a red test.\n\nOne incident during the run: the first full `npm test` was red on stateModules.test.ts 'keeps StateManager.ts under the size budget' (1500 against a budget of <1500). My load() comment was 9 lines; I cut it to 3, and the full why lives on armPeriodicSweeps. StateManager.ts is now net +1 line (1493).",
+      "timestamp": "2026-09-18T17:41:16.125Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-17T17:01:58.606Z",
+  "updatedAt": "2026-09-18T18:15:33.225Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T17:24:00.509Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-09-18T18:14:48.683Z",
+    "wallClockMs": 3048174
+  },
+  "contextFetchedBy": [
+    "architect-aa5a6c1e",
+    "worker-d0c3b06e",
+    "qa-a36819c3"
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T17:26:35.670Z",
+  "planningNotes": {
+    "approachesConsidered": "The guard belongs at the load() call site, not inside each start*.\n- `armPeriodicSweeps(state)` arms only what is unarmed; `start*` keeps restarting for callers that pass a cadence on purpose (sweeps.test.ts does exactly that, after an explicit stop).\n- Rejected: making each `start*` idempotent. It would silently ignore a caller's new cadence — a trap for the next test or feature that means to re-arm — and the DoD's wording is about load(), not about the helpers.\n- Rejected: arming from src/index.ts after the first load. It moves the arming away from the thing that owns the handles and leaves every other load() caller (tests, the plugin path) unswept.\n- Rejected: adding try/catch around the arming. Today a failure propagates out of load() loudly; swallowing it would create a new silent path where the fleet runs with no self-heal, which is precisely this card's defect.\n- Rejected here, scoped out by the card itself: tightening self-write suppression, filtering the reload snapshot, and the governor's per-reload log line (it lives in src/index.ts, outside these files).",
+    "codebaseInsights": "- load()'s tail arms four sweeps; each start* begins with its stop* and a fresh setInterval, so the phase restarts from zero on every reload. The only non-test callers of start* are those four lines.\n- The existing sweeps.test.ts case 'arms one interval and genuinely clears it on stop' calls stopReconcileWindowCheck FIRST, so keeping restart semantics leaves it green.\n- Cadences are module constants (RECONCILE_WINDOW_CHECK_INTERVAL_MS, 300000, 60_000, PROPOSAL_PURGE_INTERVAL_MS) and the sweep bodies read their thresholds from `state` at tick time, so a re-arm restores nothing. The one value captured at arm time is startStaleWorkerWatcher's livenessTimeoutMs — and load() always passes the default, so arming once freezes exactly what a re-arm would have restored.\n- Test timing trap: load() runs real fs work behind `withTimeout`, which is a setTimeout. Fake only setInterval/clearInterval, or the load can hang instead of the sweeps being tested.\n- The strongest assertion is handle identity across the reload (`toBe`), because it does not depend on the fake clock at all; the tick counts are the second, behavioural half.",
+    "risks": "1. A once-per-process rule must not outlive a stop(): if stop() ever stopped clearing the handles, the daemon would run unswept forever. Case 2 pins that explicitly.\n2. Fake timers plus a real load() are the likely source of a flaky or hanging test; fake only the interval clock.\n3. This fix does not reduce the reload rate or the unfiltered STATE_SNAPSHOT broadcast per reload. Both were scoped out by the card; say so rather than letting a reader assume the reload storm is solved.\n4. docs/ARCHITECTURE.md is currently owned by task-808869c5's docs sweep, so DoD 3 is satisfied through the load() and armPeriodicSweeps comments instead.\n5. The change is inert on the live fleet until the daemon is rebuilt and restarted — which is also the moment the other Wave 1 fixes activate.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/sweeps.test.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T17:26:35.767Z",
+  "workStartedAt": "2026-09-18T17:27:29.293Z",
+  "declaredFiles": [
+    "packages/moe-daemon/src/state/sweeps.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/sweeps.test.ts"
+  ],
+  "reviewStartedAt": "2026-09-18T17:42:53.611Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": "tsc --noEmit: no output (exit 0)\n Test Files  122 passed (122)\n      Tests  2110 passed (2110)\n   Duration  12.92s (tests 88%, transform 8%, import 4%)",
+    "reportedAt": "2026-09-18T17:42:53.611Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/sweeps.test.ts",
+    "packages/moe-daemon/src/state/sweeps.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+    ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
+    ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+    ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json"
+  ],
+  "completionSummary": "Fix: StateManager.load() no longer re-arms the periodic sweeps on every FileWatcher reload. load()'s four start* calls are replaced by armPeriodicSweeps(this) (state/sweeps.ts), which starts a sweep only when its handle === undefined. It still runs outside the locked section; start* are unchanged and still arm via mutex.exit; clearEmitter() (shutdown; StateManager has no stop()) still clears all four, so the next load arms fresh ones. Explicit start* keep restart semantics. No cadence, threshold, sweep body or release path changed.\nTests (sweeps.test.ts, new describe 'periodic sweep arming', fake setInterval/clearInterval only):\n- Case 1 'a reload does not restart an armed sweep, so its ticks keep their phase': reloads at 4:00 and 4:30 (a 4:00-only reload is on the 60 s phase, where HEAD's restart is invisible), then 5:01. On HEAD all 4 handles are replaced and ticks are blocked 0, reconcile 0, stale 4; fixed: same handles and ticks 1/1/5.\n- Case 2a 'clearEmitter() stops every sweep, and the next load() arms all four again'.\n- Case 2b 'an explicit start* still restarts its sweep on the cadence the caller passes' (5 ticks, not 6).\nMutation replay (scratch tree, full suite per mutant, none first and last 2110/2110). Red per mutant:\n- restore-start-calls, unconditional: case 1.\n- guard-blocked-only: case 1, with only the 3 unguarded sweeps in the diff.\n- never-arm-first: 1 and 2a.\n- no-stop-clearing, stop-keeps-handles: 2a.\n- module-flag: 1 and 2a.\n- idempotent-start, start-no-stop: 2b.\nAll reds are behavioural; repo == final copies was verified before the scratch tree was deleted.\nCounts: baseline 122 files / 2107 passed, now 122 / 2110; the only per-file delta is sweeps.test.ts 10 -> 13. tsc exit 0.\nThe load() comment is 3 lines because stateModules.test caps StateManager.ts below 1500 lines (now 1493, net +1); the full why is on armPeriodicSweeps (DoD 3).\nOut of scope, unchanged, nothing filed: the reload rate (500 ms per-path self-write Set), the unfiltered STATE_S",
+  "commits": [
+    {
+      "sha": "1bd826b9c43270c50bf5f59d50e38bb334e825e8",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d0c3b06e@2026-09-18T17:27:06Z",
+      "paths": [
+        ".moe/tasks/task-0e967fa1c869495888c3e1b50f69c842.json",
+        ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/sweeps.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts"
+      ],
+      "recordedBy": "worker-d0c3b06e",
+      "recordedAt": "2026-09-18T17:43:06.194Z",
+      "treeId": "21a8f650b5c931e64b3f1708c4c45aa49024091c",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "93a26a14f9b7578ca34efe6fc7b60bd0d87df294",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a36819c3@2026-09-18T18:09:47Z",
+      "paths": [
+        ".moe/tasks/task-5e096de99bc94b7d81231bb855603e76.json",
+        ".moe/tasks/task-ed52052b7ace4b8f8db4672cacfa3679.json"
+      ],
+      "recordedBy": "qa-a36819c3",
+      "recordedAt": "2026-09-18T18:15:33.225Z",
+      "treeId": "65d34ddb8467a96ad60c6a4fbf56bc89486b5066",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/sweeps.ts",
+    "packages/moe-daemon/src/state/StateManager.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-a36819c3@2026-09-18T18:09:47Z",
+    "at": "2026-09-18T18:15:33.225Z"
+  },
+  "completedAt": "2026-09-18T18:14:48.683Z",
+  "reviewCompletedAt": "2026-09-18T18:14:48.683Z",
+  "reviewSummary": "Completion commit 1bd826b is pushed (origin/moe/work-2026-09-13). The diff is small: armPeriodicSweeps arms a sweep only when its handle === undefined, load() calls it once at its tail, and sweeps.test.ts gains 3 tests. start*/stop*/clearEmitter are byte-identical: sweeps.ts is one additions-only hunk. No cadence, threshold or sweep-body change, and no idle release (rail 2); daemon-only (rail 1).\nDoD1: in a scratch copy, the pre-fix 7728e7b StateManager.ts + sweeps.ts with the new tests fail case 1. All 4 handles are replaced; ticks are 0/0/4 against the expected 1/1/5. With the fix it passes.\nDoD2: armPeriodicSweeps runs after `await withTimeout(loadOperation)`, so it is outside the lock, and start* still arm via mutex.exit. Cases 2a/2b pass, and StateManager.test is 115/115, including the ALS lock-leak regression.\nDoD3: the load() comment says 'Armed ONCE per process: a reload never resets an armed sweep'.\nDoD4, clean HEAD export: tsc exit 0 and npm test 122 files, 2107 passed / 1 skipped. Shared tree: 2110/2110. The delta is entirely peer-dirty acceptance/qaApprove/recommendSkill tests; sweeps.test.ts has 13 in both trees.\nThresholds are read from state at tick time, so arming once loses nothing.\nMy mutants all go red: unconditional arm (case 1), stale-only unguarded (case 1, stale only), inverted reconcile guard (1+2a), clearEmitter skipping reconcile (2a), start* without stop (2b). Unmutated is green first and last. Scratch deleted."
+}

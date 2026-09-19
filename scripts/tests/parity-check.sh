@@ -58,9 +58,16 @@ for code in \
   require_both "code" "$code"
 done
 
-# Chat prefixes (daemon-visible lines a governor triages on).
-for chat in 'PUSH-BLOCKED:' 'PUSH FAILED' 'CHECKPOINT-UNPUSHED' 'MOE_RESCUE_REF task='; do
+# Chat prefixes (daemon-visible lines a governor triages on). The gate-failure
+# line carries the marker in both wrappers (the status-lookup line in neither).
+for chat in '🚫 PUSH-BLOCKED:' 'PUSH FAILED' 'CHECKPOINT-UNPUSHED' 'MOE_RESCUE_REF task='; do
   require_both "chat prefix" "$chat"
+done
+
+# Claimed-prompt contract: one task per CLI session in both wrappers, and an
+# interactive TUI (which never exits on its own) is told to hand control back.
+for prompt in 'the wrapper will pick up the next task in a fresh session'   'INTERACTIVE session: this TUI stays open after you stop'; do
+  require_both "claimed prompt contract" "$prompt"
 done
 
 # Log prefixes.
@@ -77,7 +84,8 @@ done
 
 # Baseline / temp-index plumbing (identical file formats and git invocations).
 for lit in '#moe-baseline v1' 'moe/baseline' ':(literal)' \
-  '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths'; do
+  '--porcelain=v1 -z --untracked-files=all --no-renames' 'hash-object --stdin-paths' \
+  'update-index --no-assume-unchanged --no-skip-worktree -z --stdin'; do
   require_both "baseline/index" "$lit"
 done
 
@@ -145,8 +153,19 @@ for banner in 'Grok MCP config written to:' 'Grok mode: headless' 'Grok mode: in
 done
 
 # MCP tools the wrappers call for the ledger.
-for tool in get_commit_scope record_commit; do
+for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt; do
   require_both "RPC tool" "$tool"
+done
+
+for field in attemptId generation candidateId treeSha runnerId runner-observed; do
+  require_both "candidate evidence field" "$field"
+done
+
+# The landing outcomes finalize_attempt carries: both wrappers map every exit
+# (the interrupted one included) onto the same words. 'failed' is too common a
+# word to be a needle; the teardown-no-baseline arm proves it on both engines.
+for outcome in landed nothing-to-commit rescued; do
+  require_both "finalize outcome" "$outcome"
 done
 
 # Daemon get_context fields both wrappers must consume identically (the
@@ -159,6 +178,31 @@ done
 # seat; both wrappers must state it in the same words.
 for prose in 'only resource-lease waits and third-party blocks hold a seat now'; do
   require_both "blocked-hold prose" "$prose"
+done
+
+# Attempt finalize ladder, candidate-evidence and gate-cleanup prose: an operator
+# reading either transcript must see the same diagnosis for the same state.
+for prose in '[finalize] no finalizing attempt for this seat on task' 'has no pinned identity; not acknowledging.'   'finalize_attempt acknowledgement exhausted; stopping new-task loop' 'qualityGate not run: candidate evidence unavailable'   'Cannot remove owned qualityGate workspace' 'cleanup will be retried'   'Attempt identity unavailable:' 'Missing/stale attempt identity; candidate completion will fail closed.'; do
+  require_both "attempt/gate prose" "$prose"
+done
+
+# Delivery receipts: the journal, the receipt call, its crash replay, the push
+# result it reports and the reused-gate line, spelled identically in both.
+for lit in 'moe/receipt' '[receipt]' record_delivery_receipt DELIVERY_RECEIPT_CONFLICT targetBefore targetAfter landedRevision pushResult 'Moe-Kind: completion'; do
+  require_both "delivery receipt" "$lit"
+done
+for prose in 'delivery receipt not recorded for candidate' 'for the next pre-flight to replay.' 'already has a delivery receipt that differs from this report; keeping the recorded one, not retrying.' 'a crash before the receipt would leave this landing without one.' 'replaying the delivery receipt of task' 'that landing never moved the ref; dropping' 'kept: malformed journal' 'is still finalizing after its replayed receipt; its finalizing holds stay until it closes.' 'recording the owed ledger row of task' 'did not record the owed ledger row' 'a pull --rebase rewrote' 'push result unknown: the landing stopped before its push finished' 'no git remote configured; push skipped, the commit stays local on' 'push failed: ' 'git push failed' 'qualityGate result reused: the rebuilt candidate has the same tree and base.'; do
+  require_both "delivery receipt prose" "$prose"
+done
+
+# Runner identity and reattach: the identity line and its warning, the reattach
+# call and its three outcomes, and the heartbeat's other reasons, spelled
+# identically in both.
+for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequired '[reattach]'; do
+  require_both "runner reattach" "$lit"
+done
+for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this wrapper pinned no such reconciling attempt; nothing to reattach.'; do
+  require_both "runner reattach prose" "$prose"
 done
 
 # Deferred features must not be advertised by either wrapper.

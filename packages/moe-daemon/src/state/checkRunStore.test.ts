@@ -311,6 +311,34 @@ describe('checkRunStore', () => {
     expect(getCheckRun(h.state, 'check-1')).toStrictEqual(first.checkRun);
   });
 
+  // Check-1.json and check-1.json are ONE file on NTFS and a default APFS volume,
+  // so recording check-1 would silently overwrite Check-1. Refused whatever its content.
+  it('refuses an id that differs from a stored check run only by case', async () => {
+    const first = await record({ id: 'Check-1' });
+    const before = snapshot();
+    const expected = {
+      code: -32002,
+      codeName: 'CHECK_RUN_ID_CASE_COLLISION',
+      message:
+        '[CHECK_RUN_ID_CASE_COLLISION] Check run id check-1 differs only by case from the existing check run Check-1; ' +
+        'each record is one file (<id>.json), and NTFS and a default APFS volume treat those two names as the same file, ' +
+        'so recording this one would overwrite the other. Supply a distinct id - a stored id keeps the case it was given, ' +
+        'and references match it exactly.',
+      context: { checkRunId: 'Check-1', requestedId: 'check-1' },
+    };
+
+    // The candidate binding stays valid, so the refusal is the id rule and not CHECK_RUN_TREE_MISMATCH.
+    for (const override of [{ id: 'check-1', exitCode: 1, outputTail: 'gate failed' }, { id: 'check-1' }]) {
+      const error = await refusal(record(override));
+      expect({ code: error.code, codeName: error.codeName, message: error.message, context: error.context }).toEqual(expected);
+    }
+
+    expect(snapshot()).toEqual(before);
+    expect(h.state.checkRuns.size).toBe(1);
+    expect(getCheckRun(h.state, 'Check-1')).toStrictEqual(first.checkRun);
+    expect(checkFiles()).toEqual(['Check-1.json']);
+  });
+
   it('compares NORMALIZED reports, so two reports that store identically replay', async () => {
     const tail = 'y'.repeat(MAX);
     const long = await record({ id: 'check-1', outputTail: `first preamble ${tail}` });

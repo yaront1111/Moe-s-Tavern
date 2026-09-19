@@ -4,6 +4,8 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { startStepTool } from './startStep.js';
+import { claimNextTaskTool } from './claimNextTask.js';
+import { getContextTool } from './getContext.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import type { Task, Epic, Project } from '../types/schema.js';
 
@@ -206,3 +208,83 @@ describe('moe.start_step', () => {
   });
 });
 
+// A supplied workerId on an unassigned WORKING row is refused before any write and
+// pointed at the claim. The old guards no-oped here, so start_step stamped the
+// caller CODING with a currentTaskId for a row it never claimed (2026-09-13).
+describe('moe.start_step on an unclaimed row', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      status: 'WORKING',
+      assignedWorkerId: null,
+      contextFetchedBy: ['worker-x'],
+      implementationPlan: [
+        { stepId: 'step-1', description: 'First', status: 'PENDING', affectedFiles: [] },
+        { stepId: 'step-2', description: 'Second', status: 'PENDING', affectedFiles: [] },
+      ],
+    });
+    h.createWorker({ id: 'worker-x', status: 'IDLE', currentTaskId: null });
+    await h.state.load();
+  });
+
+  const args = { taskId: 'task-1', stepId: 'step-1', workerId: 'worker-x' };
+
+  async function refusedStart(): Promise<MoeError> {
+    const call = startStepTool(h.state).handler(args, h.state);
+    await expect(call).rejects.toBeInstanceOf(MoeError);
+    return (await call.catch((err: unknown) => err)) as MoeError;
+  }
+
+  it('refuses with a retryable STATE_CONFLICT naming the claim and writes nothing', async () => {
+    const err = await refusedStart();
+    expect(err.code).toBe(MoeErrorCode.STATE_CONFLICT);
+    expect(err.codeName).toBe('TASK_NOT_CLAIMED');
+    expect(err.context).toMatchObject({
+      retryable: true,
+      nextAction: {
+        tool: 'moe.claim_next_task',
+        args: { taskId: 'task-1', statuses: ['WORKING'], workerId: 'worker-x' },
+      },
+    });
+    expect(err.message).toContain('moe.claim_next_task');
+    expect(err.message).toContain('task-1');
+
+    const worker = h.state.getWorker('worker-x');
+    expect(worker?.status).toBe('IDLE');
+    expect(worker?.currentTaskId).toBeNull();
+    const task = h.state.getTask('task-1');
+    expect(task?.assignedWorkerId).toBeNull();
+    expect(task?.implementationPlan[0].status).toBe('PENDING');
+    expect(task?.implementationPlan[0].startedAt).toBeUndefined();
+    expect(task?.workStartedAt).toBeUndefined();
+  });
+
+  it('refuses the missing claim before the get_context check', async () => {
+    await h.state.updateTask('task-1', { contextFetchedBy: [] });
+    const err = await refusedStart();
+    expect(err.codeName).toBe('TASK_NOT_CLAIMED');
+    expect(err.message).not.toContain('moe.get_context');
+  });
+
+  it('points at a claim that works: claim, get_context, then the same start_step succeeds', async () => {
+    const err = await refusedStart();
+    const next = err.context?.nextAction as { tool: string; args: Record<string, unknown> };
+    expect(next.tool).toBe('moe.claim_next_task');
+    await claimNextTaskTool(h.state).handler(next.args, h.state);
+    await getContextTool(h.state).handler({ taskId: 'task-1', workerId: 'worker-x' }, h.state);
+
+    const result = await startStepTool(h.state).handler(args, h.state) as { success: boolean };
+    expect(result.success).toBe(true);
+    const task = h.state.getTask('task-1');
+    expect(task?.assignedWorkerId).toBe('worker-x');
+    expect(task?.implementationPlan[0].status).toBe('IN_PROGRESS');
+    const worker = h.state.getWorker('worker-x');
+    expect(worker?.status).toBe('CODING');
+    expect(worker?.currentTaskId).toBe('task-1');
+  });
+});

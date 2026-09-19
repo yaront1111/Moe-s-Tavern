@@ -16,9 +16,10 @@ import org.junit.Test
 class MoeJsonTest {
     private val deliveryJson = """{
         "currentCandidate":{"id":" Candidate-X ","treeSha":"AbCdEf0123456789AbCdEf0123456789AbCdEf01","shortSha":"AbCdEf01","baseRevision":" Base-X "},
-        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9},
+        "latestCheckRun":{"command":" npm.cmd test -- --run \n","exitCode":-9,"source":"runner-observed"},
         "deliveryReceipt":{"target":" refs/heads/Pilot ","landedRevision":" LanDed-X "},
-        "attemptPhase":"finalizing"
+        "attemptPhase":"finalizing",
+        "requiredCheckSatisfied":false
     }"""
 
     private fun serializedDelivery(task: Task) =
@@ -48,16 +49,41 @@ class MoeJsonTest {
     fun `delivery rejects numeric ids string exit codes and wrong shaped nested records`() {
         val fields = """"delivery":{
             "currentCandidate":{"id":42,"treeSha":true,"shortSha":[],"baseRevision":{}},
-            "latestCheckRun":{"command":17,"exitCode":"0"},
-            "deliveryReceipt":[],"attemptPhase":1
+            "latestCheckRun":{"command":17,"exitCode":"0","source":["runner-observed"]},
+            "deliveryReceipt":[],"attemptPhase":1,"requiredCheckSatisfied":"false"
         }"""
         val expected = JsonParser.parseString("""{
             "currentCandidate":{"id":null,"treeSha":null,"shortSha":null,"baseRevision":null},
-            "latestCheckRun":{"command":null,"exitCode":null},"deliveryReceipt":null,"attemptPhase":null
+            "latestCheckRun":{"command":null,"exitCode":null,"source":null},"deliveryReceipt":null,"attemptPhase":null,
+            "requiredCheckSatisfied":null
         }""")
         for ((path, task) in bothPaths(blockerTaskJson(fields))) {
             assertCompanions(path, task)
             assertEquals(path, expected, serializedDelivery(task))
+        }
+    }
+
+    @Test
+    fun `delivery keeps only a known check source and a JSON boolean verdict`() {
+        val sources = listOf(
+            "" to null, "\"runner-observed\"" to "runner-observed", "\"agent-reported\"" to "agent-reported",
+            "\" runner-observed\"" to null, "\"Agent-Reported\"" to null, "\"bogus\"" to null,
+            "42" to null, "true" to null, "null" to null, "{}" to null
+        )
+        for ((literal, expected) in sources) {
+            val source = if (literal.isEmpty()) "" else "\"source\":$literal"
+            for ((path, task) in bothPaths(blockerTaskJson("\"delivery\":{\"latestCheckRun\":{$source}}"))) {
+                assertEquals("$path source $literal", expected, task.delivery?.latestCheckRun?.source)
+            }
+        }
+        val verdicts = listOf(
+            "" to null, "true" to true, "false" to false, "\"true\"" to null, "1" to null, "0" to null, "null" to null, "[]" to null
+        )
+        for ((literal, expected) in verdicts) {
+            val verdict = if (literal.isEmpty()) "" else "\"requiredCheckSatisfied\":$literal"
+            for ((path, task) in bothPaths(blockerTaskJson("\"delivery\":{$verdict}"))) {
+                assertEquals("$path verdict $literal", expected, task.delivery?.requiredCheckSatisfied)
+            }
         }
     }
 

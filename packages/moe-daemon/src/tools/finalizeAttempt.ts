@@ -2,7 +2,8 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionAttempt } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired, notFound } from '../util/errors.js';
-import { getAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { announceAttemptClosed, getAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { REVISION_RE } from '../state/candidateStore.js';
 import { assertAttemptCurrent } from '../util/enforcement.js';
 
 // =============================================================================
@@ -15,9 +16,11 @@ import { assertAttemptCurrent } from '../util/enforcement.js';
 // exit to infer anything from — so the boundary needs an explicit operation.
 //
 // complete_task leaves the owning attempt OPEN in `finalizing`, and while it is
-// open two holds are in force: claim_next_task refuses that worker's next task,
-// and qa_approve refuses that task's approval. Closing the attempt here is what
-// lifts both.
+// open three holds are in force: claim_next_task refuses that worker's next
+// task; claim_next_task and wait_for_task refuse or skip the task for every
+// other seat; and qa_approve refuses that task's approval. Closing the attempt
+// here is what lifts all three, and a real close announces it with one
+// TASK_UPDATED so the waiters the hold kept parked wake up.
 //
 // NOT a delivery record. `outcome` and `landedRevision` are what the runner
 // REPORTED; the daemon is state-only and never runs git, so it has verified
@@ -29,14 +32,6 @@ import { assertAttemptCurrent } from '../util/enforcement.js';
 /** The four real endings of a wrapper's landing attempt. */
 const OUTCOMES = ['landed', 'nothing-to-commit', 'rescued', 'failed'] as const;
 type FinalizeOutcome = (typeof OUTCOMES)[number];
-
-/**
- * A git object name as the wrapper reports it: 40 hex characters. Case-insensitive
- * to match the sibling runner-called tool (`record_candidate`'s sha check) — two
- * tools in the same slice disagreeing about the case of a sha is exactly the kind
- * of interop trap that only shows up in production.
- */
-const REVISION_PATTERN = /^[0-9a-f]{40}$/i;
 
 interface FinalizeParams {
   taskId: string;
@@ -82,7 +77,7 @@ function validateRevision(outcome: FinalizeOutcome, value: unknown): string | nu
     return null;
   }
   const revision = requireNonBlank('landedRevision', value);
-  if (!REVISION_PATTERN.test(revision)) {
+  if (!REVISION_RE.test(revision)) {
     throw invalidInput('landedRevision', `must be 40 hex characters (got ${JSON.stringify(revision)})`);
   }
   return revision;
@@ -131,8 +126,8 @@ function response(attempt: ExecutionAttempt, params: FinalizeParams) {
     landedRevision: params.landedRevision,
     message:
       `Attempt ${attempt.id} (generation ${attempt.generation}) on task ${attempt.taskId} is closed ` +
-      `with outcome ${params.outcome}. The finalizing hold on the worker's next claim and on ` +
-      'qa_approve is lifted.',
+      `with outcome ${params.outcome}. The finalizing holds on the worker's next claim, on every ` +
+      "other seat's claim of the task and on qa_approve are lifted.",
   };
 }
 
@@ -140,7 +135,7 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.finalize_attempt',
     description:
-      'Close a task\'s execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. This is what lifts the finalizing hold on the worker\'s next claim and on qa_approve — the runner declares the bytes final, not the CLI\'s exit, so an interactive seat that stays open can still finalize. Fenced by attempt id + generation, and idempotent: repeating a call after a lost response writes nothing.',
+      'Close a task\'s execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. This is what lifts the finalizing holds on the worker\'s next claim, on every other seat\'s claim of the task and on qa_approve — the runner declares the bytes final, not the CLI\'s exit, so an interactive seat that stays open can still finalize. Fenced by attempt id + generation, and idempotent: repeating a call after a lost response writes nothing.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -222,6 +217,13 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
         // re-asserting a phase is a no-op there, so lastPhaseAt records when the
         // phase actually changed.
         const closed = await setAttemptPhase(state, attempt.id, 'closed');
+        // The attempt really moved finalizing -> closed (the closed replay
+        // returned above and the phase check refused everything else), so the
+        // hold on the task is gone: wake the waiters it kept parked. Announced
+        // only after the write published the closed record, so no subscriber
+        // can observe the attempt still open; state.emit isolates a throwing
+        // subscriber, so the announcement never fails this call.
+        announceAttemptClosed(state, closed.taskId);
         return response(closed, params);
       });
     }

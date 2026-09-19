@@ -42,16 +42,11 @@ import type { DeliveryReceipt } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
-import { getCandidate } from './candidateStore.js';
+import { getCandidate, renderGot, REVISION_RE } from './candidateStore.js';
 
 /** The longest push result a receipt keeps. A longer one is refused, never truncated, so the record stays verbatim. */
 export const MAX_PUSH_RESULT_CHARS = 2000;
 
-/**
- * A full git object name: the shape moe.finalize_attempt accepts for landedRevision.
- * An abbreviation or a ref name could name different bytes by the time anyone reads the receipt.
- */
-const REVISION_RE = /^[0-9a-f]{40}$/i;
 /** The bound candidateStore puts on a candidate's deliveryTarget, the ref a receipt's target names. */
 const MAX_TARGET_CHARS = 255;
 
@@ -80,15 +75,6 @@ export interface RecordDeliveryReceiptResult {
 }
 
 type RawReceiptParams = { [K in keyof RecordDeliveryReceiptParams]?: unknown };
-
-/** Bounded rendering of an untrusted value: it cannot throw and cannot flood a message. */
-function renderGot(value: unknown): string {
-  if (value === null) return 'null';
-  const kind = typeof value;
-  if (kind === 'object' || kind === 'function' || kind === 'symbol') return `a value of type ${kind}`;
-  const text = kind === 'string' ? JSON.stringify(value) : String(value);
-  return text.length > 40 ? `${text.slice(0, 40)}…` : text;
-}
 
 /** Absent (undefined or null) is MISSING_REQUIRED; present but not a string is INVALID_INPUT. */
 function requireString(field: string, value: unknown): string {

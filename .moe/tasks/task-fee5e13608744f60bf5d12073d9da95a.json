@@ -1,0 +1,214 @@
+{
+  "id": "task-fee5e13608744f60bf5d12073d9da95a",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "JetBrains task detail shows any latest check as \"Reported check passed\", even a run the delivery policy does not count",
+  "description": "Found by the Wave 1 integration gate (task-808869c5, client-contract check). deliveryProjection serves latestCheckRun as {command, exitCode} of the LAST run recorded on the current candidate. It carries no `source`, and it does not say whether the run is the required gate. delivery/policy.ts counts only runner-observed exit-0 runs of the trimmed gate command.\n\nSo the detail view can read \"Reported check passed - exit code 0\" for an agent-reported run while qa_approve refuses required-check:<gate>. It can also show a later failing non-gate run although the gate passed. The label honestly says \"Reported\", but nothing tells the reader whether the policy counts that run.",
+  "definitionOfDone": [
+    "The daemon projection serves the run's source and whether delivery/policy.ts counts it for the required check (or the required-check status itself), with a daemon test",
+    "JetBrains parses and renders it, pinned by a headless presentation test, and an agent-reported or non-gate pass never reads as a satisfied required check",
+    "VS Code keeps ignoring the field without error (npm test + compile)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD on the daemon projection. Do not edit policy.ts.\n\nIn packages/moe-daemon/src/state/deliveryProjection.ts (type first so tests compile):\n- Extend TaskDelivery.latestCheckRun to Pick<CheckRun, 'command' | 'exitCode' | 'source'> but source optional at runtime.\n- Add requiredCheckSatisfied?: boolean on TaskDelivery.\n\nIn packages/moe-daemon/src/state/deliveryProjection.test.ts:\n- Update `expected.latestCheckRun` (and the later-timestamp / latest-check / WS update copies) to include `source: 'runner-observed'` matching the `check` fixture. Existing toEquals fail until checkFor copies source — that is the red proof.\n- Add cases that fail on today's projection:\n  1) an agent-reported exit-0 run on the current candidate is projected with source: 'agent-reported' and, under STRICT settings (copy the qualityGate/everyTask/local-branch/autoCommit true block from qaApprove.test.ts STRICT_SETTINGS via h.setupMoeFolder before load), requiredCheckSatisfied === false.\n  2) a runner-observed exit-0 run of a NON-gate command (e.g. 'node lint.cjs') while qualityGate is 'node gate.cjs' → source runner-observed, requiredCheckSatisfied === false.\n  3) a runner-observed exit-0 run of the trimmed gate command → requiredCheckSatisfied === true.\n  4) default/legacy settings omit requiredCheckSatisfied entirely (existing expected stays without that key).\n  5) resolveDeliveryPolicy throwing (unrecognised deliveryPolicy) omits requiredCheckSatisfied and does not throw — error handling for the /ws serving path. Spy or seed settings.deliveryPolicy to a junk string.\n\nRun from packages/moe-daemon: `npx vitest run src/state/deliveryProjection.test.ts`. Expect FAIL. Skill: test-driven-development.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "note": "RED. Type first: TaskDelivery.latestCheckRun = Pick<CheckRun,'command'|'exitCode'> & Partial<Pick<CheckRun,'source'>>; requiredCheckSatisfied?: boolean. Tests: expected + 3 copies gain source 'runner-observed'; new 'required check verdict' describe (strict() mutates h.state.project.settings in memory, precedent releaseResource.generation.test.ts:125, instead of re-running setupMoeFolder after beforeEach load) with toStrictEqual so omitted keys are pinned: agent-reported gate pass=false, runner non-gate pass=false, runner gate failure=false, runner gate pass=true, padded gate pass=true, later failing lint run after gate pass -> latest shows lint exit 1 + verdict true (ticket's 2nd symptom), omit under legacy/autoCommit=false/whitespace gate/unrecognised deliveryPolicy 'local-brnach' (no throw). Also invalid source (bogus/42/null/undefined) omitted while run still served (guard; passes today). DEVIATION in scope, flagged: sibling fd970f24 has landed on this branch (97df78f) and policy.ts now judges DONE/ARCHIVED by task.requiredCheckAtDone. The plan's literal helper (verdict from live requiredCheckCommand) would say 'counted' for a DONE task with snapshot null (none owed) or an unreadable snapshot (policy reports 'unreadable-required-check', not a required-check: token). Added 4 DONE-snapshot cases that pin the policy's verdict instead. `npx vitest run src/state/deliveryProjection.test.ts` -> 39 failed | 17 passed (red, missing source / verdict). policy.ts untouched. Shared dirty tree: 21+ unrelated paths (skills, role docs, scripts, other task JSONs) left alone.",
+      "startedAt": "2026-09-18T20:54:53.508Z",
+      "completedAt": "2026-09-18T20:57:10.100Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the projection. In checkFor, when the latest valid check has source exactly 'runner-observed' or 'agent-reported', include it; otherwise omit source (do not drop command/exitCode). Do not require source in the valid() predicate.\n\nAdd requiredCheckSatisfiedFor(state, task): boolean | undefined:\n- try/catch around resolveDeliveryPolicy + evaluateDeliveryEvidence (import from ../delivery/policy.js plus REQUIRED_CHECK_TOKEN_PREFIX and requiredCheckCommand). On throw, logger.debug like readEvidence and return undefined — error handling so a bad setting cannot take down the board.\n- legacy → undefined.\n- missingEvidence has a token starting with REQUIRED_CHECK_TOKEN_PREFIX → false.\n- else if requiredCheckCommand(state, task) !== null → true.\n- else undefined.\nInclude the field in the returned object only when the helper returns boolean.\n\nRe-run `npx vitest run src/state/deliveryProjection.test.ts`; expect PASS.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "note": "GREEN. checkFor serves source only when it is exactly runner-observed/agent-reported (isCheckSource); valid() predicate unchanged, so rows with a bad source still serve command/exitCode. requiredCheckSatisfiedFor(state, task) runs evaluateDeliveryEvidence inside the existing readEvidence (debug log + undefined on throw, so an unrecognised deliveryPolicy cannot take down /ws); legacy -> undefined; a required-check:<cmd> OR 'unreadable-required-check' token -> false; else checkOwed ? true : undefined. checkOwed mirrors policy.ts checkShortfall's pick (DONE/ARCHIVED + requiredCheckAtDone !== undefined -> non-blank string snapshot, else live requiredCheckCommand) — DEVIATION from the plan's live-only rule, needed because sibling fd970f24 (97df78f) already snapshots the check at DONE; policy.ts itself untouched. Verdict computed only after the no-evidence early return, so evidence-free tasks stay byte-identical and cost nothing. Field included only when boolean. Evidence: `npx vitest run src/state/deliveryProjection.test.ts` -> 56/56 pass. Mutation proofs (each restored, cmp-identical): plan-literal live-only helper -> 3 fail (DONE snapshot null / unreadable / gate removed since); no try/catch -> 1 fail (unrecognised policy throws); unvalidated source -> 4 fail; never-false -> 5 fail; no legacy short-circuit -> 1 fail. Also deliveryProjection + WebSocketServer + delivery/acceptance tests 89/89; `npx tsc --noEmit` exit 0.",
+      "startedAt": "2026-09-18T20:57:13.103Z",
+      "completedAt": "2026-09-18T20:59:06.844Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "JetBrains parse + render. Keep checkPassed/checkFailed as the Reported latest-run rows (exit 0 vs nonzero). Never use those keys for the policy verdict.\n\nModels.kt:\n- DeliveryCheckRun: add `val source: String? = null` (third param; existing two-arg call sites keep compiling).\n- TaskDelivery: add `val requiredCheckSatisfied: Boolean? = null` at the end.\n\nMoeJson.kt parseDelivery:\n- latestCheckRun: parse source with getStrictStringOrNull; only keep it if it is exactly runner-observed or agent-reported, else null. A numeric/object source is already rejected by getStrictStringOrNull.\n- TaskDelivery: parse requiredCheckSatisfied as JSON boolean only (true/false); string/number/null/absent → null. Error handling: never throw on a malformed extra field.\n\nMoeJsonTest.kt: serializeNulls() will emit the new keys. Update `deliveryJson` and the malformed-nested expected JSON so round-trip stays exact (`source` / `requiredCheckSatisfied` null when absent or rejected). Add one fully-populated case: source runner-observed and requiredCheckSatisfied false round-trips byte-exactly.\n\nDeliveryPresentation.kt: after the checkPassed/Failed row, if source is non-empty add DeliveryRow(\"moe.delivery.checkSource\", source). If requiredCheckSatisfied == true add DeliveryRow(\"moe.delivery.requiredCheckCounted\", \"yes\", outcome = PASS). If false add DeliveryRow(\"moe.delivery.requiredCheckNotCounted\", \"no\", outcome = FAIL). Do not add those rows when the boolean is null. Do not change the 7-row combinatorial evidence() fixture (new fields stay null so mask 0..127 stays valid).\n\nDeliveryPresentationTest.kt: add focused tests (do not expand the 128-mask):\n- agent-reported exit 0 + requiredCheckSatisfied=false → has checkPassed AND requiredCheckNotCounted, does not have requiredCheckCounted.\n- runner-observed non-gate pass + requiredCheckSatisfied=false → same.\n- runner-observed gate pass + requiredCheckSatisfied=true → has requiredCheckCounted, not requiredCheckNotCounted.\n- Update `every emitted bundle key has a translation`: include the new keys, bump the unique-key count from 9 to 12.\n\nMoeBundle.properties: add\n```\nmoe.delivery.checkSource=Reported check source\nmoe.delivery.requiredCheckCounted=Required check counted by policy\nmoe.delivery.requiredCheckNotCounted=Required check not counted by policy\n```\n\nFrom repo root on Windows: `cd moe-jetbrains; .\\gradlew test --tests com.moe.toolwindow.DeliveryPresentationTest --tests com.moe.util.MoeJsonTest`. Expect PASS. Do not run runIde.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Models: DeliveryCheckRun(command, exitCode, source: String? = null); TaskDelivery gains trailing requiredCheckSatisfied: Boolean? = null (positional 4-arg call in the legacy test still compiles). MoeJson.parseDelivery: source via getStrictStringOrNull, kept only if exactly runner-observed/agent-reported; requiredCheckSatisfied only from a JSON boolean primitive (string/number/null/array/absent -> null, never throws). DeliveryPresentation: after checkPassed/Failed, addValue(moe.delivery.checkSource, source); when(requiredCheckSatisfied) true -> requiredCheckCounted 'yes' PASS, false -> requiredCheckNotCounted 'no' FAIL, null -> no row. checkPassed/Failed still keyed on reported exit code only. Bundle: 3 keys added. Tests: deliveryJson now fully populated (source runner-observed + requiredCheckSatisfied false) so the byte-exact round trip covers them; malformed-nested input gains source [\"runner-observed\"] + requiredCheckSatisfied \"false\" with null expectations; new table test for source (absent, both valid, padded, wrong case, bogus, 42, true, null, {}) and verdict (absent, true, false, \"true\", 1, 0, null, []) on both parseTask and parseState. Presentation: agent-reported gate pass + false and runner-observed lint pass + false -> exact rows incl. checkPassed + requiredCheckNotCounted, no Counted; runner gate pass + true -> Counted; null verdict -> no policy row; later failing lint run + true -> checkFailed + Counted (ticket's 2nd symptom); bundle key count 9 -> 12. 128-mask evidence() untouched. RED first: 5 failed (3 presentation, 2 json). GREEN: `.\\gradlew test --tests com.moe.toolwindow.DeliveryPresentationTest --tests com.moe.util.MoeJsonTest` exit 0 (9/9 + 23/23 per fresh JUnit XML); full `.\\gradlew test` exit 0, 200 tests, 0 failures/errors. Pre-existing compiler warning TaskDetailDialog.kt:724 (Elvis) not mine. runIde not run.",
+      "startedAt": "2026-09-18T20:59:09.110Z",
+      "completedAt": "2026-09-18T21:02:00.898Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VS Code must keep ignoring the new fields without error. moe-vscode has no TaskDelivery type (grep latestCheckRun is empty). Do not add VS Code UI.\n\nFrom moe-vscode: `npm test && npm run compile`. Expect exit 0. If compile fails on an unrelated dirty tree, say so in the step note; do not 'fix' VS Code to consume the field.\n\nAdversarial self-review of this task's diff:\n- Agent-reported or non-gate pass never produces moe.delivery.requiredCheckCounted.\n- checkPassed still means reported exit 0, not policy.\n- Unrecognised deliveryPolicy cannot throw from deliveryProjection.\n- policy.ts untouched (fd970f24).\n- Existing 7-row presentation matrix still passes.\n- autoCommit=false/legacy omit requiredCheckSatisfied.\n\nVerification command (complete_task.verification.command), from packages/moe-daemon:\n`npx vitest run src/state/deliveryProjection.test.ts`\nExpect exit 0. JetBrains and VS Code commands above must also have been run green in this step (CI will re-run them; the named command is the daemon contract QA re-runs).\n\nSkills: adversarial-self-review, verification-before-completion, regression-check.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "No files changed in this step. VS Code: grep latestCheckRun/requiredCheckSatisfied/TaskDelivery in moe-vscode/src is empty; `npm test` 113/113 pass, exit 0; `npm run compile` (tsc -p ./) exit 0. No VS Code UI added. Adversarial review of the full diff: (1) agent-reported / non-gate / failing runs only produce requiredCheckNotCounted (daemon returns false from the policy's required-check: token; Kotlin maps false -> NotCounted, true -> Counted, null -> no row); (2) checkPassed/Failed still keyed only on the reported exit code; (3) unrecognised deliveryPolicy is caught by readEvidence (debug log, field omitted; mutation-proven); (4) policy.ts diff = 0 lines; (5) 128-mask 7-row presentation matrix unchanged and green; (6) legacy + autoCommit=false + whitespace gate omit requiredCheckSatisfied (daemon tests with toStrictEqual). Theoretical notes for QA: a DONE row with a malformed requiredCheckAtDone makes policy.ts log a warn on each serve of that task (same warn the dependency gate already emits); the verdict adds one evaluateDeliveryEvidence per served task that has delivery evidence (O(tasks) epic-final scan under the epicFinal scope) — negligible at board sizes; checkOwed mirrors policy.ts checkShortfall's snapshot pick (pinned by the 4 DONE-snapshot tests) because policy.ts was off-limits. No docs reference the projection shape (grep *.md for latestCheckRun empty). Regression: daemon `npm test` 122 files / 2144 tests pass, exit 0; JetBrains full `.\\gradlew test` 200 tests, 0 failures (step 3). Verification: from packages/moe-daemon `npx vitest run src/state/deliveryProjection.test.ts` -> 56/56, exit 0.",
+      "startedAt": "2026-09-18T21:02:03.729Z",
+      "completedAt": "2026-09-18T21:03:22.221Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 208.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-18T17:27:05.853Z",
+  "updatedAt": "2026-09-18T21:37:45.857Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-18T20:40:54.778Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 4,
+    "doneAt": "2026-09-18T21:37:19.614Z",
+    "wallClockMs": 3384836
+  },
+  "contextFetchedBy": [
+    "architect-4323a407",
+    "worker-161b9959",
+    "qa-7100be29"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-18T20:43:47.132Z",
+  "planningNotes": {
+    "approachesConsidered": "Three options: (1) change checkPassed to only fire when policy counts the run — that lies about what the runner reported and breaks the existing 7-row combinatorial presentation test; (2) replace latestCheckRun with the policy-counted run instead of the last run — hides the later non-gate failure the ticket names; (3) keep latestCheckRun as the last reported run, add its source, and add a separate requiredCheckSatisfied boolean from evaluateDeliveryEvidence. (3) is the decision. Do not edit policy.ts (sibling task-fd970f24 owns that file). Import resolveDeliveryPolicy, requiredCheckCommand, evaluateDeliveryEvidence, REQUIRED_CHECK_TOKEN_PREFIX. VS Code has no TaskDelivery parser — extra JSON fields are ignored; the DoD is npm test + compile, not a VS Code UI change.",
+    "codebaseInsights": "deliveryProjection.ts checkFor already takes the last check on the current candidate's tree and serves {command, exitCode} only. CheckRun.source is 'runner-observed' | 'agent-reported'. evaluateDeliveryEvidence under legacy returns satisfied with no tokens; under strict, a missing required check is token required-check:<cmd>. Harness setupMoeFolder() is legacy, so existing deliveryProjection.test.ts toEquals stay green if we only ADD source onto latestCheckRun and omit requiredCheckSatisfied. JetBrains: DeliveryCheckRun(command, exitCode), parseDelivery in MoeJson.kt, DeliveryPresentation.rows uses moe.delivery.checkPassed/Failed for exit 0 vs nonzero — those labels say Reported and must stay. MoeBundle.properties has the keys. MoeJsonTest round-trips with serializeNulls(), so new optional fields defaulting to null MUST be added to the expected JSON or the first round-trip test goes red. DeliveryPresentationTest mask 0..127 covers 7 rows; new fields default null so that matrix stays valid if evidence() does not set them.",
+    "risks": "evaluateDeliveryEvidence throws on an unrecognised deliveryPolicy — the projection must catch and omit requiredCheckSatisfied (readEvidence style); a throw takes down /ws serving. Invalid source: omit source, still serve command/exitCode. Do not require source in checkFor's valid() predicate (legacy undated rows). Sibling fd970f24 will snapshot requiredCheckAtDone; this projection should prefer evaluateDeliveryEvidence's missing-check token (the policy verdict) over live requiredCheckCommand alone, so after that sibling lands the UI still matches qa_approve. Do not edit policy.ts. Gradle tests are JUnit 4 and headless; do not launch runIde.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+    ]
+  },
+  "planApprovedAt": "2026-09-18T20:43:47.214Z",
+  "workStartedAt": "2026-09-18T20:54:53.508Z",
+  "reviewStartedAt": "2026-09-18T21:03:41.489Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/state/deliveryProjection.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  1 passed (1)\n      Tests  56 passed (56)\n   Start at  00:03:12\n   Duration  1.74s (tests 79%, transform 16%, import 5%)",
+    "reportedAt": "2026-09-18T21:03:41.489Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/deliveryProjection.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json",
+    ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json"
+  ],
+  "completionSummary": "The daemon's /ws delivery projection (packages/moe-daemon/src/state/deliveryProjection.ts) now serves two more things. First, latestCheckRun.source, but only when it is exactly runner-observed or agent-reported. Other values are omitted and the run is still served. Second, a separate requiredCheckSatisfied boolean, which is the delivery policy's verdict and not the latest run's: false while evaluateDeliveryEvidence reports a required-check:<cmd> or unreadable-required-check token, true when a check is owed and satisfied. It is omitted under the legacy policy, when no check is owed (autoCommit=false, blank gate), when the deliveryPolicy is unrecognised (caught by readEvidence, so it does not throw), and for tasks with no evidence (still byte-identical).\n\nDeviation from the plan: sibling fd970f24 has landed (97df78f). So \"owed\" copies policy.ts checkShortfall's choice: a DONE/ARCHIVED requiredCheckAtDone snapshot first, then the live requiredCheckCommand. Otherwise a DONE task with a null or malformed snapshot would read as counted. policy.ts is untouched (0-line diff).\n\nJetBrains: DeliveryCheckRun.source and TaskDelivery.requiredCheckSatisfied. MoeJson keeps only the exact source values and a real JSON boolean. DeliveryPresentation keeps checkPassed/Failed as the reported rows and adds checkSource plus requiredCheckCounted (yes, PASS) or requiredCheckNotCounted (no, FAIL). There is no row when the verdict is null. Three bundle keys added.\n\nTests:\n- daemon deliveryProjection 56/56; mutations of the helper each make it fail (plan-literal live-only rule: 3, no try/catch: 1, unvalidated source: 4, never-false: 5, no legacy skip: 1)\n- full daemon npm test: 2144/2144; tsc exit 0\n- JetBrains full gradlew test: 200 tests, 0 failures. Red first: 5 failed before the implementation.\n- VS Code: npm test 113/113 and compile exit 0 (the field is ignored).",
+  "commits": [
+    {
+      "sha": "f4ac818e41ab4f4e3fe9766166ef0bee12db8b03",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-161b9959@2026-09-18T20:53:07Z",
+      "paths": [
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.ts"
+      ],
+      "recordedBy": "worker-161b9959",
+      "recordedAt": "2026-09-18T21:04:12.786Z",
+      "treeId": "a5a61a790ab217c86124496e4f9548b1300f8404",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "d394b43326162e20d94998ecdef130336181fdc5",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7100be29@2026-09-18T21:31:21Z",
+      "paths": [
+        ".moe/tasks/task-fd970f24862f474ca10bddd75d8cbcc5.json",
+        ".moe/tasks/task-fee5e13608744f60bf5d12073d9da95a.json"
+      ],
+      "recordedBy": "qa-7100be29",
+      "recordedAt": "2026-09-18T21:37:45.857Z",
+      "treeId": "e47ac4140a36e224198b26ddc1823e55ca206d6c",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "packages/moe-daemon/src/state/deliveryProjection.ts",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/DeliveryPresentationTest.kt",
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DeliveryPresentation.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "qa-7100be29@2026-09-18T21:31:21Z",
+    "at": "2026-09-18T21:37:45.857Z"
+  },
+  "completedAt": "2026-09-18T21:37:19.614Z",
+  "reviewCompletedAt": "2026-09-18T21:37:19.614Z",
+  "reviewSummary": "Verified at HEAD 3e72b40: completion commit f4ac818 (pushed, 9 paths); policy.ts untouched; no later commit touches reviewed files; task has no recorded candidate.\nDoD1 daemon: projection serves latestCheckRun.source only for exact runner-observed/agent-reported, plus separate requiredCheckSatisfied from evaluateDeliveryEvidence (false on required-check:*/unreadable-required-check; true only when a check is owed, checkOwed mirroring checkShortfall's DONE-snapshot pick; omitted under legacy, no check owed, unrecognised policy (caught by readEvidence), evidence-free tasks). Re-ran `cd packages/moe-daemon && npx vitest run src/state/deliveryProjection.test.ts`: 56/56 exit 0 in live tree and a HEAD scratch export; tsc --noEmit exit 0; full daemon suite in scratch 122 files/2145 tests pass. Red: pre-card projection (97df78f) fails 39 tests of the file. My mutations each caught: drop unreadable token (1 fail), no try/catch (1), no-token inference (5), checkOwed ignores DONE snapshot (2).\nDoD2 JetBrains: MoeJson keeps exact source strings and only a JSON-boolean verdict; DeliveryPresentation keeps checkPassed/Failed as reported rows, adds checkSource and requiredCheckCounted(yes)/NotCounted(no), nothing for null; agent-reported and non-gate passes with verdict false never emit requiredCheckCounted (headless DeliveryPresentationTest). `GRADLE_OPTS=-Xmx512m ./gradlew cleanTest test` (:test executed): 15 suites/200 tests, 0 failures (DeliveryPresentationTest 9, MoeJsonTest 23).\nDoD3 VS Code: no delivery parser (grep empty); npm test 113/113, npm run compile exit 0.\nRails: no forbidden patterns in added lines; daemon stays state-only; autoCommit=false and legacy omit the verdict (tested)."
+}

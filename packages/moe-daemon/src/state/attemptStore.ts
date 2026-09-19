@@ -20,10 +20,16 @@
 // Write path per mutation: writeEntity → map.set. Persist BEFORE the record
 // becomes visible, so a failed write leaves no attempt anywhere and a crash can
 // never expose an attempt that is not on disk. Unlike resourceStore this store
-// appends no activity row and emits no event: both would require editing the
-// existing ACTIVITY_EVENT_TYPES / StateChangeEvent unions, and there is no
+// appends no activity row and emits no attempt event: both would require editing
+// the existing ACTIVITY_EVENT_TYPES / StateChangeEvent unions, and there is no
 // consumer yet. Claim and release open and close attempts without either; add
 // both together with the first consumer (an attempt view on the board).
+//
+// ONE deliberate exception: announceAttemptClosed re-publishes the unchanged
+// TASK as TASK_UPDATED when a finalizing boundary ends. While an attempt is
+// finalizing no other seat may claim its task, and closing the attempt writes no
+// task — so without that one event neither a parked moe.wait_for_task waiter nor
+// the board would ever see the hold lift.
 //
 // Recovery is an idempotent re-open, not a file repair: writeEntity is an atomic
 // temp-file-and-rename, so a torn half-JSON is not reachable. The reachable
@@ -32,7 +38,7 @@
 // persisted record instead of writing a second one.
 
 import type { StateManager } from './StateManager.js';
-import type { AttemptPresenceKind, ExecutionAttempt, ExecutionAttemptPhase } from '../types/schema.js';
+import type { AttemptPresenceKind, ExecutionAttempt, ExecutionAttemptPhase, Task } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
@@ -321,7 +327,9 @@ export async function recordAttemptPresence(
 }
 
 /**
- * Park every `running` attempt in `reconciling`, and report what moved.
+ * Park every `running` attempt whose task is still assigned to its worker in
+ * `reconciling`, close every `running` or `reconciling` attempt whose task is
+ * not, and report what parked.
  *
  * WHAT `reconciling` MEANS, exactly: the daemon has LOST SIGHT of this
  * execution — it restarted, and the process it was watching is outside its
@@ -331,10 +339,27 @@ export async function recordAttemptPresence(
  * consults lastActivityAt or any other idle signal, because a silent build is
  * not evidence of a dead worker: the phase records ignorance, not a verdict.
  *
+ * WHICH ATTEMPTS PARK. The hold exists for a seat that still owns its task, so
+ * an attempt parks only while its task exists and task.assignedWorkerId is the
+ * attempt's own workerId. A `running` attempt whose task is missing, unassigned
+ * or assigned to another worker belongs to a seat that already gave the task up
+ * — a hand-back that predates closing on hand-back, or a crash between a seat
+ * clear and its close. Parking it would hold the row for nobody and make
+ * purgeAllWorkers spare a seat that holds no task, so it is CLOSED instead. A
+ * `reconciling` attempt an earlier restart parked gets the same test: while its
+ * task is still assigned to its worker it is left exactly as it is (the window
+ * keeps measuring from the original park), and once it is not, it is an orphan
+ * and is closed. The deciding fact is the assignment alone: never presence,
+ * never an idle signal.
+ *
  * Called once at daemon startup, BEFORE purgeAllWorkers, so the purge can see
- * which seats still own an execution and spare them. Only `running` moves:
- * `finalizing` belongs to a complete_task that is still landing its bytes and
- * has its own hold, and `closed` is terminal history.
+ * which seats still own an execution and spare them. `finalizing` belongs to a
+ * complete_task that is still landing its bytes and keeps its own hold across
+ * the restart — unless its task no longer exists. A task removed outside the
+ * daemon (a git checkout of .moe/tasks, a hand deletion) is a structural fact,
+ * not an idle signal, and nothing else could close that attempt: finalize_attempt
+ * refuses a missing task before it looks the attempt up. So it is closed as an
+ * orphan. `closed` is terminal history.
  *
  * Goes through setAttemptPhase like every other mutation, so the store keeps
  * its one write-then-publish ordering and a failed write leaves the attempt
@@ -342,15 +367,30 @@ export async function recordAttemptPresence(
  *
  * Per-attempt try/catch for the same reason purgeAllWorkers has one: this runs
  * on EVERY daemon start, and one unwritable record must not abort startup for
- * the whole fleet. A record that fails to move stays `running`, which is still
+ * the whole fleet. A record that fails to park stays `running`, which is still
  * non-closed — so its seat is still spared, its task is still held, and a
  * runner reattaching to it still succeeds. Swallowing here fails in the safe
- * direction; throwing would brick the daemon over one bad file.
+ * direction; throwing would brick the daemon over one bad file. The close arm
+ * fails in a different direction and has its own catch (closeOrphanedAttempt).
+ *
+ * Returns the PARKED attempts only; a closed orphan, and a hold an earlier
+ * restart already parked, are not in the list.
  */
 export async function reconcileRunningAttempts(state: StateManager): Promise<ExecutionAttempt[]> {
   const reconciled: ExecutionAttempt[] = [];
   for (const attempt of listAttempts(state)) {
-    if (attempt.phase !== 'running') continue;
+    if (attempt.phase === 'finalizing') {
+      if (!state.getTask(attempt.taskId)) await closeOrphanedAttempt(state, attempt, null);
+      continue;
+    }
+    if (attempt.phase !== 'running' && attempt.phase !== 'reconciling') continue;
+    const task = state.getTask(attempt.taskId);
+    if (!task || task.assignedWorkerId !== attempt.workerId) {
+      await closeOrphanedAttempt(state, attempt, task);
+      continue;
+    }
+    // Already held for its still-assigned owner by an earlier restart.
+    if (attempt.phase === 'reconciling') continue;
     try {
       reconciled.push(await setAttemptPhase(state, attempt.id, 'reconciling'));
     } catch (error) {
@@ -364,10 +404,56 @@ export async function reconcileRunningAttempts(state: StateManager): Promise<Exe
 }
 
 /**
- * Close every non-closed attempt of a task. This is the ONE close path: every
- * site that takes a task's seat away (release_task, deregister, worker deletion,
- * the startup purge, a claim evicting the previous owner) calls it, so the rules
- * below exist once. Returns the records it closed, in generation order.
+ * The startup close for a `running` or `reconciling` attempt whose seat no
+ * longer holds its task, and for a `finalizing` one whose task is gone (see
+ * reconcileRunningAttempts). Logged at info, with the
+ * assignee the row has now, so an operator can see which orphan a restart
+ * retired and from whose row.
+ *
+ * Its own catch and its own message, because a failed close fails in another
+ * direction than a failed park: the orphan keeps its phase on a row it does not
+ * hold, which is benign. Nothing is held — moe.claim_next_task refuses a third
+ * party only while the row is still assigned to the reconciling holder — and
+ * the next claim of the row closes the leftover through openClaimAttempt's
+ * ATTEMPT_ALREADY_OPEN arm before opening its own. The seat is spared by this
+ * one purge only; the next claim or restart retires the attempt. It must never
+ * be reported as "its task stays held". A finalizing orphan has no row left to
+ * claim: until a later restart retires it, it refuses only its own worker's
+ * next claim.
+ */
+async function closeOrphanedAttempt(
+  state: StateManager,
+  attempt: ExecutionAttempt,
+  task: Task | null
+): Promise<void> {
+  const context = {
+    attemptId: attempt.id,
+    taskId: attempt.taskId,
+    workerId: attempt.workerId,
+    phase: attempt.phase,
+    assignedWorkerId: task ? task.assignedWorkerId : null,
+    taskFound: task !== null,
+  };
+  try {
+    await setAttemptPhase(state, attempt.id, 'closed');
+    logger.info(context, 'Closed an attempt at startup: its task is missing or no longer assigned to its worker');
+  } catch (error) {
+    logger.error(
+      { ...context, error },
+      'Failed to close an orphaned attempt during startup; it keeps its phase but holds no task'
+    );
+  }
+}
+
+/**
+ * Close every non-closed attempt of a task. This is the close path for the sites
+ * that take a task's seat away outright (release_task, deregister, a claim
+ * evicting the previous owner) or the task itself (taskStore.deleteTask), so the
+ * rules below exist once. A seat hand-back through taskStore.updateTask, and the
+ * seat releases of worker deletion and the startup purge, close through
+ * closeHandedBackAttempts instead, which spares `finalizing`. The seat sites
+ * write through updateTask first, so their explicit call here finds only what
+ * that left open. Returns the records it closed, in generation order.
  *
  * - Idempotent: an exit trap and a purge can both fire for the same task, so a
  *   second call finds nothing open and does nothing — no write, no error.
@@ -394,4 +480,70 @@ export async function closeOpenAttempts(
     closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
   }
   return closed;
+}
+
+/** The phases a seat hand-back ends. `finalizing` is deliberately absent. */
+const HANDED_BACK_PHASES: ReadonlySet<ExecutionAttemptPhase> = new Set<ExecutionAttemptPhase>([
+  'running',
+  'reconciling',
+]);
+
+/**
+ * Close the attempts a seat leaves behind when it hands its task back. Called by
+ * taskStore.updateTask on every write that turns a non-null assignedWorkerId
+ * into null — qa_reject, report_blocked's seat-freeing arm, set_task_status,
+ * unblock_worker's seat-only arm, the sweeps' releases, and every other status
+ * change or release that drops the assignee — and directly by the seat releases
+ * of worker deletion and the startup purge (which writes around updateTask), so
+ * a seat that gave its task up keeps no open execution, and a later restart
+ * finds nothing of that seat's to park. Returns the records it closed, in
+ * generation order.
+ *
+ * NARROWER THAN closeOpenAttempts ON PURPOSE: it never closes `finalizing`.
+ * complete_task parks its attempt in `finalizing` BEFORE its own WORKING→REVIEW
+ * write clears the seat, and that hold is the wrapper's landing boundary. It
+ * ends ONLY through: moe.finalize_attempt (its runner, or a governor or human
+ * with outcome 'failed'); its own worker's moe.deregister_worker; deletion of
+ * its task; a daemon restart that finds its task gone; or removal of its
+ * worker's DEAD record (the stale-record prune, the startup purge). No idle
+ * signal is on that list: a quiet seat keeps its hold. No later claim of the
+ * row supersedes it either — claim_next_task refuses or skips a row another
+ * worker's landing holds. Closing it at the seat clear would free the worker for
+ * its next task while this task's bytes are still unlanded.
+ *
+ * Otherwise the closeOpenAttempts contracts hold: idempotent, tolerant of a task
+ * with no attempt record, never deletes, and each close goes through
+ * setAttemptPhase, so a failed write throws with the attempt still published as
+ * open. Caller must hold state.mutex.
+ */
+export async function closeHandedBackAttempts(
+  state: StateManager,
+  taskId: string
+): Promise<ExecutionAttempt[]> {
+  const closed: ExecutionAttempt[] = [];
+  for (const attempt of listAttempts(state, taskId)) {
+    if (!HANDED_BACK_PHASES.has(attempt.phase)) continue;
+    closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
+  }
+  return closed;
+}
+
+/**
+ * Tell the board and parked moe.wait_for_task waiters that a task's finalizing
+ * boundary has ended — this store's one deliberate event (see the header).
+ * While an attempt is finalizing, claim_next_task refuses or skips its task for
+ * every seat but the attempt's own worker, and wait_for_task hides it the same
+ * way; closing the attempt writes no task, so without this nothing would tell a
+ * waiter the hold lifted.
+ *
+ * Re-publishes the task exactly as it is: no activity row, no updatedAt change,
+ * nothing written. A task that no longer exists announces nothing. Call it only
+ * AFTER the close's write has published the closed record, so no subscriber can
+ * observe the attempt still open; state.emit isolates subscriber errors, so a
+ * failing subscriber never fails the caller.
+ */
+export function announceAttemptClosed(state: StateManager, taskId: string): void {
+  const task = state.getTask(taskId);
+  if (!task) return;
+  state.emit({ type: 'TASK_UPDATED', payload: task });
 }

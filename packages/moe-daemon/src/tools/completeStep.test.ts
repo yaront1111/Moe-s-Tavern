@@ -443,5 +443,48 @@ describe('moe.complete_step', () => {
     const reported = await tool.handler({ taskId: 'task-1', stepId: 'step-2', modifiedFiles: ['src/x.ts'] }, h.state) as { warning?: string };
     expect(reported.warning).toBeUndefined();
   });
+
+  // A supplied workerId on an unassigned row is refused before anything is recorded.
+  // The old guards no-oped here, so the step completed and touchWorker stamped the
+  // caller CODING with a currentTaskId for a row it never claimed.
+  it('refuses a worker that never claimed the unassigned row and records nothing', async () => {
+    await h.state.updateTask('task-1', { contextFetchedBy: ['worker-x'] });
+    await h.state.createWorker({
+      id: 'worker-x',
+      type: 'CLAUDE',
+      projectId: 'proj-test',
+      epicId: 'epic-1',
+      currentTaskId: null,
+      status: 'IDLE',
+    });
+
+    const call = completeStepTool(h.state).handler(
+      { taskId: 'task-1', stepId: 'step-1', workerId: 'worker-x', modifiedFiles: ['src/x.ts'], note: 'n' },
+      h.state
+    );
+    await expect(call).rejects.toMatchObject({
+      code: MoeErrorCode.STATE_CONFLICT,
+      codeName: 'TASK_NOT_CLAIMED',
+      context: {
+        retryable: true,
+        nextAction: {
+          tool: 'moe.claim_next_task',
+          args: { taskId: 'task-1', statuses: ['WORKING'], workerId: 'worker-x' },
+        },
+      },
+    });
+
+    const task = h.state.getTask('task-1')!;
+    const step = task.implementationPlan.find((s) => s.stepId === 'step-1');
+    expect(step?.status).toBe('IN_PROGRESS');
+    expect(step?.completedAt).toBeUndefined();
+    expect(step?.modifiedFiles).toBeUndefined();
+    expect(step?.note).toBeUndefined();
+    expect(task.stepsCompleted).toBeUndefined();
+    expect(task.metrics?.executedStepCount).toBeUndefined();
+    const worker = h.state.getWorker('worker-x')!;
+    expect(worker.status).toBe('IDLE');
+    expect(worker.currentTaskId).toBeNull();
+  });
 });
 

@@ -5,10 +5,10 @@ import { invalidInput, missingRequired, notFound } from '../util/errors.js';
 import { PathSet, unionPaths } from '../util/attributionTiers.js';
 import { UNIDENTIFIED_RELEASER } from '../util/claimGuards.js';
 import { trimCommits } from '../state/validators.js';
+import { SHA_RE } from '../state/candidateStore.js';
 
 const OUTCOMES = ['committed', 'nothing', 'refused', 'failed'] as const;
 const KINDS = ['completion', 'checkpoint', 'rescue'] as const;
-const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const MAX_PATHS = 500;
 const MAX_SKIPPED = 100;
 const MAX_CONTESTED = 100;

@@ -17,7 +17,8 @@ import type { ExecutionAttempt, ExecutionAttemptPhase, Task } from '../types/sch
 // The reconcile-window sweep: an attempt parked in `reconciling` must not stay
 // there forever.
 //
-// A daemon restart parks every running attempt in `reconciling` — the daemon
+// A daemon restart parks every running attempt whose task is still assigned to
+// its worker in `reconciling` — the daemon
 // has lost sight of that execution and holds the task until a runner reattaches
 // and proves which process it is talking about. If no runner ever comes back,
 // nothing else releases the row: the seat is spared by purgeAllWorkers, the
@@ -294,12 +295,21 @@ describe('reconcile-window sweep', () => {
   it('closes a stale attempt but never yanks a row a different worker now holds', async () => {
     // A dangling reconciling attempt whose task has since been handed to
     // someone else. Closing the stale record is right; releasing the row would
-    // yank a live worker, which a rail forbids outright.
-    await seedHeldTask({ phase: 'reconciling', ageMs: WINDOW + 1 });
+    // yank a live worker, which a rail forbids outright. Seeded straight onto
+    // disk: handing the row over through updateTask would close the attempt at
+    // the seat clear, leaving this sweep nothing to find.
+    h.createTask({ id: 'task-L', status: 'WORKING', assignedWorkerId: 'worker-Z' });
     h.createWorker({ id: 'worker-Z', status: 'CODING', currentTaskId: 'task-L' });
     await h.state.load();
-    await h.state.updateTask('task-L', { assignedWorkerId: null });
-    await h.state.updateTask('task-L', { assignedWorkerId: 'worker-Z' });
+    const stale = await openAttempt(h.state, {
+      id: 'attempt-L-1',
+      taskId: 'task-L',
+      workerId: 'worker-W',
+      runnerId: 'runner-1',
+      workspace: h.testDir,
+    });
+    await setAttemptPhase(h.state, stale.id, 'reconciling');
+    await backdatePhase(stale.id, WINDOW + 1);
 
     const closed = await checkReconcileWindow(h.state, NOW);
 
@@ -356,5 +366,113 @@ describe('reconcile-window sweep', () => {
     stopReconcileWindowCheck(h.state);
     expect(clearSpy).toHaveBeenCalledWith(armed);
     expect(h.state.reconcileWindowInterval).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Periodic sweeps are armed once, not once per load().
+//
+// The FileWatcher calls state.load() on every .moe write that self-write
+// suppression lets through, and a claim reliably produces one. load() used to
+// re-arm every sweep, and each start* restarts its interval, so every reload
+// pushed the next tick a whole cadence away. On 2026-09-17 two claims 3m59s
+// apart reset the 5-minute timers twice without either firing. A fleet whose
+// reloads come faster than a cadence never runs that sweep at all.
+//
+// Only the interval clock is faked: load() does real fs work behind a
+// setTimeout-based load timeout, and faking that would hang the load instead.
+// =============================================================================
+
+describe('periodic sweep arming', () => {
+  const h = new ToolTestHarness();
+  const MINUTE = 60_000;
+
+  beforeEach(() => {
+    h.init();
+    h.setupMoeFolder({ schemaVersion: 6 });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  });
+
+  afterEach(() => {
+    h.state.clearEmitter();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  function sweepHandles() {
+    return {
+      blockedTimeout: h.state.blockedTimeoutInterval,
+      proposalPurge: h.state.proposalPurgeInterval,
+      staleWorker: h.state.staleWorkerInterval,
+      reconcileWindow: h.state.reconcileWindowInterval,
+    };
+  }
+
+  function unarmed(handles: ReturnType<typeof sweepHandles>): string[] {
+    return Object.entries(handles).filter(([, timer]) => timer === undefined).map(([name]) => name);
+  }
+
+  it('a reload does not restart an armed sweep, so its ticks keep their phase', async () => {
+    // Observe the ticks without doing any sweep work.
+    const blocked = vi.spyOn(h.state, 'checkBlockedTimeouts').mockResolvedValue(undefined);
+    const reconcile = vi.spyOn(h.state, 'checkReconcileWindow').mockResolvedValue([]);
+    const stale = vi.spyOn(h.state, 'checkStaleWorkers').mockResolvedValue(undefined);
+
+    await h.state.load(); // 0:00, arms the sweeps
+    const armed = sweepHandles();
+    expect(unarmed(armed)).toEqual([]);
+
+    vi.advanceTimersByTime(4 * MINUTE);
+    await h.state.load(); // 4:00, the reload a claim triggers
+    vi.advanceTimersByTime(30_000);
+    await h.state.load(); // 4:30, another reload, off the 60 s phase
+    vi.advanceTimersByTime(31_000); // now 5:01
+
+    // The 4:00 reload lands exactly on the 60 s watcher's phase, where a
+    // restart cannot be seen; the 4:30 one is what pins that watcher.
+    const now = sweepHandles();
+    expect({
+      sameHandle: {
+        blockedTimeout: now.blockedTimeout === armed.blockedTimeout,
+        proposalPurge: now.proposalPurge === armed.proposalPurge,
+        staleWorker: now.staleWorker === armed.staleWorker,
+        reconcileWindow: now.reconcileWindow === armed.reconcileWindow,
+      },
+      ticks: {
+        blockedTimeout: blocked.mock.calls.length,
+        reconcileWindow: reconcile.mock.calls.length,
+        staleWorker: stale.mock.calls.length,
+      },
+    }).toEqual({
+      sameHandle: { blockedTimeout: true, proposalPurge: true, staleWorker: true, reconcileWindow: true },
+      ticks: { blockedTimeout: 1, reconcileWindow: 1, staleWorker: 5 },
+    });
+  });
+
+  it('clearEmitter() stops every sweep, and the next load() arms all four again', async () => {
+    await h.state.load();
+    expect(unarmed(sweepHandles())).toEqual([]);
+
+    // Once-per-process must not outlive a stop: a daemon whose next load()
+    // found stale handles would run with no self-heal at all.
+    h.state.clearEmitter();
+    expect(unarmed(sweepHandles())).toEqual(['blockedTimeout', 'proposalPurge', 'staleWorker', 'reconcileWindow']);
+
+    await h.state.load();
+    expect(unarmed(sweepHandles())).toEqual([]);
+  });
+
+  it('an explicit start* still restarts its sweep on the cadence the caller passes', async () => {
+    const reconcile = vi.spyOn(h.state, 'checkReconcileWindow').mockResolvedValue([]);
+    await h.state.load();
+    const armedByLoad = h.state.reconcileWindowInterval;
+
+    startReconcileWindowCheck(h.state, MINUTE);
+
+    expect(h.state.reconcileWindowInterval).not.toBe(armedByLoad);
+    vi.advanceTimersByTime(5 * MINUTE);
+    // Five one-minute ticks, and no sixth from the 5-minute interval load() armed.
+    expect(reconcile).toHaveBeenCalledTimes(5);
   });
 });

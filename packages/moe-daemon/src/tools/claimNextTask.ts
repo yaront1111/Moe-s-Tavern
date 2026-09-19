@@ -1,11 +1,18 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
-import { MoeError, missingRequired, notAllowed, invalidState, notFound } from '../util/errors.js';
+import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
-import { blockingHold, heldTaskRefusal, isClaimGatedByDependsOn } from '../util/claimEligibility.js';
+import {
+  blockingHold,
+  finalizingAttemptsByTask,
+  foreignFinalizingAttempt,
+  foreignFinalizingRefusal,
+  heldTaskRefusal,
+  isClaimGatedByDependsOn
+} from '../util/claimEligibility.js';
 import { dependencyShortfall, unmetDependsOn } from '../state/dependencyUnblock.js';
 import { describeMissingEvidence } from '../delivery/policy.js';
 import {
@@ -33,32 +40,93 @@ const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
 };
 
 /**
+ * Bounds on the runner's process identity. host matches the delivery receipt
+ * target's 255; a start time is a timestamp or a `<pid>@<token>` pair, never
+ * prose, so 200 is generous.
+ */
+const IDENTITY_MAX_CHARS = { processStartedAt: 200, host: 255 } as const;
+
+/** The runner's process identity, exactly as it sent it. */
+type ProcessIdentity = Record<keyof typeof IDENTITY_MAX_CHARS, string>;
+
+function readIdentityField(field: keyof typeof IDENTITY_MAX_CHARS, value: unknown): string {
+  if (typeof value !== 'string') throw invalidInput(field, 'must be a non-blank string when supplied');
+  // The bound comes before the two checks that walk the string, because both
+  // allocate over its whole length and this handler holds the state mutex: a
+  // caller that sends megabytes must be refused in O(1), not scanned first.
+  const max = IDENTITY_MAX_CHARS[field];
+  if (value.length > max) throw invalidInput(field, `must be ${max} characters or fewer`);
+  if (value.trim() === '') throw invalidInput(field, 'must be a non-blank string when supplied');
+  // C0 controls and DEL, the rule the delivery receipt target follows.
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) throw invalidInput(field, 'must not contain control characters');
+  }
+  return value;
+}
+
+/**
+ * The runner's process identity from a claim, or null when it sent none. The
+ * runner supplies both values exactly as it will present them to
+ * moe.reattach_attempt; the daemon never derives, probes or defaults either.
+ *
+ * A malformed value is REFUSED, never dropped: a dropped value reads as a
+ * successful claim and costs the seat its reattachability hours later, at a
+ * restart, with nothing in the log. Half an identity is refused the same way,
+ * because reattach requires both and compares both exactly, so half could
+ * never match. Omitting both is fully supported and changes nothing.
+ */
+function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessIdentity | null {
+  if (processStartedAt === undefined && host === undefined) return null;
+  if (processStartedAt === undefined) throw invalidInput('processStartedAt', 'must be supplied together with host');
+  if (host === undefined) throw invalidInput('host', 'must be supplied together with processStartedAt');
+  return {
+    processStartedAt: readIdentityField('processStartedAt', processStartedAt),
+    host: readIdentityField('host', host),
+  };
+}
+
+/**
  * Open the attempt for a claim whose assignment write has ALREADY succeeded,
  * or adopt the one still open on a genuine resume. Three arms:
  *  1. Nothing open: open a fresh attempt (generation = max over prior + 1).
  *  2. ATTEMPT_ALREADY_OPEN on a resume — this worker held the seat before this
  *     claim and the open attempt is its own: adopt it. A respawned CLI coming
- *     back to its task is the same execution, not a second one.
- *  3. ATTEMPT_ALREADY_OPEN otherwise: it belongs to a seat that was given up
- *     without closing it (a crash between a release's two writes, or a path
- *     that does not close yet), so close it through the shared helper and open
- *     the successor generation.
+ *     back to its task is the same execution, not a second one, so the attempt
+ *     keeps the identity its opening claim recorded; a resume never rewrites it.
+ *  3. ATTEMPT_ALREADY_OPEN otherwise: a `running` or `reconciling` leftover of
+ *     a seat that was given up without closing it (a crash between a release's
+ *     two writes, or a hand-back that predates closing on hand-back), so close
+ *     it through the shared helper and open the successor generation.
+ *
+ * Another worker's `finalizing` attempt is never such a leftover: it is that
+ * worker's landing, not yet acknowledged, and only the closes
+ * attemptStore.closeHandedBackAttempts lists may end it (moe.finalize_attempt
+ * first among them; never a claim). The claim path refuses or skips
+ * that row before any write (util/claimEligibility.ts), so arm 3 throws the same
+ * refusal instead of closing it — a backstop for a row that reached the
+ * assignment write some other way. The caller's handBackUnrecordedClaim then
+ * undoes that write, and its seat clear closes only running/reconciling.
  * Any other failure propagates; the caller treats it as fatal to the claim.
  */
 async function openClaimAttempt(
   state: StateManager,
   taskId: string,
   workerId: string,
-  resumingOwnSeat: boolean
+  resumingOwnSeat: boolean,
+  identity: ProcessIdentity | null
 ): Promise<ExecutionAttempt> {
   const params = {
     taskId,
     workerId,
-    // The claim knows the worker and the project, nothing more. A distinct
-    // runner identity and a per-attempt workspace arrive with the reattachment
-    // work; they are deliberately not invented here.
+    // The claim knows the worker and the project. runnerId stays the worker id
+    // (reattach never compares it) and no per-attempt workspace is invented.
     runnerId: workerId,
     workspace: state.projectPath,
+    // The runner's process identity, recorded exactly as it was sent so that
+    // moe.reattach_attempt can match it after a restart. No identity, no keys:
+    // the record is then byte for byte what it was before identities existed.
+    ...identity,
   };
   try {
     return await openAttempt(state, params);
@@ -67,6 +135,8 @@ async function openClaimAttempt(
   }
   const open = currentAttempt(state, taskId);
   if (open && resumingOwnSeat && open.workerId === workerId) return open;
+  const landing = foreignFinalizingAttempt(finalizingAttemptsByTask(state), taskId, workerId);
+  if (landing) throw foreignFinalizingRefusal(landing);
   await closeOpenAttempts(state, taskId);
   return openAttempt(state, params);
 }
@@ -86,6 +156,44 @@ async function handBackUnrecordedClaim(state: StateManager, taskId: string, work
       'claim_next_task: could not hand back the assignment after its attempt failed to open'
     );
   }
+}
+
+/**
+ * The explicit-taskId refusal for a row a daemon restart is HOLDING. A task
+ * whose attempt is `reconciling` is held for its owner: the restart parked it
+ * because it lost sight of that execution, and the owner's runner may be seconds
+ * from reattaching — so handing the row to anyone else would start a second
+ * execution of live work.
+ *
+ * Scoped to the TASK, NOT to the caller: that is the whole difference from the
+ * finalizing hold, which stops a worker taking MORE work; copying that scope
+ * here would let a third party walk straight in. The holder itself is exempt:
+ * its own resume is not a takeover (reattachment has its own tool).
+ *
+ * And ONLY while the row is still assigned to the holder. The hold exists for a
+ * seat that owns its task; a reconciling attempt on a row that is unassigned or
+ * assigned to somebody else protects nobody — it is an orphan from a hand-back
+ * that predates closing on hand-back. Such a claim falls through to the ordinary
+ * checks: an unassigned row is claimed, and openClaimAttempt closes the leftover
+ * before opening the successor generation, exactly as the ranked pool already
+ * does; a row a live worker holds is refused as assigned. Only this explicit
+ * path needs a guard at all: a held row stays assigned to a seat the startup
+ * purge spared, so isTaskClaimable keeps it out of the ranked pool.
+ *
+ * THROWN, like the finalizing refusal, so McpAdapter surfaces { tool, codeName }
+ * on the wire for both. The caller runs it before any assignment write, so a
+ * refused claim can never have changed an owner.
+ */
+function assertNotHeldByReconciliation(state: StateManager, task: Task, workerId: string | undefined): void {
+  const holding = listAttempts(state, task.id).find((a) => a.phase === 'reconciling');
+  if (!holding || holding.workerId === workerId) return;
+  if (task.assignedWorkerId !== holding.workerId) return;
+  throw attemptReconcilingRefusal({
+    attemptId: holding.id,
+    generation: holding.generation,
+    taskId: holding.taskId,
+    workerId: holding.workerId,
+  });
 }
 
 /**
@@ -130,6 +238,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         },
         epicId: { type: 'string' },
         workerId: { type: 'string' },
+        processStartedAt: {
+          type: 'string',
+          description: 'Optional; send together with host or not at all. The runner process start time as the runner itself records it (e.g. `<pid>@<start token>`): supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 200 chars.'
+        },
+        host: {
+          type: 'string',
+          description: 'Optional; send together with processStartedAt or not at all. The host the runner process runs on: supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 255 chars.'
+        },
         replaceExisting: { type: 'boolean', description: 'Replace existing worker assignment if another worker is active' },
         taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
         preferAdjacentInEpic: {
@@ -156,11 +272,16 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           replaceExisting?: boolean;
           taskId?: string;
           preferAdjacentInEpic?: boolean;
+          processStartedAt?: unknown;
+          host?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
           throw missingRequired('statuses');
         }
+        // Refused here, before any other check or write, so a claim with a
+        // malformed identity assigns nobody (see readProcessIdentity).
+        const identity = readProcessIdentity(params.processStartedAt, params.host);
 
         if (!state.project) {
           throw invalidState('StateManager', 'unloaded', 'loaded');
@@ -227,9 +348,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // can never have changed an owner. THROWN: the held-out acceptance
           // case for this boundary requires a MoeError, and the retryable rail
           // now travels in context.retryable rather than in the response shape.
-          // Scoped to this worker by construction — another worker's
-          // finalizing attempt is none of this caller's business (qa_approve's
-          // hold is the task-scoped one).
+          // Scoped to this worker by construction. Another worker's finalizing
+          // attempt does not hold THIS worker's seat; it holds ITS task, and the
+          // task-scoped third-party hold in the claim path below keeps every
+          // other seat off that row (explicit-taskId refusal, ranked-pool skip —
+          // util/claimEligibility.ts), as qa_approve's hold keeps approval off it.
           const finalizing = listAttempts(state).find(
             (a) => a.workerId === params.workerId && a.phase === 'finalizing'
           );
@@ -243,42 +366,17 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           }
         }
 
-        // A task whose attempt is `reconciling` is HELD for its owner. A daemon
-        // restart parked it there because it lost sight of that execution, and
-        // the owner's runner may be seconds from reattaching — so handing the
-        // row to anyone else would start a second execution of live work.
-        //
-        // Scoped to the TASK, NOT to the caller: that is the whole difference
-        // from the finalizing hold directly above, which stops a worker taking
-        // MORE work. Copying that scope here would let a third party walk
-        // straight in. Only the explicit-taskId path needs it — the ranked pool
-        // never offers a held row, because the spared owner is still present in
-        // the worker map and isTaskClaimable therefore excludes it.
-        //
-        // Fires before any ranking, eligibility scan or assignment write, so a
-        // refused claim can never have changed an owner. THROWN, like the
-        // finalizing refusal, so McpAdapter surfaces { tool, codeName } on the
-        // wire for both.
-        if (params.taskId) {
-          const holding = listAttempts(state, params.taskId).find((a) => a.phase === 'reconciling');
-          // The owner is exempt: its own resume is not a takeover (reattachment
-          // has its own tool, and this refusal is for third parties).
-          if (holding && holding.workerId !== params.workerId) {
-            throw attemptReconcilingRefusal({
-              attemptId: holding.id,
-              generation: holding.generation,
-              taskId: holding.taskId,
-              workerId: holding.workerId,
-            });
-          }
-        }
-
         let tasks: Task[];
         if (params.taskId) {
           const requested = state.getTask(params.taskId);
           if (!requested) {
             throw notFound('Task', params.taskId);
           }
+          // A row a daemon restart is holding for its still-assigned owner is
+          // refused to third parties before any other check or write. A
+          // reconciling attempt on a row its holder no longer owns holds
+          // nothing (see assertNotHeldByReconciliation).
+          assertNotHeldByReconciliation(state, requested, params.workerId);
           if (!statuses.includes(requested.status)) {
             throw invalidState('Task', requested.status, statuses.join('|'));
           }
@@ -295,6 +393,16 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               'claim',
               `Task ${requested.id} is parked for human review (reopen/critique budget exhausted). A human must reopen or approve it before it re-enters the QA queue.`
             );
+          }
+          // A row whose attempt is still finalizing under ANOTHER worker is that
+          // worker's unacknowledged landing, not a free row. Refused here, before
+          // the dependsOn gate, the eviction branches and the assignment write —
+          // openClaimAttempt would otherwise close the attempt out from under its
+          // runner. Retryable: the hold ends at moe.finalize_attempt or at its
+          // runner's moe.deregister_worker (util/claimEligibility.ts).
+          const landing = foreignFinalizingAttempt(finalizingAttemptsByTask(state), requested.id, params.workerId);
+          if (landing) {
+            throw foreignFinalizingRefusal(landing);
           }
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
@@ -327,6 +435,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             const w = state.getWorker(params.workerId);
             adjacentEpicId = w?.epicId || undefined;
           }
+          const finalizingByTask = finalizingAttemptsByTask(state);
           tasks = Array.from(state.tasks.values())
             .filter((t) => statuses.includes(t.status))
             .filter((t) => (params.epicId ? t.epicId === params.epicId : true))
@@ -341,6 +450,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // pool skips it silently, and only an explicit-taskId claim is
             // refused with the detail (dependsOnClaimRefusal).
             .filter((t) => !isClaimGatedByDependsOn(state, t))
+            // Finalizing hold — the SAME predicate as wait_for_task's matcher. A
+            // row another worker's landing still holds is SKIPPED, never refused:
+            // the wrappers claim only through this pool, and a thrown refusal
+            // here reads to the sh wrapper as a dead daemon ("claim_next_task
+            // stopped answering").
+            .filter((t) => !foreignFinalizingAttempt(finalizingByTask, t.id, params.workerId))
             .sort((a, b) => {
               // When preferAdjacentInEpic is on and a hint epic is set,
               // rank in-epic candidates ahead of out-of-epic. This lets a
@@ -471,7 +586,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // exist to remove; first it hands back the seat it just took (a resume
           // took nothing new, so there is nothing to hand back).
           try {
-            claimedAttempt = await openClaimAttempt(state, candidate.id, params.workerId, resumingOwnSeat);
+            claimedAttempt = await openClaimAttempt(state, candidate.id, params.workerId, resumingOwnSeat, identity);
           } catch (err: unknown) {
             if (!resumingOwnSeat) await handBackUnrecordedClaim(state, candidate.id, params.workerId);
             throw err;

@@ -639,6 +639,46 @@ until a human or governor acts; triage them with `list_tasks { status: "BLOCKED"
 
 ---
 
+### Worker wrapper stopped after a blocked or handed-back task
+
+**Symptom:** a worker wrapper exited after a task's post-flight instead of claiming more work, for
+example right after its agent called `moe.report_blocked` or a human moved the task with
+`set_task_status`.
+
+A hand-back does not end the loop by itself. When `report_blocked` frees the seat (or
+`set_task_status`, a seat-only `unblock_worker` or a sweep releases the task), the daemon closes that
+seat's attempt; the post-flight checkpoints the task, acknowledges nothing and claims again. These
+lines are benign:
+
+- `[finalize] no finalizing attempt for this seat on task <id>; nothing to acknowledge.` The pinned
+  attempt was missing, parked `reconciling`, or no longer matched the pin. A closed or running
+  attempt prints no line at all.
+- `[WARN] Missing/stale attempt identity; candidate completion will fail closed.` at pre-flight. A
+  resumed session found no single open attempt to pin. A checkpoint exit still lands; a completion
+  that must run a quality gate is parked on a rescue ref instead (`qualityGate not run: candidate
+  evidence unavailable`), and the loop still goes on.
+
+These lines mean the wrapper stopped on purpose:
+
+- `[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect).`
+  The seat's finalizing attempt (a completion's landing hold) was not acknowledged after three tries.
+- `[WARN] finalize refused: finalizing attempt <id> on task <id> has no pinned identity; not acknowledging.`
+  The seat holds a finalizing attempt it never pinned. The wrapper never acknowledges an identity it
+  did not pin, and the daemon refuses the seat's next claim while that hold stands.
+
+A stop after a failed quality gate (`PUSH-BLOCKED: qualityGate failed`) or a refused branch peel is a
+landing failure, not a finalize one: see **Worker finished but nothing was committed** above.
+
+**Fix:** relaunch the seat. The stopped wrapper deregistered its worker on exit, and
+`deregister_worker` closes that worker's own finalizing attempts, so the landing hold is already gone.
+If a wrapper died without deregistering, first confirm it is really gone, then close the hold by hand:
+find the record with `grep -l '"phase": "finalizing"' .moe/attempts/*.json` and call
+`moe.finalize_attempt` with its exact `taskId`, `attemptId` and `generation` (`outcome: "failed"`
+when nothing landed) — see **Escape for a runner that is gone** under `moe.finalize_attempt` in
+`docs/MCP_SERVER.md`.
+
+---
+
 ### `qa_approve` returned `NO-COMPLETION-COMMIT`
 
 **Symptom:** `warnings: ["NO-COMPLETION-COMMIT: task <id> has no completion commit recorded yet (the
@@ -646,7 +686,9 @@ wrapper lands it seconds after REVIEW) — verify task.commits / git log before 
 to `#governors`. The approval still landed (DONE).
 
 The warning is advisory. It fires when `settings.autoCommit` is on and no `task.commits` entry of kind
-`completion` was recorded at or after `task.reviewStartedAt`. Causes, in order of likelihood:
+`completion` was recorded in the current work round: at or after the latest rejection, else the first
+step start (`task.workStartedAt`), else `task.reviewStartedAt` (`completionCommitsForReview` in
+`delivery/policy.ts`). Causes, in order of likelihood:
 
 1. **The race**: QA approved within seconds of REVIEW, before the worker's CLI exited and the wrapper
    ran `record_commit`. Re-check `task.commits` a minute later — the wrapper lands the completion

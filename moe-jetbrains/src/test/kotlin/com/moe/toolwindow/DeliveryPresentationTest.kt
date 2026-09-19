@@ -79,13 +79,56 @@ class DeliveryPresentationTest {
     }
 
     @Test
+    fun `a reported pass the policy does not count never reads as a counted required check`() {
+        for ((command, source) in listOf("node gate.cjs" to "agent-reported", "node lint.cjs" to "runner-observed")) {
+            assertEquals(
+                listOf(
+                    DeliveryRow("moe.delivery.checkCommand", command),
+                    DeliveryRow("moe.delivery.checkPassed", "0", outcome = DeliveryOutcome.PASS),
+                    DeliveryRow("moe.delivery.checkSource", source),
+                    DeliveryRow("moe.delivery.requiredCheckNotCounted", "no", outcome = DeliveryOutcome.FAIL)
+                ),
+                DeliveryPresentation.rows(
+                    TaskDelivery(latestCheckRun = DeliveryCheckRun(command, 0, source), requiredCheckSatisfied = false)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `a counted gate pass reads as counted, and a null verdict adds no policy row`() {
+        val gate = DeliveryCheckRun("node gate.cjs", 0, "runner-observed")
+        val reported = listOf(
+            DeliveryRow("moe.delivery.checkCommand", "node gate.cjs"),
+            DeliveryRow("moe.delivery.checkPassed", "0", outcome = DeliveryOutcome.PASS),
+            DeliveryRow("moe.delivery.checkSource", "runner-observed")
+        )
+        val counted = DeliveryRow("moe.delivery.requiredCheckCounted", "yes", outcome = DeliveryOutcome.PASS)
+        assertEquals(reported + counted, DeliveryPresentation.rows(TaskDelivery(latestCheckRun = gate, requiredCheckSatisfied = true)))
+        assertEquals(reported, DeliveryPresentation.rows(TaskDelivery(latestCheckRun = gate)))
+        // The gate passed earlier; the LAST run is a failing non-gate one. Both truths show.
+        assertEquals(
+            listOf(
+                DeliveryRow("moe.delivery.checkCommand", "node lint.cjs"),
+                DeliveryRow("moe.delivery.checkFailed", "1", outcome = DeliveryOutcome.FAIL),
+                DeliveryRow("moe.delivery.checkSource", "runner-observed"),
+                counted
+            ),
+            DeliveryPresentation.rows(
+                TaskDelivery(latestCheckRun = DeliveryCheckRun("node lint.cjs", 1, "runner-observed"), requiredCheckSatisfied = true)
+            )
+        )
+    }
+
+    @Test
     fun `every emitted bundle key has a translation`() {
         val properties = Properties()
         requireNotNull(javaClass.classLoader.getResourceAsStream("messages/MoeBundle.properties")).use(properties::load)
         val keys = (DeliveryPresentation.rows(evidence()) + DeliveryPresentation.rows(
-            TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = 1))
-        )).map { it.labelKey } + DeliveryPresentation.TITLE_KEY
-        assertEquals(9, keys.toSet().size)
+            TaskDelivery(latestCheckRun = DeliveryCheckRun(exitCode = 1, source = "agent-reported"), requiredCheckSatisfied = false)
+        ) + DeliveryPresentation.rows(TaskDelivery(requiredCheckSatisfied = true)))
+            .map { it.labelKey } + DeliveryPresentation.TITLE_KEY
+        assertEquals(12, keys.toSet().size)
         for (key in keys) assertTrue("Missing $key", !properties.getProperty(key).isNullOrEmpty())
     }
 }

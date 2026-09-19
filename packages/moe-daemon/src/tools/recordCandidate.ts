@@ -23,8 +23,9 @@ function readGeneration(args: { generation?: unknown }): number | undefined {
  *
  * NOT `blocking`: dispatch serializes every non-blocking tool under the global
  * state mutex, and candidateStore's check-then-write relies on exactly that.
- * No ownership or status gate: the runner records after complete_task, when QA
- * may already hold the task — the attempt fence is the guard that matters. The
+ * No ownership or status gate: the runner records after complete_task has
+ * unassigned the row, while its attempt is finalizing and no other seat may
+ * claim the task — the attempt fence is what refuses a superseded attempt. The
  * handler never runs git and never starts a process: the shas are recorded as
  * reported and checked for shape only.
  */

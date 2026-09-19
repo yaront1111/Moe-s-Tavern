@@ -15,6 +15,7 @@ import { claimNextTaskTool } from './claimNextTask.js';
 import { startStepTool } from './startStep.js';
 import { completeStepTool } from './completeStep.js';
 import { completeTaskTool } from './completeTask.js';
+import { finalizeAttemptTool } from './finalizeAttempt.js';
 import { qaApproveTool } from './qaApprove.js';
 import { qaRejectTool } from './qaReject.js';
 import { releaseTaskTool } from './releaseTask.js';
@@ -311,7 +312,16 @@ describe('governance control-plane features', () => {
         // Advance time, complete_task → REVIEW, qa_approve → DONE
         vi.setSystemTime(new Date('2026-05-15T01:00:00.000Z'));
         const completeTask = completeTaskTool(state);
-        await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state);
+        const completed = await completeTask.handler({ taskId: 'task-m', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 } }, state) as { attemptId: string; generation: number };
+        // The wrapper's post-flight acknowledges the landing; until then no other seat may claim the row.
+        await finalizeAttemptTool(state).handler({
+          taskId: 'task-m',
+          workerId: 'worker-a',
+          runnerId: 'worker-a',
+          attemptId: completed.attemptId,
+          generation: completed.generation,
+          outcome: 'nothing-to-commit',
+        }, state);
 
         // QA claim and approve (simulate QA get_context so the context guard passes)
         await claim.handler({ workerId: 'qa-1', statuses: ['REVIEW'], taskId: 'task-m' }, state);

@@ -1,0 +1,28 @@
+{
+  "id": "task-84150869c3194fce908e6efad8f4c82b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the ps1 hot reload nests a new wrapper per script change, so seats accumulate blocked PowerShell parents (5.5 GB after one night)",
+  "description": "Measured by the governor on 2026-09-19 06:50Z. df42861 made the ps1 self-restart hand over with the call operator so the reloaded wrapper keeps its console, which fixed the duplicate-seat bug from Start-Process. The cost is that every moe-agent.ps1 change leaves the old wrapper blocked on its child forever, one extra process per seat per change. After one night of landings that touched the launchers, this project had 45 seat wrappers alive, 6.2 GB working set, of which 38 were blocked reload parents holding 5.5 GB. Depth per seat was 5 to 8. Nothing bounds it inside a session, and it cannot be cleaned up piecemeal: killing an intermediate parent unblocks ITS parent, which resumes the claim loop while the innermost wrapper is still live, which is the duplicate-seat failure df42861 fixed. Today the only safe cleanup is stopping a seat's whole process tree and relaunching it. Wanted: a hand-over that does not nest, for example a thin supervisor that launches the agent script once per iteration so a reload is just the next iteration reading the new file, while the console and the one-loop-per-seat guarantee are preserved. The sh twin exec()s in place and has no such growth, so this is a ps1-only defect; keep the twins behaviourally equal.",
+  "definitionOfDone": [
+    "A moe-agent.ps1 hot reload leaves no blocked parent: after N script changes a seat still has exactly one wrapper process, proven by a postflight arm that counts wrapper processes across two reloads",
+    "The reload still keeps the seat's console and never produces a second claim loop for the same worker id (the df42861 regression stays covered)",
+    "parity-check.{sh,ps1} pass and the sh twin's exec hand-over is unchanged"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 11,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-19T06:50:29.614Z",
+  "updatedAt": "2026-09-19T06:50:29.614Z"
+}
