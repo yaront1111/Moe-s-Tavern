@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,16 +96,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-19T08:18:19.451Z",
-  "updatedAt": "2026-09-19T09:06:19.266Z",
+  "updatedAt": "2026-09-19T09:12:23.379Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:49:21.709Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-09-19T09:12:23.379Z",
+    "wallClockMs": 1381670
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
-    "worker-3c030e77"
+    "worker-3c030e77",
+    "qa-7100be29"
   ],
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -152,7 +155,62 @@
     "packages/moe-daemon/src/tools/recordCandidate.ts",
     "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
     "packages/moe-daemon/src/types/schema.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+    ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+    ".moe/tasks/task-a5fb02e977f74ea2802f24053c44a1c6.json"
   ],
-  "completionSummary": "Removed the false claim that the daemon \"never runs git\" from daemon code and added a guard for it. The daemon's one git call is the read-only status fingerprint in diskState.ts.\n- Guard (daemonGitDocs.test.ts, +2 tests): no registered tool's description or inputSchema, and no non-test src/**/*.ts line, may match NEVER_RUNS_GIT. Both new tests have vacuous-pass guards: arrayContaining on the tool names, and on 4 subdirectory files for the walk.\n  - RED before the fix: ['moe.record_candidate', 'moe.record_delivery_receipt'] plus exactly the 13 lines from QA's comment-f724b231.\n- Rewrites: 13 lines use the Delivery Path wording ('never checks X against git'; providerDescriptor names the read-only fingerprint).\n  - recordCandidate.ts:39 uses the plan's exact text.\n  - DEVIATION at recordDeliveryReceipt.ts:41: the plan's 'never reads the target ref' is literally false, because the fingerprint reads HEAD and HEAD is normally the delivery-target branch. It now reads 'never checks this report against git and verifies nothing about the target'.\n- Same-class siblings also fixed: 'reads no ref' / 'inspects no ref' / 'inspects the target' in the same sentences, targetBefore/targetAfter property descriptions (:56 and :60), and docs/MCP_SERVER.md:853. That is +1 path beyond the plan's 9; the reason is in the step-4 note and comment-92d8c413.\n- Contract: MCP names, params and refusal codes are unchanged. Only prose changed. EOLs are kept.\n- Verification:\n  - tsc --noEmit exits 0. The strict standalone typecheck of the test also exits 0.\n  - Clean HEAD export: 2151 tests. The same export plus this task's files: 2153, exactly +2. The shared tree gives 2154; the extra +1 is the peer-dirty recommendSkill.test.ts.\n  - Mutations (empty walk, non-recursive walk, empty registry, phrase in a property description) all go RED.\n- Flake note: the shared tree ran 11 times after the edits. 10 were green. One run at 12:02:01 had 1 failed test, and I deleted its log before reading it, so its name"
+  "completionSummary": "Removed the false claim that the daemon \"never runs git\" from daemon code and added a guard for it. The daemon's one git call is the read-only status fingerprint in diskState.ts.\n- Guard (daemonGitDocs.test.ts, +2 tests): no registered tool's description or inputSchema, and no non-test src/**/*.ts line, may match NEVER_RUNS_GIT. Both new tests have vacuous-pass guards: arrayContaining on the tool names, and on 4 subdirectory files for the walk.\n  - RED before the fix: ['moe.record_candidate', 'moe.record_delivery_receipt'] plus exactly the 13 lines from QA's comment-f724b231.\n- Rewrites: 13 lines use the Delivery Path wording ('never checks X against git'; providerDescriptor names the read-only fingerprint).\n  - recordCandidate.ts:39 uses the plan's exact text.\n  - DEVIATION at recordDeliveryReceipt.ts:41: the plan's 'never reads the target ref' is literally false, because the fingerprint reads HEAD and HEAD is normally the delivery-target branch. It now reads 'never checks this report against git and verifies nothing about the target'.\n- Same-class siblings also fixed: 'reads no ref' / 'inspects no ref' / 'inspects the target' in the same sentences, targetBefore/targetAfter property descriptions (:56 and :60), and docs/MCP_SERVER.md:853. That is +1 path beyond the plan's 9; the reason is in the step-4 note and comment-92d8c413.\n- Contract: MCP names, params and refusal codes are unchanged. Only prose changed. EOLs are kept.\n- Verification:\n  - tsc --noEmit exits 0. The strict standalone typecheck of the test also exits 0.\n  - Clean HEAD export: 2151 tests. The same export plus this task's files: 2153, exactly +2. The shared tree gives 2154; the extra +1 is the peer-dirty recommendSkill.test.ts.\n  - Mutations (empty walk, non-recursive walk, empty registry, phrase in a property description) all go RED.\n- Flake note: the shared tree ran 11 times after the edits. 10 were green. One run at 12:02:01 had 1 failed test, and I deleted its log before reading it, so its name",
+  "commits": [
+    {
+      "sha": "2a4a5222d1d043e9098c09c0cc7fa6473c559379",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3c030e77@2026-09-19T08:50:38Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+        ".moe/tasks/task-a5fb02e977f74ea2802f24053c44a1c6.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/providers/providerDescriptor.ts",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/receiptStore.ts",
+        "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/daemonGitDocs.test.ts"
+      ],
+      "recordedBy": "worker-3c030e77",
+      "recordedAt": "2026-09-19T09:07:04.918Z",
+      "treeId": "9ebfa9eaedcc941a80fc7e3549a3c8105844e38f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/recordDeliveryReceipt.ts",
+    "packages/moe-daemon/src/util/daemonGitDocs.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/state/candidateStore.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    ".git/moe-a5fb-flake.cjs",
+    "packages/moe-daemon/src/state/receiptStore.ts",
+    "packages/moe-daemon/src/tools/recordCandidate.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+    "packages/moe-daemon/src/providers/providerDescriptor.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3c030e77@2026-09-19T08:50:38Z",
+    "at": "2026-09-19T09:07:04.918Z"
+  },
+  "completedAt": "2026-09-19T09:12:23.379Z",
+  "reviewCompletedAt": "2026-09-19T09:12:23.379Z",
+  "reviewSummary": "Verified completion 2a4a522 (9 planned paths + docs/MCP_SERVER.md + 3 board records). Working tree == commit for all 10 source/doc paths; blobs LF before and after, no EOL churn.\nDoD1: all 15 lines (2 tool descriptions + 13 comments) reworded; each checked true in context against diskState.ts, the only git call. providerDescriptor names the read-only status fingerprint; the rest say which reported value is never checked against git (Delivery Path: \"checks shape and binding, never the repository\"). Deviation at recordDeliveryReceipt.ts:41 accepted: git status --branch reads HEAD, normally the delivery target, so \"never reads the target ref\" would be false. MCP contract unchanged: only description strings differ.\nDoD2: RED in scratch: 2a4a522~1 + new test file fails both new tests with exactly ['moe.record_candidate','moe.record_delivery_receipt'] and the 13 lines of comment-f724b231. Own mutation: 'never runs ' + 'git' split inside targetAfter's property description turns only the tools test red (['moe.record_delivery_receipt']), so the runtime inputSchema scan covers what the per-line source scan cannot.\nDoD3: clean exports 2a4a522~1 = 123 files 2151/2151, 2a4a522 = 123 files 2153/2153; per-file sorted fullName::status diff = only daemonGitDocs.test.ts 2->4. tsc --noEmit exit 0 (export + shared tree); strict standalone typecheck of the test exit 0. Shared tree: 2-file run 21/21; npm test 123 files 2154/2154 exit 0 (+1 = peer-dirty recommendSkill.test.ts, one added it()).\nRails: regression tests added, no forbidden patterns, no .moe state format change.\nOut of scope, FYI only: docs/SCHEMA.md:1232 still says the daemon \"neither performs the landing nor inspects the target ref\" (same sibling class reworded at schema.ts:1155); the epic-3d096d59 rail still says \"never runs git\" (human-owned)."
 }
