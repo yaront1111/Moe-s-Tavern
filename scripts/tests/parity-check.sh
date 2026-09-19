@@ -205,6 +205,12 @@ for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (
   require_both "runner reattach prose" "$prose"
 done
 
+# Hot reload: the restart announcement an operator sees and the deregister
+# reason both postflight hot-reload cases assert, spelled identically in both.
+for lit in 'wrapper source changed on disk; restarting to load it' wrapper_restart; do
+  require_both "hot reload" "$lit"
+done
+
 # Serena TOOL-tier tools: the editing calls whose successful result is TOOL
 # evidence (old names kept for older Serena installs), and the replace_in_files
 # summary header both wrappers parse.

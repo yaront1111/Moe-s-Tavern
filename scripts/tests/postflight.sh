@@ -1489,6 +1489,95 @@ if [ "$count_after_wait" -ne "$count_at_exit" ]; then
   exit 1
 fi
 
+# --- Hot reload: the wrapper re-execs itself when its own bytes change on disk
+# (twin: the hot-reload arm in postflight.ps1). Two edits to a COPY -- a
+# repo-launched seat reloads on every edit of the real file -- must each yield
+# exactly one deregister_worker with reason wrapper_restart, then a fresh
+# claim_next_task (the daemon re-registers a worker on its claim), and no
+# further restart: the relaunched wrapper hashes the new bytes and must not
+# thrash. The second restart announcement must come from the edited bytes.
+# Until 45633c7 the sh relaunch got NO arguments and died with "Provide
+# --project or --project-name": every sh seat, on its first hot reload. ---
+echo "[hot reload] a changed wrapper restarts once per edit and re-registers"
+RELOAD_DIR="$TMP_DIR/reload"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+mkdir -p "$RELOAD_PROJECT/.moe/messages"
+# The whole scripts/ dir: the restart deregisters through the sibling moe-call.sh.
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+# moe-call.sh refuses to deregister without daemon.json; the fake proxy never reads it.
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+# c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister
+# (the postflight.ps1 twin maps the same). A line still mid-append is skipped.
+cat > "$TMP_DIR/reload-sequence.cjs" <<'JS'
+const fs=require('fs'),file=process.argv[2];
+const text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
+const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}});
+process.stdout.write(rows.map(r=>r.tool==='claim_next_task'?'c':r.tool!=='deregister_worker'?'':
+  r.args&&r.args.reason==='wrapper_restart'?'r':'x').join(''));
+JS
+reload_seq() { "$NODE_FOR_TEST" "$TMP_DIR/reload-sequence.cjs" "$RELOAD_PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null || true; }
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  "$RELOAD_WRAPPER" \
+  --project "$RELOAD_PROJECT" \
+  --worker-id worker-reload \
+  --role worker \
+  --no-start-daemon \
+  --command /bin/true \
+  --loop \
+  --poll-interval 1 \
+  >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+# The EXIT trap kills LIVE_PIDS: an abort below must not leave a looping wrapper.
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_fail() {
+  kill -KILL "$reload_pid" 2>/dev/null || true
+  cat "$TMP_DIR/wrapper-reload.out" >&2 || true
+  cat "$RELOAD_PROJECT/.moe/deregister.log" >&2 2>/dev/null || true
+  echo "HOT RELOAD FAILED: $1 (RPC sequence '$(reload_seq)')" >&2
+  exit 1
+}
+# reload_wait EDITS REGEX -- poll until the sequence matches REGEX. Fails at once
+# on a deregister with another reason (the hand-over took an exit path), on more
+# restarts than edits (thrash), or on a wrapper that is gone.
+reload_wait() {
+  local edits="$1" want="$2" deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC)) seq restarts
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    seq="$(reload_seq)"
+    restarts="${seq//[!r]/}"
+    case "$seq" in *x*) reload_fail "a deregister other than wrapper_restart" ;; esac
+    [ "${#restarts}" -le "$edits" ] || reload_fail "a restart with no edit behind it"
+    if [[ $seq =~ $want ]]; then return 0; fi
+    kill -0 "$reload_pid" 2>/dev/null || reload_fail "the wrapper exited"
+    sleep 0.5
+  done
+  reload_fail "timed out after ${POSTFLIGHT_TIMEOUT_SEC}s waiting for $want"
+}
+reload_wait 0 '^c'
+# Edit 1 rewrites the restart announcement, which the SECOND restart prints from
+# the reloaded bytes. The running bash parsed the whole loop already, and the
+# restart deregisters before it execs, so the exec reads the finished write.
+"$NODE_FOR_TEST" -e 'const fs=require("fs"),f=process.argv[1],a="restarting to load it\"",t=fs.readFileSync(f,"utf8");
+if(t.split(a).length!==2)process.exit(3);fs.writeFileSync(f,t.replace(a,"restarting to load it (edit 1 loaded)\""));' "$RELOAD_WRAPPER" \
+  || reload_fail "the restart announcement is missing from the wrapper"
+reload_wait 1 '^c+rcc'
+printf '# reload 2\n' >> "$RELOAD_WRAPPER"
+reload_wait 2 '^c+rc{2,}rcc'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+reload_want='^c+rc{2,}rc{2,}$'
+[[ $reload_final =~ $reload_want ]] \
+  || reload_fail "expected claims, then exactly two wrapper_restart deregisters each followed by claims"
+grep -Fq 'restarting to load it (edit 1 loaded)' "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail "the second restart did not run the edited bytes"
+echo "[hot reload] ok: 2 restarts, each re-registered, none without an edit"
+
 # --- Quality gate (settings.qualityGate): the post-flight runs the configured
 # command before auto-commit. Failing gate => no commit, PUSH-BLOCKED chat
 # message; passing gate => commit lands; MOE_DISABLE_QUALITY_GATE=1 => gate
