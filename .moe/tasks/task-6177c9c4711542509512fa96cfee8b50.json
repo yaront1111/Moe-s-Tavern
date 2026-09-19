@@ -1,0 +1,27 @@
+{
+  "id": "task-6177c9c4711542509512fa96cfee8b50",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "docs: two daemon test labels still say the ps1 wrapper records qualityGate verbatim",
+  "description": "Found while planning task-42c1e5939d4d4142a8cfbd819f54fa93. That card's DoD limits its diff to the policy.ts hasPassingCheck comment, so these test labels were left out of it.\n\ntask-8fc35d31 (completion f1399a3) made scripts/moe-agent.ps1 trim settings.qualityGate where Read-MoeCommitSettings reads it (moe-agent.ps1:2036, `$qg.Trim()`). Both wrappers now run and record the trimmed command. Two test labels still give the old reason:\n- packages/moe-daemon/src/tools/qaApprove.test.ts:1451, test title 'accepts a pass recorded with a padded qualityGate verbatim, as the PowerShell wrapper records it', and its comment at 1452-1454 ('the ps1 wrapper records it verbatim').\n- packages/moe-daemon/src/state/deliveryProjection.test.ts:232, case label 'a runner-observed pass of the gate, padded as the ps1 wrapper records it'.\n\nKeep both cases, their fixtures and their assertions. A padded recorded command can still come from three places: records written before task-8fc35d31, an older wrapper that an IDE plugin still bundles, and direct moe.record_check_run callers (state/checkRunStore.ts:106 keeps `command` as sent). Only the stated reason is stale. Labels and comments only; no behaviour change.\n\nVerification trap: run the vitest files in place, but do not run `npm run build` in the shared checkout. Its prebuild regenerates src/generated/initFiles.ts from peers' uncommitted docs/roles edits. See task-42c1e593's plan for the scratch-export recipe.",
+  "definitionOfDone": [
+    "packages/moe-daemon/src/tools/qaApprove.test.ts:1451-1454 and packages/moe-daemon/src/state/deliveryProjection.test.ts:232 no longer say the ps1/PowerShell wrapper records qualityGate verbatim; each label names a real source of a padded recorded command (records written before task-8fc35d31, older bundled wrappers, or direct record_check_run callers)",
+    "Only test titles, case labels and comments change. Fixtures, inputs and assertions are byte-identical, and `npx vitest run src/tools/qaApprove.test.ts src/state/deliveryProjection.test.ts` (in packages/moe-daemon) passes with the same test count as before the change"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 215.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-19T13:17:13.570Z",
+  "updatedAt": "2026-09-19T13:17:13.570Z"
+}

@@ -52,7 +52,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T23:52:56.320Z",
-  "updatedAt": "2026-09-19T13:24:13.814Z",
+  "updatedAt": "2026-09-19T13:24:33.031Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T13:12:10.949Z",
     "plannedStepCount": 2,
@@ -97,7 +97,9 @@
   "filesModified": [
     "packages/moe-daemon/src/delivery/policy.ts",
     ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
-    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+    ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
   ],
   "completionSummary": "Comment-only fix in packages/moe-daemon/src/delivery/policy.ts, the hasPassingCheck JSDoc (lines 171-176). It replaced the stale claim \"the ps1 wrapper records settings.qualityGate verbatim (the sh one trims it)\" with the current facts: both wrappers now trim before they run and record. It also names the three sources that can still hand the compare a padded command: runs the ps1 wrapper recorded before task-8fc35d31, older wrappers bundled in IDE plugins, and direct moe.record_check_run callers (checkRunStore keeps `command` as sent). Code untouched: both trims (requiredCheckCommand and hasPassingCheck `run.command.trim()`) and the try/catch stay.\n\nDiff: `git diff --numstat` = 5 2, only ` *` JSDoc lines, no added `*/`, file stays LF (i/lf w/lf, 0 CR bytes). `grep verbatim policy.ts` finds nothing.\n\nEvery claim was checked against code:\n- ps1 trims at moe-agent.ps1:2036, runs that value (3886 -> 3806) and records it (1416).\n- sh strips at moe-agent.sh:7333, runs it via `bash -c` (3963) and records it (1996).\n- checkRunStore.ts:106-114 keeps `command` untrimmed.\n- recordCheckRun.ts:63 says \"never trimmed\".\n\nBuild ran in a scratch export (temp index, HEAD + policy.ts, tree 61450b42, `git diff --stat HEAD T` = policy.ts only), never in the shared checkout: its prebuild would regenerate initFiles.ts from peers' dirty docs and `clean` would wipe the live dist. Scratch was torn down, junction unlinked first, live node_modules checked. src/generated matches the pre-task state (only the peer's skillFiles.ts M). Stale wording in qaApprove.test.ts / deliveryProjection.test.ts is out of scope (follow-up task-6177c9c4).",
   "commits": [
@@ -117,6 +119,24 @@
       "treeId": "a799b9e01dbdac091dba67ae505bc9a8b441b9b0",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "f2a1b8beac3b6ee8d7528ccceb21f0b0ac4958e2",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8df1fc47@2026-09-19T13:21:55Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "qa-8df1fc47",
+      "recordedAt": "2026-09-19T13:24:33.031Z",
+      "treeId": "8bb9a685cf20df563520981bcbc2be8508a22798",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -125,9 +145,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0966ef4c@2026-09-19T13:18:50Z",
-    "at": "2026-09-19T13:21:40.626Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-8df1fc47@2026-09-19T13:21:55Z",
+    "at": "2026-09-19T13:24:33.031Z"
   },
   "completedAt": "2026-09-19T13:24:13.814Z",
   "reviewCompletedAt": "2026-09-19T13:24:13.814Z",
