@@ -741,6 +741,13 @@ $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
+
+# Shared policy applies to every project, before a task is claimed or a model is called.
+$promptCacheHelper = Join-Path $PSScriptRoot 'prompt-cache.mjs'
+if ($cliType -in @('claude', 'codex')) {
+    & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+}
 # Codex is interactive (TUI) for every role unless -CodexExec opts the seat
 # into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
 # default to exec because the codex TUI never exits on its own and this wrapper
@@ -5245,8 +5252,8 @@ do {
     if ($roleDoc) {
         $systemAppend += "`n`n$roleDoc"
     }
-    $systemAppend += $systemAppendPost
     $dynamicContext = ""
+    $dynamicContext += $systemAppendPost
     # A headless loop may launch without a claim solely to answer routed
     # mentions. Claiming later inside that CLI bypasses the task baseline and
     # postflight, both keyed to the preflight task id. Return to the wrapper.
@@ -5512,8 +5519,9 @@ $mentionsJson
         $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
         $script:CodexSeatInstructionsFile = Join-Path $env:TEMP "moe-codex-instructions-$Role-$PID.md"
         $fileBody = $systemAppend
+        $script:CodexSessionContextFile = Join-Path $env:TEMP ("moe-codex-context-" + [guid]::NewGuid().ToString('N') + '.md')
         if ($dynamicContext) {
-            $fileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
+            [System.IO.File]::WriteAllText($script:CodexSessionContextFile, $dynamicContext, [System.Text.UTF8Encoding]::new($false))
             $codexUsesFileContext = $true
         }
         $fileBody | Set-Content -Path $script:CodexSeatInstructionsFile -Encoding UTF8
@@ -5649,10 +5657,11 @@ $mentionsJson
             # (no-task-with-mentions pre-flight): never fall back to $claimPrompt here, because that
             # IS the dynamic context (routed mention text = arbitrary quotes) that just crashed on argv.
             if ($codexUsesFileContext) {
+                $contextPointer = "First read the private session context file at $($script:CodexSessionContextFile). It contains your task binding, inbox and routed mentions. "
                 if ($claimPromptBody) {
-                    $shortPrompt = $claimPromptBody
+                    $shortPrompt = $contextPointer + $claimPromptBody
                 } else {
-                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CodexSeatInstructionsFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    $shortPrompt = $contextPointer + "If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
                 }
             } else {
                 $shortPrompt = $claimPrompt
@@ -5786,8 +5795,10 @@ $mentionsJson
                     }
                 }
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
-                & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs "$shortPrompt"
-                $script:CliExitCode = $LASTEXITCODE
+                & {
+                    & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
+                    $script:CliExitCode = $LASTEXITCODE
+                } | & node $promptCacheHelper codex-stream
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
@@ -5796,6 +5807,9 @@ $mentionsJson
             }
         } finally {
             Stop-HeartbeatSidecar
+            foreach ($cacheFile in @($script:CodexSeatInstructionsFile, $script:CodexSessionContextFile)) {
+                if ($cacheFile) { Remove-Item -LiteralPath $cacheFile -Force -ErrorAction SilentlyContinue }
+            }
         }
     } elseif ($cliType -eq "gemini") {
         # Check gemini is available
@@ -6045,15 +6059,16 @@ $mentionsJson
             # no-task + routed-mentions launch). codex/gemini already dodge this
             # via their instruction files — claude's user prompt was the gap.
             $userPromptForCli = $claimPrompt
+            $sessionContextFile = $null
             $WIN_CMD_SAFE_THRESHOLD = 6000
             $isWin = ($env:OS -eq "Windows_NT")
             $promptHasQuote = $claimPrompt -and $claimPrompt.IndexOf('"') -ge 0
             if ($isWin -and $claimPrompt -and ($claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD -or $promptHasQuote)) {
-                $overflow = "`n`n# === Per-iteration runtime context (delivered as system prompt because the Windows command line cannot carry it as a user message) ===`n" + $claimPrompt
-                [System.IO.File]::AppendAllText($systemPromptFile, $overflow, [System.Text.UTF8Encoding]::new($false))
-                $userPromptForCli = "Begin. Your full task context, claimed_task_context, routed mentions, and role directive are at the END of the appended system prompt. Treat the role directive there as your active user request."
+                $sessionContextFile = Join-Path $env:TEMP ("moe-claude-context-" + [guid]::NewGuid().ToString('N') + '.md')
+                [System.IO.File]::WriteAllText($sessionContextFile, $claimPrompt, [System.Text.UTF8Encoding]::new($false))
+                $userPromptForCli = "First read the private session context file at $sessionContextFile. It contains your full task context, claimed_task_context, routed mentions, and role directive. Treat that role directive as your active user request."
                 $overflowReason = if ($claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD) { "length $($claimPrompt.Length) > $WIN_CMD_SAFE_THRESHOLD chars" } else { "embedded double quotes (PS 5.1 argv word-split)" }
-                Write-Host "[prompt-overflow] claimPrompt routed via system prompt file: $overflowReason." -ForegroundColor Yellow
+                Write-Host "[prompt-overflow] claimPrompt routed via private session context file: $overflowReason." -ForegroundColor Yellow
             }
 
             # Per-task one-shot mode. --print runs claude non-interactively: the
@@ -6210,8 +6225,10 @@ $mentionsJson
                     $script:moeToolJson = ""
                     $script:moeToolName = $null
                     $script:moeInText = $false
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli" 2>&1 | ForEach-Object { & $parseStreamJson $_ }
-                    $script:CliExitCode = $LASTEXITCODE
+                    & {
+                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli" 2>&1
+                        $script:CliExitCode = $LASTEXITCODE
+                    } | & node $promptCacheHelper claude-stream | ForEach-Object { & $parseStreamJson $_ }
                 } else {
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli"
                     $script:CliExitCode = $LASTEXITCODE
@@ -6220,8 +6237,10 @@ $mentionsJson
                 Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort max $($printArgs -join ' ')"
                 if ($usePrintMode) {
                     $script:moeToolJson = ""
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs 2>&1 | ForEach-Object { & $parseStreamJson $_ }
-                    $script:CliExitCode = $LASTEXITCODE
+                    & {
+                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs 2>&1
+                        $script:CliExitCode = $LASTEXITCODE
+                    } | & node $promptCacheHelper claude-stream | ForEach-Object { & $parseStreamJson $_ }
                 } else {
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs
                     $script:CliExitCode = $LASTEXITCODE
@@ -6229,6 +6248,7 @@ $mentionsJson
             }
             } finally {
                 Stop-HeartbeatSidecar
+                if ($sessionContextFile) { Remove-Item -LiteralPath $sessionContextFile -Force -ErrorAction SilentlyContinue }
             }
         }
     }

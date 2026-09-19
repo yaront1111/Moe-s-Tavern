@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -106,17 +106,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-19T06:50:29.614Z",
-  "updatedAt": "2026-09-19T16:00:29.187Z",
+  "updatedAt": "2026-09-19T16:29:34.161Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:45:23.056Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-19T16:29:34.161Z",
+    "wallClockMs": 27851105
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
     "governor-daa92494",
-    "worker-0966ef4c"
+    "worker-0966ef4c",
+    "qa-8df1fc47"
   ],
   "dependsOn": [
     "task-d144136406384f96b85388da77f193ed"
@@ -153,7 +156,45 @@
   },
   "filesModified": [
     "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+  ],
+  "completionSummary": "ps1 hot reload no longer nests. scripts/moe-agent.ps1 has an in-process supervisor right after param(). The first invocation runs each pass with `& $PSCommandPath @PSBoundParameters` and loops while a pass sets $global:MoeWrapperReload. The bottom hand-over sets that flag and then does `exit 0`. The old `& <exe> <GetCommandLineArgs>` child relaunch and its HostExe/RelaunchArgs capture are gone. Result: one process and one console per seat across reloads, and the runner identity survives a reload.\nBeyond the plan:\n- Hot reload now hashes with .NET SHA-256 (the shared Get-MoeSha256Hex). Under node->powershell, CI's 5.1 leg, Get-FileHash is \"not recognized\", so HEAD never reloaded there.\n- A reload that fails to start prints the 'relaunch it by hand' hint and exits 1. A first-pass error is rethrown as before.\n- The supervisor requires $PSCommandPath.\nProcess-global state:\n- Only OUR previous PowerShell.Exiting subscriber and its job are removed, so an operator profile's handler is untouched.\n- Measured: the Exiting action is inert once its pass has returned, as it already was for IDE `-Command` launches. The outer finally stays the deregister of record.\n- The gate type is named MoeFrozenGateProcess<sha12 of its C#>, so a changed definition compiles under a new name and an unchanged one never compiles twice. Proven in-process on both engines.\nTest: a new postflight.ps1 arm edits a COPY of the wrapper twice. It asserts exactly 1 wrapper process after each reload, one processStartedAt|host on every claim, the RPC sequence ^c+rc+rc+$, and that pass 2 runs the edited bytes.\n- RED on HEAD: 'counted 2 then 3' and 3 identities on pwsh 7 and on PS 5.1. Via node it times out with no reload.\n- The pre-df42861 Start-Process wrapper also fails it (RPC sequence 'cx').\nVerified on the final bytes (MOE_POSTFLIGHT_TIMEOUT_SEC=400):\n- full postflight.ps1: pwsh PASS in 557 s, PS 5.1 PASS in 529 s (frozen 69, hot reload ok, scope 30).\n- CI-shape `node postflight-safe.mjs powershell`: fail",
+  "commits": [
+    {
+      "sha": "021f351c34f895fd6a7924b034af4a5997e413db",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0966ef4c@2026-09-19T14:41:12Z",
+      "paths": [
+        ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1"
+      ],
+      "recordedBy": "worker-0966ef4c",
+      "recordedAt": "2026-09-19T16:01:47.763Z",
+      "treeId": "e0a15b0b251dd3b9b6606e6d7c1a6baac307cca1",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1"
   ],
-  "completionSummary": "ps1 hot reload no longer nests. scripts/moe-agent.ps1 has an in-process supervisor right after param(). The first invocation runs each pass with `& $PSCommandPath @PSBoundParameters` and loops while a pass sets $global:MoeWrapperReload. The bottom hand-over sets that flag and then does `exit 0`. The old `& <exe> <GetCommandLineArgs>` child relaunch and its HostExe/RelaunchArgs capture are gone. Result: one process and one console per seat across reloads, and the runner identity survives a reload.\nBeyond the plan:\n- Hot reload now hashes with .NET SHA-256 (the shared Get-MoeSha256Hex). Under node->powershell, CI's 5.1 leg, Get-FileHash is \"not recognized\", so HEAD never reloaded there.\n- A reload that fails to start prints the 'relaunch it by hand' hint and exits 1. A first-pass error is rethrown as before.\n- The supervisor requires $PSCommandPath.\nProcess-global state:\n- Only OUR previous PowerShell.Exiting subscriber and its job are removed, so an operator profile's handler is untouched.\n- Measured: the Exiting action is inert once its pass has returned, as it already was for IDE `-Command` launches. The outer finally stays the deregister of record.\n- The gate type is named MoeFrozenGateProcess<sha12 of its C#>, so a changed definition compiles under a new name and an unchanged one never compiles twice. Proven in-process on both engines.\nTest: a new postflight.ps1 arm edits a COPY of the wrapper twice. It asserts exactly 1 wrapper process after each reload, one processStartedAt|host on every claim, the RPC sequence ^c+rc+rc+$, and that pass 2 runs the edited bytes.\n- RED on HEAD: 'counted 2 then 3' and 3 identities on pwsh 7 and on PS 5.1. Via node it times out with no reload.\n- The pre-df42861 Start-Process wrapper also fails it (RPC sequence 'cx').\nVerified on the final bytes (MOE_POSTFLIGHT_TIMEOUT_SEC=400):\n- full postflight.ps1: pwsh PASS in 557 s, PS 5.1 PASS in 529 s (frozen 69, hot reload ok, scope 30).\n- CI-shape `node postflight-safe.mjs powershell`: fail"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-0966ef4c@2026-09-19T14:41:12Z",
+    "at": "2026-09-19T16:01:47.763Z"
+  },
+  "completedAt": "2026-09-19T16:29:34.161Z",
+  "reviewCompletedAt": "2026-09-19T16:29:34.161Z",
+  "reviewSummary": "Verified completion commit 021f351 (pushed): moe-agent.ps1 + tests/postflight.ps1 + 3 board records. `git diff 021f351^ 021f351 -- scripts/moe-agent.sh` EMPTY (sh exec hand-over untouched).\nDoD1: re-ran the verification command from a scratch copy of the landed bytes, MOE_POSTFLIGHT_TIMEOUT_SEC=400: full postflight.ps1 rc=0 on pwsh 7.6.6 AND PS 5.1.26100, both printing \"PASS frozen candidate scenarios: 69\", \"[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity\", \"commit-scope scenarios run: 30\", \"PASS postflight.ps1\". Rebuilt the arm-only harness with the worker's anchor generator (read first) over 3 trees: on pwsh and 5.1, HEAD passes; 021f351^ fails \"counted 2 then 3\" + 3 runner identities (nesting observed, not a missing string); df42861^ fails \"RPC sequence 'cx'\", so the df42861 duplicate-seat regression stays covered. Through the CI chain (pwsh->node->powershell) HEAD passes while 021f351^ never reloads at all (52 claims) - the Get-FileHash -> .NET SHA-256 swap is load-bearing.\nDoD2: the arm pins the reloaded pass's edited announcement in the SAME redirected stdout, one processStartedAt|host per claim, sequence ^c+rc+rc+$; the frozen interrupt-int (Ctrl+C) arm passes through the supervised pass on both engines.\nDoD3: parity-check PASS on sh, pwsh, 5.1.\nBeyond the plan (daemon tests run this wrapper): delivery/acceptance.test.ts 6/6 (spawns the real ps1 wrapper with -File), providerDescriptor.contract.test.ts 23/23, node --test 61/61, importee-guard 48/48 both engines. No forbidden pattern added, no MCP/.moe change, diff scope == plan.\nOwn checks: AST shows no script-level `return` (every pass ends at an explicit `exit N`); the gate `.Replace` hits exactly class + ctor; both AST loaders take FunctionDefinitionAst only. My PowerShell.Exiting probe (plain vs supervised, both engines, 8 shapes) never ran the action in any shape - already inert, not a regression here."
 }
