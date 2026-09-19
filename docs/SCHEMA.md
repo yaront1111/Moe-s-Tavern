@@ -105,7 +105,7 @@ interface ProjectSettings {
   commitPattern: string;         // default: "feat({epicId}): {taskTitle}"
 
   // Master switch for the agent wrapper's land-on-every-exit post-flight
-  // (the daemon never runs git). true (default): a worker exit at REVIEW/DONE
+  // (the daemon writes no git state and never lands or pushes). true (default): a worker exit at REVIEW/DONE
   // makes a completion commit (feat|fix(task-<id>)) and pushes; any other
   // exit that holds a task (worker/architect/qa) makes a wip(task-<id>)
   // checkpoint; gate/peel/commit failures and Ctrl+C teardown go to a rescue
@@ -445,7 +445,7 @@ interface Task {
                                  // reopen clears it. See deliveryPolicy in docs/CONFIGURATION.md
 
   // Commit ledger — written only by moe.record_commit (wrapper post-flight)
-  // and moe.declare_files; the daemon never runs git. Additive, no
+  // and moe.declare_files; the daemon stores what their callers report and never checks it against git. Additive, no
   // schemaVersion bump. Never cleared by reopen/qa_reject.
   commits?: TaskCommit[];        // Every landed commit (completion/checkpoint/rescue); idempotent by sha,
                                  // capped at MAX_COMMITS_PER_TASK (50, newest kept)
