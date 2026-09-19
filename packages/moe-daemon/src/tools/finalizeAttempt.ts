@@ -23,7 +23,7 @@ import { assertAttemptCurrent } from '../util/enforcement.js';
 // TASK_UPDATED so the waiters the hold kept parked wake up.
 //
 // NOT a delivery record. `outcome` and `landedRevision` are what the runner
-// REPORTED; the daemon is state-only and never runs git, so it has verified
+// REPORTED; the daemon never checks a report against git, so it has verified
 // neither. They are echoed back and deliberately NOT persisted — a durable
 // landing record is the receipt slice's job, and writing anything extra onto
 // the attempt would make the idempotent repeat below produce different bytes.

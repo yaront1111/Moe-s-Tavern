@@ -23,7 +23,8 @@
 // Fail closed: an unreadable record or failed lookup reports the evidence missing.
 // The one throw is an unrecognised deliveryPolicy, because reading it as the
 // default would report unverified work as delivered. Recorded, not re-run: the
-// daemon never runs git or the gate, so a record that misreports still counts.
+// daemon never runs the gate or checks records against git, so a record that
+// misreports still counts.
 
 import type { StateManager } from '../state/StateManager.js';
 import type { DeliveryPolicy, Task, TaskCommit, TaskDeliveryEvidence } from '../types/schema.js';

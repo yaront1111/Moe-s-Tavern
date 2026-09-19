@@ -26,8 +26,8 @@ function readGeneration(args: { generation?: unknown }): number | undefined {
  * No ownership or status gate: the runner records after complete_task has
  * unassigned the row, while its attempt is finalizing and no other seat may
  * claim the task — the attempt fence is what refuses a superseded attempt. The
- * handler never runs git and never starts a process: the shas are recorded as
- * reported and checked for shape only.
+ * handler never starts a process or checks the shas against git: they are
+ * recorded as reported and checked for shape only.
  */
 export function recordCandidateTool(_state: StateManager): ToolDefinition {
   return {
@@ -36,7 +36,7 @@ export function recordCandidateTool(_state: StateManager): ToolDefinition {
       'Record a frozen Candidate: the exact bytes a task is offering for delivery (a runner-reported treeSha on a runner-reported baseRevision, aimed at deliveryTarget), persisted immutably as one file per candidate at .moe/candidates/<id>.json. ' +
       'Fenced BEFORE anything is written: attemptId (and generation, when supplied) must be the task\'s CURRENT attempt, else ATTEMPT_SUPERSEDED. ' +
       'Immutable: a changed tree needs a NEW id — a same-id record that differs in any field is refused (CANDIDATE_IMMUTABLE), while a byte-identical re-record is idempotent and returns the stored candidate with duplicate:true, so retrying after a crash is safe. ' +
-      'The daemon never runs git: the shas are recorded as reported and checked for shape (7-40 hex) only. ' +
+      'The daemon never checks these shas against git: they are recorded as reported and checked for shape (7-40 hex) only. ' +
       'Other refusals: TASK_NOT_FOUND; ATTEMPT_NOT_FOUND / ATTEMPT_ID_TASK_MISMATCH (the attempt must exist and belong to the task); INVALID_INPUT / MISSING_REQUIRED. No ownership or status gate.',
     inputSchema: {
       type: 'object',
