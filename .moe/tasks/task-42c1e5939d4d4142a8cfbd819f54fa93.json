@@ -52,7 +52,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T23:52:56.320Z",
-  "updatedAt": "2026-09-19T13:24:33.031Z",
+  "updatedAt": "2026-09-19T13:34:35.184Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T13:12:10.949Z",
     "plannedStepCount": 2,
@@ -99,7 +99,8 @@
     ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
     ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
     ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
-    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+    ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json"
   ],
   "completionSummary": "Comment-only fix in packages/moe-daemon/src/delivery/policy.ts, the hasPassingCheck JSDoc (lines 171-176). It replaced the stale claim \"the ps1 wrapper records settings.qualityGate verbatim (the sh one trims it)\" with the current facts: both wrappers now trim before they run and record. It also names the three sources that can still hand the compare a padded command: runs the ps1 wrapper recorded before task-8fc35d31, older wrappers bundled in IDE plugins, and direct moe.record_check_run callers (checkRunStore keeps `command` as sent). Code untouched: both trims (requiredCheckCommand and hasPassingCheck `run.command.trim()`) and the try/catch stay.\n\nDiff: `git diff --numstat` = 5 2, only ` *` JSDoc lines, no added `*/`, file stays LF (i/lf w/lf, 0 CR bytes). `grep verbatim policy.ts` finds nothing.\n\nEvery claim was checked against code:\n- ps1 trims at moe-agent.ps1:2036, runs that value (3886 -> 3806) and records it (1416).\n- sh strips at moe-agent.sh:7333, runs it via `bash -c` (3963) and records it (1996).\n- checkRunStore.ts:106-114 keeps `command` untrimmed.\n- recordCheckRun.ts:63 says \"never trimmed\".\n\nBuild ran in a scratch export (temp index, HEAD + policy.ts, tree 61450b42, `git diff --stat HEAD T` = policy.ts only), never in the shared checkout: its prebuild would regenerate initFiles.ts from peers' dirty docs and `clean` would wipe the live dist. Scratch was torn down, junction unlinked first, live node_modules checked. src/generated matches the pre-task state (only the peer's skillFiles.ts M). Stale wording in qaApprove.test.ts / deliveryProjection.test.ts is out of scope (follow-up task-6177c9c4).",
   "commits": [
@@ -137,17 +138,49 @@
       "treeId": "8bb9a685cf20df563520981bcbc2be8508a22798",
       "status": "DONE",
       "pushed": true
+    },
+    {
+      "sha": "9321b4656a529b793cfcac2d8063ed6419b3a22e",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-74607b1b@2026-09-19T13:12:11Z",
+      "paths": [
+        ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json"
+      ],
+      "recordedBy": "architect-74607b1b",
+      "recordedAt": "2026-09-19T13:34:35.184Z",
+      "treeId": "5e083d8c15f26e06d5675bcad4e8e261c92f41d9",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/delivery/policy.ts"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "docs/roles/architect.reference.md",
+    "docs/roles/qa.reference.md",
+    "docs/roles/worker.reference.md",
+    "docs/skills/LICENSE-VENDORED.md",
+    "docs/skills/manifest.json",
+    "docs/skills/moe-planning/SKILL.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "docs/skills/ponytail/SKILL.md",
+    "docs/skills/ponytail/SOURCE.md",
+    "docs/skills/ponytail-review/SKILL.md",
+    "docs/skills/ponytail-review/SOURCE.md",
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    "packages/moe-daemon/src/tools/startStep.ts",
+    "packages/moe-daemon/src/util/contextNextAction.ts",
+    "packages/moe-daemon/src/util/recommendSkill.test.ts",
+    "packages/moe-daemon/src/util/recommendSkill.ts"
+  ],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-8df1fc47@2026-09-19T13:21:55Z",
-    "at": "2026-09-19T13:24:33.031Z"
+    "sessionId": "architect-74607b1b@2026-09-19T13:12:11Z",
+    "at": "2026-09-19T13:34:35.184Z"
   },
   "completedAt": "2026-09-19T13:24:13.814Z",
   "reviewCompletedAt": "2026-09-19T13:24:13.814Z",
