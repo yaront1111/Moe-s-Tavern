@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-7100be29",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -107,12 +107,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:26:46.752Z",
-  "updatedAt": "2026-09-18T23:18:17.262Z",
+  "updatedAt": "2026-09-19T00:37:42.688Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T19:14:08.572Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-09-19T00:37:42.688Z",
+    "wallClockMs": 19414116
   },
   "contextFetchedBy": [
     "architect-aa5a6c1e",
@@ -372,5 +374,8 @@
     "scripts/tests/postflight.ps1",
     "scripts/tests/.parity-check.sh.new",
     "scripts/tests/parity-check.ps1"
-  ]
+  ],
+  "completedAt": "2026-09-19T00:37:42.688Z",
+  "reviewCompletedAt": "2026-09-19T00:37:42.688Z",
+  "reviewSummary": "Verified completion f1399a3 (5 scripts; numstat ps1 +5/-2, parity-check.ps1 +7/-3, .sh +3/-2, postflight twins +22/-4 each; BOMs/EOLs unchanged). Still intact at HEAD 07a2762; later commits touch only unrelated hunks.\nDoD1: moe-agent.ps1:1980 `$qg.Trim()` behind the -is [string] guard is the only qualityGate read in ps1. sh (7127-7136) strips; policy.ts trims.\nDoD2: gate-blank/gate-padded arms; the embedded frozen suites are byte-identical (619 lines). Red proofs on single-line mutations of HEAD, in scratch:\n- ps1 trim reverted: gate-blank FAILS (loop stopped; log shows check persistence failed + MOE_RESCUE_REF reason=gate-failed) and gate-padded FAILS (recorded '  node gate.cjs  '), on pwsh AND PS 5.1.\n- sh strip reverted: both arms also FAIL on sh.\nDoD3: ps1 $gateMsg (chat + comment) = sh's '🚫 PUSH-BLOCKED: qualityGate failed ...'. dirty-helper asserts the exact line in chat and on comment line 1.\n- Marker removed from ps1: dirty-helper FAILS on both engines.\n- Marker removed from either wrapper: parity-check.sh and parity-check.ps1 (pwsh + PS 5.1) all FAIL.\n- The status-lookup line is unmarked in both, as planned.\nDoD4, my runs (MOE_POSTFLIGHT_TIMEOUT_SEC=180) on a scratch copy byte-identical to HEAD scripts:\n- postflight.sh: 66 frozen + 28 scope PASS, rc 0, 2850s.\n- postflight.ps1 pwsh: 66+28 PASS, rc 0, 404s.\n- postflight.ps1 PS 5.1: 66+28 PASS, rc 0, 430s. It really spawns powershell.exe (postflight.ps1:22).\n- parity-check.sh PASS; parity-check.ps1 PASS on pwsh and PS 5.1.\nThe live project sets no qualityGate, so the fleet sees no change.\nOut of scope (plan capped at 5 files): the policy.ts:170-172 comment still says ps1 records verbatim. Filed as task-42c1e593."
 }
