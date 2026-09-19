@@ -1443,11 +1443,12 @@ function Send-MoeReceipt([string]$Path, $Report) {
 # no-longer-matching attempt is nothing to acknowledge: no RPC, and the loop
 # goes on. A finalizing attempt with no pinned identity is never acknowledged,
 # and it stops the loop, as an exhausted acknowledgement does: the daemon
-# refuses this seat's next claim while an attempt of it is finalizing.
-function Get-MoePinnedAttemptPhase([string]$AttemptId = $script:MoeAttemptId, [string]$TaskId = $preflightTaskId, $Generation = $script:MoeAttemptGeneration) {
+# refuses this seat's next claim while an attempt of it is finalizing. The
+# receipt replay passes a journal's attempt and worker instead.
+function Get-MoePinnedAttemptPhase([string]$AttemptId = $script:MoeAttemptId, [string]$TaskId = $preflightTaskId, $Generation = $script:MoeAttemptGeneration, [string]$Worker = $WorkerId) {
     try {
         $a=[IO.File]::ReadAllText((Join-Path $projectPath ('.moe/attempts/'+$AttemptId+'.json'))) | ConvertFrom-Json -ErrorAction Stop
-        if ($a.id -ceq $AttemptId -and $a.taskId -ceq $TaskId -and $a.workerId -ceq $WorkerId -and
+        if ($a.id -ceq $AttemptId -and $a.taskId -ceq $TaskId -and $a.workerId -ceq $Worker -and
             (Test-MoeGeneration $a.generation) -and $a.generation -eq $Generation -and $a.phase -is [string]) { return $a.phase }
     } catch { }
     return 'mismatch'
@@ -1488,17 +1489,72 @@ function Send-MoeFinalize([string]$Outcome, [string]$Sha = '') {
     return $false
 }
 
-# Crash replay of delivery receipts, run right AFTER the pre-flight claim: this
+# A journal's owed ledger row: absent, or {sessionId, role, status?} inside the
+# bounds moe.record_commit takes. Twin: receipt_replay's validator.
+function Test-MoeOwedLedger($Ledger) {
+    if ($null -eq $Ledger) { return $true }
+    return [bool]($Ledger -is [System.Management.Automation.PSCustomObject] -and
+        $Ledger.sessionId -is [string] -and $Ledger.sessionId.Trim() -and $Ledger.sessionId.Length -le 255 -and
+        $Ledger.role -is [string] -and $Ledger.role.Trim() -and $Ledger.role.Length -le 64 -and
+        ($null -eq $Ledger.status -or $Ledger.status -is [string]))
+}
+# Where a journal's target shows its landing: targetAfter itself, or the copy a
+# pull --rebase in the push rewrote it into -- a commit after the CAS base that
+# carries the landing's own Moe-Session and Moe-Kind: completion trailers (a
+# session lands at most one completion, and its pre-flight recovery checkpoint
+# is a wip commit already under the base). '' = the ref never moved; throws
+# when git cannot answer. Twin: receipt_landed_as.
+function Find-MoeJournaledLanding([string]$Top, $Journal) {
+    $tip = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '-q', '--verify', "$($Journal.target)^{commit}")
+    if ($tip.Rc -eq 1) { return '' }
+    if ($tip.Rc -ne 0) { throw "git rev-parse exited $($tip.Rc)" }
+    $tipSha = ($tip.Out -join '').Trim()
+    $anc = Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', [string]$Journal.targetAfter, $tipSha)
+    if ($anc.Rc -eq 0) { return [string]$Journal.targetAfter }
+    if ($anc.Rc -ne 1) { throw "git merge-base --is-ancestor exited $($anc.Rc)" }
+    $msg = Invoke-MoeGit -Top $Top -GitArgs @('log', '-1', '--format=%B', [string]$Journal.targetAfter)
+    if ($msg.Rc -ne 0) { throw "git log exited $($msg.Rc)" }
+    $sid = ''
+    foreach ($line in $msg.Out) {
+        if ($line.StartsWith('Moe-Session: ', [StringComparison]::Ordinal)) { $sid = $line.Substring(13).TrimEnd("`r"); break }
+    }
+    if (-not $sid) { return '' }
+    $range = if ([string]$Journal.targetBefore -eq ('0' * 40)) { $tipSha } else { "$($Journal.targetBefore)..$tipSha" }
+    $hit = Invoke-MoeGit -Top $Top -GitArgs @('log', '-n1', '--format=%H', '--fixed-strings', '--all-match', "--grep=Moe-Session: $sid", '--grep=Moe-Kind: completion', $range)
+    if ($hit.Rc -ne 0) { throw "git log exited $($hit.Rc)" }
+    $copy = ($hit.Out -join '').Trim()
+    if ($copy) { Write-Host "[receipt] a pull --rebase rewrote $($Journal.targetAfter); $($Journal.target) carries it as $copy." -ForegroundColor Cyan }
+    return $copy
+}
+# The committed ledger row a journal still owes, recorded for the commit git
+# shows on the target (the daemon merges a repeated sha). pushed follows the
+# journaled push result and is omitted while that is unknown. $true once
+# moe.record_commit acknowledged it. Twin: receipt_ledger_send.
+function Send-MoeOwedLedgerRow($Journal, [string]$Sha) {
+    $l = $Journal.ledger; $push = $Journal.pushResult
+    $row = @{ taskId=[string]$Journal.taskId; outcome='committed'; kind='completion'; sha=$Sha; ref=[string]$Journal.target
+        role=[string]$l.role; sessionId=[string]$l.sessionId; workerId=$WorkerId }
+    if ($l.status) { $row.status = [string]$l.status }
+    if ($null -eq $push -or "$push" -clike 'push failed: *') { $row.pushed = $false } elseif ("$push" -clike 'pushed *') { $row.pushed = $true }
+    Write-Host "[receipt] recording the owed ledger row of task $($Journal.taskId): $Sha on $($Journal.target)" -ForegroundColor Cyan
+    $reply = Send-MoeRecordCommit $row
+    return ($null -ne $reply -and (Get-MoeProp $reply 'success') -eq $true)
+}
+
+# Crash replay of delivery receipts, run right AFTER the pre-flight claim: a
 # seat's still-finalizing attempt makes that claim refuse (ATTEMPT_FINALIZING),
 # which also keeps a single-shot run out of the taskless wait -- close the
 # attempt first and the claim would answer "nothing claimable" and wait. For
 # each journal whose task no other live session holds: git shows its revision
-# on the target -> re-send the journaled report verbatim and, for this seat's
-# own journal only, acknowledge the journaled attempt as landed; git does not
-# -> the ref never moved, drop the journal (the baseline recovery owns those
-# bytes). Reads git, never moves a ref, never re-freezes or re-gates. Each
-# step is safe to repeat. Best-effort: a failure logs and keeps that journal.
-# Twin: receipt_replay.
+# on the target, or the copy a pull --rebase rewrote it into -> record the
+# ledger row the journal still owes (then drop it from the journal, so a
+# receipt refused from there on never re-sends it), re-send the journaled
+# report verbatim, and close the journaled attempt as landed while it is still finalizing
+# under the journal's worker, whichever seat replays (finalize_attempt is
+# fenced by attempt id + generation); git shows neither -> the ref never
+# moved, drop the journal (the baseline recovery owns those bytes). Reads git,
+# never moves a ref, never re-freezes or re-gates. Each step is safe to
+# repeat. Best-effort: a failure logs and keeps that journal. Twin: receipt_replay.
 function Invoke-MoeReceiptReplay {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -1516,29 +1572,29 @@ function Invoke-MoeReceiptReplay {
                 if ($null -eq $j -or $f.Name -cne "$($j.taskId).json" -or -not (Get-MoeReceiptJournalPath $git.GitDir ([string]$j.taskId)) -or
                     [string]$j.candidateId -cnotmatch $id -or [string]$j.attemptId -cnotmatch $id -or -not (Test-MoeGeneration $j.generation) -or
                     -not $j.workerId -or -not $j.target -or [string]$j.targetBefore -notmatch $rev -or
-                    [string]$j.targetAfter -notmatch $rev -or [string]$j.landedRevision -notmatch $rev) {
+                    [string]$j.targetAfter -notmatch $rev -or [string]$j.landedRevision -notmatch $rev -or -not (Test-MoeOwedLedger $j.ledger)) {
                     Write-Host "[WARN] receipt journal $($f.FullName) kept: malformed journal" -ForegroundColor Yellow
                     continue
                 }
                 if (Test-MoeLiveMarkerForeignLive $git.GitDir $j.taskId) { continue }
-                $tip = Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '-q', '--verify', "$($j.target)^{commit}")
-                $landed = $false
-                if ($tip.Rc -eq 0) {
-                    $anc = Invoke-MoeGit -Top $git.Top -GitArgs @('merge-base', '--is-ancestor', $j.targetAfter, ($tip.Out -join '').Trim())
-                    if ($anc.Rc -gt 1) { throw "git merge-base --is-ancestor exited $($anc.Rc)" }
-                    $landed = ($anc.Rc -eq 0)
-                } elseif ($tip.Rc -ne 1) { throw "git rev-parse exited $($tip.Rc)" }
-                if (-not $landed) {
+                $landedAs = Find-MoeJournaledLanding $git.Top $j
+                if (-not $landedAs) {
                     Write-Host "[receipt] $($j.target) does not contain $($j.targetAfter): that landing never moved the ref; dropping $($f.FullName)." -ForegroundColor Cyan
                     Remove-Item -LiteralPath $f.FullName -Force
                     continue
                 }
                 Write-Host "[receipt] replaying the delivery receipt of task $($j.taskId) from $($f.FullName)" -ForegroundColor Cyan
+                if ($null -ne $j.ledger) {
+                    if (-not (Send-MoeOwedLedgerRow $j $landedAs)) {
+                        Write-Host "[WARN] receipt journal $($f.FullName) kept: moe.record_commit did not record the owed ledger row" -ForegroundColor Yellow; continue
+                    }
+                    $j.PSObject.Properties.Remove('ledger'); Write-MoeReceiptJournal $f.FullName $j
+                }
                 if (-not (Send-MoeReceipt $f.FullName $j)) { continue }
-                if ($j.workerId -cne $WorkerId -or (Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation) -cne 'finalizing') { continue }
+                if ((Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId) -cne 'finalizing') { continue }
                 $closed = Send-MoeEvidence 'finalize_attempt' @{ taskId=[string]$j.taskId; attemptId=[string]$j.attemptId; generation=$j.generation
-                    workerId=$WorkerId; runnerId=$script:MoeRunnerId; outcome='landed'; landedRevision=[string]$j.landedRevision } 3
-                if (-not $closed) { Write-Host "[WARN] attempt $($j.attemptId) is still finalizing after its replayed receipt; this seat's next claim stays refused until it closes." -ForegroundColor Yellow }
+                    workerId=[string]$j.workerId; runnerId=$script:MoeRunnerId; outcome='landed'; landedRevision=$landedAs } 3
+                if (-not $closed) { Write-Host "[WARN] attempt $($j.attemptId) is still finalizing after its replayed receipt; its finalizing holds stay until it closes." -ForegroundColor Yellow }
             } catch {
                 Write-Host "[WARN] receipt journal $($f.FullName) kept: $_" -ForegroundColor Yellow
             }
@@ -2218,7 +2274,9 @@ function Remove-MoeBaseline([string]$Path) {
 # once the push resolved, and deletes it once moe.record_delivery_receipt holds
 # the receipt. A crash between the ref move and that answer leaves the journal
 # for Invoke-MoeReceiptReplay to re-send verbatim: a recomputed report is exactly
-# what a replay conflicts on. Twin: receipt_journal_path / receipt_journal_write.
+# what a replay conflicts on. Until moe.record_commit acknowledges the landing's
+# committed ledger row, the journal also carries that owed row (`ledger`), for
+# the replay to record before the receipt. Twin: receipt_journal_path / receipt_journal_write.
 function Get-MoeReceiptJournalPath([string]$GitDir, [string]$TaskId) {
     if (-not $TaskId -or ($TaskId -notmatch '^[A-Za-z0-9_.-]+$')) { return '' }
     return (Join-Path $GitDir "moe/receipt/$TaskId.json")
@@ -2230,7 +2288,7 @@ function Write-MoeReceiptJournal([string]$Path, $Report) {
         $dir = Split-Path -Parent $Path
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
         $tmp = "$Path.tmp.$PID"
-        [IO.File]::WriteAllText($tmp, ($Report | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
+        [IO.File]::WriteAllText($tmp, ($Report | ConvertTo-Json -Depth 5 -Compress), (New-Object Text.UTF8Encoding($false)))
         Move-Item -LiteralPath $tmp -Destination $Path -Force
     } catch {
         Remove-Item -LiteralPath "$Path.tmp.$PID" -Force -ErrorAction SilentlyContinue
@@ -4064,11 +4122,13 @@ function Invoke-MoeLanding {
             if ($Kind -eq 'completion' -and $gate) {
                 # The receipt report is journaled BEFORE the ref can move. targetBefore
                 # is the CAS base: the candidate's baseRevision, git's zero id if unborn.
+                # `ledger` is the committed ledger row this landing owes until
+                # moe.record_commit acknowledges it.
                 $journal = Get-MoeReceiptJournalPath $Git.GitDir $TaskId
                 $pending = if (Test-MoeNoRemote $Git.Top) { $null } else { 'push result unknown: the landing stopped before its push finished' }
                 $receipt = [ordered]@{ taskId=$TaskId; workerId=$WorkerId; attemptId=$script:MoeAttemptId; generation=$script:MoeAttemptGeneration
                     candidateId=$script:MoeFrozen.CandidateId; target="refs/heads/$branch"; targetBefore=$oldArg; targetAfter=$new
-                    landedRevision=$new; pushResult=$pending }
+                    landedRevision=$new; pushResult=$pending; ledger=[ordered]@{ sessionId=$Sid; role=$Role; status=$Status } }
                 Write-MoeReceiptJournal $journal $receipt
             }
             $ur = Invoke-MoeGit -Top $Git.Top -GitArgs @('update-ref', "refs/heads/$branch", $new, $oldArg) -MergeStderr
@@ -4148,9 +4208,12 @@ function Invoke-MoeLanding {
             skipped = @(@(@($attr.Skipped | Where-Object { $_.Code -ne 'MOE_ATTR_EXCLUDED' }) + @($dropped) | Select-Object -First 100) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); code = $_.Code } })
             contested = @(@($attr.Contested) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); taskId = $_.TaskId } })
         }
-        Send-MoeRecordCommit $recArgs | Out-Null
+        $recReply = Send-MoeRecordCommit $recArgs
+        $ledgerAcked = ($null -ne $recReply -and (Get-MoeProp $recReply 'success') -eq $true)
         $recorded=$true
         if ($receipt) {
+            # Only an acknowledged row leaves the journal; a lost one is replayed.
+            if ($ledgerAcked) { $receipt.Remove('ledger') }
             $receipt.pushResult = $script:MoePushResult
             Write-MoeReceiptJournal $journal $receipt
             $null = Send-MoeReceipt $journal $receipt

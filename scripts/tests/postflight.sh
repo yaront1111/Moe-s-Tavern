@@ -259,6 +259,17 @@ function holdForInterrupt() {
   fs.writeFileSync(ready, 'ready');
   for (let i = 0; i < 1200 && !fs.existsSync(ready + '.sent'); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
 }
+// receipt-ledger-replay: the FIRST committed completion row is never recorded;
+// the supervisor hard-kills the wrapper tree while its landing waits on it (a
+// crash between update-ref and record_commit), so no log shows the call.
+function holdLedgerForCrash() {
+  const held = path.join(moe, 'ledger-held');
+  if (process.env.FAKE_EVIDENCE_MODE !== 'receipt-ledger-replay' || tool !== 'record_commit' || args.outcome !== 'committed'
+    || args.kind !== 'completion' || fs.existsSync(held)) return;
+  fs.writeFileSync(held, 'held');
+  for (let i = 0; i < 1200; i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  process.exit(1);
+}
 function evidenceRpc() {
   appendRpc();
   if (['record_commit','deregister_worker','add_comment'].includes(tool)) return false;
@@ -270,10 +281,11 @@ function evidenceRpc() {
   if (mode === tool + '-malformed') { ok({success:true}); return true; }
   if (tool === 'record_delivery_receipt' && mode === 'receipt-refused') { refusal('fixture receipt refused'); return true; }
   if (tool === 'record_delivery_receipt' && mode === 'receipt-conflict') { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
-  // receipt-replay: the FIRST receipt is never answered; the supervisor
-  // hard-kills the wrapper tree while it waits (acceptance case 6's crash).
+  // receipt-replay, receipt-rebase-replay, receipt-foreign-replay: the FIRST
+  // receipt is never answered; the supervisor hard-kills the wrapper tree while
+  // it waits (acceptance case 6's crash).
   const held = path.join(moe, 'receipt-held');
-  if (mode === 'receipt-replay' && tool === 'record_delivery_receipt' && !fs.existsSync(held)) {
+  if (['receipt-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode) && tool === 'record_delivery_receipt' && !fs.existsSync(held)) {
     fs.writeFileSync(held, 'held');
     for (let i = 0; i < 1200; i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
     process.exit(1);
@@ -286,6 +298,7 @@ function evidenceRpc() {
   return true;
 }
 holdForInterrupt();
+holdLedgerForCrash();
 if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment','reattach_attempt'].includes(tool)) {
   if (evidenceRpc()) process.exit(0);
 }
@@ -588,6 +601,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
+'receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
@@ -701,6 +715,14 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
     // whose path does not exist. Every other arm has no remote, so no push.
     if(mode==='receipt-push'){git(root,'init','-q','--bare',mode+'-remote.git');git(repo,'remote','add','origin',path.join(root,mode+'-remote.git'));}
     if(mode==='receipt-push-failed')git(repo,'remote','add','origin',path.join(root,mode+'-missing.git'));
+    // A peer's commit is already on the remote branch: the landing's first push is
+    // rejected, and its pull --rebase rewrites the landed commit before the re-push.
+    if(mode==='receipt-rebase-replay'){const remote=path.join(root,mode+'-remote.git'),peer=path.join(root,mode+'-peer');
+      git(root,'init','-q','--bare',mode+'-remote.git');git(repo,'remote','add','origin',remote);git(repo,'push','-q','origin','moe/frozen');
+      git(root,'clone','-q','-b','moe/frozen',remote,peer);
+      for(const [key,value] of [['user.name','Moe Peer'],['user.email','peer@test.local'],['core.autocrlf','false']])git(peer,'config',key,value);
+      write(path.join(peer,'remote-only.txt'),'remote only\n');git(peer,'add','--','remote-only.txt');git(peer,'commit','-qm','peer-remote');
+      git(peer,'push','-q','origin','moe/frozen');}
     // The branch CAS fails ONCE with the tip unchanged (git refuses the first
     // prepared update of the target), so the rebuilt tree and base are identical.
     if(mode==='receipt-cached-check'){const hook=path.join(repo,'.git','hooks','reference-transaction');
@@ -799,6 +821,16 @@ if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mo
     write(supervisor,KILL_ON_MARKER);
     runEngine=process.execPath;
     runArgs=[supervisor,receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
+  }
+  // The crash-window arms die the same way: at the held ledger row (window 1) or
+  // at the held receipt (windows 2 and 3).
+  const ledgerHeld=path.join(nested,'.moe','ledger-held');
+  if(['receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode)){
+    env.TMPDIR=env.TMP=env.TEMP=wrapperTmp;
+    const supervisor=path.join(root,'receipt-supervisor.cjs');
+    write(supervisor,KILL_ON_MARKER);
+    runEngine=process.execPath;
+    runArgs=[supervisor,mode==='receipt-ledger-replay'?ledgerHeld:receiptHeld,String((Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)-15)*1000),engine,...args];
   }
   if(/^(interrupt|teardown)-/.test(mode)){
     const supervisor=path.join(root,mode+(win?'-supervisor.ps1':'-supervisor.sh'));
@@ -928,6 +960,89 @@ exit "$rc"
       'the replay freezes and gates nothing\n'+log2);
     assert.equal(rpc2.filter(r=>r.tool==='record_commit'&&r.args.outcome==='committed').length,1,log2);
     assert.equal(fs.existsSync(journal),false,'a recorded replay deletes its journal\n'+log2);
+    count++;continue;
+  }
+  // The three crash windows receipt-replay does not reach. Run 2 is its
+  // claim-refused pre-flight; sid() is a commit's Moe-Session trailer.
+  const sid=sha=>(git(repo,'log','-1','--format=%B',sha).split('\n').find(l=>l.startsWith('Moe-Session: '))||'').slice(13).trim();
+  const ledgerRows=()=>rows(path.join(nested,'.moe','record_commit.jsonl')).filter(r=>r.outcome==='committed'&&r.kind==='completion');
+  const reflogOf=()=>git(repo,'reflog','show','--format=%H','refs/heads/moe/frozen');
+  const replay=argv=>{const r=cp.spawnSync(engine,argv,{env:{...env,FAKE_CLAIM_MODE:'finalizing',MOE_TASKLESS_WAIT_SEC:'5'},encoding:'utf8',
+      timeout:Number(process.env.MOE_POSTFLIGHT_TIMEOUT_SEC||180)*1000,maxBuffer:4*1024*1024});
+    const log2=log+(r.stdout||'')+(r.stderr||'');write(path.join(root,mode+'.log'),log2);
+    assert.equal(r.signal,null,log2);assert.ok(r.status!==null,log2);
+    return {log2,rpc2:rows(path.join(nested,'.moe','evidence-rpcs.jsonl'))};};
+  // What every replay leaves: no ref moved, nothing frozen or gated again, one
+  // committed completion row, one landed finalize of the journal owner's attempt
+  // after the last receipt, that attempt closed and the journal gone.
+  const replayed=(rpc2,log2,reflog)=>{
+    const receipts=rpc2.filter(r=>r.tool==='record_delivery_receipt'),finals2=rpc2.filter(r=>r.tool==='finalize_attempt');
+    assert.equal(git(repo,'rev-parse','HEAD'),after,'the replay moves no ref\n'+log2);
+    assert.equal(reflogOf(),reflog,'the replay moves no ref\n'+log2);
+    assert.equal(rpc2.filter(r=>r.tool==='record_candidate'||r.tool==='record_check_run').length,candidates.length+checks.length,
+      'the replay freezes and gates nothing\n'+log2);
+    assert.equal(ledgerRows().length,1,'exactly one committed completion row\n'+log2);
+    assert.equal(finals2.length,1,'the replay closes the attempt once\n'+log2);
+    const f=finals2[0].args;
+    assert.deepEqual([f.attemptId,f.generation,f.outcome,f.landedRevision,f.workerId],['attempt-postflight',7,'landed',after,'worker-frozen'],log2);
+    assert.ok(rpc2.indexOf(receipts.at(-1))<rpc2.indexOf(finals2[0]),'the receipt precedes the finalize\n'+log2);
+    assert.equal(JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json'))).phase,'closed',log2);
+    assert.deepEqual(fs.readdirSync(path.join(nested,'.moe','attempts')),['attempt-postflight.json'],'the replay opens no attempt\n'+log2);
+    assert.equal(fs.existsSync(journal),false,'a recorded replay deletes its journal\n'+log2);
+    return receipts;
+  };
+  if(mode==='receipt-ledger-replay'){
+    // Window 1: run 1 moved the ref and was hard-killed inside its committed ledger
+    // call, so only the journal knows that row is owed. Run 2 (same seat) records
+    // it, then the receipt, then closes the attempt.
+    assert.ok(fs.existsSync(ledgerHeld),'run 1 must reach its ledger row\n'+log);
+    assert.notEqual(after,before,log);assert.ok(fs.existsSync(journal),'the crash leaves the receipt journal\n'+log);
+    const j1=JSON.parse(read(journal)),reflog=reflogOf();
+    assert.equal(ledgerRows().length,0,'the killed ledger call recorded nothing\n'+log);
+    const {log2,rpc2}=replay(args),owed=ledgerRows();
+    assert.equal(owed.length,1,'the replay records the owed ledger row once\n'+log2);
+    assert.deepEqual([owed[0].taskId,owed[0].sha,owed[0].ref,owed[0].role,owed[0].sessionId,owed[0].status,owed[0].pushed],
+      ['task-postflight',after,'refs/heads/moe/frozen','worker',sid(after),'REVIEW',false],log2);
+    const receipts=replayed(rpc2,log2,reflog),c=candidates.at(-1).args,
+      row=rpc2.find(r=>r.tool==='record_commit'&&r.args.outcome==='committed'&&r.args.kind==='completion');
+    assert.equal(receipts.length,1,log2);
+    assert.ok(rpc2.indexOf(row)<rpc2.indexOf(receipts[0]),'the owed row precedes the receipt\n'+log2);
+    assert.deepEqual([receipts[0].args.candidateId,receipts[0].args.target,receipts[0].args.targetBefore,receipts[0].args.targetAfter,
+      receipts[0].args.landedRevision,receipts[0].args.pushResult],[c.id,c.deliveryTarget,c.baseRevision,after,after,undefined],log2);
+    assert.deepEqual(j1.ledger,{sessionId:sid(after),role:'worker',status:'REVIEW'},'the journal carries the owed row\n'+log2);
+    count++;continue;
+  }
+  if(mode==='receipt-rebase-replay'){
+    // Window 2: the push's pull --rebase rewrote the landed commit, then the crash
+    // lost its receipt. The journal names the CAS commit; the branch carries its copy.
+    assert.ok(fs.existsSync(receiptHeld),'run 1 must reach its delivery receipt\n'+log);
+    const j1=JSON.parse(read(journal)),C=j1.targetAfter,remote=path.join(root,mode+'-remote.git');
+    assert.notEqual(C,after,'the pull --rebase rewrote the landed commit\n'+log);
+    assert.equal(cp.spawnSync('git',['-C',repo,'merge-base','--is-ancestor',C,after]).status,1,log);
+    assert.equal(git(remote,'rev-parse','refs/heads/moe/frozen'),after,log);assert.equal(sid(C),sid(after),log);
+    assert.deepEqual([j1.ledger,j1.pushResult],[undefined,'pushed moe/frozen'],'an acknowledged ledger row leaves the journal\n'+log);
+    assert.deepEqual(ledgerRows().map(r=>r.sha),[after],'run 1 recorded the rewritten copy\n'+log);
+    const reflog=reflogOf(),{log2,rpc2}=replay(args),receipts=rpc2.filter(r=>r.tool==='record_delivery_receipt');
+    assert.equal(git(remote,'rev-parse','refs/heads/moe/frozen'),after,'the replay pushes nothing\n'+log2);
+    assert.equal(receipts.length,2,'the rewritten copy counts as landed\n'+log2);
+    assert.deepEqual(receipts[1].args,receipts[0].args,'the replay re-sends the journaled report\n'+log2);
+    assert.deepEqual([receipts[0].args.targetAfter,receipts[0].args.landedRevision,receipts[0].args.pushResult],[C,C,'pushed moe/frozen'],log2);
+    replayed(rpc2,log2,reflog);
+    assert.equal(log2.includes('that landing never moved the ref'),false,log2);
+    count++;continue;
+  }
+  if(mode==='receipt-foreign-replay'){
+    // Window 3: the owner never comes back. Another seat's pre-flight replays the
+    // journal and, git showing the landing, closes the owner's attempt.
+    assert.ok(fs.existsSync(receiptHeld),'run 1 must reach its delivery receipt\n'+log);
+    assert.notEqual(after,before,log);assert.ok(fs.existsSync(journal),'the crash leaves the receipt journal\n'+log);
+    const reflog=reflogOf(),{log2,rpc2}=replay(args.map(a=>a==='worker-frozen'?'worker-other':a));
+    const receipts=rpc2.filter(r=>r.tool==='record_delivery_receipt');
+    assert.equal(rpc2.filter(r=>r.tool==='claim_next_task').at(-1).args.workerId,'worker-other',log2);
+    assert.equal(receipts.length,2,log2);
+    const {workerId:w0,...r0}=receipts[0].args,{workerId:w1,...r1}=receipts[1].args;
+    assert.deepEqual([w0,w1,r1],['worker-frozen','worker-other',r0],'the other seat re-sends the journaled report\n'+log2);
+    replayed(rpc2,log2,reflog);
     count++;continue;
   }
   if(mode.startsWith('teardown-')){

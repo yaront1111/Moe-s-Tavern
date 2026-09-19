@@ -2031,9 +2031,10 @@ print(json.dumps(p))
 
 # Phase of the pinned attempt record; "mismatch" when the file is missing,
 # unreadable or no longer carries this seat's exact identity. Optional
-# ATTEMPT_ID TASK_ID GENERATION name an identity pinned elsewhere (a receipt journal).
+# ATTEMPT_ID TASK_ID GENERATION WORKER name an identity pinned elsewhere (a
+# receipt journal, whose worker may be another seat).
 moe_pinned_attempt_phase() {
-    $PYTHON_CMD - "$PROJECT" "${1:-$MOE_ATTEMPT_ID}" "${2:-$PREFLIGHT_TASK_ID}" "$WORKER_ID" "${3:-$MOE_ATTEMPT_GENERATION}" <<'PY' 2>/dev/null || echo mismatch
+    $PYTHON_CMD - "$PROJECT" "${1:-$MOE_ATTEMPT_ID}" "${2:-$PREFLIGHT_TASK_ID}" "${4:-$WORKER_ID}" "${3:-$MOE_ATTEMPT_GENERATION}" <<'PY' 2>/dev/null || echo mismatch
 import json,os,sys
 project,aid,task,worker,generation=sys.argv[1:]
 try:
@@ -4072,7 +4073,7 @@ land_plumbing() {
             RECEIPT_JOURNAL="$(receipt_journal_path "$LAND_TASK_ID")"
             local pending="push result unknown: the landing stopped before its push finished"
             if no_git_remote; then pending=""; fi
-            receipt_journal_write "$RECEIPT_JOURNAL" "$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$pending")"
+            receipt_journal_write "$RECEIPT_JOURNAL" "$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$pending" 1)"
         fi
         if [ -n "$old" ]; then
             if git -C "$MOE_TOP" update-ref "$ref" "$new" "$old" >/dev/null 2>&1; then rc=0; else rc=1; fi
@@ -4315,6 +4316,7 @@ push_branch() {
 # record_commit_rpc OUTCOME KIND SHA REF CODE MESSAGE PUSHED STAGED_FILE DROPPED_FILE
 # Best-effort moe.record_commit with every outcome; never breaks the loop.
 # Paths go back ROOT-relative (REL stripped); lists are capped daemon-side too.
+# Returns 0 only when the daemon answered (callers that do not care add || true).
 record_commit_rpc() {
     local args=""
     args=$(MOE_RC_TASK="$LAND_TASK_ID" MOE_RC_OUTCOME="$1" MOE_RC_KIND="$2" MOE_RC_SHA="${3:-}" MOE_RC_REF="${4:-}" \
@@ -4414,8 +4416,8 @@ if contested:
 print(json.dumps(d))
 PYEOF
     ) || args=""
-    [ -n "$args" ] || return 0
-    moe_rpc record_commit "$args" >/dev/null 2>&1 || true
+    [ -n "$args" ] || return 1
+    moe_rpc record_commit "$args" >/dev/null 2>&1 || return 1
     return 0
 }
 
@@ -4484,15 +4486,20 @@ receipt_journal_path() {
     printf '%s/moe/receipt/%s.json' "$MOE_GITDIR" "$1"
 }
 
-# receipt_report TARGET_BEFORE LANDED PUSH_RESULT -- the report as one JSON line
-# from the landing's globals ('' PUSH_RESULT = null).
+# receipt_report TARGET_BEFORE LANDED PUSH_RESULT [LEDGER] -- the report as one
+# JSON line from the landing's globals ('' PUSH_RESULT = null). A non-empty
+# LEDGER adds `ledger`, the committed ledger row this landing owes until
+# moe.record_commit acknowledges it (the sessionId record_commit_rpc sends).
 receipt_report() {
     $PYTHON_CMD -c '
 import json,sys
-t,w,a,g,c,target,before,landed,push=sys.argv[1:]
-print(json.dumps(dict(taskId=t,workerId=w,attemptId=a,generation=int(g),candidateId=c,target=target,
-    targetBefore=before,targetAfter=landed,landedRevision=landed,pushResult=push or None)))
-' "$LAND_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$FROZEN_CANDIDATE_ID" "refs/heads/$LAND_BRANCH" "$1" "$2" "$3"
+t,w,a,g,c,target,before,landed,push,owed,sid,role,status=sys.argv[1:]
+d=dict(taskId=t,workerId=w,attemptId=a,generation=int(g),candidateId=c,target=target,
+    targetBefore=before,targetAfter=landed,landedRevision=landed,pushResult=push or None)
+if owed: d["ledger"]=dict(sessionId=sid,role=role,status=status)
+print(json.dumps(d))
+' "$LAND_TASK_ID" "$WORKER_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$FROZEN_CANDIDATE_ID" "refs/heads/$LAND_BRANCH" "$1" "$2" "$3" \
+        "${4:-}" "${MOE_SID:-$WORKER_ID@unknown}" "$ROLE" "${LAND_STATUS:-}"
 }
 
 # receipt_journal_write PATH REPORT -- atomic (.tmp + rename) and best-effort: an
@@ -4539,66 +4546,127 @@ print(d["candidateId"]); print(json.dumps(p))
     return 1
 }
 
-# receipt_replay -- crash replay of delivery receipts, run right AFTER the
-# pre-flight claim: this seat's still-finalizing attempt makes that claim refuse
-# (ATTEMPT_FINALIZING), which also keeps a single-shot run out of the taskless
-# wait -- close the attempt first and the claim would answer "nothing
-# claimable" and wait. For each journal whose task no other live session holds:
-# git shows its revision on the target -> re-send the journaled report verbatim
-# and, for this seat's own journal only, acknowledge the journaled attempt as
-# landed; git does not -> the ref never moved, drop the journal (the baseline
-# recovery owns those bytes). Reads git, never moves a ref, never re-freezes or
-# re-gates. Each step is safe to repeat. Best-effort: a failure logs and keeps
-# that journal. The git globals are local, so the pre-flight's own probe is
-# untouched. Twin: Invoke-MoeReceiptReplay.
-receipt_replay() {
-    [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
-    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner landed tip rc args
-    git_top || return 0
-    [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
-    for f in "$MOE_GITDIR"/moe/receipt/*.json; do
-        [ -f "$f" ] || continue
-        if ! fields=$($PYTHON_CMD - "$f" <<'PY' 2>/dev/null
+# receipt_journal_fields JOURNAL -- the replay's fields of a well-formed journal,
+# \x1f-separated (the last is 1 while it owes a ledger row); 1 when malformed.
+# The optional `ledger` must be {sessionId, role, status?} inside the bounds
+# moe.record_commit takes. Twin: Invoke-MoeReceiptReplay's check + Test-MoeOwedLedger.
+receipt_journal_fields() {
+    $PYTHON_CMD - "$1" <<'PY' 2>/dev/null
 import json,os,re,sys
 f=sys.argv[1]; d=json.load(open(f,encoding='utf-8'))
-rev=re.compile(r'[0-9a-fA-F]{40}'); ids=re.compile(r'[A-Za-z0-9_-]{1,128}'); g=d.get('generation')
+rev=re.compile(r'[0-9a-fA-F]{40}'); ids=re.compile(r'[A-Za-z0-9_-]{1,128}'); g=d.get('generation'); l=d.get('ledger')
 ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z0-9_.-]+',str(d.get('taskId')))
     and all(isinstance(d.get(k),str) and ids.fullmatch(d[k]) for k in ('candidateId','attemptId'))
     and type(g)==int and 0<g<=9007199254740991 and isinstance(d.get('workerId'),str) and d['workerId']
     and isinstance(d.get('target'),str) and d['target']
-    and all(isinstance(d.get(k),str) and rev.fullmatch(d[k]) for k in ('targetBefore','targetAfter','landedRevision')))
+    and all(isinstance(d.get(k),str) and rev.fullmatch(d[k]) for k in ('targetBefore','targetAfter','landedRevision'))
+    and (l is None or (isinstance(l,dict) and all(isinstance(l.get(k),str) and l[k].strip() and len(l[k])<=n
+        for k,n in (('sessionId',255),('role',64))) and (l.get('status') is None or isinstance(l['status'],str)))))
 if not ok: sys.exit(1)
-print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['landedRevision']]))
+print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1']))
 PY
-        ); then
+}
+
+# receipt_landed_as TARGET AFTER BEFORE -- where a journal's target shows its
+# landing: AFTER itself, or the copy a pull --rebase in the push rewrote it into
+# -- a commit after the CAS base that carries the landing's own Moe-Session and
+# Moe-Kind: completion trailers (a session lands at most one completion, and its
+# pre-flight recovery checkpoint is a wip commit already under the base).
+# Prints that commit, or nothing when the ref never moved; returns 1 with the
+# reason printed when git cannot answer. Twin: Find-MoeJournaledLanding.
+receipt_landed_as() {
+    local target="$1" after="$2" before="$3" tip rc msg line sid="" range
+    if tip=$(git -C "$MOE_TOP" rev-parse -q --verify "$target^{commit}" 2>/dev/null); then :; else
+        rc=$?; [ "$rc" -ne 1 ] || return 0
+        echo "git rev-parse exited $rc"; return 1
+    fi
+    if git -C "$MOE_TOP" merge-base --is-ancestor "$after" "$tip" 2>/dev/null; then echo "$after"; return 0; else rc=$?; fi
+    [ "$rc" -eq 1 ] || { echo "git merge-base --is-ancestor exited $rc"; return 1; }
+    if msg=$(git -C "$MOE_TOP" log -1 --format=%B "$after" 2>/dev/null); then :; else rc=$?; echo "git log exited $rc"; return 1; fi
+    while IFS= read -r line; do
+        case "$line" in 'Moe-Session: '*) sid="${line#Moe-Session: }"; sid="${sid%$'\r'}"; break ;; esac
+    done <<< "$msg"
+    [ -n "$sid" ] || return 0
+    range="$before..$tip"; [ "$before" != "$MOE_ZERO_OID" ] || range="$tip"
+    if msg=$(git -C "$MOE_TOP" log -n1 --format=%H --fixed-strings --all-match --grep="Moe-Session: $sid" \
+        --grep="Moe-Kind: completion" "$range" 2>/dev/null); then :; else rc=$?; echo "git log exited $rc"; return 1; fi
+    printf '%s\n' "$msg"
+}
+
+# receipt_ledger_send JOURNAL SHA -- the committed ledger row a journal still
+# owes, recorded for the commit git shows on the target (the daemon merges a
+# repeated sha). pushed follows the journaled push result and is omitted while
+# that is unknown. 0 once moe.record_commit answered. Twin: Send-MoeOwedLedgerRow.
+receipt_ledger_send() {
+    local row
+    row=$($PYTHON_CMD - "$1" "$2" "$WORKER_ID" <<'PY' 2>/dev/null
+import json,sys
+f,sha,worker=sys.argv[1:]; d=json.load(open(f,encoding='utf-8')); l=d['ledger']; push=d.get('pushResult')
+row=dict(taskId=d['taskId'],outcome='committed',kind='completion',sha=sha,ref=d['target'],role=l['role'],sessionId=l['sessionId'],workerId=worker)
+if l.get('status'): row['status']=l['status']
+if push is None or str(push).startswith('push failed: '): row['pushed']=False
+elif str(push).startswith('pushed '): row['pushed']=True
+print(json.dumps(row))
+PY
+    ) || return 1
+    moe_rpc record_commit "$row" >/dev/null 2>&1
+}
+
+# receipt_replay -- crash replay of delivery receipts, run right AFTER the
+# pre-flight claim: a seat's still-finalizing attempt makes that claim refuse
+# (ATTEMPT_FINALIZING), which also keeps a single-shot run out of the taskless
+# wait -- close the attempt first and the claim would answer "nothing
+# claimable" and wait. For each journal whose task no other live session holds:
+# git shows its revision on the target, or the copy a pull --rebase rewrote it
+# into -> record the ledger row the journal still owes (then drop it from the
+# journal, so a receipt refused from there on never re-sends it), re-send the
+# journaled report verbatim, and close the journaled attempt as landed while it
+# is still finalizing under the journal's worker, whichever seat replays
+# (finalize_attempt is fenced by attempt id + generation); git shows neither ->
+# the ref never moved, drop the journal (the baseline recovery owns those
+# bytes). Reads git, never moves a ref, never re-freezes or re-gates. Each step
+# is safe to repeat. Best-effort: a failure logs and keeps that journal. The git
+# globals are local, so the pre-flight's own probe is untouched.
+# Twin: Invoke-MoeReceiptReplay.
+receipt_replay() {
+    [ "${CS_AUTO_COMMIT:-true}" = "true" ] || return 0
+    local MOE_TOP="" MOE_REL="" MOE_GITDIR="" f fields tid target after aid gen owner before owed landed args report
+    git_top || return 0
+    [ -d "$MOE_GITDIR/moe/receipt" ] || return 0
+    for f in "$MOE_GITDIR"/moe/receipt/*.json; do
+        [ -f "$f" ] || continue
+        if ! fields=$(receipt_journal_fields "$f"); then
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: malformed journal"
             continue
         fi
-        IFS=$'\x1f' read -r tid target after aid gen owner landed <<< "$fields" || true
+        IFS=$'\x1f' read -r tid target after aid gen owner before owed <<< "$fields" || true
         if live_marker_foreign_live "$tid"; then continue; fi
-        if tip=$(git -C "$MOE_TOP" rev-parse -q --verify "$target^{commit}" 2>/dev/null); then
-            if git -C "$MOE_TOP" merge-base --is-ancestor "$after" "$tip" 2>/dev/null; then rc=0; else rc=$?; fi
-        else
-            rc=$?
-            [ "$rc" -eq 1 ] || { echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: git rev-parse exited $rc"; continue; }
-        fi
-        if [ "$rc" -gt 1 ]; then
-            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: git merge-base --is-ancestor exited $rc"
+        if ! landed=$(receipt_landed_as "$target" "$after" "$before"); then
+            echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: $landed"
             continue
         fi
-        if [ "$rc" -ne 0 ]; then
+        if [ -z "$landed" ]; then
             echo -e "${BLUE}[receipt]${NC} $target does not contain $after: that landing never moved the ref; dropping $f."
             rm -f "$f"
             continue
         fi
+        [ "$landed" = "$after" ] || echo -e "${BLUE}[receipt]${NC} a pull --rebase rewrote $after; $target carries it as $landed."
         echo -e "${BLUE}[receipt]${NC} replaying the delivery receipt of task $tid from $f"
+        if [ -n "$owed" ]; then
+            echo -e "${BLUE}[receipt]${NC} recording the owed ledger row of task $tid: $landed on $target"
+            if ! receipt_ledger_send "$f" "$landed"; then
+                echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: moe.record_commit did not record the owed ledger row"
+                continue
+            fi
+            report=$($PYTHON_CMD -c 'import json,sys;d=json.load(open(sys.argv[1],encoding="utf-8"));d.pop("ledger",None);print(json.dumps(d))' "$f" 2>/dev/null) || report=""
+            receipt_journal_write "$f" "$report"
+        fi
         receipt_send "$(cat "$f")" "$f" || continue
-        [ "$owner" = "$WORKER_ID" ] || continue
-        [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen")" = finalizing ] || continue
+        [ "$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")" = finalizing ] || continue
         args=$($PYTHON_CMD -c 'import json,sys;t,a,g,w,r,s=sys.argv[1:];print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,runnerId=r,outcome="landed",landedRevision=s)))' \
-            "$tid" "$aid" "$gen" "$WORKER_ID" "$MOE_RUNNER_ID" "$landed") || continue
+            "$tid" "$aid" "$gen" "$owner" "$MOE_RUNNER_ID" "$landed") || continue
         moe_evidence_rpc finalize_attempt "$args" 3 \
-            || echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; this seat's next claim stays refused until it closes."
+            || echo -e "${YELLOW}[WARN]${NC} attempt $aid is still finalizing after its replayed receipt; its finalizing holds stay until it closes."
     done
     return 0
 }
@@ -4814,12 +4882,14 @@ run_landing() {
             LAND_SHA="$found"
             LAND_TREE=$(git -C "$MOE_TOP" rev-parse "$found^{tree}" 2>/dev/null) || LAND_TREE=""
         fi
-        record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE" || true
+        local owed=1
+        if record_commit_rpc "committed" "$LAND_KIND" "$LAND_SHA" "$LAND_BRANCH" "" "" "$LAND_PUSHED" "$LAND_STAGED_FILE" "$LAND_DROPPED_FILE"; then owed=""; fi
         LAND_RECORDED=true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$LAND_STAGED_FILE" "$bl_flag" "$bl_session"
         if [ -n "${RECEIPT_LANDED:-}" ]; then
             local report
-            report=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$LAND_PUSH_RESULT") || report=""
+            # Only an acknowledged row leaves the journal; a lost one is replayed.
+            report=$(receipt_report "$RECEIPT_BEFORE" "$RECEIPT_LANDED" "$LAND_PUSH_RESULT" "$owed") || report=""
             receipt_journal_write "$RECEIPT_JOURNAL" "$report"
             [ -z "$report" ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
         fi

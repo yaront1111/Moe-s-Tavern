@@ -281,18 +281,38 @@ no candidate (no gate to run, `autoCommit=false`, no git) records none.
 The report is journaled at `<gitdir>/moe/receipt/<taskId>.json` before
 `update-ref` can move the target (with `push result unknown: the landing
 stopped before its push finished` until the push resolves), rewritten once the
-push resolved, and deleted once the daemon holds the receipt. A refused or
-unanswered receipt never rolls back, re-lands or stops the loop (`[WARN]
-delivery receipt not recorded for candidate …; journal kept at … for the next
-pre-flight to replay.`); `DELIVERY_RECEIPT_CONFLICT` means a receipt already
-records that candidate, and it is not retried. Right after its pre-flight
-claim, which a seat whose attempt is still finalizing gets refused, every seat
-replays the journals of tasks no other live session holds: when git shows the
-journaled revision on the target (its tip or an ancestor) it re-sends the
-journaled report verbatim and, for its own journal only, closes the journaled
-attempt as `landed`; when git does not, the ref never moved and the journal is
-dropped for the baseline recovery. A crash between the ref move and the receipt
-therefore records the one missing receipt and never lands the bytes twice.
+push resolved, and deleted once the daemon holds the receipt. Until
+`moe.record_commit` acknowledges the landing's committed ledger row, the journal
+also carries that owed row as `ledger` (`sessionId`, `role`, `status`). A
+refused or unanswered receipt never rolls back, re-lands or stops the loop
+(`[WARN] delivery receipt not recorded for candidate …; journal kept at … for
+the next pre-flight to replay.`); `DELIVERY_RECEIPT_CONFLICT` means a receipt
+already records that candidate, and it is not retried. Right after its
+pre-flight claim, which a seat whose attempt is still finalizing gets refused,
+every seat replays the journals of tasks no other live session holds. The
+landing counts as landed when git shows the journaled revision on the target
+(its tip or an ancestor), or its rewritten copy: a commit after the CAS base
+that carries the landing's `Moe-Session` and `Moe-Kind: completion` trailers,
+which a `pull --rebase` in the push creates (`[receipt] a pull --rebase rewrote
+…`). The replay then, in order, re-sends the owed ledger row (the sha is the
+commit on the target, with no path list and `pushed` from the journaled push
+result, omitted while that is unknown; an unacknowledged row keeps the whole
+journal for the next pre-flight), re-sends the receipt verbatim, and, whichever
+seat replays, closes the journaled attempt as `landed` while that attempt is
+still finalizing under the journal's worker. When git shows neither, the ref
+never moved and the journal is dropped for the baseline recovery. A crash
+between the ref move and the receipt therefore records the missing ledger row
+and receipt, and never lands the bytes twice.
+
+Residuals. Under `deliveryPolicy: remote-push`, a replayed row whose push
+result was unknown carries no `pushed`: push the branch, then re-record the row
+(`record_commit` upgrades `pushed` on the same sha; the sid is the commit's
+`Moe-Session` trailer) with `scripts/moe-call.sh record_commit
+'{"taskId":"<id>","outcome":"committed","kind":"completion","role":"worker","sessionId":"<sid>","sha":"<sha>","ref":"refs/heads/<branch>","pushed":true}'
+--project <path>`. An ungated completion writes no journal, and a crash after
+the receipt is recorded but before `finalize_attempt` leaves none either; in
+both cases the attempt waits for its worker's `moe.deregister_worker`, or for
+the `moe.finalize_attempt` escape in `docs/MCP_SERVER.md`.
 
 ### Session touch evidence
 

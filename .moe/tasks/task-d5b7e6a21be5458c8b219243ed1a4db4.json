@@ -13,71 +13,115 @@
     {
       "stepId": "step-1",
       "description": "RED FIRST. Add three arms to the frozen-candidate suite, and the matching fake-proxy holds, in BOTH harnesses, BEFORE any wrapper change. This task waits on task-8fc35d31 and task-eff6f018, which edit the same files, so find code by function name; line numbers are from bb5e7e2. The frozen-suite JS is byte-identical between postflight.sh (FROZEN_SUITE heredoc) and postflight.ps1 ($frozenSuite here-string), so keep it identical. The fake proxies differ elsewhere, so edit each copy. Do NOT touch the existing receipt-replay block or any existing assertion.\n\nFAKE PROXY (both copies):\n(a) New holdLedgerForCrash(), defined beside holdForInterrupt() and called right after it. In FAKE_EVIDENCE_MODE 'receipt-ledger-replay', the FIRST record_commit with outcome 'committed' and kind 'completion' does three things: writes .moe/ledger-held, blocks up to 120 s (the same Atomics.wait loop as the receipt hold), then calls process.exit(1). This happens BEFORE appendRpc, so the killed call appears in neither evidence-rpcs.jsonl nor record_commit.jsonl.\n(b) The receipt hold in evidenceRpc (currently mode === 'receipt-replay') also fires for 'receipt-rebase-replay' and 'receipt-foreign-replay'.\n\nFROZEN SUITE:\n(c) In modes, add 'receipt-ledger-replay', 'receipt-rebase-replay' and 'receipt-foreign-replay' after 'receipt-conflict'.\n(d) receipt-rebase-replay fixture, placed next to the receipt-push remote setup:\n  1. git init -q --bare <root>/<mode>-remote.git, then remote add origin, then push -q origin moe/frozen (the seed).\n  2. Make a peer clone: git clone -q -b moe/frozen <remote> <root>/<mode>-peer, and set user.name, user.email and core.autocrlf=false in it.\n  3. In the clone, commit remote-only.txt and push it to moe/frozen.\n  Result: the wrapper's first push is rejected, its pull --rebase rewrites the landed commit, and the re-push succeeds.\n(e) Run 1 of all three modes goes under the KILL_ON_MARKER supervisor exactly like receipt-replay (TMPDIR/TMP/TEMP=wrapperTmp). The marker is .moe/ledger-held for receipt-ledger-replay and .moe/receipt-held for the other two.\n(f) After the existing receipt-replay block, add one block per mode, each ending in count++;continue.\n  Run 2 settings: engine, env {...env, FAKE_CLAIM_MODE:'finalizing', MOE_TASKLESS_WAIT_SEC:'5'}, and the same timeout and maxBuffer as receipt-replay's second run. Append log2 to <mode>.log.\n  Helper: sid(sha) is the value of the 'Moe-Session: ' line in git log -1 --format=%B <sha>.\n\n  receipt-ledger-replay (window 1: hard crash between update-ref and record_commit).\n  Run 1 checks:\n  - ledger-held exists and after != before.\n  - The journal exists; keep j1 = JSON.parse(read(journal)).\n  - record_commit.jsonl has no committed completion row.\n  Run 2 checks (same seat):\n  - HEAD and the refs/heads/moe/frozen reflog are unchanged.\n  - record_commit.jsonl has EXACTLY ONE committed completion row. [taskId, sha, ref, role, sessionId, status, pushed] deep-equals ['task-postflight', after, 'refs/heads/moe/frozen', 'worker', sid(after), 'REVIEW', false].\n  - In rpc2, that record_commit comes before the single receipt, which comes before the single finalize.\n  - Receipt args are [c.id, c.deliveryTarget, c.baseRevision, after, after, undefined].\n  - Finalize args are [attempt-postflight, 7, 'landed', after], with workerId 'worker-frozen'.\n  - The attempt is closed and is the only attempt file; no new candidate or check was recorded; the journal is deleted.\n  - LAST: j1.ledger deep-equals {sessionId: sid(after), role: 'worker', status: 'REVIEW'}. This goes last so today's wrapper fails on 'no ledger row replayed', not on the journal shape.\n\n  receipt-rebase-replay (window 2: the push's pull --rebase rewrote the landed commit, then a crash lost the receipt).\n  Run 1 checks:\n  - receipt-held exists; read j1 and set C = j1.targetAfter.\n  - C != after, and git merge-base --is-ancestor C after exits 1.\n  - The remote's refs/heads/moe/frozen equals after, and sid(C) === sid(after).\n  - j1.ledger === undefined and j1.pushResult === 'pushed moe/frozen'.\n  - record_commit.jsonl has exactly one committed completion row, with sha === after.\n  Run 2 checks (same seat):\n  - HEAD, the reflog and the remote are unchanged.\n  - There are 2 receipts; the second deep-equals the first, and the first has targetAfter = landedRevision = C and pushResult 'pushed moe/frozen'.\n  - Exactly one finalize, with args [attempt-postflight, 7, 'landed', after] (after is the rewritten copy).\n  - Still exactly one committed completion row.\n  - The attempt is closed and the journal is deleted.\n  - log2 does not contain 'that landing never moved the ref'.\n\n  receipt-foreign-replay (window 3: another seat replays).\n  Run 1: the same checks as receipt-replay's run 1.\n  Run 2: args with 'worker-frozen' replaced by 'worker-other'. Checks:\n  - The last claim in rpc2 is worker-other's.\n  - HEAD and the reflog are unchanged.\n  - There are 2 receipts whose args are equal except workerId; the second one's workerId is wor",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
       ],
-      "startedAt": "2026-09-19T03:42:29.270Z"
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "RED FIRST done, before any wrapper edit. Both fake proxies: holdLedgerForCrash() (first committed completion record_commit in receipt-ledger-replay: writes .moe/ledger-held, waits 120 s, exit 1, before appendRpc) + the receipt hold also fires for receipt-rebase-replay/receipt-foreign-replay. Frozen suite (byte-identical in both, verified by extraction: 60478 bytes each): 3 modes after receipt-conflict, the rebase fixture (bare remote + peer clone commit remote-only.txt), a sibling KILL_ON_MARKER supervisor block (existing receipt-replay supervisor/assertion blocks untouched), shared helpers sid/ledgerRows/reflogOf/replay/replayed and one block per mode ending count++;continue. The plan text was cut at 5000 chars inside window 3; I completed it from mem:decision-receipt-replay-owed-ledger-and-any-seat-finalize: 2 receipts equal except workerId (worker-frozen, worker-other), one landed finalize with workerId worker-frozen (the journal owner), attempt closed, journal gone, one committed row. Red on today's wrappers, each arm alone (MOE_POSTFLIGHT_TIMEOUT_SEC=400): sh + pwsh 7 both fail exactly at: ledger 'the replay records the owed ledger row once' (actual 0); rebase 'the rewritten copy counts as landed' (actual 1, log shows 'that landing never moved the ref; dropping'); foreign 'the replay closes the attempt once' (actual 0). Sanity pwsh: receipt-replay, receipt-refused, receipt-push, teardown-landed PASS (4). BOM kept on postflight.ps1, both files LF. Shared checkout: the 16+ dirty paths (skills/roles/daemon recommendSkill etc.) belong to other sessions; untouched.",
+      "startedAt": "2026-09-19T03:42:29.270Z",
+      "completedAt": "2026-09-19T04:42:04.124Z"
     },
     {
       "stepId": "step-2",
       "description": "PS1 LANDING SIDE (window 1): the journal carries the ledger row that is still owed until record_commit acknowledges it. All changes are in Invoke-MoeLanding.\n\n1. The gated-completion journal is the [ordered] $receipt built just before update-ref, where Write-MoeReceiptJournal is first called. Add ledger=[ordered]@{sessionId=$Sid; role=$Role; status=$Status}.\n2. Keep the answer of the committed ledger call (today it is 'Send-MoeRecordCommit $recArgs | Out-Null'):\n   $rc = Send-MoeRecordCommit $recArgs; $ledgerAcked = ($null -ne $rc -and (Get-MoeProp $rc 'success') -eq $true)\n   Keep '$recorded=$true' unchanged, because the finally block depends on it.\n3. In the post-record rewrite ('if ($receipt) { $receipt.pushResult = ...; Write-MoeReceiptJournal ...; Send-MoeReceipt ... }'), remove 'ledger' from $receipt ONLY when $ledgerAcked. Two consequences:\n   - A journal left behind by a refused or lost receipt is exactly today's 10-field report. The receipt-refused arm deep-equals it and must stay green unedited.\n   - A journal that still carries 'ledger' always means the ledger row may be missing.\n4. In Write-MoeReceiptJournal, add -Depth 5 to ConvertTo-Json, because 'ledger' is nested.\n5. Leave the finally block's interrupted-landing re-send alone. It keeps the journal as written, so the next replay sends the ledger row once more, and record_commit merges a repeated sha.\n6. Do not change Send-MoeReceipt: its payload already takes only the six receipt fields.\n7. Update the journal comment above Get-MoeReceiptJournalPath: the journal also carries the owed ledger row until moe.record_commit acknowledges it.\n\nError handling: a record_commit that returns $null or success != $true leaves 'ledger' in the journal. A journal write that fails keeps today's WARN and never blocks the landing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Invoke-MoeLanding: J0 $receipt gains ledger=[ordered]@{sessionId=$Sid; role=$Role; status=$Status}; the committed record is kept as $recReply (named so, not $rc, because $rc means a git exit code everywhere else in this file) and $ledgerAcked = success -eq $true; the post-record rewrite does $receipt.Remove('ledger') only when acked; $recorded=$true and the finally re-send are unchanged. Write-MoeReceiptJournal: ConvertTo-Json -Depth 5 -Compress. Journal comment above Get-MoeReceiptJournalPath updated. Send-MoeReceipt unchanged. Checks: BOM kept, 0 CRLF, PS parser 0 errors; pwsh MOE_FROZEN_TEST_ONLY=receipt-replay,receipt-refused,receipt-conflict,receipt-push,receipt-push-failed,teardown-landed,pass -> PASS 7 (receipt-refused still deep-equals the 10-field J1, so ledger is dropped on ack). receipt-ledger-replay stays red until the replay (step 3).",
+      "startedAt": "2026-09-19T04:42:07.435Z",
+      "completedAt": "2026-09-19T04:43:51.252Z"
     },
     {
       "stepId": "step-3",
       "description": "PS1 REPLAY (all three windows). Rework Invoke-MoeReceiptReplay. It still runs right after the pre-flight claim, and its per-journal try/catch stays best-effort.\n\n1. VALIDATION: also accept an optional 'ledger'. When present, sessionId must be a non-blank string of at most 255 chars, role a non-blank string of at most 64 chars, and status absent, null or a string. Anything else gets the existing 'kept: malformed journal' WARN.\n2. LANDED TEST, in this order:\n   a. tip as today: rc 1 means not landed; any other nonzero rc throws and keeps the journal.\n   b. 'merge-base --is-ancestor targetAfter tip': rc 0 means landed, with $landedAs = targetAfter; rc > 1 throws.\n   c. rc 1 starts the rewritten-copy search:\n      - Run 'git log -1 --format=%B <targetAfter>'. A nonzero rc throws 'git log exited N' and keeps the journal.\n      - sid is the value of the first 'Moe-Session: ' line, with CR trimmed.\n      - If there is a sid, run: git log -n1 --format=%H --fixed-strings --all-match \"--grep=Moe-Session: <sid>\" '--grep=Moe-Kind: completion' <range>. The range is <targetBefore>..<tip>, or just <tip> when targetBefore is the 40-zero id. A nonzero rc throws.\n      - A hit means landed, with $landedAs = hit. Log: [receipt] a pull --rebase rewrote <targetAfter>; <target> carries it as <hit>.\n      - No hit keeps today's drop line: 'that landing never moved the ref; dropping'.\n   WHY this range is safe: it holds only commits reachable from the tip but not from the CAS base, of kind completion, from this landing's session. A session lands at most one completion. Its pre-flight recovery checkpoint has the same sid but is a wip commit that already sits under the base.\n3. OWED LEDGER ROW. After the existing 'replaying the delivery receipt' line, when the journal carries 'ledger':\n   a. Send record_commit through Send-MoeRecordCommit with: taskId; outcome 'committed'; kind 'completion'; sha $landedAs; ref = target; role; sessionId; workerId $WorkerId; status (only when non-empty); pushed.\n   b. pushed is $false when pushResult is null or starts with 'push failed: ', and $true when it starts with 'pushed '. Omit it for the 'push result unknown' placeholder.\n   c. Log: [receipt] recording the owed ledger row of task <tid>: <landedAs> on <target>\n   d. Not acknowledged ($null, or success is not $true): WARN 'receipt journal <f> kept: moe.record_commit did not record the owed ledger row', then continue. No receipt and no finalize, so the next pre-flight retries the whole journal.\n   e. Acknowledged: remove 'ledger' from $j and rewrite the file with Write-MoeReceiptJournal before the receipt. Otherwise a receipt that keeps being refused would re-send the row on every pre-flight.\n4. RECEIPT: unchanged, verbatim through Send-MoeReceipt.\n5. FINALIZE FOR ANY SEAT (window 3).\n   a. Drop the '$j.workerId -cne $WorkerId' guard.\n   b. Give Get-MoePinnedAttemptPhase a 4th parameter [string]$Worker = $WorkerId and use it in its workerId match. Call it with ($j.attemptId, $j.taskId, $j.generation, $j.workerId).\n   c. When the phase is 'finalizing', send finalize_attempt with: taskId; attemptId; generation; workerId [string]$j.workerId (the tool contract defines workerId as the seat that held the attempt); runnerId $script:MoeRunnerId; outcome 'landed'; landedRevision $landedAs. Use 3 tries, as today.\n   d. The daemon has no owner gate, and the attempt id plus generation fence it.\n   e. The failure WARN becomes seat-neutral: 'attempt <aid> is still finalizing after its replayed receipt; its finalizing holds stay until it closes.' It replaces the 'this seat's next claim stays refused' wording.\n6. Rewrite the function's header comment to match: any seat closes the attempt, the owed ledger row, the rewritten copy.\n\nError handling. For every failure, keep the journal and move on to the next journal:\n- a git exit code other than the documented 0/1;\n- a missing targetAfter object;\n- an unacknowledged ledger row;\n- a refused receipt.\nOnly two cases drop a journal: a clean 'not on the target', and no rewritten copy found. The replay never moves a ref, never re-freezes and never re-gates. It never throws out of the pre-flight: the outer catch logs and continues.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 replay reworked (tests came first in step 1, TDD skill loaded). New helpers: Test-MoeOwedLedger (optional ledger must be a JSON object: sessionId non-blank string <=255, role non-blank string <=64, status absent/null/string; otherwise the existing 'kept: malformed journal'); Find-MoeJournaledLanding (tip rev-parse: rc 1 -> '', other nonzero throws; merge-base --is-ancestor: rc 0 -> targetAfter, rc>1 throws; rc 1 -> git log -1 --format=%B targetAfter (nonzero throws 'git log exited N'), first 'Moe-Session: ' line CR-trimmed, then git log -n1 --format=%H --fixed-strings --all-match --grep=Moe-Session: <sid> --grep=Moe-Kind: completion over <targetBefore>..<tip> (tip alone for the zero id), nonzero throws; logs '[receipt] a pull --rebase rewrote <after>; <target> carries it as <hit>.'); Send-MoeOwedLedgerRow (record_commit taskId/committed/completion/sha=landedAs/ref=target/role/sessionId/workerId=$WorkerId/status if non-empty/pushed false for null or 'push failed: ', true for 'pushed ', omitted otherwise; logs '[receipt] recording the owed ledger row of task ...'; acked = success -eq $true). Invoke-MoeReceiptReplay: owed row before the receipt; not acked -> WARN 'receipt journal <f> kept: moe.record_commit did not record the owed ledger row' and next journal; acked -> ledger removed and journal rewritten before the receipt; own-seat guard dropped; Get-MoePinnedAttemptPhase gained [string]$Worker=$WorkerId, called with $j.workerId; finalize sends workerId=[string]$j.workerId and landedRevision=$landedAs; seat-neutral WARN. Header comments rewritten. Function sizes: replay 50 lines, helpers 7/22/10. Verification: PS parser 0 errors, BOM kept, 0 CRLF. pwsh: the 3 new arms PASS, each alone. The existing receipt-replay, receipt-cached-check, receipt-same-tree-race, receipt-push, receipt-push-failed, receipt-refused, receipt-conflict, teardown-landed and loop-land-twice PASS (9). PS 5.1: the 3 new + receipt-replay + receipt-refused PASS (5). Logs from a scratch run of the extracted suite show 'recording the owed ledger row of task task-postflight: <sha> on refs/heads/moe/frozen' and 'a pull --rebase rewrote <C>; refs/heads/moe/frozen carries it as <C'>'.",
+      "startedAt": "2026-09-19T04:53:00.435Z",
+      "completedAt": "2026-09-19T04:53:09.626Z"
     },
     {
       "stepId": "step-4",
       "description": "SH TWIN of steps 2 and 3 in scripts/moe-agent.sh. Use the same fields, the same call order, byte-identical operator strings, and the same keep or drop decision for every git exit code.\n\nLANDING:\n1. receipt_report gets an optional 4th argument: receipt_report TARGET_BEFORE LANDED PUSH_RESULT [LEDGER]. A non-empty 4th argument adds ledger {sessionId: ${MOE_SID:-$WORKER_ID@unknown} (the value record_commit_rpc sends), role: $ROLE, status: $LAND_STATUS}.\n2. The pre-update-ref journal write in run_landing passes 1 as the 4th argument.\n3. record_commit_rpc returns 1 when it cannot build its args or moe_rpc fails, and 0 only when moe_rpc answered. Every caller already ends in '|| true'; re-verify that, because set -e is on.\n4. At the committed record in the post-landing block (next to LAND_RECORDED=true), write it as: 'if record_commit_rpc ...; then <acked>=1; fi'. Do not use bare && chains under set -e.\n5. Pass the ledger argument to the post-record receipt_report only when the row was not acknowledged.\n6. Reset any new RECEIPT_* global in the same place run_landing resets RECEIPT_BEFORE, RECEIPT_LANDED and RECEIPT_JOURNAL.\n\nREPLAY (receipt_replay):\n1. Extend the python validator and extractor with the optional ledger, using the same rules as ps1. Also emit targetBefore, the pushed mapping and the ledger fields.\n2. Add the rewritten-copy search. Read the sid with a bash 'while IFS= read -r' loop over the 'git log -1 --format=%B' output, not a '| head' or 'grep -q' pipe.\n3. Re-send the owed ledger row with a python-built payload through moe_rpc record_commit (rc 0 means acknowledged). After an acknowledgement, rewrite the journal without 'ledger' using python plus receipt_journal_write, before the receipt.\n4. moe_pinned_attempt_phase gets a 4th argument, the worker, defaulting to $WORKER_ID.\n5. Finalize for any seat, with workerId set to the journal's owner.\n6. Update the function header comments to match the ps1 twin.\n\nError handling is the same as in ps1:\n- Every git or python failure keeps the journal, prints the '[WARN] receipt journal <f> kept: ...' line, and continues.\n- receipt_replay still returns 0 and is still called as 'receipt_replay || true'.\n- No new command may abort the wrapper under set -e.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh twin. Landing: receipt_report TARGET_BEFORE LANDED PUSH_RESULT [LEDGER] adds ledger {sessionId ${MOE_SID:-$WORKER_ID@unknown}, role $ROLE, status $LAND_STATUS}; the pre-update-ref write passes 1. record_commit_rpc now returns 1 when it cannot build args or moe_rpc fails (0 only when the daemon answered). I checked all 10 callers: each ends in '|| true' or sits in an if. The committed record is 'local owed=1; if record_commit_rpc ...; then owed=\"\"; fi', and the post-record receipt_report gets \"$owed\". It is a run_landing local, so no new RECEIPT_* global was needed. Replay: new helpers receipt_journal_fields (validator moved out of receipt_replay, plus ledger rules as in ps1; it emits targetBefore and an owed flag), receipt_landed_as (tip/ancestor/rewritten copy; sid read with 'while IFS= read -r' from a here-string; every git failure prints its reason, and the caller WARNs 'receipt journal <f> kept: <reason>') and receipt_ledger_send (python builds the row from the journal file, same pushed mapping, moe_rpc record_commit rc 0 = acked). One deviation from the letter of the plan: the ledger fields and pushed mapping are read from the file by that python instead of being passed through the \\x1f-joined line, so a sessionId can never split the fields. Same behaviour. After an ack, python drops ledger and receipt_journal_write rewrites the journal before receipt_send. moe_pinned_attempt_phase has a 4th WORKER arg (default $WORKER_ID). The finalize goes out from any seat with workerId = journal owner and landedRevision = the landed commit. The WARN strings are byte-identical to ps1 and in the same order: rewritten, replaying, recording. Sizes: receipt_replay 42, receipt_landed_as 18, receipt_journal_fields 16, receipt_ledger_send 14. bash -n OK, 0 CR (LF kept). sh: the 3 new arms PASS, each alone. The existing receipt-replay, receipt-cached-check, receipt-same-tree-race, receipt-push, receipt-push-failed, receipt-refused, receipt-conflict, teardown-landed and loop-land-twice PASS (9, 535 s). A scratch run of the suite shows the same [receipt] lines as ps1.",
+      "startedAt": "2026-09-19T04:53:14.216Z",
+      "completedAt": "2026-09-19T05:09:05.181Z"
     },
     {
       "stepId": "step-5",
       "description": "PARITY. Make these edits in both parity-check.sh and parity-check.ps1.\n1. In the 'delivery receipt prose' list:\n   - add 'recording the owed ledger row of task', 'did not record the owed ledger row' and 'a pull --rebase rewrote';\n   - replace the needle \"is still finalizing after its replayed receipt; this seat's next claim stays refused until it closes.\" with 'is still finalizing after its replayed receipt; its finalizing holds stay until it closes.'.\n2. In the 'delivery receipt' literal list, add 'Moe-Kind: completion'. The rewritten-copy search spells it in both wrappers.\n3. Prove the guard: temporarily misspell one new needle in moe-agent.sh. Confirm that both parity-check.sh and parity-check.ps1 FAIL, then restore the spelling.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Red first: before the list update, parity-check.sh FAILED on the old needle (\"this seat's next claim stays refused\" missing from both wrappers). Both lists changed. The 'delivery receipt' literals gained 'Moe-Kind: completion'. The 'delivery receipt prose' list gained 'recording the owed ledger row of task', 'did not record the owed ledger row' and 'a pull --rebase rewrote', and its old finalize needle became 'is still finalizing after its replayed receipt; its finalizing holds stay until it closes.'. Green: parity-check.sh PASS, parity-check.ps1 PASS on pwsh 7 and PS 5.1. Guard proof: in a scratch copy (scripts/ + tests/ copied into %TEMP%, so the live wrapper was never mutated), 'recording the owed ledger row of task' was misspelled in moe-agent.sh. parity-check.sh then FAILED ('missing from: moe-agent.sh'), and parity-check.ps1 FAILED on pwsh and on PS 5.1. Scratch removed. One gotcha: the Edit tool rewrote parity-check.ps1's worktree endings from CRLF to LF. I restored CRLF with a script (git ls-files --eol shows i/lf w/crlf again, and the diff is 2 lines).",
+      "startedAt": "2026-09-19T05:09:11.916Z",
+      "completedAt": "2026-09-19T05:10:53.848Z"
     },
     {
       "stepId": "step-6",
       "description": "DOCS. No daemon code or comment changes.\n\ndocs/CONFIGURATION.md, section 'Delivery receipts', second paragraph:\n1. The journal also carries 'ledger' (sessionId, role, status), the ledger row still owed, until moe.record_commit acknowledges it.\n2. The replay counts the landing as landed when git shows the journaled revision on the target. It also counts it when git shows its rewritten copy: a commit after the CAS base that carries the landing's Moe-Session and 'Moe-Kind: completion' trailers. A pull --rebase in the push creates that copy.\n3. When landed, the replay does three things in order:\n   a. It re-sends the owed ledger row. The sha is the commit on the target, there is no path list, and pushed comes from the journaled push result (omitted while unknown).\n   b. It re-sends the receipt verbatim.\n   c. Whichever seat replays, it closes the journaled attempt as 'landed' while that attempt is still finalizing under the journal's worker.\n4. Replace 'for its own journal only'.\n5. Add the residuals and their operator recovery in one or two sentences:\n   - Under deliveryPolicy remote-push, a replayed row whose push result was unknown carries no 'pushed'. Push the branch, then re-record the row. record_commit upgrades pushed on the same sha, and the sid is the commit's Moe-Session trailer:\n     scripts/moe-call.sh record_commit '{\"taskId\":\"<id>\",\"outcome\":\"committed\",\"kind\":\"completion\",\"role\":\"worker\",\"sessionId\":\"<sid>\",\"sha\":\"<sha>\",\"ref\":\"refs/heads/<branch>\",\"pushed\":true}' --project <path>\n   - An ungated completion writes no journal. A crash after the receipt is recorded but before finalize_attempt also leaves none. In both cases the attempt waits for its worker's deregister_worker, or for the finalize_attempt escape in docs/MCP_SERVER.md.\n\ndocs/MCP_SERVER.md, section moe.finalize_attempt: in item 1 of 'Every end of a finalizing attempt', and in the 'Escape for a runner that is gone' note, add this. After a crash, any seat's wrapper that replays the landing's receipt journal closes the attempt as 'landed', and only once git shows the landed revision, or its rewritten copy, on the target.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/CONFIGURATION.md -> Delivery receipts, second paragraph rewritten. It covers: the journal's owed `ledger` (sessionId, role, status) until record_commit acknowledges it; landed = the journaled revision OR its rewritten copy (a commit after the CAS base with the landing's Moe-Session and Moe-Kind: completion trailers, which a pull --rebase in the push creates); and the replay order: owed row (the sha on the target, no paths, pushed from the journaled push result and omitted while unknown; an unacknowledged row keeps the journal), then the receipt verbatim, then any seat closes the attempt as landed while it is finalizing under the journal's worker. 'for its own journal only' is gone. A new 'Residuals.' paragraph gives the remote-push unknown-push recovery with the exact moe-call.sh record_commit command (record_commit upgrades pushed on the same sha; I verified this in recordCommit.ts:224-233). It also covers ungated completions and crash-after-receipt-before-finalize, both of which wait on deregister_worker or the finalize_attempt escape. docs/MCP_SERVER.md -> moe.finalize_attempt: both 'Escape for a runner that is gone' and item 1 of 'Every end of a finalizing attempt' now say that any seat's replaying wrapper closes the attempt as landed, and only once git shows the landed revision or its rewritten copy on the target. No daemon code touched. Both docs stay LF (w/lf). A grep of ARCHITECTURE/TROUBLESHOOTING/SCHEMA/CLAUDE.md found no other stale replay wording.",
+      "startedAt": "2026-09-19T05:10:57.946Z",
+      "completedAt": "2026-09-19T05:11:58.983Z"
     },
     {
       "stepId": "step-7",
       "description": "VERIFY GREEN. Run everything sequentially on a quiet box, because parallel harness runs flake. Use MOE_POSTFLIGHT_TIMEOUT_SEC=400. Launch the ps1 harness from PowerShell.\n\n1. Run each of the 3 new arms alone:\n   - sh from Git Bash;\n   - postflight.ps1 on pwsh 7;\n   - postflight.ps1 on PS 5.1 (powershell -NoProfile -File scripts/tests/postflight.ps1).\n2. On sh and on pwsh, run the 7 existing receipt arms plus teardown-landed and loop-land-twice through MOE_FROZEN_TEST_ONLY.\n3. Run the full 'bash scripts/tests/postflight.sh' (about 40-50 min), and the full postflight.ps1 on pwsh 7 and on PS 5.1. Report the PASS lines: the frozen scenario count must be the pre-change count + 3.\n4. Run 'bash scripts/tests/parity-check.sh', 'pwsh -NoProfile -File scripts/tests/parity-check.ps1' and 'powershell -NoProfile -File scripts/tests/parity-check.ps1'.\n5. Acceptance criterion 6, UNEDITED: 'git diff --stat packages/moe-daemon/src/delivery/acceptance.test.ts' must be empty, then run 'cd packages/moe-daemon && npx vitest run src/delivery/acceptance.test.ts'.\n6. MUTATION PROOFS, each reverted afterwards. Run the sh arm against moe-agent.sh and the ps1 arm against moe-agent.ps1:\n   (a) skip the ledger re-send: receipt-ledger-replay fails;\n   (b) skip the rewritten-copy search: receipt-rebase-replay fails;\n   (c) restore the own-seat-only finalize guard: receipt-foreign-replay fails;\n   (d) never drop 'ledger' in the post-record rewrite: receipt-refused fails.\n\nFor complete_task, the verification is the full postflight.sh command, and outputTail is the PASS lines.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "All runs sequential, MOE_POSTFLIGHT_TIMEOUT_SEC=400, ps1 launched from PowerShell. (1) New arms alone: sh 3/3 PASS (step 4), pwsh 3/3 PASS (step 3), PS 5.1 PASS (step 3: the 3 arms plus receipt-replay and receipt-refused, 5/5). (2) receipt-replay, receipt-cached-check, receipt-same-tree-race, receipt-push, receipt-push-failed, receipt-refused, receipt-conflict, teardown-landed, loop-land-twice: sh 9/9 PASS (535 s), pwsh 9/9 PASS. (3) FULL: 'MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh' rc 0 in 2537 s, 'PASS frozen candidate scenarios: 69', 'commit-scope scenarios run: 29', 'PASS postflight.sh'. postflight.ps1 on pwsh 7.6.6 rc 0 in 423 s and on PS 5.1.26100 rc 0 in 445 s, 69 frozen + 29 scope each. Frozen = pre-change 66 + 3. (4) parity-check.sh PASS; parity-check.ps1 PASS on pwsh and PS 5.1, re-run on the final bytes. (5) 'git diff --stat packages/moe-daemon/src/delivery/acceptance.test.ts' is empty, and 'npx vitest run src/delivery/acceptance.test.ts' gives 6/6 passed (the real ps1 wrapper on Windows). (6) Mutation proofs came from a scratch copy of scripts/ (%TEMP%/d5b7/mut), so the live hot-reloading wrapper was never mutated. They were applied by an exact-once needle script, and pristine copies were restored and cmp-verified. Each wrapper failed at the expected assertion, sh and pwsh alike: (a) no ledger re-send -> receipt-ledger-replay 'the replay records the owed ledger row once'; (b) no rewritten-copy search -> receipt-rebase-replay 'the rewritten copy counts as landed'; (c) own-seat finalize guard restored -> receipt-foreign-replay 'the replay closes the attempt once'; (d) ledger never dropped after ack -> receipt-refused 'a refused receipt stays journaled verbatim for the next pre-flight'. EOLs: moe-agent.sh, postflight.sh and parity-check.sh are LF; moe-agent.ps1 and postflight.ps1 are LF with BOM; parity-check.ps1 is w/crlf as before.",
+      "startedAt": "2026-09-19T05:12:25.792Z",
+      "completedAt": "2026-09-19T06:14:03.296Z"
     },
     {
       "stepId": "step-8",
       "description": "ADVERSARIAL SELF-REVIEW. Put the two wrapper diffs side by side, answer each point below, and post the answers as a task comment.\n1. Two seats replay the same journal at once. The ledger re-send merges by sha, the receipt comes back as a duplicate or as DELIVERY_RECEIPT_CONFLICT, and finalize is idempotent. Confirm nothing lands twice and no ref moves.\n2. A live owner is mid-landing. The live-marker skip still runs before any git call or RPC, so a foreign seat never finalizes an attempt whose owner's marker is live, or sits on a host or pid namespace this seat cannot probe.\n3. The rewritten-copy search cannot pick up the session's recovery checkpoint (a wip commit, under the base), a peer's commit (another sid), or a landing that never moved the ref (no completion with that sid after the base). Name the guard that covers each.\n4. With an unborn target, the range is the tip alone.\n5. An old journal without 'ledger' replays exactly as before. A new journal read by an old wrapper loses only the ledger re-send; name this as a mixed-rollout residual.\n6. Nothing new runs before claim_next_task, so the single-shot taskless-wait trap (mem:gotcha-single-shot-taskless-wait-vs-crash-replay) is not reopened.\n7. The early returns for autoCommit=false, no-git and governor seats are unchanged.\n8. No finalize is sent for an attempt whose id, task, generation or worker differs from the journal's.\n9. Error handling: every new git call and RPC keeps the journal on failure and never throws out of the pre-flight.\n10. moe-agent.sh and postflight.sh are still LF (Serena edits can flip files to CRLF).\n11. The existing receipt-replay block and every other pre-existing assertion are byte-identical (check git diff).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review posted as comment-0349c6ce44324b9992701a56e674d5e3, answering all 11 points with code references. The daemon behaviour it cites was checked in the source: receiptStore.ts RECORDED_FIELDS leaves out workerId, finalizeAttempt.ts returns early on a closed attempt, record_commit merges a repeated sha, and its role/sessionId bounds are 64/255, matching both validators. Nothing needed fixing. Three theoretical items are named there: a replay racing a new landing's J0 for the same task (the same class as today's delete-after-receipt), a permanently refused row or receipt (kept with a WARN, like today's refused receipt), and a duplicate-seat sid collision (from task-eff6f018). So is the mixed-rollout residual: an old wrapper drops the owed row. This step changed no files; all modified paths were reported in steps 1-6.",
+      "startedAt": "2026-09-19T06:15:00.358Z",
+      "completedAt": "2026-09-19T06:15:21.249Z"
     }
   ],
-  "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3c030e77",
+  "planRevision": 17,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,14 +130,22 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 209.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-0349c6ce44324b9992701a56e674d5e3",
+      "author": "worker-3c030e77",
+      "content": "Adversarial self-review (step 8). I read the ps1 and sh wrapper diffs side by side.\n\n1. Two seats replay one journal at once. Every replay git call is read-only (rev-parse, merge-base, log); no update-ref, commit or push. The daemon mutex serializes record_commit, and a repeated sha merges (recordCommit.ts ~224: duplicate, only pushed/treeId upgrade). The receipt store compares only target, targetBefore, targetAfter, landedRevision and pushResult (receiptStore.ts RECORDED_FIELDS; workerId is not compared), so the second receipt is a duplicate. finalize_attempt on a closed attempt returns without writing (finalizeAttempt.ts ~195). Journal rewrites are temp+rename (ps1 temp named by $PID, sh by $$). A racing rewrite can re-create a journal the other seat just deleted, but that copy has no ledger, so its next replay is a duplicate receipt, then phase 'closed', then no RPC. Nothing lands twice and no ref moves.\n2. Live owner. The Test-MoeLiveMarkerForeignLive / live_marker_foreign_live skip still runs right after validation, before any git call or RPC. 'live' and 'foreign' (a host or namespace this seat cannot probe) both skip.\n3. Rewritten-copy guards:\n- The recovery checkpoint is excluded twice: it is Moe-Kind: checkpoint, which --all-match with --grep=Moe-Kind: completion rejects, and it sits under the CAS base, outside <targetBefore>..<tip>.\n- A peer's commit carries another sid, so --fixed-strings --grep=Moe-Session: <sid> rejects it.\n- A landing that never moved the ref has no completion with its sid after the base. A session lands at most one completion, a failed CAS deletes its own journal, and rescue commits are Moe-Kind: rescue on refs/moe/rescue.\n- Both twins drop the journal only on a clean 'not on target' or 'no copy'.\n4. Unborn target. A zero-id targetBefore gives a range of the tip alone (ps1 compares with '0'*40, sh with $MOE_ZERO_OID).\n5. Old journals. One without ledger validates as before, sends no record_commit, then the same receipt and finalize (the finalize now also comes from a foreign seat, which is window 3). A new journal read by an old wrapper: both old validators ignore unknown keys, so it replays the receipt plus an own-seat finalize and deletes the journal, losing only the ledger re-send. That is a MIXED-ROLLOUT RESIDUAL.\n6. Call sites are unchanged: ps1 '$claim = Invoke-MoeRpc claim_next_task; Invoke-MoeReceiptReplay', sh 'CLAIM_RESULT=$(moe_rpc claim_next_task ...); receipt_replay || true'. All new work is inside the replay, after the claim, so the taskless-wait trap stays closed.\n7. The early returns are unchanged: autoCommit off and no git return first in both twins, and governor seats take the enter_governance branch and never reach the replay.\n8. The finalize fence: Get-MoePinnedAttemptPhase / moe_pinned_attempt_phase read .moe/attempts/<journal attemptId>.json. It must match the journal's id, taskId, workerId (new 4th parameter) and generation, or the result is 'mismatch' and no RPC is sent.\n9. Errors.\n- ps1: Find-MoeJournaledLanding throws on any exit code other than the documented 0/1, and the per-journal catch logs 'kept: <reason>'. Send-MoeRecordCommit swallows exceptions into $null, which logs 'did not record the owed ledger row' and keeps the journal. Write-MoeReceiptJournal WARNs, and the outer catch still logs and continues.\n- sh: receipt_landed_as returns 1 with the reason, and a failed receipt_ledger_send gets the same WARN. Every new command is in an if, an || list, or an assignment with a fallback. receipt_replay returns 0 and is still called with '|| true'. record_commit_rpc now returns 1 on failure, and all 10 callers use '|| true' or an if.\n10. Line endings. moe-agent.sh, postflight.sh and parity-check.sh are LF (0 CR). moe-agent.ps1 and postflight.ps1 are LF with their BOM. The Edit tool flipped parity-check.ps1 to LF; I restored it to CRLF (i/lf w/crlf, as before).\n11. In the harness diffs the only removed lines are the receipt-hold condition and its 2 comment lines (plan item b). The receipt-replay assertion block and every other assertion are byte-identical (git diff -U0 shows no other '-' lines).\n\nTheoretical (not fixed):\n- A replay racing a NEW landing's J0 for the same task could overwrite or delete it. This is the same class as today's delete-after-receipt, and the live-marker skip and the new session's own pre-flight replay make it near-impossible.\n- A journal whose row or receipt the daemon refuses forever (deleted task, hand-edited status over 32 chars) stays with a WARN on every pre-flight, like today's refused receipt.\n- Duplicate-seat sid collision, carried over from task-eff6f018.\n\nDocumented residuals (CONFIGURATION.md): ungated completions; a crash after the receipt ack but before finalize; remote-push with an unknown push result (recovery command given).",
+      "timestamp": "2026-09-19T06:15:15.711Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:55.919Z",
-  "updatedAt": "2026-09-19T04:00:16.823Z",
+  "updatedAt": "2026-09-19T06:16:25.444Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:05:34.837Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 8
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 8
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
@@ -107,7 +159,16 @@
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-09-18T20:35:40.502Z",
   "planningNotes": {
@@ -222,17 +283,47 @@
       "treeId": "b63d6e91151f13595593ec01015c68b678acd738",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "2b7e930288fb51e9f98b3d054a5b94790f9a8bd0",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3c030e77@2026-09-19T04:15:17Z",
+      "paths": [
+        ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json"
+      ],
+      "recordedBy": "worker-3c030e77",
+      "recordedAt": "2026-09-19T04:15:23.789Z",
+      "treeId": "f828b435044c326761e80317079c0db20e0e4fea",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-d5b7e6a21be5458c8b219243ed1a4db4.json",
-    ".moe/tasks/task-eff6f0181ce848d48aa818a3df4f0950.json"
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "docs/CONFIGURATION.md",
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-3c030e77@2026-09-19T04:00:10Z",
-    "at": "2026-09-19T04:00:16.823Z"
-  }
+    "sessionId": "worker-3c030e77@2026-09-19T04:15:17Z",
+    "at": "2026-09-19T04:15:23.789Z"
+  },
+  "reviewStartedAt": "2026-09-19T06:16:25.442Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "full sh rc=0 secs=2537\nPASS frozen candidate scenarios: 69\ncommit-scope scenarios run: 29\nPASS postflight.sh\n--- also: postflight.ps1 pwsh 7.6.6 rc=0 423s (69 frozen + 29 scope, PASS postflight.ps1); PS 5.1.26100 rc=0 445s (69 + 29); parity-check.sh PASS, parity-check.ps1 PASS (pwsh + PS 5.1); npx vitest run src/delivery/acceptance.test.ts: Test Files 1 passed, Tests 6 passed (6)",
+    "reportedAt": "2026-09-19T06:16:25.442Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "All three receipt-replay crash windows are closed in BOTH wrappers. No daemon change.\nW1, ledger row lost between update-ref and record_commit:\n- J0 journals the owed row as ledger {sessionId, role, status}.\n- The post-record rewrite drops it only when record_commit acked.\n- The replay re-sends it before the receipt (idempotent by sha), then rewrites the journal without it.\nW2, pull --rebase rewrote the landed commit:\n- When targetAfter is not an ancestor, the replay reads its Moe-Session.\n- It then finds the copy with --fixed-strings --all-match --grep=Moe-Session:<sid> --grep=Moe-Kind: completion over <targetBefore>..<tip> (the tip alone when unborn).\n- The receipt is re-sent verbatim; the ledger sha and landedRevision use the copy.\nW3, foreign seat:\n- Any seat finalizes the journaled attempt, workerId = the journal owner.\n- The attempt file must match id/task/worker/generation and be finalizing.\nEvery git or RPC failure keeps the journal; the replay still runs after claim_next_task.\nTests, red on today's wrappers first (sh + pwsh), each failing on its defect:\n- receipt-ledger-replay, receipt-rebase-replay, receipt-foreign-replay.\n- The frozen suite is still byte-identical in both harnesses; existing assertions are untouched.\nMutations a-d (ledger re-send, copy search, own-seat guard, ledger drop) each fail their arm on both twins; run from a scratch copy.\nVerification on the final bytes:\n- postflight.sh rc 0: 69 frozen (66+3) + 29 scope.\n- postflight.ps1: pwsh rc 0 and PS 5.1 rc 0, 69+29 each.\n- parity-check PASS on sh, pwsh and PS 5.1.\n- acceptance.test.ts 6/6, unedited.\nDocs (CONFIGURATION.md Delivery receipts, MCP_SERVER.md finalize_attempt) now describe the owed row, the rewritten copy and the any-seat close. They also list the residuals and the remote-push recovery command.\nSelf-review: comment-0349c6ce."
 }
