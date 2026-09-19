@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# One run per PR (per branch for pushes) at a time: a newer push replaces the
+# queued run instead of stacking another full matrix behind it, and the run in
+# progress still finishes. The agent fleet lands a commit every few minutes,
+# faster than the Windows build completes, so without this the queue only grows.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+
 jobs:
   fresh-linux-install:
     name: Fresh Linux installation

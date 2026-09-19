@@ -14,6 +14,10 @@ on:
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
+# Same rule as ci.yml: one running and at most one queued run per PR or ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/moe-daemon
