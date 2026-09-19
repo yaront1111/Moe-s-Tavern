@@ -326,6 +326,17 @@ empty. A dirty Git tree, a change since baseline,
 not establish a current-session TOOL witness. File declarations and completed-step reports
 still contribute to ASSERTED scope.
 
+Serena's `replace_content`, `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol`,
+`create_text_file` and its optional line editors `delete_lines`, `replace_lines` and
+`insert_at_line` witness their `relative_path`; the older `replace_regex` still counts for older
+Serena installs. Three tools must also show the change in their result text. `safe_delete_symbol`
+witnesses its `relative_path` only on its `OK` answer; a `Cannot delete` answer changed nothing.
+`replace_in_files` witnesses exactly the files its applied `Replaced N occurrence(s) in M
+file(s):` summary lists; a dry run lists none. `rename_symbol` witnesses its declaring
+`relative_path` only: its result names no other file, so a contested file that it changed as a
+reference gets no witness. Such a file lands only after the built-in Edit tool touches it, for
+example an edit away and back that leaves its bytes unchanged.
+
 Under the default `skip-untouched` policy, a contested path without that witness remains held
 while another nonterminal task declares it. A peer becoming idle or its CLI exiting does not
 by itself remove the declaration. Resolve the task ownership through the normal Moe workflow

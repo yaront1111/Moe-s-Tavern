@@ -6792,15 +6792,24 @@ $DYNAMIC_CONTEXT"
         # Inline stream-json pretty-printer for --print mode (mirrors the
         # PowerShell launcher's parser): terse per-event lines for init /
         # tool_use / text / rate-limit / result; non-JSON lines pass through.
-        # It ALSO harvests the paths the model's editing tools wrote (Edit /
-        # Write / MultiEdit / NotebookEdit file_path|notebook_path, the Serena
-        # edit tools' relative_path) into
+        # It ALSO harvests the paths the model's editing tools wrote into
         # $MOE_TOOL_WRITES_FILE, TOP-relative -- the TOOL tier of the
         # post-flight attribution: a path this session's tools wrote is the
         # session's own even when a peer's plan also names it and even with
         # other workers active. Only complete assistant tool_use blocks can
         # supply an editing call, followed by its matching successful tool_result.
         # Partial stream events are display only; calls alone are not writes.
+        # What counts (ps1 twin: Get-MoeToolWrittenPaths / Complete-MoeToolWrite):
+        #   Edit / Write / MultiEdit / NotebookEdit: file_path|notebook_path;
+        #   Serena's single-file editors (old names kept for older installs,
+        #     and the optional line editors): relative_path;
+        #   safe_delete_symbol: relative_path, only on its 'OK' (a 'Cannot
+        #     delete' answer changed nothing);
+        #   rename_symbol: its declaring relative_path only, on 'Successfully
+        #     renamed'. The result names no referencing file, so those get no
+        #     witness (documented gap);
+        #   replace_in_files: exactly the files its applied summary lists (a
+        #     dry run or a failed guard lists none).
         # Absolute paths outside the repo are dropped
         # with a WARN. Codex/gemini/grok have no such stream: their TOOL set is
         # empty (documented).
@@ -6817,7 +6826,11 @@ rel = os.environ.get('MOE_GIT_REL') or ''
 serena_root = (os.environ.get('MOE_SERENA_PROJECT_ROOT') or '').replace('\\', '/').rstrip('/')
 CI = sys.platform in ('win32', 'darwin')
 WRITE_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
-SERENA_TOOLS = ('replace_symbol_body', 'insert_after_symbol', 'insert_before_symbol', 'create_text_file', 'replace_regex')
+SERENA_TOOLS = ('replace_symbol_body', 'insert_after_symbol', 'insert_before_symbol', 'create_text_file', 'replace_regex',
+                'replace_content', 'delete_lines', 'replace_lines', 'insert_at_line',
+                'rename_symbol', 'safe_delete_symbol', 'replace_in_files')
+REPLACED_HEADER = re.compile(r'^Replaced \d+ ' + re.escape('occurrence(s) in') + r' \d+ ' + re.escape('file(s):') + '$')
+REPLACED_FILE = re.compile(r'^  (.+): \d+$')
 def w(s):
     sys.stdout.write(s); sys.stdout.flush()
 def base_name(n):
@@ -6844,20 +6857,63 @@ def to_top_rel(raw):
     if not p or any(seg == '..' for seg in p.split('/')):
         return None
     return rel + p
-def harvest(name, inp):
+def result_text(block):
+    # The tool_result text: a string, or the text parts of a [{type:text}]
+    # list (how Claude Code reports MCP results). Serena wraps an edit that
+    # added diagnostics as {"result": <text>, "diagnostics...": ...}.
+    c = block.get('content')
+    if isinstance(c, list):
+        c = '\n'.join(p['text'] for p in c if isinstance(p, dict) and p.get('type') == 'text' and isinstance(p.get('text'), str))
+    if not isinstance(c, str):
+        return ''
+    c = c.strip()
+    if c.startswith('{'):
+        try:
+            d = json.loads(c)
+        except Exception:
+            d = None
+        if isinstance(d, dict) and isinstance(d.get('result'), str):
+            c = d['result'].strip()
+    return c
+def serena_changed(n, inp, block):
+    # The relative paths a Serena call demonstrably changed. Fail closed: a
+    # TOOL witness beats a peer's declaration, so a result that does not
+    # prove the edit witnesses nothing.
+    rp = inp.get('relative_path')
+    if n not in ('safe_delete_symbol', 'rename_symbol', 'replace_in_files'):
+        return [rp]
+    text = result_text(block)
+    if n == 'safe_delete_symbol':
+        return [rp] if text == 'OK' else []
+    if n == 'rename_symbol':
+        # The result names no file: the declaring file is witnessed, the
+        # referencing files it rewrote are not (documented gap).
+        return [rp] if text.startswith('Successfully renamed') else []
+    lines = text.splitlines()
+    if not lines or not REPLACED_HEADER.match(lines[0]):
+        return []
+    out = []
+    for ln in lines[1:]:
+        m = REPLACED_FILE.match(ln)
+        if not m:
+            break
+        out.append(m.group(1))
+    return out
+def harvest(name, inp, block):
     if not harvest_path or not isinstance(inp, dict):
         return
     n = base_name(name)
     if n in WRITE_TOOLS:
         raws = [inp.get('file_path'), inp.get('notebook_path')]
     elif n in SERENA_TOOLS:
-        # Serena resolves relative_path against ITS project root (the
-        # serenaProject override can point outside this Moe project): join it
-        # there first so the harvest maps the REAL file -- exactly what the
-        # ps1 twin's Add-MoeToolWrittenPath does. Absolute results outside the
-        # repo are then dropped by to_top_rel with the usual WARN.
+        # Serena resolves relative_path (and its summary paths) against ITS
+        # project root (the serenaProject override can point outside this Moe
+        # project): join it there first so the harvest maps the REAL file --
+        # exactly what the ps1 twin's Get-MoeToolWrittenPaths does. Absolute
+        # results outside the repo are then dropped by to_top_rel with the
+        # usual WARN.
         raws = []
-        for raw0 in [inp.get('relative_path')]:
+        for raw0 in serena_changed(n, inp, block):
             if isinstance(raw0, str) and raw0.strip() and serena_root:
                 p0 = raw0.strip().replace('\\', '/')
                 if not (p0.startswith('/') or re.match(r'^[A-Za-z]:/', p0)):
@@ -6899,7 +6955,7 @@ def finish_edit(block):
     value = pending_edits.pop(identifier)
     finished_edits.add(identifier)
     if value is not None and block.get('is_error', False) is False:
-        harvest(*value)
+        harvest(value[0], value[1], block)
 for line in sys.stdin:
     line = line.rstrip('\n')
     if not line.strip():
@@ -6907,6 +6963,8 @@ for line in sys.stdin:
     try:
         evt = json.loads(line)
     except Exception:
+        evt = None
+    if not isinstance(evt, dict):
         w(line + '\n'); continue
     t = evt.get('type')
     if t == 'system' and evt.get('subtype') == 'init':
@@ -6953,7 +7011,10 @@ for line in sys.stdin:
         msg = evt.get('message') or {}
         for blk in (msg.get('content') or []):
             if isinstance(blk, dict) and blk.get('type') == 'tool_result':
-                finish_edit(blk)
+                try:
+                    finish_edit(blk)
+                except Exception:
+                    pass
     elif t == 'rate_limit_event':
         rl = evt.get('rate_limit_info') or {}
         tag = 'OVERAGE' if rl.get('isUsingOverage') else rl.get('status')

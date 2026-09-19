@@ -1375,6 +1375,37 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         "echo {`"type`":`"assistant`",`"message`":{`"content`":[{`"type`":`"tool_use`",`"id`":`"t2`",`"name`":`"Edit`",`"input`":{`"file_path`":`"%MOE_PROJECT_PATH:\=/%/tool-edited.txt`",`"old_string`":`"a`",`"new_string`":`"b`"}}]}}`r`n" +
         "echo {`"type`":`"user`",`"message`":{`"content`":[{`"type`":`"tool_result`",`"tool_use_id`":`"t2`",`"is_error`":false,`"content`":`"ok`"}]}}`r`n" +
         "exit /b 0`r`n")
+    # Serena emitter (scenario K2): writes six files, then replays
+    # serena-stream.jsonl, the same transcript as postflight.sh's SERENA_CLI:
+    # Serena's current editing tools with Serena's own result texts, each a
+    # complete tool_use plus its successful matching tool_result. refused.txt
+    # is named only by calls that changed nothing.
+    $serenaStreamJsonl = Join-Path $tempRoot 'serena-stream.jsonl'
+    Set-Content -Path $serenaStreamJsonl -Encoding ASCII -Value @'
+{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"model":"fake"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-content","name":"mcp__serena__replace_content","input":{"relative_path":"contested.txt","needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-content","is_error":false,"content":[{"type":"text","text":"OK"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-text","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-text","is_error":false,"content":"Replaced 3 occurrence(s) in 2 file(s):\n  multi-a.txt: 2\n  multi-b.txt: 1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-diag","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","relative_path":"sub dir"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-diag","is_error":false,"content":[{"type":"text","text":"{\"result\": \"Replaced 1 occurrence(s) in 1 file(s):\\n  sub dir\\\\diag.txt: 1\", \"diagnostics[warning-or-higher]\": {\"sub dir\\\\diag.txt\": {}}}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename","name":"mcp__serena__rename_symbol","input":{"name_path":"Foo","relative_path":"rename-decl.txt","new_name":"Bar"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename","is_error":false,"content":[{"type":"text","text":"Successfully renamed 'Foo' to 'Bar' (1 changes applied)"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-delete","name":"mcp__serena__safe_delete_symbol","input":{"name_path_pattern":"Baz","relative_path":"refused.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-delete","is_error":false,"content":[{"type":"text","text":"Cannot delete, the symbol Baz is referenced in: {\"multi-a.txt\": [3]}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-dry-run","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","dry_run":true}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-dry-run","is_error":false,"content":[{"type":"text","text":"Found 1 occurrence(s) in 1 file(s). DRY RUN - no changes were applied.\n\nrefused.txt (1 occurrence(s)):\n  refused.txt: 1"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename-failed","name":"mcp__serena__rename_symbol","input":{"name_path":"Baz","relative_path":"refused.txt","new_name":"Qux"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename-failed","is_error":false,"content":[{"type":"text","text":"Error executing tool: ValueError: Renaming symbol 'Baz' to 'Qux' resulted in no changes being applied"}]}]}}
+{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"end_turn"}
+'@
+    $serenaStreamCmd = Join-Path $tempRoot 'serena-stream.cmd'
+    Set-Content -Path $serenaStreamCmd -Encoding ASCII -Value ("@echo off`r`n" +
+        "mkdir `"%MOE_PROJECT_PATH%\sub dir`"`r`n" +
+        "for %%f in (contested.txt multi-a.txt multi-b.txt rename-decl.txt refused.txt) do echo serena> `"%MOE_PROJECT_PATH%\%%f`"`r`n" +
+        "echo serena> `"%MOE_PROJECT_PATH%\sub dir\diag.txt`"`r`n" +
+        "type `"%~dp0serena-stream.jsonl`"`r`n" +
+        "exit /b 0`r`n")
     # CAS-contention hook (MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF): moves the
     # branch tip between commit-tree and update-ref by committing a peer file.
     $hookPeerCmd = Join-Path $tempRoot 'hook-peer.cmd'
@@ -2000,6 +2031,37 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
                 }
                 $scopeScenariosRun++
                 Write-Host '[scenario K] ok'
+
+                # Scenario K2 — Serena's current editing tools are TOOL
+                # evidence too (same fixture as postflight.sh). Six asserted
+                # paths are also peer-declared (contested): under the default
+                # attribution.contested=skip-untouched each lands only with a
+                # TOOL witness. refused.txt, named only by calls that changed
+                # nothing, stays out.
+                Write-Host "[scenario K2] Serena's current editing tools witness contested paths; no-op results do not"
+                $scopeK2Dir = Join-Path $tempRoot 'scope-k2'
+                New-ScopeProject $scopeK2Dir @('owned-a.txt', 'contested.txt', 'multi-a.txt', 'multi-b.txt', 'rename-decl.txt', 'refused.txt', 'sub dir/diag.txt')
+                Set-Content -Path (Join-Path $scopeK2Dir 'owned-a.txt') -Value 'owned-a'
+                $scopeK2Out = Join-Path $tempRoot 'scope-k2.out'
+                $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                $env:FAKE_SCOPE_PEER_DECLARED = 'contested.txt:task-peer,multi-a.txt:task-peer,multi-b.txt:task-peer,rename-decl.txt:task-peer,refused.txt:task-peer,sub dir/diag.txt:task-peer'
+                try {
+                    Assert-ScopeRun 'K2' (Invoke-GateWrapper $scopeK2Dir $scopeK2Out -Command $serenaStreamCmd) $scopeK2Out
+                } finally {
+                    Remove-Item Env:FAKE_SCOPE_PEERS_ACTIVE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_SCOPE_PEER_DECLARED -ErrorAction SilentlyContinue
+                }
+                if ((Get-CommittedPaths $scopeK2Dir) -ne 'contested.txt multi-a.txt multi-b.txt owned-a.txt rename-decl.txt sub dir/diag.txt') {
+                    Get-Content $scopeK2Out -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO K2 FAILED: expected owned-a.txt + every Serena-witnessed contested path; got [$(Get-CommittedPaths $scopeK2Dir)]"
+                }
+                if (@(& git -C $scopeK2Dir status --porcelain 2>$null) -notcontains '?? refused.txt') { throw 'SCENARIO K2 FAILED: refused.txt must stay untracked' }
+                if (-not (Get-Content -Raw -Path $scopeK2Out).Contains('[skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)')) {
+                    Get-Content $scopeK2Out -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO K2 FAILED: expected [skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario K2] ok'
 
                 # Scenario L — declaration tiers. An ASSERTED path that was
                 # already dirty at baseline and never changed is still committed
@@ -3073,8 +3135,8 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 29) {
-                    throw "Expected 29 commit-scope scenarios (A-V, M2, M3, X-Z, AA, AB); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 30) {
+                    throw "Expected 30 commit-scope scenarios (A-V, K2, M2, M3, X-Z, AA, AB); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

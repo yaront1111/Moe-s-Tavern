@@ -205,6 +205,15 @@ for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (
   require_both "runner reattach prose" "$prose"
 done
 
+# Serena TOOL-tier tools: the editing calls whose successful result is TOOL
+# evidence (old names kept for older Serena installs), and the replace_in_files
+# summary header both wrappers parse.
+for tool in replace_symbol_body insert_after_symbol insert_before_symbol create_text_file replace_regex \
+  replace_content replace_in_files rename_symbol safe_delete_symbol delete_lines replace_lines insert_at_line \
+  'occurrence(s) in'; do
+  require_both "Serena TOOL-tier tools" "$tool"
+done
+
 # Deferred features must not be advertised by either wrapper.
 for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$SH"; then fail "deferred setting '$deferred' is referenced by moe-agent.sh"; fi

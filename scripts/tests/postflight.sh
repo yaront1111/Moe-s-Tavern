@@ -1940,6 +1940,43 @@ printf '%s\n' '{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"en
 exit 0
 EOF
   chmod +x "$STREAM_CLI"
+  # SERENA_CLI (scenario K2) writes six files, then streams Serena's current
+  # editing tools the way Claude Code reports MCP calls: a complete tool_use,
+  # then a successful tool_result whose content is a [{type:text,text}] list
+  # (once a plain string). The texts are Serena's own: replace_content 'OK',
+  # replace_in_files' applied summary (plain, and inside the diagnostics JSON
+  # envelope with a Windows path), a rename_symbol success. refused.txt is
+  # named only by calls that changed nothing: a safe_delete_symbol refusal, a
+  # replace_in_files dry run and a failed rename. Same transcript as the ps1
+  # harness's serena-stream.jsonl.
+  SERENA_CLI="$TMP_DIR/serena-cli"
+  cat > "$SERENA_CLI" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$MOE_PROJECT_PATH/sub dir"
+for f in contested.txt multi-a.txt multi-b.txt rename-decl.txt refused.txt 'sub dir/diag.txt'; do
+  echo serena > "$MOE_PROJECT_PATH/$f"
+done
+cat <<'JSONL'
+{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"model":"fake"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-content","name":"mcp__serena__replace_content","input":{"relative_path":"contested.txt","needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-content","is_error":false,"content":[{"type":"text","text":"OK"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-text","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-text","is_error":false,"content":"Replaced 3 occurrence(s) in 2 file(s):\n  multi-a.txt: 2\n  multi-b.txt: 1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-diag","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","relative_path":"sub dir"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-diag","is_error":false,"content":[{"type":"text","text":"{\"result\": \"Replaced 1 occurrence(s) in 1 file(s):\\n  sub dir\\\\diag.txt: 1\", \"diagnostics[warning-or-higher]\": {\"sub dir\\\\diag.txt\": {}}}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename","name":"mcp__serena__rename_symbol","input":{"name_path":"Foo","relative_path":"rename-decl.txt","new_name":"Bar"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename","is_error":false,"content":[{"type":"text","text":"Successfully renamed 'Foo' to 'Bar' (1 changes applied)"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-delete","name":"mcp__serena__safe_delete_symbol","input":{"name_path_pattern":"Baz","relative_path":"refused.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-delete","is_error":false,"content":[{"type":"text","text":"Cannot delete, the symbol Baz is referenced in: {\"multi-a.txt\": [3]}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-dry-run","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","dry_run":true}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-dry-run","is_error":false,"content":[{"type":"text","text":"Found 1 occurrence(s) in 1 file(s). DRY RUN - no changes were applied.\n\nrefused.txt (1 occurrence(s)):\n  refused.txt: 1"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename-failed","name":"mcp__serena__rename_symbol","input":{"name_path":"Baz","relative_path":"refused.txt","new_name":"Qux"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename-failed","is_error":false,"content":[{"type":"text","text":"Error executing tool: ValueError: Renaming symbol 'Baz' to 'Qux' resulted in no changes being applied"}]}]}}
+{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"end_turn"}
+JSONL
+exit 0
+EOF
+  chmod +x "$SERENA_CLI"
 
   committed_paths() { # $1 = dir -- space-terminated sorted file list of HEAD
     git -C "$1" show --pretty=format: --name-only HEAD | sed '/^$/d' | sort | tr '\n' ' '
@@ -2269,6 +2306,35 @@ EOF
   fi
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario K] ok"
+
+  # Scenario K2 -- Serena's current editing tools are TOOL evidence too. Six
+  # asserted paths are also peer-declared (contested): under the default
+  # attribution.contested=skip-untouched each lands only with a TOOL witness.
+  # replace_content, replace_in_files (both content shapes, the diagnostics
+  # envelope, a Windows path with a space) and rename_symbol's declaring file
+  # land; refused.txt, named only by calls that changed nothing, stays out.
+  echo "[scenario K2] Serena's current editing tools witness contested paths; no-op results do not"
+  SCOPE_K2_DIR="$TMP_DIR/scope-k2"
+  make_scope_project "$SCOPE_K2_DIR" '["owned-a.txt","contested.txt","multi-a.txt","multi-b.txt","rename-decl.txt","refused.txt","sub dir/diag.txt"]'
+  echo owned-a > "$SCOPE_K2_DIR/owned-a.txt"
+  set +e
+  FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='contested.txt:task-peer,multi-a.txt:task-peer,multi-b.txt:task-peer,rename-decl.txt:task-peer,refused.txt:task-peer,sub dir/diag.txt:task-peer' \
+    run_scope_wrapper "$SCOPE_K2_DIR" "$TMP_DIR/scope-k2.out" "$SERENA_CLI"
+  scope_k2_code=$?
+  set -e
+  [ "$scope_k2_code" -eq 0 ] || scope_fail K2 "wrapper exited with $scope_k2_code" "$TMP_DIR/scope-k2.out"
+  scope_k2_files="$(committed_paths "$SCOPE_K2_DIR")"
+  if [ "$scope_k2_files" != "contested.txt multi-a.txt multi-b.txt owned-a.txt rename-decl.txt sub dir/diag.txt " ]; then
+    scope_fail K2 "expected owned-a.txt + every Serena-witnessed contested path; got [$scope_k2_files]" "$TMP_DIR/scope-k2.out"
+  fi
+  if ! git -C "$SCOPE_K2_DIR" status --porcelain | grep -q '^?? refused\.txt$'; then
+    scope_fail K2 "refused.txt must stay untracked" "$TMP_DIR/scope-k2.out"
+  fi
+  if ! grep -Fq '[skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' "$TMP_DIR/scope-k2.out"; then
+    scope_fail K2 "expected '[skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" "$TMP_DIR/scope-k2.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario K2] ok"
 
   # Scenario L -- the two-tier split: an ASSERTED path dirty at baseline and
   # unchanged is still committed (declaration wins -- the b54b5609 stranding),
@@ -3652,8 +3718,8 @@ EOF
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 29 ]; then
-    echo "Expected 29 commit-scope scenarios (A-P, M2, M3, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 30 ]; then
+    echo "Expected 30 commit-scope scenarios (A-P, K2, M2, M3, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

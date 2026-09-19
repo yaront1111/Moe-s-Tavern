@@ -4496,8 +4496,56 @@ function Invoke-MoeTeardownRescue {
     } catch {}
 }
 
+# A tool_result's text: its string content, or the text parts of a
+# [{type:text}] list (how Claude Code reports MCP results), unwrapping the
+# {"result": ...} envelope Serena returns when an edit added diagnostics.
+function Get-MoeToolResultText($Result) {
+    $content = Get-MoeProp $Result 'content'
+    $text = ''
+    if ($content -is [string]) {
+        $text = $content
+    } elseif ($null -ne $content) {
+        $parts = foreach ($part in @($content)) {
+            $t = Get-MoeProp $part 'text'
+            if ((Get-MoeProp $part 'type') -ceq 'text' -and $t -is [string]) { $t }
+        }
+        $text = @($parts) -join "`n"
+    }
+    $text = $text.Trim()
+    if ($text.StartsWith('{', [StringComparison]::Ordinal)) {
+        try {
+            $inner = Get-MoeProp ($text | ConvertFrom-Json -ErrorAction Stop) 'result'
+            if ($inner -is [string]) { $text = $inner.Trim() }
+        } catch {}
+    }
+    return $text
+}
+
+# The Serena-relative paths a result-gated Serena editor changed, failing
+# closed (a TOOL witness beats a peer's declaration): safe_delete_symbol only
+# on 'OK' (a 'Cannot delete' answer changed nothing), rename_symbol only its
+# declaring file on 'Successfully renamed' (the result names no referencing
+# file: documented gap), replace_in_files exactly the files its applied summary
+# lists (a dry run or a failed guard lists none). Twin of the sh parser's
+# serena_changed.
+function Get-MoeSerenaResultPaths([string]$Tool, $RelativePath, $Result) {
+    $text = Get-MoeToolResultText $Result
+    if ($Tool -eq 'safe_delete_symbol' -or $Tool -eq 'rename_symbol') {
+        $ok = if ($Tool -eq 'safe_delete_symbol') { $text -ceq 'OK' } else { $text.StartsWith('Successfully renamed', [StringComparison]::Ordinal) }
+        if ($ok -and $RelativePath -is [string] -and $RelativePath) { Write-Output $RelativePath }
+        return
+    }
+    $lines = @($text -split "`n")
+    if ($lines[0] -cnotmatch ('^Replaced \d+ ' + [regex]::Escape('occurrence(s) in') + ' \d+ ' + [regex]::Escape('file(s):') + '$')) { return }
+    foreach ($ln in ($lines | Select-Object -Skip 1)) {
+        if ($ln -cmatch '^  (.+): \d+$') { Write-Output $Matches[1] } else { break }
+    }
+}
+
 # Stream-json harvest (claude only): record the paths the CLI's tools wrote.
-function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
+# The result-gated Serena editors name what they changed only in their tool
+# result: they yield paths only when Complete-MoeToolWrite passes $Result.
+function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput, $Result = $null) {
     if (-not $ToolName -or $null -eq $ToolInput) { return }
     if ($null -eq $moeGit) { return }
     $paths = @()
@@ -4505,9 +4553,12 @@ function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
     if ($ToolName -match '^(Edit|Write|MultiEdit|NotebookEdit)$') {
         $kind = 'abs'
         foreach ($k in @('file_path', 'notebook_path')) { $v = Get-MoeProp $ToolInput $k; if ($v -is [string] -and $v) { $paths += $v } }
-    } elseif ($ToolName -match '(^|__)(replace_symbol_body|insert_after_symbol|insert_before_symbol|create_text_file|replace_regex)$') {
+    } elseif ($ToolName -match '(^|__)(replace_symbol_body|insert_after_symbol|insert_before_symbol|create_text_file|replace_regex|replace_content|delete_lines|replace_lines|insert_at_line)$') {
         $kind = 'serena'
         $v = Get-MoeProp $ToolInput 'relative_path'; if ($v -is [string] -and $v) { $paths += $v }
+    } elseif ($ToolName -match '(^|__)(rename_symbol|safe_delete_symbol|replace_in_files)$') {
+        $kind = 'serena'
+        $paths = @(Get-MoeSerenaResultPaths $Matches[2] (Get-MoeProp $ToolInput 'relative_path') $Result)
     } else {
         return
     }
@@ -4530,9 +4581,16 @@ function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
 # paths (never tool input/result content), and publish them after its successful
 # matching result. Terminal IDs prevent duplicate streamed/full messages from
 # resurrecting a failed write. Overflow holds further evidence for this session.
+# A result-gated Serena call keeps only its tool name (tagged by a NUL, which no
+# path contains) and relative_path; Complete-MoeToolWrite resolves its paths.
 function Register-MoeToolWrite([string]$Id, [string]$ToolName, $ToolInput) {
     if (-not $Id -or $Id.Length -gt 256 -or $script:MoeToolHarvestSaturated -or $script:MoeToolSettled.ContainsKey($Id)) { return }
-    $paths = @(Get-MoeToolWrittenPaths $ToolName $ToolInput | Select-Object -First 501)
+    if ($null -ne $ToolInput -and $ToolName -match '(^|__)(rename_symbol|safe_delete_symbol|replace_in_files)$') {
+        $rp = Get-MoeProp $ToolInput 'relative_path'
+        $paths = @("`0$ToolName", $(if ($rp -is [string]) { $rp } else { '' }))
+    } else {
+        $paths = @(Get-MoeToolWrittenPaths $ToolName $ToolInput | Select-Object -First 501)
+    }
     if ($paths.Count -eq 0) { return }
     if ($paths.Count -gt 500 -or $script:MoeToolPending.Count -ge 2048 -or $script:MoeToolSettled.Count -ge 8192) {
         $script:MoeToolHarvestSaturated = $true; $script:MoeToolPending.Clear(); return
@@ -4553,6 +4611,11 @@ function Complete-MoeToolWrite($Result) {
     $failed = Get-MoeProp $Result 'is_error'
     $hasFlag = if ($Result -is [System.Collections.IDictionary]) { $Result.Contains('is_error') } else { $null -ne $Result.PSObject.Properties['is_error'] }
     if ($hasFlag -and ($failed -isnot [bool] -or $failed)) { return }
+    if ($paths[0].StartsWith("`0", [StringComparison]::Ordinal)) {
+        # A malformed result witnesses nothing and never throws into the stream loop.
+        try { $paths = @(Get-MoeToolWrittenPaths $paths[0].Substring(1) @{ relative_path = $paths[1] } $Result | Select-Object -First 501) } catch { $paths = @() }
+        if ($paths.Count -gt 500) { $script:MoeToolHarvestSaturated = $true; $script:MoeToolPending.Clear(); return }
+    }
     foreach ($path in $paths) { $script:MoeToolWritten[(Get-MoePathKey $path)] = $path }
 }
 

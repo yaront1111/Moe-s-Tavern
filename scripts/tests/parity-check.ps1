@@ -94,6 +94,11 @@ $required = [ordered]@{
     'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]')
     'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this wrapper pinned no such reconciling attempt; nothing to reattach.')
     'claimed prompt contract' = @('the wrapper will pick up the next task in a fresh session', 'INTERACTIVE session: this TUI stays open after you stop')
+    # Serena TOOL-tier tools: the editing calls whose successful result is TOOL
+    # evidence (old names kept for older Serena installs), and the
+    # replace_in_files summary header both wrappers parse.
+    'Serena TOOL-tier tools' = @('replace_symbol_body', 'insert_after_symbol', 'insert_before_symbol', 'create_text_file', 'replace_regex',
+        'replace_content', 'replace_in_files', 'rename_symbol', 'safe_delete_symbol', 'delete_lines', 'replace_lines', 'insert_at_line', 'occurrence(s) in')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {
