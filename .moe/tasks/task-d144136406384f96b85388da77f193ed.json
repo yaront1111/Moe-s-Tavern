@@ -104,8 +104,8 @@
     }
   ],
   "planRevision": 15,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-8df1fc47",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,12 +124,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:16:35.674Z",
-  "updatedAt": "2026-09-19T13:25:03.913Z",
+  "updatedAt": "2026-09-19T14:40:53.829Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:40:08.713Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-09-19T14:40:53.829Z",
+    "wallClockMs": 21645116
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
@@ -193,7 +195,9 @@
     ".moe/tasks/task-a5fb02e977f74ea2802f24053c44a1c6.json",
     ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
     ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
-    ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json"
+    ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+    ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+    ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json"
   ],
   "completionSummary": "Both launchers' TOOL-tier harvest now counts Serena's current editing tools and keeps the old names (replace_symbol_body, insert_after/before_symbol, create_text_file, replace_regex).\nRules:\n- replace_content and the optional delete_lines, replace_lines and insert_at_line witness their relative_path on any non-error result.\n- safe_delete_symbol witnesses its relative_path only on 'OK'. Its 'Cannot delete' refusal is a normal result and witnesses nothing.\n- rename_symbol witnesses only its declaring relative_path, and only on 'Successfully renamed'. Its referencing files are the documented gap.\n- replace_in_files witnesses exactly the files listed after its 'Replaced N occurrence(s) in M file(s):' header, which must be the first line. A dry run or failed guard witnesses nothing.\n- Result text may be a string or a [{type:text}] list (the real MCP shape), and Serena's diagnostics JSON envelope is unwrapped. Anything malformed fails closed.\nsh (moe-agent.sh STREAM_JSON_PARSER): new result_text and serena_changed; the tool_result call site is wrapped in try/except. Also fixed a pre-existing crash: a non-object JSON line killed the parser.\nps1 (moe-agent.ps1):\n- New Get-MoeToolResultText and Get-MoeSerenaResultPaths.\n- Register stores a gated call as a NUL-tagged (tool, relative_path) pair, which Complete-MoeToolWrite resolves inside try/catch.\n- The 256-char id limit, the 500/2048/8192 caps, the conflicting-repeat rule and is_error handling are unchanged.\nTests: K2 is in both harnesses, with 6 contested paths plus refused.txt (named only by a refusal, a dry run and a failed rename). It was RED on the old wrappers on sh, pwsh and PS 5.1 ('got [owned-a.txt]') and is green now.\nParity: parity-check.{sh,ps1} pin all 12 names plus 'occurrence(s) in'. Dropping replace_content fails both on all engines.\nDocs: CONFIGURATION.md 'Session touch evidence'.\nVerified: full postflight.sh PASS; postflight.ps1 PASS on pwsh and PS 5.1 (30 scope scenarios each); importee-guard.ps1 48/48 on",
   "commits": [
@@ -446,6 +450,24 @@
       "treeId": "788d30f49d4c70177d2adddf1bf524b616a11a8d",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "e878b307cc8def38b100b22091051ae0e88b7a0b",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8df1fc47@2026-09-19T13:25:04Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+        ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json"
+      ],
+      "recordedBy": "qa-8df1fc47",
+      "recordedAt": "2026-09-19T13:25:06.490Z",
+      "treeId": "f18df4fcd38c156d9d2d90846d1326e3da7c2106",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -461,8 +483,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-2fd44536@2026-09-19T13:07:02Z",
-    "at": "2026-09-19T13:07:05.911Z"
+    "sessionId": "qa-8df1fc47@2026-09-19T13:25:04Z",
+    "at": "2026-09-19T13:25:06.490Z"
   },
   "priorHandoffs": [
     {
@@ -481,5 +503,8 @@
       "releasedBy": "governor-710f6d69",
       "reason": "Confirmed crash: qa-7100be29 has no wrapper or CLI process on the host (old moes fleet gone ~13:00Z). Released with the human's approval so qa-2fd44536 can take the review now instead of waiting for the 30-min review-stale sweep."
     }
-  ]
+  ],
+  "completedAt": "2026-09-19T14:40:53.829Z",
+  "reviewCompletedAt": "2026-09-19T14:40:53.829Z",
+  "reviewSummary": "Verified completion commit 8260852, pushed on origin/moe/work-2026-09-13: the 7 planned paths plus 2 board records. The bytes I tested in scratch equal those blobs. Checked the installed Serena 1.7.0 source: replace_in_files lists paths relative to the project root, its dry run has no 'Replaced' header, rename_symbol raises on 0 changes, and the line editors take relative_path.\nDoD1: read both twins. A 99-line probe transcript gave identical witness sets on sh, pwsh and PS 5.1. It covered junk JSON lines, both content shapes, the diagnostics envelope, a dry run, a refusal, a failed rename, conflicting ids, malformed results, and paths with ': 1', spaces or backslashes. The old names and line editors count. The pre-fix sh parser crashed on a '[1, 2]' line.\nDoD2: ran K2 alone, using the worker's anchor-based generators after reading them. The pre-fix wrappers FAIL with 'got [owned-a.txt]' and '[skip] contested.txt MOE_ATTR_CONTESTED_UNTOUCHED' on sh (Git Bash), Linux (WSL Ubuntu 24.04), pwsh and PS 5.1. The new wrappers pass on all four. K2 catches two gate mutants (safe_delete always counts; rename always counts) on sh, pwsh and PS 5.1.\nDoD3:\n- Full postflight.sh PASS: frozen 69, scope 30, 3182 s.\n- postflight.ps1 PASS on pwsh (478 s) and PS 5.1 (495 s), 30 scope scenarios each.\n- parity-check PASS on sh, pwsh and PS 5.1. Dropping replace_content fails all three.\n- importee-guard.ps1 48/48 on both engines. node --test 60/60 and 61/61.\nRails: no forbidden patterns, no MCP or .moe contract change.\nNot pinned by any harness arm, but they fail closed and the probes prove them:\n- safe_delete 'OK', the line editors, and the old names (parity pins only the names).\n- The per-file stop rule. A break-to-continue mutant survives because the header-first rule already blocks the dry run."
 }
