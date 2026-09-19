@@ -9,8 +9,8 @@
 // target ref and recording the landing asks on its next pass whether the
 // candidate already landed, and needs an answer that cannot change under it.
 //
-// REPORTED, NEVER VERIFIED. The daemon is state-only and never runs git: it
-// performs no landing and inspects no ref. Recording checks the shape of each
+// REPORTED, NEVER VERIFIED. The daemon is state-only: it performs no landing
+// and never checks a receipt against git. Recording checks the shape of each
 // field and that the candidate exists, nothing about the target itself, so a
 // receipt is not independent proof that the bytes are where it says. Nor does
 // it refuse a target other than the candidate's deliveryTarget: refusing a

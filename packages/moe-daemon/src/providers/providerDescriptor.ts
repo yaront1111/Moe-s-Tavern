@@ -4,9 +4,10 @@
  * WHY THIS FILE IS HERE, AND WHY THAT IS PROVISIONAL.
  * It lives in the daemon package for exactly one reason: TypeScript and the
  * vitest suite that pins it already live here. That is a convenience, not a
- * design decision. The daemon is state-only -- it does not launch agents and
- * never runs git, and it MUST NOT start doing either because a type describing
- * launches happens to sit in its tree. Where a provider registry belongs if a
+ * design decision. The daemon is state-only -- it does not launch agents or
+ * write git state (its one git call is a read-only status fingerprint), and it
+ * MUST NOT start doing either because a type describing launches happens to
+ * sit in its tree. Where a provider registry belongs if a
  * staged migration ever happens is one of the questions answered -- as a
  * recommendation, not a decision -- in
  * docs/plans/2026-09-11-provider-registry-spike.md.

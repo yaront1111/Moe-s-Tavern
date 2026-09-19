@@ -14,9 +14,9 @@ import { MAX_PUSH_RESULT_CHARS, recordDeliveryReceipt, validateDeliveryReceiptPa
 // moves the target ref, then reports the landing here. A coding agent has no
 // landing to report, and a receipt it sent would record one nobody performed.
 //
-// REPORTED, NOT VERIFIED. The daemon runs no git and reads no ref, so a receipt
-// is what the wrapper said about a landing it performed, not proof that the
-// bytes are where it says.
+// REPORTED, NOT VERIFIED. The daemon never checks the report against git, so a
+// receipt is what the wrapper said about a landing it performed, not proof that
+// the bytes are where it says.
 //
 // `duplicate` IS THE REPLAY SIGNAL. false: this call recorded the landing.
 // true: the candidate's receipt already said exactly this, and nothing was
@@ -38,7 +38,7 @@ export function recordDeliveryReceiptTool(_state: StateManager): ToolDefinition 
     description:
       'Wrapper-called; not for agents. Record a DeliveryReceipt: where the agent wrapper REPORTS one Candidate\'s bytes landed (target ref, where it pointed before and after, the landed revision, and the push result or null when no push was required), as one file at .moe/receipts/<id>.json. ' +
       'At most one receipt per candidate, never rewritten: an identical repeat report returns the stored receipt with duplicate:true and writes nothing, which is how a wrapper replaying a landing after a crash recognizes it as already recorded. A report that differs in any field is refused (DELIVERY_RECEIPT_CONFLICT), as is a candidate that already has two receipts on disk (DELIVERY_RECEIPT_AMBIGUOUS). ' +
-      'A new receipt needs an existing candidate (CANDIDATE_NOT_FOUND). The daemon never runs git and verifies nothing about the target: a receipt is a reported landing, not proof. ' +
+      'A new receipt needs an existing candidate (CANDIDATE_NOT_FOUND). The daemon never checks this report against git and verifies nothing about the target: a receipt is a reported landing, not proof. ' +
       `Revisions must be 40 hex; pushResult at most ${MAX_PUSH_RESULT_CHARS} chars. Other refusals: INVALID_INPUT / MISSING_REQUIRED. No ownership, status or attempt gate.`,
     inputSchema: {
       type: 'object',
@@ -53,11 +53,11 @@ export function recordDeliveryReceiptTool(_state: StateManager): ToolDefinition 
         },
         targetBefore: {
           type: 'string',
-          description: 'Where the target pointed before the landing: 40 hex, git\'s all-zero id when the ref did not exist. Recorded as reported; the daemon never reads the ref.',
+          description: 'Where the target pointed before the landing: 40 hex, git\'s all-zero id when the ref did not exist. Recorded as reported; the daemon never checks it against git.',
         },
         targetAfter: {
           type: 'string',
-          description: 'Where the target pointed after the landing: 40 hex. Recorded as reported; the daemon never reads the ref.',
+          description: 'Where the target pointed after the landing: 40 hex. Recorded as reported; the daemon never checks it against git.',
         },
         landedRevision: {
           type: 'string',

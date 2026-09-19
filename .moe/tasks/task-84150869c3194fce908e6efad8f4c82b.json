@@ -9,20 +9,90 @@
     "parity-check.{sh,ps1} pass and the sh twin's exec hand-over is unchanged"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED FIRST: a hot-reload arm in scripts/tests/postflight.ps1, the only harness that runs the ps1 wrapper. This task waits on task-d1441364, which edits the same two files, so find code by function name.\n\nArm 'hot reload keeps one wrapper process':\n1. Copy the repo's scripts/ into a temp root, plus docs/roles if the wrapper loads role docs from there, so the arm edits a COPY and never the live launcher.\n2. Run the copied moe-agent.ps1 with -Loop -PollInterval 1 against the existing fake proxy, with FAKE_CLAIM_MODE=idle and MOE_DISABLE_HEARTBEAT=1, via Start-Process -PassThru with redirected output.\n3. Wait for the first logged claim_next_task.\n4. Twice: append a comment line ('# reload N') to the copied moe-agent.ps1. Wait until the fake's deregister.log shows a 'wrapper_restart' deregister AND a later claim is logged. Then count wrapper processes: Win32_Process whose CommandLine contains the copied script path and whose executable is pwsh or powershell. The heartbeat job is disabled, so it is not counted.\n5. Stop the whole tree (taskkill /T /F), as the loop arms do.\n\nAssertions:\n(a) exactly 2 wrapper_restart deregisters;\n(b) exactly 1 wrapper process after EACH reload;\n(c) every claim_next_task across both reloads carries ONE runner identity (processStartedAt/host) — one process, one claim loop;\n(d) at least one claim after the second reload, so the seat keeps working.\n\nOn today's wrapper it must FAIL: each reload spawns `& $exe @args` and blocks, so (b) sees 2 and then 3 processes, and (c) sees three identities. Run it on pwsh 7 AND PS 5.1, launched from PowerShell, never from Git Bash, and paste both failures. The sh harness gets no arm: the sh twin execs in place and is unchanged by this task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "THE NON-NESTING HAND-OVER in scripts/moe-agent.ps1.\n\n1. Immediately after the param() block, before $ErrorActionPreference, add an in-process supervisor. Its comment must carry the why: df42861 kept the console but nested one blocked parent per reload (45 wrappers / 5.5 GB measured 2026-09-19); `&` on the script path re-reads the file, so each pass runs the bytes on disk now, and the previous pass has fully returned.\n\n     if (-not $global:MoeWrapperSupervised) {\n         $global:MoeWrapperSupervised = $true\n         try {\n             do {\n                 $global:MoeWrapperReload = $false; $global:LASTEXITCODE = 0\n                 & $PSCommandPath @PSBoundParameters\n                 $moeRc = $LASTEXITCODE\n             } while ($global:MoeWrapperReload)\n         } catch {\n             Write-Host \"wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_\" -ForegroundColor Yellow\n             $moeRc = 1\n         } finally { $global:MoeWrapperSupervised = $false }\n         exit $moeRc\n     }\n\n2. Every existing `exit N` in the body now returns N to this loop, which exits with it. The -Loop -NoLoop exit 2 and single-shot exits keep their codes. Ctrl+C stops the whole pipeline, so it never reloads.\n3. Replace the bottom-of-file hand-over (`& $moeRelaunchExe @moeRelaunchArgs; exit $LASTEXITCODE`) with `$global:MoeWrapperReload = $true; exit 0`. Keep the in-loop hash check, the deregister 'wrapper_restart' and the break exactly as they are.\n4. Delete $script:MoeWrapperHostExe and $script:MoeWrapperRelaunchArgs and their capture. Nothing else reads them; grep to confirm.\n5. Rewrite the hand-over comment block: one process and one console per seat, however many reloads.\n6. A side effect worth one sentence in that comment: the runner identity (<pid>@<start token>) now survives a reload, because the process is the same, so a held attempt can still reattach after a reload.\n\nError handling: a reload whose new parameter list rejects the old bound parameters, or whose file vanished, throws inside `&`. The supervisor's catch prints the same 'relaunch it by hand' line as today and exits 1 — the same outcome as today's failed child relaunch.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "PROCESS-GLOBAL STATE that a same-process rerun would otherwise accumulate or freeze. Both are in scripts/moe-agent.ps1.\n\n1. PowerShell.Exiting subscriber (Register-EngineEvent near the top). Each run would add another subscriber bound to its own, now dead, script scope. Before registering, run `Unregister-Event -SourceIdentifier PowerShell.Exiting -ErrorAction SilentlyContinue` (this process has no other subscriber to it), then register as today. Exactly one handler, the current run's, deregisters the current worker on window close.\n2. Add-Type of MoeFrozenGateProcess. A compiled type lives as long as the process, so after an in-process reload a CHANGED C# definition would silently keep the old code.\n   - Name the class after its definition: keep a placeholder in $script:MoeGateProcessDefinition, and set $script:MoeGateTypeName = 'MoeFrozenGateProcess' + the first 12 hex digits of SHA256(the definition text).\n   - Substitute that name into the definition, and have Initialize-MoeGateProcess test `$script:MoeGateTypeName -as [type]` before calling Add-Type.\n   - Create instances with New-Object -TypeName $script:MoeGateTypeName -ArgumentList @(...).\n   An unchanged definition reuses the loaded type. A changed one compiles a new name.\n3. Confirm everything else is per run and needs nothing: env vars are set each run and cleaned in the finally; the heartbeat Start-Job is stopped in the finally; the $global:OutputEncoding swap is restored inside Invoke-MoeRpc; TreatControlCAsInput=$false is idempotent. Say so in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY, sequentially, launched from PowerShell, with MOE_POSTFLIGHT_TIMEOUT_SEC=400.\n1. The new arm is green on pwsh 7 and on PS 5.1 (powershell -NoProfile -File scripts/tests/postflight.ps1, or isolate the arm while iterating).\n2. The full postflight.ps1 on pwsh 7 and PS 5.1. The frozen suite's gate arms (interrupt-int, integrity-batch, exit-tail and the rest) create the renamed gate type, and the loop arms stop the wrapper tree, so they exercise both halves.\n3. node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs. Both spawn the ps1 wrapper on Windows.\n4. pwsh -NoProfile -File scripts/tests/importee-guard.ps1 and powershell -NoProfile -File scripts/tests/importee-guard.ps1.\n5. Parity: bash scripts/tests/parity-check.sh, pwsh -NoProfile -File scripts/tests/parity-check.ps1, powershell -NoProfile -File scripts/tests/parity-check.ps1. Also confirm git diff shows no change to scripts/moe-agent.sh.\n6. For complete_task, the verification is the full postflight.ps1 on pwsh, with its PASS line as outputTail.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "SELF-REVIEW, posted as a task comment:\n1. Can two claim loops ever exist for one seat? One process means one supervisor; after the break, the previous pass has returned before the next `&`.\n2. What does Ctrl+C do inside the rerun boundary? The pipeline stops, the finally cleans up, and there is no reload.\n3. Could a stale PowerShell.Exiting handler deregister the wrong run, or none? Exactly one subscriber exists, the current run's.\n4. Does a changed gate C# definition take effect after a reload (new type name), and does an unchanged one avoid a second Add-Type?\n5. Is every exit code the same as before, for normal exit, -Loop -NoLoop and single-shot?\n6. PS 5.1 specifics: splatting a switch left bound as $false (-Interactive:$false), and $LASTEXITCODE after a script `exit`.\n7. Is the sh twin untouched? git diff --stat shows only the two planned paths.\n\nRelated memories for the reviewer: moes-ps1-hotreload-detach (df42861) and moes-duplicate-seat-wrapper.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human approved: ps1 hot-reload nesting, 45 wrappers / 5.5 GB of blocked parents measured 2026-09-19 06:50Z.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 11,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-e297b5449317452e96122b1c6d2d1a26",
+      "author": "governor-39911495",
+      "content": "Governor data point for the implementer (2026-09-19 09:05Z): the growth is driven by edits, not only by landings. Idle seats poll every 30 s, and each poll checks the moe-agent.ps1 hash, so every SAVE a worker makes to the repo copy while developing reloads every idle ps1 seat, one nesting level each. Between 09:02:58Z and 09:04:48Z, while task-d1441364's worker was editing moe-agent.ps1, qa-7100be29, qa-5e66a826 and qa-9a371c33 each reloaded (wrapper_restart), taking this project from 45 to 48 seat wrappers with 41 blocked parents. Free RAM went from 22.6 GB to 19.0 GB over the morning. Two consequences for the plan: (1) once the hand-over stops nesting, a reload storm during development costs nothing, so fix the nesting first; (2) if the design keeps any per-reload cost, reload only when the hash has been stable for a short window, so a burst of saves costs one reload, not N. Keep the one-loop-per-seat and keep-the-console guarantees from df42861.",
+      "timestamp": "2026-09-19T09:05:02.067Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-19T06:50:29.614Z",
-  "updatedAt": "2026-09-19T06:50:29.614Z"
+  "updatedAt": "2026-09-19T09:05:02.067Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-19T08:45:23.056Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-e52c9adc"
+  ],
+  "dependsOn": [
+    "task-d144136406384f96b85388da77f193ed"
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-19T08:49:00.869Z",
+  "planningNotes": {
+    "approachesConsidered": "- A separate thin supervisor file with the body in moe-agent-core.ps1: rejected. It changes what the JetBrains/VS Code bundles, parity-check, the harnesses and the docs point at, for the same effect as the in-file prologue.\n- Start-Process -NoNewWindow followed by the parent exiting: rejected. The launching shell returns to its prompt while the child writes to the same console, which is the dead-looking-seat confusion df42861 fixed.\n- Recursing into the script in-process at the bottom (`& $PSCommandPath` without a loop): rejected. It still nests call frames and scopes per reload, and it would reach PowerShell's call-depth limit over a long run.\n- Keeping the child-process relaunch and reaping old parents: rejected. Killing an intermediate parent resumes ITS parent's loop, which is the duplicate-seat failure.",
+    "codebaseInsights": "- Today's hand-over is at the bottom of moe-agent.ps1: after the outer finally, `& $moeRelaunchExe @moeRelaunchArgs; exit $LASTEXITCODE`. The parent blocks for the child's whole life.\n- The restart check sits at the top of each loop iteration: hash change, then Invoke-MoeDeregister 'wrapper_restart', then break.\n- Process-global side effects in the body:\n  - Register-EngineEvent PowerShell.Exiting near the top: accumulates on every run.\n  - Add-Type of MoeFrozenGateProcess (guarded by -as [type], used through New-Object by name): would freeze old C# after a reload.\n  - Everything else is per run.\n- The param block has no ValueFromRemainingArguments, so @PSBoundParameters forwards everything.\n- No test covers the self-restart today (task-e92b2cb3 is in BACKLOG).\n- The runner identity is <pid>@<start token>, so an in-process reload keeps it, which is better for reattach than a new child PID.",
+    "risks": "- The arm must edit a COPY of the wrapper, never the live scripts/moe-agent.ps1: repo-launched seats hot-reload on every edit of that file (mem:moes-installed-plugin-staleness).\n- Process counting under fleet load: match on the unique copied script path and on the pwsh or powershell executable only, and poll with a deadline rather than a fixed sleep.\n- PS 5.1 differences: the $global variable scoping, `exit` inside a script invoked with &, and splatting SwitchParameter values. Test both engines.\n- A reload that changes the param() block can fail to bind the old parameters; that is the same outcome as today's child relaunch, and the catch keeps it a clear stop.\n- dependsOn task-d1441364, which edits the same two files. Re-check git status before editing.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/importee-guard.ps1"
+    ]
+  },
+  "planApprovedAt": "2026-09-19T08:49:00.932Z"
 }

@@ -16,7 +16,7 @@
 // nothing changes, so it is not a mutation. Readers hand out copies, so no
 // caller can edit a stored candidate in memory either.
 //
-// The daemon never runs git. baseRevision and treeSha are recorded exactly as
+// Never checked against git: baseRevision and treeSha are recorded exactly as
 // the runner reported them and validated for shape only — never observed, never
 // verified.
 //

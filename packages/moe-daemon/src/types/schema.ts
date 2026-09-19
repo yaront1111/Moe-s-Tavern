@@ -536,7 +536,8 @@ export type TaskCommitOutcome = 'committed' | 'nothing' | 'refused' | 'failed';
  * the shared branch after a worker session ended in REVIEW/DONE; 'checkpoint'
  * = wip commit on any other exit; 'rescue' = snapshot on
  * refs/moe/rescue/<taskId>/<ts> (never a branch, never pushed). The daemon
- * never runs git — this is attestation, verified by QA via `git show <sha>`.
+ * never checks the sha against git — this is attestation, verified by QA via
+ * `git show <sha>`.
  */
 export interface TaskCommit {
   sha: string;
@@ -622,9 +623,9 @@ export interface NextAction {
 /**
  * What a DONE approval rested on when it was an ATTESTATION rather than recorded
  * code delivery; persisted by moe.qa_approve under deliveryPolicy manual-artifact
- * or merged-pull-request. The daemon never runs git and no runner observed it, so
- * `verifiedDelivery` is the literal false: no reader can mistake a manual label
- * for a verified landing.
+ * or merged-pull-request. The daemon never checks it against git and no runner
+ * observed it, so `verifiedDelivery` is the literal false: no reader can mistake
+ * a manual label for a verified landing.
  */
 export interface TaskDeliveryEvidence {
   /** manual-artifact: a deliverable checked by hand; merged-pull-request: a pull request declared merged. */
@@ -1021,7 +1022,7 @@ export interface ExecutionAttempt {
  * either later would be a design regression, not a feature.
  *
  * PROVENANCE. `baseRevision` and `treeSha` are what the runner REPORTED. The
- * daemon is state-only and never runs git, so it has observed and verified
+ * daemon never checks a report against git, so it has observed and verified
  * neither; a consumer that needs proof must re-derive it from the repository.
  */
 export interface Candidate {
@@ -1151,8 +1152,8 @@ export interface CheckRun {
  * (daemon sole-writer, via state/receiptStore.ts only).
  *
  * REPORTED, NEVER VERIFIED. This is the daemon's record of what a wrapper SAID
- * about a landing it performed. The daemon is state-only and never runs git: it
- * neither performs the landing nor inspects the target, so nothing may treat a
+ * about a landing it performed. The daemon is state-only: it neither performs
+ * the landing nor checks the report against git, so nothing may treat a
  * receipt as independent proof that the bytes are where it says. A consumer
  * that needs proof must re-derive it from the repository.
  *

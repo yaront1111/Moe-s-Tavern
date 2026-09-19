@@ -9,9 +9,59 @@
     "npx tsc --noEmit and the daemon suite stay green; both parity-check scripts pass if a wrapper changes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "THE RULE, chosen from the two the task offers: Moe's delivery records hold SHA-1 object ids only. A repository whose object format is sha256 is refused up front and lands nothing, exactly like a no-git project.\n\nWhy refuse rather than accept 64-hex: accepting means changing the daemon regexes and every '7-40 hex' / '40 hex' message, tool description and doc line, plus the wrappers' zero-oid and empty-tree constants, their replay regexes and the harness fakes. That is a lot of surface for a rare format, against the epic's 'one narrow vertical slice' rail. Supporting sha256 later is a separate feature.\n\nRED FIRST, in BOTH harnesses (identical frozen-suite JS). This task waits on task-d1441364, task-84150869 and task-a5fb02e9, which edit these files, so find code by name.\n1. Add frozen mode 'sha256-repo'. Its fixture uses git(repo,'init','-q','--object-format=sha256') instead of the plain init; everything else stays as in 'pass'. Skip the mode, printing why, if `git init --object-format=sha256` is unsupported, which needs git older than 2.29 (CI and this box have newer).\n2. Assertions:\n   (a) the log contains 'MOE_COMMIT_REFUSED_OBJECT_FORMAT' and 'sha256';\n   (b) HEAD is unchanged and no refs/moe/rescue/* exist;\n   (c) no record_candidate, record_check_run or gate observation, since nothing is frozen or gated;\n   (d) exactly one finalize, outcome 'nothing-to-commit' (the documented no-git acknowledgement);\n   (e) owned.txt still holds the CLI's bytes, uncommitted.\n3. It must FAIL on today's wrappers. Their landing freezes a candidate with a 64-hex tree, the fake refuses it (it checks 40 hex, like the daemon), and the bytes are rescued. So (a), (b) and (d) are red. Run it on sh and pwsh and paste the failures.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "APPLY THE RULE AT THE ONE GIT PROBE in each wrapper: sh git_top() and ps1 Get-MoeGitTop, which every landing, baseline, marker, replay and rescue path calls first.\n\n1. After the top and gitdir are resolved, run `git -C <project> rev-parse --show-object-format`.\n2. If the answer is exactly 'sha256':\n   - print ONE line per wrapper process, under a flag so a loop does not repeat it: `[WARN] MOE_COMMIT_REFUSED_OBJECT_FORMAT: <top> uses the sha256 object format; Moe's delivery records hold SHA-1 ids only, so this seat lands nothing there, as in a no-git project.`;\n   - return the existing 'no repo' result (sh: return 1 with MOE_TOP etc. empty; ps1: $null).\n3. Any other answer, including an empty one from an old git that lacks the flag, proceeds exactly as today. A git that old cannot open a sha256 repository anyway.\n\nEverything downstream then takes its existing, tested no-git branch: no baseline, no candidate, no gate, no rescue ref, and the finalize acknowledges 'nothing-to-commit'. Confirm by reading that no landing path calls git without going through git_top or Get-MoeGitTop first. Name any exception in the step note, and route it through the probe if it would otherwise touch a ref.\n\nError handling: a failing rev-parse is treated as 'not sha256' (fail open to today's behaviour). The probe never throws, and under sh's set -e it stays inside an `|| fmt=\"\"` guard.\n\nMake the same change in both twins, with byte-identical operator text.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCUMENT THE ONE RULE where each reader meets it. No daemon behaviour changes: the regexes already refuse 64-hex ids, and that is now the stated contract, not an accident.\n1. packages/moe-daemon/src/state/candidateStore.ts, at SHA_RE and REVISION_RE: one comment saying the shapes are SHA-1 only BY RULE, and that the wrappers refuse a sha256 repository at the git probe (MOE_COMMIT_REFUSED_OBJECT_FORMAT), so no runner in this slice reports a 64-hex id. Point to docs/CONFIGURATION.md → autoCommit.\n2. docs/CONFIGURATION.md, the autoCommit row: one sentence. A repository created with --object-format=sha256 lands nothing (MOE_COMMIT_REFUSED_OBJECT_FORMAT, the same as a no-git project); commit such work by hand, and use deliveryPolicy manual-artifact if a strict policy applies.\n3. docs/SCHEMA.md, the Candidate 'Provenance' paragraph (the '7-40 hex' sentence): add 'SHA-1 object format only; see autoCommit for sha256 repositories'.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "PARITY. The new MOE_COMMIT_REFUSED_OBJECT_FORMAT code is enforced by parity-check's MOE_COMMIT_* family diff automatically. Also add the prose needle 'uses the sha256 object format; Moe' to the attempt/gate prose lists of both parity-check.sh and parity-check.ps1, so the operator sentence cannot drift between twins. Prove the guard: misspell it in one wrapper, confirm both scripts fail, then restore it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, sequentially, with MOE_POSTFLIGHT_TIMEOUT_SEC=400. Launch the ps1 harness from PowerShell.\n1. The sha256-repo arm is green on sh, pwsh 7 and PS 5.1.\n2. Full harnesses: postflight.sh, and postflight.ps1 on pwsh and PS 5.1.\n3. Parity on sh, pwsh and PS 5.1.\n4. node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs.\n5. cd packages/moe-daemon && npx tsc --noEmit && npm test: green, with no count change (the daemon change is a comment).\n6. For complete_task, the verification is the full postflight.sh command, with its PASS lines as outputTail.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "SELF-REVIEW, posted as a task comment:\n1. Does any path touch git in a sha256 repository without going through the probe? List the git call sites you checked.\n2. Does a SHA-1 repository behave byte-for-byte as before? The full harnesses answer this.\n3. Is the refusal line printed once per process, not on every loop iteration?\n4. Does an old git without --show-object-format fall through to today's behaviour?\n5. Is the finalize outcome in a sha256 repository 'nothing-to-commit', and does the task's strict-policy consequence (no completion commit) match what the docs now say?\n6. git diff --stat: only the 9 planned paths.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,12 +70,44 @@
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
-    "task-31fe6dc806d9466d9d71c9f8beda60be"
+    "task-31fe6dc806d9466d9d71c9f8beda60be",
+    "task-d144136406384f96b85388da77f193ed",
+    "task-84150869c3194fce908e6efad8f4c82b",
+    "task-a5fb02e977f74ea2802f24053c44a1c6"
   ],
   "priority": "LOW",
   "order": 213.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:04:32.874Z",
-  "updatedAt": "2026-09-19T06:48:28.050Z"
+  "updatedAt": "2026-09-19T08:53:01.407Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-19T08:50:55.263Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 9
+  },
+  "contextFetchedBy": [
+    "architect-e52c9adc"
+  ],
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-19T08:53:01.330Z",
+  "planningNotes": {
+    "approachesConsidered": "- Accept 64-hex ids end to end: rejected for this slice. It needs daemon regexes and messages widened, every '7-40 hex' and '40 hex' mention in the tool descriptions and docs updated, the wrappers' zero oid (40 zeros) and empty-tree sentinel (the SHA-1 4b825dc6…) made format-aware, the replay journal regexes widened in both twins, and the harness fakes widened. That is broad risk for a rare format, against the 'one narrow vertical slice' rail.\n- Force autoCommit=false in the settings reader: rejected. The settings readers don't know the repository yet. git_top and Get-MoeGitTop are the single entry every git path already goes through, and their 'no repo' result is the existing, tested manual/no-git path.\n- Also improving the daemon's 64-hex refusal messages: YAGNI. The wrappers are the only runners in this slice, and after this change they never send a 64-hex id.",
+    "codebaseInsights": "- The single git probe is sh git_top() (7 call sites) and ps1 Get-MoeGitTop (9 call sites). Returning 'no repo' there sends every git path down the no-git branch; the frozen suite's 'no-git' mode already pins that branch's finalize outcome, nothing-to-commit.\n- After task-31fe6dc8, SHA_RE (7-40) and REVISION_RE (40) live once in candidateStore.ts.\n- The frozen-suite fixture is created with git(repo,'init','-q'); the new mode swaps in --object-format=sha256.\n- The fake proxy's candidateReply checks 40-hex shas like the daemon, which is what makes the old-code run go red, with a rescue.\n- git rev-parse --show-object-format exists since git 2.29, the same release that added sha256 repositories.",
+    "risks": "- dependsOn task-31fe6dc8 (DONE), task-d1441364 and task-84150869 (the wrappers and harnesses) and task-a5fb02e9 (candidateStore.ts comments), all of which edit these files. Start after them.\n- The probe adds one git call per git_top: cheap, but git_top runs on every landing. Keep it to a single rev-parse.\n- git_top is sometimes called in a subshell (sh), where the print-once flag does not persist; make sure the line is not spammed in a loop.\n- Under a strict delivery policy, a sha256 project cannot reach DONE without an attestation, which is the correct and documented consequence.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "docs/CONFIGURATION.md",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "planApprovedAt": "2026-09-19T08:53:01.406Z"
 }
