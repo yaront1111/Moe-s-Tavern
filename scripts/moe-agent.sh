@@ -358,6 +358,15 @@ COMMAND_BIN=""
 COMMAND_ARGV=()
 parse_command_into_argv() {
     local line="$1"
+    # A string that names an existing path is one binary, spaces and all
+    # ("/opt/my tools/claude"). Same rule as the ps1 twin's
+    # Resolve-CommandParts, which splits -Command only when the whole string
+    # is not an existing path; shlex below would cut it at every space.
+    if [ -e "$line" ]; then
+        COMMAND_BIN="$line"
+        COMMAND_ARGV=()
+        return 0
+    fi
     local python_bin="${PYTHON_CMD:-python3}"
     if command -v "$python_bin" &> /dev/null; then
         # \x1f-separated so argv elements containing whitespace survive read.
