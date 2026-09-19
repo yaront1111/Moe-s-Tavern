@@ -13,11 +13,12 @@
     {
       "stepId": "step-1",
       "description": "RED FIRST. Add three arms to the frozen-candidate suite, and the matching fake-proxy holds, in BOTH harnesses, BEFORE any wrapper change. This task waits on task-8fc35d31 and task-eff6f018, which edit the same files, so find code by function name; line numbers are from bb5e7e2. The frozen-suite JS is byte-identical between postflight.sh (FROZEN_SUITE heredoc) and postflight.ps1 ($frozenSuite here-string), so keep it identical. The fake proxies differ elsewhere, so edit each copy. Do NOT touch the existing receipt-replay block or any existing assertion.\n\nFAKE PROXY (both copies):\n(a) New holdLedgerForCrash(), defined beside holdForInterrupt() and called right after it. In FAKE_EVIDENCE_MODE 'receipt-ledger-replay', the FIRST record_commit with outcome 'committed' and kind 'completion' does three things: writes .moe/ledger-held, blocks up to 120 s (the same Atomics.wait loop as the receipt hold), then calls process.exit(1). This happens BEFORE appendRpc, so the killed call appears in neither evidence-rpcs.jsonl nor record_commit.jsonl.\n(b) The receipt hold in evidenceRpc (currently mode === 'receipt-replay') also fires for 'receipt-rebase-replay' and 'receipt-foreign-replay'.\n\nFROZEN SUITE:\n(c) In modes, add 'receipt-ledger-replay', 'receipt-rebase-replay' and 'receipt-foreign-replay' after 'receipt-conflict'.\n(d) receipt-rebase-replay fixture, placed next to the receipt-push remote setup:\n  1. git init -q --bare <root>/<mode>-remote.git, then remote add origin, then push -q origin moe/frozen (the seed).\n  2. Make a peer clone: git clone -q -b moe/frozen <remote> <root>/<mode>-peer, and set user.name, user.email and core.autocrlf=false in it.\n  3. In the clone, commit remote-only.txt and push it to moe/frozen.\n  Result: the wrapper's first push is rejected, its pull --rebase rewrites the landed commit, and the re-push succeeds.\n(e) Run 1 of all three modes goes under the KILL_ON_MARKER supervisor exactly like receipt-replay (TMPDIR/TMP/TEMP=wrapperTmp). The marker is .moe/ledger-held for receipt-ledger-replay and .moe/receipt-held for the other two.\n(f) After the existing receipt-replay block, add one block per mode, each ending in count++;continue.\n  Run 2 settings: engine, env {...env, FAKE_CLAIM_MODE:'finalizing', MOE_TASKLESS_WAIT_SEC:'5'}, and the same timeout and maxBuffer as receipt-replay's second run. Append log2 to <mode>.log.\n  Helper: sid(sha) is the value of the 'Moe-Session: ' line in git log -1 --format=%B <sha>.\n\n  receipt-ledger-replay (window 1: hard crash between update-ref and record_commit).\n  Run 1 checks:\n  - ledger-held exists and after != before.\n  - The journal exists; keep j1 = JSON.parse(read(journal)).\n  - record_commit.jsonl has no committed completion row.\n  Run 2 checks (same seat):\n  - HEAD and the refs/heads/moe/frozen reflog are unchanged.\n  - record_commit.jsonl has EXACTLY ONE committed completion row. [taskId, sha, ref, role, sessionId, status, pushed] deep-equals ['task-postflight', after, 'refs/heads/moe/frozen', 'worker', sid(after), 'REVIEW', false].\n  - In rpc2, that record_commit comes before the single receipt, which comes before the single finalize.\n  - Receipt args are [c.id, c.deliveryTarget, c.baseRevision, after, after, undefined].\n  - Finalize args are [attempt-postflight, 7, 'landed', after], with workerId 'worker-frozen'.\n  - The attempt is closed and is the only attempt file; no new candidate or check was recorded; the journal is deleted.\n  - LAST: j1.ledger deep-equals {sessionId: sid(after), role: 'worker', status: 'REVIEW'}. This goes last so today's wrapper fails on 'no ledger row replayed', not on the journal shape.\n\n  receipt-rebase-replay (window 2: the push's pull --rebase rewrote the landed commit, then a crash lost the receipt).\n  Run 1 checks:\n  - receipt-held exists; read j1 and set C = j1.targetAfter.\n  - C != after, and git merge-base --is-ancestor C after exits 1.\n  - The remote's refs/heads/moe/frozen equals after, and sid(C) === sid(after).\n  - j1.ledger === undefined and j1.pushResult === 'pushed moe/frozen'.\n  - record_commit.jsonl has exactly one committed completion row, with sha === after.\n  Run 2 checks (same seat):\n  - HEAD, the reflog and the remote are unchanged.\n  - There are 2 receipts; the second deep-equals the first, and the first has targetAfter = landedRevision = C and pushResult 'pushed moe/frozen'.\n  - Exactly one finalize, with args [attempt-postflight, 7, 'landed', after] (after is the rewritten copy).\n  - Still exactly one committed completion row.\n  - The attempt is closed and the journal is deleted.\n  - log2 does not contain 'that landing never moved the ref'.\n\n  receipt-foreign-replay (window 3: another seat replays).\n  Run 1: the same checks as receipt-replay's run 1.\n  Run 2: args with 'worker-frozen' replaced by 'worker-other'. Checks:\n  - The last claim in rpc2 is worker-other's.\n  - HEAD and the reflog are unchanged.\n  - There are 2 receipts whose args are equal except workerId; the second one's workerId is wor",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "startedAt": "2026-09-19T03:42:29.270Z"
     },
     {
       "stepId": "step-2",
@@ -74,9 +75,9 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-3c030e77",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,7 +89,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T17:27:55.919Z",
-  "updatedAt": "2026-09-19T00:38:34.630Z",
+  "updatedAt": "2026-09-19T03:42:29.270Z",
   "metrics": {
     "firstClaimAt": "2026-09-18T20:05:34.837Z",
     "plannedStepCount": 8,
@@ -96,7 +97,8 @@
   },
   "contextFetchedBy": [
     "architect-e52c9adc",
-    "worker-161b9959"
+    "worker-161b9959",
+    "worker-3c030e77"
   ],
   "dependsOn": [
     "task-8fc35d31f71440bd85e5c08708ed71fe",
@@ -127,5 +129,6 @@
       "packages/moe-daemon/src/delivery/policy.ts"
     ]
   },
-  "planApprovedAt": "2026-09-18T20:35:40.597Z"
+  "planApprovedAt": "2026-09-18T20:35:40.597Z",
+  "workStartedAt": "2026-09-19T03:42:29.270Z"
 }
