@@ -596,7 +596,7 @@ function git(d,...a){const r=cp.spawnSync('git',['-C',d,...a],{encoding:'utf8'})
 const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tracked-mutation','exit-tail',
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
-'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
+'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
@@ -604,7 +604,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -626,7 +626,7 @@ const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-ma
 // exactly once, before deregister_worker, with what it actually did to the bytes.
 // teardown-running is the control: its attempt is still `running` (no
 // complete_task), so the very same exit path must acknowledge NOTHING.
-const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit',
+const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit','teardown-sha256':'nothing-to-commit',
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
@@ -700,9 +700,14 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
   if(!noGit){
-    git(repo,'init','-q');git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
+    // A sha256 repository: both wrappers refuse it at their git probe, because
+    // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
+    if(!sha256)git(repo,'init','-q');
+    else if(cp.spawnSync('git',['-C',repo,'init','-q','--object-format=sha256']).status!==0){
+      console.log('[frozen candidate] '+mode+' skipped: this git cannot create a sha256 repository (git init --object-format=sha256 needs git 2.29+)');continue;}
+    git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
     if(mode==='unborn')git(repo,'symbolic-ref','HEAD','refs/heads/moe/frozen');
     else{git(repo,'add','--','seed.txt','nested project é/owned.txt','nested project é/gate.cjs');
       git(repo,'commit','-qm','seed');git(repo,'checkout','-qb','moe/frozen');}
@@ -767,7 +772,7 @@ if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json')
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
+if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
   const cli=path.join(root,mode+(win?'.cmd':'.sh'));
@@ -1132,6 +1137,17 @@ exit "$rc"
     assert.equal(git(repo,'rev-list','--count',before+'..HEAD'),'1',log);
     assert.match(git(repo,'log','-1','--format=%s'),/^wip\(task-postflight\).*\[status=BLOCKED /,log);
     assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');
+    count++;continue;
+  }
+  if(mode==='sha256-repo'){
+    // Refused at the git probe, named once per wrapper process, and nothing lands:
+    // no candidate, gate, commit or rescue ref, the CLI's bytes stay uncommitted,
+    // and the finalize acknowledges nothing-to-commit, exactly as in no-git.
+    assert.deepEqual({refused:said('MOE_COMMIT_REFUSED_OBJECT_FORMAT'),named:log.includes('uses the sha256 object format; Moe'),
+      head:after===before,rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),
+      evidence:candidates.length+checks.length+seen.length,commits:rpc.filter(r=>r.tool==='record_commit').map(r=>r.args.outcome),
+      finals:finals.map(f=>f.args.outcome),owned:read(owned),committed:git(repo,'show','HEAD:nested project é/owned.txt')},
+      {refused:1,named:true,head:true,rescue:'',evidence:0,commits:[],finals:['nothing-to-commit'],owned:'frozen owned\n',committed:'base'},log);
     count++;continue;
   }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
@@ -3478,7 +3494,7 @@ EOF
   # The banner is what the launch-failure hint tells the operator to re-run by
   # hand, so it must carry the seat override and the reviewer pin too.
   if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox danger-full-access' "$TMP_DIR/scope-z.out" \
-     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec -C' "$TMP_DIR/scope-z.out"; then
+     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec --json -C' "$TMP_DIR/scope-z.out"; then
     scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox danger-full-access" "$TMP_DIR/scope-z.out"
   fi
   if ! grep -Fq 'run the printed Command by hand' "$TMP_DIR/scope-z.out"; then
@@ -3641,6 +3657,7 @@ EOF
   CODEX_ARGS_FILE="$TMP_DIR/codex-args.txt"
   CODEX_PATH_FILE="$TMP_DIR/codex-instructions-path.txt"
   CODEX_INSTRUCTIONS_COPY="$TMP_DIR/codex-instructions-copy.md"
+  CODEX_CONTEXT_COPY="$TMP_DIR/codex-context-copy.md"
   CODEX_TMP_DIR="$TMP_DIR/codex-tmp"
   mkdir -p "$CODEX_TMP_DIR"
   cat > "$CODEX_CLI" <<EOF
@@ -3652,6 +3669,11 @@ for arg in "\$@"; do
     path="\${arg#model_instructions_file=}"
     printf '%s\n' "\$path" > "$CODEX_PATH_FILE"
     if [ -f "\$path" ]; then cp "\$path" "$CODEX_INSTRUCTIONS_COPY"; fi
+  fi
+  if [[ "\$arg" == 'First read the private session context file at '* ]]; then
+    context="\${arg#First read the private session context file at }"
+    context="\${context%%. It contains*}"
+    cp "\$context" "$CODEX_CONTEXT_COPY"
   fi
   prev="\$arg"
 done
@@ -3689,11 +3711,15 @@ EOF
     *) echo "received path: $CODEX_HEADLESS_PATH" >&2; scope_fail Z2 "headless instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-headless.out" ;;
   esac
   [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z2 "headless Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-headless.out"
-  for needle in 'Role: worker' '# Session Context (per-iteration)' 'Claimed task id: task-resume'; do
+  for needle in 'Role: worker'; do
     if ! grep -Fq -- "$needle" "$CODEX_INSTRUCTIONS_COPY"; then
       scope_fail Z2 "headless instructions file is missing [$needle]" "$TMP_DIR/wrapper-codex-headless.out"
     fi
   done
+  grep -Fq 'Claimed task id: task-resume' "$CODEX_CONTEXT_COPY" || scope_fail Z2 'private user context is missing task binding' "$TMP_DIR/wrapper-codex-headless.out"
+  if grep -Fq 'Claimed task id:' "$CODEX_INSTRUCTIONS_COPY"; then
+    scope_fail Z2 'task context polluted the stable system instructions' "$TMP_DIR/wrapper-codex-headless.out"
+  fi
   if [ -e "$CODEX_HEADLESS_PATH" ]; then
     scope_fail Z2 "headless per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-headless.out"
   fi
@@ -3729,8 +3755,8 @@ EOF
     *) echo "received path: $CODEX_TUI_PATH" >&2; scope_fail Z2 "interactive instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-tui.out" ;;
   esac
   [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z2 "interactive Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-tui.out"
-  if ! grep -Fq -- '# Session Context (per-iteration)' "$CODEX_INSTRUCTIONS_COPY"; then
-    scope_fail Z2 "interactive instructions file is missing per-iteration context" "$TMP_DIR/wrapper-codex-tui.out"
+  if ! grep -Fq -- 'Claimed task id: task-resume' "$CODEX_CONTEXT_COPY"; then
+    scope_fail Z2 "interactive private context file is missing task binding" "$TMP_DIR/wrapper-codex-tui.out"
   fi
   if [ -e "$CODEX_TUI_PATH" ]; then
     scope_fail Z2 "interactive per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-tui.out"

@@ -582,7 +582,7 @@ function git(d,...a){const r=cp.spawnSync('git',['-C',d,...a],{encoding:'utf8'})
 const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tracked-mutation','exit-tail',
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
-'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
+'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
@@ -590,7 +590,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -612,7 +612,7 @@ const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-ma
 // exactly once, before deregister_worker, with what it actually did to the bytes.
 // teardown-running is the control: its attempt is still `running` (no
 // complete_task), so the very same exit path must acknowledge NOTHING.
-const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit',
+const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit','teardown-sha256':'nothing-to-commit',
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
@@ -686,9 +686,14 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
   if(!noGit){
-    git(repo,'init','-q');git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
+    // A sha256 repository: both wrappers refuse it at their git probe, because
+    // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
+    if(!sha256)git(repo,'init','-q');
+    else if(cp.spawnSync('git',['-C',repo,'init','-q','--object-format=sha256']).status!==0){
+      console.log('[frozen candidate] '+mode+' skipped: this git cannot create a sha256 repository (git init --object-format=sha256 needs git 2.29+)');continue;}
+    git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
     if(mode==='unborn')git(repo,'symbolic-ref','HEAD','refs/heads/moe/frozen');
     else{git(repo,'add','--','seed.txt','nested project é/owned.txt','nested project é/gate.cjs');
       git(repo,'commit','-qm','seed');git(repo,'checkout','-qb','moe/frozen');}
@@ -753,7 +758,7 @@ if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json')
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
+if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
   const cli=path.join(root,mode+(win?'.cmd':'.sh'));
@@ -1120,6 +1125,17 @@ exit "$rc"
     assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');
     count++;continue;
   }
+  if(mode==='sha256-repo'){
+    // Refused at the git probe, named once per wrapper process, and nothing lands:
+    // no candidate, gate, commit or rescue ref, the CLI's bytes stay uncommitted,
+    // and the finalize acknowledges nothing-to-commit, exactly as in no-git.
+    assert.deepEqual({refused:said('MOE_COMMIT_REFUSED_OBJECT_FORMAT'),named:log.includes('uses the sha256 object format; Moe'),
+      head:after===before,rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),
+      evidence:candidates.length+checks.length+seen.length,commits:rpc.filter(r=>r.tool==='record_commit').map(r=>r.args.outcome),
+      finals:finals.map(f=>f.args.outcome),owned:read(owned),committed:git(repo,'show','HEAD:nested project é/owned.txt')},
+      {refused:1,named:true,head:true,rescue:'',evidence:0,commits:[],finals:['nothing-to-commit'],owned:'frozen owned\n',committed:'base'},log);
+    count++;continue;
+  }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
@@ -1475,6 +1491,9 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         $reloadProject = Join-Path $tempRoot 'reload\project'
         New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
         Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter 'prompt-cache*.mjs' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+        }
         Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
         Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
         $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
@@ -3015,7 +3034,7 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                     if ($scopeZArgs -contains '--full-auto') { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: codex 0.147+ rejects --full-auto; it must never be on argv' }
                     # -cnotcontains: the default -contains is case-insensitive, so `-C` would be
                     # satisfied by the `-c` seat overrides that precede every codex launch.
-                    foreach ($flag in @('exec', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
+                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
                         if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
@@ -3024,7 +3043,7 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                     # appears once per invocation; every occurrence must point under $env:TEMP.
                     $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
                     if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
-                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, the reviewer pin and --sandbox danger-full-access' }
+                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec --json -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, JSON mode, the reviewer pin and --sandbox danger-full-access' }
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
                     $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)

@@ -747,6 +747,9 @@ $promptCacheHelper = Join-Path $PSScriptRoot 'prompt-cache.mjs'
 if ($cliType -in @('claude', 'codex')) {
     & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
     if ($LASTEXITCODE -ne 0) { exit 1 }
+    # Native stream filters must not turn Unicode task/tool text into '?' on PS 5.1.
+    $global:OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = $global:OutputEncoding
 }
 # Codex is interactive (TUI) for every role unless -CodexExec opts the seat
 # into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
@@ -783,7 +786,7 @@ if ($cliType -eq "codex") {
         $topLevelConfig = @"
 model_instructions_file = "agent-instructions.md"
 model_reasoning_effort = "$codexReasoningEffort"
-developer_instructions = """`nYou are a $Role agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
+developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
 "@
 
         # Build the moe MCP server TOML block. Codex's default MCP startup
@@ -2119,6 +2122,19 @@ function Get-MoeGitTop {
         $rc = $LASTEXITCODE
         if ($rc -ne 0) { $rel = '' }
         $rel = if ($rel) { "$rel".Trim() } else { '' }
+        # Moe's delivery records hold SHA-1 ids only: a sha256 repository lands
+        # nothing, exactly as a no-git one, and the wrapper says so once (a hot
+        # reload starts over). See docs/CONFIGURATION.md autoCommit. Any other
+        # answer proceeds: a git older than 2.29 echoes the unknown flag back,
+        # and it cannot open a sha256 repository anyway. Twin: git_top.
+        $format = & git -C $projectPath rev-parse --show-object-format 2>$null
+        if ("$format".Trim() -ceq 'sha256') {
+            if (-not $script:MoeObjectFormatWarned) {
+                $script:MoeObjectFormatWarned = $true
+                Write-Host "[WARN] MOE_COMMIT_REFUSED_OBJECT_FORMAT: $top uses the sha256 object format; Moe's delivery records hold SHA-1 ids only, so this seat lands nothing there, as in a no-git project." -ForegroundColor Yellow
+            }
+            return $null
+        }
         return @{ Top = $top; GitDir = "$gitDir".Trim(); Rel = $rel }
     } catch {
         return $null
@@ -5497,26 +5513,21 @@ $mentionsJson
     # Write system prompt to CLI-specific instruction files (per iteration so pre-flight data is fresh).
     # Grok is handled in its launch branch below: its prompt file must also carry the final role
     # directive ($claimPromptBody, built after this block), so it is written right before the launch.
-    # For codex and gemini we ALSO fold $dynamicContext (claimed_task_context, routed_mentions, skill JIT)
-    # into the file. Reason: PowerShell 5.1's `&` operator doesn't escape embedded double quotes when
+    # Codex uses a separate private user-context file; Gemini folds context into its instructions.
+    # PowerShell 5.1's `&` operator doesn't escape embedded double quotes when
     # forwarding native-command args on Windows. Task JSON serialized into $dynamicContext routinely
     # contains "..." substrings (e.g. `\"audit.read\"`), which causes codex/gemini to word-split the
     # prompt argv (e.g. "unexpected argument 'VERIFICATION' found"). Claude reads its system prompt
     # from --append-system-prompt-file, so its bug surface is the (mostly quote-free) role directive.
     $codexUsesFileContext = $false
     if ($cliType -eq "codex") {
-        # The project-shared .codex/agent-instructions.md keeps ONLY the
-        # identity-free role doc (it is a project_doc fallback). Everything
-        # per-seat -- "You ARE ... workerId=", the claimed task, inbox, routed
-        # mentions -- goes to a per-PROCESS file handed to codex with
-        # `-c model_instructions_file=<path>` at launch. Measured 2026-09-06:
-        # two codex seats launched 2 s apart both read the shared file, the
-        # second write won, and one seat worked the other's task under the
-        # other's workerId for ten minutes.
+        # Shared fallback stays role-neutral; otherwise a sibling role can change
+        # the prefix. Private stable instructions and private task context remain
+        # separate: task text must never enter model_instructions_file.
         $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
         if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
-        $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
+        [System.IO.File]::WriteAllText($agentInstructionsPath, 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.', [System.Text.UTF8Encoding]::new($false))
         $script:CodexSeatInstructionsFile = Join-Path $env:TEMP "moe-codex-instructions-$Role-$PID.md"
         $fileBody = $systemAppend
         $script:CodexSessionContextFile = Join-Path $env:TEMP ("moe-codex-context-" + [guid]::NewGuid().ToString('N') + '.md')
@@ -5524,7 +5535,7 @@ $mentionsJson
             [System.IO.File]::WriteAllText($script:CodexSessionContextFile, $dynamicContext, [System.Text.UTF8Encoding]::new($false))
             $codexUsesFileContext = $true
         }
-        $fileBody | Set-Content -Path $script:CodexSeatInstructionsFile -Encoding UTF8
+        [System.IO.File]::WriteAllText($script:CodexSeatInstructionsFile, $fileBody, [System.Text.UTF8Encoding]::new($false))
         Write-Host "Agent instructions written to: $($script:CodexSeatInstructionsFile) (shared role doc: $agentInstructionsPath)"
     } elseif ($cliType -eq "gemini") {
         $geminiInstructionsDir = Join-Path $projectPath ".gemini"
@@ -5633,11 +5644,19 @@ $mentionsJson
         -and ($preflightRoutedMentions.Count -eq 0)) {
         $moeSkipLaunch = $true
     }
+    if (-not $moeSkipLaunch -and $cliType -in @('claude', 'codex')) {
+        # Settings can change between tasks in a long-lived wrapper.
+        & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+    }
     if ($moeSkipLaunch) {
         if ($preflightClaimFailed) {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$Role worker=$WorkerId - the claim RPC is unreachable; no CLI is launched without a task bound." -ForegroundColor Yellow
         } else {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=idle role=$Role worker=$WorkerId - no claimable task and nothing to answer." -ForegroundColor DarkGray
+        }
+        if ($cliType -eq 'codex' -and $script:CodexSessionContextFile) {
+            Remove-Item -LiteralPath $script:CodexSessionContextFile -Force -ErrorAction SilentlyContinue
         }
         $script:CliExitCode = 0
     } elseif ($cliType -eq "codex") {
@@ -5649,19 +5668,18 @@ $mentionsJson
         }
 
         if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
-            # Pre-flight baked context into .codex/agent-instructions.md. When that file already
-            # includes $dynamicContext (see $codexUsesFileContext branch above), argv carries ONLY
+            # Pre-flight wrote a private session-context file. When it includes
+            # $dynamicContext (see $codexUsesFileContext branch above), argv carries ONLY
             # a short quote-free directive — PS < 7.3 forwards native args without escaping embedded
             # double quotes, so any raw task JSON or chat text on argv word-splits the prompt
             # (codex: "unrecognized subcommand"). This must hold even when $claimPromptBody is null
             # (no-task-with-mentions pre-flight): never fall back to $claimPrompt here, because that
             # IS the dynamic context (routed mention text = arbitrary quotes) that just crashed on argv.
             if ($codexUsesFileContext) {
-                $contextPointer = "First read the private session context file at $($script:CodexSessionContextFile). It contains your task binding, inbox and routed mentions. "
                 if ($claimPromptBody) {
-                    $shortPrompt = $contextPointer + $claimPromptBody
+                    $shortPrompt = $claimPromptBody
                 } else {
-                    $shortPrompt = $contextPointer + "If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    $shortPrompt = "If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
                 }
             } else {
                 $shortPrompt = $claimPrompt
@@ -5681,6 +5699,10 @@ $mentionsJson
             } else {
                 $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
             }
+        }
+
+        if ($codexUsesFileContext) {
+            $shortPrompt = "First read the private session context file at $($script:CodexSessionContextFile). It contains your task binding, inbox and routed mentions. " + $shortPrompt
         }
 
         # Last-resort argv guard: PS < 7.3 forwards native args without escaping embedded
@@ -5776,7 +5798,7 @@ $mentionsJson
                     $probePrevEap = $ErrorActionPreference
                     $ErrorActionPreference = 'Continue'
                     try {
-                        $probeOut = (& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
+                        $probeOut = (& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
                         $probeExit = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
                     } catch { $probeOut = "$_"; if ($probeExit -eq 0) { $probeExit = 1 } } finally { $ErrorActionPreference = $probePrevEap }
                     if ($probeExit -ne 0 -and $probeOut -match 'unexpected argument|unrecognized subcommand|unexpected value') {
@@ -5794,7 +5816,7 @@ $mentionsJson
                         exit 1
                     }
                 }
-                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec --json -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
                 & {
                     & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
@@ -6045,9 +6067,9 @@ $mentionsJson
             # Windows CreateProcess caps the total command line at ~32K UTF-16 chars
             # (~8K through cmd.exe). $claimPrompt — claimed_task_context + inbox +
             # routed_mentions + role directive — can blow past that for workers
-            # whose tasks carry a fat implementationPlan. When it would, embed the
-            # whole user-prompt body into the system-prompt file (Claude has no
-            # --user-message-file flag) and hand the CLI a tiny sentinel.
+            # whose tasks carry a fat implementationPlan. Put the whole user prompt
+            # in a private context file and pass a short read directive. The stable
+            # system prompt must remain identical across tasks, including overflow.
             #
             # The same file route also covers prompts with embedded double quotes,
             # regardless of length. Windows PowerShell 5.1 forwards native-command
@@ -6056,8 +6078,7 @@ $mentionsJson
             # threshold) word-splits into hundreds of argv tokens; the first
             # '-'-leading fragment then kills the CLI as an unknown option
             # (observed: `claude.exe : error: unknown option '-1'` on the
-            # no-task + routed-mentions launch). codex/gemini already dodge this
-            # via their instruction files — claude's user prompt was the gap.
+            # no-task + routed-mentions launch). File delivery preserves exact text.
             $userPromptForCli = $claimPrompt
             $sessionContextFile = $null
             $WIN_CMD_SAFE_THRESHOLD = 6000
