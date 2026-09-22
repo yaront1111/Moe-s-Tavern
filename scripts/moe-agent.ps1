@@ -5821,7 +5821,21 @@ $mentionsJson
                 & {
                     & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
-                } | & node $promptCacheHelper codex-stream
+                } | ForEach-Object -Begin {
+                    # PS 5.1 holds a native-to-native pipe until the producer exits, so
+                    # feed the helper line by line; its stdout stays the console.
+                    $psi = [System.Diagnostics.ProcessStartInfo]::new('node', "`"$promptCacheHelper`" codex-stream")
+                    $psi.UseShellExecute = $false
+                    $psi.RedirectStandardInput = $true
+                    $cacheStream = [System.Diagnostics.Process]::Start($psi)
+                } -Process {
+                    $cacheBytes = [System.Text.Encoding]::UTF8.GetBytes("$_`n")
+                    $cacheStream.StandardInput.BaseStream.Write($cacheBytes, 0, $cacheBytes.Length)
+                    $cacheStream.StandardInput.BaseStream.Flush()
+                } -End {
+                    $cacheStream.StandardInput.Close()
+                    $cacheStream.WaitForExit()
+                }
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
@@ -6232,6 +6246,9 @@ $mentionsJson
                         $dur = if ($evt.duration_ms) { "$([math]::Round($evt.duration_ms/1000.0,1))s" } else { "?" }
                         $color = if ($evt.is_error) { "Red" } else { "Green" }
                         Write-Host "  [result] turns=$($evt.num_turns) dur=$dur stop=$($evt.stop_reason)" -ForegroundColor $color
+                        # Only the result line goes through the helper: piping the
+                        # whole stream into node stalls the console on PS 5.1.
+                        $line | & node $promptCacheHelper claude-stream | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ }
                     }
                 }
             }
@@ -6250,7 +6267,7 @@ $mentionsJson
                     & {
                         & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli" 2>&1
                         $script:CliExitCode = $LASTEXITCODE
-                    } | & node $promptCacheHelper claude-stream | ForEach-Object { & $parseStreamJson $_ }
+                    } | ForEach-Object { & $parseStreamJson $_ }
                 } else {
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli"
                     $script:CliExitCode = $LASTEXITCODE
@@ -6262,7 +6279,7 @@ $mentionsJson
                     & {
                         & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs 2>&1
                         $script:CliExitCode = $LASTEXITCODE
-                    } | & node $promptCacheHelper claude-stream | ForEach-Object { & $parseStreamJson $_ }
+                    } | ForEach-Object { & $parseStreamJson $_ }
                 } else {
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs
                     $script:CliExitCode = $LASTEXITCODE

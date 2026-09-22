@@ -10,7 +10,9 @@ try {
   } else if (command === 'claude-stream' || command === 'codex-stream') {
     const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
     let reported = false;
-    for await (const line of lines) {
+    for await (let line of lines) {
+      // PS 5.1's Process.StandardInput writer prepends a UTF-8 BOM.
+      line = line.replace(/^\uFEFF/, '');
       let event;
       try { event = JSON.parse(line); }
       catch { console.log(line); continue; }
