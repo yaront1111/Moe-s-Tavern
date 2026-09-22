@@ -1752,8 +1752,8 @@ if [ -z "$RESOLVED_MODEL" ]; then
     # --effort max below. Override per role via project.json settings.models.{role}.
     case "$ROLE" in
         architect) RESOLVED_MODEL="claude-opus-5" ;;
-        worker)    RESOLVED_MODEL="claude-opus-5" ;;
-        qa)        RESOLVED_MODEL="claude-opus-5" ;;
+        worker)    RESOLVED_MODEL="claude-opus-5-5" ;;
+        qa)        RESOLVED_MODEL="claude-opus-5-5" ;;
         governor)  RESOLVED_MODEL="claude-opus-5" ;;
     esac
 fi
