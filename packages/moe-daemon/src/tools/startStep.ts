@@ -59,7 +59,8 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       await state.touchWorker(task.assignedWorkerId || params.workerId, { status: 'CODING', currentTaskId: task.id });
 
       // Heuristic: recommend TDD skill on test-touching steps, adversarial-self-review
-      // on the final step. Both are advisory.
+      // on the final step, ponytail on every other implementation step (that slot
+      // used to be empty - a mid-plan step got no recommendation at all). All advisory.
       const desc = (step.description || '').toLowerCase();
       const files = (step.affectedFiles || []).join(' ').toLowerCase();
       const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
@@ -68,7 +69,7 @@ export function startStepTool(_state: StateManager): ToolDefinition {
         ? recommendSkillFor('worker', 'final_step')
         : isTestStep
           ? recommendSkillFor('worker', 'test_step')
-          : undefined;
+          : recommendSkillFor('worker', 'implementation_step');
 
       return {
         success: true,

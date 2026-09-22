@@ -99,7 +99,7 @@ async function main() {
   // Copy agent scripts
   const scriptsOut = path.join(outputRoot, 'scripts');
   await mkdir(scriptsOut, { recursive: true });
-  const agentScripts = ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh'];
+  const agentScripts = ['moe-agent.ps1', 'moe-agent.sh', 'moe-call.sh', 'prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs'];
   for (const script of agentScripts) {
     const src = path.join(repoRoot, 'scripts', script);
     if (await exists(src)) {

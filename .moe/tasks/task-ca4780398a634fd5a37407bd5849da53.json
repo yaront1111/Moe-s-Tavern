@@ -1,0 +1,47 @@
+{
+  "id": "task-ca4780398a634fd5a37407bd5849da53",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a CLI that fails fast at launch (provider usage limit) makes the wrapper land and push a board-only checkpoint on every backoff retry",
+  "description": "Measured by the governor on 2026-09-19. During a provider usage-limit window the CLI exits 1 within seconds of launch. The wrapper already classifies this (\"CLI exits within 120s of launch (exit 1, 3 in a row) ... backing off up to 900s\") but still runs a full post-flight landing on every retry. Each landing is a wip checkpoint whose only path is the task's own .moe/tasks/<id>.json (the claim touched the record), and it is pushed. Result: qa-7100be29 put 14 commits \"wip(task-d1441364…) [status=REVIEW role=qa cli-exit=1]\" on moe/work-2026-09-13 between 10:18Z and 12:36Z, and 46 cli-exit=1 checkpoint commits landed between 2026-09-18 20:00Z and 2026-09-19 12:50Z. None of them carries work, and they bury the real history. Board state is not lost by skipping them: the next real landing stages the task's BOARD path anyway. Proposed rule, identical in both twins: when an exit is classified as a launch failure and the landing would contain only BOARD paths, skip the checkpoint and log the skip. A launch-failure exit that has real (non-BOARD) dirty owned paths still lands as today.",
+  "definitionOfDone": [
+    "A launch-failure exit whose landing would contain only the task's BOARD path lands no commit and logs a named skip, in both moe-agent.ps1 and moe-agent.sh",
+    "A launch-failure exit with a real owned code path still lands its checkpoint; a postflight arm per twin covers both cases and the skip arm fails on the old launchers",
+    "parity-check.{sh,ps1} pin the skip code; postflight.sh, postflight.ps1 (pwsh and PS 5.1) and both parity checks pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by governor with the human's approval. Planning may proceed now; the WORKING claim stays gated on task-84150869 (both edit the launchers).",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-84150869c3194fce908e6efad8f4c82b"
+  ],
+  "priority": "LOW",
+  "order": 13,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-19T12:52:22.121Z",
+  "updatedAt": "2026-09-19T13:23:33.224Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-19T13:07:06.964Z"
+  },
+  "contextFetchedBy": [
+    "architect-c1e521b4"
+  ],
+  "priorHandoffs": [
+    {
+      "whatIsDone": "Nothing. architect-c1e521b4 claimed the task at 13:07Z and was still reading context when its seat died; no plan was submitted.",
+      "whatRemains": "Plan the task. dependsOn task-84150869 is already set, since both edit the launchers.",
+      "pitfalls": "Both launchers must change together, and parity-check.{sh,ps1} must stay green.",
+      "releasedAt": "2026-09-19T13:23:33.223Z",
+      "releasedBy": "governor-daa92494",
+      "reason": "Confirmed crash: PyCharm restarted at 13:11:34Z. architect-c1e521b4 has no wrapper or CLI process left, and its attempt is parked in reconciling after the 13:11:46Z daemon restart. Released with the human's approval so a live architect can plan it."
+    }
+  ]
+}

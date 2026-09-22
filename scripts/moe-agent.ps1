@@ -63,6 +63,38 @@
     [string]$Model = ""
 )
 
+# ---- Hot-reload supervisor --------------------------------------------------
+# One process and one console per seat, however many reloads. The first
+# invocation in a process runs every pass of this file with `&` and loops while
+# a pass asks for a reload (the restart check in the main loop, then the
+# hand-over at the bottom of this file). `&` re-reads the file, so each pass
+# runs the bytes on disk now, and the previous pass has fully returned (its
+# finally ran, its seat deregistered) before the next one starts. df42861
+# relaunched through `& <exe> <args>` instead: the seat kept its console, but
+# the old wrapper stayed blocked on its child for the child's whole life, one
+# more process per seat per edit -- 45 wrappers / 6.2 GB after one night of
+# launcher landings, 38 of them blocked parents holding 5.5 GB (measured
+# 2026-09-19). An `exit N` anywhere in a pass returns N here and the process
+# exits with it; Ctrl+C stops the whole pipeline, so it never reloads.
+if (-not $global:MoeWrapperSupervised -and $PSCommandPath) {
+    $global:MoeWrapperSupervised = $true
+    $moeReloaded = $false
+    try {
+        do {
+            $global:MoeWrapperReload = $false; $global:LASTEXITCODE = 0
+            & $PSCommandPath @PSBoundParameters
+            $moeRc = $LASTEXITCODE
+            $moeReloaded = $global:MoeWrapperReload
+        } while ($moeReloaded)
+    } catch {
+        # A reloaded file that no longer parses, rejects the bound parameters or
+        # is gone stops the seat, as a failed child relaunch did before.
+        if ($moeReloaded) { Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow }
+        throw
+    } finally { $global:MoeWrapperSupervised = $false }
+    exit $moeRc
+}
+
 # Fail fast on unhandled cmdlet errors. Per-call `-ErrorAction SilentlyContinue`
 # overrides this for spots that intentionally rely on non-terminating errors
 # (Resolve-Path with missing paths, Get-Process for stale PIDs, etc.).
@@ -363,6 +395,17 @@ function Invoke-MoeDeregister {
     try { Invoke-MoeRpc -Tool "deregister_worker" -Args @{ workerId = $WorkerId; reason = $Reason } | Out-Null } catch {}
 }
 # PowerShell.Exiting fires for normal exits AND console-window close in 5.1.
+# Its action resolves Invoke-MoeDeregister only while this pass is on the stack
+# (measured 2026-09-19: at process exit after the pass returned, the name is not
+# recognized), so the outer finally stays the deregister of record. A reload
+# reruns this file in the same process (the supervisor at the top): drop the
+# previous pass's subscriber and its job first so exactly one exists, and touch
+# only ours (a -Command launch that loads a profile may own others).
+try {
+    Get-EventSubscriber -SourceIdentifier PowerShell.Exiting -ErrorAction SilentlyContinue |
+        Where-Object { "$($_.Action.Command)" -match 'Invoke-MoeDeregister' } |
+        ForEach-Object { Unregister-Event -SubscriptionId $_.SubscriptionId; Remove-Job -Id $_.Action.Id -Force -ErrorAction SilentlyContinue }
+} catch {}
 try { Register-EngineEvent -SourceIdentifier ([System.Management.Automation.PsEngineEvent]::Exiting) -Action { Invoke-MoeDeregister } | Out-Null } catch {}
 # Do not attach a PowerShell scriptblock to Console.CancelKeyPress: its foreign
 # thread has no runspace. In 5.1 it was inert; in 7.x it aborts the process before
@@ -698,6 +741,16 @@ $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
+
+# Shared policy applies to every project, before a task is claimed or a model is called.
+$promptCacheHelper = Join-Path $PSScriptRoot 'prompt-cache.mjs'
+if ($cliType -in @('claude', 'codex')) {
+    & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    # Native stream filters must not turn Unicode task/tool text into '?' on PS 5.1.
+    $global:OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = $global:OutputEncoding
+}
 # Codex is interactive (TUI) for every role unless -CodexExec opts the seat
 # into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
 # default to exec because the codex TUI never exits on its own and this wrapper
@@ -733,7 +786,7 @@ if ($cliType -eq "codex") {
         $topLevelConfig = @"
 model_instructions_file = "agent-instructions.md"
 model_reasoning_effort = "$codexReasoningEffort"
-developer_instructions = """`nYou are a $Role agent in the Moe AI Workforce system. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
+developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
 "@
 
         # Build the moe MCP server TOML block. Codex's default MCP startup
@@ -2069,6 +2122,19 @@ function Get-MoeGitTop {
         $rc = $LASTEXITCODE
         if ($rc -ne 0) { $rel = '' }
         $rel = if ($rel) { "$rel".Trim() } else { '' }
+        # Moe's delivery records hold SHA-1 ids only: a sha256 repository lands
+        # nothing, exactly as a no-git one, and the wrapper says so once (a hot
+        # reload starts over). See docs/CONFIGURATION.md autoCommit. Any other
+        # answer proceeds: a git older than 2.29 echoes the unknown flag back,
+        # and it cannot open a sha256 repository anyway. Twin: git_top.
+        $format = & git -C $projectPath rev-parse --show-object-format 2>$null
+        if ("$format".Trim() -ceq 'sha256') {
+            if (-not $script:MoeObjectFormatWarned) {
+                $script:MoeObjectFormatWarned = $true
+                Write-Host "[WARN] MOE_COMMIT_REFUSED_OBJECT_FORMAT: $top uses the sha256 object format; Moe's delivery records hold SHA-1 ids only, so this seat lands nothing there, as in a no-git project." -ForegroundColor Yellow
+            }
+            return $null
+        }
         return @{ Top = $top; GitDir = "$gitDir".Trim(); Rel = $rel }
     } catch {
         return $null
@@ -3622,6 +3688,14 @@ function Update-MoeSharedIndex([string]$Top, [array]$Paths) {
 }
 
 
+# .NET, not Get-FileHash: Windows PowerShell 5.1 started by node under pwsh (the
+# CI 5.1 leg) inherits pwsh's PSModulePath and cannot resolve Get-FileHash at
+# all, which silently turned the hot reload below off there.
+function Get-MoeSha256Hex([byte[]]$Bytes) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '') } finally { $sha.Dispose() }
+}
+
 # Suspended launch + an owned kill-on-close job closes the child-registration
 # race. One inherited log handle captures both streams without memory buffering.
 $script:MoeGateProcessDefinition = @"
@@ -3692,9 +3766,13 @@ public sealed class MoeFrozenGateProcess : IDisposable {
     public void Dispose() { if(job!=IntPtr.Zero) {CloseHandle(job);job=IntPtr.Zero;} if(process!=IntPtr.Zero){CloseHandle(process);process=IntPtr.Zero;} }
 }
 "@
+# A compiled type lives as long as the process, and a hot reload reruns this
+# file in the same process: the class is named after its source, so a changed
+# definition compiles under a new name instead of silently keeping the old code.
+$script:MoeGateTypeName = 'MoeFrozenGateProcess' + (Get-MoeSha256Hex ([Text.Encoding]::UTF8.GetBytes($script:MoeGateProcessDefinition))).Substring(0, 12)
 function Initialize-MoeGateProcess {
-    if ('MoeFrozenGateProcess' -as [type]) { return }
-    Add-Type -TypeDefinition $script:MoeGateProcessDefinition -ErrorAction Stop
+    if ($script:MoeGateTypeName -as [type]) { return }
+    Add-Type -TypeDefinition $script:MoeGateProcessDefinition.Replace('MoeFrozenGateProcess', $script:MoeGateTypeName) -ErrorAction Stop
 }
 function Test-MoeGateIntegrity([hashtable]$Frozen) {
     $top = $script:MoeGate.Workspace
@@ -3803,7 +3881,7 @@ function Invoke-MoeFrozenGate([hashtable]$Git,[hashtable]$Frozen,[string]$Comman
         $vars['MOE_PROJECT_PATH']=$cwd
         $block=(@($vars.Keys | Sort-Object | ForEach-Object { "$_=$($vars[$_])" }) -join [char]0)+[char]0+[char]0
         Write-Host "Post-flight: quality gate: $Command" -ForegroundColor Cyan
-        $gate.Process=New-Object MoeFrozenGateProcess($env:ComSpec,$Command,$cwd,$block,$gate.Log)
+        $gate.Process=New-Object -TypeName $script:MoeGateTypeName -ArgumentList @($env:ComSpec,$Command,$cwd,$block,$gate.Log)
         $gate.Started=$true
         while (-not $gate.Process.Wait(100)) { } # No idle-output timeout.
         $gate.ExitCode=$gate.Process.ExitCode; $gate.Finished=$true
@@ -4496,8 +4574,56 @@ function Invoke-MoeTeardownRescue {
     } catch {}
 }
 
+# A tool_result's text: its string content, or the text parts of a
+# [{type:text}] list (how Claude Code reports MCP results), unwrapping the
+# {"result": ...} envelope Serena returns when an edit added diagnostics.
+function Get-MoeToolResultText($Result) {
+    $content = Get-MoeProp $Result 'content'
+    $text = ''
+    if ($content -is [string]) {
+        $text = $content
+    } elseif ($null -ne $content) {
+        $parts = foreach ($part in @($content)) {
+            $t = Get-MoeProp $part 'text'
+            if ((Get-MoeProp $part 'type') -ceq 'text' -and $t -is [string]) { $t }
+        }
+        $text = @($parts) -join "`n"
+    }
+    $text = $text.Trim()
+    if ($text.StartsWith('{', [StringComparison]::Ordinal)) {
+        try {
+            $inner = Get-MoeProp ($text | ConvertFrom-Json -ErrorAction Stop) 'result'
+            if ($inner -is [string]) { $text = $inner.Trim() }
+        } catch {}
+    }
+    return $text
+}
+
+# The Serena-relative paths a result-gated Serena editor changed, failing
+# closed (a TOOL witness beats a peer's declaration): safe_delete_symbol only
+# on 'OK' (a 'Cannot delete' answer changed nothing), rename_symbol only its
+# declaring file on 'Successfully renamed' (the result names no referencing
+# file: documented gap), replace_in_files exactly the files its applied summary
+# lists (a dry run or a failed guard lists none). Twin of the sh parser's
+# serena_changed.
+function Get-MoeSerenaResultPaths([string]$Tool, $RelativePath, $Result) {
+    $text = Get-MoeToolResultText $Result
+    if ($Tool -eq 'safe_delete_symbol' -or $Tool -eq 'rename_symbol') {
+        $ok = if ($Tool -eq 'safe_delete_symbol') { $text -ceq 'OK' } else { $text.StartsWith('Successfully renamed', [StringComparison]::Ordinal) }
+        if ($ok -and $RelativePath -is [string] -and $RelativePath) { Write-Output $RelativePath }
+        return
+    }
+    $lines = @($text -split "`n")
+    if ($lines[0] -cnotmatch ('^Replaced \d+ ' + [regex]::Escape('occurrence(s) in') + ' \d+ ' + [regex]::Escape('file(s):') + '$')) { return }
+    foreach ($ln in ($lines | Select-Object -Skip 1)) {
+        if ($ln -cmatch '^  (.+): \d+$') { Write-Output $Matches[1] } else { break }
+    }
+}
+
 # Stream-json harvest (claude only): record the paths the CLI's tools wrote.
-function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
+# The result-gated Serena editors name what they changed only in their tool
+# result: they yield paths only when Complete-MoeToolWrite passes $Result.
+function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput, $Result = $null) {
     if (-not $ToolName -or $null -eq $ToolInput) { return }
     if ($null -eq $moeGit) { return }
     $paths = @()
@@ -4505,9 +4631,12 @@ function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
     if ($ToolName -match '^(Edit|Write|MultiEdit|NotebookEdit)$') {
         $kind = 'abs'
         foreach ($k in @('file_path', 'notebook_path')) { $v = Get-MoeProp $ToolInput $k; if ($v -is [string] -and $v) { $paths += $v } }
-    } elseif ($ToolName -match '(^|__)(replace_symbol_body|insert_after_symbol|insert_before_symbol|create_text_file|replace_regex)$') {
+    } elseif ($ToolName -match '(^|__)(replace_symbol_body|insert_after_symbol|insert_before_symbol|create_text_file|replace_regex|replace_content|delete_lines|replace_lines|insert_at_line)$') {
         $kind = 'serena'
         $v = Get-MoeProp $ToolInput 'relative_path'; if ($v -is [string] -and $v) { $paths += $v }
+    } elseif ($ToolName -match '(^|__)(rename_symbol|safe_delete_symbol|replace_in_files)$') {
+        $kind = 'serena'
+        $paths = @(Get-MoeSerenaResultPaths $Matches[2] (Get-MoeProp $ToolInput 'relative_path') $Result)
     } else {
         return
     }
@@ -4530,9 +4659,16 @@ function Get-MoeToolWrittenPaths([string]$ToolName, $ToolInput) {
 # paths (never tool input/result content), and publish them after its successful
 # matching result. Terminal IDs prevent duplicate streamed/full messages from
 # resurrecting a failed write. Overflow holds further evidence for this session.
+# A result-gated Serena call keeps only its tool name (tagged by a NUL, which no
+# path contains) and relative_path; Complete-MoeToolWrite resolves its paths.
 function Register-MoeToolWrite([string]$Id, [string]$ToolName, $ToolInput) {
     if (-not $Id -or $Id.Length -gt 256 -or $script:MoeToolHarvestSaturated -or $script:MoeToolSettled.ContainsKey($Id)) { return }
-    $paths = @(Get-MoeToolWrittenPaths $ToolName $ToolInput | Select-Object -First 501)
+    if ($null -ne $ToolInput -and $ToolName -match '(^|__)(rename_symbol|safe_delete_symbol|replace_in_files)$') {
+        $rp = Get-MoeProp $ToolInput 'relative_path'
+        $paths = @("`0$ToolName", $(if ($rp -is [string]) { $rp } else { '' }))
+    } else {
+        $paths = @(Get-MoeToolWrittenPaths $ToolName $ToolInput | Select-Object -First 501)
+    }
     if ($paths.Count -eq 0) { return }
     if ($paths.Count -gt 500 -or $script:MoeToolPending.Count -ge 2048 -or $script:MoeToolSettled.Count -ge 8192) {
         $script:MoeToolHarvestSaturated = $true; $script:MoeToolPending.Clear(); return
@@ -4553,6 +4689,11 @@ function Complete-MoeToolWrite($Result) {
     $failed = Get-MoeProp $Result 'is_error'
     $hasFlag = if ($Result -is [System.Collections.IDictionary]) { $Result.Contains('is_error') } else { $null -ne $Result.PSObject.Properties['is_error'] }
     if ($hasFlag -and ($failed -isnot [bool] -or $failed)) { return }
+    if ($paths[0].StartsWith("`0", [StringComparison]::Ordinal)) {
+        # A malformed result witnesses nothing and never throws into the stream loop.
+        try { $paths = @(Get-MoeToolWrittenPaths $paths[0].Substring(1) @{ relative_path = $paths[1] } $Result | Select-Object -First 501) } catch { $paths = @() }
+        if ($paths.Count -gt 500) { $script:MoeToolHarvestSaturated = $true; $script:MoeToolPending.Clear(); return }
+    }
     foreach ($path in $paths) { $script:MoeToolWritten[(Get-MoePathKey $path)] = $path }
 }
 
@@ -4678,21 +4819,16 @@ if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [in
 # while every copy on disk already carried the fix.
 #
 # The hash is captured ONCE, here, so one on-disk change triggers exactly one
-# restart: the relaunched process captures the new hash and cannot thrash if the
+# restart: the reloaded pass captures the new hash and cannot thrash if the
 # file is touched again mid-flight.
 $script:MoeWrapperPath = $PSCommandPath
 $script:MoeWrapperLaunchHash = $null
-$script:MoeWrapperHostExe = $null
-$script:MoeWrapperRelaunchArgs = @()
 # Set by the restart check below and read once, past the outer finally, by the
 # hand-over at the very bottom of this file.
 $script:MoeWrapperRelaunchRequested = $false
 try {
     if ($script:MoeWrapperPath -and (Test-Path -LiteralPath $script:MoeWrapperPath)) {
-        $script:MoeWrapperLaunchHash =
-            (Get-FileHash -Algorithm SHA256 -LiteralPath $script:MoeWrapperPath).Hash
-        $script:MoeWrapperHostExe = (Get-Process -Id $PID).Path
-        $script:MoeWrapperRelaunchArgs = @([Environment]::GetCommandLineArgs() | Select-Object -Skip 1)
+        $script:MoeWrapperLaunchHash = Get-MoeSha256Hex ([IO.File]::ReadAllBytes($script:MoeWrapperPath))
     }
 } catch {
     # FAIL-OPEN. A wrapper that dies because it could not stat itself is a fleet
@@ -4719,26 +4855,25 @@ do {
     if ($script:MoeWrapperLaunchHash) {
         $moeCurrentHash = $null
         try {
-            $moeCurrentHash =
-                (Get-FileHash -Algorithm SHA256 -LiteralPath $script:MoeWrapperPath).Hash
+            $moeCurrentHash = Get-MoeSha256Hex ([IO.File]::ReadAllBytes($script:MoeWrapperPath))
         } catch {
             $moeCurrentHash = $null   # FAIL-OPEN: keep running the current bytes
         }
         if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash) {
             Write-Host "wrapper source changed on disk; restarting to load it"
             # The hand-over itself happens past the outer finally, IN THIS
-            # CONSOLE. Until 2026-09-18 this was a `Start-Process`, which gives
-            # the relaunched wrapper its OWN console window and leaves the
-            # launching terminal at a prompt: the operator reads that as a dead
-            # seat and relaunches the same worker id, so two wrapper loops share
-            # it and both resume the held task. Measured that day on
+            # PROCESS AND CONSOLE (the supervisor at the top of this file runs
+            # the file again). Until 2026-09-18 this was a `Start-Process`,
+            # which gives the relaunched wrapper its OWN console window and
+            # leaves the launching terminal at a prompt: the operator reads that
+            # as a dead seat and relaunches the same worker id, so two wrapper
+            # loops share it and both resume the held task. Measured that day on
             # qa-a36819c3 (two CLIs reviewing one REVIEW row, one deleting the
             # other's harness log) and on worker-d0c3b06e. The sh twin `exec`s
-            # in place for the same reason; PowerShell has no exec, so this
-            # process stays alive as the relaunched wrapper's parent.
+            # in place for the same reason.
             # Deregister BEFORE handing over (sh twin parity, same reason
-            # string): the relaunched wrapper registers afresh, and the
-            # post-flight above has already landed this session's work.
+            # string): the next pass registers afresh, and the post-flight
+            # above has already landed this session's work.
             Invoke-MoeDeregister -Reason 'wrapper_restart'
             $script:MoeWrapperRelaunchRequested = $true
             break
@@ -5133,8 +5268,8 @@ do {
     if ($roleDoc) {
         $systemAppend += "`n`n$roleDoc"
     }
-    $systemAppend += $systemAppendPost
     $dynamicContext = ""
+    $dynamicContext += $systemAppendPost
     # A headless loop may launch without a claim solely to answer routed
     # mentions. Claiming later inside that CLI bypasses the task baseline and
     # postflight, both keyed to the preflight task id. Return to the wrapper.
@@ -5378,33 +5513,29 @@ $mentionsJson
     # Write system prompt to CLI-specific instruction files (per iteration so pre-flight data is fresh).
     # Grok is handled in its launch branch below: its prompt file must also carry the final role
     # directive ($claimPromptBody, built after this block), so it is written right before the launch.
-    # For codex and gemini we ALSO fold $dynamicContext (claimed_task_context, routed_mentions, skill JIT)
-    # into the file. Reason: PowerShell 5.1's `&` operator doesn't escape embedded double quotes when
+    # Codex uses a separate private user-context file; Gemini folds context into its instructions.
+    # PowerShell 5.1's `&` operator doesn't escape embedded double quotes when
     # forwarding native-command args on Windows. Task JSON serialized into $dynamicContext routinely
     # contains "..." substrings (e.g. `\"audit.read\"`), which causes codex/gemini to word-split the
     # prompt argv (e.g. "unexpected argument 'VERIFICATION' found"). Claude reads its system prompt
     # from --append-system-prompt-file, so its bug surface is the (mostly quote-free) role directive.
     $codexUsesFileContext = $false
     if ($cliType -eq "codex") {
-        # The project-shared .codex/agent-instructions.md keeps ONLY the
-        # identity-free role doc (it is a project_doc fallback). Everything
-        # per-seat -- "You ARE ... workerId=", the claimed task, inbox, routed
-        # mentions -- goes to a per-PROCESS file handed to codex with
-        # `-c model_instructions_file=<path>` at launch. Measured 2026-09-06:
-        # two codex seats launched 2 s apart both read the shared file, the
-        # second write won, and one seat worked the other's task under the
-        # other's workerId for ten minutes.
+        # Shared fallback stays role-neutral; otherwise a sibling role can change
+        # the prefix. Private stable instructions and private task context remain
+        # separate: task text must never enter model_instructions_file.
         $agentInstructionsPath = Join-Path (Join-Path $projectPath ".codex") "agent-instructions.md"
         $codexDir = Split-Path $agentInstructionsPath -Parent
         if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Force -Path $codexDir | Out-Null }
-        $systemAppend | Set-Content -Path $agentInstructionsPath -Encoding UTF8
+        [System.IO.File]::WriteAllText($agentInstructionsPath, 'Moe role instructions are supplied by the launcher. Follow the user message for this session context.', [System.Text.UTF8Encoding]::new($false))
         $script:CodexSeatInstructionsFile = Join-Path $env:TEMP "moe-codex-instructions-$Role-$PID.md"
         $fileBody = $systemAppend
+        $script:CodexSessionContextFile = Join-Path $env:TEMP ("moe-codex-context-" + [guid]::NewGuid().ToString('N') + '.md')
         if ($dynamicContext) {
-            $fileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext
+            [System.IO.File]::WriteAllText($script:CodexSessionContextFile, $dynamicContext, [System.Text.UTF8Encoding]::new($false))
             $codexUsesFileContext = $true
         }
-        $fileBody | Set-Content -Path $script:CodexSeatInstructionsFile -Encoding UTF8
+        [System.IO.File]::WriteAllText($script:CodexSeatInstructionsFile, $fileBody, [System.Text.UTF8Encoding]::new($false))
         Write-Host "Agent instructions written to: $($script:CodexSeatInstructionsFile) (shared role doc: $agentInstructionsPath)"
     } elseif ($cliType -eq "gemini") {
         $geminiInstructionsDir = Join-Path $projectPath ".gemini"
@@ -5513,11 +5644,19 @@ $mentionsJson
         -and ($preflightRoutedMentions.Count -eq 0)) {
         $moeSkipLaunch = $true
     }
+    if (-not $moeSkipLaunch -and $cliType -in @('claude', 'codex')) {
+        # Settings can change between tasks in a long-lived wrapper.
+        & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+    }
     if ($moeSkipLaunch) {
         if ($preflightClaimFailed) {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$Role worker=$WorkerId - the claim RPC is unreachable; no CLI is launched without a task bound." -ForegroundColor Yellow
         } else {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=idle role=$Role worker=$WorkerId - no claimable task and nothing to answer." -ForegroundColor DarkGray
+        }
+        if ($cliType -eq 'codex' -and $script:CodexSessionContextFile) {
+            Remove-Item -LiteralPath $script:CodexSessionContextFile -Force -ErrorAction SilentlyContinue
         }
         $script:CliExitCode = 0
     } elseif ($cliType -eq "codex") {
@@ -5529,8 +5668,8 @@ $mentionsJson
         }
 
         if ($AutoClaim -and ($preflightOk -or $preflightNoTask)) {
-            # Pre-flight baked context into .codex/agent-instructions.md. When that file already
-            # includes $dynamicContext (see $codexUsesFileContext branch above), argv carries ONLY
+            # Pre-flight wrote a private session-context file. When it includes
+            # $dynamicContext (see $codexUsesFileContext branch above), argv carries ONLY
             # a short quote-free directive — PS < 7.3 forwards native args without escaping embedded
             # double quotes, so any raw task JSON or chat text on argv word-splits the prompt
             # (codex: "unrecognized subcommand"). This must hold even when $claimPromptBody is null
@@ -5540,7 +5679,7 @@ $mentionsJson
                 if ($claimPromptBody) {
                     $shortPrompt = $claimPromptBody
                 } else {
-                    $shortPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CodexSeatInstructionsFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    $shortPrompt = "If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
                 }
             } else {
                 $shortPrompt = $claimPrompt
@@ -5560,6 +5699,10 @@ $mentionsJson
             } else {
                 $shortPrompt = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
             }
+        }
+
+        if ($codexUsesFileContext) {
+            $shortPrompt = "First read the private session context file at $($script:CodexSessionContextFile). It contains your task binding, inbox and routed mentions. " + $shortPrompt
         }
 
         # Last-resort argv guard: PS < 7.3 forwards native args without escaping embedded
@@ -5655,7 +5798,7 @@ $mentionsJson
                     $probePrevEap = $ErrorActionPreference
                     $ErrorActionPreference = 'Continue'
                     try {
-                        $probeOut = (& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
+                        $probeOut = (& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)
                         $probeExit = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
                     } catch { $probeOut = "$_"; if ($probeExit -eq 0) { $probeExit = 1 } } finally { $ErrorActionPreference = $probePrevEap }
                     if ($probeExit -ne 0 -and $probeOut -match 'unexpected argument|unrecognized subcommand|unexpected value') {
@@ -5673,9 +5816,11 @@ $mentionsJson
                         exit 1
                     }
                 }
-                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
-                & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec -C "$projectPath" @codexSandboxArgs "$shortPrompt"
-                $script:CliExitCode = $LASTEXITCODE
+                Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec --json -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
+                & {
+                    & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
+                    $script:CliExitCode = $LASTEXITCODE
+                } | & node $promptCacheHelper codex-stream
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
@@ -5684,6 +5829,9 @@ $mentionsJson
             }
         } finally {
             Stop-HeartbeatSidecar
+            foreach ($cacheFile in @($script:CodexSeatInstructionsFile, $script:CodexSessionContextFile)) {
+                if ($cacheFile) { Remove-Item -LiteralPath $cacheFile -Force -ErrorAction SilentlyContinue }
+            }
         }
     } elseif ($cliType -eq "gemini") {
         # Check gemini is available
@@ -5919,9 +6067,9 @@ $mentionsJson
             # Windows CreateProcess caps the total command line at ~32K UTF-16 chars
             # (~8K through cmd.exe). $claimPrompt — claimed_task_context + inbox +
             # routed_mentions + role directive — can blow past that for workers
-            # whose tasks carry a fat implementationPlan. When it would, embed the
-            # whole user-prompt body into the system-prompt file (Claude has no
-            # --user-message-file flag) and hand the CLI a tiny sentinel.
+            # whose tasks carry a fat implementationPlan. Put the whole user prompt
+            # in a private context file and pass a short read directive. The stable
+            # system prompt must remain identical across tasks, including overflow.
             #
             # The same file route also covers prompts with embedded double quotes,
             # regardless of length. Windows PowerShell 5.1 forwards native-command
@@ -5930,18 +6078,18 @@ $mentionsJson
             # threshold) word-splits into hundreds of argv tokens; the first
             # '-'-leading fragment then kills the CLI as an unknown option
             # (observed: `claude.exe : error: unknown option '-1'` on the
-            # no-task + routed-mentions launch). codex/gemini already dodge this
-            # via their instruction files — claude's user prompt was the gap.
+            # no-task + routed-mentions launch). File delivery preserves exact text.
             $userPromptForCli = $claimPrompt
+            $sessionContextFile = $null
             $WIN_CMD_SAFE_THRESHOLD = 6000
             $isWin = ($env:OS -eq "Windows_NT")
             $promptHasQuote = $claimPrompt -and $claimPrompt.IndexOf('"') -ge 0
             if ($isWin -and $claimPrompt -and ($claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD -or $promptHasQuote)) {
-                $overflow = "`n`n# === Per-iteration runtime context (delivered as system prompt because the Windows command line cannot carry it as a user message) ===`n" + $claimPrompt
-                [System.IO.File]::AppendAllText($systemPromptFile, $overflow, [System.Text.UTF8Encoding]::new($false))
-                $userPromptForCli = "Begin. Your full task context, claimed_task_context, routed mentions, and role directive are at the END of the appended system prompt. Treat the role directive there as your active user request."
+                $sessionContextFile = Join-Path $env:TEMP ("moe-claude-context-" + [guid]::NewGuid().ToString('N') + '.md')
+                [System.IO.File]::WriteAllText($sessionContextFile, $claimPrompt, [System.Text.UTF8Encoding]::new($false))
+                $userPromptForCli = "First read the private session context file at $sessionContextFile. It contains your full task context, claimed_task_context, routed mentions, and role directive. Treat that role directive as your active user request."
                 $overflowReason = if ($claimPrompt.Length -gt $WIN_CMD_SAFE_THRESHOLD) { "length $($claimPrompt.Length) > $WIN_CMD_SAFE_THRESHOLD chars" } else { "embedded double quotes (PS 5.1 argv word-split)" }
-                Write-Host "[prompt-overflow] claimPrompt routed via system prompt file: $overflowReason." -ForegroundColor Yellow
+                Write-Host "[prompt-overflow] claimPrompt routed via private session context file: $overflowReason." -ForegroundColor Yellow
             }
 
             # Per-task one-shot mode. --print runs claude non-interactively: the
@@ -6098,8 +6246,10 @@ $mentionsJson
                     $script:moeToolJson = ""
                     $script:moeToolName = $null
                     $script:moeInText = $false
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli" 2>&1 | ForEach-Object { & $parseStreamJson $_ }
-                    $script:CliExitCode = $LASTEXITCODE
+                    & {
+                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli" 2>&1
+                        $script:CliExitCode = $LASTEXITCODE
+                    } | & node $promptCacheHelper claude-stream | ForEach-Object { & $parseStreamJson $_ }
                 } else {
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs "$userPromptForCli"
                     $script:CliExitCode = $LASTEXITCODE
@@ -6108,8 +6258,10 @@ $mentionsJson
                 Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort max $($printArgs -join ' ')"
                 if ($usePrintMode) {
                     $script:moeToolJson = ""
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs 2>&1 | ForEach-Object { & $parseStreamJson $_ }
-                    $script:CliExitCode = $LASTEXITCODE
+                    & {
+                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs 2>&1
+                        $script:CliExitCode = $LASTEXITCODE
+                    } | & node $promptCacheHelper claude-stream | ForEach-Object { & $parseStreamJson $_ }
                 } else {
                     & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort max @printArgs
                     $script:CliExitCode = $LASTEXITCODE
@@ -6117,6 +6269,7 @@ $mentionsJson
             }
             } finally {
                 Stop-HeartbeatSidecar
+                if ($sessionContextFile) { Remove-Item -LiteralPath $sessionContextFile -Force -ErrorAction SilentlyContinue }
             }
         }
     }
@@ -6412,18 +6565,13 @@ $mentionsJson
 
 # ---- Self-restart hand-over (see the restart check inside the loop) ---------
 # Runs only after the finally above has released this session's temp files,
-# gate workspace, live marker and seat, so the relaunched wrapper starts from a
-# clean slate. The call operator keeps the CHILD IN THIS CONSOLE: the operator's
-# terminal still shows the seat, Ctrl+C still reaches it, and nobody mistakes a
-# hand-over for a dead seat and launches a second loop on the same worker id.
-if ($script:MoeWrapperRelaunchRequested -and $script:MoeWrapperHostExe) {
-    $moeRelaunchExe = $script:MoeWrapperHostExe
-    $moeRelaunchArgs = @($script:MoeWrapperRelaunchArgs)
-    try {
-        & $moeRelaunchExe @moeRelaunchArgs
-        exit $LASTEXITCODE
-    } catch {
-        Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow
-        exit 1
-    }
-}
+# gate workspace, live marker and seat, so the next pass starts from a clean
+# slate. The supervisor at the top of this file runs that pass IN THIS PROCESS
+# AND CONSOLE: one process and one console per seat however many reloads, the
+# operator's terminal still shows the seat, Ctrl+C still reaches it, and nobody
+# mistakes a hand-over for a dead seat and launches a second loop on the same
+# worker id. The runner identity (<pid>@<start token>) belongs to the process,
+# so it survives the reload and a held attempt can still reattach afterwards.
+if ($script:MoeWrapperRelaunchRequested) { $global:MoeWrapperReload = $true }
+# Explicit, so the supervisor never reads a stale native exit code.
+exit 0

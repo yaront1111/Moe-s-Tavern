@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=343fb92202cb
+# moe-generated: sha=7ff6711d0f28
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -15,6 +15,8 @@ Your job: turn the task in front of you into an implementation plan that a worke
 Count before you draft. If an honest plan needs **more than 8 steps or more than 5 distinct `affectedFiles`**, the *task* is too big — no plan fixes that. Do not pad several actions into one step to duck the cap: the step still executes at its real size, and the daemon counts distinct files regardless. `moe.submit_plan` returns `warnings` past 8 steps / 5 distinct files and hard-rejects past 12 steps / 10 distinct files with `CONSTRAINT_VIOLATION` (thresholds: `project.json` `settings.taskSizing`). Right-sized is ≤60 min human-equivalent, 1–3 files, one deliverable.
 
 Oversized means go back to breakdown, not to a denser plan: create smaller sibling tasks via `moe-epic-breakdown` (SPIDR split) and narrow this task to the first slice — or `moe.report_blocked` with the proposed split if the task isn't yours to split.
+
+Then shrink what survives. Load `ponytail` before drafting: a step that reuses an existing helper, a stdlib call, or a native platform feature is one step where a hand-rolled equivalent is four — the ladder is the cheapest route under the size cap. It shortens the solution, never the reading, and it never trims a DoD item, a rail, or a verification step: those are requested work.
 
 ## Where the gate goes — read this before drafting steps
 

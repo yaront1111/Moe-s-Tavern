@@ -182,7 +182,7 @@ done
 
 # Attempt finalize ladder, candidate-evidence and gate-cleanup prose: an operator
 # reading either transcript must see the same diagnosis for the same state.
-for prose in '[finalize] no finalizing attempt for this seat on task' 'has no pinned identity; not acknowledging.'   'finalize_attempt acknowledgement exhausted; stopping new-task loop' 'qualityGate not run: candidate evidence unavailable'   'Cannot remove owned qualityGate workspace' 'cleanup will be retried'   'Attempt identity unavailable:' 'Missing/stale attempt identity; candidate completion will fail closed.'; do
+for prose in '[finalize] no finalizing attempt for this seat on task' 'has no pinned identity; not acknowledging.'   'finalize_attempt acknowledgement exhausted; stopping new-task loop' 'qualityGate not run: candidate evidence unavailable'   'Cannot remove owned qualityGate workspace' 'cleanup will be retried'   'Attempt identity unavailable:' 'Missing/stale attempt identity; candidate completion will fail closed.' 'uses the sha256 object format; Moe'; do
   require_both "attempt/gate prose" "$prose"
 done
 
@@ -203,6 +203,21 @@ for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequire
 done
 for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this wrapper pinned no such reconciling attempt; nothing to reattach.'; do
   require_both "runner reattach prose" "$prose"
+done
+
+# Hot reload: the restart announcement an operator sees and the deregister
+# reason both postflight hot-reload cases assert, spelled identically in both.
+for lit in 'wrapper source changed on disk; restarting to load it' wrapper_restart; do
+  require_both "hot reload" "$lit"
+done
+
+# Serena TOOL-tier tools: the editing calls whose successful result is TOOL
+# evidence (old names kept for older Serena installs), and the replace_in_files
+# summary header both wrappers parse.
+for tool in replace_symbol_body insert_after_symbol insert_before_symbol create_text_file replace_regex \
+  replace_content replace_in_files rename_symbol safe_delete_symbol delete_lines replace_lines insert_at_line \
+  'occurrence(s) in'; do
+  require_both "Serena TOOL-tier tools" "$tool"
 done
 
 # Deferred features must not be advertised by either wrapper.

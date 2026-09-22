@@ -107,25 +107,25 @@ if ([int]$caseCount -lt 8) {
 Write-Host "[seed] $caseCount stored cases + 2 synthetic delivery-failure cases"
 
 # Capture stands in for the CLI. With a fat prompt the wrapper takes its Windows
-# overflow path and embeds the assembled context in the --append-system-prompt-file
-# file (case-d is sized to guarantee that), so the capture copies that file --
-# the exact bytes a real worker session is handed.
+# overflow path and references a private user-context file. Capture both the
+# stable instructions and the referenced context, exactly as the agent reads them.
 $captureCmd = Join-Path $tempRoot 'claude.cmd'
+$captureJs = Join-Path $tempRoot 'capture-context.cjs'
+[System.IO.File]::WriteAllText($captureJs, @'
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const chunks = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--append-system-prompt-file') chunks.push(fs.readFileSync(args[++i], 'utf8'));
+  const match = /^First read the private session context file at (.+?)\. It contains/.exec(args[i]);
+  if (match) chunks.push(fs.readFileSync(match[1], 'utf8'));
+}
+fs.writeFileSync(process.env.MOE_PROVENANCE_CAPTURE, chunks.join('\n'));
+'@, [System.Text.UTF8Encoding]::new($false))
 $captureBody = @'
 @echo off
-setlocal
-set "prev="
-:loop
-if "%~1"=="" goto done
-if /I "%prev%"=="--append-system-prompt-file" (
-  type "%~1" > "%MOE_PROVENANCE_CAPTURE%"
-  goto done
-)
-set "prev=%~1"
-shift
-goto loop
-:done
-exit /b 0
+node "%~dp0capture-context.cjs" %*
+exit /b %errorlevel%
 '@
 [System.IO.File]::WriteAllText($captureCmd, $captureBody, [System.Text.ASCIIEncoding]::new())
 

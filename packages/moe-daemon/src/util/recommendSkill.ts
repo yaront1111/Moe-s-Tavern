@@ -17,6 +17,7 @@
  *   - architect, before submit_plan                     → writing-plans
  *   - worker,    on first start_step (unfamiliar code)  → explore-before-assume
  *   - worker,    on test-touching step                  → test-driven-development
+ *   - worker,    on any other mid-plan step             → ponytail
  *   - worker,    on final step                          → adversarial-self-review
  *   - worker,    before complete_task                   → verification-before-completion
  *   - worker,    on BLOCKED / repeated failure          → systematic-debugging
@@ -56,6 +57,7 @@ export type SkillTrigger =
   | 'before_submit_plan'       // architect, plan drafted
   | 'first_start_step'         // worker, opening a step
   | 'test_step'                // worker, step touches tests
+  | 'implementation_step'      // worker, mid-plan step: not the first, not test-touching, not the final
   | 'final_step'               // worker, last step before complete_step
   | 'before_complete_task'     // worker, all steps done
   | 'task_blocked'             // worker, set_task_status BLOCKED
@@ -72,6 +74,7 @@ const TABLE: Record<Role, Partial<Record<SkillTrigger, SkillRecommendation>>> = 
   worker: {
     first_start_step:     { name: 'explore-before-assume',         reason: 'First step in code you have not verified. Load this before editing so you build on what actually exists, not assumptions.' },
     test_step:            { name: 'test-driven-development',       reason: 'This step touches tests. Load this and write the test before the implementation.' },
+    implementation_step:  { name: 'ponytail',                      reason: 'Mid-plan implementation step. Load this and climb the ladder before you write code: reuse what this repo already has, then stdlib, then native, then one line. The plan, the DoD and the rails are requested work - never simplify those away.' },
     final_step:           { name: 'adversarial-self-review',       reason: 'Final step before complete_step. Load this and read your own diff as an attacker before you finish.' },
     before_complete_task: { name: 'verification-before-completion', reason: 'You are about to call complete_task. Load this and actually run the verification and regression checks before claiming done.' },
     task_blocked:         { name: 'systematic-debugging',          reason: 'You are about to report blocked. Load this and debug systematically before giving up.' },

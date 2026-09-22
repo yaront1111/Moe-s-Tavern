@@ -582,7 +582,7 @@ function git(d,...a){const r=cp.spawnSync('git',['-C',d,...a],{encoding:'utf8'})
 const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tracked-mutation','exit-tail',
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
-'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
+'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
@@ -590,7 +590,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -612,7 +612,7 @@ const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-ma
 // exactly once, before deregister_worker, with what it actually did to the bytes.
 // teardown-running is the control: its attempt is still `running` (no
 // complete_task), so the very same exit path must acknowledge NOTHING.
-const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit',
+const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit','teardown-sha256':'nothing-to-commit',
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
@@ -686,9 +686,14 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
   if(!noGit){
-    git(repo,'init','-q');git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
+    // A sha256 repository: both wrappers refuse it at their git probe, because
+    // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
+    if(!sha256)git(repo,'init','-q');
+    else if(cp.spawnSync('git',['-C',repo,'init','-q','--object-format=sha256']).status!==0){
+      console.log('[frozen candidate] '+mode+' skipped: this git cannot create a sha256 repository (git init --object-format=sha256 needs git 2.29+)');continue;}
+    git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
     if(mode==='unborn')git(repo,'symbolic-ref','HEAD','refs/heads/moe/frozen');
     else{git(repo,'add','--','seed.txt','nested project é/owned.txt','nested project é/gate.cjs');
       git(repo,'commit','-qm','seed');git(repo,'checkout','-qb','moe/frozen');}
@@ -753,7 +758,7 @@ if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json')
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
+if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
   const cli=path.join(root,mode+(win?'.cmd':'.sh'));
@@ -1120,6 +1125,17 @@ exit "$rc"
     assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');
     count++;continue;
   }
+  if(mode==='sha256-repo'){
+    // Refused at the git probe, named once per wrapper process, and nothing lands:
+    // no candidate, gate, commit or rescue ref, the CLI's bytes stay uncommitted,
+    // and the finalize acknowledges nothing-to-commit, exactly as in no-git.
+    assert.deepEqual({refused:said('MOE_COMMIT_REFUSED_OBJECT_FORMAT'),named:log.includes('uses the sha256 object format; Moe'),
+      head:after===before,rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),
+      evidence:candidates.length+checks.length+seen.length,commits:rpc.filter(r=>r.tool==='record_commit').map(r=>r.args.outcome),
+      finals:finals.map(f=>f.args.outcome),owned:read(owned),committed:git(repo,'show','HEAD:nested project é/owned.txt')},
+      {refused:1,named:true,head:true,rescue:'',evidence:0,commits:[],finals:['nothing-to-commit'],owned:'frozen owned\n',committed:'base'},log);
+    count++;continue;
+  }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
@@ -1375,6 +1391,37 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         "echo {`"type`":`"assistant`",`"message`":{`"content`":[{`"type`":`"tool_use`",`"id`":`"t2`",`"name`":`"Edit`",`"input`":{`"file_path`":`"%MOE_PROJECT_PATH:\=/%/tool-edited.txt`",`"old_string`":`"a`",`"new_string`":`"b`"}}]}}`r`n" +
         "echo {`"type`":`"user`",`"message`":{`"content`":[{`"type`":`"tool_result`",`"tool_use_id`":`"t2`",`"is_error`":false,`"content`":`"ok`"}]}}`r`n" +
         "exit /b 0`r`n")
+    # Serena emitter (scenario K2): writes six files, then replays
+    # serena-stream.jsonl, the same transcript as postflight.sh's SERENA_CLI:
+    # Serena's current editing tools with Serena's own result texts, each a
+    # complete tool_use plus its successful matching tool_result. refused.txt
+    # is named only by calls that changed nothing.
+    $serenaStreamJsonl = Join-Path $tempRoot 'serena-stream.jsonl'
+    Set-Content -Path $serenaStreamJsonl -Encoding ASCII -Value @'
+{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"model":"fake"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-content","name":"mcp__serena__replace_content","input":{"relative_path":"contested.txt","needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-content","is_error":false,"content":[{"type":"text","text":"OK"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-text","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-text","is_error":false,"content":"Replaced 3 occurrence(s) in 2 file(s):\n  multi-a.txt: 2\n  multi-b.txt: 1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-diag","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","relative_path":"sub dir"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-diag","is_error":false,"content":[{"type":"text","text":"{\"result\": \"Replaced 1 occurrence(s) in 1 file(s):\\n  sub dir\\\\diag.txt: 1\", \"diagnostics[warning-or-higher]\": {\"sub dir\\\\diag.txt\": {}}}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename","name":"mcp__serena__rename_symbol","input":{"name_path":"Foo","relative_path":"rename-decl.txt","new_name":"Bar"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename","is_error":false,"content":[{"type":"text","text":"Successfully renamed 'Foo' to 'Bar' (1 changes applied)"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-delete","name":"mcp__serena__safe_delete_symbol","input":{"name_path_pattern":"Baz","relative_path":"refused.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-delete","is_error":false,"content":[{"type":"text","text":"Cannot delete, the symbol Baz is referenced in: {\"multi-a.txt\": [3]}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-dry-run","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","dry_run":true}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-dry-run","is_error":false,"content":[{"type":"text","text":"Found 1 occurrence(s) in 1 file(s). DRY RUN - no changes were applied.\n\nrefused.txt (1 occurrence(s)):\n  refused.txt: 1"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename-failed","name":"mcp__serena__rename_symbol","input":{"name_path":"Baz","relative_path":"refused.txt","new_name":"Qux"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename-failed","is_error":false,"content":[{"type":"text","text":"Error executing tool: ValueError: Renaming symbol 'Baz' to 'Qux' resulted in no changes being applied"}]}]}}
+{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"end_turn"}
+'@
+    $serenaStreamCmd = Join-Path $tempRoot 'serena-stream.cmd'
+    Set-Content -Path $serenaStreamCmd -Encoding ASCII -Value ("@echo off`r`n" +
+        "mkdir `"%MOE_PROJECT_PATH%\sub dir`"`r`n" +
+        "for %%f in (contested.txt multi-a.txt multi-b.txt rename-decl.txt refused.txt) do echo serena> `"%MOE_PROJECT_PATH%\%%f`"`r`n" +
+        "echo serena> `"%MOE_PROJECT_PATH%\sub dir\diag.txt`"`r`n" +
+        "type `"%~dp0serena-stream.jsonl`"`r`n" +
+        "exit /b 0`r`n")
     # CAS-contention hook (MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF): moves the
     # branch tip between commit-tree and update-ref by committing a peer file.
     $hookPeerCmd = Join-Path $tempRoot 'hook-peer.cmd'
@@ -1431,6 +1478,93 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         # didn't by checking the count is stable a few seconds later.
         Start-Sleep -Seconds 3
         $countAfterWait = if (Test-Path $heartbeatLogFile) { (Get-Content $heartbeatLogFile | Measure-Object -Line).Lines } else { 0 }
+
+        # --- Hot reload keeps ONE wrapper process. An edit to moe-agent.ps1
+        # reloads every live seat at the top of its next iteration. df42861
+        # handed over with `& <exe> <args>`: the seat kept its console, but the
+        # old wrapper stayed blocked on its child for good, one more process
+        # per seat per edit (45 wrappers / 5.5 GB after one night, 2026-09-19).
+        # Two edits to a COPY (repo-launched seats reload on every edit of the
+        # real file) must leave one wrapper process, one runner identity on
+        # every claim, and a seat that goes on claiming. ---
+        $reloadWrapper = Join-Path $tempRoot 'reload\scripts\moe-agent.ps1'
+        $reloadProject = Join-Path $tempRoot 'reload\project'
+        New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
+        Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter 'prompt-cache*.mjs' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+        }
+        Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload.out'
+        function Get-ReloadRows {
+            $lines = @(); try { $lines = @(Get-Content -LiteralPath $reloadRpcLog -ErrorAction Stop) } catch {}
+            foreach ($line in $lines) { try { $line | ConvertFrom-Json } catch {} }
+        }
+        # c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister.
+        function Get-ReloadSequence {
+            -join @(Get-ReloadRows | ForEach-Object {
+                if ($_.tool -eq 'claim_next_task') { 'c' }
+                elseif ($_.tool -eq 'deregister_worker') { if ($_.args.reason -eq 'wrapper_restart') { 'r' } else { 'x' } }
+            })
+        }
+        function Get-ReloadWrapperPids {
+            @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" |
+                Where-Object { $_.CommandLine -and $_.CommandLine.Contains($reloadWrapper) } | ForEach-Object { $_.ProcessId })
+        }
+        function Wait-ReloadSequence([string]$Pattern, [string]$What) {
+            $deadline = (Get-Date).AddSeconds($wrapperTimeoutSec)
+            while ((Get-Date) -lt $deadline -and -not $reloadProc.HasExited) {
+                if ((Get-ReloadSequence) -match $Pattern) { return }
+                Start-Sleep -Milliseconds 250
+            }
+            throw "HOT RELOAD FAILED: no $What (waited up to ${wrapperTimeoutSec}s; wrapper exited: $($reloadProc.HasExited); RPC sequence '$(Get-ReloadSequence)')"
+        }
+        # The seat hashes its own file every iteration; that read can refuse a
+        # concurrent write for a moment.
+        function Set-ReloadWrapperText([string]$Text) {
+            for ($i = 1; ; $i++) {
+                try { [IO.File]::WriteAllText($reloadWrapper, $Text, (New-Object System.Text.UTF8Encoding($true))); return }
+                catch { if ($i -ge 20) { throw }; Start-Sleep -Milliseconds 100 }
+            }
+        }
+        $reloadProc = $null
+        $reloadCounts = @()
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $env:MOE_DISABLE_HEARTBEAT = '1'
+        try {
+            $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', 'worker-reload', '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+            $null = $reloadProc.Handle
+            Wait-ReloadSequence '^c' 'first claim'
+            # Edit 1 rewrites the restart announcement, which the SECOND reload
+            # prints from the reloaded bytes: a reload runs the file on disk.
+            $reloadText = [IO.File]::ReadAllText($reloadWrapper)
+            $reloadEdited = $reloadText.Replace('restarting to load it"', 'restarting to load it (edit 1 loaded)"')
+            if ($reloadEdited -eq $reloadText) { throw 'HOT RELOAD FAILED: the restart announcement is missing from the wrapper' }
+            Set-ReloadWrapperText $reloadEdited
+            Wait-ReloadSequence '^c+rc' 'claim after reload 1'
+            $reloadCounts += @(Get-ReloadWrapperPids).Count
+            Set-ReloadWrapperText ($reloadEdited + "# reload 2`n")
+            Wait-ReloadSequence '^c+rc+rc' 'claim after reload 2'
+            $reloadCounts += @(Get-ReloadWrapperPids).Count
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
+            if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+            foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+        }
+        $reloadSeq = Get-ReloadSequence
+        $reloadIds = @(Get-ReloadRows | Where-Object { $_.tool -eq 'claim_next_task' } | ForEach-Object { "$($_.args.processStartedAt)|$($_.args.host)" } | Sort-Object -Unique)
+        $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+        $reloadProblems = @()
+        if ($reloadSeq -notmatch '^c+rc+rc+$') { $reloadProblems += "expected claims, then exactly two wrapper_restart deregisters each followed by claims; RPC sequence '$reloadSeq'" }
+        if (($reloadCounts -join ',') -ne '1,1') { $reloadProblems += "expected exactly 1 wrapper process after each reload; counted $($reloadCounts -join ' then ')" }
+        if ($reloadIds.Count -ne 1 -or $reloadIds[0] -like '|*') { $reloadProblems += "expected every claim to carry one runner identity; got $($reloadIds.Count): $($reloadIds -join '; ')" }
+        if ($reloadLog -notlike '*restarting to load it (edit 1 loaded)*') { $reloadProblems += 'the second reload did not run the edited bytes' }
+        if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
+        Write-Host '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity'
 
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no
@@ -2000,6 +2134,37 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
                 }
                 $scopeScenariosRun++
                 Write-Host '[scenario K] ok'
+
+                # Scenario K2 — Serena's current editing tools are TOOL
+                # evidence too (same fixture as postflight.sh). Six asserted
+                # paths are also peer-declared (contested): under the default
+                # attribution.contested=skip-untouched each lands only with a
+                # TOOL witness. refused.txt, named only by calls that changed
+                # nothing, stays out.
+                Write-Host "[scenario K2] Serena's current editing tools witness contested paths; no-op results do not"
+                $scopeK2Dir = Join-Path $tempRoot 'scope-k2'
+                New-ScopeProject $scopeK2Dir @('owned-a.txt', 'contested.txt', 'multi-a.txt', 'multi-b.txt', 'rename-decl.txt', 'refused.txt', 'sub dir/diag.txt')
+                Set-Content -Path (Join-Path $scopeK2Dir 'owned-a.txt') -Value 'owned-a'
+                $scopeK2Out = Join-Path $tempRoot 'scope-k2.out'
+                $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                $env:FAKE_SCOPE_PEER_DECLARED = 'contested.txt:task-peer,multi-a.txt:task-peer,multi-b.txt:task-peer,rename-decl.txt:task-peer,refused.txt:task-peer,sub dir/diag.txt:task-peer'
+                try {
+                    Assert-ScopeRun 'K2' (Invoke-GateWrapper $scopeK2Dir $scopeK2Out -Command $serenaStreamCmd) $scopeK2Out
+                } finally {
+                    Remove-Item Env:FAKE_SCOPE_PEERS_ACTIVE -ErrorAction SilentlyContinue
+                    Remove-Item Env:FAKE_SCOPE_PEER_DECLARED -ErrorAction SilentlyContinue
+                }
+                if ((Get-CommittedPaths $scopeK2Dir) -ne 'contested.txt multi-a.txt multi-b.txt owned-a.txt rename-decl.txt sub dir/diag.txt') {
+                    Get-Content $scopeK2Out -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw "SCENARIO K2 FAILED: expected owned-a.txt + every Serena-witnessed contested path; got [$(Get-CommittedPaths $scopeK2Dir)]"
+                }
+                if (@(& git -C $scopeK2Dir status --porcelain 2>$null) -notcontains '?? refused.txt') { throw 'SCENARIO K2 FAILED: refused.txt must stay untracked' }
+                if (-not (Get-Content -Raw -Path $scopeK2Out).Contains('[skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)')) {
+                    Get-Content $scopeK2Out -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                    throw 'SCENARIO K2 FAILED: expected [skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario K2] ok'
 
                 # Scenario L — declaration tiers. An ASSERTED path that was
                 # already dirty at baseline and never changed is still committed
@@ -2869,7 +3034,7 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                     if ($scopeZArgs -contains '--full-auto') { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: codex 0.147+ rejects --full-auto; it must never be on argv' }
                     # -cnotcontains: the default -contains is case-insensitive, so `-C` would be
                     # satisfied by the `-c` seat overrides that precede every codex launch.
-                    foreach ($flag in @('exec', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
+                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
                         if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
@@ -2878,7 +3043,7 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                     # appears once per invocation; every occurrence must point under $env:TEMP.
                     $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
                     if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
-                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, the reviewer pin and --sandbox danger-full-access' }
+                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec --json -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, JSON mode, the reviewer pin and --sandbox danger-full-access' }
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
                     $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)
@@ -3073,8 +3238,8 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 29) {
-                    throw "Expected 29 commit-scope scenarios (A-V, M2, M3, X-Z, AA, AB); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 30) {
+                    throw "Expected 30 commit-scope scenarios (A-V, K2, M2, M3, X-Z, AA, AB); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

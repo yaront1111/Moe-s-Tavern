@@ -169,8 +169,11 @@ export function requiredCheckCommand(state: StateManager, task: Task): string | 
  * logged and answers false.
  *
  * `command` is the trimmed setting, and the recorded command is trimmed before the
- * compare: the ps1 wrapper records settings.qualityGate verbatim (the sh one trims
- * it), and no shell sees the padding a hand-edited project.json can carry.
+ * compare. Both wrappers trim settings.qualityGate before they run and record it,
+ * but a padded command can still reach this compare: a run the ps1 wrapper recorded
+ * before task-8fc35d31, a run from an older wrapper an IDE plugin still bundles,
+ * or a direct moe.record_check_run call (checkRunStore keeps `command` as sent).
+ * Trimming is safe: no shell sees the padding a hand-edited project.json can carry.
  */
 function hasPassingCheck(state: StateManager, taskId: string, command: string): boolean {
   try {

@@ -596,7 +596,7 @@ function git(d,...a){const r=cp.spawnSync('git',['-C',d,...a],{encoding:'utf8'})
 const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tracked-mutation','exit-tail',
 'record_candidate-refuse','record_candidate-null','record_candidate-malformed',
 'record_check_run-refuse','record_check_run-null','record_check_run-malformed',
-'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
+'finalize-loss-once','finalize-loss','no-change','disabled','deferred','gate-blank','gate-padded','manual','no-git','sha256-repo','missing-attempt','stale-attempt','workspace-failure','claim-missing','claim-malformed','closed-attempt',
 'loop-land-twice',
 'nogate-qa-claimed','gate-qa-claimed','checkpoint-reconciling','checkpoint-unpinned','manual-reconciling','manual-unpinned',
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
@@ -604,7 +604,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'receipt-ledger-replay','receipt-rebase-replay','receipt-foreign-replay',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
-'teardown-finalizing','teardown-manual','teardown-no-git','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
+'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
 // supervisor stops the wrapper as soon as that claim is seen. freed-* is a
 // seat-freeing report_blocked (the task exits BLOCKED): whatever became of the
@@ -626,7 +626,7 @@ const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-ma
 // exactly once, before deregister_worker, with what it actually did to the bytes.
 // teardown-running is the control: its attempt is still `running` (no
 // complete_task), so the very same exit path must acknowledge NOTHING.
-const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit',
+const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit','teardown-sha256':'nothing-to-commit',
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':''};
 const teardownRescued=['teardown-finalizing','teardown-recovered','teardown-scope','teardown-running'];
@@ -700,9 +700,14 @@ if(mode==='exit-tail'){process.stdout.write('é😀'.repeat(5000)+'TAIL');proces
   write(path.join(nested,'.moe','project.json'),JSON.stringify({id:'proj-frozen',name:'Frozen',settings}));
   write(path.join(nested,'.moe','tasks','task-postflight.json'),JSON.stringify({id:'task-postflight',title:'Frozen',
     status:'WORKING',filesModified:ownedPaths,implementationPlan:[{stepId:'s1',status:'COMPLETED',modifiedFiles:ownedPaths}]}));
-  const noGit=mode==='no-git'||mode==='teardown-no-git';
+  const noGit=mode==='no-git'||mode==='teardown-no-git',sha256=mode==='sha256-repo'||mode==='teardown-sha256';
   if(!noGit){
-    git(repo,'init','-q');git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
+    // A sha256 repository: both wrappers refuse it at their git probe, because
+    // Moe's delivery records hold SHA-1 ids only. Creating one needs git 2.29+.
+    if(!sha256)git(repo,'init','-q');
+    else if(cp.spawnSync('git',['-C',repo,'init','-q','--object-format=sha256']).status!==0){
+      console.log('[frozen candidate] '+mode+' skipped: this git cannot create a sha256 repository (git init --object-format=sha256 needs git 2.29+)');continue;}
+    git(repo,'config','core.autocrlf','false');git(repo,'config','user.name','Moe Test');git(repo,'config','user.email','moe@test.local');
     if(mode==='unborn')git(repo,'symbolic-ref','HEAD','refs/heads/moe/frozen');
     else{git(repo,'add','--','seed.txt','nested project é/owned.txt','nested project é/gate.cjs');
       git(repo,'commit','-qm','seed');git(repo,'checkout','-qb','moe/frozen');}
@@ -767,7 +772,7 @@ if(qaClaimed)fs.writeFileSync(path.join(dir,'.moe','attempts','attempt-qa.json')
  workerId:'qa-frozen',runnerId:'qa-frozen',phase:'running',workspace:dir,startedAt:stamp,lastPhaseAt:stamp}));
 if(mode.endsWith('-unpinned')||mode==='freed-corrupt-sibling')fs.writeFileSync(path.join(dir,'.moe','attempts','zzz-broken.json'),'{not json');
 if(mode==='teardown-no-baseline')fs.rmSync(${JSON.stringify(baselineFile)},{force:true});
-if(/^teardown-(finalizing|manual|no-git|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
+if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.test(mode)){const ready=path.join(dir,'.moe','gate-ready');fs.writeFileSync(ready,'ready');
  const until=Date.now()+120000,wait=setInterval(()=>{if(fs.existsSync(ready+'.sent')||Date.now()>until)clearInterval(wait);},100);}
 `);
   const cli=path.join(root,mode+(win?'.cmd':'.sh'));
@@ -1134,6 +1139,17 @@ exit "$rc"
     assert.equal(git(repo,'show','HEAD:nested project é/owned.txt'),'frozen owned');
     count++;continue;
   }
+  if(mode==='sha256-repo'){
+    // Refused at the git probe, named once per wrapper process, and nothing lands:
+    // no candidate, gate, commit or rescue ref, the CLI's bytes stay uncommitted,
+    // and the finalize acknowledges nothing-to-commit, exactly as in no-git.
+    assert.deepEqual({refused:said('MOE_COMMIT_REFUSED_OBJECT_FORMAT'),named:log.includes('uses the sha256 object format; Moe'),
+      head:after===before,rescue:git(repo,'for-each-ref','--format=%(refname)','refs/moe/rescue/'),
+      evidence:candidates.length+checks.length+seen.length,commits:rpc.filter(r=>r.tool==='record_commit').map(r=>r.args.outcome),
+      finals:finals.map(f=>f.args.outcome),owned:read(owned),committed:git(repo,'show','HEAD:nested project é/owned.txt')},
+      {refused:1,named:true,head:true,rescue:'',evidence:0,commits:[],finals:['nothing-to-commit'],owned:'frozen owned\n',committed:'base'},log);
+    count++;continue;
+  }
   if(['dirty-helper','race-fail','tracked-mutation','exit-tail','hidden-mutation','record_candidate-refuse'].includes(mode))
     assert.equal(pushBlocked,true,'a real gate or evidence persistence failure stays PUSH-BLOCKED\n'+log);
   if(mode==='dirty-helper'){
@@ -1488,6 +1504,95 @@ if [ "$count_after_wait" -ne "$count_at_exit" ]; then
   echo "Heartbeat sidecar kept pinging ($count_after_wait calls) after the wrapper exited ($count_at_exit at exit) - stop_heartbeat_sidecar cleanup failed" >&2
   exit 1
 fi
+
+# --- Hot reload: the wrapper re-execs itself when its own bytes change on disk
+# (twin: the hot-reload arm in postflight.ps1). Two edits to a COPY -- a
+# repo-launched seat reloads on every edit of the real file -- must each yield
+# exactly one deregister_worker with reason wrapper_restart, then a fresh
+# claim_next_task (the daemon re-registers a worker on its claim), and no
+# further restart: the relaunched wrapper hashes the new bytes and must not
+# thrash. The second restart announcement must come from the edited bytes.
+# Until 45633c7 the sh relaunch got NO arguments and died with "Provide
+# --project or --project-name": every sh seat, on its first hot reload. ---
+echo "[hot reload] a changed wrapper restarts once per edit and re-registers"
+RELOAD_DIR="$TMP_DIR/reload"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+mkdir -p "$RELOAD_PROJECT/.moe/messages"
+# The whole scripts/ dir: the restart deregisters through the sibling moe-call.sh.
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+# moe-call.sh refuses to deregister without daemon.json; the fake proxy never reads it.
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+# c = claim_next_task, r = a wrapper_restart deregister, x = any other deregister
+# (the postflight.ps1 twin maps the same). A line still mid-append is skipped.
+cat > "$TMP_DIR/reload-sequence.cjs" <<'JS'
+const fs=require('fs'),file=process.argv[2];
+const text=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
+const rows=text.split('\n').flatMap(l=>{try{return [JSON.parse(l)];}catch(e){return [];}});
+process.stdout.write(rows.map(r=>r.tool==='claim_next_task'?'c':r.tool!=='deregister_worker'?'':
+  r.args&&r.args.reason==='wrapper_restart'?'r':'x').join(''));
+JS
+reload_seq() { "$NODE_FOR_TEST" "$TMP_DIR/reload-sequence.cjs" "$RELOAD_PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null || true; }
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  "$RELOAD_WRAPPER" \
+  --project "$RELOAD_PROJECT" \
+  --worker-id worker-reload \
+  --role worker \
+  --no-start-daemon \
+  --command /bin/true \
+  --loop \
+  --poll-interval 1 \
+  >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+# The EXIT trap kills LIVE_PIDS: an abort below must not leave a looping wrapper.
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_fail() {
+  kill -KILL "$reload_pid" 2>/dev/null || true
+  cat "$TMP_DIR/wrapper-reload.out" >&2 || true
+  cat "$RELOAD_PROJECT/.moe/deregister.log" >&2 2>/dev/null || true
+  echo "HOT RELOAD FAILED: $1 (RPC sequence '$(reload_seq)')" >&2
+  exit 1
+}
+# reload_wait EDITS REGEX -- poll until the sequence matches REGEX. Fails at once
+# on a deregister with another reason (the hand-over took an exit path), on more
+# restarts than edits (thrash), or on a wrapper that is gone.
+reload_wait() {
+  local edits="$1" want="$2" deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC)) seq restarts
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    seq="$(reload_seq)"
+    restarts="${seq//[!r]/}"
+    case "$seq" in *x*) reload_fail "a deregister other than wrapper_restart" ;; esac
+    [ "${#restarts}" -le "$edits" ] || reload_fail "a restart with no edit behind it"
+    if [[ $seq =~ $want ]]; then return 0; fi
+    kill -0 "$reload_pid" 2>/dev/null || reload_fail "the wrapper exited"
+    sleep 0.5
+  done
+  reload_fail "timed out after ${POSTFLIGHT_TIMEOUT_SEC}s waiting for $want"
+}
+reload_wait 0 '^c'
+# Edit 1 rewrites the restart announcement, which the SECOND restart prints from
+# the reloaded bytes. The running bash parsed the whole loop already, and the
+# restart deregisters before it execs, so the exec reads the finished write.
+"$NODE_FOR_TEST" -e 'const fs=require("fs"),f=process.argv[1],a="restarting to load it\"",t=fs.readFileSync(f,"utf8");
+if(t.split(a).length!==2)process.exit(3);fs.writeFileSync(f,t.replace(a,"restarting to load it (edit 1 loaded)\""));' "$RELOAD_WRAPPER" \
+  || reload_fail "the restart announcement is missing from the wrapper"
+reload_wait 1 '^c+rcc'
+printf '# reload 2\n' >> "$RELOAD_WRAPPER"
+reload_wait 2 '^c+rc{2,}rcc'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+reload_want='^c+rc{2,}rc{2,}$'
+[[ $reload_final =~ $reload_want ]] \
+  || reload_fail "expected claims, then exactly two wrapper_restart deregisters each followed by claims"
+grep -Fq 'restarting to load it (edit 1 loaded)' "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail "the second restart did not run the edited bytes"
+echo "[hot reload] ok: 2 restarts, each re-registered, none without an edit"
 
 # --- Quality gate (settings.qualityGate): the post-flight runs the configured
 # command before auto-commit. Failing gate => no commit, PUSH-BLOCKED chat
@@ -1940,6 +2045,43 @@ printf '%s\n' '{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"en
 exit 0
 EOF
   chmod +x "$STREAM_CLI"
+  # SERENA_CLI (scenario K2) writes six files, then streams Serena's current
+  # editing tools the way Claude Code reports MCP calls: a complete tool_use,
+  # then a successful tool_result whose content is a [{type:text,text}] list
+  # (once a plain string). The texts are Serena's own: replace_content 'OK',
+  # replace_in_files' applied summary (plain, and inside the diagnostics JSON
+  # envelope with a Windows path), a rename_symbol success. refused.txt is
+  # named only by calls that changed nothing: a safe_delete_symbol refusal, a
+  # replace_in_files dry run and a failed rename. Same transcript as the ps1
+  # harness's serena-stream.jsonl.
+  SERENA_CLI="$TMP_DIR/serena-cli"
+  cat > "$SERENA_CLI" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p "$MOE_PROJECT_PATH/sub dir"
+for f in contested.txt multi-a.txt multi-b.txt rename-decl.txt refused.txt 'sub dir/diag.txt'; do
+  echo serena > "$MOE_PROJECT_PATH/$f"
+done
+cat <<'JSONL'
+{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"model":"fake"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-content","name":"mcp__serena__replace_content","input":{"relative_path":"contested.txt","needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-content","is_error":false,"content":[{"type":"text","text":"OK"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-text","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-text","is_error":false,"content":"Replaced 3 occurrence(s) in 2 file(s):\n  multi-a.txt: 2\n  multi-b.txt: 1"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-files-diag","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","relative_path":"sub dir"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-files-diag","is_error":false,"content":[{"type":"text","text":"{\"result\": \"Replaced 1 occurrence(s) in 1 file(s):\\n  sub dir\\\\diag.txt: 1\", \"diagnostics[warning-or-higher]\": {\"sub dir\\\\diag.txt\": {}}}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename","name":"mcp__serena__rename_symbol","input":{"name_path":"Foo","relative_path":"rename-decl.txt","new_name":"Bar"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename","is_error":false,"content":[{"type":"text","text":"Successfully renamed 'Foo' to 'Bar' (1 changes applied)"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-delete","name":"mcp__serena__safe_delete_symbol","input":{"name_path_pattern":"Baz","relative_path":"refused.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-delete","is_error":false,"content":[{"type":"text","text":"Cannot delete, the symbol Baz is referenced in: {\"multi-a.txt\": [3]}"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-dry-run","name":"mcp__serena__replace_in_files","input":{"needle":"old","repl":"serena","mode":"literal","dry_run":true}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-dry-run","is_error":false,"content":[{"type":"text","text":"Found 1 occurrence(s) in 1 file(s). DRY RUN - no changes were applied.\n\nrefused.txt (1 occurrence(s)):\n  refused.txt: 1"}]}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"serena-rename-failed","name":"mcp__serena__rename_symbol","input":{"name_path":"Baz","relative_path":"refused.txt","new_name":"Qux"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"serena-rename-failed","is_error":false,"content":[{"type":"text","text":"Error executing tool: ValueError: Renaming symbol 'Baz' to 'Qux' resulted in no changes being applied"}]}]}}
+{"type":"result","num_turns":1,"duration_ms":10,"stop_reason":"end_turn"}
+JSONL
+exit 0
+EOF
+  chmod +x "$SERENA_CLI"
 
   committed_paths() { # $1 = dir -- space-terminated sorted file list of HEAD
     git -C "$1" show --pretty=format: --name-only HEAD | sed '/^$/d' | sort | tr '\n' ' '
@@ -2269,6 +2411,35 @@ EOF
   fi
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario K] ok"
+
+  # Scenario K2 -- Serena's current editing tools are TOOL evidence too. Six
+  # asserted paths are also peer-declared (contested): under the default
+  # attribution.contested=skip-untouched each lands only with a TOOL witness.
+  # replace_content, replace_in_files (both content shapes, the diagnostics
+  # envelope, a Windows path with a space) and rename_symbol's declaring file
+  # land; refused.txt, named only by calls that changed nothing, stays out.
+  echo "[scenario K2] Serena's current editing tools witness contested paths; no-op results do not"
+  SCOPE_K2_DIR="$TMP_DIR/scope-k2"
+  make_scope_project "$SCOPE_K2_DIR" '["owned-a.txt","contested.txt","multi-a.txt","multi-b.txt","rename-decl.txt","refused.txt","sub dir/diag.txt"]'
+  echo owned-a > "$SCOPE_K2_DIR/owned-a.txt"
+  set +e
+  FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='contested.txt:task-peer,multi-a.txt:task-peer,multi-b.txt:task-peer,rename-decl.txt:task-peer,refused.txt:task-peer,sub dir/diag.txt:task-peer' \
+    run_scope_wrapper "$SCOPE_K2_DIR" "$TMP_DIR/scope-k2.out" "$SERENA_CLI"
+  scope_k2_code=$?
+  set -e
+  [ "$scope_k2_code" -eq 0 ] || scope_fail K2 "wrapper exited with $scope_k2_code" "$TMP_DIR/scope-k2.out"
+  scope_k2_files="$(committed_paths "$SCOPE_K2_DIR")"
+  if [ "$scope_k2_files" != "contested.txt multi-a.txt multi-b.txt owned-a.txt rename-decl.txt sub dir/diag.txt " ]; then
+    scope_fail K2 "expected owned-a.txt + every Serena-witnessed contested path; got [$scope_k2_files]" "$TMP_DIR/scope-k2.out"
+  fi
+  if ! git -C "$SCOPE_K2_DIR" status --porcelain | grep -q '^?? refused\.txt$'; then
+    scope_fail K2 "refused.txt must stay untracked" "$TMP_DIR/scope-k2.out"
+  fi
+  if ! grep -Fq '[skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' "$TMP_DIR/scope-k2.out"; then
+    scope_fail K2 "expected '[skip] refused.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" "$TMP_DIR/scope-k2.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario K2] ok"
 
   # Scenario L -- the two-tier split: an ASSERTED path dirty at baseline and
   # unchanged is still committed (declaration wins -- the b54b5609 stranding),
@@ -3323,7 +3494,7 @@ EOF
   # The banner is what the launch-failure hint tells the operator to re-run by
   # hand, so it must carry the seat override and the reviewer pin too.
   if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox danger-full-access' "$TMP_DIR/scope-z.out" \
-     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec -C' "$TMP_DIR/scope-z.out"; then
+     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec --json -C' "$TMP_DIR/scope-z.out"; then
     scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox danger-full-access" "$TMP_DIR/scope-z.out"
   fi
   if ! grep -Fq 'run the printed Command by hand' "$TMP_DIR/scope-z.out"; then
@@ -3486,6 +3657,7 @@ EOF
   CODEX_ARGS_FILE="$TMP_DIR/codex-args.txt"
   CODEX_PATH_FILE="$TMP_DIR/codex-instructions-path.txt"
   CODEX_INSTRUCTIONS_COPY="$TMP_DIR/codex-instructions-copy.md"
+  CODEX_CONTEXT_COPY="$TMP_DIR/codex-context-copy.md"
   CODEX_TMP_DIR="$TMP_DIR/codex-tmp"
   mkdir -p "$CODEX_TMP_DIR"
   cat > "$CODEX_CLI" <<EOF
@@ -3497,6 +3669,11 @@ for arg in "\$@"; do
     path="\${arg#model_instructions_file=}"
     printf '%s\n' "\$path" > "$CODEX_PATH_FILE"
     if [ -f "\$path" ]; then cp "\$path" "$CODEX_INSTRUCTIONS_COPY"; fi
+  fi
+  if [[ "\$arg" == 'First read the private session context file at '* ]]; then
+    context="\${arg#First read the private session context file at }"
+    context="\${context%%. It contains*}"
+    cp "\$context" "$CODEX_CONTEXT_COPY"
   fi
   prev="\$arg"
 done
@@ -3534,11 +3711,15 @@ EOF
     *) echo "received path: $CODEX_HEADLESS_PATH" >&2; scope_fail Z2 "headless instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-headless.out" ;;
   esac
   [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z2 "headless Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-headless.out"
-  for needle in 'Role: worker' '# Session Context (per-iteration)' 'Claimed task id: task-resume'; do
+  for needle in 'Role: worker'; do
     if ! grep -Fq -- "$needle" "$CODEX_INSTRUCTIONS_COPY"; then
       scope_fail Z2 "headless instructions file is missing [$needle]" "$TMP_DIR/wrapper-codex-headless.out"
     fi
   done
+  grep -Fq 'Claimed task id: task-resume' "$CODEX_CONTEXT_COPY" || scope_fail Z2 'private user context is missing task binding' "$TMP_DIR/wrapper-codex-headless.out"
+  if grep -Fq 'Claimed task id:' "$CODEX_INSTRUCTIONS_COPY"; then
+    scope_fail Z2 'task context polluted the stable system instructions' "$TMP_DIR/wrapper-codex-headless.out"
+  fi
   if [ -e "$CODEX_HEADLESS_PATH" ]; then
     scope_fail Z2 "headless per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-headless.out"
   fi
@@ -3574,8 +3755,8 @@ EOF
     *) echo "received path: $CODEX_TUI_PATH" >&2; scope_fail Z2 "interactive instructions path is not under TMPDIR" "$TMP_DIR/wrapper-codex-tui.out" ;;
   esac
   [ -f "$CODEX_INSTRUCTIONS_COPY" ] || scope_fail Z2 "interactive Codex could not read its per-seat file" "$TMP_DIR/wrapper-codex-tui.out"
-  if ! grep -Fq -- '# Session Context (per-iteration)' "$CODEX_INSTRUCTIONS_COPY"; then
-    scope_fail Z2 "interactive instructions file is missing per-iteration context" "$TMP_DIR/wrapper-codex-tui.out"
+  if ! grep -Fq -- 'Claimed task id: task-resume' "$CODEX_CONTEXT_COPY"; then
+    scope_fail Z2 "interactive private context file is missing task binding" "$TMP_DIR/wrapper-codex-tui.out"
   fi
   if [ -e "$CODEX_TUI_PATH" ]; then
     scope_fail Z2 "interactive per-seat instructions file was not removed after exit" "$TMP_DIR/wrapper-codex-tui.out"
@@ -3652,8 +3833,8 @@ EOF
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 29 ]; then
-    echo "Expected 29 commit-scope scenarios (A-P, M2, M3, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 30 ]; then
+    echo "Expected 30 commit-scope scenarios (A-P, K2, M2, M3, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

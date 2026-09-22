@@ -77,6 +77,15 @@ Bad rejects produce ping-pong. Good rejects produce one round-trip.
 - **Never approve "with notes."** Either it's done or it's not. If you have notes, reject and let the worker address them.
 - **Never re-write the worker's code in your reject message.** Describe the gap, don't fix it for them — they need the practice.
 
+## Second pass: complexity
+
+Once the verdict is settled on correctness, run `ponytail-review` over the same diff — a complexity-only pass
+(`delete:` / `stdlib:` / `native:` / `yagni:` / `shrink:`, one line per finding). Route the findings, don't just list them:
+
+- Breaches a rail or a DoD item → a real `rejectionDetails` entry.
+- Leaner but equally correct → the `qa_approve { summary }`, or a follow-up card via `moe.create_task`. Taste is never grounds for a reject (see above), and a needless reopen pushes the task toward the 3-reopen auto-flip back to PLANNING.
+- A worker's `ponytail:` comment naming a ceiling and an upgrade path is declared intent. Flag it only if the ceiling is wrong or the corner breaks a DoD item.
+
 ## When you're not sure
 
 If the diff is large or touches an unfamiliar subsystem, before deciding:

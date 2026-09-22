@@ -8,14 +8,43 @@
     "The diff changes only that comment (no code); the daemon build (npm run build in packages/moe-daemon) passes"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Replace the stale reason in the hasPassingCheck doc comment. This is a comment-only change.\n\nIn packages/moe-daemon/src/delivery/policy.ts, find the JSDoc directly above `function hasPassingCheck` (lines 165-174 at planning). Replace exactly these two lines (172-173):\n```\n * compare: the ps1 wrapper records settings.qualityGate verbatim (the sh one trims\n * it), and no shell sees the padding a hand-edited project.json can carry.\n```\nwith these five lines:\n```\n * compare. Both wrappers trim settings.qualityGate before they run and record it,\n * but a padded command can still reach this compare: a run the ps1 wrapper recorded\n * before task-8fc35d31, a run from an older wrapper an IDE plugin still bundles,\n * or a direct moe.record_check_run call (checkRunStore keeps `command` as sent).\n * Trimming is safe: no shell sees the padding a hand-edited project.json can carry.\n```\nLeave everything else byte-identical: line 171 (\" * `command` is the trimmed setting, and the recorded command is trimmed before the\"), the first paragraph, and all code. Both trims stay: `run.command.trim()` in hasPassingCheck and `.trim()` in requiredCheckCommand. They protect the three sources the new text names.\n\nError handling does not change. The try/catch in hasPassingCheck, which logs a lookup failure and answers false, is untouched, and no new failure path is added.\n\nEvery claim in the text was checked against code at planning:\n- ps1 trims in Read-MoeCommitSettings at scripts/moe-agent.ps1:2036 (`$qg.Trim()`, from task-8fc35d31 / f1399a3).\n- sh strips at scripts/moe-agent.sh:7333 (`v.strip()`).\n- state/checkRunStore.ts:106-114 requireCommand stores `command` untrimmed.\n- tools/recordCheckRun.ts:63 documents it as never trimmed.\n\nMake the change with the built-in Edit tool, which keeps policy.ts LF (`git ls-files --eol` shows i/lf w/lf). On this box Serena replace_content rewrites the whole file as CRLF (mem:gotcha-serena-edit-rewrites-crlf-on-windows). The new text contains no `*/`, which would close the JSDoc early.\n\nOut of scope: src/tools/qaApprove.test.ts:1451-1454 and src/state/deliveryProjection.test.ts:232 carry the same stale wording, but DoD 2 limits this diff to this one comment. They are filed as BACKLOG follow-up task-6177c9c4711542509512fa96cfee8b50. Do not touch them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "Replaced the stale 2-line reason in the hasPassingCheck JSDoc (policy.ts:172-173) with the planned 5 lines, using the built-in Edit tool. git diff --numstat = \"5\t2\"; every +/- line is a ` *` JSDoc line; no added `*/`; git ls-files --eol still i/lf w/lf, 0 CR bytes. Code untouched: both trims (requiredCheckCommand .trim(), hasPassingCheck run.command.trim()) and the try/catch stay. Re-checked the claims against code before the edit: ps1 Read-MoeCommitSettings trims at moe-agent.ps1:2036 and Send-MoeCheckRun records $Gate.Command, which is the same trimmed $Settings.qualityGate it runs (3886 -> 3790/3806/1416); sh strips at moe-agent.sh:7333 and record_check_run_rpc sends $QUALITY_GATE (1996); checkRunStore.ts:106-114 requireCommand returns `command` untrimmed; recordCheckRun.ts:63 says \"never trimmed\". No test added: the change is comment-only (DoD 2 forbids code), so no behaviour exists for a test to fail on. Peer-owned dirty paths (docs/roles, docs/skills, .moe/skills, src/generated/skillFiles.ts, tools/startStep.ts, util/contextNextAction.ts, util/recommendSkill*.ts, other .moe/tasks rows) are untouched and not reported.",
+      "startedAt": "2026-09-19T13:19:33.749Z",
+      "completedAt": "2026-09-19T13:19:58.002Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Prove the diff is comment-only and that `npm run build` passes, without touching the shared checkout.\n\n(a) Shared checkout, from the repo root:\n- `git diff --numstat -- packages/moe-daemon/src/delivery/policy.ts` prints `5\t2`.\n- `git diff` of that file shows only ` *` JSDoc lines.\n- `git ls-files --eol` still shows w/lf.\n\n(b) Run `npm run build` in a scratch export of HEAD plus this one file, NEVER in the shared checkout. Three reasons:\n- Its prebuild regenerates src/generated/initFiles.ts from docs/roles/*.md. Peers' uncommitted docs/roles/*.reference.md lines (the ponytail rows; verified absent from initFiles.ts) would dirty the clean initFiles.ts, and the post-flight could land that file in this task as MEASURED.\n- `clean` deletes the dist a live daemon may run from.\n- tsc would compile peers' dirty src.\n\nRun the git lines in ONE Bash call from the repo root (env does not persist between tool calls):\n```\nN=t42c1-$RANDOM; S=/d/moe-scratch/$N; mkdir -p \"$S\"; echo \"$N\"\nexport GIT_INDEX_FILE=D:/moe-scratch/$N.index\ngit read-tree HEAD && git update-index -- packages/moe-daemon/src/delivery/policy.ts && T=$(git write-tree)\nunset GIT_INDEX_FILE\ngit diff --stat HEAD \"$T\"   # must list ONLY packages/moe-daemon/src/delivery/policy.ts\ngit archive \"$T\" packages/moe-daemon docs | tar -x -C \"$S\"\n```\nThen link node_modules and build:\n1. PowerShell: `New-Item -ItemType Junction -Path D:\\moe-scratch\\<N>\\packages\\moe-daemon\\node_modules -Target D:\\projexts\\moes\\packages\\moe-daemon\\node_modules`.\n2. Bash: `cd /d/moe-scratch/<N>/packages/moe-daemon && npm run build; echo exit=$?`. It must print exit=0.\n\nTear down in this order (mem:gotcha-qa-scratch-and-snapshot-traps section 2):\n1. PowerShell: `$j = Get-Item -Force <junction>; if ($j.LinkType -eq 'Junction') { [System.IO.Directory]::Delete($j.FullName, $false) }`.\n2. `Test-Path D:\\projexts\\moes\\packages\\moe-daemon\\node_modules\\typescript\\package.json` must print True.\n3. Only then, Bash: `rm -rf /d/moe-scratch/<N> /d/moe-scratch/<N>.index`.\n\n(c) Final self-check:\n- Re-read the new comment against the four code facts in step 1.\n- `git status --porcelain -- packages/moe-daemon/src/generated` must match the pre-task state. initFiles.ts stays clean. skillFiles.ts is a peer's pre-existing M: leave it alone.\n\nThen call complete_task:\n- modifiedFiles: packages/moe-daemon/src/delivery/policy.ts only.\n- verification: { command: 'npm run build', exitCode: 0 }, with an outputTail that says it ran in a scratch export of HEAD + policy.ts and quotes the numstat.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "(a) Shared checkout: git diff --numstat policy.ts = \"5\t2\"; every changed line is a ` *` JSDoc line; no added line contains `*/` (count 0); git ls-files --eol = i/lf w/lf. (b) Scratch build, following the plan's recipe: temp index D:/moe-scratch/t42c1-6882.index, `git read-tree HEAD` + `update-index policy.ts`, write-tree T=61450b423303bc2508fc706a9069eb75baa3185e. `git diff --stat HEAD T` listed ONLY packages/moe-daemon/src/delivery/policy.ts (5 insertions, 2 deletions). `git archive T packages/moe-daemon docs` went to D:/moe-scratch/t42c1-6882, with a junction to the live node_modules. `npm run build` there ran clean, generate-init-files (\"8 role docs + 3 subagents\"), generate-skill-files (\"62 skill files across 15 skills\") and tsc, and printed exit=0. dist/delivery/policy.js carries the new text. Teardown: junction unlinked via [System.IO.Directory]::Delete (LinkType Junction checked first); live node_modules/typescript/package.json = True; 0 reparse points left; then rm -rf of the scratch dir, index and log (no leftovers). (c) Self-check: every claim was re-verified against code. ps1 trims at moe-agent.ps1:2036, runs that value (3886 -> 3806 via ComSpec) and records it (1416 $Gate.Command). sh strips at moe-agent.sh:7333, runs `bash -c \"$QUALITY_GATE\"` (3963) and records the same value (1996). checkRunStore.ts:106-114 requireCommand returns `command` untrimmed. recordCheckRun.ts:63 says \"never trimmed\". `git status --porcelain -- packages/moe-daemon/src/generated` matches the pre-task state: only the peer's pre-existing ` M skillFiles.ts`, initFiles.ts clean. Live packages/moe-daemon/dist untouched (no build ran in the shared checkout). Considered but theoretical only: the kept clause \"no shell sees the padding\" is literally true for current wrappers, which trim before they run. For a record from a pre-fix wrapper the padding is leading/trailing whitespace that cmd /c and bash -c ignore, so the trim-for-compare still equates only equivalent commands.",
+      "startedAt": "2026-09-19T13:20:27.565Z",
+      "completedAt": "2026-09-19T13:21:01.637Z"
+    }
+  ],
+  "planRevision": 5,
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted by governor with the human's approval: give the idle architects work.",
   "createdBy": "QA",
   "parentTaskId": null,
   "priority": "LOW",
@@ -23,5 +52,137 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T23:52:56.320Z",
-  "updatedAt": "2026-09-18T23:52:56.320Z"
+  "updatedAt": "2026-09-19T13:34:35.184Z",
+  "metrics": {
+    "firstClaimAt": "2026-09-19T13:12:10.949Z",
+    "plannedStepCount": 2,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2,
+    "doneAt": "2026-09-19T13:24:13.814Z",
+    "wallClockMs": 722865
+  },
+  "contextFetchedBy": [
+    "architect-74607b1b",
+    "worker-0966ef4c",
+    "qa-8df1fc47"
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-19T13:18:42.518Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Drop the reason and just say the trim is defensive. Rejected: DoD 1 requires naming the three sources.\n(2) Also fix the same stale wording in qaApprove.test.ts:1451-1454 and deliveryProjection.test.ts:232. Rejected for this card: DoD 2 limits the diff to this one comment, and test titles are code. Filed as BACKLOG task-6177c9c4 instead. The daemon warned that this is a meta row and suggested consolidating it here; that needs a human DoD edit, so it is left for the human.\n(3) Run `npm run build` in the shared checkout. Rejected: prebuild would regenerate initFiles.ts with peers' uncommitted role-doc lines (verified), and clean would wipe the dist a live daemon may run from.",
+    "codebaseInsights": "Both trims in policy.ts stay: requiredCheckCommand trims the setting, and hasPassingCheck trims the recorded command. Where the stale claim stood at planning:\n- ps1 trims at scripts/moe-agent.ps1:2036. The task text's line 1980 had drifted.\n- sh strips at scripts/moe-agent.sh:7333.\n- checkRunStore.ts:106-114 keeps `command` untrimmed.\n\nThe only source-text guard that scans daemon src lines is util/daemonGitDocs.test.ts. It looks for 'never runs/executes/touches git', 'runs no git' and 'does not run git'. The new text matches none of them.\n\nThe new wording follows the convention some src comments use (claimEligibility.ts, reportBlocked.ts) of citing short task ids.",
+    "risks": "- An Edit that changes the file's EOL shows up as whole-file churn. Use the Edit tool, not Serena, and check that numstat is `5 2`.\n- A `*/` inside the new text would close the JSDoc early. The given text has none, and the build catches it.\n- QA re-running `npm run build` faces the same shared-checkout trap. Use the step 2 scratch recipe; `npx tsc --noEmit -p packages/moe-daemon` is a read-only fallback, but it compiles peers' dirty src.\n- Dirty paths owned by other sessions (docs/roles, docs/skills, .moe/skills, src/generated/skillFiles.ts, tools/startStep.ts, util/contextNextAction.ts, util/recommendSkill*.ts, other .moe/tasks rows) must never be reverted, staged or reported.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/tools/recordCheckRun.ts"
+    ]
+  },
+  "planApprovedAt": "2026-09-19T13:18:42.622Z",
+  "workStartedAt": "2026-09-19T13:19:33.749Z",
+  "reviewStartedAt": "2026-09-19T13:21:20.210Z",
+  "verification": {
+    "command": "npm run build",
+    "exitCode": 0,
+    "outputTail": "Ran in a scratch export of HEAD + packages/moe-daemon/src/delivery/policy.ts (temp-index tree 61450b423303bc2508fc706a9069eb75baa3185e; git diff --stat HEAD T lists only policy.ts; git diff --numstat = 5\t2) at D:/moe-scratch/t42c1-6882/packages/moe-daemon with node_modules junctioned to the live one.\n> moe-daemon@0.8.0 prebuild\n> npm run clean && npm run generate-init-files && npm run generate-skill-files\n> moe-daemon@0.8.0 clean\n> moe-daemon@0.8.0 generate-init-files\nGenerated D:\\moe-scratch\\t42c1-6882\\packages\\moe-daemon\\src\\generated\\initFiles.ts (8 role docs + 3 subagents, sha-stamped)\n> moe-daemon@0.8.0 generate-skill-files\nGenerated D:\\moe-scratch\\t42c1-6882\\packages\\moe-daemon\\src\\generated\\skillFiles.ts (62 skill files across 15 skills)\n> moe-daemon@0.8.0 build\n> tsc\nexit=0\n(dist/delivery/policy.js contains the new comment text)",
+    "reportedAt": "2026-09-19T13:21:20.210Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/policy.ts",
+    ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+    ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+    ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+    ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json"
+  ],
+  "completionSummary": "Comment-only fix in packages/moe-daemon/src/delivery/policy.ts, the hasPassingCheck JSDoc (lines 171-176). It replaced the stale claim \"the ps1 wrapper records settings.qualityGate verbatim (the sh one trims it)\" with the current facts: both wrappers now trim before they run and record. It also names the three sources that can still hand the compare a padded command: runs the ps1 wrapper recorded before task-8fc35d31, older wrappers bundled in IDE plugins, and direct moe.record_check_run callers (checkRunStore keeps `command` as sent). Code untouched: both trims (requiredCheckCommand and hasPassingCheck `run.command.trim()`) and the try/catch stay.\n\nDiff: `git diff --numstat` = 5 2, only ` *` JSDoc lines, no added `*/`, file stays LF (i/lf w/lf, 0 CR bytes). `grep verbatim policy.ts` finds nothing.\n\nEvery claim was checked against code:\n- ps1 trims at moe-agent.ps1:2036, runs that value (3886 -> 3806) and records it (1416).\n- sh strips at moe-agent.sh:7333, runs it via `bash -c` (3963) and records it (1996).\n- checkRunStore.ts:106-114 keeps `command` untrimmed.\n- recordCheckRun.ts:63 says \"never trimmed\".\n\nBuild ran in a scratch export (temp index, HEAD + policy.ts, tree 61450b42, `git diff --stat HEAD T` = policy.ts only), never in the shared checkout: its prebuild would regenerate initFiles.ts from peers' dirty docs and `clean` would wipe the live dist. Scratch was torn down, junction unlinked first, live node_modules checked. src/generated matches the pre-task state (only the peer's skillFiles.ts M). Stale wording in qaApprove.test.ts / deliveryProjection.test.ts is out of scope (follow-up task-6177c9c4).",
+  "commits": [
+    {
+      "sha": "249ec63a1c3d23dbcecb214e514511c12f79ba7a",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0966ef4c@2026-09-19T13:18:50Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "recordedBy": "worker-0966ef4c",
+      "recordedAt": "2026-09-19T13:21:40.626Z",
+      "treeId": "a799b9e01dbdac091dba67ae505bc9a8b441b9b0",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "f2a1b8beac3b6ee8d7528ccceb21f0b0ac4958e2",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-8df1fc47@2026-09-19T13:21:55Z",
+      "paths": [
+        ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+        ".moe/tasks/task-d144136406384f96b85388da77f193ed.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "qa-8df1fc47",
+      "recordedAt": "2026-09-19T13:24:33.031Z",
+      "treeId": "8bb9a685cf20df563520981bcbc2be8508a22798",
+      "status": "DONE",
+      "pushed": true
+    },
+    {
+      "sha": "9321b4656a529b793cfcac2d8063ed6419b3a22e",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-74607b1b@2026-09-19T13:12:11Z",
+      "paths": [
+        ".moe/tasks/task-16aac8b441b44867b8c9b1faaf141dc0.json"
+      ],
+      "recordedBy": "architect-74607b1b",
+      "recordedAt": "2026-09-19T13:34:35.184Z",
+      "treeId": "5e083d8c15f26e06d5675bcad4e8e261c92f41d9",
+      "status": "DONE",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/policy.ts"
+  ],
+  "unattributedPaths": [
+    "docs/roles/architect.reference.md",
+    "docs/roles/qa.reference.md",
+    "docs/roles/worker.reference.md",
+    "docs/skills/LICENSE-VENDORED.md",
+    "docs/skills/manifest.json",
+    "docs/skills/moe-planning/SKILL.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "docs/skills/ponytail/SKILL.md",
+    "docs/skills/ponytail/SOURCE.md",
+    "docs/skills/ponytail-review/SKILL.md",
+    "docs/skills/ponytail-review/SOURCE.md",
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    "packages/moe-daemon/src/tools/startStep.ts",
+    "packages/moe-daemon/src/util/contextNextAction.ts",
+    "packages/moe-daemon/src/util/recommendSkill.test.ts",
+    "packages/moe-daemon/src/util/recommendSkill.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-74607b1b@2026-09-19T13:12:11Z",
+    "at": "2026-09-19T13:34:35.184Z"
+  },
+  "completedAt": "2026-09-19T13:24:13.814Z",
+  "reviewCompletedAt": "2026-09-19T13:24:13.814Z",
+  "reviewSummary": "DoD 1 PASS: the policy.ts:171-176 hasPassingCheck JSDoc no longer calls either wrapper verbatim. It names all three reasons the trim stays: pre-8fc35d31 ps1 records, older bundled wrappers, and direct record_check_run callers.\n\nClaims checked against code:\n- ps1 trims with `$qg.Trim()` at 2036 (added by f1399a3; before that it assigned verbatim).\n- ps1 runs and records that value: 3886 to 4051 Invoke-MoeFrozenGate, then 1416 command=$Gate.Command.\n- sh strips at 7333, runs it at 3963, records it at 1996.\n- checkRunStore requireCommand keeps it verbatim; recordCheckRun.ts:63 says \"never trimmed\".\n\nDoD 2 PASS: commit 249ec63 changes policy.ts by 5+/2-, all ` *` lines. No `*/` added, both trims (:159, :185) and the try/catch are intact, the file is still LF, and the working tree matches HEAD. The commit's other paths are wrapper board-state (this task's JSON, and task-e92b2cb3's governor promotion).\n\nRe-ran `npm run build` in a scratch `git archive 249ec63 packages/moe-daemon docs` with node_modules junctioned: exit 0, and dist/delivery/policy.js has the new text. qaApprove.test.ts and deliveryProjection.test.ts pass 190/190 there. The scratch is torn down (junction unlinked first, live node_modules OK), and the shared src/generated is unchanged.\n\nLedger: 249ec63 is a completion commit, pushed, recorded after workStartedAt. The task has no candidate record.\n\nRails: comment-only, and the DoD forbids code, so the failing-test rail has no behaviour to pin. No forbidden patterns. The stale test wording is follow-up task-6177c9c4."
 }

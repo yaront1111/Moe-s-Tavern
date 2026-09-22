@@ -37,6 +37,10 @@ import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { getAttempt } from './attemptStore.js';
 
+// SHA_RE and REVISION_RE are SHA-1 only BY RULE: a 64-hex (sha256) object id is
+// refused. The wrappers refuse a sha256 repository at their git probe
+// (MOE_COMMIT_REFUSED_OBJECT_FORMAT), so no runner in this slice reports one.
+// See docs/CONFIGURATION.md, autoCommit.
 /** The one git-object shape (7-40 hex, any case) every Wave 1 record and moe.record_commit accept; import it, never copy it. */
 export const SHA_RE = /^[0-9a-f]{7,40}$/i;
 /**
