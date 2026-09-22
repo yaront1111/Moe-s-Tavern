@@ -1,0 +1,61 @@
+{
+  "id": "task-b63bbfbefa614d8abea251746d868ad3",
+  "epicId": "epic-f8c1446cc37e4f47bccf7c5db14748a3",
+  "title": "Reinstall the verified main build into PyCharm",
+  "description": "User authorized reinstalling the new Moe plugin to PyCharm after a fully verified main release. Consume only the predecessor's exact main-SHA-bound ZIP and SHA256. Target observed PyCharm2026.1.2, C:/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.1/plugins/moe-jetbrains. PyCharm PID14080 is currently running: require user-coordinated shutdown and independently re-observe IDE/serving daemon exit before swapping. Inspect current installer implementation first: scripts/install-plugin.ps1 deletes destination before extraction and must not be used blindly. A historical backup/hash/receipt helper exists at C:/Users/Yaron/AppData/Local/Temp/moe-pycharm-install-43aa46d553674503a4b1ab456e76a012/Install-Moe.ps1 but its contents, applicability and test evidence need fresh verification. Deliver safe backup, validated extraction/swap with explicit error handling/rollback, installation receipt and runtime readback after user restarts PyCharm. Do not force-stop the IDE, change unrelated installations, publish source, or call artifact preparation installation success. Verification: Get-CimInstance Win32_Process for shutdown precondition; Get-FileHash -Algorithm SHA256 for ZIP and installed payload manifest; inspect installed plugin.xml/version and packaged daemon/proxy/helper files; after restart inspect idea.log/Moe connection and health to prove serving new bytes.",
+  "definitionOfDone": [
+    "Before installation, recorded processes show targeted PyCharm and its serving daemon stopped; ZIP SHA256 and main revision match predecessor evidence.",
+    "Existing plugin is backed up and new payload is validated before replacement; rollback paths are tested or verified without deleting the old plugin prematurely.",
+    "Installed files/hash/version match the approved artifact and an installation receipt records target, backup, release SHA and archive hash.",
+    "After PyCharm restart, plugin logs and daemon health/version prove the new installation is active; pending restart is explicitly reported if activation cannot be observed."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-203121e3ee8a4ffb999ff289f811772c"
+  ],
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [
+    {
+      "id": "comment-e8f12ad260a1464db2b98ab075f91ca3",
+      "author": "worker-87bc1cad",
+      "content": "Human follow-up authorizes manual ZIP install before they close PyCharm. Safe interpretation: queue validated ZIP for IDE-managed next restart, not overwrite active plugin. Inspected prepared Install-Moe.ps1: QueueNextRestart copies/stages ZIP, validates paths/hash/plugin ID, backs up current plugin with hash equality, refuses existing action.script, compiles QueueMoePlugin.java and records QUEUED_FOR_RESTART. This can fit the rail because active plugin replacement remains deferred to restart. It still requires inspection/testing of the Java helper and a real main-bound artifact; MainCommit is merely caller-supplied metadata, so never fabricate it. Only local latest ZIP observed is moe-jetbrains/build/distributions/moe-jetbrains-0.8.0.zip dated Sep19, not a new build for latest checkout. No queue or plugin state changed by this inspection. Architect should adapt install plan to deferred installation, retaining backup/receipt and activation readback.",
+      "timestamp": "2026-09-22T08:54:42.688Z"
+    },
+    {
+      "id": "comment-c9c2bad87e97424e8a52b5e1098ea3b6",
+      "author": "worker-87bc1cad",
+      "content": "A NEW ZIP now exists, unlike the earlier Sep19 artifact blocker. Local rebuild completed 2026-09-22T10:27Z under latest user request \"so rebuild it\"; this is build verification, not main publication or installation. Frozen current working-source snapshot D:/moe-scratch/rebuild-20260922-792cc532/source (599 files, base b798186edf93a72622fd7feef7b26422aba48e93, manifest SHA256 f48fcea7d703d41cbf4c981233d5c042f14f917d4df59ceeec7f568fb34aad5b). No source edits or live-checkout changes, generated files unchanged, live manifest paths rehashed unchanged after build. Fresh npm ci/build/test: daemon 2154/2154; proxy 62/62; Claude plugin 13/13; JetBrains Gradle 9.7.1 test buildPlugin --no-daemon --max-workers=2: 200/200,13 tasks executed, exit0; VS Code compile/test/package 113/113; runtime+prompt-cache tests22/22. Total2564 pass,0skip. All3 shell parity checks and role docs lint PASS. Full slow postflight suites not rerun. ZIP 4439 entries; 513 bundled source/runtime files hash-matched; both new wrapper markers and ponytail skills present; plugin com.moe.jetbrains v0.8.0; extracted daemon/proxy load smoke PASS. ZIP delivered at C:/Users/Yaron/Downloads/Moe-rebuild-20260922-792cc532/moe-jetbrains-0.8.0.zip (64440032 bytes, SHA256 0e77edb61deac78d113b25198ccd17989a7276736aa1a11accdbd9314c55cc2c). VSIX alongside SHA256 a573d8230a443fadb9efc6395bce01a73fe830c9ba038a4280b8f925ec68eab5. Logs/commands/manifests/artifact receipt in scratch; README/BUILD-RECEIPT beside deliveredZIP. Label: local-working-source-not-main-release. No push/merge/task claim/forged finalization, no install/queue/activation. PyCharm14080 still open, action.script absent. Publication/reinstall tasks remain blocked on their existing prerequisites; original SHA task remains REVIEW/FINALIZING, no lifecycle bypass.",
+      "timestamp": "2026-09-22T10:29:48.236Z"
+    },
+    {
+      "id": "comment-17e309c24b854ceabda203adbf34bfc3",
+      "author": "worker-87bc1cad",
+      "content": "Human now explicitly says 'please install' in direct response to the rebuilt ZIP labelled NOT main-published. Treating this as authorization for that exact local ZIP, not a main-release claim. Bounded operator action: verify SHA256/receipt; reuse inspected installer validation+backup and IDE-managed QueueNextRestart only; never replace live plugin or stop processes. Existing helper's MainCommit field would falsely label local source as main, so use an isolated copy with sourceBaseCommit/sourceKind metadata only (same validation/queue behavior), and freshly test helper queue/refusal paths in scratch first. This does NOT claim/reassign/finalize the held SHA attempt, publish git, or mark the broader main-install row complete. Receipt and post-restart activation remain distinct; will record outcome here.",
+      "timestamp": "2026-09-22T11:39:07.500Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-22T08:33:08.176Z",
+  "updatedAt": "2026-09-22T11:39:07.500Z",
+  "contextFetchedBy": [
+    "worker-87bc1cad"
+  ],
+  "blockedReason": "BUILD-ONLY REQUEST SUCCEEDED: fresh local working-source Moe 0.8.0 ZIP is C:/Users/Yaron/Downloads/Moe-rebuild-20260922-792cc532/moe-jetbrains-0.8.0.zip, SHA256 0e77edb61deac78d113b25198ccd17989a7276736aa1a11accdbd9314c55cc2c. 2564 tests passed,0skip; packaging/parity/lint/bundle smoke green; evidence comment-c9c2bad87e97424e8a52b5e1098ea3b6. The old missing-new-ZIP blocker is resolved. This reinstall row still requires a verified MAIN build from publication prerequisite task-203121e3ee8a4ffb999ff289f811772c, or architect-approved scope change explicitly accepting a local unpublished snapshot. No main push/merge, install, restart queue or activation performed. PyCharm14080 remains open; active plugin and prior ZIP preserved. Current CLI remains attached to prior SHA FINALIZING attempt and cannot claim release execution; exit for wrapper postflight, then use fresh task binding. No background builds remain.",
+  "blockedOnTaskIds": [
+    "task-203121e3ee8a4ffb999ff289f811772c"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-09-22T08:55:13.778Z"
+}

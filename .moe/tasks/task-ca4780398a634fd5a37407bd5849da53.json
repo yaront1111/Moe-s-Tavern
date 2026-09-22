@@ -9,10 +9,113 @@
     "parity-check.{sh,ps1} pin the skip code; postflight.sh, postflight.ps1 (pwsh and PS 5.1) and both parity checks pass"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add tests first in both postflight harnesses, next to Scenario P, using make_scope_project/run_scope_wrapper and New-ScopeProject/Invoke-GateWrapper. Capture pre-fix wrapper bytes to a uniquely owned scratch tree, verify the task-bound baseline/prerequisite and preserve foreign WIP. Add named P2 subcases with a fake CLI that exits 1 immediately; use role=qa, final REVIEW, tracked dirty own task record, checkpointPush=true and an isolated local bare remote. (a) BOARD-only: assert unchanged HEAD/branch/remote tip, zero committed checkpoint/rescue rows and no push attempt, board file still dirty, exact MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY in log and nothing record. Include a staged foreign path and prove its index/worktree bytes stay intact. (b) Same fast exit with an actual owned non-BOARD change: exactly one wip checkpoint, exact owned+board paths/content, exit 1 retained in ledger and successful remote update, no skip. (c) Repeat BOARD-only failure on the same repository, then do a successful owned-code invocation: no intermediate recovered/board-only commit; later real checkpoint includes retained BOARD bytes. Add controls: exit 0 BOARD-only checkpoint still lands; exit 1 with MOE_LAUNCH_FAIL_SEC=0 still lands; worker REVIEW completion is not suppressed. Also cover no-candidate and ordinary recovery via existing assertions or focused additional subcases. Restore every fixture environment override in cleanup/finally; use existing bounded process helpers. Obtain focused RED proof against pre-fix twins before implementation: failure must be the unchanged-HEAD/commit-count assertion, not merely the absent log token. DoD 1-2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Added matching P2 behavioral fixtures (8 modes/10 invocations): BOARD-only, owned, repeated retry+later code, exit0, threshold0, worker completion, empty candidates, deletion. Local bare origin with checkpointPush=true; foreign staged/worktree bytes, HEAD/branch/remote, ledger/trace, baseline/session/teardown and exact content asserted. RED old twins captured before edits at d435fc77 in D:/moe-scratch/ca478-87bc1cad-58bbdbef/pre: board+retry fail HEAD-unchanged assertion on Bash, pwsh 7.6.6 and PS5.1, old wrappers actually commit/push one BOARD path; old owned controls pass on both PS engines, Bash running to completion. Corrected test assumptions from inspected production: QA does not finalize worker attempts; commitBoardState=false excludes own BOARD in both current twins (not changing policy). Fresh task .tsv/.live bind worker-87bc1cad to wrapper PID19952; prerequisite 021f351/469ed6d on branch. Six intended paths were clean. Foreign WIP preserved; preflight recovery d435fc7 is not authored work. Existing harness structure exceeds size guidelines; no extra repo file added.",
+      "startedAt": "2026-09-21T17:11:01.390Z",
+      "completedAt": "2026-09-21T17:20:06.803Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the PowerShell twin. Reset an explicitly named current-invocation launch-failure boolean each loop and assign it using the EXISTING native-exit/elapsed predicate; leave streak/backoff/resume accounting untouched. Add optional internal [bool]$LaunchFailed=$false to Invoke-MoeLanding and pass it only from normal postflight; recovery calls retain the false default. After successful scope/attribution and before branch peel/private-index staging, recognize ONLY Kind=checkpoint, not recovered, LaunchFailed=true, nonempty Candidates, and every candidate.Reason exactly BOARD. Emit [skip] MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY with task identity and explanation that dirty BOARD state is deferred. Return the existing Outcome=nothing with Code set, empty SHA/ref, PathCount=0, Pushed=false and StopLoop=false. Use the ordinary no-landing bookkeeping: write the unchanged B plus current unattributed U using Get-MoeBaselineLandedFlag and original session, send best-effort record_commit outcome=nothing with this code and existing diagnostics, preserve normal finalization/marker cleanup. Do not remove BOARD files, prune them as committed, peel branches, run a gate, create rescue/commit/receipt or push on the skip. Explicit error handling: preserve existing exception handling; snapshot/attribution failures stay failures, not skips. Add concise why-comments at the guard and update the existing blanket board-only-lands comment. Compatible with pwsh and PS5.1; no change to the prerequisite supervisor. DoD 1-2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "PS twin uses optional LaunchFailed=false, reset current invocation flag set only in existing elapsed/native-exit classifier; normal postflight passes it, recovery defaults unchanged. Resolved nonempty all-BOARD checkpoint guard shares existing nothing bookkeeping before peel/stage/gates. Same B/U/session-safe landed flag and diagnostics; no commit/push/rescue. New exact skip log/code. No supervisor edits. Focused snapshot green: all 10 P2 invocations PASS pwsh7.6.6 and powershell5.1, including repeated skips/later code, controls and deletion. Adjusted shared verifier to assert teardown marker+session summary (Bash deregister uses standalone moe-call, not fake-proxy ledger); worker completion alone finalizes as existing semantics.",
+      "startedAt": "2026-09-21T17:20:06.936Z",
+      "completedAt": "2026-09-21T17:23:06.231Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Implement identical semantics in Bash. Reset a per-invocation boolean and set it from the existing classifier, then pass it as an optional run_landing argument only at normal postflight (default false for all existing recovery callers); do not use the historical streak as landing authority. Determine BOARD-only from the already resolved candidate reason tags, not git status or declarations: add a non-BOARD candidate count to the resolver's summary and its loader, initialize the new count to an unknown sentinel, and require valid zero plus positive N_CANDIDATES before skipping. After successful attribution and existing failure guards but before land_commit, recognize checkpoint/current launch failure/not recovered/nonempty all-BOARD, set LAND_OUTCOME=nothing and LAND_CODE=MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY. Flow through the shared nothing epilogue rather than bypass bookkeeping. Make the nothing log and record_commit_rpc preserve LAND_CODE (defaulting to MOE_COMMIT_NOTHING_TO_COMMIT only for ordinary nothing), retain zero paths/empty SHA/no push, and carry the code in session summary. Preserve baseline_after_landing with the existing session-safe landed flag and empty committed-path list, so the next retry cannot recover a skipped board-only checkpoint. Preserve diagnostics/unattributed U, finalize and live-marker/teardown handling. Explicit error handling: failed snapshot/attribution or unknown count must never become proof for a skip; maintain existing conservative error paths. Keep NUL-delimited records and path quoting intact; document the deliberate deferral inline. DoD 1-2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Bash flag resets every iteration and is set only by existing launch classifier; optional run_landing arg defaults false for recovery, normal postflight alone passes it. Resolver counts actual non-BOARD reason tags; loader uses unknown sentinel and decimal validation. Guard after attribution/failure checks but before land_commit routes to existing nothing baseline/RPC/session epilogue preserving LAND_CODE, zero paths, no push. NUL records and existing exception/failure handling untouched. Fresh snapshot P2 Bash PASS: all 10 invocations (board, owned, retry x2+later, zero, outside, completion, empty, deleted), exit0. Old Bash owned-control now PASS; old board/retry RED on HEAD movement. Extracted real attr_summary_load passes 8 checks zero/nonzero/missing/invalid/reset. All evidence in D:/moe-scratch/ca478-87bc1cad-58bbdbef.",
+      "startedAt": "2026-09-21T17:23:06.361Z",
+      "completedAt": "2026-09-21T17:26:43.173Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Pin MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY in both parity scripts' explicit required reason-code inventories, not only the automatic token-set equality check. Keep all existing pins and internal-plumbing exemptions unchanged. In scratch verification, removing the new marker from either twin, and from both together, must make each parity checker fail for this required code. Use ASCII text so BOM-less Windows PowerShell 5.1 reads the same literal. DoD 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Added ASCII skip-code pin to both explicit reason-code inventories; all prior pins/plumbing exemptions untouched. Snapshot parity PASS on Bash, pwsh, PS5.1. Independent scratch no-sh/no-ps1/no-both marker removal: all 9 checker/engine combinations fail exit1 explicitly for required new code (including symmetric removal). Local Git Bash grep cannot match pre-existing 4-byte 🚫 literal with LC_ALL=C.UTF-8 (minimal repro fails despite identical bytes); LC_ALL=C byte matching passes. Used LC_ALL=C for Bash parity, will inherit this toolchain normalization for exact full compound gate. No source workaround/weakening. Evidence parity-*-*.log plus grep-repro.sh in task scratch.",
+      "startedAt": "2026-09-21T17:26:43.241Z",
+      "completedAt": "2026-09-21T17:28:46.782Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Run the single concentrated verification gate on a stable, identified scratch snapshot containing the intended scripts tree; do not run long suites against live peers' changing wrapper files. From that snapshot root in pwsh on Windows, execute this exact compound command and retain its native exit plus concise pass/count summaries for complete_task.verification:\n$env:MOE_POSTFLIGHT_TIMEOUT_SEC='400'; & 'C:\\Program Files\\Git\\bin\\bash.exe' -c 'bash -n scripts/moe-agent.sh scripts/tests/postflight.sh scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; node scripts/tests/postflight-safe.mjs pwsh; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; node scripts/tests/postflight-safe.mjs powershell; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/tests/parity-check.ps1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/parity-check.ps1; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs; exit $LASTEXITCODE\nRequire full postflight.sh, full postflight.ps1 on BOTH pwsh and Windows PowerShell 5.1, both parity scripts (PS on both engines), and Node tests to pass without SKIP. Verify positive scenario execution, not just an empty test selection. Retain the focused pre-fix-vs-fixed evidence for every P2 skip/owned-code arm on Bash, pwsh and PS5.1; mutant runs and parity-pin removal happen only in separate disposable trees, never by swapping live launchers. Old code must actually commit the unwanted BOARD checkpoint; fixed code must not. Check later real landing and retry baseline evidence, including no recovery/teardown backdoor. Bash uses Git Bash explicitly on Windows to avoid accidentally selecting WSL; on Linux/macOS the Bash leg uses native bash and POSIX paths, while PS5.1 proof still requires Windows. Report real unavailable-engine/infrastructure failures, never call skipped coverage passing. DoD 1-3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Exact plan compound gate completed exit0 in fixed scripts snapshot D:/moe-scratch/ca478-87bc1cad-58bbdbef/gate-snapshot (base d435fc77, manifest72beb0da4ab612079b9ba3fe89a285226ae878cfe9bc74701183c24b9fee261f; all49 script hashes still equal live and frozen). Bash syntax/full postflight PASS: 71 frozen candidate scenarios, 31 scope scenarios, P2 all10 invocations; parity Bash PASS. Full PS postflight safe-runner pwsh and powershell both exit0, failureClass=NONE, lastScenario=Z, no SKIP. PS parity PASS on both engines. Node agent-runtime/taskless-handoff 61/61, fail0/skipped0. Inherited LC_ALL=C for measured Git Bash supplementary-Unicode grep defect; exact command otherwise unchanged. gate.log and gate-result.json retained. Focused old-vs-fixed evidence: old board+retry fail HEAD invariant on all3 engines; red-proof.json verifies6/6 actually committed+pushed exactly BOARD with CLI exit1. Owned old controls PASS; fixed10 P2 invocations PASS each engine. Parity marker removal9/9 expected failures. No live mutation or manual source landing.",
+      "startedAt": "2026-09-21T17:28:46.992Z",
+      "completedAt": "2026-09-21T19:05:00.636Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Perform the final adversarial self-review (load adversarial-self-review and regression-check before completion) of this task's diff only. Check: repeated retries and a later successful CLI; recovery/default-argument isolation; no launched CLI/null or unknown timing; threshold boundary and nonzero code outside the window; empty candidates; all BOARD versus one real ASSERTED/TOOL/PLANNED/MEASURED candidate, including deletion; commitBoardState=false still does not redefine own BOARD; foreign staged/dirty/unattributed paths; failed attribution/RPC/baseline writes keep existing handling; skip never peels/commits/pushes/rescues; only the owning session's baseline becomes handled; finalization and operator summary say nothing with the exact skip code, not committed/failed. Check concurrency and private-index/CAS guards remain untouched. Run git diff --check scoped to the six owned paths and inspect diff against the recorded baseline, preserving all foreign edits. Attach DoD-to-test mapping, red/green evidence and the fresh compound gate result in Moe step/completion notes, then complete_task for QA; do not manually land, push, install or bypass the wrapper. Handle any QA rejection within these same rails, with fresh verification after a fix. No separate docs/API change is needed beyond guard comments and parity vocabulary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh"
+      ],
+      "note": "Loaded adversarial-self-review/regression-check and read six-file task-only diff vs d435fc77. No implementation defect found: flags reset/current classifier only; recovery defaults false and explicit recovered guard; missing/null timing, zero/threshold0/outside, empty candidates retain old behavior; all resolved reason tags govern eligibility (any ASSERTED/TOOL/PLANNED/MEASURED/deletion prevents skip). commitBoardState=false preserves resolver semantics, not filename inference. Skip shares unchanged B/U + session-safe landed flag, diagnostics/RPC/finalization/marker cleanup; no peel/stage/gate/commit/push/rescue. Snapshot/attribution failure guards, baseline-write failure handling, concurrency/private-index/CAS remain unchanged. DoD1=P2 board+retry exact nothing/code/no-push/foreign/index/baseline; DoD2=owned+deleted/later real commit and old-twin RED on HEAD movement across all3 engines, with zero/outside/completion/empty controls; DoD3=explicit pins +9 removal mutants + full compound exit0 at19:04:23Z (71 frozen,31 scope Bash; PS7+PS5.1 full safe runners; parity all engines;61/61 Node,no SKIP). Fresh six-path diff --check clean; all49 live/frozen hashes still match manifest72beb0da. Existing large files are retained, no seventh repo file. All created/modified source paths listed; no manual land/push/install. Delivery risk remains: peer07474 declares all6, contested=skip-untouched and Codex TOOL harvest absent; governor+task comment notified, QA must inspect actual landed blobs. Green snapshot is NOT a delivery claim.",
+      "startedAt": "2026-09-21T19:05:00.846Z",
+      "completedAt": "2026-09-21T19:06:05.157Z"
+    }
+  ],
+  "planRevision": 13,
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-80e829b3",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,15 +127,36 @@
   ],
   "priority": "LOW",
   "order": 13,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-3bb955ab131c47c5ac2b24aa9fc47caf",
+      "author": "worker-87bc1cad",
+      "content": "Delivery risk found during self-review: task-07474ee438f34021a23809f9c764d15c still peer-declares all six affected paths under contested=skip-untouched. Codex has no Claude stream-json TOOL witness. Our start snapshot had all six clean; source diff only this task. No manual landing or policy bypass performed. Governor notified for supported ownership reconciliation. QA must verify eventual completion SHA carries the six blobs, not treat shared worktree/full-snapshot green as landed evidence. Full exact compound gate is running against manifest 72beb0da4ab612079b9ba3fe89a285226ae878cfe9bc74701183c24b9fee261f (49 scripts, base d435fc77).",
+      "timestamp": "2026-09-21T17:46:30.556Z"
+    },
+    {
+      "id": "comment-c6bd7a14aa104003897f122a270a88f0",
+      "author": "worker-87bc1cad",
+      "content": "Completion transport rejected the verbatim planned compound in verification.command: runtime max500 chars. No verification failure. Resubmitting the actual short pwsh -File invocation used to execute scratch/gate.ps1; that file retains the exact full approved compound, gate-result.json proves exit0, and cwd was scratch/gate-snapshot with LC_ALL=C inherited. All prescribed tests ran; no command leg omitted or shortened.",
+      "timestamp": "2026-09-21T19:08:39.708Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-19T12:52:22.121Z",
-  "updatedAt": "2026-09-19T13:23:33.224Z",
+  "updatedAt": "2026-09-22T20:10:01.699Z",
   "metrics": {
-    "firstClaimAt": "2026-09-19T13:07:06.964Z"
+    "firstClaimAt": "2026-09-19T13:07:06.964Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-c1e521b4"
+    "architect-c1e521b4",
+    "architect-3aa54087",
+    "governor-fbd1fae8",
+    "worker-87bc1cad",
+    "qa-9420e52a",
+    "qa-80e829b3"
   ],
   "priorHandoffs": [
     {
@@ -43,5 +167,178 @@
       "releasedBy": "governor-daa92494",
       "reason": "Confirmed crash: PyCharm restarted at 13:11:34Z. architect-c1e521b4 has no wrapper or CLI process left, and its attempt is parked in reconciling after the 13:11:46Z daemon restart. Released with the human's approval so a live architect can plan it."
     }
-  ]
+  ],
+  "commits": [
+    {
+      "sha": "0635ffc994377a72cc284435ff5dd5a5d2c9ec7a",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-3aa54087@2026-09-20T11:05:23Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-84150869c3194fce908e6efad8f4c82b.json",
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "architect-3aa54087",
+      "recordedAt": "2026-09-20T11:05:26.362Z",
+      "treeId": "c79c4bfdb132c9b62706bde34c39a0b4f8667753",
+      "status": "PLANNING",
+      "pushed": true
+    },
+    {
+      "sha": "d435fc77f545b17fdce19dbc153d4616a5e81f72",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-87bc1cad@2026-09-21T17:09:41Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json",
+        "docs/plans/2026-09-19-prompt-caching.md",
+        "docs/PROMPT_CACHING.md",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts",
+        "scripts/prompt-cache.mjs",
+        "scripts/prompt-cache-policy.mjs",
+        "scripts/prompt-cache-usage.mjs",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-87bc1cad",
+      "recordedAt": "2026-09-21T17:09:45.904Z",
+      "treeId": "00c717fc84d22d36c3abbff90e6165ca84301b41",
+      "status": "WORKING",
+      "inferredPaths": [
+        ".github/workflows/ci.yml",
+        "docs/plans/2026-09-19-prompt-caching.md",
+        "docs/PROMPT_CACHING.md",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "packages/moe-daemon/src/providers/codexDescriptor.ts",
+        "scripts/prompt-cache.mjs",
+        "scripts/prompt-cache-policy.mjs",
+        "scripts/prompt-cache-usage.mjs",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "pushed": true
+    },
+    {
+      "sha": "0a3bf35a0382e0b2b1fe5c35c981c66a313594a1",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-87bc1cad@2026-09-21T17:09:41Z",
+      "paths": [
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json"
+      ],
+      "recordedBy": "worker-87bc1cad",
+      "recordedAt": "2026-09-21T19:56:28.459Z",
+      "treeId": "eb535128733c1b20dd88bb8f284a846304a2107e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/parity-check.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/parity-check.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-87bc1cad@2026-09-21T17:09:41Z",
+    "at": "2026-09-21T19:56:28.459Z"
+  },
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-09-20T11:11:44.757Z",
+  "planningNotes": {
+    "approachesConsidered": "Human confirmed in the REPL: skip checkpoints only when the current exit satisfies the existing launch-failure classifier and every attributed candidate is BOARD; preserve owned-code checkpoints, successful exits, completion and recovery landings. Rejected skipping all nonzero exits, disabling board commits globally, testing the whole dirty checkout, using declared file counts/extensions as proof of real changes, and returning before attribution or session bookkeeping. Use an additive optional INTERNAL landing input and the existing nothing outcome; no MCP schema, project setting, state migration, provider-output parsing, or change to retry/backoff policy. The six edited paths are the three explicitly required Bash/PowerShell twin pairs, one tightly coupled bugfix; no seventh documentation/helper file.",
+    "codebaseInsights": "Explored live launcher classifiers, attribution, landing epilogues, recovery and harnesses. Existing predicate: nonzero native CLI exit and 0 <= elapsed < MOE_LAUNCH_FAIL_SEC (default 120). Both classify before postflight but never feed that fact to landing. Bash run_landing resolves NUL-delimited (reason, blob, path) candidates and uses a summary; PowerShell Invoke-MoeLanding gets attr.Candidates with Reason. BOARD is an attribution tier, not a filename extension or arbitrary .moe prefix. Both early nothing paths can maintain baseline/session state without commit or push. Bash's nothing log and record_commit_rpc currently hard-code MOE_COMMIT_NOTHING_TO_COMMIT; preserve a new skip code through both and through LAND_SUMMARY_CODE. Complete-MoePostflight/finalize_postflight already map nothing to nothing-to-commit. Get-MoeBaselineLandedFlag/baseline_landed_flag protect foreign-session baselines. record_commit accepts a string code and outcome=nothing; no daemon edit is required. Reuse scenario-P board fixtures and existing scope helpers rather than add another harness.",
+    "risks": "Dependency task-84150869c3194fce908e6efad8f4c82b is already visible in current branch history at 021f351 (implementation), 469ed6d (QA board); recheck its landing and worker ownership at execution time, preserve its PS supervisor. Planning inspected HEAD 9f2cce3be83adf80e72fdccbde09072d22c1e379; this is a shared moving checkout with foreign WIP. Do not stage/revert/stash it or edit runtime .moe records. Test only owned changes over an identified source snapshot, not an accidental mixture of peers' half-written launchers. A skip must acknowledge only this session's baseline without pruning deferred board bytes, leave unresolved/foreign paths and real recovery intact, and not trigger teardown rescue. Do not pass sticky failure-streak state to recovery. Missing/failed attribution is not proof of BOARD-only content. Never broaden the change to completion paths or weaken private-index, CAS, receipt/finalize, contested-path, or quality-gate guards. PS5.1-compatible syntax and ASCII skip marker; Bash candidate records remain NUL-safe. Full Bash harness can exceed the safe runner's 20-minute cap, hence direct Bash invocation in the gate; Windows safe-runner legs also exercise node-to-powershell launch inheritance.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1"
+    ]
+  },
+  "planApprovedAt": "2026-09-20T11:11:44.818Z",
+  "inferredPaths": [
+    ".github/workflows/ci.yml",
+    "docs/plans/2026-09-19-prompt-caching.md",
+    "docs/PROMPT_CACHING.md",
+    "moe-jetbrains/build.gradle.kts",
+    "moe-vscode/scripts/bundle-assets.mjs",
+    "packages/moe-daemon/src/providers/codexDescriptor.ts",
+    "scripts/prompt-cache.mjs",
+    "scripts/prompt-cache-policy.mjs",
+    "scripts/prompt-cache-usage.mjs",
+    "scripts/tests/mention-provenance.ps1",
+    "scripts/tests/onboarding.mjs",
+    "scripts/tests/prompt-cache.test.mjs",
+    "scripts/tests/prompt-cache-launcher.test.mjs"
+  ],
+  "workStartedAt": "2026-09-21T17:11:01.390Z",
+  "reviewStartedAt": "2026-09-21T19:08:39.788Z",
+  "verification": {
+    "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:/moe-scratch/ca478-87bc1cad-58bbdbef/gate.ps1",
+    "exitCode": 0,
+    "outputTail": "CWD=D:/moe-scratch/ca478-87bc1cad-58bbdbef/gate-snapshot; inherited LC_ALL=C. gate.ps1 contains exact approved compound.\nPASS frozen candidate scenarios: 71\n[scenario P2] ok (10 invocations)\ncommit-scope scenarios run: 31\nPASS postflight.sh\nPASS parity-check.sh\n{\"engine\":\"pwsh\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS parity-check.ps1\nPASS parity-check.ps1\nℹ tests 61\nℹ pass 61\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 12532.8562\nCOMPOUND_GATE_EXIT=0",
+    "reportedAt": "2026-09-21T19:08:39.788Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Both launchers defer only current launch-failure + nonempty resolved all-BOARD checkpoints, using nothing/MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY before peel/stage/gate/push/rescue. Recovery, completions, real owned changes/deletion, successful exits and threshold0 retain landing. Existing B/U/session-safe bookkeeping preserves BOARD without retry recovery. Six files only; foreign WIP preserved. P2:10 calls per engine, including foreign index/worktree, local bare remote/trace, retry x2+later code, exact ledger/content, controls. Old twins:6/6 board/retry runs actually commit+pushed BOARD-only exit1 on Bash/PS7/PS5.1; old owned controls pass. Required parity pins;9/9 removal mutants rejected. Full prescribed compound gate exit0 at19:04:23Z: Bash71 frozen+31scope; full PS7+PS5.1 safe runners; parity allengines; Node61/61,noSKIP. Snapshot D:/moe-scratch/ca478-87bc1cad-58bbdbef/gate-snapshot, manifest72beb0da4ab612079b9ba3fe89a285226ae878cfe9bc74701183c24b9fee261f;49 live/frozen script hashes equal post-gate. LC_ALL=C for measured local Git Bash grep Unicode defect. Two adversarial passes; scoped diff --check clean. Runtime caps verification.command at500 chars, so field records actual pwsh -File invocation; gate.ps1 retains exact approved compound. Handoff memory includes expected6 Git blobs and all evidence. DELIVERY RISK: peer07474 still declares all6 under contested=skip-untouched; Codex has no Claude TOOL witness. Governor/task comment notified. QA must verify actual postflight blobs; local green is NOT a landing claim. No manual landing/push/install/bypass."
 }

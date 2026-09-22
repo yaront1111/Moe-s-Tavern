@@ -1,0 +1,60 @@
+{
+  "id": "task-203121e3ee8a4ffb999ff289f811772c",
+  "epicId": "epic-f8c1446cc37e4f47bccf7c5db14748a3",
+  "title": "Publish a fully verified Moe release on main",
+  "description": "User explicitly requested a full new Moe build and push to main before PyCharm reinstall. Deliver a reviewed main commit containing all intended release work, full package regression/build logs, and a JetBrains ZIP bound by SHA256 to that exact revision. Start in a fresh task-bound wrapper AFTER the current FINALIZING attempt closes; do not reuse the live SHA worker session. Inventory the shared dirty launcher and ponytail/skill changes, ownership and existing PR194 before selecting release bytes; preserve all foreign work and reconcile publication with owners. Main remote currently ae374ec65802ed82c4781f67f84b75b59223af46; PR194 at179d6503 is OPEN, all8 checks SUCCESS, REVIEW_REQUIRED/BLOCKED, so it is not yet a merged release and not the complete latest dirty tree. No force push or branch-protection bypass. Not in scope: replacing a running IDE/plugin or inventing new product features. Verification: run existing npm test and npm run build in daemon/proxy/claude-plugin; npm test, npm run compile and npm run package in moe-vscode; gradlew.bat test buildPlugin in moe-jetbrains; launcher postflight/parity and runtime/cache tests as applicable to the selected final bytes. Capture git rev-parse HEAD, git ls-remote origin refs/heads/main, gh pr view/checks and Get-FileHash of the ZIP; all must refer to the same approved release revision. Architect must approve exact integration scope/commands before worker edits.",
+  "definitionOfDone": [
+    "Every intended tracked/untracked release path is inventoried with ownership and included or explicitly deferred; no foreign bytes lost or silently staged.",
+    "Full existing package and launcher regression/build gates pass on the exact intended release revision with positive test counts and retained logs.",
+    "Normal protected-branch publication succeeds: remote main equals the approved release SHA and required PR reviews/checks pass; no force/admin bypass.",
+    "JetBrains distribution ZIP is built from verified main, its SHA256 and bundled source/helper provenance recorded for the installation task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-07474ee438f34021a23809f9c764d15c",
+    "task-ca4780398a634fd5a37407bd5849da53"
+  ],
+  "priority": "HIGH",
+  "order": 10,
+  "comments": [
+    {
+      "id": "comment-7e5c8f383a4a4f82a817a3d5d931b922",
+      "author": "worker-87bc1cad",
+      "content": "Operational handoff 2026-09-22: request authorized by human in this chat; not executed because claim_next_task refuses ATTEMPT_FINALIZING (attempt-2be68b7d5bb043d69cf878aa0fbdd5ea gen4 on SHA task), current wrapper30508 still live. No manual finalize, task switch, build, merge/push or installation. Main remote measured ae374ec65802ed82c4781f67f84b75b59223af46. gh pr view194 returns OPEN/BLOCKED/REVIEW_REQUIRED, all8 checks SUCCESS, head179d6503. The dirty shared tree still contains ca478 launcher/parity/postflight code and separate ponytail/role/skill/daemon changes. Do not infer that all latest bytes are in PR194. PyCharm PID14080 at C:/Program Files/JetBrains/PyCharm2026.1.2/bin/pycharm64.exe open. Existing destructive install-plugin.ps1 inspected; install-all.ps1 has backup/staging but still lacks an observed closed-IDE precondition here. Fresh architect plan must choose safe publication/installation path. Separate install deliverable task-b63bbfbefa614d8abea251746d868ad3 is intentionally split by external effect/artifact consumer, not a duplicate evidence row; tool title-warning is advisory.",
+      "timestamp": "2026-09-22T08:33:49.080Z"
+    },
+    {
+      "id": "comment-e5deda88cbea4093baab3886ed50b895",
+      "author": "worker-87bc1cad",
+      "content": "User narrowed the immediate request to: 'so rebuild it'. Performing non-publishing build verification of a frozen source snapshot, including current intended launcher/skill source bytes; no source edits, new task claim, main push, live plugin replacement or synthetic attempt finalization. Existing publication prerequisites remain blocked. Any resulting ZIP will be labelled local snapshot build, not a verified-main release or activated installation.",
+      "timestamp": "2026-09-22T10:19:26.491Z"
+    },
+    {
+      "id": "comment-ae5a303f2be84f50a4a7dc78b79858c6",
+      "author": "worker-87bc1cad",
+      "content": "Local rebuild completed 2026-09-22T10:27Z under latest user request \"so rebuild it\"; this is build verification, not main publication or installation. Frozen current working-source snapshot D:/moe-scratch/rebuild-20260922-792cc532/source (599 files, base b798186edf93a72622fd7feef7b26422aba48e93, manifest SHA256 f48fcea7d703d41cbf4c981233d5c042f14f917d4df59ceeec7f568fb34aad5b). No source edits or live-checkout changes, generated files unchanged, live manifest paths rehashed unchanged after build. Fresh npm ci/build/test: daemon 2154/2154; proxy 62/62; Claude plugin 13/13; JetBrains Gradle 9.7.1 test buildPlugin --no-daemon --max-workers=2: 200/200,13 tasks executed, exit0; VS Code compile/test/package 113/113; runtime+prompt-cache tests22/22. Total2564 pass,0skip. All3 shell parity checks and role docs lint PASS. Full slow postflight suites not rerun. ZIP 4439 entries; 513 bundled source/runtime files hash-matched; both new wrapper markers and ponytail skills present; plugin com.moe.jetbrains v0.8.0; extracted daemon/proxy load smoke PASS. ZIP delivered at C:/Users/Yaron/Downloads/Moe-rebuild-20260922-792cc532/moe-jetbrains-0.8.0.zip (64440032 bytes, SHA256 0e77edb61deac78d113b25198ccd17989a7276736aa1a11accdbd9314c55cc2c). VSIX alongside SHA256 a573d8230a443fadb9efc6395bce01a73fe830c9ba038a4280b8f925ec68eab5. Logs/commands/manifests/artifact receipt in scratch; README/BUILD-RECEIPT beside deliveredZIP. Label: local-working-source-not-main-release. No push/merge/task claim/forged finalization, no install/queue/activation. PyCharm14080 still open, action.script absent. Publication/reinstall tasks remain blocked on their existing prerequisites; original SHA task remains REVIEW/FINALIZING, no lifecycle bypass.",
+      "timestamp": "2026-09-22T10:29:48.173Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-09-22T08:32:32.639Z",
+  "updatedAt": "2026-09-22T10:29:48.173Z",
+  "blockedReason": "Release cannot start in this wrapper-bound session: claim_next_task freshly refuses ATTEMPT_FINALIZING for attempt-2be68b7d5bb043d69cf878aa0fbdd5ea generation4; wrapper PID30508 remains live and prior completion has not landed. Both predecessor tasks remain REVIEW. Current ca478 launcher changes remain dirty, so publishing current HEAD would omit intended work. PR194 is OPEN with8 successful checks but REVIEW_REQUIRED/BLOCKED; no bypass authorized. PyCharm PID14080 is open. Preserve foreign WIP and prior REVIEW evidence. Exit Codex while leaving its parent wrapper alive for postflight, then resume release under an approved plan/fresh binding. No build, push, merge, or reinstall has occurred.",
+  "blockedOnTaskIds": [
+    "task-07474ee438f34021a23809f9c764d15c",
+    "task-ca4780398a634fd5a37407bd5849da53"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-09-22T08:33:49.135Z"
+}

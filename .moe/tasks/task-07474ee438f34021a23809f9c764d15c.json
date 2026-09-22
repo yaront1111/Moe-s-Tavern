@@ -18,13 +18,9 @@
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
       ],
-      "modifiedFiles": [
-        "scripts/tests/postflight.sh",
-        "scripts/tests/postflight.ps1"
-      ],
-      "note": "RED arms added to the byte-identical frozen suite of BOTH harnesses with one node script (exact-once needles; the extracted suites compare equal, 61971 chars). Two arms:\n- sha256-repo: fixture made by `git init --object-format=sha256`, otherwise as 'pass'. One deepEqual pins all of (a)-(e) plus the print-once count: {refused: said('MOE_COMMIT_REFUSED_OBJECT_FORMAT')===1, named: log has 'uses the sha256 object format; Moe' (NOT bare 'sha256': the fixture path itself contains 'sha256-repo'), head unchanged, no refs/moe/rescue/*, candidates+checks+gate observations = 0, record_commit outcomes [], finals ['nothing-to-commit'], owned.txt = 'frozen owned\\n' while HEAD:owned.txt = 'base'}.\n- teardown-sha256 (beyond the plan's one arm, same machinery as teardown-no-git): the sh teardown_rescue checks `git -C \"$PROJECT\" rev-parse --show-toplevel` directly, not through git_top, so an interrupted sh session in a sha256 repo would acknowledge 'failed' instead of 'nothing-to-commit' even after the git_top fix. This arm pins that (expected outcome nothing-to-commit, no rescue ref, no record_commit).\n- Both skip with a printed reason when `git init --object-format=sha256` fails (git < 2.29). This box: git 2.54.\nRED, run in a scratch tree of HEAD scripts + only these arm edits (D:/moe-scratch/w0747-1KZuRv/old), MOE_FROZEN_TEST_ONLY=<arm>, MOE_POSTFLIGHT_TIMEOUT_SEC=400:\n- sh sha256-repo rc=1: actual {refused:0, named:false, rescue:'refs/moe/rescue/task-postflight/20260919T164210Z', evidence:1, commits:['committed','failed'], finals:['rescued']}; the log shows the fake refusing `assert.ok(sha(args.treeSha))` on a 64-hex tree and MOE_RESCUE_REF sha=67cd7d3a...6b0 (64 hex).\n- sh teardown-sha256 rc=1: actual 'rescued', expected 'nothing-to-commit'.\n- pwsh 7.6.6 sha256-repo rc=1: the same diff (rescue ref 20260919T164340Z, finals ['rescued']). pwsh teardown-sha256 rc=1: 'rescued' vs 'nothing-to-commit'.\nSHARED-CHECKOUT HAZARD: a Codex session (cwd D:\\projexts, started 16:21Z, prompt caching, its plan says leave uncommitted) is live-editing scripts/moe-agent.sh, moe-agent.ps1, postflight.sh and postflight.ps1, all PLANNED paths of this task. HEAD 469ed6d (a QA checkpoint) already swept its moe-agent.ps1 hunks in, so HEAD's ps1 needs the UNTRACKED scripts/prompt-cache*.mjs (MODULE_NOT_FOUND otherwise). I copied those helpers into the scratch tree ONLY so the HEAD ps1 wrapper could run. I flagged it in #general (msg-8f23b1a5, msg-a046584a) and by SendMessage to both interactive moes sessions (held for the human's approval). I have not reverted or committed any Codex bytes.",
-      "startedAt": "2026-09-19T16:32:23.814Z",
-      "completedAt": "2026-09-19T16:44:43.405Z"
+      "note": "Recovery verification; existing SHA fixtures already landed in 9f2cce3, no duplicate edits. HEAD b798186 exported to D:/moe-scratch/sha256-87bc1cad-bdbf68eb/snapshot, all 432 files byte-verified against commit. Prerequisites now published via d435fc7: helper and descriptor; previously failing focused daemon suites now 29/29. Copied scripts into isolated red tree, removed only SHA probes/teardown guard. MOE_FROZEN_TEST_ONLY=sha256-repo with timeout400: sh and pwsh exit1 at exact deepEqual: refused0/namedfalse/evidence1/finals[rescued]/nonempty rescue ref versus refused1/namedtrue/evidence0/nothing-to-commit/no rescue. Logs red-{sh,pwsh}.log, generator prepare.cjs. Frozen JS byte-identical in twins. No repository source changes; foreign ca478 six-path implementation and unrelated skill/role/daemon WIP preserved.",
+      "startedAt": "2026-09-21T19:57:47.507Z",
+      "completedAt": "2026-09-21T20:01:45.916Z"
     },
     {
       "stepId": "step-2",
@@ -34,13 +30,9 @@
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
       ],
-      "modifiedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1"
-      ],
-      "note": "Rule applied at the one git probe of each twin, byte-identical operator line: `[WARN] MOE_COMMIT_REFUSED_OBJECT_FORMAT: <top> uses the sha256 object format; Moe's delivery records hold SHA-1 ids only, so this seat lands nothing there, as in a no-git project.`\n- sh git_top: after top+gitdir, `fmt=$(git -C \"$PROJECT\" rev-parse --show-object-format 2>/dev/null) || fmt=\"\"` (set -e safe); exactly 'sha256' -> print once under global MOE_OBJECT_FORMAT_WARNED, return 1 with MOE_TOP/REL/GITDIR empty. Every caller runs in the current shell (checked: no $(git_top)), so the flag holds across loop iterations; a hot reload (exec) starts over.\n- ps1 Get-MoeGitTop: same probe, `\"$format\".Trim() -ceq 'sha256'` -> print once under $script:MoeObjectFormatWarned, return $null. No Set-StrictMode in the wrapper, so the unset flag reads $null.\n- Old git: measured on git 2.54 that rev-parse ECHOES an unknown flag with rc=0 (`git rev-parse --show-object-formatx` prints `--show-object-formatx`), so a pre-2.29 git answers '--show-object-format', not 'sha256', and proceeds as today. The comments say that instead of \"empty\".\nAUDIT of git call sites:\n- sh: git_top callers are preflight_landing, receipt_replay (locals), the post-flight landing and no-landing branches, and the adoption count. Every other git call uses MOE_TOP/MOE_GITDIR (set only by git_top), $scratch (hook commit inside a landing) or $GATE_WORKSPACE (gate inside a landing).\n- ONE EXCEPTION: teardown_rescue ran `git -C \"$PROJECT\" rev-parse --show-toplevel` directly. It touches no ref, but in a sha256 repo it made an interrupted session acknowledge 'failed' instead of 'nothing-to-commit' (the ps1 twin already routes through Get-MoeGitTop). Routed through the probe as `[ -n \"${MOE_TOP:-}\" ] || (git_top) || return 0`. The subshell keeps MOE_TOP as the session left it, so every SHA-1 outcome is unchanged. Pinned by the teardown-sha256 arm.\n- ps1: Get-MoeGitTop callers are Invoke-MoeReceiptReplay, Invoke-MoeIdleRecovery, Invoke-MoeTeardownRescue, pre-flight, the post-flight autoCommit=false, no-landing and landing branches, and adoption. All other git calls take $Top/$Git.Top/$moeGit.Top from it, the hook $scratch, or the gate workspace.\nGREEN (scratch tree D:/moe-scratch/w0747-1KZuRv/new = HEAD scripts + arms + this fix): sha256-repo and teardown-sha256 each rc=0 'PASS frozen candidate scenarios: 1' on sh (Git Bash), pwsh 7.6.6 and PS 5.1.26100. Shared tree: both ps1 files parse with 0 errors on 7.6.6 and 5.1; bash -n ok; parity-check.sh and parity-check.ps1 PASS.\nShared-file note: I applied the same exact-once pieces to the shared wrappers ON TOP of the Codex session's uncommitted prompt-cache hunks: numstat went sh 37/25 -> 56/28 and ps1 32/24 -> 45/24, exactly my +19/-3 and +13. Codex hunks untouched, LF and BOM kept.",
-      "startedAt": "2026-09-19T16:44:46.569Z",
-      "completedAt": "2026-09-19T16:47:23.231Z"
+      "note": "Already-landed probes audited on immutable b798186. Green sha256-repo + teardown-sha256 on sh, pwsh7.6.6, PS5.1: each PASS2, exit0/no skip (green-*.log). Fresh extracted production probe controls on all3 engines: SHA1, unknown-flag echo, empty, rc129 and uppercase SHA256 fall through; exactly lowercase sha256 refuses twice with one warning and empty repo state. Call-site audit: sh preflight_landing/receipt_replay/normal and no-landing postflight/adoption call git_top; other refs/index/hook/gate/push operations require MOE_TOP or derived scratch. Existing teardown_rescue was the bypass and already routes through (git_top), preserving session globals. PS replay/recovery/preflight/three postflight branches/adoption/teardown use Get-MoeGitTop; remaining calls take its Top or derived gate/hook workspace. No additional source edits needed.",
+      "startedAt": "2026-09-21T20:01:46.056Z",
+      "completedAt": "2026-09-21T20:02:49.216Z"
     },
     {
       "stepId": "step-3",
@@ -51,14 +43,9 @@
         "docs/CONFIGURATION.md",
         "docs/SCHEMA.md"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/state/candidateStore.ts",
-        "docs/CONFIGURATION.md",
-        "docs/SCHEMA.md"
-      ],
-      "note": "Rule documented where each reader meets it. No daemon behaviour change.\n1. candidateStore.ts: a 4-line comment above SHA_RE (covering SHA_RE and REVISION_RE). It says both are SHA-1 only BY RULE, a 64-hex id is refused, the wrappers refuse a sha256 repository at their git probe (MOE_COMMIT_REFUSED_OBJECT_FORMAT) so no runner in this slice reports one, and points to docs/CONFIGURATION.md autoCommit. SHA_RE is also used by checkRunStore, deliveryProjection and recordCommit, and REVISION_RE by receiptStore and finalizeAttempt. They all import these two constants, so the one comment covers every revision validator.\n2. CONFIGURATION.md autoCommit row: one sentence. A --object-format=sha256 repository lands nothing, exactly as a no-git project, with one `[WARN] MOE_COMMIT_REFUSED_OBJECT_FORMAT` line; commit by hand; under a strict deliveryPolicy follow its no-git rules (manual-artifact, with qualityGate unset or autoCommit false). DEVIATION from the plan's wording, for accuracy: the plan said just \"use manual-artifact\". The deliveryPolicy row already states that a no-git project with qualityGate set and autoCommit on still owes required-check under manual-artifact. That holds here too, because policy.ts cannot see the object format.\n3. SCHEMA.md Candidate Provenance: added \": SHA-1 object format only; see `autoCommit` in CONFIGURATION.md for sha256 repositories\" after the 7-40 hex sentence.\nEOLs kept (CONFIGURATION.md and candidateStore.ts LF, SCHEMA.md CRLF in the worktree). numstat: 1/1, 1/1, 4/0. Neither doc is vendored by the init or skill generators.\nChecks: `npx tsc --noEmit` rc=0. `npx vitest run src/state/candidateStore.test.ts src/util/daemonGitDocs.test.ts`: 2 files, 42/42 passed (the doc guard scans docs/**/*.md and src comments).",
-      "startedAt": "2026-09-19T16:47:26.073Z",
-      "completedAt": "2026-09-19T16:48:24.102Z"
+      "note": "Verified published candidateStore.ts lines40-52 document shared SHA_RE and REVISION_RE as SHA-1-only and reference the wrapper refusal/docs; regex semantics unchanged. CONFIGURATION.md autoCommit states sha256/no-git, manual commit and strict manual-artifact rules with qualityGate unset or autoCommit false. SCHEMA.md Candidate provenance states SHA-1-only with autoCommit link. No code/doc delta; these exact bytes are included in the 432-file immutable manifest.",
+      "startedAt": "2026-09-21T20:02:49.319Z",
+      "completedAt": "2026-09-21T20:02:49.418Z"
     },
     {
       "stepId": "step-4",
@@ -68,35 +55,36 @@
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1"
       ],
-      "modifiedFiles": [
-        "scripts/tests/parity-check.sh",
-        "scripts/tests/parity-check.ps1"
-      ],
-      "note": "Needle 'uses the sha256 object format; Moe' appended to the attempt/gate prose list in parity-check.sh (the `for prose in ...` list) and in parity-check.ps1 ('attempt/gate prose' = @(...)). Each is a same-line edit through an exact-once node applier. parity-check.ps1 keeps its CRLF (139 CR / 139 LF before and after); numstat 1/1 each. MOE_COMMIT_REFUSED_OBJECT_FORMAT is covered by the MOE_COMMIT_* family diff automatically, since it is in both wrappers.\nGuard proof, run in scratch copies only (live ps1 seats hot-reload the repo wrapper):\n- Mutant `mut` = the fixed tree with the ps1 sentence misspelled ('object-format'; the code stays):\n  - parity-check.sh FAIL \"attempt/gate prose 'uses the sha256 object format; Moe' missing from: moe-agent.ps1\".\n  - parity-check.ps1 FAIL \"[attempt/gate prose] 'uses the sha256 object format; Moe' is missing from moe-agent.ps1\", on pwsh 7.6.6 and on PS 5.1 (rc=1 each).\n- Control `ctl` = the same mutant wrapper with the parity scripts WITHOUT the new needle: PASS on sh and on pwsh. So the new needle is the only thing that catches the drift; the code-family diff alone does not.\n- Unmutated `new` tree: PASS on sh, pwsh and PS 5.1.\nShared tree after the edit: parity-check.sh PASS (Git Bash); parity-check.ps1 PASS on pwsh and PS 5.1.",
-      "startedAt": "2026-09-19T16:48:29.794Z",
-      "completedAt": "2026-09-19T16:49:54.869Z"
+      "note": "Parity needle is already published in both checkers. Fresh isolated mutation proof: pristine b798186 passes sh (LC_ALL=C), pwsh7 and PS5.1. Misspelling only the operator prose in sh fails all3 checkers; misspelling only ps1 fails all3, each failure names 'uses the sha256 object format; Moe'. 3 green controls + 6 red mutants, all expected exit codes. Scratch parity.cjs/parity.ps1 and per-engine logs retained. Original immutable snapshot and shared checkout never mutated; no repository path edits.",
+      "startedAt": "2026-09-21T20:02:49.512Z",
+      "completedAt": "2026-09-21T20:04:03.744Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY, sequentially, with MOE_POSTFLIGHT_TIMEOUT_SEC=400. Launch the ps1 harness from PowerShell.\n1. The sha256-repo arm is green on sh, pwsh 7 and PS 5.1.\n2. Full harnesses: postflight.sh, and postflight.ps1 on pwsh and PS 5.1.\n3. Parity on sh, pwsh and PS 5.1.\n4. node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs.\n5. cd packages/moe-daemon && npx tsc --noEmit && npm test: green, with no count change (the daemon change is a comment).\n6. For complete_task, the verification is the full postflight.sh command, with its PASS lines as outputTail.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-09-19T16:50:04.663Z"
+      "note": "Fresh sequential gate COMPLETED exit0 on immutable b798186; no live/dirty substitute. Scratch D:/moe-scratch/sha256-87bc1cad-bdbf68eb/gate.ps1, gate.log, gate-result.json and individual logs. 2026-09-21 20:04:04Z–21:25:42Z. MOE_POSTFLIGHT_TIMEOUT_SEC=400, LC_ALL=C; MOE_PROJECT_PATH/MOE_WORKER_ID and focused-mode env unset. Full postflight.sh PASS:71 frozen +30 scope (59m23s); full postflight.ps1 on pwsh7.6.6 PASS71+30 (11m44s), PS5.1 PASS71+30 (9m58s), both hot reload71 suite completed. Parity PASS all3. Node runtime/taskless61/61 no skips. npx tsc --noEmit exit0. npm test -- --reporter=json --outputFile=../../../daemon-results.json:2153/2153,0 failed,0 pending; same delivered-suite count as prior rejected snapshot, all4 old failures resolved by published prerequisite. No source edits and no background verification remains.",
+      "startedAt": "2026-09-21T20:04:03.843Z",
+      "completedAt": "2026-09-21T21:29:17.105Z"
     },
     {
       "stepId": "step-6",
       "description": "SELF-REVIEW, posted as a task comment:\n1. Does any path touch git in a sha256 repository without going through the probe? List the git call sites you checked.\n2. Does a SHA-1 repository behave byte-for-byte as before? The full harnesses answer this.\n3. Is the refusal line printed once per process, not on every loop iteration?\n4. Does an old git without --show-object-format fall through to today's behaviour?\n5. Is the finalize outcome in a sha256 repository 'nothing-to-commit', and does the task's strict-policy consequence (no completion commit) match what the docs now say?\n6. git diff --stat: only the 9 planned paths.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review posted comment-09c604b5815e4299885ccf1e5e00138a covering all6 plan questions, concurrency/input/exit-path assumptions and warning-scope hot-reload caveat. Rechecked immutable 432-file export byte-for-byte after all gates: manifest SHA256 99a9284c13365064e046df39e5c0a8dcbf2819bce08438cdc679513173a6b3b9, HEAD still b798186. Full sh/PS7/PS5.1 each71 frozen+30 scope, parity all3, runtime61/61, tsc0, daemon2153/2153. Scope delta this session is zero source files; prior9-path implementation remains delivered and verified. Six live dirty paths hash-equal ca478 frozen gate snapshot and remain peerDeclared; no foreign edits absorbed. No active background verification.",
+      "startedAt": "2026-09-21T21:29:17.187Z",
+      "completedAt": "2026-09-21T21:30:49.169Z"
     }
   ],
-  "planRevision": 10,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0966ef4c",
+  "planRevision": 26,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Human approved: SHA-256 object-format follow-up requested by QA of task-31fe6dc8.",
+  "reopenCount": 1,
+  "reopenReason": "DoD 3 fails on recorded checkpoint 9f2cce3: the daemon suite is 2149 passed/4 failed, and both full postflight harnesses fail before the new SHA-256 assertions (DoD 2 green-fix evidence is therefore unverifiable from delivered bytes). The checkpoint carries unrelated prompt-cache launcher changes without the helper or matching provider descriptor. SHA-256 rule/docs are present; tsc, parity (bash with LC_ALL=C; PS7/PS5.1), and 61 runtime tests pass. task.verification remains null and only a checkpoint is recorded, so this is not a completed, freshly verified delivery. Full commands, diagnostics and immutable snapshot path are in comment-62fe9638f4e24cf0909f102301707653. Coordinate prerequisite publication with the prompt-cache owner; do not revert or absorb foreign WIP. Then rerun on complete delivered bytes and submit through complete_task with verification.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
@@ -107,19 +95,47 @@
   ],
   "priority": "LOW",
   "order": 213.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-46c9ea8a282945e4a3bd2f1297d81c35",
+      "author": "worker-0966ef4c",
+      "content": "SELF-REVIEW (step 6), worker-0966ef4c\n\n1. Git in a sha256 repo without the probe? No.\n- sh: git_top callers are preflight_landing, receipt_replay (locals), the post-flight landing and no-landing branches, and adoption. Every other git call is keyed on MOE_TOP/MOE_GITDIR (set only by git_top), on the hook $scratch or on $GATE_WORKSPACE, both inside a landing.\n- The ONE bypass was teardown_rescue's direct `rev-parse --show-toplevel`. It touched no ref, but gave an interrupted sh session 'failed' instead of 'nothing-to-commit'. It now runs `[ -n \"${MOE_TOP:-}\" ] || (git_top) || return 0`; the subshell keeps MOE_TOP as the session left it, so SHA-1 outcomes are unchanged. Pinned by the new teardown-sha256 arm.\n- ps1: Get-MoeGitTop is called by receipt replay, idle recovery, teardown, pre-flight, the three post-flight branches and adoption. Every other git call takes its Top from it, or from the hook scratch / gate workspace.\n2. SHA-1 byte-for-byte? The only new work per probe is one `rev-parse --show-object-format`. Snapshot HEAD+patch: full postflight.sh PASS (frozen 71 = 69 old + 2 new, scope 30). Clean base (021f351 ps1 + patch): full postflight.ps1 PASS on pwsh and PS 5.1 (frozen 71, hot reload ok, scope 30). Daemon 2154/2154, node 61/61, parity PASS on all three shells.\n3. Once per process? Yes. The flag is a global in sh and $script: in ps1. The sha256-repo arm asserts exactly 1 WARN in a run that calls the probe at least 3 times. Calling ps1 Get-MoeGitTop (AST-extracted) twice on a sha256 repo gives $null both times and 1 WARN, on both engines. A hot reload (sh exec, ps1 new script scope) prints it once more, by design, and the comments say so.\n4. Old git? rev-parse ECHOES an unknown flag with rc 0 (measured), so a pre-2.29 git answers '--show-object-format' and proceeds. PATH shims that echo it back or exit 129: sh 'pass' still lands (the set -e guard holds) and sha256-repo falls back to today's path; ps1 AST probe with a git.cmd shim fails open, with no WARN.\n5. Outcome is 'nothing-to-commit' on both twins, including teardown (arm-pinned). Strict policy: no completion commit is ever recorded, so local-branch and remote-push cannot be met. CONFIGURATION.md autoCommit now says to follow the no-git rules (manual-artifact, with qualityGate unset or autoCommit false), consistent with the deliveryPolicy row.\n6. Diff: my hunks touch exactly the 9 planned paths. moe-agent.sh 19/3, moe-agent.ps1 13/0, postflight.sh 22/6, postflight.ps1 22/6, parity-check.sh 1/1, parity-check.ps1 1/1, candidateStore.ts 4/0, CONFIGURATION.md 1/1, SCHEMA.md 1/1. The shared moe-agent.{sh,ps1} and postflight.{sh,ps1} ALSO hold the Codex session's uncommitted prompt-cache hunks, which are not mine. Per the human (architect msg-de6bc910), I hold complete_task until that work is committed on its own. My hunks alone are in D:/moe-scratch/w0747-1KZuRv/mine.patch; `git apply --cached -R` of it was verified in a throwaway index.\n\nTheoretical, not fixed:\n- sh `echo -e` would interpret a backslash in the repo path. Every other sh WARN in the wrapper uses the same idiom.\n- In a sha256 (or no-git) repo, the adoption path still says \"the tree is clean - nothing to land\". That wording predates this task; the WARN line precedes it.\n- A pre-existing red, not mine: HEAD's own postflight.ps1 hot-reload arm has failed since 469ed6d carried the prompt-cache check without its helper.",
+      "timestamp": "2026-09-19T18:25:45.676Z"
+    },
+    {
+      "id": "comment-62fe9638f4e24cf0909f102301707653",
+      "author": "qa-a4402b0a",
+      "content": "QA evidence (qa-a4402b0a, 2026-09-20): reviewed `git show 9f2cce3be83adf80e72fdccbde09072d22c1e379` and `git branch --contains 9f2cce3`; it is the recorded/pushed recovery checkpoint, not a completion. Diff: 10 paths incl board, +179/-80, including unrelated prompt-cache hunks. No currentCandidate is exposed. Final context still has verification=null and no completion commit.\n\nImmutable test root: D:/moe-scratch/qa-07474-265a4a2d, exported with `git -c core.autocrlf=false archive 9f2cce3 packages/moe-daemon docs scripts CLAUDE.md .gitignore .gitattributes package.json`; daemon node_modules junction points to shared dependencies. Source checkout unchanged. Root contains logs/results; do not recursively remove the junction target.\n\nCommands/results, independently run:\n- `MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh` (Git Bash): exit 1, MODULE_NOT_FOUND scripts/prompt-cache.mjs, before SHA-256 assertions.\n- Same timeout, `pwsh -NoProfile -File scripts/tests/postflight.ps1` and `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/postflight.ps1`: both exit 1, same missing helper. postflight-{sh,ps7,ps51}.log.\n- From packages/moe-daemon, with MOE_PROJECT_PATH/MOE_WORKER_ID removed: `npx tsc --noEmit`: exit 0; `npm test -- --reporter=json --outputFile=../../daemon-results.json`: exit 1, 2149 passed / 4 failed / 2153 total, no skips. One acceptance.test.ts failure: receipt barrier never reached because missing helper. Three providerDescriptor.contract.test.ts failures: delivered wrappers changed exec -C to exec --json -C, prompt pointer and developer_instructions, without matching descriptor. Focused rerun: 20 passed / 3 failed (provider.log).\n- `LC_ALL=C bash scripts/tests/parity-check.sh`: PASS. Default inherited C.UTF-8 produced a Git Bash emoji matching false negative; byte-locale rerun passes without edits. parity-check.ps1: PASS on PS7 and PS5.1.\n- `node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs`: 61 passed, exit 0.\n- bash syntax, PS AST parse, git diff --check: PASS.\n\nSHA-256-only code/docs and exact fixture assertions are present; state consumers still import the shared SHA-1 validators. This is a delivered-tree/verification rejection, not a finding that the SHA-256 probe itself is wrong. Worker was asked in the task channel whether the documented foreign-work hold was resolved; no reply yet. Coordinate with prompt-cache owner rather than absorbing/reverting their WIP, then re-run all planned gates on the complete delivered revision and submit complete_task with verification.",
+      "timestamp": "2026-09-20T11:10:45.009Z"
+    },
+    {
+      "id": "comment-dcde34d0a2534dfc97682ecf5a15d129",
+      "author": "worker-87bc1cad",
+      "content": "Reopen recovery: current commit b798186 includes the missing prompt-cache helper/descriptor via d435fc7. Focused former-failure suites now 29/29 on an immutable export, not dirty bytes. Source already implements the approved SHA rule, so no new repository edits. Scratch D:/moe-scratch/sha256-87bc1cad-bdbf68eb: manifest.json verifies all432 exported tracked files against b798186; RED guard-removal derivative fails exact SHA assertion on sh/pwsh (refused0, candidate1, rescue ref, finals[rescued]); original SHA and teardown cases pass2/2 on sh,pwsh,PS5.1; fresh probe controls cover old-git flag echo/empty/rc129 and print-once; parity original passes3 engines, prose mutation in either twin fails all6 combinations. Full sequential gate started via gate.ps1 at ~20:03Z; logs retained. Six dirty ca478 implementation paths and unrelated skill work remain foreign and untouched. Completion will report verification recovery, not authorship/publication of those foreign bytes.",
+      "timestamp": "2026-09-21T20:04:43.457Z"
+    },
+    {
+      "id": "comment-09c604b5815e4299885ccf1e5e00138a",
+      "author": "worker-87bc1cad",
+      "content": "SELF-REVIEW / step6 (fresh b798186 immutable bytes, no source edits):\n1. Ref-writing reachability audited: sh git_top callers receipt_replay, preflight_landing, postflight normal/no-landing, adoption and teardown_rescue; git index staging/CAS/branch peel/rescue/push require MOE_TOP, hook/gate workspaces derive from that landing. PS Get-MoeGitTop callers replay, idle recovery, preflight, all postflight variants, adoption and teardown; Invoke-MoeGit consumers use returned Top or derived hook/gate workspace. Prior teardown direct-probe bypass is fixed in 9f2cce3.\n2. SHA1/manual/no-git regression: full sh, pwsh7, PS5.1 each PASS71 frozen+30 scope, no skipped arms; Node61/61; daemon2153/2153 same count as rejected delivery; tsc0. All gate exits0. Logs/result.json under D:/moe-scratch/sha256-87bc1cad-bdbf68eb. Full sh59m23s, PS7 11m44s, PS5.1 9m58s. All432 exported source files re-compared after tests and still byte-identical to b798186.\n3. Once-per-pass warning confirmed by actual SHA fixture and twice-called extracted probe on all3 engines. Hot reload intentionally creates a fresh wrapper/script warning scope (as existing comments say); no claim of process-global suppression across reload.\n4. Missing/empty/echoed --show-object-format, rc129 and uppercase control all fall through; lowercase sha256 returns no repo. Paths are argv-quoted, no new shell interpolation. stdout/repo-move TOCTOU remain existing environment assumptions, not new authority.\n5. SHA and interrupted-SHA cases pin exactly nothing-to-commit, no candidate/check/gate/rescue/ref update, unchanged HEAD and dirty owned bytes retained. Strict local/remote evidence remains unsatisfied; manual-artifact/no-git documentation is explicit.\n6. Recovery needed zero new repository source paths: original SHA changes occupy9 planned paths already published. Current six-path working diff is ca478 BOARD-skip work, not this task; hashes match that task's frozen gate snapshot. get_commit_scope still marks all6 peerDeclared with contested=skip-untouched and touchedFiles=[]; preserve them. A naive comparison against baseline.tsv was inapplicable because those contested paths are not listed; direct peer-blob equality is the preservation evidence. No manual commits, no foreign code absorbed, no test/build still running. Completion will attest revalidation of existing delivered source, not claim new source authorship or postflight publication.",
+      "timestamp": "2026-09-21T21:30:33.831Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T22:04:32.874Z",
-  "updatedAt": "2026-09-19T16:50:04.663Z",
+  "updatedAt": "2026-09-21T21:32:32.400Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T08:50:55.263Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 9,
-    "executedStepCount": 4
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-e52c9adc",
-    "worker-0966ef4c"
+    "governor-fbd1fae8",
+    "worker-87bc1cad",
+    "qa-9420e52a"
   ],
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
@@ -128,9 +144,22 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "A test using a 64-hex revision (or a sha256 fixture repository) fails on the old code and passes on the fix",
+      "rejectedAt": "2026-09-20T11:11:06.744Z",
+      "rejectedBy": "qa-a4402b0a"
+    },
+    {
+      "item": "npx tsc --noEmit and the daemon suite stay green; both parity-check scripts pass if a wrapper changes",
+      "rejectedAt": "2026-09-20T11:11:06.744Z",
+      "rejectedBy": "qa-a4402b0a"
+    }
+  ],
   "planSubmittedAt": "2026-09-19T08:53:01.330Z",
   "planningNotes": {
     "approachesConsidered": "- Accept 64-hex ids end to end: rejected for this slice. It needs daemon regexes and messages widened, every '7-40 hex' and '40 hex' mention in the tool descriptions and docs updated, the wrappers' zero oid (40 zeros) and empty-tree sentinel (the SHA-1 4b825dc6…) made format-aware, the replay journal regexes widened in both twins, and the harness fakes widened. That is broad risk for a rare format, against the 'one narrow vertical slice' rail.\n- Force autoCommit=false in the settings reader: rejected. The settings readers don't know the repository yet. git_top and Get-MoeGitTop are the single entry every git path already goes through, and their 'no repo' result is the existing, tested manual/no-git path.\n- Also improving the daemon's 64-hex refusal messages: YAGNI. The wrappers are the only runners in this slice, and after this change they never send a 64-hex id.",
@@ -147,5 +176,154 @@
     ]
   },
   "planApprovedAt": "2026-09-19T08:53:01.406Z",
-  "workStartedAt": "2026-09-19T16:32:23.814Z"
+  "workStartedAt": "2026-09-19T16:32:23.814Z",
+  "commits": [
+    {
+      "sha": "9f2cce3be83adf80e72fdccbde09072d22c1e379",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-a4402b0a@2026-09-20T11:06:06Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "qa-a4402b0a",
+      "recordedAt": "2026-09-20T11:06:10.291Z",
+      "treeId": "83cb39abcef983bb493eb2f4918f4ccebbe3b25d",
+      "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "b798186edf93a72622fd7feef7b26422aba48e93",
+      "ref": "refs/heads/moe/work-2026-09-13",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-87bc1cad@2026-09-21T19:56:32Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-ca4780398a634fd5a37407bd5849da53.json"
+      ],
+      "recordedBy": "worker-87bc1cad",
+      "recordedAt": "2026-09-21T19:56:35.386Z",
+      "treeId": "abe32cc9dfbebc87e64c4c0b2ab1c8d415ec3381",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-ca4780398a634fd5a37407bd5849da53"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-ca4780398a634fd5a37407bd5849da53"
+        },
+        {
+          "path": "scripts/tests/parity-check.ps1",
+          "taskId": "task-ca4780398a634fd5a37407bd5849da53"
+        },
+        {
+          "path": "scripts/tests/parity-check.sh",
+          "taskId": "task-ca4780398a634fd5a37407bd5849da53"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-ca4780398a634fd5a37407bd5849da53"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-ca4780398a634fd5a37407bd5849da53"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "packages/moe-daemon/src/state/candidateStore.ts",
+    "docs/CONFIGURATION.md",
+    "docs/SCHEMA.md",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-87bc1cad@2026-09-21T19:56:32Z",
+    "at": "2026-09-21T19:56:35.386Z"
+  },
+  "reviewCompletedAt": "2026-09-20T11:11:06.744Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "A test using a 64-hex revision (or a sha256 fixture repository) fails on the old code and passes on the fix",
+      "npx tsc --noEmit and the daemon suite stay green; both parity-check scripts pass if a wrapper changes"
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "scripts/moe-agent.sh",
+        "line": 534,
+        "description": "Delivered 9f2cce3 invokes scripts/prompt-cache.mjs, absent from its tree (PS1:748 does too). All three postflight runs exit 1 with MODULE_NOT_FOUND; daemon receipt-crash acceptance also fails. Coordinate a complete prompt-cache prerequisite delivery or an isolated SHA-256-only change; preserve foreign WIP. Rerun sh/PS7/PS5.1 harnesses from a clean delivered snapshot."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+        "line": 289,
+        "description": "Clean daemon suite fails 3 descriptor contract tests (:289, :321, :371). Delivered wrappers use exec --json -C, new context-pointer prose and role-neutral developer_instructions, but the committed codexDescriptor still describes old emitters. Reconcile this through the prompt-cache owner's complete delivery, then run the full daemon suite; dirty local descriptor bytes are not delivery evidence."
+      },
+      {
+        "type": "other",
+        "description": "task.verification is null, completedAt/reviewStartedAt are null, and task.commits contains only recovered checkpoint 9f2cce3, not a completion. The handoff explicitly held complete_task pending foreign-work publication. After resolving delivery failures, rerun the planned gates against the resulting snapshot and call complete_task with a reproducible verification command/output, allowing normal wrapper completion landing. Do not patch board files by hand."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 3 fails on recorded checkpoint 9f2cce3: the daemon suite is 2149 passed/4 failed, and both full postflight harnesses fail before the new SHA-256 assertions (DoD 2 green-fix evidence is therefore unverifiable from delivered bytes). The checkpoint carries unrelated prompt-cache launcher changes without the helper or matching provider descriptor. SHA-256 rule/docs are present; tsc, parity (bash with LC_ALL=C; PS7/PS5.1), and 61 runtime tests pass. task.verification remains null and only a checkpoint is recorded, so this is not a completed, freshly verified delivery. Full commands, diagnostics and immutable snapshot path are in comment-62fe9638f4e24cf0909f102301707653. Coordinate prerequisite publication with the prompt-cache owner; do not revert or absorb foreign WIP. Then rerun on complete delivered bytes and submit through complete_task with verification.",
+      "rejectedAt": "2026-09-20T11:11:06.744Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "A test using a 64-hex revision (or a sha256 fixture repository) fails on the old code and passes on the fix",
+        "npx tsc --noEmit and the daemon suite stay green; both parity-check scripts pass if a wrapper changes"
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "scripts/moe-agent.sh",
+          "line": 534,
+          "description": "Delivered 9f2cce3 invokes scripts/prompt-cache.mjs, absent from its tree (PS1:748 does too). All three postflight runs exit 1 with MODULE_NOT_FOUND; daemon receipt-crash acceptance also fails. Coordinate a complete prompt-cache prerequisite delivery or an isolated SHA-256-only change; preserve foreign WIP. Rerun sh/PS7/PS5.1 harnesses from a clean delivered snapshot."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/providers/providerDescriptor.contract.test.ts",
+          "line": 289,
+          "description": "Clean daemon suite fails 3 descriptor contract tests (:289, :321, :371). Delivered wrappers use exec --json -C, new context-pointer prose and role-neutral developer_instructions, but the committed codexDescriptor still describes old emitters. Reconcile this through the prompt-cache owner's complete delivery, then run the full daemon suite; dirty local descriptor bytes are not delivery evidence."
+        },
+        {
+          "type": "other",
+          "description": "task.verification is null, completedAt/reviewStartedAt are null, and task.commits contains only recovered checkpoint 9f2cce3, not a completion. The handoff explicitly held complete_task pending foreign-work publication. After resolving delivery failures, rerun the planned gates against the resulting snapshot and call complete_task with a reproducible verification command/output, allowing normal wrapper completion landing. Do not patch board files by hand."
+        }
+      ]
+    }
+  ],
+  "reviewStartedAt": "2026-09-21T21:32:32.398Z",
+  "verification": {
+    "command": "$env:MOE_POSTFLIGHT_TIMEOUT_SEC='400'; & 'C:/Program Files/Git/bin/bash.exe' scripts/tests/postflight.sh",
+    "exitCode": 0,
+    "outputTail": "cwd D:/moe-scratch/sha256-87bc1cad-bdbf68eb/snapshot, git archive b798186edf93a72622fd7feef7b26422aba48e93; LC_ALL=C, MOE_PROJECT_PATH/MOE_WORKER_ID unset. Run20:04:04Z-21:03:27Z. PASS frozen candidate scenarios:71; [scenario AB] ok; commit-scope scenarios run:30; PASS postflight.sh. Full sequential gate.ps1 also completed21:25:42Z: PS7 and PS5.1 postflight71+30 each, parity all3, runtime61/61, tsc exit0, daemon2153/2153. All432 snapshot files revalidated exact Git bytes after tests; no skipped arms. gate-result.json and logs retained.",
+    "reportedAt": "2026-09-21T21:32:32.398Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "QA reopen resolved by verifying complete published bytes: SHA refusal/tests/docs were already in9f2cce3; prompt-cache helper/descriptor prerequisite now in d435fc7. No new source edits or foreign WIP absorbed. Immutable b798186 export rechecked432 files before/after all gates. Fresh RED on isolated pre-fix probes: sh/pwsh create rescue and finalize rescued; unchanged delivered fix passes SHA+teardown2/2 on sh/PS7/PS5.1. Full postflight PASS71 frozen+30 scope on all3 engines; parity all3; runtime61/61; tsc0; daemon2153/2153 (same count, prior4 failures resolved). Probe fallthrough/once-per-pass and6 parity mutation failures verified. Logs/manifests/scripts: D:/moe-scratch/sha256-87bc1cad-bdbf68eb. Self-review comment-09c604b5815e4299885ccf1e5e00138a; Serena handoff saved. Six dirty ca478 script paths remain byte-identical to peer snapshot, peerDeclared, touchedFiles=[]; do not absorb them. All tests completed; normal wrapper completion/finalization still pending session exit, not claimed landed/pushed."
 }
