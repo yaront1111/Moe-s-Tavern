@@ -661,12 +661,13 @@ if ($projConfig -and $projConfig.settings.PSObject.Properties['enableAgentTeams'
 
 # Resolve the Claude model for this role.
 # Precedence: -Model flag → .moe/project.json settings.models.<role> → per-role default.
-# All roles default to Opus 5, launched with --effort max below. Override
+# Worker and qa default to Opus 5.5, architect and governor to Opus 5, launched
+# with --effort max below. Override
 # per role via project.json settings.models.{role}.
 $defaultModels = @{
     architect = "claude-opus-5"
-    worker    = "claude-opus-5"
-    qa        = "claude-opus-5"
+    worker    = "claude-opus-5-5"
+    qa        = "claude-opus-5-5"
     governor  = "claude-opus-5"
 }
 $resolvedModel = ""

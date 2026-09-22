@@ -1747,7 +1747,8 @@ fi
 # never with the claude-opus-5 fallback below.
 EXPLICIT_MODEL="$RESOLVED_MODEL"
 if [ -z "$RESOLVED_MODEL" ]; then
-    # All roles default to Opus 5 -- matches moe-agent.ps1. Launched with
+    # Worker and qa default to Opus 5.5, architect and governor to Opus 5 --
+    # matches moe-agent.ps1. Launched with
     # --effort max below. Override per role via project.json settings.models.{role}.
     case "$ROLE" in
         architect) RESOLVED_MODEL="claude-opus-5" ;;
