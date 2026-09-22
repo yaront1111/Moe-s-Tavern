@@ -3575,8 +3575,8 @@ write_recs('contested', contested)
 write_recs('missing', [(m,) for m in missing])
 declared = set(ASSERTED) | set(PLANNED)
 with open(os.path.join(out_dir, 'summary'), 'w', newline='') as fh:
-    fh.write('N_CANDIDATES=%d\nN_INFERRED=%d\nN_SKIPPED=%d\nN_UNATTRIBUTED=%d\nN_MISSING=%d\nN_PREEXISTING=%d\nN_EXCLUDED=%d\nN_DECLARED=%d\nN_ASSERTED=%d\nALL_ASSERTED_MISSING=%d\nN_TOOL=%d\nN_CONTESTED=%d\nPEERS_ACTIVE=%d\n' % (
-        len(cands), n_inf, len(skipped), len(unattributed), len(missing), n_pre, n_exc, len(declared), len(ASSERTED), all_missing, len(TOOL), len(contested), 1 if peers_active else 0))
+    fh.write('N_CANDIDATES=%d\nN_NON_BOARD=%d\nN_INFERRED=%d\nN_SKIPPED=%d\nN_UNATTRIBUTED=%d\nN_MISSING=%d\nN_PREEXISTING=%d\nN_EXCLUDED=%d\nN_DECLARED=%d\nN_ASSERTED=%d\nALL_ASSERTED_MISSING=%d\nN_TOOL=%d\nN_CONTESTED=%d\nPEERS_ACTIVE=%d\n' % (
+        len(cands), sum(1 for c in cands if c[0] != 'BOARD'), n_inf, len(skipped), len(unattributed), len(missing), n_pre, n_exc, len(declared), len(ASSERTED), all_missing, len(TOOL), len(contested), 1 if peers_active else 0))
 PYEOF
 }
 
@@ -3585,12 +3585,14 @@ attr_summary_load() {
     ATTR_N_CANDIDATES=0; ATTR_N_INFERRED=0; ATTR_N_SKIPPED=0; ATTR_N_UNATTRIBUTED=0; ATTR_N_MISSING=0
     ATTR_N_PREEXISTING=0; ATTR_N_EXCLUDED=0; ATTR_N_DECLARED=0; ATTR_N_ASSERTED=0; ATTR_ALL_ASSERTED_MISSING=0
     ATTR_N_TOOL=0; ATTR_N_CONTESTED=0; ATTR_PEERS_ACTIVE=0
+    ATTR_N_NON_BOARD=unknown
     [ -f "$1/summary" ] || return 1
     local k v
     while IFS='=' read -r k v; do
         v="${v%$'\r'}"
         case "$k" in
             N_CANDIDATES) ATTR_N_CANDIDATES="$v" ;;
+            N_NON_BOARD) case "$v" in ''|*[!0-9]*) : ;; *) ATTR_N_NON_BOARD="$v" ;; esac ;;
             N_INFERRED) ATTR_N_INFERRED="$v" ;;
             N_SKIPPED) ATTR_N_SKIPPED="$v" ;;
             N_UNATTRIBUTED) ATTR_N_UNATTRIBUTED="$v" ;;
@@ -4716,7 +4718,7 @@ receipt_replay() {
 }
 
 # ---- the landing driver ------------------------------------------------------
-# run_landing -- inputs via LAND_* globals:
+# run_landing [current-launch-failed=false] -- other inputs via LAND_* globals:
 #   LAND_KIND completion|checkpoint, LAND_TASK_ID, LAND_TITLE, LAND_STATUS,
 #   LAND_REOPEN, LAND_CLI_EXIT, LAND_RECOVERED, LAND_GATE_FAILED,
 #   LAND_POLICY_OVERRIDE ('' | never), LAND_SNAPSHOT_FILE ('' = take one now),
@@ -4729,6 +4731,7 @@ receipt_replay() {
 # the teardown rescue never double-parks a session that already landed.
 run_landing() {
     FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
+    local current_launch_failed="${1:-false}"
     local work rc=0 snap tool head_before head_after n_skipped
     work="$(create_secure_temp)/landing-$$"
     rm -rf "$work" 2>/dev/null || true
@@ -4815,7 +4818,17 @@ run_landing() {
         return 4
     fi
 
-    if [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] || {
+    # Defer only resolved BOARD bytes from this failed launch. Sharing the
+    # nothing epilogue handles this session's baseline without pruning those
+    # bytes, so a retry cannot recover the skipped checkpoint. Unknown counts
+    # are not proof; recovery callers keep the false default.
+    if [ "$LAND_KIND" = checkpoint ] && [ "${LAND_RECOVERED:-false}" != true ] &&
+        [ "$current_launch_failed" = true ] && [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] &&
+        [ "$ATTR_N_NON_BOARD" = 0 ]; then
+        LAND_OUTCOME="nothing"
+        LAND_CODE="MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY"
+        echo -e "${BLUE}[skip]${NC} $LAND_CODE: task $LAND_TASK_ID -- launch failed; dirty BOARD state deferred until a real landing."
+    elif [ "${ATTR_N_CANDIDATES:-0}" -gt 0 ] || {
         [ "$LAND_KIND" = completion ] && [ "${ATTR_N_DECLARED:-0}" -gt 0 ] &&
         [ "${ATTR_ALL_ASSERTED_MISSING:-0}" != 1 ]; }; then
         head_before=$(git -C "$MOE_TOP" rev-parse -q --verify HEAD 2>/dev/null) || head_before=""
@@ -4870,7 +4883,7 @@ run_landing() {
             echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- refusing to auto-commit; there is no whole-tree fallback. Commit the task's own paths by hand: git commit -- <path> [<path>...]"
             ;;
         nothing)
-            echo -e "${BLUE}[info]${NC} MOE_COMMIT_NOTHING_TO_COMMIT: task $LAND_TASK_ID -- no changed candidate paths (already landed, or the session changed nothing it may commit)."
+            echo -e "${BLUE}[info]${NC} $LAND_CODE: task $LAND_TASK_ID -- nothing landed; candidate bytes, if any, remain deferred."
             ;;
     esac
     if [ "${ATTR_N_UNATTRIBUTED:-0}" -gt 0 ]; then
@@ -4938,7 +4951,7 @@ run_landing() {
             [ -z "$report" ] || receipt_send "$report" "$RECEIPT_JOURNAL" || true
         fi
     elif [ "$LAND_OUTCOME" = "nothing" ]; then
-        record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "MOE_COMMIT_NOTHING_TO_COMMIT" "" "" "" "" || true
+        record_commit_rpc "nothing" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
         baseline_after_landing "$LAND_TASK_ID" "$work/B.tsv" "$ATTR_DIR/unattributed" "$work/none.z" "$bl_flag" "$bl_session"
     elif [ "$LAND_OUTCOME" = "refused" ]; then
         record_commit_rpc "refused" "$LAND_KIND" "" "$LAND_BRANCH" "$LAND_CODE" "" "" "" "" || true
@@ -5360,6 +5373,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     FIRST_RUN=false
 
     CLI_EXIT_CODE=0
+    CURRENT_LAUNCH_FAILED=false
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     # Claim the next task, fetch context, read chat backlog.
@@ -7110,6 +7124,7 @@ PYEOF
     if [ -n "$CLI_LAUNCHED_AT" ]; then CLI_ELAPSED_SEC=$(( $(date +%s) - CLI_LAUNCHED_AT )); fi
     CLI_EXIT_FOR_LAUNCH="${CLI_EXIT_CODE:-0}"
     if [ "$CLI_EXIT_FOR_LAUNCH" != "0" ] && [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then
+        CURRENT_LAUNCH_FAILED=true
         LAUNCH_FAIL_STREAK=$((LAUNCH_FAIL_STREAK + 1))
         # Not a mid-task death: give the resume attempt back.
         if [ "$RESUME_ATTEMPTS" -gt 0 ]; then RESUME_ATTEMPTS=$((RESUME_ATTEMPTS - 1)); fi
@@ -7402,7 +7417,7 @@ except Exception:
                 LAND_SNAPSHOT_FILE="$POSTFLIGHT_SNAPSHOT"
                 LAND_TOOL_FILE="$MOE_TOOL_WRITES_FILE"
                 LAND_SCOPE_FILE=""
-                if run_landing; then LAND_RC=0; else LAND_RC=$?; fi
+                if run_landing "$CURRENT_LAUNCH_FAILED"; then LAND_RC=0; else LAND_RC=$?; fi
                 if [ "$GATE_FAILED" = true ]; then
                     if [ -n "${GATE_LOG:-}" ] && [ -f "$GATE_LOG" ]; then
                         GATE_OUT=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c 'import sys;f=open(sys.argv[1],"rb");f.seek(0,2);f.seek(max(0,f.tell()-16384));print(f.read().decode("utf-8","ignore"))' "$GATE_LOG")

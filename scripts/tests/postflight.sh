@@ -3009,6 +3009,165 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario P] ok"
 
+  # Scenario P2 -- only current launch-failure BOARD-only checkpoints defer.
+  P2_CHECK="$TMP_DIR/p2-check.cjs"
+  cat > "$P2_CHECK" <<'P2JS'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const cp = require('node:child_process');
+const [action, dir, mode, logFile, round = '1'] = process.argv.slice(2);
+const board = '.moe/tasks/task-postflight.json';
+const stateFile = path.join(dir, '.git/p2-state.json');
+const skipCode = 'MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY';
+const read = p => fs.readFileSync(p, 'utf8');
+const bytes = p => fs.readFileSync(path.join(dir, p)).toString('base64');
+function git(...args) {
+  return cp.execFileSync('git', ['-C', dir, ...args], {encoding: 'utf8'}).trim();
+}
+function rows(file) {
+  return fs.existsSync(file) ? read(file).trim().split(/\r?\n/).filter(Boolean).map(JSON.parse) : [];
+}
+function prepare() {
+  git('config', 'core.autocrlf', 'false');
+  for (const p of [board, 'seed.txt']) fs.writeFileSync(path.join(dir, p), read(path.join(dir, p)).replace(/\r\n/g, '\n'));
+  git('add', board, 'seed.txt');
+  git('checkout', '-B', 'main');
+  fs.writeFileSync(path.join(dir, 'owned-a.txt'), 'owned-base\n');
+  fs.writeFileSync(path.join(dir, 'peer-plan.txt'), 'peer-base\n');
+  git('add', 'owned-a.txt', 'peer-plan.txt');
+  git('commit', '-qm', 'P2 fixture');
+  const remote = dir + '-remote.git';
+  cp.execFileSync('git', ['init', '--bare', '-q', remote]);
+  git('remote', 'add', 'origin', remote);
+  git('push', '-u', 'origin', 'main');
+  const before = {head: git('rev-parse', 'HEAD'), branch: git('symbolic-ref', 'HEAD'),
+    remote, refs: cp.execFileSync('git', ['--git-dir', remote, 'show-ref'], {encoding: 'utf8'})};
+  fs.writeFileSync(path.join(dir, 'peer-plan.txt'), 'foreign-index\n');
+  git('add', 'peer-plan.txt');
+  fs.writeFileSync(path.join(dir, 'peer-plan.txt'), 'foreign-worktree\n');
+  if (mode !== 'empty') fs.appendFileSync(path.join(dir, board), '\n \n');
+  if (mode === 'owned') own();
+  if (mode === 'deleted') fs.unlinkSync(path.join(dir, 'owned-a.txt'));
+  Object.assign(before, {board: bytes(board), foreign: bytes('peer-plan.txt'),
+    index: git('rev-parse', ':peer-plan.txt')});
+  fs.writeFileSync(stateFile, JSON.stringify(before));
+}
+function own() { fs.writeFileSync(path.join(dir, 'owned-a.txt'), 'real-owned-change\n'); }
+function assertCommon(before, ledger, log) {
+  assert.equal(bytes('peer-plan.txt'), before.foreign, 'foreign worktree bytes');
+  assert.equal(git('rev-parse', ':peer-plan.txt'), before.index, 'foreign staged bytes');
+  assert.equal(git('for-each-ref', '--format=%(refname)', 'refs/moe/rescue/'), '', 'no rescue refs');
+  assert.equal(ledger.filter(r => r.kind === 'rescue' || r.outcome === 'failed').length, 0, 'no rescue/failure ledger');
+  assert.doesNotMatch(log, /MOE_CHECKPOINT_RECOVERED/, 'no recovery backdoor');
+  assert.equal(fs.existsSync(path.join(dir, '.git/moe/baseline/task-postflight.live')), false, 'live marker removed');
+  const rpc = rows(path.join(dir, '.moe/evidence-rpcs.jsonl'));
+  assert.match(read(path.join(dir, '.moe/messages/chan-general.jsonl')), /session ended:/, 'postflight summary sent');
+  assert.equal(rpc.some(r => r.tool === 'finalize_attempt'), mode === 'completion', 'only worker completion finalizes');
+  return rpc;
+}
+function assertSkip(before, ledger, log, rpc) {
+  // Keep the behavioral assertion FIRST: old wrappers must actually commit.
+  assert.equal(git('rev-parse', 'HEAD'), before.head, 'P2 BOARD-only failure must leave HEAD unchanged');
+  assert.equal(git('symbolic-ref', 'HEAD'), before.branch, 'skip must not peel branch');
+  assert.equal(cp.execFileSync('git', ['--git-dir', before.remote, 'show-ref'], {encoding: 'utf8'}), before.refs);
+  assert.equal(ledger.filter(r => r.outcome === 'committed').length, 0, 'zero checkpoints/rescues');
+  assert.doesNotMatch(read(logFile + '.trace'), /built-in: git .*push(?: |$)/m, 'no push attempt');
+  assert.equal(bytes(board), before.board, 'deferred BOARD bytes unchanged');
+  if (mode !== 'empty') assert.ok(git('diff', '--name-only', 'HEAD', '--', board), 'BOARD still dirty');
+  const expectedCode = mode === 'empty' ? 'MOE_COMMIT_NOTHING_TO_COMMIT' : skipCode;
+  const last = ledger.at(-1);
+  assert.equal(ledger.length, Number(round), 'exactly one nothing record per invocation');
+  assert.equal(last.outcome, 'nothing');
+  assert.equal(last.kind, 'checkpoint');
+  assert.equal(last.code, expectedCode);
+  assert.equal(last.cliExitCode, 1);
+  assert.equal(last.sha || '', '');
+  assert.equal(last.ref || '', '');
+  assert.equal((last.paths || []).length, 0);
+  assert.notEqual(last.pushed, true);
+  assert.ok(log.includes(expectedCode), 'named code in log');
+  if (mode !== 'empty') assert.match(log, /\[skip\]/);
+  const messages = read(path.join(dir, '.moe/messages/chan-general.jsonl'));
+  assert.ok(messages.includes('outcome=nothing code=' + expectedCode), 'session summary code');
+  assert.equal(rpc.filter(r => ['record_candidate', 'record_check_run', 'record_delivery_receipt'].includes(r.tool)).length, 0);
+  assert.equal(rpc.filter(r => r.tool === 'finalize_attempt').length, 0, 'QA does not finalize worker attempts');
+  const baseline = read(path.join(dir, '.git/moe/baseline/task-postflight.tsv'));
+  assert.match(baseline.split('\n')[0], / landed=1 .*session=qa-p2@/);
+  if (mode !== 'empty') assert.ok(baseline.includes(board), 'deferred BOARD baseline retained');
+}
+function assertLanded(before, ledger, log) {
+  assert.equal(git('rev-list', '--count', before.head + '..HEAD'), '1', 'exactly one real landing');
+  const commits = ledger.filter(r => r.outcome === 'committed');
+  assert.equal(commits.length, 1);
+  const last = commits[0], completion = mode === 'completion';
+  assert.equal(last.kind, completion ? 'completion' : 'checkpoint');
+  assert.equal(last.cliExitCode, ['zero', 'later'].includes(mode) ? 0 : 1);
+  assert.equal(last.pushed, true);
+  assert.equal(last.sha, git('rev-parse', 'HEAD'));
+  assert.equal(cp.execFileSync('git', ['--git-dir', before.remote, 'rev-parse', git('symbolic-ref', 'HEAD')], {encoding: 'utf8'}).trim(), last.sha);
+  assert.match(read(logFile + '.trace'), /built-in: git .*push(?: |$)/m, 'successful push attempted');
+  const want = ['owned', 'deleted', 'later'].includes(mode) ? [board, 'owned-a.txt'] : [board];
+  assert.deepEqual(git('diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').split('\n').sort(), want);
+  assert.deepEqual([...last.paths].sort(), want);
+  assert.equal(cp.execFileSync('git', ['-C', dir, 'show', 'HEAD:' + board]).toString('base64'), before.board);
+  if (['owned', 'later'].includes(mode)) assert.equal(git('show', 'HEAD:owned-a.txt'), 'real-owned-change');
+  if (mode === 'deleted') assert.equal(git('ls-tree', 'HEAD', 'owned-a.txt'), '');
+  if (!completion) assert.match(git('log', '-1', '--format=%s'), /^wip\(task-postflight\):/);
+  assert.doesNotMatch(log, new RegExp(skipCode), 'non-skipped control');
+  if (mode === 'later') assert.equal(ledger.filter(r => r.code === skipCode).length, 2, 'two deferred retries');
+}
+if (action === 'prepare') prepare();
+else if (action === 'own') own();
+else if (action === 'begin') fs.rmSync(path.join(dir, '.moe/attempts/attempt-postflight.json'), {force: true});
+else {
+  const before = JSON.parse(read(stateFile));
+  const ledger = rows(path.join(dir, '.moe/record_commit.jsonl'));
+  const log = read(logFile);
+  // Old-code RED proof must name HEAD movement, not a missing marker.
+  if (['board', 'retry', 'empty'].includes(mode))
+    assert.equal(git('rev-parse', 'HEAD'), before.head, 'P2 BOARD-only failure must leave HEAD unchanged');
+  const rpc = assertCommon(before, ledger, log);
+  if (['board', 'retry', 'empty'].includes(mode)) assertSkip(before, ledger, log, rpc);
+  else assertLanded(before, ledger, log);
+  console.log('[scenario P2-' + mode + '-' + round + '] ok');
+}
+P2JS
+  # Subshell restores every fixture override even on an assertion failure.
+  (
+    for p2_mode in board owned retry zero outside completion empty deleted; do
+      p2_dir="$TMP_DIR/scope-p2-$p2_mode"
+      make_scope_project "$p2_dir" '["owned-a.txt"]' REVIEW '[]' '{"checkpointPush":true}'
+      write_peer_task_record "$p2_dir"
+      "$NODE_FOR_TEST" "$P2_CHECK" prepare "$p2_dir" "$p2_mode"
+      p2_cli=/bin/false; p2_role=qa; p2_limit=120
+      [ "$p2_mode" != zero ] || p2_cli=/bin/true
+      [ "$p2_mode" != outside ] || p2_limit=0
+      [ "$p2_mode" != completion ] || p2_role=worker
+      p2_rounds=1; [ "$p2_mode" != retry ] || p2_rounds=2
+      for ((p2_round=1; p2_round<=p2_rounds; p2_round++)); do
+        p2_out="$TMP_DIR/p2-$p2_mode-$p2_round.out"
+        "$NODE_FOR_TEST" "$P2_CHECK" begin "$p2_dir"
+        MOE_LAUNCH_FAIL_SEC="$p2_limit" GIT_TRACE="$p2_out.trace" FAKE_TASK_STATUS=REVIEW FAKE_ATTEMPT_PHASE=finalizing \
+          run_scope_wrapper "$p2_dir" "$p2_out" "$p2_cli" "$p2_role" "$p2_role-p2" \
+          || scope_fail P2 "wrapper failed" "$p2_out"
+        "$NODE_FOR_TEST" "$P2_CHECK" verify "$p2_dir" "$p2_mode" "$p2_out" "$p2_round" \
+          || scope_fail P2 "behavior assertion ($p2_mode)" "$p2_out"
+      done
+      if [ "$p2_mode" = retry ]; then
+        "$NODE_FOR_TEST" "$P2_CHECK" own "$p2_dir"
+        p2_out="$TMP_DIR/p2-later.out"
+        "$NODE_FOR_TEST" "$P2_CHECK" begin "$p2_dir"
+        MOE_LAUNCH_FAIL_SEC=120 GIT_TRACE="$p2_out.trace" FAKE_TASK_STATUS=REVIEW FAKE_ATTEMPT_PHASE=finalizing \
+          run_scope_wrapper "$p2_dir" "$p2_out" /bin/true qa qa-p2
+        "$NODE_FOR_TEST" "$P2_CHECK" verify "$p2_dir" later "$p2_out"
+      fi
+    done
+  )
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario P2] ok (10 invocations)"
+
+
   # Scenario R -- peel failure (a branch literally named `moe` blocks creating
   # moe/work-<date>): the bytes go to a rescue ref, HEAD and branch stay put,
   # and the wrapper hard-stops (exit 0, loop broken) instead of looping on.
@@ -3833,8 +3992,8 @@ EOF
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 30 ]; then
-    echo "Expected 30 commit-scope scenarios (A-P, K2, M2, M3, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 31 ]; then
+    echo "Expected 31 commit-scope scenarios (A-P, K2, M2, M3, P2, R-U, W-Z, Z2, AA, AB); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

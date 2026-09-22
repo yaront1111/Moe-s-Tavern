@@ -3914,7 +3914,8 @@ function Invoke-MoeLanding {
         [string]$Reason = '',
         [string]$Sid = '',
         [bool]$RunGate = $false,
-        [bool]$IsEpicFinal = $true
+        [bool]$IsEpicFinal = $true,
+        [bool]$LaunchFailed = $false
     )
     # 'pending' is the interruption sentinel: EVERY return below sets a real
     # outcome, so an Outcome still reading 'pending' in the finally means the
@@ -4014,21 +4015,31 @@ function Invoke-MoeLanding {
         $newU = @{}
         foreach ($ua in @($attr.Unattributed)) { $newU[(Get-MoePathKey $ua.Path)] = @{ Path = $ua.Path; Blob = $ua.Blob } }
 
-        # Outcome when nothing at all is attributable (BOARD candidates count:
-        # a board-only session still lands, as the sh twin does).
-        if ($attr.Candidates.Count -eq 0 -and ($Kind -ne 'completion' -or
+        # A failed launch has no work to checkpoint when every resolved path is
+        # BOARD. Defer those bytes, but handle this session's baseline normally
+        # so the next retry cannot recover the skipped checkpoint. Recovery and
+        # completions never use this exception; unknown attribution is no proof.
+        $deferBoard = $Kind -eq 'checkpoint' -and -not $recovered -and $LaunchFailed -and
+            $attr.Candidates.Count -gt 0 -and @($attr.Candidates | Where-Object { $_.Reason -cne 'BOARD' }).Count -eq 0
+        # Other board-only sessions still land. Share the no-landing bookkeeping
+        # without peeling a branch or pruning the deferred BOARD baseline bytes.
+        if ($deferBoard -or ($attr.Candidates.Count -eq 0 -and ($Kind -ne 'completion' -or
             ($attr.AssertedCount + $attr.PlannedCount) -eq 0 -or
-            ($attr.AssertedCount -gt 0 -and $attr.Missing.Count -ge $attr.AssertedCount -and $attr.ToolCount -eq 0))) {
+            ($attr.AssertedCount -gt 0 -and $attr.Missing.Count -ge $attr.AssertedCount -and $attr.ToolCount -eq 0)))) {
             $code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
             $outcome = 'nothing'
-            if ($Kind -eq 'completion' -and ($attr.AssertedCount + $attr.PlannedCount) -eq 0) {
+            if ($deferBoard) {
+                $code = 'MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY'
+            } elseif ($Kind -eq 'completion' -and ($attr.AssertedCount + $attr.PlannedCount) -eq 0) {
                 $code = 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS'
                 $outcome = 'refused'
             } elseif ($attr.AssertedCount -gt 0 -and $attr.Missing.Count -ge $attr.AssertedCount -and $attr.ToolCount -eq 0) {
                 $code = 'MOE_COMMIT_REFUSED_OWNED_PATH_MISSING'
                 $outcome = 'refused'
             }
-            if ($outcome -eq 'refused') {
+            if ($deferBoard) {
+                Write-Host "[skip] ${code}: task $TaskId - launch failed; dirty BOARD state deferred until a real landing." -ForegroundColor Cyan
+            } elseif ($outcome -eq 'refused') {
                 # Fail CLOSED. There is no whole-tree fallback: a fallback that
                 # fires silently is how a peer's in-flight files reached another
                 # task's commit.
@@ -4921,6 +4932,7 @@ do {
     $moeBaselinePath = ""
     $moeLandingDone = $false
     $moeStopLoop = $false
+    $moeCurrentLaunchFailed = $false
     $script:MoeToolWritten = @{}
     $script:MoeToolPending = [hashtable]::new([StringComparer]::Ordinal)
     $script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal)
@@ -6296,6 +6308,7 @@ $mentionsJson
     $cliElapsedSec = if ($script:CliLaunchedAt) { [int]((Get-Date) - $script:CliLaunchedAt).TotalSeconds } else { -1 }
     $cliExitForLaunch = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } else { 0 }
     if ($cliExitForLaunch -ne 0 -and $cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) {
+        $moeCurrentLaunchFailed = $true
         $script:LaunchFailStreak++
         # Not a mid-task death: give the resume attempt back.
         if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }
@@ -6469,7 +6482,7 @@ $mentionsJson
                 $moeExitForCommit = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } else { 0 }
                 $moeLanding = Invoke-MoeLanding -Kind $moeMode -TaskId $preflightTaskId -Git $moeGit -Settings $moeSettings `
                     -Title $preflightTaskTitle -Status $moeStatusForCommit -ReopenCount $finalReopenCount -CliExit $moeExitForCommit `
-                    -Sid $moeSid -RunGate $true -IsEpicFinal $isEpicFinal
+                    -Sid $moeSid -RunGate $true -IsEpicFinal $isEpicFinal -LaunchFailed $moeCurrentLaunchFailed
                 $script:MoeLastLanding = $moeLanding
                 if ($moeLanding.StopLoop) { $moeStopLoop = $true }
             }
