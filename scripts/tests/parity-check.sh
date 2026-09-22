@@ -220,6 +220,16 @@ for tool in replace_symbol_body insert_after_symbol insert_before_symbol create_
   require_both "Serena TOOL-tier tools" "$tool"
 done
 
+# Per-role claude default models must match (a one-sided edit once left the sh
+# worker/qa seats on the old model while the ps1 moved on).
+for role in architect worker qa governor; do
+  sh_model="$(tr -d '\r' < "$SH" | sed -nE "s/^[[:space:]]+$role\)[[:space:]]+RESOLVED_MODEL=\"([^\"]+)\".*/\1/p")"
+  ps_model="$(tr -d '\r' < "$PS1" | sed -nE "s/^[[:space:]]+$role[[:space:]]+= \"([^\"]+)\"\$/\1/p")"
+  if [ -z "$sh_model" ] || [ "$sh_model" != "$ps_model" ]; then
+    fail "default $role model differs: moe-agent.sh '$sh_model' vs moe-agent.ps1 '$ps_model'"
+  fi
+done
+
 # Deferred features must not be advertised by either wrapper.
 for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$SH"; then fail "deferred setting '$deferred' is referenced by moe-agent.sh"; fi
