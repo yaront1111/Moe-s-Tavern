@@ -1,4 +1,4 @@
-# Moe - MCP Server Specification (Current)
+claude# Moe - MCP Server Specification (Current)
 
 ## Overview
 
