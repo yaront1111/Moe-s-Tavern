@@ -489,7 +489,7 @@ only you can.
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=5840723dccb6 -->
+  'worker.md': `<!-- moe-generated: sha=bbff0ab435ae -->
 
 # Worker
 
@@ -499,6 +499,7 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Keep functions <=50 lines and files <=300 lines unless existing structure makes that impossible.
 - Avoid \`any\`; preserve type safety and explicit error handling on failure paths.
 - Add or update tests for every changed function/behavior and record the commands/results.
+- Project rails outrank this role's defaults. When a global rail sets a different per-task verification bar (for example code-only work with tests and gates batched into a later verification task), follow the rail: skip the test and gate work it moves, hand the tests forward where it says, and submit a build or compile check as \`verification\`. A rail overriding a default in this file is not a rail conflict, so do not \`report_blocked\` over it.
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` — run the plan's named verification command fresh and submit its result; exit code must be 0 or the daemon rejects completion. Never claim success without that fresh output.
 - If \`settings.qualityGate\` is set, post-flight runs it before the completion commit on the epic's FINAL task (default scope) and a failure diverts your work to a rescue ref instead of the branch — on that task, run the gate command yourself before \`complete_task\`.
