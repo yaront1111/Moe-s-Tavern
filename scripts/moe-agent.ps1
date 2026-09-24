@@ -760,6 +760,19 @@ if ($cliType -in @('claude', 'codex')) {
 # session-end line) only when the operator closes the TUI. Reverted 2026-09-07
 # at the operator's request; pass -CodexExec when per-task landing matters.
 # The sh twin resolves --codex-exec the same way.
+# Worker/qa codex seats default to one-shot `codex exec` (restores 8b632b5,
+# reverted 2026-09-07; re-requested by the operator 2026-09-24 as "make sure
+# codex not stopping between tasks"). The codex TUI never exits on its own, so
+# an interactive worker/qa seat both misses the post-flight AND has its loop
+# forced off below -- it lands one row and then sits idle forever. Exec mode
+# exits per row, so the post-flight lands it and the relaunch loop takes the
+# next one. Architect/governor keep the TUI: planning and governance are
+# conversations, and neither is a byte-landing path. -Interactive still forces
+# the TUI back for a worker/qa seat. The sh twin resolves this identically.
+if (($cliType -eq "codex") -and (-not $CodexExec) -and (-not $Interactive) -and
+    (($Role -eq "worker") -or ($Role -eq "qa"))) {
+    $CodexExec = $true
+}
 $codexInteractive = ($cliType -eq "codex") -and (-not $CodexExec)
 # Gemini is interactive by default, but -GeminiExec enables non-interactive headless mode
 $geminiInteractive = ($cliType -eq "gemini") -and (-not $GeminiExec)

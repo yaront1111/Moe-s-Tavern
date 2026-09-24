@@ -434,6 +434,20 @@ fi
 # record_commit) only when the operator closes the TUI. Reverted 2026-09-07 at
 # the operator's request; pass --codex-exec when per-task landing matters.
 # The ps1 twin resolves -CodexExec the same way.
+# Worker/qa codex seats default to one-shot `codex exec` (restores 8b632b5,
+# reverted 2026-09-07; re-requested by the operator 2026-09-24 as "make sure
+# codex not stopping between tasks"). The codex TUI never exits on its own, so
+# an interactive worker/qa seat both misses the post-flight AND has LOOP_ENABLED
+# forced false below -- it lands one row and then sits idle forever. Exec mode
+# exits per row, so the post-flight lands it and the relaunch loop takes the
+# next one. Architect/governor keep the TUI: planning and governance are
+# conversations, and neither is a byte-landing path. --interactive still forces
+# the TUI back for a worker/qa seat. The ps1 twin resolves this identically.
+if [ "$CLI_TYPE" = "codex" ] && [ "$CODEX_EXEC" = false ] && [ "$INTERACTIVE_REQUESTED" != true ]; then
+    case "$ROLE" in
+        worker|qa) CODEX_EXEC=true ;;
+    esac
+fi
 CODEX_INTERACTIVE=false
 if [ "$CLI_TYPE" = "codex" ] && [ "$CODEX_EXEC" = false ]; then
     CODEX_INTERACTIVE=true
