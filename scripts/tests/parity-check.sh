@@ -211,6 +211,12 @@ for lit in 'wrapper source changed on disk; restarting to load it' wrapper_resta
   require_both "hot reload" "$lit"
 done
 
+# Team join: a refused join (a full team) leaves the seat SOLO, and a solo
+# seat's claims are refused NO_TEAM_MEMBERSHIP; both are named, never hidden.
+for prose in 'moe.join_team refused: ' 'this seat has NO team, so claim_next_task skips every epic a live worker already holds' 'moe.join_team got no answer; team membership is unconfirmed.' 'claim_next_task refused with NO_TEAM_MEMBERSHIP'; do
+  require_both "team join prose" "$prose"
+done
+
 # Serena TOOL-tier tools: the editing calls whose successful result is TOOL
 # evidence (old names kept for older Serena installs), and the replace_in_files
 # summary header both wrappers parse.

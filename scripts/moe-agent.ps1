@@ -1229,9 +1229,19 @@ if ($Team) {
 
             $joinJson = ConvertTo-Json @{ teamId = $teamId; workerId = $WorkerId } -Compress
             $joinRpc = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.join_team","arguments":' + $joinJson + '}}'
-            Invoke-MoeRpcRaw -RpcJson $joinRpc | Out-Null
-            Write-Host "Worker $WorkerId joined team '$Team'"
-            $teamContext = "You are part of team '$Team' (id: $teamId, role: $Role). Team members can work in parallel on the same epic."
+            # Read the answer. A refused join (e.g. "Team X is full (max N members)")
+            # leaves this seat SOLO, and claim_next_task then skips every epic a live
+            # worker already holds: the seat reports "no claimable task" while the
+            # board is full of work. Never print success blind. Twin: moe-agent.sh.
+            $joinResult = Invoke-MoeRpcRaw -RpcJson $joinRpc
+            if ($joinResult -and $joinResult.PSObject.Properties['error'] -and $joinResult.error) {
+                Write-Host "[WARN] moe.join_team refused: $($joinResult.error.message) - this seat has NO team, so claim_next_task skips every epic a live worker already holds. Raise the team's maxSize or free a seat, then relaunch." -ForegroundColor Yellow
+            } elseif ($null -eq $joinResult) {
+                Write-Host "[WARN] moe.join_team got no answer; team membership is unconfirmed." -ForegroundColor Yellow
+            } else {
+                Write-Host "Worker $WorkerId joined team '$Team'"
+                $teamContext = "You are part of team '$Team' (id: $teamId, role: $Role). Team members can work in parallel on the same epic."
+            }
         } else {
             Write-Host "WARNING: Could not parse team creation response (daemon may not be running)" -ForegroundColor Yellow
         }
@@ -4971,6 +4981,11 @@ do {
             $claim = [pscustomobject]@{ hasNext = $false }
         } else {
             $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args $claimRpcArgs
+            # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
+            # empty queue: say so, or the [no-task] banner below reads as "no work".
+            if ($claim -and $claim.PSObject.Properties['code'] -and $claim.code -eq 'NO_TEAM_MEMBERSHIP') {
+                Write-Host "[WARN] claim_next_task refused with NO_TEAM_MEMBERSHIP - this seat has NO team, so claim_next_task skips every epic a live worker already holds; the queue is not empty." -ForegroundColor Yellow
+            }
             Invoke-MoeReceiptReplay
             # Before the pin below reads the attempt: a restart may have parked it.
             if ($claim) { Invoke-MoeReattachOwnAttempts }

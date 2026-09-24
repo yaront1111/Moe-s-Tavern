@@ -370,7 +370,7 @@ if (tool === 'claim_next_task' && claimLimit > 0) {
   fs.writeFileSync(claimCount, String(claimN));
   if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
 }
-if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
 if (tool === 'get_context' && args.taskId) {
   const countFile = path.join(moe,'context-count');
   const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
@@ -384,7 +384,13 @@ if (tool === 'get_context' && args.taskId) {
 
 switch (tool) {
   case 'create_team': ok({ team: { id: 'team-smoke', name: args.name || 'Smoke' } }); break;
-  case 'join_team': ok({ success: true }); break;
+  case 'join_team':
+    // FAKE_JOIN_FULL=1: refused the way teamStore refuses a join to a full team.
+    if (process.env.FAKE_JOIN_FULL === '1') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32000,message:'Team Smoke is full (max 10 members)',data:{tool:'moe.join_team'}}}) + '\n');
+      process.exit(0);
+    }
+    ok({ success: true }); break;
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;
   case 'chat_read': {
@@ -421,6 +427,10 @@ switch (tool) {
         alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
         nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (BLOCKED).' }
       });
+    } else if (process.env.FAKE_CLAIM_MODE === 'noteam') {
+      // claimNextTask.ts noTeamMembershipRefusal: a SOLO seat whose every
+      // candidate sits in an epic+status a live worker already holds.
+      ok({ hasNext: false, code: 'NO_TEAM_MEMBERSHIP', nextAction: { tool: 'moe.join_team', args: { workerId: args.workerId }, reason: 'Worker belongs to no team.' } });
     } else if (process.env.FAKE_CLAIM_MODE === 'idle') {
       // Nothing claimable and nothing held: the board state that used to make
       // the wrapper launch a CLI and tell it to claim itself.
@@ -3441,6 +3451,42 @@ if (process.env.SIBLING_TOUCH_RECORD === '1') {
     } else {
         Write-Host 'SKIP qualityGate cases: git not available'
     }
+
+    # --- A refused team join (a full team) must be named, never printed as
+    # success, and the teamless claim refusal must not read as an empty queue.
+    # Until this case, both wrappers discarded the join_team answer and printed
+    # "joined team", and 7 seats sat idle beside 35 claimable rows.
+    # Twin: the [team join] case in postflight.sh. ---
+    $teamFullProject = Join-Path $tempRoot 'teamfull-project'
+    New-Item -ItemType Directory -Force -Path (Join-Path $teamFullProject '.moe\messages') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $teamFullProject '.moe\project.json'), '{"id":"proj-teamfull","name":"postflight-teamfull","settings":{"autoCommit":false}}')
+    [IO.File]::WriteAllText((Join-Path $teamFullProject '.moe\messages\chan-general.jsonl'), '')
+    [IO.File]::WriteAllText((Join-Path $teamFullProject '.moe\daemon.json'), ('{"port":9876,"projectPath":' + (ConvertTo-Json $teamFullProject) + '}'))
+    $teamFullOut = Join-Path $tempRoot 'wrapper-teamfull.out'
+    $teamFullSavedProxy = $env:MOE_PROXY_PATH
+    $env:MOE_PROXY_PATH = $fakeProxy
+    $env:FAKE_JOIN_FULL = '1'
+    $env:FAKE_CLAIM_MODE = 'noteam'
+    $env:MOE_TASKLESS_WAIT_SEC = '5'
+    $env:MOE_DISABLE_HEARTBEAT = '1'
+    try {
+        $null = Invoke-WrapperProcess @('-Project', $teamFullProject, '-WorkerId', 'worker-teamfull', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $trueCmd, '-NoLoop') $teamFullOut
+    } finally {
+        Remove-Item Env:FAKE_JOIN_FULL, Env:FAKE_CLAIM_MODE, Env:MOE_TASKLESS_WAIT_SEC, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
+        $env:MOE_PROXY_PATH = $teamFullSavedProxy
+    }
+    $teamFullText = [string](Get-Content -Raw -LiteralPath $teamFullOut -ErrorAction SilentlyContinue)
+    foreach ($want in @('moe.join_team refused: Team Smoke is full (max 10 members)', 'claim_next_task refused with NO_TEAM_MEMBERSHIP')) {
+        if ($teamFullText.IndexOf($want, [System.StringComparison]::Ordinal) -lt 0) {
+            Write-Host $teamFullText
+            throw "TEAM JOIN FAILED: expected '$want'"
+        }
+    }
+    if ($teamFullText.IndexOf("joined team 'Smoke'", [System.StringComparison]::Ordinal) -ge 0) {
+        Write-Host $teamFullText
+        throw 'TEAM JOIN FAILED: a refused join was printed as success'
+    }
+    Write-Host '[team join] ok'
 
     Write-Host 'PASS postflight.ps1'
 } catch {

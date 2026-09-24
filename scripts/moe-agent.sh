@@ -1628,13 +1628,38 @@ except:
             TEAM_JOIN_JSON=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'teamId':sys.argv[1],'workerId':sys.argv[2]}))" "$TEAM_ID" "$WORKER_ID" 2>/dev/null)
             TEAM_JOIN_RPC=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'moe.join_team','arguments':json.loads(sys.argv[1])}}))" "$TEAM_JOIN_JSON" 2>/dev/null)
 
+            # Read the answer. A refused join (e.g. "Team X is full (max N members)")
+            # leaves this seat SOLO, and claim_next_task then skips every epic a live
+            # worker already holds: the seat reports "no claimable task" while the
+            # board is full of work. Never print success blind. Twin: moe-agent.ps1.
+            TEAM_JOIN_RESULT=""
             if [ -n "$TEAM_PROXY" ]; then
-                echo "$TEAM_JOIN_RPC" | "$NODE_CMD" "$TEAM_PROXY" 2>/dev/null > /dev/null || true
+                TEAM_JOIN_RESULT=$(echo "$TEAM_JOIN_RPC" | "$NODE_CMD" "$TEAM_PROXY" 2>/dev/null || true)
             else
-                echo "$TEAM_JOIN_RPC" | "$PROXY_CMD" 2>/dev/null > /dev/null || true
+                TEAM_JOIN_RESULT=$(echo "$TEAM_JOIN_RPC" | "$PROXY_CMD" 2>/dev/null || true)
             fi
-            echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM'"
-            TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
+            TEAM_JOIN_ERROR=$($PYTHON_CMD -c "
+import json, sys
+err = ''
+for line in reversed([l for l in sys.stdin.read().splitlines() if l.strip()]):
+    try:
+        data = json.loads(line)
+    except Exception:
+        continue
+    e = data.get('error') if isinstance(data, dict) else None
+    if e:
+        err = (e.get('message') if isinstance(e, dict) else str(e)) or 'unknown error'
+    break
+print(err)
+" <<< "$TEAM_JOIN_RESULT" 2>/dev/null || true)
+            if [ -n "$TEAM_JOIN_ERROR" ]; then
+                echo -e "${YELLOW}[WARN]${NC} moe.join_team refused: $TEAM_JOIN_ERROR - this seat has NO team, so claim_next_task skips every epic a live worker already holds. Raise the team's maxSize or free a seat, then relaunch."
+            elif [ -z "$TEAM_JOIN_RESULT" ]; then
+                echo -e "${YELLOW}[WARN]${NC} moe.join_team got no answer; team membership is unconfirmed."
+            else
+                echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM'"
+                TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
+            fi
         else
             echo -e "${YELLOW}[WARN]${NC} Failed to parse team ID from response"
         fi
@@ -5464,6 +5489,17 @@ except Exception:
             CLAIM_RESULT='{"hasNext":false}'
         else
             CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
+            # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
+            # empty queue: say so, or the [no-task] banner below reads as "no work".
+            if [ -n "$CLAIM_RESULT" ] && [ -n "$PYTHON_CMD" ] && $PYTHON_CMD -c "
+import json, sys
+try:
+    sys.exit(0 if (json.loads(sys.stdin.read()) or {}).get('code') == 'NO_TEAM_MEMBERSHIP' else 1)
+except Exception:
+    sys.exit(1)
+" <<< "$CLAIM_RESULT" 2>/dev/null; then
+                echo -e "${YELLOW}[WARN]${NC} claim_next_task refused with NO_TEAM_MEMBERSHIP - this seat has NO team, so claim_next_task skips every epic a live worker already holds; the queue is not empty."
+            fi
             receipt_replay || true
             # Before the pin below reads the attempt: a restart may have parked it.
             [ -z "$CLAIM_RESULT" ] || reattach_own_attempts || true

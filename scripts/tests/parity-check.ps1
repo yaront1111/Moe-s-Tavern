@@ -96,6 +96,9 @@ $required = [ordered]@{
     # Hot reload: the restart announcement an operator sees and the deregister
     # reason both postflight hot-reload cases assert, spelled identically in both.
     'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart')
+    # Team join: a refused join (a full team) leaves the seat SOLO, and a solo
+    # seat's claims are refused NO_TEAM_MEMBERSHIP; both are named, never hidden.
+    'team join prose' = @('moe.join_team refused: ', 'this seat has NO team, so claim_next_task skips every epic a live worker already holds', 'moe.join_team got no answer; team membership is unconfirmed.', 'claim_next_task refused with NO_TEAM_MEMBERSHIP')
     'claimed prompt contract' = @('the wrapper will pick up the next task in a fresh session', 'INTERACTIVE session: this TUI stays open after you stop')
     # Serena TOOL-tier tools: the editing calls whose successful result is TOOL
     # evidence (old names kept for older Serena installs), and the

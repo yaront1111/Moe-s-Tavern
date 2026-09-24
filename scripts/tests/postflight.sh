@@ -354,7 +354,7 @@ if (tool === 'claim_next_task' && claimLimit > 0) {
   fs.writeFileSync(claimCount, String(claimN));
   if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
 }
-if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
+if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
 if (tool === 'get_context' && args.taskId) {
   const countFile = path.join(moe,'context-count');
   const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
@@ -368,7 +368,13 @@ if (tool === 'get_context' && args.taskId) {
 
 switch (tool) {
   case 'create_team': ok({ team: { id: 'team-smoke', name: args.name || 'Smoke' } }); break;
-  case 'join_team': ok({ success: true }); break;
+  case 'join_team':
+    // FAKE_JOIN_FULL=1: refused the way teamStore refuses a join to a full team.
+    if (process.env.FAKE_JOIN_FULL === '1') {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32000,message:'Team Smoke is full (max 10 members)',data:{tool:'moe.join_team'}}}) + '\n');
+      process.exit(0);
+    }
+    ok({ success: true }); break;
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;
   case 'chat_read': {
@@ -406,6 +412,10 @@ switch (tool) {
         alreadyAssigned: { taskId: 'task-blocked', title: 'Blocked smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
         nextAction: { tool: 'moe.wait_for_task', reason: 'One task per worker: you already hold task-blocked (BLOCKED).' }
       });
+    } else if (process.env.FAKE_CLAIM_MODE === 'noteam') {
+      // claimNextTask.ts noTeamMembershipRefusal: a SOLO seat whose every
+      // candidate sits in an epic+status a live worker already holds.
+      ok({ hasNext: false, code: 'NO_TEAM_MEMBERSHIP', nextAction: { tool: 'moe.join_team', args: { workerId: args.workerId }, reason: 'Worker belongs to no team.' } });
     } else if (process.env.FAKE_CLAIM_MODE === 'idle') {
       // Nothing claimable and nothing held: the board state that used to make
       // the wrapper launch a CLI and tell it to claim itself.
@@ -3840,5 +3850,32 @@ EOF
 else
   echo "SKIP commit-scope scenarios: git not available"
 fi
+
+# --- A refused team join (a full team) must be named, never printed as success,
+# and the teamless claim refusal must not read as an empty queue. Until this
+# case, both wrappers discarded the join_team answer and printed "joined team",
+# and 7 seats sat idle beside 35 claimable rows. Twin: postflight.ps1. ---
+echo "[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named"
+TEAMFULL_PROJECT="$TMP_DIR/teamfull/project"
+mkdir -p "$TEAMFULL_PROJECT/.moe/messages"
+printf '{"id":"proj-teamfull","name":"postflight-teamfull","settings":{"autoCommit":false}}\n' > "$TEAMFULL_PROJECT/.moe/project.json"
+: > "$TEAMFULL_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$TEAMFULL_PROJECT" > "$TEAMFULL_PROJECT/.moe/daemon.json"
+set +e
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_JOIN_FULL=1 FAKE_CLAIM_MODE=noteam   MOE_TASKLESS_WAIT_SEC=5 MOE_DISABLE_HEARTBEAT=1 timeout "${POSTFLIGHT_TIMEOUT_SEC}s"   "$WRAPPER"   --project "$TEAMFULL_PROJECT"   --worker-id worker-teamfull   --role worker   --team Smoke   --no-start-daemon   --command /bin/true   --no-loop   >"$TMP_DIR/wrapper-teamfull.out" 2>&1
+set -e
+for want in 'moe.join_team refused: Team Smoke is full (max 10 members)' 'claim_next_task refused with NO_TEAM_MEMBERSHIP'; do
+  if ! grep -Fq "$want" "$TMP_DIR/wrapper-teamfull.out"; then
+    cat "$TMP_DIR/wrapper-teamfull.out" >&2 || true
+    echo "TEAM JOIN FAILED: expected '$want'" >&2
+    exit 1
+  fi
+done
+if grep -Fq "joined team 'Smoke'" "$TMP_DIR/wrapper-teamfull.out"; then
+  cat "$TMP_DIR/wrapper-teamfull.out" >&2 || true
+  echo "TEAM JOIN FAILED: a refused join was printed as success" >&2
+  exit 1
+fi
+echo "[team join] ok"
 
 echo "PASS postflight.sh"
