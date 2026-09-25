@@ -924,7 +924,7 @@ reasoning_effort = sys.argv[8] if len(sys.argv) > 8 else "xhigh"
 top_level_lines = [
     'model_instructions_file = "agent-instructions.md"',
     'model_reasoning_effort = ' + json.dumps(reasoning_effort),
-    'developer_instructions = """You are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly."""',
+    'developer_instructions = """You are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly unless the project's CLAUDE.md or AGENTS.md explicitly permits that path."""',
 ]
 top_level_block = "\n".join(top_level_lines)
 

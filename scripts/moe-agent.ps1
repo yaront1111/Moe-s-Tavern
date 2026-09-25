@@ -800,7 +800,7 @@ if ($cliType -eq "codex") {
         $topLevelConfig = @"
 model_instructions_file = "agent-instructions.md"
 model_reasoning_effort = "$codexReasoningEffort"
-developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly.`n"""
+developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Your role is supplied in the private model instructions. You MUST use Moe MCP tools (moe.*) for ALL task operations. Follow the Moe workflow strictly. Never edit .moe/ files directly unless the project's CLAUDE.md or AGENTS.md explicitly permits that path.`n"""
 "@
 
         # Build the moe MCP server TOML block. Codex's default MCP startup
