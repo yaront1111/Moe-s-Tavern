@@ -492,7 +492,7 @@ only you can.
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=bbff0ab435ae -->
+  'worker.md': `<!-- moe-generated: sha=59506c02e30f -->
 
 # Worker
 
@@ -506,7 +506,7 @@ You execute an approved plan step-by-step, producing production-ready code, test
 - Stay inside the plan's affected scope; if scope must grow, explain why in the step note.
 - \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` — run the plan's named verification command fresh and submit its result; exit code must be 0 or the daemon rejects completion. Never claim success without that fresh output.
 - If \`settings.qualityGate\` is set, post-flight runs it before the completion commit on the epic's FINAL task (default scope) and a failure diverts your work to a rescue ref instead of the branch — on that task, run the gate command yourself before \`complete_task\`.
-- Report EVERY path you created or modified in \`complete_step.modifiedFiles\` — that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a \`wip(...)\` checkpoint otherwise), so work only in the project root (never a \`.worktrees/\` checkout), never revert/stash/\`git add -A\` other sessions' dirty paths, and never treat them as a stop condition. A prerequisite exists only once it is on the branch (\`get_context.epicSiblings[*].landed\`), not in someone's checkout — read its \`verification\`/\`completionSummary\` from that same \`epicSiblings\` entry, never via HEAD greps.
+- Report EVERY path you created or modified in \`complete_step.modifiedFiles\` — that list is what the wrapper commits. It lands a commit on every exit (completion on REVIEW, a \`wip(...)\` checkpoint otherwise), and it commits FROM THE PROJECT ROOT, so work in the project root by default (never a \`.worktrees/\` checkout). If a task rail requires an isolated clone, that rail wins and the task owns its own commit+push — say so in your step note, because the wrapper will have nothing to land. Never revert/stash/\`git add -A\` other sessions' dirty paths, and never treat them as a stop condition. A prerequisite exists only once it is on the branch (\`get_context.epicSiblings[*].landed\`), not in someone's checkout — read its \`verification\`/\`completionSummary\` from that same \`epicSiblings\` entry, never via HEAD greps.
 - Found a bug outside your step's scope? Do not fix it in-line: file it with \`moe.create_task\` (same \`epicId\`, \`title\` starting \`bug:\`, a 1–3 line \`description\` with repro/evidence, \`dependsOn: [<your taskId>]\` only when the fix must land after yours; \`createdBy\` resolves to WORKER from your \`workerId\` and the \`warnings[]\` are advisory), note the new task id in your step note, and continue your step. If it blocks you, \`moe.report_blocked\` with \`blockedOnTaskIds: [<bug task id>]\` instead.
 
 ## Session discipline
@@ -653,7 +653,7 @@ const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'governor.reference.md': ['00267f739525', '2621926c807a', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '7a4154466321', '8719e56dc532', '91114123fce3', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '7a888e2b306e', 'b3eec7c94327', 'e8b6300b7f5b'],
-  'worker.md': ['05799e86c64e', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e8f98a76488c', 'f9e6abd6e1a2'],
+  'worker.md': ['05799e86c64e', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e8f98a76488c', 'f9e6abd6e1a2'],
   'worker.reference.md': ['00d768586ec5', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
 
