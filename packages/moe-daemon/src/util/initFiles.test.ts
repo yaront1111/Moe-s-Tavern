@@ -71,6 +71,24 @@ describe('writeInitFiles — sha-marker scaffold refresh', () => {
     expect(fs.readFileSync(rolePath(sampleRole), 'utf-8')).toBe(custom);
   });
 
+  it('upgrades an unmarked role doc byte-identical to a shipped version (CRLF tolerated)', () => {
+    // A vendored pre-stamp copy: a shipped body with no marker, checked out with CRLF.
+    // Kept as a "customization" it would freeze the project on retired rules forever.
+    fs.mkdirSync(path.join(moeDir, 'roles'), { recursive: true });
+    const body = ROLE_DOCS[sampleRole].replace(MARKER_RE, '').trim();
+    fs.writeFileSync(rolePath(sampleRole), body.replace(/\n/g, '\r\n') + '\r\n');
+    writeInitFiles(moeDir);
+    expect(fs.readFileSync(rolePath(sampleRole), 'utf-8')).toBe(ROLE_DOCS[sampleRole]);
+  });
+
+  it('preserves an unmarked role doc that differs from every shipped version by one line', () => {
+    fs.mkdirSync(path.join(moeDir, 'roles'), { recursive: true });
+    const edited = ROLE_DOCS[sampleRole].replace(MARKER_RE, '').trim() + '\n- Local rule.\n';
+    fs.writeFileSync(rolePath(sampleRole), edited);
+    writeInitFiles(moeDir);
+    expect(fs.readFileSync(rolePath(sampleRole), 'utf-8')).toBe(edited);
+  });
+
   it('does not rewrite a role doc whose marker sha already matches', () => {
     fs.mkdirSync(path.join(moeDir, 'roles'), { recursive: true });
     const currentSha = ROLE_DOCS[sampleRole].match(MARKER_RE)![1];
