@@ -524,6 +524,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     const moePath = path.join(projectPath, '.moe');
     try { writeInitFiles(moePath); } catch (err) { logger.warn({ err }, 'writeInitFiles refresh failed (non-fatal)'); }
     try { writeSkillFiles(moePath); } catch (err) { logger.warn({ err }, 'writeSkillFiles refresh failed (non-fatal)'); }
+    // Projects initialized before .claude/skills existed never got the mirror.
+    linkClaudeSkills(projectPath);
   } catch (initError) {
     logger.error({ error: initError }, 'Failed to initialize daemon');
     releaseLock(projectPath);
