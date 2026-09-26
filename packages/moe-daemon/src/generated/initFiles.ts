@@ -4,6 +4,7 @@
 // Regenerate: npm run generate-init-files (runs automatically on build)
 // =============================================================================
 
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { atomicWriteText } from '../util/atomicWrite.js';
@@ -15,7 +16,9 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * marker that `writeInitFiles` reads to decide whether an existing on-disk
  * copy is a stale Moe-generated doc (→ overwrite) or a user customization
  * (→ leave alone). Users who want to customize a role doc should delete the
- * marker line — that opts the file out of future auto-upgrades.
+ * marker line and edit it — that opts the file out of future auto-upgrades.
+ * An unmarked doc byte-identical (CRLF-tolerant) to a version Moe once shipped
+ * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
   'architect.md': `<!-- moe-generated: sha=78f381a0ed75 -->
@@ -640,6 +643,21 @@ only you can.
 };
 
 /**
+ * sha12 of the trimmed, LF-normalized body of every shipped version of each
+ * role doc (git history of docs/roles plus the working copy at generation).
+ */
+const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
+  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '36c12e0f6b86', '38d016858dca', '78f381a0ed75', '9baf82c2cea5', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86'],
+  'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
+  'governor.md': ['2556278c295b', '3aa528c96f55', '669f916cafc6', 'a0c5bc216e41', 'd3da43241c7d', 'f882385984d6'],
+  'governor.reference.md': ['00267f739525', '2621926c807a', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'f57ea78fcf8c'],
+  'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '7a4154466321', '8719e56dc532', '91114123fce3', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'fe6ee0d3b5a0'],
+  'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '7a888e2b306e', 'b3eec7c94327', 'e8b6300b7f5b'],
+  'worker.md': ['05799e86c64e', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e8f98a76488c', 'f9e6abd6e1a2'],
+  'worker.reference.md': ['00d768586ec5', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
+};
+
+/**
  * Claude Code subagent definitions, auto-generated from docs/agents/moe-*.md.
  * `writeInitFiles` writes these to `.moe/agents/` so the agent launcher can
  * mirror them into `.claude/agents/` for Claude Code's subagent loader.
@@ -782,6 +800,12 @@ function markerSha(content: string): string | null {
  *   - marker matches → up to date, no write needed
  *   - malformed marker → treat as user content
  */
+function isShippedRoleBody(filename: string, onDisk: string): boolean {
+  const body = onDisk.replace(/\r\n/g, '\n').trim();
+  const sha = crypto.createHash('sha256').update(body, 'utf8').digest('hex').slice(0, 12);
+  return (SHIPPED_ROLE_BODY_SHAS[filename] ?? []).includes(sha);
+}
+
 function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
   const diskSha = markerSha(onDisk);
   const bundledSha = markerSha(bundled);
@@ -796,7 +820,9 @@ function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
  * - Files whose first line carries a `<!-- moe-generated: sha=<X> -->` marker
  *   whose sha differs from the bundled content's marker are OVERWRITTEN
  *   (this is the upgrade path for the iron-law skill directive etc.).
- * - Files without the marker are left alone (treated as user customizations).
+ * - Files without the marker are left alone (treated as user customizations),
+ *   EXCEPT a role doc whose body is byte-identical to a version Moe shipped:
+ *   that is a vendored pre-stamp copy and is upgraded like a stale marker.
  */
 export function writeInitFiles(moePath: string): void {
   // Ensure roles directory exists
@@ -813,7 +839,8 @@ export function writeInitFiles(moePath: string): void {
       continue;
     }
     const onDisk = fs.readFileSync(filePath, 'utf-8');
-    if (shouldUpgradeGeneratedDoc(onDisk, content)) {
+    const vendoredUnmarked = markerSha(onDisk) === null && isShippedRoleBody(filename, onDisk);
+    if (shouldUpgradeGeneratedDoc(onDisk, content) || vendoredUnmarked) {
       atomicWriteText(filePath, content);
     }
   }
