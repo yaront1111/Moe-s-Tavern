@@ -14,6 +14,7 @@
  * prompts (role doc + CLAUDE.md cover the same ground). The file remains
  * on disk in existing projects but is not regenerated for new ones.
  */
+import { execFileSync } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -70,6 +71,32 @@ const roleEntries = roleFiles.map(f => {
   return `  '${f}': \`${escapeTemplateLiteral(stamped)}\``;
 });
 
+// Body hashes of every version of each role doc Moe ever shipped (git history
+// plus the working copy). writeInitFiles upgrades an UNMARKED on-disk doc whose
+// body matches one: it is a vendored copy written before stamping existed (or by
+// a non-stamping path), not a user customization. Without this, such a copy is
+// frozen forever and seats keep obeying retired rules. The normalization must
+// match isShippedRoleBody in the generated code.
+function bodySha(raw: string): string {
+  return sha12(raw.replace(/\r\n/g, '\n').trim());
+}
+function shippedBodyShas(f: string): string[] {
+  const shas = new Set<string>([bodySha(fs.readFileSync(path.join(rolesDir, f), 'utf-8'))]);
+  const rel = `docs/roles/${f}`;
+  try {
+    const revs = execFileSync('git', ['log', '--format=%H', '--', rel], { cwd: repoRoot, encoding: 'utf-8' })
+      .split('\n').filter(Boolean);
+    for (const rev of revs) {
+      shas.add(bodySha(execFileSync('git', ['show', `${rev}:${rel}`], { cwd: repoRoot, encoding: 'utf-8' })));
+    }
+  } catch (err) {
+    // ponytail: without git history (tarball build) only the current body is listed; the committed initFiles.ts keeps the full list.
+    console.warn(`generate-init-files: no git history for ${rel}; shipped-body list holds the current version only (${String(err)})`);
+  }
+  return [...shas].sort();
+}
+const shippedEntries = roleFiles.map(f => `  '${f}': [${shippedBodyShas(f).map(sha => `'${sha}'`).join(', ')}]`);
+
 // Subagent definitions live under docs/agents/moe-<name>.md. Only files matching
 // that prefix are bundled — the directory also contains uppercase role docs
 // (ARCHITECT.md, WORKER.md, REVIEWER.md, README.md) that are documentation, not
@@ -89,6 +116,7 @@ const output = `// =============================================================
 // Regenerate: npm run generate-init-files (runs automatically on build)
 // =============================================================================
 
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { atomicWriteText } from '../util/atomicWrite.js';
@@ -100,10 +128,20 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * marker that \`writeInitFiles\` reads to decide whether an existing on-disk
  * copy is a stale Moe-generated doc (→ overwrite) or a user customization
  * (→ leave alone). Users who want to customize a role doc should delete the
- * marker line — that opts the file out of future auto-upgrades.
+ * marker line and edit it — that opts the file out of future auto-upgrades.
+ * An unmarked doc byte-identical (CRLF-tolerant) to a version Moe once shipped
+ * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
 ${roleEntries.join(',\n')}
+};
+
+/**
+ * sha12 of the trimmed, LF-normalized body of every shipped version of each
+ * role doc (git history of docs/roles plus the working copy at generation).
+ */
+const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
+${shippedEntries.join(',\n')}
 };
 
 /**
@@ -152,6 +190,12 @@ function markerSha(content: string): string | null {
  *   - marker matches → up to date, no write needed
  *   - malformed marker → treat as user content
  */
+function isShippedRoleBody(filename: string, onDisk: string): boolean {
+  const body = onDisk.replace(/\\r\\n/g, '\\n').trim();
+  const sha = crypto.createHash('sha256').update(body, 'utf8').digest('hex').slice(0, 12);
+  return (SHIPPED_ROLE_BODY_SHAS[filename] ?? []).includes(sha);
+}
+
 function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
   const diskSha = markerSha(onDisk);
   const bundledSha = markerSha(bundled);
@@ -166,7 +210,9 @@ function shouldUpgradeGeneratedDoc(onDisk: string, bundled: string): boolean {
  * - Files whose first line carries a \`<!-- moe-generated: sha=<X> -->\` marker
  *   whose sha differs from the bundled content's marker are OVERWRITTEN
  *   (this is the upgrade path for the iron-law skill directive etc.).
- * - Files without the marker are left alone (treated as user customizations).
+ * - Files without the marker are left alone (treated as user customizations),
+ *   EXCEPT a role doc whose body is byte-identical to a version Moe shipped:
+ *   that is a vendored pre-stamp copy and is upgraded like a stale marker.
  */
 export function writeInitFiles(moePath: string): void {
   // Ensure roles directory exists
@@ -183,7 +229,8 @@ export function writeInitFiles(moePath: string): void {
       continue;
     }
     const onDisk = fs.readFileSync(filePath, 'utf-8');
-    if (shouldUpgradeGeneratedDoc(onDisk, content)) {
+    const vendoredUnmarked = markerSha(onDisk) === null && isShippedRoleBody(filename, onDisk);
+    if (shouldUpgradeGeneratedDoc(onDisk, content) || vendoredUnmarked) {
       atomicWriteText(filePath, content);
     }
   }
