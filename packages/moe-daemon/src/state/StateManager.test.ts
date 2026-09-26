@@ -775,28 +775,65 @@ describe('StateManager', () => {
       await stateManager.load();
     });
 
-    it('writes APPROVED status before applying rail changes', async () => {
+    it('keeps a proposal pending when applying its rail change fails', async () => {
       const proposal = await stateManager.createProposal(createTestProposal());
 
       const applyRailChangeSpy = vi
         .spyOn(stateManager as unknown as { applyRailChange: (proposal: RailProposal) => Promise<void> }, 'applyRailChange')
         .mockImplementation(async () => {
-          const inMemoryProposal = stateManager.proposals.get(proposal.id);
-          expect(inMemoryProposal?.status).toBe('APPROVED');
-
-          const proposalFile = path.join(moePath, 'proposals', `${proposal.id}.json`);
-          const savedProposal = JSON.parse(fs.readFileSync(proposalFile, 'utf-8')) as RailProposal;
-          expect(savedProposal.status).toBe('APPROVED');
-
           throw new Error('rail apply failed');
         });
 
-      const approved = await stateManager.approveProposal(proposal.id);
+      await expect(stateManager.approveProposal(proposal.id)).rejects.toThrow('rail apply failed');
 
       expect(applyRailChangeSpy).toHaveBeenCalledOnce();
-      expect(approved.status).toBe('APPROVED');
-      expect(stateManager.proposals.get(proposal.id)?.status).toBe('APPROVED');
+      expect(stateManager.proposals.get(proposal.id)?.status).toBe('PENDING');
+      const proposalFile = path.join(moePath, 'proposals', `${proposal.id}.json`);
+      const savedProposal = JSON.parse(fs.readFileSync(proposalFile, 'utf-8')) as RailProposal;
+      expect(savedProposal.status).toBe('PENDING');
     });
+
+    it('refuses approval when the original rail is missing', async () => {
+      const proposal = await stateManager.createProposal(createTestProposal({
+        proposalType: 'MODIFY_RAIL',
+        currentValue: 'not a stored rail',
+        proposedValue: 'new rail',
+      }));
+
+      await expect(stateManager.approveProposal(proposal.id)).rejects.toThrow('Rail not found');
+      expect(stateManager.proposals.get(proposal.id)?.status).toBe('PENDING');
+      expect(stateManager.project!.globalRails.customRules).toEqual([]);
+    });
+
+    it.each(['GLOBAL', 'EPIC', 'TASK'] as const)(
+      'modifies the %s rail when only trailing whitespace differs in the proposal',
+      async (targetScope) => {
+        const storedRail = 'PER TASK = CODE ONLY ';
+        const replacement = 'BATCHED VERIFICATION 1-PER-10';
+        if (targetScope === 'GLOBAL') {
+          stateManager.project!.globalRails.customRules = [storedRail];
+        } else if (targetScope === 'EPIC') {
+          await stateManager.updateEpic('epic-test123', { epicRails: [storedRail] });
+        } else {
+          await stateManager.updateTask('task-test123', { taskRails: [storedRail] });
+        }
+
+        const proposal = await stateManager.createProposal(createTestProposal({
+          proposalType: 'MODIFY_RAIL',
+          targetScope,
+          currentValue: storedRail.trimEnd(),
+          proposedValue: replacement,
+        }));
+        await stateManager.approveProposal(proposal.id);
+
+        const rails = targetScope === 'GLOBAL'
+          ? stateManager.project!.globalRails.customRules
+          : targetScope === 'EPIC'
+            ? stateManager.getEpic('epic-test123')!.epicRails
+            : stateManager.getTask('task-test123')!.taskRails;
+        expect(rails).toEqual([replacement]);
+      },
+    );
   });
 
   describe('purgeResolvedProposals', () => {

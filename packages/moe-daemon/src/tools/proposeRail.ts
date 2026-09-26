@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { generateId } from '../util/ids.js';
 import { notFound, invalidInput } from '../util/errors.js';
+import { findRailIndex } from '../state/railChange.js';
 
 export function proposeRailTool(_state: StateManager): ToolDefinition {
   return {
@@ -43,8 +44,19 @@ export function proposeRailTool(_state: StateManager): ToolDefinition {
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 
+      const proposalId = generateId('prop');
+      if (params.proposalType !== 'ADD_RAIL') {
+        if (!params.currentValue) throw invalidInput('currentValue', 'required for MODIFY_RAIL or REMOVE_RAIL');
+        const rails = params.targetScope === 'GLOBAL'
+          ? state.project?.globalRails.customRules || []
+          : params.targetScope === 'EPIC'
+            ? state.getEpic(task.epicId)?.epicRails || []
+            : task.taskRails || [];
+        findRailIndex(rails, params.currentValue, proposalId);
+      }
+
       const proposal = {
-        id: generateId('prop'),
+        id: proposalId,
         workerId: task.assignedWorkerId || 'unknown',
         taskId: task.id,
         proposalType: params.proposalType,

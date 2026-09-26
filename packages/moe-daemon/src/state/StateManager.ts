@@ -64,6 +64,7 @@ import type {
 } from '../types/schema.js';
 import { CURRENT_SCHEMA_VERSION, ACTIVITY_EVENT_TYPES } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
+import { findRailIndex } from './railChange.js';
 import { generateId } from '../util/ids.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { logger, createContextLogger } from '../util/logger.js';
@@ -1367,6 +1368,8 @@ export class StateManager {
       throw new Error(`Proposal not found: ${proposalId}`);
     }
 
+    await this.applyRailChange(proposal);
+
     const updated: RailProposal = {
       ...proposal,
       status: 'APPROVED',
@@ -1385,17 +1388,14 @@ export class StateManager {
     );
     this.emit({ type: 'PROPOSAL_UPDATED', payload: updated });
 
-    try {
-      await this.applyRailChange(updated);
-    } catch (error) {
-      logger.error({ error, proposalId }, 'Failed to apply rail change for approved proposal');
-    }
-
     return updated;
   }
 
   private async applyRailChange(proposal: RailProposal): Promise<void> {
     const { proposalType, targetScope, currentValue, proposedValue, taskId } = proposal;
+    if (proposalType !== 'ADD_RAIL' && !currentValue) {
+      throw new Error(`Original rail missing for proposal ${proposal.id}`);
+    }
 
     if (targetScope === 'GLOBAL') {
       if (!this.project) throw new Error('Project not loaded');
@@ -1404,10 +1404,10 @@ export class StateManager {
       if (proposalType === 'ADD_RAIL') {
         rails.push(proposedValue);
       } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
-        const idx = rails.indexOf(currentValue);
+        const idx = findRailIndex(rails, currentValue, proposal.id);
         if (idx !== -1) rails[idx] = proposedValue;
       } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
-        const idx = rails.indexOf(currentValue);
+        const idx = findRailIndex(rails, currentValue, proposal.id);
         if (idx !== -1) rails.splice(idx, 1);
       }
 
@@ -1431,10 +1431,10 @@ export class StateManager {
       if (proposalType === 'ADD_RAIL') {
         rails.push(proposedValue);
       } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
-        const idx = rails.indexOf(currentValue);
+        const idx = findRailIndex(rails, currentValue, proposal.id);
         if (idx !== -1) rails[idx] = proposedValue;
       } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
-        const idx = rails.indexOf(currentValue);
+        const idx = findRailIndex(rails, currentValue, proposal.id);
         if (idx !== -1) rails.splice(idx, 1);
       }
 
@@ -1448,10 +1448,10 @@ export class StateManager {
       if (proposalType === 'ADD_RAIL') {
         rails.push(proposedValue);
       } else if (proposalType === 'MODIFY_RAIL' && currentValue) {
-        const idx = rails.indexOf(currentValue);
+        const idx = findRailIndex(rails, currentValue, proposal.id);
         if (idx !== -1) rails[idx] = proposedValue;
       } else if (proposalType === 'REMOVE_RAIL' && currentValue) {
-        const idx = rails.indexOf(currentValue);
+        const idx = findRailIndex(rails, currentValue, proposal.id);
         if (idx !== -1) rails.splice(idx, 1);
       }
 

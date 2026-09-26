@@ -45,6 +45,7 @@ describe('moe.propose_rail', () => {
   });
 
   it('includes workerId from assigned task', async () => {
+    await h.state.updateEpic('epic-1', { epicRails: ['old value '] });
     const tool = proposeRailTool(h.state);
     await tool.handler({
       taskId: 'task-1',
@@ -58,6 +59,31 @@ describe('moe.propose_rail', () => {
     const proposal = Array.from(h.state.proposals.values())[0];
     expect(proposal.workerId).toBe('worker-1');
     expect(proposal.currentValue).toBe('old value');
+  });
+
+  it('refuses a modification whose original rail does not exist', async () => {
+    const tool = proposeRailTool(h.state);
+    await expect(tool.handler({
+      taskId: 'task-1',
+      proposalType: 'MODIFY_RAIL',
+      targetScope: 'GLOBAL',
+      currentValue: 'old value',
+      proposedValue: 'new value',
+      reason: 'Replace the old rail',
+    }, h.state)).rejects.toThrow('Rail not found');
+    expect(h.state.proposals.size).toBe(0);
+  });
+
+  it('refuses removal without an original rail value', async () => {
+    const tool = proposeRailTool(h.state);
+    await expect(tool.handler({
+      taskId: 'task-1',
+      proposalType: 'REMOVE_RAIL',
+      targetScope: 'TASK',
+      proposedValue: '',
+      reason: 'Remove the old rail',
+    }, h.state)).rejects.toThrow('currentValue');
+    expect(h.state.proposals.size).toBe(0);
   });
 });
 
