@@ -3810,10 +3810,13 @@ current_branch_name() {
 
 # ensure_safe_branch -- never commit on main/master/detached/unborn: peel onto
 # the literal settings.consolidationBranch (no `*`) else moe/work-<date>
-# (local, then origin/, then create). An EXPLICIT consolidationBranch is
-# honoured from any branch, so a checkout already parked on a stale moe/work-*
-# is pulled back onto it; without the setting, existing non-default branches
-# are reused as-is (not branch-per-task). Sets MOE_SHARED_BRANCH; 1 on failure.
+# (local, then origin/, then create). Existing non-default branches are reused
+# as-is (not branch-per-task). Sets MOE_SHARED_BRANCH; returns 1 on failure.
+# A consolidationBranch naming main/master is the main-direct opt-in: a tree
+# already on it stays there and no checkout runs. An EXPLICIT consolidationBranch
+# is honoured from ANY branch, so a checkout parked on a stale moe/work-* is
+# returned to it; without the setting the peel is unchanged and existing
+# non-default branches are still reused as-is. Twin: Ensure-MoeSafeBranch.
 # symbolic-ref returns the name on an unborn branch and FAILS on a detached
 # HEAD; rev-parse is the fallback but returns the literal "HEAD" for both, so
 # detached ("HEAD" / '') and main/master are all unsafe.
@@ -3824,11 +3827,17 @@ ensure_safe_branch() {
     target="$(peel_target_branch)"
     if [ "$current" = "main" ] || [ "$current" = "master" ] || [ "$current" = "HEAD" ] || [ -z "$current" ] \
        || { [ -n "${CS_CONSOLIDATION_BRANCH:-}" ] && [ "$current" != "$target" ]; }; then
-        if [ -n "${CS_CONSOLIDATION_BRANCH:-}" ]; then
-            echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; switching to $target (settings.consolidationBranch)."
-        else
-            echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; switching to $target so we don't commit to the default branch."
-        fi
+        case "$target" in
+            main|master)
+                if [ "$target" = "$current" ]; then
+                    echo -e "${YELLOW}[branch]${NC} staying on $current: settings.consolidationBranch names the default branch (main-direct project)."
+                    MOE_SHARED_BRANCH="$current"
+                    return 0
+                fi
+                echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; checking out $target: settings.consolidationBranch names the default branch (main-direct project)." ;;
+            *)
+                echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; switching to $target so we don't commit to the default branch." ;;
+        esac
         if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target" > /dev/null 2>&1; then
             git -C "$MOE_TOP" checkout "$target" 2>&1 | tail -2
         elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/remotes/origin/$target" > /dev/null 2>&1; then
