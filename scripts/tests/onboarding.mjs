@@ -22,7 +22,8 @@ assert.ok(fs.existsSync(daemonEntry), 'Build moe-daemon first');
 assert.ok(fs.existsSync(proxyEntry), 'Build moe-proxy first');
 if (bundle) {
   const cacheHelper = path.join(bundle, 'scripts/prompt-cache.mjs');
-  for (const file of ['prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs']) {
+  for (const file of ['prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
+    'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs']) {
     assert.ok(fs.existsSync(path.join(bundle, 'scripts', file)), `Missing bundled ${file}`);
   }
   const report = execFileSync(process.execPath, [cacheHelper, 'codex-stream'], {

@@ -745,6 +745,34 @@ elseif ($cmdBase -eq "grok") { $cliType = "grok" }
 
 # Shared policy applies to every project, before a task is claimed or a model is called.
 $promptCacheHelper = Join-Path $PSScriptRoot 'prompt-cache.mjs'
+function Start-MoeUsageReceipt([string]$Provider, [string]$LaunchMode) {
+    $env:MOE_USAGE_RECEIPT_FILE = $null
+    $env:MOE_USAGE_CONTEXT_JSON = $null
+    if ($env:MOE_USAGE_REPORTING -eq 'off' -or $Provider -notin @('claude', 'codex')) { return }
+    $savedExitCode = $global:LASTEXITCODE
+    try {
+        $requestedModel = if ($Provider -eq 'claude') { $resolvedModel } else { $null }
+        $requestedEffort = if ($Provider -eq 'claude') { 'max' } elseif ($env:MOE_CODEX_REASONING_EFFORT) { $env:MOE_CODEX_REASONING_EFFORT } else { 'xhigh' }
+        $env:MOE_USAGE_CONTEXT_JSON = @{ taskId=$preflightTaskId; workerId=$WorkerId; role=$Role
+            attemptId=$script:MoeAttemptId; requestedModel=$requestedModel; requestedEffort=$requestedEffort
+            launchMode=$LaunchMode } | ConvertTo-Json -Compress
+        $sessionHelper = Join-Path (Split-Path -Parent $promptCacheHelper) 'usage-session.mjs'
+        $prepared = (& node $sessionHelper "$projectPath" 2>$null | Out-String).Trim()
+        if (-not $prepared) { throw 'unavailable' }
+        $usageSession = $prepared | ConvertFrom-Json -ErrorAction Stop
+        if (-not $usageSession.file -or -not $usageSession.context.launchId) { throw 'invalid' }
+        $env:MOE_USAGE_RECEIPT_FILE = [string]$usageSession.file
+        $env:MOE_USAGE_CONTEXT_JSON = $usageSession.context | ConvertTo-Json -Compress
+        # Pending survives a crash or interactive session with no usage stream;
+        # a later reported/missing receipt supersedes only this pending marker.
+        & node $promptCacheHelper usage-start $Provider | Out-Null
+    } catch {
+        $env:MOE_USAGE_RECEIPT_FILE = $null
+        $env:MOE_USAGE_CONTEXT_JSON = $null
+        Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE'
+    } finally { $global:LASTEXITCODE = $savedExitCode }
+}
+# End usage receipt helpers.
 if ($cliType -in @('claude', 'codex')) {
     & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
     if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -2752,7 +2780,7 @@ function Test-MoeDenyPath([string]$TopPath, [string]$XY, [string]$Rel, [hashtabl
     foreach ($dr in $denyRoots) {
         if ($k.StartsWith("$dr.moe/")) { return $true }
         if ($k -eq "$dr.mcp.json") { return $true }
-        foreach ($pre in @('.codex/', '.gemini/', '.grok/', '.claude/agents/', '.worktrees/', '.moe-worktree')) {
+        foreach ($pre in @('.codex/', '.gemini/', '.grok/', '.claude/agents/', '.worktrees/', '.moe-worktree', 'logs/moe-usage/')) {
             if ($k.StartsWith("$dr$pre")) { return $true }
         }
         if ($k -eq "$dr.claude/settings.local.json") { return $true }
@@ -4876,6 +4904,9 @@ try {
 
 try {
 do {
+    # Receipt metadata belongs to one actual CLI launch, never a prior task.
+    $env:MOE_USAGE_RECEIPT_FILE = $null
+    $env:MOE_USAGE_CONTEXT_JSON = $null
     if (-not $firstRun) {
         Write-Host ""
         if ($script:LaunchFailBackoffSec -gt 0) {
@@ -5860,6 +5891,7 @@ $mentionsJson
                     }
                 }
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') $($codexExecOverrides -join ' ') exec --json -C `"$projectPath`"$codexSandboxBanner `"<prompt>`""
+                Start-MoeUsageReceipt 'codex' 'headless'
                 & {
                     & $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"
                     $script:CliExitCode = $LASTEXITCODE
@@ -5881,6 +5913,7 @@ $mentionsJson
             } else {
                 # Interactive TUI mode: codex -c <seat overrides> -C <project> "<prompt>"
                 Write-Host "Command: $Command $($codexSeatArgs -join ' ') -C `"$projectPath`" `"<prompt>`""
+                Start-MoeUsageReceipt 'codex' 'interactive'
                 & $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"
                 $script:CliExitCode = $LASTEXITCODE
             }
@@ -6285,6 +6318,7 @@ $mentionsJson
                         }
                     }
                     "result" {
+                        $script:MoeUsageResultSeen = $true
                         $dur = if ($evt.duration_ms) { "$([math]::Round($evt.duration_ms/1000.0,1))s" } else { "?" }
                         $color = if ($evt.is_error) { "Red" } else { "Green" }
                         Write-Host "  [result] turns=$($evt.num_turns) dur=$dur stop=$($evt.stop_reason)" -ForegroundColor $color
@@ -6295,6 +6329,10 @@ $mentionsJson
                 }
             }
 
+            # Usage receipt launch boundary.
+            $script:MoeUsageResultSeen = $false
+            $usageLaunchMode = if ($usePrintMode) { 'headless' } else { 'interactive' }
+            Start-MoeUsageReceipt 'claude' $usageLaunchMode
             Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
             try {
             if ($userPromptForCli) {
@@ -6328,6 +6366,10 @@ $mentionsJson
                 }
             }
             } finally {
+                if ($usePrintMode -and -not $script:MoeUsageResultSeen -and $env:MOE_USAGE_RECEIPT_FILE) {
+                    try { '' | & node $promptCacheHelper claude-stream | Out-Null }
+                    catch { Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE' }
+                }
                 Stop-HeartbeatSidecar
                 if ($sessionContextFile) { Remove-Item -LiteralPath $sessionContextFile -Force -ErrorAction SilentlyContinue }
             }

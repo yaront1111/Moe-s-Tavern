@@ -302,7 +302,7 @@ export class McpAdapter {
           return {
             jsonrpc: '2.0',
             id,
-            result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+            result: { content: [{ type: 'text', text: JSON.stringify(result) }] }
           };
         } catch (toolError) {
           if (toolError instanceof MoeError) {

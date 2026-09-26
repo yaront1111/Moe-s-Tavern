@@ -395,7 +395,7 @@ The wrapper — never the daemon — lands every session's files (completion com
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. When you spot a recurring failure mode or a subtle invariant the system missed, \`write_memory\` a \`pattern-<area>\` note (or \`edit_memory\` an existing one). Governors own cross-task \`epic-<epicId>-notes\` — workers see one task at a time; you see the fleet. There is no auto-ranking, so consistent topic names are what make this knowledge findable.`,
-  'qa.md': `<!-- moe-generated: sha=bdf6c4fed023 -->
+  'qa.md': `<!-- moe-generated: sha=e13f67cfacdd -->
 
 # QA
 
@@ -404,7 +404,7 @@ You verify a completed task against its Definition of Done and rails, then appro
 ## Approval bar
 - Verify; do not trust summaries without checking the diff and relevant files.
 - Audit \`task.verification\` from \`get_context\` — re-run the command yourself; missing, failing, or mismatched evidence is a reject. Treat >400 net changed LOC as reject-as-oversized (tell the architect to split).
-- Audit \`task.commits\` from \`get_context\` — review the recorded completion commit (\`git show <sha>\`, \`git branch --contains <sha>\`), never the dirty shared tree. An empty \`task.commits\` at REVIEW is a bounded wait, not a blocker: re-run \`task.verification\` and the tests first, then re-poll \`get_context\` — up to ~2 minutes total, because the wrapper lands seconds after REVIEW. If a completion commit arrives, review that. If none does, verify the row on its merits on the working tree and land it yourself with the measured-attribution path recipe in \`qa.reference.md\` — then \`moe.record_commit\`, then approve, saying in the \`qa_approve\` summary that you self-landed after the bounded wait expired. A \`NO-COMPLETION-COMMIT\` warning after that is a daemon race, not a defect.
+- Audit \`task.commits\` from full \`get_context\` — review the recorded completion commit (\`git show <sha>\`, \`git branch --contains <sha>\`), never the dirty shared tree. An empty \`task.commits\` at REVIEW is a bounded wait, not a blocker: re-run \`task.verification\` and the tests first, then poll \`get_context {taskId, view:"status"}\` — up to ~2 minutes total, because the wrapper lands seconds after REVIEW. Status omits requirements and evidence: fetch full \`get_context\` again before any review or action. If a completion commit arrives, review that. If none does, verify the row on its merits on the working tree and land it yourself with the measured-attribution path recipe in \`qa.reference.md\` — then \`moe.record_commit\`, then approve, saying in the \`qa_approve\` summary that you self-landed after the bounded wait expired. A \`NO-COMPLETION-COMMIT\` warning after that is a daemon race, not a defect.
 - Run the right tests yourself and record the commands/results — \`qa_approve\` requires that summary, persists it, and returns \`warnings[]\` + \`commitEvidence\` when no commit backs the task.
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
@@ -417,7 +417,7 @@ One-shot sessions exit the moment you end your turn, and background builds/tests
 Every rejection must name failed DoD items and include structured issues that tell the worker what to change and why.
 
 ## Runtime-driven workflow
-Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool.
+Follow \`nextAction\` on every Moe tool response. During the bounded commit wait only, repeat status polls without following their full-context hint on each poll; fetch full context when the wait ends, a commit arrives, or status/ownership changes, before reviewing or acting. If \`nextAction\` includes \`recommendedSkill\`, load that skill before calling the hinted tool.
 
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
@@ -492,7 +492,7 @@ only you can.
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=59506c02e30f -->
+  'worker.md': `<!-- moe-generated: sha=2b22d0d22444 -->
 
 # Worker
 
@@ -517,7 +517,7 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 
 The runtime enforces ownership, step ordering, and task completion gates, so rely on tool responses instead of memorizing procedural steps.
 
-Memory lives in Serena. On task start, \`list_memories\` then \`read_memory\` to pick up prior knowledge for this task/area. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
+Memory lives in Serena. On task start, use a supplied memory-name inventory when it covers this task/area; otherwise call \`list_memories\`. Then \`read_memory\` for the relevant prior knowledge. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
   'worker.reference.md': `<!-- moe-generated: sha=b0ef035a319f -->
@@ -651,9 +651,9 @@ const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '669f916cafc6', 'a0c5bc216e41', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'f57ea78fcf8c'],
-  'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '7a4154466321', '8719e56dc532', '91114123fce3', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'fe6ee0d3b5a0'],
+  'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '7a4154466321', '8719e56dc532', '91114123fce3', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '7a888e2b306e', 'b3eec7c94327', 'e8b6300b7f5b'],
-  'worker.md': ['05799e86c64e', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e8f98a76488c', 'f9e6abd6e1a2'],
+  'worker.md': ['05799e86c64e', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e8f98a76488c', 'f9e6abd6e1a2'],
   'worker.reference.md': ['00d768586ec5', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
 

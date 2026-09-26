@@ -164,6 +164,7 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     }
     from(repoRoot.resolve("scripts")) {
         include("prompt-cache*.mjs")
+        include("usage-receipt.mjs", "usage-session.mjs", "usage-report.mjs", "analyze-usage.mjs")
         into("$pluginContentRoot/scripts")
     }
     from(listOf(bundledAgentScriptSh, bundledCallScriptSh)) {

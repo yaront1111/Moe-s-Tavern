@@ -134,6 +134,26 @@ describe('McpAdapter', () => {
   });
 
   describe('tools/call', () => {
+    it('returns compact JSON without changing nested values or string whitespace', async () => {
+      const payload = {
+        rails: ['keep  two spaces', 'line one\n  line two\t', 'שלום 漢字 "quoted" \\path'],
+        nested: { empty: {}, values: [null, false, 0, '', { preserved: true }] },
+      };
+      const tools = (adapter as unknown as {
+        tools: Map<string, { handler: () => Promise<unknown> }>;
+      }).tools;
+      tools.set('moe.compact_fixture', { handler: async () => payload });
+
+      const response = await adapter.handle({
+        jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'moe.compact_fixture' },
+      }) as JsonRpcResponse;
+      const result = response.result as { content: Array<{ type: string; text: string }> };
+
+      expect(response.error).toBeUndefined();
+      expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(payload) }]);
+      expect(JSON.parse(result.content[0].text)).toEqual(payload);
+    });
+
     it('calls tool handler with arguments', async () => {
       const request: JsonRpcRequest = {
         jsonrpc: '2.0',

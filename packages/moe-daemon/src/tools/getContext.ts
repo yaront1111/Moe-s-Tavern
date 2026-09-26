@@ -1,12 +1,13 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskCommit } from '../types/schema.js';
-import { invalidState } from '../util/errors.js';
+import { invalidInput, invalidState } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { contextNextAction } from '../util/contextNextAction.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
 import { listCandidatesForTask } from '../state/candidateStore.js';
+import { contextStatus } from '../util/contextStatus.js';
 
 /** Newest commits surfaced per task (the ledger itself is capped at MAX_COMMITS_PER_TASK). */
 const MAX_CONTEXT_COMMITS = 20;
@@ -64,6 +65,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       properties: {
         taskId: { type: 'string' },
         workerId: { type: 'string' },
+        view: {
+          type: 'string', enum: ['full', 'status'],
+          description: 'Default full. Status is a read-only delivery poll, excludes instructions and never satisfies the full-context prerequisite. Fetch full before reviewing or acting.'
+        },
         commentsLimit: {
           type: 'number',
           description: 'Maximum recent task comments to include (default: 3, max: 50; 0 omits comments).'
@@ -79,6 +84,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const params = (args || {}) as {
         taskId?: string;
         workerId?: string;
+        view?: 'full' | 'status';
         commentsLimit?: number;
         commentsMaxChars?: number;
       };
@@ -87,6 +93,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
 
       if (!state.project) {
         throw invalidState('Project', 'not loaded', 'loaded');
+      }
+      if (params.view !== undefined && params.view !== 'full' && params.view !== 'status') {
+        throw invalidInput('view', 'must be one of: full, status');
       }
 
       let task = taskId ? state.getTask(taskId) : null;
@@ -152,6 +161,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         0,
         MAX_COMMENT_CONTENT_CHARS
       );
+
+      // Polling is not reading the task's instructions: do not stamp
+      // contextFetchedBy or update worker activity on this read-only path.
+      if (params.view === 'status') return contextStatus(state, task, callerWorkerId);
 
       // Read planningNotes from task if present
       const planningNotes = task ? (task as unknown as Record<string, unknown>).planningNotes ?? null : null;

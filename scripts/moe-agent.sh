@@ -644,6 +644,33 @@ PROJECT=$(cd "$PROJECT" 2>/dev/null && pwd || echo "$PROJECT")
 
 # Shared policy applies to every resolved project before task claim/model calls.
 PROMPT_CACHE_HELPER="$SCRIPT_DIR/prompt-cache.mjs"
+start_moe_usage_receipt() {
+    unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON
+    [ "${MOE_USAGE_REPORTING:-}" != off ] || return 0
+    local provider="$1" mode="$2" requested_model="" requested_effort="" prepared="" receipt_file="" receipt_context=""
+    case "$provider" in
+        claude) requested_model="${RESOLVED_MODEL:-}"; requested_effort=max ;;
+        codex) requested_effort="${MOE_CODEX_REASONING_EFFORT:-xhigh}" ;;
+        *) return 0 ;;
+    esac
+    if ! MOE_USAGE_CONTEXT_JSON=$("$PYTHON_CMD" -c 'import json,sys
+keys=["taskId","workerId","role","attemptId","requestedModel","requestedEffort","launchMode"]
+print(json.dumps(dict(zip(keys,[v or None for v in sys.argv[1:]]))))' \
+        "${PREFLIGHT_TASK_ID:-}" "$WORKER_ID" "$ROLE" "${MOE_ATTEMPT_ID:-}" "$requested_model" "$requested_effort" "$mode" 2>/dev/null); then
+        echo '[usage] MOE_USAGE_REPORT_UNAVAILABLE' >&2; unset MOE_USAGE_CONTEXT_JSON; return 0
+    fi
+    export MOE_USAGE_CONTEXT_JSON
+    prepared=$("$NODE_CMD" "$SCRIPT_DIR/usage-session.mjs" "$PROJECT" 2>/dev/null) || prepared=""
+    receipt_file=$("$PYTHON_CMD" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["context"]["launchId"]; print(d["file"])' "$prepared" 2>/dev/null) || receipt_file=""
+    receipt_context=$("$PYTHON_CMD" -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])["context"]))' "$prepared" 2>/dev/null) || receipt_context=""
+    if [ -z "$receipt_file" ] || [ -z "$receipt_context" ]; then
+        echo '[usage] MOE_USAGE_REPORT_UNAVAILABLE' >&2; unset MOE_USAGE_CONTEXT_JSON; return 0
+    fi
+    export MOE_USAGE_RECEIPT_FILE="$receipt_file" MOE_USAGE_CONTEXT_JSON="$receipt_context"
+    # Pending is a launch marker, not measured zero usage or a terminal result.
+    "$NODE_CMD" "$PROMPT_CACHE_HELPER" usage-start "$provider" >/dev/null || true
+}
+# End usage receipt helpers.
 if [ "$CLI_TYPE" = "claude" ] || [ "$CLI_TYPE" = "codex" ]; then
     parse_command_into_argv "$COMMAND"
     "$NODE_CMD" "$PROMPT_CACHE_HELPER" check "$CLI_TYPE" "$PROJECT" "${COMMAND_ARGV[@]}" || exit 1
@@ -3192,6 +3219,8 @@ def denied(p, xy):
             return True
         if pk.startswith(pre + '.codex/') or pk.startswith(pre + '.gemini/') or pk.startswith(pre + '.grok/') or pk.startswith(pre + '.claude/agents/'):
             return True
+        if pk.startswith(pre + 'logs/moe-usage/'):
+            return True
         if pk.startswith(pre + '.serena/') and xy == '??':
             return True
         if pk.startswith(pre + '.worktrees/') or pk.startswith(pre + '.moe-worktree'):
@@ -5372,6 +5401,8 @@ if [ -f "$MOE_WRAPPER_PATH" ]; then
 fi
 
 while [ "$LOOP_RUNNING" = true ]; do
+    # Receipt metadata belongs to one actual CLI launch, never a prior task.
+    unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON
     if [ "$FIRST_RUN" = false ]; then
         echo ""
         if [ "${LAUNCH_FAIL_BACKOFF_SEC:-0}" -gt 0 ]; then
@@ -6631,6 +6662,7 @@ $PROMPT_BODY"
             # The banner is the line the launch-failure hint tells the operator to re-run by
             # hand, so it carries every argv token the real launch does (ps1 twin parity).
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
+            start_moe_usage_receipt codex headless
             set +e
 
             # Per-seat overrides on argv (PS twin parity): codex does not
@@ -6650,6 +6682,7 @@ $PROMPT_BODY"
             echo "Starting Codex (interactive TUI)..."
             echo ""
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID -C \"$PROJECT\" \"<prompt>\""
+            start_moe_usage_receipt codex interactive
             set +e
 
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
@@ -7135,6 +7168,10 @@ PYEOF
         if [ "$LAUNCH_SKIPPED" = true ]; then
             : # CLI spawn skipped this iteration; post-flight + loop continue below.
         elif [ "$AUTO_CLAIM" = true ]; then
+            # Usage receipt launch boundary.
+            USAGE_LAUNCH_MODE=interactive
+            [ ${#PRINT_ARGS[@]} -eq 0 ] || USAGE_LAUNCH_MODE=headless
+            start_moe_usage_receipt "$CLI_TYPE" "$USAGE_LAUNCH_MODE"
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 echo "Starting ${CLI_TYPE} with auto-claim (one-shot --print)..."
             else
@@ -7158,9 +7195,11 @@ PYEOF
             set +e
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
+                start_moe_usage_receipt "$CLI_TYPE" headless
                 (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
+                start_moe_usage_receipt "$CLI_TYPE" interactive
                 (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort max)
                 CLI_EXIT_CODE=$?
             fi

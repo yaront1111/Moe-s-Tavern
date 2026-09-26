@@ -185,7 +185,8 @@ Get current project/epic/task context and rails.
 {
   taskId?: string,
   workerId?: string,
-  commentsLimit?: number,                  // default: 10 recent comments, max 50; 0 omits comments
+  view?: "full" | "status",                // default: full; status is only for progress/commit polling
+  commentsLimit?: number,                  // default: 3 recent comments, max 50; 0 omits comments
   commentsMaxChars?: number                // default: 1000 per comment; 0 returns full comment text
 }
 ```
@@ -253,6 +254,8 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 ```
 
 By default, `get_context` returns compact recent-chat previews, a lean worker object, and only the latest compact task comments to save tokens. Cross-session memory is not part of this payload — use the Serena MCP server's memory tools (`list_memories` / `read_memory`); see [MEMORY.md](MEMORY.md). Call `moe.chat_read` with `maxContentChars: 0` for full chat content; set `commentsMaxChars: 0` when full returned comment content is needed.
+
+`view: "status"` returns `contextScope: "status"`, `requiresFullContext: true`, task identity/status/owner/reopen state, the latest 20 commit identities with total count, the latest commit outcome, and the current candidate when present. It omits rails, DoD, plans, amendments and verification. It performs no worker/task writes and does not satisfy the full-context prerequisite for execution. Use it only to poll progress; fetch full context before reviewing or acting, as its `nextAction` instructs. Missing/explicit `view: "full"` retains the complete existing payload; unsupported view values are rejected. Tool result JSON uses compact serialization while preserving field values and whitespace inside strings.
 
 **Reviewed bytes.** `currentCandidate` is the record QA must read before signing off, and its `id` is what `moe.qa_approve` / `moe.qa_reject` bind the decision to. Because it is re-resolved on every call, a reviewer who re-reads a task after the runner recorded a newer candidate sees the new one — and an approval still naming the old one is refused with `CANDIDATE_MISMATCH`. Projects that never call `moe.record_candidate` never see the key.
 

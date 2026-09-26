@@ -1,14 +1,18 @@
 import { createInterface } from 'node:readline';
 import { checkPolicy } from './prompt-cache-policy.mjs';
 import { formatUsage, renderCodexEvent } from './prompt-cache-usage.mjs';
+import { createUsageReceiptWriter } from './usage-receipt.mjs';
 
 const [command, provider, project, ...args] = process.argv.slice(2);
 try {
   if (command === 'check') {
     const mode = checkPolicy({ provider, project, args });
     console.log(`[prompt-cache] provider=${provider} policy=${mode} caching=provider-managed; hits require provider usage evidence`);
+  } else if (command === 'usage-start' && ['claude', 'codex'].includes(provider)) {
+    createUsageReceiptWriter(provider).start();
   } else if (command === 'claude-stream' || command === 'codex-stream') {
     const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+    const receipts = createUsageReceiptWriter(command === 'claude-stream' ? 'claude' : 'codex');
     let reported = false;
     for await (let line of lines) {
       // PS 5.1's Process.StandardInput writer prepends a UTF-8 BOM.
@@ -16,6 +20,7 @@ try {
       let event;
       try { event = JSON.parse(line); }
       catch { console.log(line); continue; }
+      receipts.event(event);
       if (command === 'claude-stream') {
         // Leave Claude events byte-for-byte for the existing attribution and
         // display parser. Only result usage is cumulative; do not sum deltas.
@@ -29,9 +34,10 @@ try {
         if (event?.type === 'turn.completed') reported = true;
       }
     }
+    receipts.finish();
     if (!reported) console.log(formatUsage(command === 'claude-stream' ? 'claude' : 'codex'));
   } else {
-    throw new Error('MOE_PROMPT_CACHE_COMMAND_INVALID: expected check, claude-stream, or codex-stream.');
+    throw new Error('MOE_PROMPT_CACHE_COMMAND_INVALID: expected check, usage-start <provider>, claude-stream, or codex-stream.');
   }
 } catch (error) {
   console.error(error.message);
