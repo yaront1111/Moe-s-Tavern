@@ -3813,7 +3813,10 @@ current_branch_name() {
 # (local, then origin/, then create). Existing non-default branches are reused
 # as-is (not branch-per-task). Sets MOE_SHARED_BRANCH; returns 1 on failure.
 # A consolidationBranch naming main/master is the main-direct opt-in: a tree
-# already on it stays there and no checkout runs. Twin: Ensure-MoeSafeBranch.
+# already on it stays there and no checkout runs. An EXPLICIT consolidationBranch
+# is honoured from ANY branch, so a checkout parked on a stale moe/work-* is
+# returned to it; without the setting the peel is unchanged and existing
+# non-default branches are still reused as-is. Twin: Ensure-MoeSafeBranch.
 # symbolic-ref returns the name on an unborn branch and FAILS on a detached
 # HEAD; rev-parse is the fallback but returns the literal "HEAD" for both, so
 # detached ("HEAD" / '') and main/master are all unsafe.
@@ -3821,8 +3824,9 @@ ensure_safe_branch() {
     MOE_SHARED_BRANCH=""
     local current target
     current="$(current_branch_name)"
-    if [ "$current" = "main" ] || [ "$current" = "master" ] || [ "$current" = "HEAD" ] || [ -z "$current" ]; then
-        target="$(peel_target_branch)"
+    target="$(peel_target_branch)"
+    if [ "$current" = "main" ] || [ "$current" = "master" ] || [ "$current" = "HEAD" ] || [ -z "$current" ] \
+       || { [ -n "${CS_CONSOLIDATION_BRANCH:-}" ] && [ "$current" != "$target" ]; }; then
         case "$target" in
             main|master)
                 if [ "$target" = "$current" ]; then

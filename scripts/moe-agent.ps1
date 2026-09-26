@@ -3253,9 +3253,12 @@ function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
         $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--abbrev-ref', 'HEAD')
         if ($r.Rc -eq 0 -and $r.Out.Count -gt 0) { $currentBranch = ($r.Out -join '').Trim() }
     }
-    if ($currentBranch -eq 'main' -or $currentBranch -eq 'master' -or $currentBranch -eq 'HEAD' -or -not $currentBranch) {
-        $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
-        if ($Settings -and $Settings.consolidationBranch) { $moeBranch = $Settings.consolidationBranch }
+    $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
+    $explicitBranch = [bool]($Settings -and $Settings.consolidationBranch)
+    if ($explicitBranch) { $moeBranch = $Settings.consolidationBranch }
+    # An EXPLICIT consolidationBranch is honoured from ANY branch, so a checkout
+    # parked on a stale moe/work-* is returned to it. Twin: ensure_safe_branch.
+    if ($currentBranch -eq 'main' -or $currentBranch -eq 'master' -or $currentBranch -eq 'HEAD' -or -not $currentBranch -or ($explicitBranch -and $currentBranch -ne $moeBranch)) {
         $shownBranch = if ($currentBranch) { $currentBranch } else { 'detached/unborn' }
         if ($moeBranch -ceq 'main' -or $moeBranch -ceq 'master') {
             if ($moeBranch -ceq $currentBranch) {

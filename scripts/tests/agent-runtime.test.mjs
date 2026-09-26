@@ -47,7 +47,8 @@ for (const [mode, version] of [['bootstrap', 'v24.99.0'], ['path', 'v22.99.0'], 
 // Branch safety: the REAL ensure_safe_branch / Ensure-MoeSafeBranch, sliced
 // from both wrappers (never a copy), run against a throwaway repo. The default
 // peel must stay as it is for every project; a consolidationBranch naming the
-// default branch keeps a main-direct project on it without a checkout.
+// default branch keeps a main-direct project on it without a checkout, and an
+// explicit one returns a checkout parked on another branch to it.
 const wrapper = name => readFileSync(new URL(`../moe-agent.${name}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
 function between(source, start, end) {
     const from = source.indexOf(start);
@@ -139,6 +140,28 @@ for (const [engine, executable] of engines) {
         assert.equal(head(top), 'main');
         assert.ok(r.log.includes(`[branch] on HEAD; checking out main: ${mainDirect}`), r.log);
         assert.ok(!r.log.includes("so we don't commit to the default branch"), r.log);
+    });
+
+    test(`${engine}: branch safety returns a parked moe/work-* checkout to main when consolidationBranch is main`, t => {
+        const top = repo(t);
+        git(top, 'checkout', '-q', '-b', 'moe/work-2026-09-26');
+        const r = ensureSafeBranch(engine, executable, top, 'main');
+        assert.equal(r.rc, 0, r.log);
+        assert.equal(r.branch, 'main');
+        assert.equal(head(top), 'main');
+        assert.ok(r.log.includes(`[branch] on moe/work-2026-09-26; checking out main: ${mainDirect}`), r.log);
+    });
+
+    test(`${engine}: branch safety leaves a non-default branch alone when no consolidationBranch is set`, t => {
+        const top = repo(t);
+        git(top, 'checkout', '-q', '-b', 'moe/work-2026-09-26');
+        const before = reflogLength(top);
+        const r = ensureSafeBranch(engine, executable, top, '');
+        assert.equal(r.rc, 0, r.log);
+        assert.equal(r.branch, 'moe/work-2026-09-26');
+        assert.equal(head(top), 'moe/work-2026-09-26');
+        assert.equal(reflogLength(top), before, 'no checkout may run: ' + git(top, 'reflog', '-1'));
+        assert.equal(r.log, '', r.log);
     });
 
     test(`${engine}: branch safety refuses and names the target when the checkout fails`, t => {
