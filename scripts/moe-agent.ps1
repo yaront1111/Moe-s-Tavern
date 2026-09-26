@@ -3251,10 +3251,19 @@ function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
         $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--abbrev-ref', 'HEAD')
         if ($r.Rc -eq 0 -and $r.Out.Count -gt 0) { $currentBranch = ($r.Out -join '').Trim() }
     }
-    if ($currentBranch -eq 'main' -or $currentBranch -eq 'master' -or $currentBranch -eq 'HEAD' -or -not $currentBranch) {
-        $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
-        if ($Settings -and $Settings.consolidationBranch) { $moeBranch = $Settings.consolidationBranch }
-        Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
+    $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
+    $explicitBranch = [bool]($Settings -and $Settings.consolidationBranch)
+    if ($explicitBranch) { $moeBranch = $Settings.consolidationBranch }
+    # An EXPLICIT consolidationBranch is honoured from any branch, so a checkout
+    # already parked on a stale moe/work-* is pulled back onto it. Without the
+    # setting, existing non-default branches are reused as-is. Twin of
+    # ensure_safe_branch in moe-agent.sh.
+    if ($currentBranch -eq 'main' -or $currentBranch -eq 'master' -or $currentBranch -eq 'HEAD' -or -not $currentBranch -or ($explicitBranch -and $currentBranch -ne $moeBranch)) {
+        if ($explicitBranch) {
+            Write-Host "[branch] on $currentBranch; switching to $moeBranch (settings.consolidationBranch)." -ForegroundColor Yellow
+        } else {
+            Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
+        }
         $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$moeBranch")
         if ($r.Rc -eq 0) {
             $co = Invoke-MoeGit -Top $Top -GitArgs @('checkout', $moeBranch) -MergeStderr
