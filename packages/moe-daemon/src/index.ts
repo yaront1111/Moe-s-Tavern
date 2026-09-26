@@ -13,6 +13,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { StateManager } from './state/StateManager.js';
 import { FileWatcher } from './state/FileWatcher.js';
+import { healMassDeletion } from './state/massDeletionHeal.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
@@ -601,6 +602,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 
   const watcher = new FileWatcher(state.moePath, async () => {
     try {
+      // A wiped store (git clean / sparse-checkout / rm -rf) must not replace the in-memory board.
+      if ((await healMassDeletion(state)) > 0) return;
       await state.load();
       wsServer.broadcast({ type: 'STATE_SNAPSHOT', payload: state.getSnapshot() });
     } catch (error) {
