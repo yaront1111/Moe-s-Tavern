@@ -3243,6 +3243,8 @@ function Resolve-MoeAttribution {
 
 # Today's branch-safety peel lifted into a helper. Returns the branch name the
 # commit may land on, or '' when the tree must not be committed (peel failed).
+# A consolidationBranch naming main/master is the main-direct opt-in: a tree
+# already on it stays there and no checkout runs. Twin: ensure_safe_branch.
 function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
     $currentBranch = ''
     $r = Invoke-MoeGit -Top $Top -GitArgs @('symbolic-ref', '--short', '-q', 'HEAD')
@@ -3254,7 +3256,16 @@ function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
     if ($currentBranch -eq 'main' -or $currentBranch -eq 'master' -or $currentBranch -eq 'HEAD' -or -not $currentBranch) {
         $moeBranch = "moe/work-" + (Get-Date -Format "yyyy-MM-dd")
         if ($Settings -and $Settings.consolidationBranch) { $moeBranch = $Settings.consolidationBranch }
-        Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
+        $shownBranch = if ($currentBranch) { $currentBranch } else { 'detached/unborn' }
+        if ($moeBranch -ceq 'main' -or $moeBranch -ceq 'master') {
+            if ($moeBranch -ceq $currentBranch) {
+                Write-Host "[branch] staying on ${currentBranch}: settings.consolidationBranch names the default branch (main-direct project)." -ForegroundColor Yellow
+                return $currentBranch
+            }
+            Write-Host "[branch] on $shownBranch; checking out ${moeBranch}: settings.consolidationBranch names the default branch (main-direct project)." -ForegroundColor Yellow
+        } else {
+            Write-Host "[branch] on $currentBranch; switching to $moeBranch so we don't commit to the default branch." -ForegroundColor Yellow
+        }
         $r = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$moeBranch")
         if ($r.Rc -eq 0) {
             $co = Invoke-MoeGit -Top $Top -GitArgs @('checkout', $moeBranch) -MergeStderr
@@ -3268,7 +3279,7 @@ function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
         }
         $co.Out | Select-Object -Last 2 | ForEach-Object { Write-Host "  $_" }
         if ($co.Rc -ne 0) {
-            Write-Host "[WARN] failed to switch off $currentBranch; aborting auto-commit to avoid writing to the default branch." -ForegroundColor Yellow
+            Write-Host "[WARN] [branch] failed to switch off $shownBranch onto $moeBranch; refusing to commit to the default branch." -ForegroundColor Yellow
             return ''
         }
         $currentBranch = $moeBranch

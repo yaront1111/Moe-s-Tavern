@@ -3812,6 +3812,8 @@ current_branch_name() {
 # the literal settings.consolidationBranch (no `*`) else moe/work-<date>
 # (local, then origin/, then create). Existing non-default branches are reused
 # as-is (not branch-per-task). Sets MOE_SHARED_BRANCH; returns 1 on failure.
+# A consolidationBranch naming main/master is the main-direct opt-in: a tree
+# already on it stays there and no checkout runs. Twin: Ensure-MoeSafeBranch.
 # symbolic-ref returns the name on an unborn branch and FAILS on a detached
 # HEAD; rev-parse is the fallback but returns the literal "HEAD" for both, so
 # detached ("HEAD" / '') and main/master are all unsafe.
@@ -3821,7 +3823,17 @@ ensure_safe_branch() {
     current="$(current_branch_name)"
     if [ "$current" = "main" ] || [ "$current" = "master" ] || [ "$current" = "HEAD" ] || [ -z "$current" ]; then
         target="$(peel_target_branch)"
-        echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; switching to $target so we don't commit to the default branch."
+        case "$target" in
+            main|master)
+                if [ "$target" = "$current" ]; then
+                    echo -e "${YELLOW}[branch]${NC} staying on $current: settings.consolidationBranch names the default branch (main-direct project)."
+                    MOE_SHARED_BRANCH="$current"
+                    return 0
+                fi
+                echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; checking out $target: settings.consolidationBranch names the default branch (main-direct project)." ;;
+            *)
+                echo -e "${YELLOW}[branch]${NC} on ${current:-detached/unborn}; switching to $target so we don't commit to the default branch." ;;
+        esac
         if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target" > /dev/null 2>&1; then
             git -C "$MOE_TOP" checkout "$target" 2>&1 | tail -2
         elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/remotes/origin/$target" > /dev/null 2>&1; then
