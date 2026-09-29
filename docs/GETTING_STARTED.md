@@ -38,7 +38,7 @@ Claude Code is installed by default. To choose another CLI, add `-AgentCommand c
 
 In your IDE, open **Settings / Preferences → Plugins → gear icon → Install Plugin from Disk**, select the ZIP in `moe-jetbrains/build/distributions/`, and restart. Open **your target project**, then its **Moe** tool window. The plugin creates `.moe/`, starts the daemon, and shows **Connected** with an empty board.
 
-In a new terminal, open your target project and run your chosen CLI (`claude`, `codex`, or `gemini`) once to complete sign-in. Confirm it responds. You need access to that provider; the installer does not perform account sign-in. Check `git status`, `git config user.name`, and `git config user.email` in this project before launching agents. Moe's default launchers commit task changes and attempt to push them to the project's remote.
+In a new terminal, open your target project and run your chosen CLI (`claude`, `codex`, or `agy` for Antigravity) once to complete sign-in. Confirm it responds. You need access to that provider; the installer does not perform account sign-in. Check `git status`, `git config user.name`, and `git config user.email` in this project before launching agents. Moe's default launchers commit task changes and attempt to push them to the project's remote.
 
 Run this in another terminal, replacing the path with your target project, to check the daemon:
 

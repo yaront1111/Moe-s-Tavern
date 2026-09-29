@@ -80,7 +80,9 @@ Write-Output RETAINED_HANDLE
     expect(r.code, r.output).toBe(0);
     expect(r.output).not.toContain('BAD_RELOAD');
     expect(r.output).toContain('RETAINED_HANDLE');
-  });
+    // A cold pwsh start on a loaded CI runner under coverage can pass 5s; run()
+    // itself allows 8s, so give vitest more than that (matches the bash sibling).
+  }, 12000);
 
   it.skipIf(!hasBash).each(['ignore', 'stopped'])('bounds a %s TERM-resistant owned helper without killing a peer', async mode => {
     const r = await run('bash', ['-c', `

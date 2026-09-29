@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("architect", "worker", "qa", "governor")]
     [string]$Role = "worker",
 
@@ -741,7 +741,7 @@ if ($cmdForDetect) {
 }
 $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
-elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
+elseif ($cmdBase -eq "gemini" -or $cmdBase -eq "agy") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
 
 # Shared policy applies to every project, before a task is claimed or a model is called.
@@ -6114,14 +6114,18 @@ $mentionsJson
             }
         }
     } elseif ($cliType -eq "gemini") {
-        if ($Command -eq "gemini") {
-            if (Get-Command agy -ErrorAction SilentlyContinue) {
-                $Command = "agy"
-            }
+        # Gemini mode runs Antigravity (agy) only -- never fall back to the
+        # Gemini CLI, which rejects agy's flags. MOE_AGY_COMMAND points at agy
+        # when the IDE's PATH lacks it (a desktop-launched IDE often misses
+        # the shell PATH).
+        if (-not [string]::IsNullOrWhiteSpace($env:MOE_AGY_COMMAND)) {
+            $Command = $env:MOE_AGY_COMMAND
+        } elseif ([System.IO.Path]::GetFileNameWithoutExtension($Command) -eq "gemini") {
+            $Command = "agy"
         }
         $geminiCheck = Get-Command $Command -ErrorAction SilentlyContinue
         if (-not $geminiCheck) {
-            Write-Error "Antigravity command not found: $Command. Please ensure Antigravity CLI (agy) is installed."
+            Write-Error "Antigravity CLI (agy) not found: $Command. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH)."
             exit 1
         }
 
