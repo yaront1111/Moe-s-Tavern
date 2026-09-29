@@ -252,6 +252,20 @@ for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$PS1"; then fail "deferred setting '$deferred' is referenced by moe-agent.ps1"; fi
 done
 
+# Gemini mode runs Antigravity only: both wrappers honor MOE_AGY_COMMAND and
+# carry the same not-found message (no silent fallback to the Gemini CLI).
+for needle in 'MOE_AGY_COMMAND' 'Antigravity CLI (agy) not found:' 'Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path'; do
+  grep -Fq -- "$needle" "$SH" || fail "moe-agent.sh is missing gemini-mode Antigravity text: $needle"
+  grep -Fq -- "$needle" "$PS1" || fail "moe-agent.ps1 is missing gemini-mode Antigravity text: $needle"
+done
+
+# Windows PowerShell 5.1 (powershell.exe, which the JetBrains plugin launches)
+# reads a BOM-less .ps1 in the ANSI code page: an em-dash's 0x94 byte decodes
+# as a closing quote and the wrapper fails to parse. Keep the UTF-8 BOM.
+if [ "$(head -c3 "$PS1" | od -An -tx1 | tr -d ' \n')" != "efbbbf" ]; then
+  fail "moe-agent.ps1 must start with a UTF-8 BOM (Windows PowerShell 5.1 misparses non-ASCII without it)"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "FAIL parity-check.sh: $failures asymmetr$([ "$failures" -eq 1 ] && echo y || echo ies) between moe-agent.sh and moe-agent.ps1" >&2
   exit 1

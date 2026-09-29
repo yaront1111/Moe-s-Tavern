@@ -2,7 +2,7 @@
 
 **An AI agent task board. Turn your coding agents into a team you can steer.**
 
-Run Claude Code, Codex, Gemini CLI, and Grok Build through a shared task board in your IDE. Give agents clear roles, review their plans, and follow the work through implementation and QA.
+Run Claude Code, Codex, Antigravity (agy), and Grok Build through a shared task board in your IDE. Give agents clear roles, review their plans, and follow the work through implementation and QA.
 
 [![CI](https://github.com/yaront1111/Moe-s-Tavern/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yaront1111/Moe-s-Tavern/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -28,7 +28,7 @@ Start with one small task. As you add agents, the same board keeps their plans, 
 | **A live board inside your IDE** | Organize work into epics and tasks, inspect plans and implementation steps, and follow progress from Backlog to Done. JetBrains is the primary interface; a VS Code / Antigravity extension is also included. |
 | **Plan approval before implementation** | Review proposed steps and affected files in the default **CONTROL** mode. Choose SPEED or TURBO when you want more automation. |
 | **Agents with distinct jobs** | Give planning, implementation, and QA their own roles. Add a governor to help monitor the team and surface blockers. |
-| **Your choice of coding CLI** | Launch Claude Code, Codex, Gemini CLI, or Grok Build. Pick different providers for different roles. |
+| **Your choice of coding CLI** | Launch Claude Code, Codex, Antigravity (agy), or Grok Build. Pick different providers for different roles. |
 | **Coordination for parallel work** | Use teams, task dependencies, chat channels, and @mentions to coordinate agents. File overlap warnings help flag potential collisions. |
 | **Context that survives a session** | Keep tasks, plans, decisions, and handoffs with your project. Add [Serena](docs/MEMORY.md) for shared agent memory across sessions. |
 | **Git history tied to tasks** | Agent launchers create task-linked commits, checkpoints, and recovery refs so you can inspect what landed and investigate interrupted work. |
@@ -69,7 +69,7 @@ The first-run path below uses **JetBrains and one small task**. The [full walkth
 - **VS Code / Antigravity** — install the extension `yaront1111.moe-vscode` (VS Code Marketplace or Open VSX).
 - **Daemon and proxy only** — `npm install -g moe-daemon moe-proxy`, then `moe-daemon init --project .` inside your project (creates `.moe/` and keeps the daemon running in that terminal).
 
-The IDE plugins bundle their own daemon and proxy; the npm packages are for terminal-only use. You still need one coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build) installed and signed in, and Node.js on PATH. After a marketplace install, continue at step 2 below.
+The IDE plugins bundle their own daemon and proxy; the npm packages are for terminal-only use. You still need one coding CLI (Claude Code, Codex, Antigravity (agy), or Grok Build) installed and signed in, and Node.js on PATH. After a marketplace install, continue at step 2 below.
 
 > These listings go live with the **v0.8.0** release. Until that tag ships, use **Build from source** below.
 
@@ -98,7 +98,7 @@ You need a JetBrains IDE and your platform's package manager: **WinGet on Window
 | Agent | Windows | macOS / Linux |
 | --- | --- | --- |
 | Codex | `-AgentCommand codex` | `--agent codex` |
-| Gemini CLI | `-AgentCommand gemini` | `--agent gemini` |
+| Antigravity (agy) | `-AgentCommand gemini` | `--agent gemini` |
 | Skip agent installation | `-AgentCommand none` | `--agent none` |
 
 Grok Build is supported by the agent launchers. The Windows installer also accepts `-AgentCommand grok`; on macOS/Linux, install Grok Build separately.

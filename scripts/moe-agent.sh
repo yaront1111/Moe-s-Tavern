@@ -421,7 +421,7 @@ CMD_BASE=$(basename "$CMD_FIRST")
 CMD_BASE="${CMD_BASE%.*}"
 if [ "$CMD_BASE" = "codex" ]; then
     CLI_TYPE="codex"
-elif [ "$CMD_BASE" = "gemini" ]; then
+elif [ "$CMD_BASE" = "gemini" ] || [ "$CMD_BASE" = "agy" ]; then
     CLI_TYPE="gemini"
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
@@ -6918,12 +6918,18 @@ $PROMPT_BODY"
         rm -f "$CODEX_SEAT_INSTRUCTIONS_FILE" 2>/dev/null || true
         rm -f "$CODEX_SESSION_CONTEXT_FILE" 2>/dev/null || true
     elif [ "$CLI_TYPE" = "gemini" ]; then
-        if [ "$COMMAND_BIN" = "gemini" ] && command -v agy &> /dev/null; then
+        # Gemini mode runs Antigravity (agy) only -- never fall back to the
+        # Gemini CLI, which rejects agy's flags. MOE_AGY_COMMAND points at agy
+        # when the IDE's PATH lacks it (a desktop-launched IDE often misses
+        # the shell PATH).
+        GEMINI_BIN_BASE=$(basename "$COMMAND_BIN")
+        if [ -n "${MOE_AGY_COMMAND:-}" ]; then
+            COMMAND_BIN="$MOE_AGY_COMMAND"
+        elif [ "${GEMINI_BIN_BASE%.*}" = "gemini" ]; then
             COMMAND_BIN="agy"
         fi
-        # Check agy is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
-            echo -e "${RED}[ERROR]${NC} Antigravity command not found: $COMMAND_BIN. Please ensure Antigravity CLI (agy) is installed."
+            echo -e "${RED}[ERROR]${NC} Antigravity CLI (agy) not found: $COMMAND_BIN. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH)."
             exit 1
         fi
 
