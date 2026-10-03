@@ -442,12 +442,13 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // by you, so wait_for_task will not offer you one and claim_next_task
       // would refuse it. The old text promised "a different task to pick up",
       // which sent the worker into a wait -> claim -> refuse spin (task-9d5dfec6).
-      // Name the same alternative exit the other two tools name.
+      // Match the assignee acknowledgement / wrapper handoff the other two tools name.
       const waitHintTail =
         'wait for the unblock of THIS task (resource grant, chat, moe.unblock_worker { resolveBlocks: true } ' +
         'or moe.set_task_status -- a plain unblock_worker only frees the seat and leaves the task BLOCKED) -- ' +
-        'wait_for_task will not hand you other work while you hold it. To work something ' +
-        'else instead, release this one first with moe.release_task; its blockedReason is preserved.';
+        'wait_for_task will not hand you other work while you hold it. The assignee can acknowledge a ' +
+        'non-resource hold with moe.report_blocked to free only its seat, then end the session for wrapper ' +
+        'checkpointing. Resource holds stay parked for their grant; do not claim other work in this session.';
       const nextActionReason = identicalRepeat
         ? `Task was already BLOCKED with this exact reason -- NOTHING was recorded. Use moe.add_comment to add detail, then ${waitHintTail}`
         : alreadyBlocked

@@ -8,6 +8,7 @@ import { joinTeamTool } from './joinTeam.js';
 import { activeWaiters, waitForTaskTool } from './waitForTask.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import { releaseTaskTool } from './releaseTask.js';
+import { reportBlockedTool } from './reportBlocked.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { closeOpenAttempts, listAttempts, openAttempt, setAttemptPhase } from '../state/attemptStore.js';
 import { MoeError } from '../util/errors.js';
@@ -315,6 +316,25 @@ describe('moe.claim_next_task — one task per worker', () => {
     expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
   });
 
+  it('a healthy architect resumes or reports a real blocker instead of calling unavailable release_task', async () => {
+    writeTask('task-held', { status: 'PLANNING', assignedWorkerId: 'w-1' });
+    writeTask('task-free', { status: 'PLANNING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-held' });
+    await state.load();
+    const team = await state.createTeam({ name: 'architects', role: 'architect' });
+    await state.addTeamMember(team.id, 'w-1');
+
+    const result = await claimNextTaskTool(state).handler(
+      { workerId: 'w-1', statuses: ['PLANNING'] }, state
+    ) as Record<string, unknown>;
+    const next = result.nextAction as { tool: string; reason: string };
+    expect(next.tool).toBe('moe.get_context');
+    expect(next.reason).toContain('moe.report_blocked');
+    expect(next.reason).not.toContain('moe.release_task');
+    expect(state.getTask('task-held')!.assignedWorkerId).toBe('w-1');
+    expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
+  });
+
   it('blocks an explicit taskId claim of a DIFFERENT task while holding one', async () => {
     writeTask('task-held', { status: 'WORKING', assignedWorkerId: 'w-1' });
     writeTask('task-free', { status: 'WORKING', order: 2 });
@@ -367,7 +387,7 @@ describe('moe.claim_next_task — one task per worker', () => {
   // non-resource block, and told the worker to end its session while
   // wait_for_task kept offering it work.
 
-  it('a BLOCKED hold refuses the claim and names release_task as the actionable exit', async () => {
+  it('a non-resource BLOCKED hold can acknowledge its real blocker without release_task', async () => {
     writeTask('task-blocked', { status: 'BLOCKED', assignedWorkerId: 'w-1', blockedReason: 'needs a human' });
     writeTask('task-free', { status: 'WORKING', order: 2 });
     writeWorker('w-1', { currentTaskId: 'task-blocked', status: 'BLOCKED' });
@@ -382,10 +402,47 @@ describe('moe.claim_next_task — one task per worker', () => {
     expect(assigned.status).toBe('BLOCKED');
     expect(assigned.blockedReason).toBe('needs a human');
     const next = result.nextAction as { tool: string; args: Record<string, unknown>; reason: string };
-    expect(next.tool).toBe('moe.release_task');
-    expect(next.args).toEqual({ taskId: 'task-blocked', workerId: 'w-1' });
-    expect(next.reason).toContain('moe.release_task');
+    expect(next.tool).toBe('moe.report_blocked');
+    expect(next.args).toEqual({ taskId: 'task-blocked', workerId: 'w-1', reason: 'needs a human' });
+    expect(next.reason).not.toContain('moe.release_task');
+    const acknowledged = await reportBlockedTool(state).handler(next.args, state) as Record<string, unknown>;
+    expect(acknowledged.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-blocked' });
+    expect(state.getTask('task-blocked')).toMatchObject({ status: 'BLOCKED', assignedWorkerId: null, blockedReason: 'needs a human' });
     expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
+  });
+
+  it('a resource BLOCKED hold ends the session without releasing its seat or lease queue', async () => {
+    writeTask('task-blocked', { status: 'BLOCKED', assignedWorkerId: 'w-1', blockedReason: 'waiting for compiler', blockedResourceId: 'compiler' });
+    writeTask('task-free', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-blocked', status: 'BLOCKED' });
+    await state.load();
+    await state.acquireResource({ resourceId: 'compiler', taskId: 'task-free', workerId: 'w-free' });
+    await state.acquireResource({ resourceId: 'compiler', taskId: 'task-blocked', workerId: 'w-1' });
+    const resourceBefore = structuredClone(state.getResource('compiler'));
+    for (const tool of [claimNextTaskTool(state), waitForTaskTool(state)]) {
+      const result = await tool.handler({ workerId: 'w-1', statuses: ['WORKING'], timeoutMs: 1000 }, state) as Record<string, unknown>;
+      expect(result.hasNext).toBe(false);
+      expect(result.nextAction).toBeUndefined();
+      expect(result.sessionHandoff).toMatchObject({ action: 'END_SESSION', taskId: 'task-blocked', workerId: 'w-1' });
+      expect((result.sessionHandoff as { reason: string }).reason).toContain('resource grant');
+      expect(JSON.stringify(result)).not.toContain('moe.release_task');
+      expect(state.getTask('task-blocked')).toMatchObject({ status: 'BLOCKED', assignedWorkerId: 'w-1', blockedResourceId: 'compiler' });
+      expect(state.getResource('compiler')).toEqual(resourceBefore);
+      expect(state.getTask('task-free')!.assignedWorkerId).toBeNull();
+    }
+  });
+
+  it('a dependency BLOCKED acknowledgement preserves the exact dependency ids and reason', async () => {
+    writeTask('task-blocked', { status: 'BLOCKED', assignedWorkerId: 'w-1', blockedReason: 'native artifact missing', blockedOnTaskIds: ['task-prereq'] });
+    writeTask('task-prereq', { status: 'WORKING', order: 2 });
+    writeWorker('w-1', { currentTaskId: 'task-blocked', status: 'BLOCKED' });
+    await state.load();
+    const result = await claimNextTaskTool(state).handler({ workerId: 'w-1', statuses: ['WORKING'] }, state) as Record<string, unknown>;
+    const next = result.nextAction as { tool: string; args: Record<string, unknown> };
+    expect(next.tool).toBe('moe.report_blocked');
+    expect(next.args).toEqual({ taskId: 'task-blocked', workerId: 'w-1', reason: 'native artifact missing', blockedOnTaskIds: ['task-prereq'] });
+    await reportBlockedTool(state).handler(next.args, state);
+    expect(state.getTask('task-blocked')).toMatchObject({ status: 'BLOCKED', assignedWorkerId: null, blockedReason: 'native artifact missing', blockedOnTaskIds: ['task-prereq'] });
   });
 
   it('wait_for_task and claim_next_task give a block-holding worker the SAME answer', async () => {

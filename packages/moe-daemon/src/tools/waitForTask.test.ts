@@ -279,7 +279,7 @@ describe('wait_for_task eligibility mirrors claim_next_task (hot-loop regression
     expect(result.timedOut).toBe(true);
     expect((result.alreadyAssigned as { taskId: string; status: string }).taskId).toBe('task-held');
     expect((result.alreadyAssigned as { taskId: string; status: string }).status).toBe('BLOCKED');
-    expect((result.nextAction as { tool: string }).tool).toBe('moe.release_task');
+    expect((result.nextAction as { tool: string }).tool).toBe('moe.report_blocked');
 
     // POSITIVE CONTROL — the fix must not dim the queue. Without this, the
     // assertions above would also pass against a wait_for_task that offered

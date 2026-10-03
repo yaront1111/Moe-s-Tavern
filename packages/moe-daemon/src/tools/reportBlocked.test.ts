@@ -633,6 +633,7 @@ describe('moe.report_blocked', () => {
     expect(state.getResource('bench')).toEqual(resourceBefore);
     expect(result.seatFreed).not.toBe(true);
     expect(result.sessionHandoff).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('moe.release_task');
   });
 
   it.each([false, true])('third-party repeat keeps its non-resource hold (corrected=%s)', async (corrected) => {
@@ -643,6 +644,7 @@ describe('moe.report_blocked', () => {
     expect(state.getWorker('worker-1')).toMatchObject({ status: 'BLOCKED', currentTaskId: 'task-1' });
     expect(result.seatFreed).not.toBe(true);
     expect(result.sessionHandoff).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('moe.release_task');
   });
 
   it('assignee repeat clears only the dangling assignment, not another active session', async () => {

@@ -160,7 +160,8 @@ export interface HeldTaskRefusal {
     blockedResourceId?: string;
     blockedOnTaskIds?: string[];
   };
-  nextAction: NextActionHint;
+  nextAction?: NextActionHint;
+  sessionHandoff?: { action: 'END_SESSION'; taskId: string; workerId: string; reason: string };
 }
 
 /**
@@ -181,36 +182,41 @@ export function blockingHold(
 }
 
 /**
- * The one piece of guidance every tool gives a worker holding a BLOCKED task.
- *
- * Names both real exits and explicitly closes the loop that used to send the
- * worker back into wait_for_task: while the hold stands, nothing else is
- * claimable by this worker, so waiting can only produce another refusal.
- * moe.list_resources — the old hint — cannot clear a non-resource block.
+ * Do not suggest crash recovery to a healthy seat. Non-resource holds can be
+ * acknowledged through report_blocked; resource holds stay parked for a grant.
+ * Both paths finish this wrapper session before any later claim.
  */
-export function blockedHoldNextAction(hold: BlockedHoldRef, workerId: string): NextActionHint {
-  const onResource = Boolean(hold.blockedResourceId);
-  const onTasks = Array.isArray(hold.blockedOnTaskIds) && hold.blockedOnTaskIds.length > 0;
-  const why = onResource
-    ? ` waiting on resource ${hold.blockedResourceId}`
-    : onTasks
-      ? ` waiting on task(s) ${hold.blockedOnTaskIds!.join(', ')}`
-      : ` (${hold.blockedReason ?? 'needs a human'})`;
-  const idle = onResource
-    ? 'the resource grant auto-unblocks it'
-    : onTasks
-      ? 'the daemon auto-unblocks it when those tasks are DONE/ARCHIVED'
-      : 'a human or governor must unblock it';
+function blockedHoldGuidance(
+  hold: BlockedHoldRef, workerId: string
+): Pick<HeldTaskRefusal, 'nextAction' | 'sessionHandoff'> {
+  if (hold.blockedResourceId) {
+    return {
+      sessionHandoff: {
+        action: 'END_SESSION', taskId: hold.id, workerId,
+        reason: `You hold ${hold.id}, BLOCKED on resource ${hold.blockedResourceId}. ` +
+          'Save the handoff and end this session so the wrapper can checkpoint and idle until the resource grant. ' +
+          'Keep the task, seat and queue intact. Do not work on it or call moe.wait_for_task or ' +
+          'moe.claim_next_task for other work inside this session.'
+      }
+    };
+  }
   return {
-    tool: 'moe.release_task',
-    args: { taskId: hold.id, workerId },
-    reason:
-      `You hold ${hold.id} and it is BLOCKED${why}. Do NOT work on it, and do NOT ` +
-      `re-enter moe.wait_for_task hoping for different work: while you hold this task ` +
-      `nothing else is claimable by you, so wait_for_task will not offer you any. ` +
-      `Two workable exits — end your session and let the wrapper idle (${idle}), or ` +
-      `call moe.release_task {taskId: "${hold.id}"} to hand it back with its ` +
-      `blockedReason intact and free your slot to claim other work.`
+    nextAction: {
+      tool: 'moe.report_blocked',
+      args: {
+        taskId: hold.id, workerId,
+        reason: hold.blockedReason || 'Existing BLOCKED task needs blocker clarification before resuming.',
+        ...(hold.blockedOnTaskIds?.length ? { blockedOnTaskIds: hold.blockedOnTaskIds } : {})
+      },
+      reason: `You hold ${hold.id} and it is BLOCKED. Confirm the blocker still applies before acknowledging it ` +
+        '(if resolved, refresh moe.get_context instead). Acknowledge the existing non-resource blocker ' +
+        'with moe.report_blocked as the assignee; this frees only your seat, preserving the task block. ' +
+        (hold.blockedOnTaskIds?.length
+          ? `It auto-unblocks when ${hold.blockedOnTaskIds.join(', ')} are DONE/ARCHIVED with any required delivery evidence. `
+          : 'A human or governor must resolve the remaining blocker. ') +
+        'Save the handoff first, then obey sessionHandoff: end this session so its wrapper can checkpoint. ' +
+        'Do not claim or wait for other work inside the same session, and do not invent or clear a blocker.'
+    }
   };
 }
 
@@ -237,15 +243,18 @@ export function heldTaskRefusal(hold: Task, workerId: string): HeldTaskRefusal {
           }
         : {})
     },
-    nextAction: blocked
-      ? blockedHoldNextAction(hold, workerId)
+    ...(blocked
+      ? blockedHoldGuidance(hold, workerId)
       : {
-          tool: 'moe.get_context',
-          args: { taskId: hold.id, workerId },
-          reason:
-            `One task per worker: you already hold ${hold.id} (${hold.status}). Resume it, ` +
-            `finish it (submit_plan / complete_task / qa_approve / qa_reject), or release it ` +
-            `(moe.release_task) before claiming another.`
-        }
+          nextAction: {
+            tool: 'moe.get_context',
+            args: { taskId: hold.id, workerId },
+            reason:
+              `One task per worker: you already hold ${hold.id} (${hold.status}). Read its context and resume ` +
+              'or finish it (submit_plan / complete_task / qa_approve / qa_reject). If a real blocker prevents ' +
+              'progress, save your handoff and use moe.report_blocked with its actual reason and dependencies; ' +
+              'then follow sessionHandoff before another claim. Do not fabricate a block just to switch tasks.'
+          }
+        })
   };
 }

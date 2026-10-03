@@ -353,14 +353,13 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
               resolve({
                 hasNext: false,
                 timedOut: true,
-                ...(refusal ? { alreadyAssigned: refusal.alreadyAssigned } : {}),
-                nextAction: refusal
-                  ? refusal.nextAction
-                  : {
-                      tool: 'moe.wait_for_task',
-                      args: { statuses, workerId, epicId: params.epicId, timeoutMs },
-                      reason: 'Timeout elapsed; re-enter wait to keep listening.'
-                    }
+                ...(refusal ?? {
+                  nextAction: {
+                    tool: 'moe.wait_for_task',
+                    args: { statuses, workerId, epicId: params.epicId, timeoutMs },
+                    reason: 'Timeout elapsed; re-enter wait to keep listening.'
+                  }
+                })
               });
             });
         }, timeoutMs);
