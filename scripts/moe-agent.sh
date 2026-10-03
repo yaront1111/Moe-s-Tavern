@@ -980,6 +980,8 @@ moe_block_lines.append('startup_timeout_sec = %d' % startup_timeout_sec)
 # approve, codex 0.147+; older versions ignore the key), so headless seats can
 # call start_step under any MOE_CODEX_SANDBOX and TUI seats never see a prompt.
 moe_block_lines.append('default_tools_approval_mode = "approve"')
+# Cover Moe's 600s blocking polls and the proxy's 660s response budget.
+moe_block_lines.append('tool_timeout_sec = 720')
 moe_block_lines.extend([
     "",
     "[mcp_servers.moe.env]",

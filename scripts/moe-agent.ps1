@@ -849,6 +849,7 @@ developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Y
         # (enum auto | prompt | writes | approve, codex 0.147+; older versions ignore
         # the key), so headless seats can call start_step under any MOE_CODEX_SANDBOX
         # and TUI seats never see a prompt. Written on the serena server too.
+        # Cover Moe's 600s blocking polls and the proxy's 660s response budget.
         $moeTomlBlock = @"
 
 [mcp_servers.moe]
@@ -856,6 +857,7 @@ command = "node"
 args = ["$proxyScriptForToml"]
 startup_timeout_sec = $codexMcpStartupTimeout
 default_tools_approval_mode = "approve"
+tool_timeout_sec = 720
 
 [mcp_servers.moe.env]
 MOE_PROJECT_PATH = "$projectPathForToml"$moeDaemonHostLine

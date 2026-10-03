@@ -3888,7 +3888,7 @@ EOF
   fi
   # -- config writer --
   [ -f "$SCOPE_Z_CFG" ] || scope_fail Z "expected .codex/config.toml to be written at pre-flight" "$TMP_DIR/scope-z.out"
-  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'model_instructions_file = "agent-instructions.md"' 'model_reasoning_effort = "xhigh"' 'default_tools_approval_mode = "approve"'; do
+  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'tool_timeout_sec = 720' 'model_instructions_file = "agent-instructions.md"' 'model_reasoning_effort = "xhigh"' 'default_tools_approval_mode = "approve"'; do
     if ! grep -Fq -- "$needle" "$SCOPE_Z_CFG"; then
       cat "$SCOPE_Z_CFG" >&2 || true
       scope_fail Z "expected [$needle] in .codex/config.toml" "$TMP_DIR/scope-z.out"
