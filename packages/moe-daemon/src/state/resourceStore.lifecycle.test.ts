@@ -107,20 +107,55 @@ describe('resourceStore lifecycle reconciliation', () => {
     if (overrides) expect(h.state.getWorker(waiter.workerId)!.currentTaskId).toBe(overrides.currentTaskId);
   });
 
-  it('preserves a quiet parked worker that still points at the resource task', async () => {
+  it.each(['WORKING', 'PLANNING', 'REVIEW'] as const)('resumes the quiet parked worker with its %s task', async (restoredStatus) => {
+    const lastActivityAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     h.createWorker({
       id: waiter.workerId, status: 'BLOCKED', currentTaskId: waiter.taskId,
-      lastActivityAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      lastActivityAt, lastError: 'Waiting for box',
     });
     await loadState();
+    await h.state.updateTask(waiter.taskId, { blockedFromStatus: restoredStatus });
     await h.state.acquireResource(holder);
     await h.state.acquireResource(waiter);
 
     await h.state.releaseResource(holder);
     const restored = h.state.getTask(waiter.taskId)!;
-    expect(restored.status).toBe('WORKING');
+    expect(restored.status).toBe(restoredStatus);
     expect(restored.assignedWorkerId).toBe(waiter.workerId);
+    expect(h.state.getWorker(waiter.workerId)).toMatchObject({
+      status: 'READING_CONTEXT', lastError: null, lastActivityAt,
+    });
     expect(h.state.getWorker(waiter.workerId)!.currentTaskId).toBe(waiter.taskId);
     expect(h.state.isTaskClaimable(restored)).toBe(false);
+  });
+
+  it('retries worker-state repair after the task unblock was already persisted', async () => {
+    h.createWorker({ id: waiter.workerId, status: 'BLOCKED', currentTaskId: waiter.taskId });
+    await loadState();
+    await h.state.acquireResource(holder);
+    await h.state.acquireResource(waiter);
+    const updateWorker = vi.spyOn(h.state, 'updateWorker').mockRejectedValueOnce(new Error('worker write failed'));
+
+    await h.state.releaseResource(holder);
+    expect(h.state.getTask(waiter.taskId)!.status).toBe('WORKING');
+    expect(h.state.getWorker(waiter.workerId)!.status).toBe('BLOCKED');
+    await h.state.grantNextLeases('box');
+    expect(h.state.getWorker(waiter.workerId)!.status).toBe('READING_CONTEXT');
+    expect(updateWorker).toHaveBeenCalledTimes(2);
+    expect(readResource().holders).toHaveLength(1);
+  });
+
+  it.each(['CODING', 'BLOCKED'] as const)('does not overwrite a holder with %s activity elsewhere', async (status) => {
+    h.createWorker({ id: waiter.workerId, status, currentTaskId: waiter.taskId, lastError: 'other reason' });
+    await loadState();
+    await h.state.acquireResource(waiter);
+    await h.state.updateTask(waiter.taskId, {
+      status: status === 'BLOCKED' ? 'BLOCKED' : 'WORKING',
+      assignedWorkerId: waiter.workerId,
+      blockedResourceId: status === 'BLOCKED' ? 'other-box' : null,
+    });
+    const original = { ...h.state.getWorker(waiter.workerId)! };
+    await h.state.grantNextLeases('box');
+    expect(h.state.getWorker(waiter.workerId)).toEqual(original);
   });
 });

@@ -359,6 +359,22 @@ async function resumeResourceHolder(
     const msg = `🟢 Resource ${resourceId} granted to ${lease.taskId} (${lease.workerId}).`;
     try { await state.postToGeneral(msg); } catch { /* best-effort */ }
   }
+  // Repair the matching seat too, including a retry after only the task write
+  // persisted. A grant is not a heartbeat; never refresh presence or overwrite
+  // a worker already progressing, working elsewhere, or blocked on another task.
+  const resumed = state.tasks.get(lease.taskId);
+  const owner = resumed?.assignedWorkerId ? state.getWorker(resumed.assignedWorkerId) : null;
+  if (resumed && ['PLANNING', 'WORKING', 'REVIEW'].includes(resumed.status)
+      && owner?.status === 'BLOCKED' && owner.currentTaskId === resumed.id) {
+    try {
+      await state.updateWorker(owner.id, {
+        status: 'READING_CONTEXT', lastError: null, lastActivityAt: owner.lastActivityAt,
+      }, 'WORKER_UNBLOCKED');
+    } catch (err) {
+      logger.warn({ resourceId, taskId: resumed.id, workerId: owner.id, error: err },
+        'grantNextLeases: failed to un-block worker');
+    }
+  }
 }
 
 /**
