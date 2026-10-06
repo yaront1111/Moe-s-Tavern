@@ -6823,7 +6823,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # (--prompt-file --yolo) is the same one-shot shape and gets it too.
     if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
         PROMPT_BODY="$PROMPT_BODY One-shot session: this CLI process exits when you end your turn, and any background jobs/builds/tests die with it, so a completion notification cannot arrive after you stop. Run verification in the foreground or poll it to completion. Do not call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
-    elif { [ "$CLI_TYPE" = claude ] || [ "$CLI_TYPE" = grok ]; } && [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
+    elif { { [ "$CLI_TYPE" = claude ] && [ "$CLAUDE_INTERACTIVE" = true ]; } ||
+           { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = true ]; } ||
+           { [ "$CLI_TYPE" = codex ] && [ "$CODEX_INTERACTIVE" = true ]; } ||
+           { [ "$CLI_TYPE" = gemini ] && [ "$GEMINI_INTERACTIVE" = true ]; }; } &&
+         [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
         # An interactive TUI stays open after the agent stops, and the wrapper
         # claims the next task only once the CLI exits: without this line the
         # seat parks after every task until the operator notices.
