@@ -29,6 +29,7 @@ import type {
   TaskStatus,
 } from '../types/schema.js';
 import { logger } from '../util/logger.js';
+import { unmetDependsOn } from './dependencyUnblock.js';
 
 export const RESOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -55,6 +56,17 @@ const RESOURCE_ELIGIBLE_STATUSES = new Set<TaskStatus>([
 function isResourceTaskEligible(state: StateManager, taskId: string): boolean {
   const task = state.tasks.get(taskId);
   return !!task && RESOURCE_ELIGIBLE_STATUSES.has(task.status);
+}
+
+/** New grants must not strand capacity on work no successor can claim. */
+function resourceDependenciesSatisfied(state: StateManager, taskId: string): boolean {
+  const task = state.tasks.get(taskId);
+  // Task existence/status validation stays with the caller's eligibility gate.
+  if (!task) return true;
+  const phase = task.status === 'BLOCKED' ? task.blockedFromStatus ?? 'WORKING' : task.status;
+  // As with claims, dependencies gate WORKING only. An existing assignee can
+  // still need the resource to finish; existing leases are never revoked here.
+  return !!task.assignedWorkerId || phase !== 'WORKING' || unmetDependsOn(state, task).length === 0;
 }
 
 export interface ResourceConfig {
@@ -172,7 +184,7 @@ export async function acquireResource(state: StateManager, params: AcquireParams
     };
   }
 
-  if (resource.holders.length < config.capacity) {
+  if (resource.holders.length < config.capacity && resourceDependenciesSatisfied(state, taskId)) {
     const lease: ResourceLease = {
       taskId,
       workerId,
@@ -293,7 +305,10 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
   const queueCleaned = resource.queue.length !== persisted.queue.length;
 
   while (resource.holders.length < config.capacity && resource.queue.length > 0) {
-    const next = sortedQueue(state, resource.queue)[0];
+    // Keep unready entries (and their age) for a later sweep; skip them rather
+    // than blocking ready work behind them or revoking a lease already in use.
+    const next = sortedQueue(state, resource.queue).find((entry) => resourceDependenciesSatisfied(state, entry.taskId));
+    if (!next) break;
     resource.queue = resource.queue.filter((q) => q !== next);
     const now = Date.now();
     const lease: ResourceLease = {
