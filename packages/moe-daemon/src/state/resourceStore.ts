@@ -7,7 +7,8 @@
 // per-project marker files + pid probes. Leases are keyed by TASK id, not
 // worker id — a lease must survive CLI respawns and the daemon-restart worker
 // purge, because the underlying work (a detached multi-hour run) survives them
-// too.
+// too. Only a resource declared releaseOnDeregister gives a task's claims up
+// when the seat holding the task deregisters (releaseDeregisteredClaims).
 //
 // Follows the workerStore pattern: stateless functions taking the state handle
 // first; every mutation runs under state.mutex (tool dispatch provides it for
@@ -72,6 +73,7 @@ function resourceDependenciesSatisfied(state: StateManager, taskId: string): boo
 export interface ResourceConfig {
   capacity: number;
   maxLeaseMs: number;
+  releaseOnDeregister: boolean;
   description?: string;
 }
 
@@ -88,7 +90,9 @@ export function resolveResourceConfig(state: StateManager, resourceId: string): 
     typeof maxLeaseRaw === 'number' && Number.isFinite(maxLeaseRaw) && maxLeaseRaw >= MIN_MAX_LEASE_MS
       ? Math.floor(maxLeaseRaw)
       : DEFAULT_MAX_LEASE_MS;
-  return { capacity, maxLeaseMs, description: declared?.description };
+  // Strictly opt-in: anything but a literal true keeps the task-keyed default.
+  const releaseOnDeregister = declared?.releaseOnDeregister === true;
+  return { capacity, maxLeaseMs, releaseOnDeregister, description: declared?.description };
 }
 
 export function getResource(state: StateManager, resourceId: string): ResourceState | null {
@@ -284,6 +288,114 @@ export async function releaseResource(state: StateManager, params: ReleaseParams
 
   const granted = await grantNextLeases(state, params.resourceId);
   return { released, removedFromQueue, granted };
+}
+
+/** A lease or queue entry given up because the seat holding its task deregistered. */
+export interface DroppedResourceClaim {
+  resourceId: string;
+  taskId: string;
+  claim: 'lease' | 'queue';
+}
+
+export interface DeregisteredClaimsResult {
+  dropped: DroppedResourceClaim[];
+  /** Released tasks taken out of a resource BLOCKED hold → the status they now rest in. */
+  restored: Map<string, TaskStatus>;
+}
+
+/**
+ * Seat deregistration, for resources declared releaseOnDeregister ONLY. Every
+ * other resource keeps the task-keyed lease for the task's next claimant —
+ * the right default for an exclusive stateful host, where a dead holder may
+ * have left a run or a dirty box behind. A resource whose work dies with its
+ * seat (a build slot) opts in, and then the released tasks' leases and queue
+ * entries are dropped and the freed capacity is granted onward exactly as a
+ * release would, instead of staying reserved for rows nobody holds until
+ * maxLeaseMs. A released task still BLOCKED on such a resource first returns
+ * to blockedFromStatus, unassigned, so it is claimable; its next claimant
+ * re-acquires.
+ *
+ * Never throws (deregister runs from exit traps). Restore before drop, so a
+ * failure never strands a row BLOCKED with nothing left to grant it: a task
+ * whose restore fails keeps its claims (a later grant restores it, as before),
+ * and a failed resource write leaves that resource as it was, still bounded by
+ * the lease reaper. Caller holds state.mutex.
+ */
+export async function releaseDeregisteredClaims(
+  state: StateManager,
+  taskIds: string[]
+): Promise<DeregisteredClaimsResult> {
+  const dropped: DroppedResourceClaim[] = [];
+  const restored = new Map<string, TaskStatus>();
+  const releasable = new Set<string>();
+  const optedIn = (resourceId: string): boolean => resolveResourceConfig(state, resourceId).releaseOnDeregister;
+
+  for (const taskId of new Set(taskIds)) {
+    const task = state.tasks.get(taskId);
+    const resourceId = task?.status === 'BLOCKED' ? task.blockedResourceId : null;
+    if (!task || !resourceId || !optedIn(resourceId)) {
+      releasable.add(taskId);
+      continue;
+    }
+    const restoredStatus: TaskStatus = task.blockedFromStatus ?? 'WORKING';
+    try {
+      // The same restore a grant performs, minus the lease: the row returns
+      // unassigned and its next claimant re-acquires.
+      await state.updateTask(task.id, {
+        status: restoredStatus,
+        assignedWorkerId: null,
+        ...(task.blockedReason ? { priorBlockedReason: task.blockedReason } : {}),
+        blockedReason: null,
+        blockedResourceId: null,
+        blockedOnTaskIds: null,
+        blockedFromStatus: null,
+        blockedAt: null,
+      }, 'TASK_UNBLOCKED');
+      restored.set(task.id, restoredStatus);
+      releasable.add(taskId);
+    } catch (err) {
+      logger.warn({ resourceId, taskId: task.id, error: err },
+        'releaseDeregisteredClaims: failed to un-block task; its resource claims stay');
+    }
+  }
+
+  for (const persisted of Array.from(state.resources.values())) {
+    if (!optedIn(persisted.id)) continue;
+    const resource = copyResource(persisted);
+    const leases = resource.holders.filter((h) => releasable.has(h.taskId));
+    const entries = resource.queue.filter((q) => releasable.has(q.taskId));
+    if (leases.length === 0 && entries.length === 0) continue;
+    // Drop both before granting, so no released task is granted a freed slot.
+    resource.holders = resource.holders.filter((h) => !leases.includes(h));
+    resource.queue = resource.queue.filter((q) => !entries.includes(q));
+    try {
+      await persistResource(state, resource);
+    } catch (err) {
+      logger.warn({ resourceId: resource.id, taskIds, error: err },
+        'releaseDeregisteredClaims: failed to drop claims; they stay until released or maxLeaseMs');
+      continue;
+    }
+    for (const lease of leases) {
+      state.appendActivity('RESOURCE_RELEASED', {
+        resourceId: resource.id,
+        taskId: lease.taskId,
+        workerId: lease.workerId,
+        forced: true,
+        reason: 'holder deregistered',
+      });
+      dropped.push({ resourceId: resource.id, taskId: lease.taskId, claim: 'lease' });
+    }
+    for (const entry of entries) {
+      dropped.push({ resourceId: resource.id, taskId: entry.taskId, claim: 'queue' });
+    }
+    try {
+      await grantNextLeases(state, resource.id);
+    } catch (err) {
+      // The drop is durable; the lease reaper's grant pass retries the grant.
+      logger.warn({ resourceId: resource.id, error: err }, 'releaseDeregisteredClaims: grantNextLeases failed');
+    }
+  }
+  return { dropped, restored };
 }
 
 /**

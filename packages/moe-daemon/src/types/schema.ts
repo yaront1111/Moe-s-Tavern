@@ -983,6 +983,13 @@ export interface ResourceSettings {
   capacity?: number;
   /** Hard lease cap in ms before the reaper force-releases. default: 86400000 (24h) */
   maxLeaseMs?: number;
+  /**
+   * When the seat holding a task deregisters, drop that task's lease and queue
+   * entry and grant the freed slot onward. Only for resources whose work dies
+   * with its seat (a build slot); leave it off for an exclusive stateful host,
+   * where a dead holder may have left the host dirty. default: false
+   */
+  releaseOnDeregister?: boolean;
   description?: string;
 }
 

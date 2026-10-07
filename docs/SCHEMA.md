@@ -243,6 +243,10 @@ interface ProjectSettings {
   //   maxLeaseMs?: number;   // hard per-lease cap before the reaper
   //                          // force-releases; default: 86400000 = 24h
   //                          // (valid 60000-604800000 = 1 min - 7 days)
+  //   releaseOnDeregister?: boolean; // default: false — drop a task's lease
+  //                          // and queue entry when the seat holding the
+  //                          // task deregisters (build slots, never a
+  //                          // stateful host)
   //   description?: string;  // ≤500 chars
   // }
 
@@ -1730,7 +1734,7 @@ function generateId(prefix: string): string {
 ### Resource
 - Resource ids (`settings.resources` keys, `.moe/resources/` filenames, and every tool `resourceId` param) must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (1-64 chars: letters, digits, `.`, `_`, `-`; no leading punctuation)
 - `settings.resources` updates **replace** the stored map (not a deep merge — removing a resource must be possible); unknown per-resource fields are rejected
-- `capacity` integer 1-100 (default 1); `maxLeaseMs` integer 60000-604800000 (1 min - 7 days; default 86400000 = 24h); `description` ≤500 chars
+- `capacity` integer 1-100 (default 1); `maxLeaseMs` integer 60000-604800000 (1 min - 7 days; default 86400000 = 24h); `releaseOnDeregister` boolean (default false; only a literal `true` turns it on); `description` ≤500 chars
 - Malformed or below-minimum values that reach the stored file by other means degrade to the defaults at resolve time rather than erroring
 
 ### Candidate

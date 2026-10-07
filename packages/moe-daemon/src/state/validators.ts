@@ -362,13 +362,16 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
         throw invalidInput('resources', `invalid resource id "${key}" — use 1-64 chars of letters, digits, ".", "_", "-"`);
       }
       const spec = requirePlainObject(value, `resources.${key}`);
-      rejectUnknownFields(spec, ['capacity', 'maxLeaseMs', 'description'], `resources.${key} setting`);
+      rejectUnknownFields(spec, ['capacity', 'maxLeaseMs', 'releaseOnDeregister', 'description'], `resources.${key} setting`);
       const entry: NonNullable<ProjectSettings['resources']>[string] = {};
       if (spec.capacity !== undefined) {
         entry.capacity = validateIntegerValue(spec.capacity, `resources.${key}.capacity`, 1, 100);
       }
       if (spec.maxLeaseMs !== undefined) {
         entry.maxLeaseMs = validateIntegerValue(spec.maxLeaseMs, `resources.${key}.maxLeaseMs`, 60000, 604800000);
+      }
+      if (spec.releaseOnDeregister !== undefined) {
+        entry.releaseOnDeregister = validateBooleanValue(spec.releaseOnDeregister, `resources.${key}.releaseOnDeregister`);
       }
       if (spec.description !== undefined) {
         entry.description = validateStringValue(spec.description, `resources.${key}.description`, {

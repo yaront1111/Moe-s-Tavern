@@ -285,7 +285,7 @@ Rules that keep this safe:
 - **Governance still applies to you.** Fixing Moe is not planning and not coding product — it is in your lane. But an edit that changes what the fleet may claim (a role gate, a claim filter, a dependency rule) is a hard call: surface it to the human before you push, the same as a release.
 
 Then post it in \`#governors\`: the defect, the commit sha, and what it unblocks. Future-you reads that log to notice the second occurrence of a pattern you have already fixed once.`,
-  'governor.reference.md': `<!-- moe-generated: sha=d95b284d3f3c -->
+  'governor.reference.md': `<!-- moe-generated: sha=62d4b73873ab -->
 
 # Governor — Reference
 
@@ -310,7 +310,7 @@ Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-
 
 - **Visibility**: \`moe.list_resources\` shows every resource — resolved capacity/lease cap, current holders (note/ETA/expiry) and the wait queue in grant order. Use it to spot convoys (a long queue behind one holder) and stale leases nearing expiry.
 - **Stuck lease**: \`moe.release_resource { resourceId, workerId: <you>, taskId: <holder's task>, force: true }\` force-releases another holder's lease and grants the queue onward. Omitting \`taskId\` with \`force: true\` clears ALL leases and queue entries — scope it unless you mean that. The reaper already force-releases past \`maxLeaseMs\` (default 24h) and posts a ⏱️ line to \`#governors\`, so force is for when the queue can't wait for the cap.
-- **Declaration**: tune capacity/lease caps in \`.moe/project.json\` \`settings.resources\` — \`{ "<id>": { capacity, maxLeaseMs, description } }\` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
+- **Declaration**: tune capacity/lease caps in \`.moe/project.json\` \`settings.resources\` — \`{ "<id>": { capacity, maxLeaseMs, releaseOnDeregister, description } }\` (defaults capacity 1, 24h, \`releaseOnDeregister: false\`; undeclared ids auto-create with those). A settings update replaces the whole map. \`releaseOnDeregister: true\` drops a deregistered seat's lease and queue entries on that resource: use it for build slots, never for a stateful host a dead holder may have left dirty.
 - **Leave resource-blocked tasks alone**: a task BLOCKED with \`blockedResourceId\` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
 
 ## Unblocking: seat vs task
@@ -663,7 +663,7 @@ const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
   'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd3da43241c7d', 'f882385984d6'],
-  'governor.reference.md': ['00267f739525', '2621926c807a', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
+  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
   'worker.md': ['05799e86c64e', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],

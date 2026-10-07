@@ -92,5 +92,18 @@ describe('moe.acquire_resource / release_resource / list_resources', () => {
     await expect(h.state.updateSettings({ resources: { box: { capacity: 0 } } })).rejects.toThrow(/capacity/);
     await expect(h.state.updateSettings({ resources: { box: { maxLeaseMs: 5 } } })).rejects.toThrow(/maxLeaseMs/);
     await expect(h.state.updateSettings({ resources: { box: { unknown: 1 } } })).rejects.toThrow(/not a supported/);
+    await expect(h.state.updateSettings({ resources: { box: { releaseOnDeregister: 'yes' } } })).rejects.toThrow(/releaseOnDeregister/);
+  });
+
+  it('releaseOnDeregister is opt-in per resource and list_resources reports it only when on', async () => {
+    await h.state.updateSettings({ resources: { slot: { capacity: 2, releaseOnDeregister: true }, box: { capacity: 1 } } });
+    expect(h.state.resolveResourceConfig('slot').releaseOnDeregister).toBe(true);
+    expect(h.state.resolveResourceConfig('box').releaseOnDeregister).toBe(false);
+    expect(h.state.resolveResourceConfig('undeclared').releaseOnDeregister).toBe(false);
+
+    const result = await listResourcesTool(h.state).handler({}, h.state) as { resources: Array<Record<string, unknown>> };
+    const byId = Object.fromEntries(result.resources.map((r) => [r.id, r]));
+    expect(byId.slot.releaseOnDeregister).toBe(true);
+    expect(byId.box).not.toHaveProperty('releaseOnDeregister');
   });
 });
