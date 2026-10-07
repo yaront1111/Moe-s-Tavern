@@ -1184,8 +1184,8 @@ With `preferAdjacentInEpic` on (default), candidates in the caller's currently-r
   fileCollision?: Array<{ task: string, files: string[] }>,  // advisory only
   launch?: {                        // WORKING/REVIEW task with a tier and settings.routing not disabled;
     tier: 'light' | 'standard' | 'heavy',  // also on the alreadyAssigned answer (resume relaunch)
-    effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max',  // always an allowed level
-    model: string,                  // claude seats: task.model, else settings.routing.<tier>.model, else the default
+    effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max',  // always an allowed level; a qa seat gets at least settings.routing.qa.effort (default xhigh)
+    model: string,                  // claude seats: task.model, else settings.routing.<tier>.model, else the default; a qa seat: settings.routing.qa.model when set and allowed for the tier
     codex: { model: string, effort } // codex seats: task.codexModel, else the codex default; same effort
   },
   alreadyAssigned?: {               // hasNext: false — you already hold an active task

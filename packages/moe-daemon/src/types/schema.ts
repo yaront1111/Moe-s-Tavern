@@ -124,6 +124,8 @@ export interface RoutingSettings {
   light?: TierLaunch;
   standard?: TierLaunch;
   heavy?: TierLaunch;
+  /** Reviewer floor: a qa seat launches at no less than `effort` (default xhigh) and on `model` when set. */
+  qa?: TierLaunch;
 }
 
 /**

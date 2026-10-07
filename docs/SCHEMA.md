@@ -205,6 +205,7 @@ interface ProjectSettings {
     light?: { model?: string; effort?: Effort };    // default effort: high
     standard?: { model?: string; effort?: Effort }; // default effort: xhigh
     heavy?: { model?: string; effort?: Effort };    // default effort: max
+    qa?: { model?: string; effort?: Effort };       // reviewer floor: default effort xhigh, model = the task's pick
   };                             // Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
   // DEPRECATED — accepted and ignored. Fed the removed task time-budget feature

@@ -1,4 +1,4 @@
-import type { Effort, ModelProvider, ProjectSettings, RoutingModel, Task, TaskTier, TierLaunch } from '../types/schema.js';
+import type { Effort, ModelProvider, ProjectSettings, RoutingModel, Task, TaskTier, TeamRole, TierLaunch } from '../types/schema.js';
 import { countDistinctAffectedFiles, resolveTaskSizing } from './planSize.js';
 
 /**
@@ -28,6 +28,8 @@ const DEFAULT_EFFORT: Record<TaskTier, Effort> = {
   standard: 'xhigh',
   heavy: 'max',
 };
+/** A qa seat never reviews below this effort (settings.routing.qa.effort). */
+export const DEFAULT_QA_EFFORT_FLOOR: Effort = 'xhigh';
 /** Minimum effort per tier: a planner may lower effort, but not below this. */
 const EFFORT_FLOOR: Record<TaskTier, Effort> = {
   light: 'high',
@@ -242,19 +244,31 @@ export interface ResolvedLaunch {
   codex: { model: string; effort: Effort };
 }
 
-/** Launch hint for a claimed WORKING/REVIEW task. */
+/**
+ * Launch hint for a claimed WORKING/REVIEW task. A `qa` seat reviews at no
+ * less than settings.routing.qa.effort (default xhigh) and, when configured
+ * and allowed for the tier, on settings.routing.qa.model: the reviewer never
+ * runs weaker than the cheapest worker launch.
+ */
 export function resolveLaunch(
   task: Pick<Task, 'tier' | 'status' | 'effort' | 'model' | 'codexModel' | 'lowEffortEligible'>,
-  settings?: Pick<ProjectSettings, 'routing'>
+  settings?: Pick<ProjectSettings, 'routing'>,
+  role?: TeamRole | null
 ): ResolvedLaunch | undefined {
   // The tier sizes the worker/QA sessions; planning keeps the role default.
   if (!isTier(task.tier) || settings?.routing?.enabled === false || task.status === 'PLANNING') return undefined;
   const low = task.lowEffortEligible === true;
-  const effort = isEffort(task.effort) ? clampEffort(task.effort, settings, low) : tierEffort(task.tier, settings);
+  let effort = isEffort(task.effort) ? clampEffort(task.effort, settings, low) : tierEffort(task.tier, settings);
   const entryModel = tierEntry(task.tier, settings).model;
-  const model = typeof task.model === 'string' && modelsForTier(task.tier, settings).includes(task.model)
+  let model = typeof task.model === 'string' && modelsForTier(task.tier, settings).includes(task.model)
     ? task.model
     : typeof entryModel === 'string' && entryModel.trim() !== '' ? entryModel.trim() : defaultModel(settings);
+  if (role === 'qa') {
+    const qa = settings?.routing?.qa;
+    const qaEffort = qa?.effort;
+    effort = maxEffort(effort, clampEffort(isEffort(qaEffort) ? qaEffort : DEFAULT_QA_EFFORT_FLOOR, settings));
+    if (typeof qa?.model === 'string' && modelsForTier(task.tier, settings).includes(qa.model)) model = qa.model;
+  }
   const codexModel = typeof task.codexModel === 'string' && modelsForTier(task.tier, settings, 'codex').includes(task.codexModel)
     ? task.codexModel
     : defaultModel(settings, 'codex');

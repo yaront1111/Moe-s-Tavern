@@ -21,7 +21,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=334a9268175f -->
+  'architect.md': `<!-- moe-generated: sha=9ef88be32dd8 -->
 
 # Architect
 
@@ -35,7 +35,7 @@ You turn a task description, rails, and Definition of Done into an ordered imple
 
 ## Plan-mode heuristics
 Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs.
-Size the worker and QA sessions on \`moe.submit_plan\` from get_context \`routing\`: \`tier\` (\`light\` mechanical/one-concern, \`heavy\` cross-cutting or subtle, else \`standard\`), \`effort\` (\`high\` routine, \`xhigh\` most coding, \`max\` subtle; \`low\`/\`medium\` only for docs/tests-only plans, decided from the files), and both \`model\` (Opus 5.5 default for open-ended work; Sonnet 5.5 for well-scoped light/standard tasks at about half the cost) and \`codexModel\` — the daemon floors tier and effort by plan size and escalates after each QA reject.
+Size the worker and QA sessions on \`moe.submit_plan\` from get_context \`routing\`: \`tier\` (\`light\` mechanical/one-concern, \`heavy\` cross-cutting or subtle, else \`standard\`), \`effort\` (\`high\` routine, \`xhigh\` most coding, \`max\` only for safety-critical logic or a task QA already reopened; \`low\`/\`medium\` only for docs/tests-only plans, decided from the files), and both \`model\` (Opus 5.5 default for open-ended work; Sonnet 5.5 for well-scoped light/standard tasks at about half the cost) and \`codexModel\` — the daemon floors tier and effort by plan size and escalates after each QA reject.
 
 ## Breaking down an epic
 Slicing an epic into tasks is a separate pass from planning one task's steps — load \`moe-epic-breakdown\` before \`moe.create_task\`, and \`moe-planning\` later, per task.
@@ -660,7 +660,7 @@ only you can.
  * role doc (git history of docs/roles plus the working copy at generation).
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
-  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
+  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
   'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],

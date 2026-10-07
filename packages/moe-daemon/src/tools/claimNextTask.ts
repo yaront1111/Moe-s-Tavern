@@ -336,7 +336,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           const hold = blockingHold(state, params.workerId, params.taskId);
           if (hold) {
             // The resume relaunch reads `launch` too, so a respawned CLI keeps the tier.
-            const heldLaunch = resolveLaunch(hold, state.project?.settings);
+            const heldLaunch = resolveLaunch(hold, state.project?.settings, resolveWorkerRole(state, params.workerId));
             return { ...heldTaskRefusal(hold, params.workerId), ...(heldLaunch ? { launch: heldLaunch } : {}) };
           }
 
@@ -733,7 +733,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         baseHandoffHint = handoffHint;
       }
 
-      const launch = resolveLaunch(task, state.project?.settings);
+      const launch = resolveLaunch(task, state.project?.settings, resolveWorkerRole(state, params.workerId ?? ''));
       return {
         hasNext: true,
         task: {
