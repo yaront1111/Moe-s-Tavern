@@ -775,6 +775,34 @@ describe('StateManager', () => {
       await stateManager.load();
     });
 
+    it('preserves the complete approved global rail through project reload', async () => {
+      const rule = 'Owner-approved constraint. '.repeat(50) +
+        'A real product defect still rejects; all safety gates remain unchanged.';
+      const proposal = await stateManager.createProposal(createTestProposal({ proposedValue: rule }));
+      await stateManager.approveProposal(proposal.id);
+      expect(stateManager.project!.globalRails.customRules).toEqual([rule]);
+
+      // load() is also the file-watcher path and writes normalized project state.
+      await stateManager.load();
+      expect(stateManager.project!.globalRails.customRules).toEqual([rule]);
+      const persisted = JSON.parse(fs.readFileSync(path.join(moePath, 'project.json'), 'utf-8')) as Project;
+      expect(persisted.globalRails.customRules).toEqual([rule]);
+      expect(stateManager.proposals.get(proposal.id)?.proposedValue).toBe(rule);
+    });
+
+    it('does not drop an approved global rail beyond the normalization item cap', async () => {
+      const existing = Array.from({ length: 100 }, (_, i) => `Existing approved rule ${i}`);
+      stateManager.project!.globalRails.customRules = existing;
+      const rule = 'Never silently discard this safety constraint.';
+      const proposal = await stateManager.createProposal(createTestProposal({ proposedValue: rule }));
+      await stateManager.approveProposal(proposal.id);
+
+      await stateManager.load();
+      expect(stateManager.project!.globalRails.customRules).toEqual([...existing, rule]);
+      const persisted = JSON.parse(fs.readFileSync(path.join(moePath, 'project.json'), 'utf-8')) as Project;
+      expect(persisted.globalRails.customRules).toEqual([...existing, rule]);
+    });
+
     it('keeps a proposal pending when applying its rail change fails', async () => {
       const proposal = await stateManager.createProposal(createTestProposal());
 

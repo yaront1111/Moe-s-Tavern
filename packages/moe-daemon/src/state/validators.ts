@@ -30,6 +30,7 @@ import type {
   TeamRole,
 } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
+import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
@@ -588,9 +589,9 @@ export function sanitizeStepAmendments(value: unknown): StepAmendment[] {
     if (typeof a.description !== 'string' || a.description.trim().length === 0) continue;
     out.push({
       amendmentId: a.amendmentId.slice(0, 200),
-      // 5000 matches the step-description cap above (submitPlan's 10000 limit
-      // would be silently truncated here otherwise).
-      description: a.description.slice(0, 5000),
+      // Bounded at the same cap submit_plan/amend_plan_step accept, so an
+      // accepted amendment is never silently truncated here.
+      description: a.description.slice(0, MAX_STEP_DESCRIPTION_CHARS),
       reason: typeof a.reason === 'string' ? a.reason.slice(0, 2000) : '',
       amendedBy: typeof a.amendedBy === 'string' ? a.amendedBy.slice(0, 200) : '',
       amendedAt: typeof a.amendedAt === 'string' ? a.amendedAt.slice(0, 64) : '',
@@ -611,12 +612,15 @@ export function sanitizeImplementationPlan(plan: unknown): ImplementationStep[] 
     if (!s.description || typeof s.description !== 'string') continue;
     result.push({
       stepId: typeof s.stepId === 'string' ? s.stepId : `step-${result.length + 1}`,
-      description: s.description.slice(0, 5000),
+      // The sanitizer's bound equals the tool caps (util/planSize). It used to
+      // slice at 5000 while submit_plan accepted 10000: every approved step
+      // between those sizes was persisted cut mid-sentence on the next write.
+      description: s.description.slice(0, MAX_STEP_DESCRIPTION_CHARS),
       status: (typeof s.status === 'string' && VALID_STEP_STATUSES.includes(s.status) ? s.status : 'PENDING') as StepStatus,
       affectedFiles: Array.isArray(s.affectedFiles) ? (s.affectedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [],
       ...(s.newFiles !== undefined ? { newFiles: Array.isArray(s.newFiles) ? (s.newFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
       ...(s.modifiedFiles !== undefined ? { modifiedFiles: Array.isArray(s.modifiedFiles) ? (s.modifiedFiles as string[]).filter(f => typeof f === 'string').slice(0, 50) : [] } : {}),
-      ...(typeof s.note === 'string' ? { note: s.note.slice(0, 5000) } : {}),
+      ...(typeof s.note === 'string' ? { note: s.note.slice(0, MAX_STEP_NOTE_CHARS) } : {}),
       ...(typeof s.startedAt === 'string' ? { startedAt: s.startedAt } : {}),
       ...(typeof s.completedAt === 'string' ? { completedAt: s.completedAt } : {}),
       ...(s.amendments !== undefined ? { amendments: sanitizeStepAmendments(s.amendments) } : {}),

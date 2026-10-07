@@ -31,8 +31,13 @@ const runGit: PlanPathGitRunner = async (args, cwd, timeout) => {
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
     GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' });
   try {
+    // Global config is deliberately masked, including safe.directory. Trust
+    // only this explicitly configured, canonical project for these read-only
+    // commands (e.g. a Windows checkout retaining its previous owner's SID).
+    // Never write Git config or broaden this to safe.directory=*.
     const result = await execFileAsync('git', ['--no-optional-locks', '--no-replace-objects',
-      '-c', 'protocol.allow=never', ...args], { cwd, env, timeout, maxBuffer: MAX_BUFFER, windowsHide: true });
+      '-c', 'protocol.allow=never', '-c', `safe.directory=${cwd}`, ...args],
+    { cwd, env, timeout, maxBuffer: MAX_BUFFER, windowsHide: true });
     return result.stdout;
   } catch (error) {
     // git config returns 1 for no matching keys; every other failure is unknown.
@@ -53,15 +58,20 @@ export async function findCachedPlanPaths(
   const ref = cachedPlanRef(branch);
   if (!ref || missing.length === 0 || missing.length > 100 || missing.join('').length > 24000) return undefined;
   const deadline = performance.now() + BUDGET_MS;
+  let cwd = projectRoot;
   const git = (args: string[]) => {
     const remaining = Math.floor(deadline - performance.now());
     if (remaining <= 0) throw new Error('Cached path lookup budget exhausted');
-    return run(args, projectRoot, remaining);
+    return run(args, cwd, remaining);
   };
   try {
     // Defense in depth: callers pass normalized paths, never pathspecs.
     if (missing.some(p => normalizeAffectedFile(p) !== p || p.includes('\0'))) return undefined;
     const root = await fs.promises.realpath(projectRoot);
+    // Git interprets a trailing /* as trusting a subtree, even when it is a
+    // literal directory name on this filesystem. Uncertainty stays missing.
+    if (root.replace(/\\/g, '/').endsWith('/*')) return undefined;
+    cwd = root;
     const top = (await git(['rev-parse', '--show-toplevel'])).trim();
     if (pathKey(await fs.promises.realpath(top)) !== pathKey(root)) return undefined;
     // Older Git ignores GIT_NO_LAZY_FETCH. Refuse partial/promisor repositories

@@ -31,10 +31,12 @@ const engines = windows
 function render(engine, executable, options = {}) {
   const o = { role: 'worker', cli: 'claude', interactive: false, loop: true, auto: true, claimed: false, noTask: true, resume: false, claimFailed: false, ...options };
   const bool = value => String(value);
+  const sessionInteractive = o.sessionInteractive ?? o.interactive;
   let script;
   if (engine === 'bash') {
     const setup = `ROLE=${o.role}; CLI_TYPE=${o.cli}; WORKER_ID=worker-fixture
-CLAUDE_INTERACTIVE=${bool(o.interactive)}; GROK_INTERACTIVE=false
+CLAUDE_INTERACTIVE=${bool(o.interactive)}; GROK_INTERACTIVE=${bool(sessionInteractive)}
+CODEX_INTERACTIVE=${bool(sessionInteractive)}; GEMINI_INTERACTIVE=${bool(sessionInteractive)}
 LOOP_ENABLED=${bool(o.loop)}; AUTO_CLAIM=${bool(o.auto)}
 PREFLIGHT_OK=${bool(o.claimed)}; PREFLIGHT_NO_TASK=${bool(o.noTask)}
 PREFLIGHT_IS_RESUME=${bool(o.resume)}; PREFLIGHT_TASK_ID=${o.claimed ? 'task-fixture' : ''}
@@ -48,7 +50,8 @@ STATUSES='["WORKING"]'; PROJECT=/nonexistent-moe-prompt-fixture
     const setup = `$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $Role='${o.role}'; $cliType='${o.cli}'; $WorkerId='worker-fixture'
-$Interactive=$${bool(o.interactive)}; $grokInteractive=$false
+$Interactive=$${bool(o.interactive)}; $grokInteractive=$${bool(sessionInteractive)}
+$codexInteractive=$${bool(sessionInteractive)}; $geminiInteractive=$${bool(sessionInteractive)}
 $loopEnabled=$${bool(o.loop)}; $AutoClaim=$${bool(o.auto)}
 $preflightOk=$${bool(o.claimed)}; $preflightNoTask=$${bool(o.noTask)}
 $preflightIsResume=$${bool(o.resume)}; $preflightTaskId='${o.claimed ? 'task-fixture' : ''}'
@@ -169,6 +172,28 @@ for (const [engine, executable] of engines) {
   // more PLANNING rows in-session up to MOE_ARCHITECT_TASKS_PER_SESSION.
   const exitHint = /Exit this CLI session \(e\.g\. \/exit; keep the terminal tab open\) to start the next task/;
   const multiPlan = /may plan up to 10 tasks, this one included: .*call moe\.claim_next_task with statuses \['PLANNING'\] and workerId 'worker-fixture'/;
+  for (const cli of ['codex', 'gemini', 'grok']) {
+    for (const interactive of [false, true]) {
+      test(`${engine}: ${cli} handoff uses resolved CLI mode, not generic interactive flag (${interactive})`, () => {
+        const { body } = render(engine, executable, {
+          cli, role: 'architect', interactive: !interactive, sessionInteractive: interactive,
+          claimed: true, noTask: false,
+        });
+        if (interactive) {
+          assert.match(body, exitHint);
+          assert.doesNotMatch(body, /One-shot session:/);
+        } else {
+          assert.doesNotMatch(body, exitHint);
+        }
+      });
+    }
+    test(`${engine}: ${cli} governor and notification prompts never ask for task handoff exit`, () => {
+      for (const options of [{ role: 'governor' }, { role: 'architect' }]) {
+        const { body } = render(engine, executable, { cli, interactive: true, ...options });
+        assert.doesNotMatch(body, exitHint);
+      }
+    });
+  }
   for (const role of ['architect', 'worker', 'qa']) {
     for (const interactive of [false, true]) {
       const multi = role === 'architect' && interactive;

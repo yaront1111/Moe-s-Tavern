@@ -7,6 +7,7 @@ import { completeStepTool } from './completeStep.js';
 import { startStepTool } from './startStep.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import type { Task, Epic, Project } from '../types/schema.js';
+import { MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 
 describe('moe.complete_step ownership + stepsCompleted tracking', () => {
   let testDir: string;
@@ -92,6 +93,25 @@ describe('moe.complete_step ownership + stepsCompleted tracking', () => {
       expect(err).toBeInstanceOf(MoeError);
       expect((err as MoeError).code).toBe(MoeErrorCode.NOT_ALLOWED);
     }
+  });
+
+  it('refuses a note longer than the sanitizer bound instead of storing it clipped', async () => {
+    setupMoe();
+    writeEpic();
+    writeTask();
+    await state.load();
+    const tool = completeStepTool(state);
+    // Before the caps were unified, a long note was accepted here and sliced
+    // to 5000 chars by sanitizeImplementationPlan on the write: the worker's
+    // hand-forward text was lost mid-sentence without any error.
+    await expect(
+      tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a', note: 'n'.repeat(MAX_STEP_NOTE_CHARS + 1) }, state)
+    ).rejects.toThrow(/too long/);
+    expect(state.getTask('task-1')?.implementationPlan[0]?.status).toBe('IN_PROGRESS');
+
+    const note = 'n'.repeat(MAX_STEP_NOTE_CHARS);
+    await tool.handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a', note }, state);
+    expect(state.getTask('task-1')?.implementationPlan[0]?.note).toBe(note);
   });
 
   it('appends stepId to stepsCompleted on success', async () => {

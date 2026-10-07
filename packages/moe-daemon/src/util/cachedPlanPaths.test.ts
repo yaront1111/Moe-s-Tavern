@@ -6,9 +6,11 @@ import { cachedPlanRef, findCachedPlanPaths, type PlanPathGitRunner } from './ca
 
 const commit = 'a'.repeat(40);
 const blob = 'b'.repeat(40);
+const execFileMock = vi.hoisted(() => vi.fn());
+vi.mock('node:child_process', () => ({ execFile: execFileMock }));
 let root: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-cached-path-')); });
-afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); execFileMock.mockReset(); fs.rmSync(root, { recursive: true, force: true }); });
 
 function runner(overrides: Partial<Record<'top' | 'config' | 'commit' | 'tree', string>> = {}) {
   return vi.fn<PlanPathGitRunner>(async args => {
@@ -20,6 +22,40 @@ function runner(overrides: Partial<Record<'top' | 'config' | 'commit' | 'tree', 
 }
 
 describe('cached plan source evidence', () => {
+  it('trusts only the configured canonical project for a foreign-owned checkout', async () => {
+    const canonical = fs.realpathSync(root);
+    vi.stubEnv('GIT_DIR', '/foreign/repo');
+    execFileMock.mockImplementation((_file, args, options, callback) => {
+      if (!args.includes(`safe.directory=${canonical}`)) {
+        callback(Object.assign(new Error('fatal: detected dubious ownership'), { code: 128 }));
+        return;
+      }
+      expect(options.cwd).toBe(canonical);
+      expect(options.env.GIT_DIR).toBeUndefined();
+      expect(options.env.GIT_CONFIG_NOSYSTEM).toBe('1');
+      expect(options.env.GIT_CONFIG_GLOBAL).toBe(process.platform === 'win32' ? 'NUL' : '/dev/null');
+      expect(args.filter((arg: string) => arg.startsWith('safe.directory='))).toEqual([`safe.directory=${canonical}`]);
+      const stdout = args.includes('--show-toplevel') ? canonical
+        : args.includes('config') ? ''
+        : args.includes('--verify') ? commit
+        : `100644 blob ${blob}\tsrc/existing.ts\0`;
+      // The mocked function has no execFile custom promisifier: return its result object.
+      callback(null, { stdout, stderr: '' });
+    });
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'])).toMatchObject({
+      commit, paths: ['src/existing.ts'],
+    });
+    expect(execFileMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not turn a literal star directory into a Git subtree trust rule', async () => {
+    const canonical = fs.realpathSync(root);
+    vi.spyOn(fs.promises, 'realpath').mockResolvedValue(`${canonical}/*`);
+    const run = runner();
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it('pins one ref and uses literal path arguments with a decreasing total budget', async () => {
     const run = runner();
     const result = await findCachedPlanPaths(root, 'release/main', ['src/existing.ts', 'typo.ts'], run);

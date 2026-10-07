@@ -4,8 +4,11 @@ import type { ImplementationStep, StepAmendment } from '../types/schema.js';
 import { invalidInput, invalidState, missingRequired, notAllowed, notFound, MoeError, MoeErrorCode } from '../util/errors.js';
 import { MAX_AMENDMENTS_PER_STEP, effectiveStepDescription, nextAmendmentId } from '../util/planAmendments.js';
 import { workerHasRole } from '../util/workerRole.js';
+import { MAX_STEP_DESCRIPTION_CHARS } from '../util/planSize.js';
 
-const MAX_DESCRIPTION_CHARS = 5000;
+// Same bound as submit_plan and the plan sanitizer (util/planSize): an amendment
+// may carry the full 10000-char step, e.g. to restore text an older daemon clipped.
+const MAX_DESCRIPTION_CHARS = MAX_STEP_DESCRIPTION_CHARS;
 const MAX_REASON_CHARS = 2000;
 
 export function amendPlanStepTool(_state: StateManager): ToolDefinition {

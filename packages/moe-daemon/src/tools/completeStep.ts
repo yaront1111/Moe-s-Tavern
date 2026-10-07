@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState, MoeError, MoeErrorCode } from '../util/errors.js';
+import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
+import { MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
@@ -66,6 +67,13 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
 
       if (existingStep.status !== 'IN_PROGRESS') {
         throw invalidState('Step', existingStep.status, 'IN_PROGRESS');
+      }
+
+      // A note longer than the plan sanitizer's bound would be stored clipped
+      // mid-sentence on the next write (the hand-forward text silently lost);
+      // refuse it up front instead, like every other capped text field.
+      if (typeof params.note === 'string' && params.note.length > MAX_STEP_NOTE_CHARS) {
+        throw invalidInput('note', `too long (${params.note.length} chars). Maximum ${MAX_STEP_NOTE_CHARS} characters allowed.`);
       }
 
       const steps = task.implementationPlan.map((step) =>

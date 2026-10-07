@@ -253,6 +253,15 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
       },
       {
         agreement: 'shared',
+        value: 'tool_timeout_sec = 720 on moe, covering the 600s blocking polls',
+        presentInBoth: ['tool_timeout_sec = 720'],
+        emitterEvidence: {
+          bash: ["moe_block_lines.append('tool_timeout_sec = 720')"],
+          powershell: ['tool_timeout_sec = 720\n\n[mcp_servers.moe.env]'],
+        },
+      },
+      {
+        agreement: 'shared',
         value: 'default_tools_approval_mode = "approve" on both servers',
         presentInBoth: ['default_tools_approval_mode = "approve"'],
         // Two emission sites per wrapper (the moe server and the serena server);

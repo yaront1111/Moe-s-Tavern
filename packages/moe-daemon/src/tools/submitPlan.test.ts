@@ -434,6 +434,9 @@ describe('SPEED mode timeout cancellation', () => {
       steps: [{ description: 'x'.repeat(MAX_STEP_DESCRIPTION_CHARS) }],
     }, state);
     expect(state.getTask('task-long-step')?.status).toBe('AWAITING_APPROVAL');
+    // Stored intact: the sanitizer must not clip what submit_plan accepted
+    // (it sliced at 5000 before, cutting approved steps mid-sentence).
+    expect(state.getTask('task-long-step')?.implementationPlan[0]?.description.length).toBe(MAX_STEP_DESCRIPTION_CHARS);
   });
 
   it('rejects step descriptions over the cap', async () => {

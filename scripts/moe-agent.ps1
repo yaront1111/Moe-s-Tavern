@@ -849,6 +849,7 @@ developer_instructions = """`nYou are an agent in the Moe AI Workforce system. Y
         # (enum auto | prompt | writes | approve, codex 0.147+; older versions ignore
         # the key), so headless seats can call start_step under any MOE_CODEX_SANDBOX
         # and TUI seats never see a prompt. Written on the serena server too.
+        # Cover Moe's 600s blocking polls and the proxy's 660s response budget.
         $moeTomlBlock = @"
 
 [mcp_servers.moe]
@@ -856,6 +857,7 @@ command = "node"
 args = ["$proxyScriptForToml"]
 startup_timeout_sec = $codexMcpStartupTimeout
 default_tools_approval_mode = "approve"
+tool_timeout_sec = 720
 
 [mcp_servers.moe.env]
 MOE_PROJECT_PATH = "$projectPathForToml"$moeDaemonHostLine
@@ -5988,13 +5990,17 @@ $mentionsJson
     # completion notification", and died mid-review — the notification can
     # never arrive in --print mode. Say so explicitly in the prompt. Governor
     # is excluded: its prompt is a chat_wait loop, not a finish-and-stop task.
-    # Headless polarity: claude keys on -not $Interactive; grok's headless is
-    # -not $grokInteractive (an architect launched with -GrokExec is one-shot
-    # too), matching the sh twin's GROK_INTERACTIVE gate.
-    $oneShotSession = if ($cliType -eq 'grok') { -not $grokInteractive } else { -not $Interactive }
+    # Use each CLI's resolved mode: an explicit *Exec override can differ
+    # from the generic role default, and an explicit TUI must get the exit hint.
+    $oneShotSession = switch ($cliType) {
+        'codex' { -not $codexInteractive }
+        'gemini' { -not $geminiInteractive }
+        'grok' { -not $grokInteractive }
+        default { -not $Interactive }
+    }
     if ($claimPromptBody -and $oneShotSession -and $Role -ne 'governor' -and -not $notificationPrompt) {
         $claimPromptBody += " One-shot session: this CLI process exits when you end your turn, and any background jobs/builds/tests die with it, so a completion notification cannot arrive after you stop. Never end your turn to 'wait for' a background task: run it in the foreground or poll it to completion first. End your turn only after your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded."
-    } elseif ($cliType -in @('claude', 'grok') -and $AutoClaim -and $preflightOk -and $claimPromptBody -and $Role -ne 'governor' -and -not $notificationPrompt) {
+    } elseif ($cliType -in @('claude', 'grok', 'codex', 'gemini') -and $AutoClaim -and $preflightOk -and $claimPromptBody -and $Role -ne 'governor' -and -not $notificationPrompt) {
         # An interactive TUI stays open after the agent stops, and the wrapper
         # claims the next task only once the CLI exits: without this line the
         # seat parks after every task until the operator notices.

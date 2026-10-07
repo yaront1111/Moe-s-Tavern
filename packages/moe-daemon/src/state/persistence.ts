@@ -101,7 +101,9 @@ export function normalizeProject(projectPath: string, project: Partial<Project>)
       requiredPatterns: sanitizeStringArray(project.globalRails?.requiredPatterns, 100, 1000),
       formatting: sanitizeString(project.globalRails?.formatting, 'formatting', 10000, ''),
       testing: sanitizeString(project.globalRails?.testing, 'testing', 10000, ''),
-      customRules: sanitizeStringArray(project.globalRails?.customRules, 100, 1000)
+      // These are approved policy, not preview text. Reload must not silently
+      // truncate a rule (possibly dropping its safety qualifiers) or its list.
+      customRules: sanitizeStringArray(project.globalRails?.customRules, Infinity, Infinity)
     },
     settings: {
       // Spread the persisted settings first so user keys that aren't part of

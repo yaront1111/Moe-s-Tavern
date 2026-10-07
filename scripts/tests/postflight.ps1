@@ -3407,7 +3407,7 @@ else {
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
                     $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)
-                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'startup_timeout_sec = 120', 'model_instructions_file = "agent-instructions.md"', 'model_reasoning_effort = "xhigh"', 'default_tools_approval_mode = "approve"')) {
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'startup_timeout_sec = 120', 'tool_timeout_sec = 720', 'model_instructions_file = "agent-instructions.md"', 'model_reasoning_effort = "xhigh"', 'default_tools_approval_mode = "approve"')) {
                         if (-not $scopeZToml.Contains($needle)) { Write-Host $scopeZToml; throw "SCENARIO Z FAILED: .codex/config.toml must contain [$needle]" }
                     }
                     # codex 0.148+ rejects un-annotated MCP tools under approval never + a sandbox;

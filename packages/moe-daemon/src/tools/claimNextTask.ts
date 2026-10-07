@@ -251,7 +251,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         taskId: { type: 'string', description: 'Claim this specific task (must be in one of the requested statuses). Skips priority/order ranking.' },
         preferAdjacentInEpic: {
           type: 'boolean',
-          description: 'When true (default), prefer claimable tasks in the worker\'s current/last epic before falling through to global ranking. Lets a worker waiting on wait_for_task pick up the next claimable task in the same epic.'
+          description: 'When true (default), among claimable tasks of EQUAL priority prefer those in the worker\'s current/last epic. A higher-priority task in another epic always wins. Lets a worker waiting on wait_for_task pick up the next claimable task in the same epic.'
         }
       },
       required: ['statuses'],
@@ -460,19 +460,24 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // stopped answering").
             .filter((t) => !foreignFinalizingAttempt(finalizingByTask, t.id, params.workerId))
             .sort((a, b) => {
-              // When preferAdjacentInEpic is on and a hint epic is set,
-              // rank in-epic candidates ahead of out-of-epic. This lets a
-              // worker idling on wait_for_task pick up an adjacent task
-              // whose dependencies just cleared, rather than dropping back
-              // to the global pool.
+              // Priority first, the same order wait_for_task ranks by: a
+              // higher-priority task outranks a lower one in any epic. Ranking
+              // the epic first let a seat anchored in an epic full of LOW rows
+              // starve a CRITICAL row elsewhere, and claimed a different task
+              // than the one wait_for_task had just woken it for.
+              const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
+              const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
+              if (pa !== pb) return pa - pb;
+              // Within one priority, when preferAdjacentInEpic is on and a hint
+              // epic is set, rank in-epic candidates ahead of out-of-epic. This
+              // lets a worker idling on wait_for_task pick up an adjacent task
+              // whose dependencies just cleared, rather than dropping back to
+              // the global pool.
               if (preferAdjacent && adjacentEpicId) {
                 const aIn = a.epicId === adjacentEpicId ? 0 : 1;
                 const bIn = b.epicId === adjacentEpicId ? 0 : 1;
                 if (aIn !== bIn) return aIn - bIn;
               }
-              const pa = PRIORITY_WEIGHT[a.priority] ?? PRIORITY_WEIGHT.MEDIUM;
-              const pb = PRIORITY_WEIGHT[b.priority] ?? PRIORITY_WEIGHT.MEDIUM;
-              if (pa !== pb) return pa - pb;
               return a.order - b.order;
             });
         }

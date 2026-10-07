@@ -207,7 +207,7 @@ describe('moe.amend_plan_step', () => {
     await expect(amend({ reason: undefined })).rejects.toThrow(/reason/);
     await expect(amend({ description: '   ' })).rejects.toThrow(/description/);
     await expect(amend({ reason: '   ' })).rejects.toThrow(/reason/);
-    await expect(amend({ description: 'x'.repeat(5001) })).rejects.toThrow(/too long/);
+    await expect(amend({ description: 'x'.repeat(10001) })).rejects.toThrow(/too long/);
     await expect(amend({ reason: 'x'.repeat(2001) })).rejects.toThrow(/too long/);
     await expect(amend({ description: 42 })).rejects.toThrow(/must be a string/);
     expect(step('step-1').amendments).toBeUndefined();

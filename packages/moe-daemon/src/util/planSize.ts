@@ -21,6 +21,18 @@ export const MAX_DISTINCT_FILES_DEFAULT = 10;
 /** Advisory per-epic task ceiling checked at create_task (warn-only — creation never hard-fails). */
 export const DEFAULT_MAX_TASKS_PER_EPIC = 40;
 
+/**
+ * Longest plan-step description any tool accepts (moe.submit_plan and
+ * moe.amend_plan_step) AND the bound the plan sanitizer applies on every
+ * write/reload. They must be one number: when submit_plan accepted 10000
+ * while sanitizeImplementationPlan sliced at 5000, every approved step
+ * between 5001 and 10000 chars was persisted cut mid-sentence — the worker
+ * read "step 2 stored at exactly 5000 chars", the approved harness text gone.
+ */
+export const MAX_STEP_DESCRIPTION_CHARS = 10000;
+/** Longest complete_step note accepted; the sanitizer bounds at the same value. */
+export const MAX_STEP_NOTE_CHARS = 10000;
+
 export interface ResolvedTaskSizing {
   warnSteps: number;
   maxSteps: number;

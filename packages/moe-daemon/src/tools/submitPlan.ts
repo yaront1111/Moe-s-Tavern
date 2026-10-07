@@ -7,14 +7,16 @@ import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '..
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles, findMissingPaths, pathKey } from '../util/affectedFiles.js';
 import { cachedPlanRef, findCachedPlanPaths, type CachedPlanPaths } from '../util/cachedPlanPaths.js';
-import { assessPlanSize } from '../util/planSize.js';
+import { assessPlanSize, MAX_STEP_DESCRIPTION_CHARS } from '../util/planSize.js';
 import {
   allowedEfforts, clampEffort, EFFORTS, effortFloor, isEffort, isLowEffortPlan, isTier, maxEffort, maxTier, modelsForTier,
   planSizeFloor, resolveLaunch,
 } from '../util/routing.js';
 
 /** Upper bound on a single plan step's description — a guard against runaway payloads, not a style limit. */
-export const MAX_STEP_DESCRIPTION_CHARS = 10000;
+// The cap lives with the sanitizer's bound (util/planSize) so they cannot drift;
+// re-exported here for callers/tests that import it from this module.
+export { MAX_STEP_DESCRIPTION_CHARS };
 /** Tracks SPEED mode auto-approval timeouts by taskId so they can be cancelled. */
 const speedModeTimeouts = new Map<string, NodeJS.Timeout>();
 

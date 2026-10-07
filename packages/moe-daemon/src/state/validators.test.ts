@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_COMMITS_PER_TASK, trimCommits, validateSettingsUpdate } from './validators.js';
+import { MAX_COMMITS_PER_TASK, sanitizeImplementationPlan, sanitizeStepAmendments, trimCommits, validateSettingsUpdate } from './validators.js';
+import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import type { Project, TaskCommit } from '../types/schema.js';
 
 function project(settingsOverrides: Record<string, unknown> = {}): Project {
@@ -127,5 +128,31 @@ describe('trimCommits', () => {
     expect(trimmed).toHaveLength(MAX_COMMITS_PER_TASK);
     expect(trimmed[0].sha).toBe(commit(3).sha);
     expect(trimmed[trimmed.length - 1].sha).toBe(commit(MAX_COMMITS_PER_TASK + 2).sha);
+  });
+});
+
+describe('sanitizeImplementationPlan — bounds equal the tool caps', () => {
+  // Observed defect: submit_plan accepted a 10000-char step, the sanitizer
+  // sliced it to 5000 on the next write, and the worker read the approved
+  // harness text cut mid-sentence at exactly 5000 chars.
+  it('keeps a step description and note of the accepted maximum intact', () => {
+    const description = 'd'.repeat(MAX_STEP_DESCRIPTION_CHARS);
+    const note = 'n'.repeat(MAX_STEP_NOTE_CHARS);
+    const [step] = sanitizeImplementationPlan([{ stepId: 'step-1', description, status: 'PENDING', affectedFiles: [], note }]);
+    expect(step.description).toBe(description);
+    expect(step.note).toBe(note);
+    expect(MAX_STEP_DESCRIPTION_CHARS).toBeGreaterThan(5000);
+  });
+
+  it('bounds oversized text at the same cap the tools refuse above', () => {
+    const [step] = sanitizeImplementationPlan([{ stepId: 'step-1', description: 'd'.repeat(MAX_STEP_DESCRIPTION_CHARS + 7), status: 'PENDING', affectedFiles: [], note: 'n'.repeat(MAX_STEP_NOTE_CHARS + 7) }]);
+    expect(step.description.length).toBe(MAX_STEP_DESCRIPTION_CHARS);
+    expect(step.note?.length).toBe(MAX_STEP_NOTE_CHARS);
+  });
+
+  it('keeps an amendment of the accepted maximum intact', () => {
+    const description = 'a'.repeat(MAX_STEP_DESCRIPTION_CHARS);
+    const [amendment] = sanitizeStepAmendments([{ amendmentId: 'amend-1', description, reason: 'r', amendedBy: 'architect-1', amendedAt: '2026-10-01T00:00:00.000Z' }]);
+    expect(amendment.description).toBe(description);
   });
 });
