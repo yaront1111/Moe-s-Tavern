@@ -383,7 +383,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
   stepId,
   warning?: string,                   // present when modifiedFiles was omitted: report every touched path
   progress: { completed, total, percentage },
-  effectiveDescription: string,       // what the worker was actually told to do (amendment-resolved)
+  effectiveDescription: string,       // what the worker was actually told to do (amendment-resolved); capped at 200 chars + "…"
   amended?: {                         // ABSENT unless an amendment is active on the completed step
     amendmentId, reason, amendedBy, amendedAt
   },
@@ -392,7 +392,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 ```
 
 **Notes:**
-- `effectiveDescription` is the amended text when the step has an active amendment (see `moe.amend_plan_step`), otherwise the step's planned `description`. The chat line posted for the completion uses the same text, so a worker following an amendment does not read as plan drift.
+- `effectiveDescription` is the amended text when the step has an active amendment (see `moe.amend_plan_step`), otherwise the step's planned `description`, cut to 200 characters (plus `…`) in the response — the full text is already in the worker's context, and an echoed multi-KB step would sit there for the rest of the session. The chat line posted for the completion uses the full text, so a worker following an amendment does not read as plan drift.
 - `amended` is omitted entirely (not `false`/`null`) on unamended steps, so existing consumers see an unchanged shape.
 - `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
 - `modifiedFiles` is the worker's positive assertion and feeds the **ASSERTED** attribution tier: the wrapper's post-flight commits every completed step's `modifiedFiles ?? affectedFiles` regardless of what its baseline says. Omitting it returns `warning`. The wrapper can still pick up unreported edits through the TOOL (stream-json harvest, claude only), PLANNED (plan-declared and changed) and MEASURED (undeclared and changed, solo only) tiers — but with another worker active an undeclared, non-tool-written edit stays **unattributed** (reported as `MOE_ATTRIBUTION_UNRESOLVED`, never staged) until someone declares it via `moe.declare_files`.
@@ -666,7 +666,7 @@ All seven are required; `additionalProperties` is `false`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, sha?, kind, outcome, duplicate?: boolean, commitCount, filesModified, addedPaths, warning? }
+{ success: true, taskId, sha?, kind, outcome, duplicate?: boolean, commitCount, filesModifiedCount, addedPaths, warning? }
 ```
 
 **Notes:**

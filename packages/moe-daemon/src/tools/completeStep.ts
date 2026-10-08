@@ -196,8 +196,13 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
           percentage: steps.length > 0 ? Math.round((completed / steps.length) * 100) : 0
         },
         // What the worker was actually told to do (amended when an amendment is
-        // in force, otherwise identical to the planned description).
-        effectiveDescription: completedDescription,
+        // in force, otherwise identical to the planned description), capped:
+        // the full text already sits in the worker's context, and echoing a
+        // multi-KB step back on every completion stays there for the rest of
+        // the session.
+        effectiveDescription: completedDescription.length > 200
+          ? `${completedDescription.slice(0, 200)}…`
+          : completedDescription,
         // Absent — not false/null — on unamended steps, so existing consumers
         // see an unchanged response shape.
         ...(completedAmendment

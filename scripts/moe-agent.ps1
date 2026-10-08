@@ -6575,6 +6575,21 @@ $mentionsJson
                 $cacheArgs = @("--exclude-dynamic-system-prompt-sections")
             }
 
+            # Cache TTL: the API offers 5m (default) or 1h, nothing longer. A
+            # seat that waits on a long tool call (gradle, full vitest,
+            # postflight) or on a usage-limit backoff loses the 5m cache and
+            # re-reads the whole prefix; 1h keeps it warm. Operator env wins;
+            # FORCE_PROMPT_CACHING_5M still overrides both. Claude Code
+            # < 2.1.242 ignores the variables.
+            # Auto-compact window: native-1M models compact at ~967K by default
+            # and a long worker session re-reads that context on every turn
+            # (measured: 700-1300 turns at 500-950K). 300K caps the per-turn
+            # cost and only bites sessions that would have grown past it.
+            # Operator env wins; older Claude Code ignores the variable.
+            if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_PROMPT_CACHE_TTL = '1h' }
+            if (-not $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL = '1h' }
+            if (-not $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW) { $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = '300000' }
+
             # Inline stream-json parser. Reads one JSON line at a time, prints
             # human-readable summaries of tool_use / text / rate_limit events.
             $parseStreamJson = {

@@ -7325,6 +7325,22 @@ $PROMPT_BODY"
             CACHE_ARGS=(--exclude-dynamic-system-prompt-sections)
         fi
 
+        # Cache TTL: the API offers 5m (default) or 1h, nothing longer. A seat
+        # that waits on a long tool call (gradle, full vitest, postflight) or
+        # on a usage-limit backoff loses the 5m cache and re-reads the whole
+        # prefix; 1h keeps it warm. Operator env wins; FORCE_PROMPT_CACHING_5M
+        # still overrides both. Claude Code < 2.1.242 ignores the variables.
+        # Auto-compact window: native-1M models compact at ~967K by default and
+        # a long worker session re-reads that context on every turn (measured:
+        # 700-1300 turns at 500-950K). 300K caps the per-turn cost; the window
+        # only bites sessions that would have grown past it. Operator env wins;
+        # older Claude Code ignores the variable.
+        if [ "$CLI_TYPE" = "claude" ]; then
+            export CLAUDE_CODE_PROMPT_CACHE_TTL="${CLAUDE_CODE_PROMPT_CACHE_TTL:-1h}"
+            export CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL="${CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL:-1h}"
+            export CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-300000}"
+        fi
+
         # Per-task one-shot mode (parity with moe-agent.ps1). --print runs
         # claude non-interactively: the model executes tool calls until it
         # produces an end_turn without a tool call, then the process exits —
