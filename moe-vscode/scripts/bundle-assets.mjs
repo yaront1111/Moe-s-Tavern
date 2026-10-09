@@ -117,6 +117,11 @@ async function main() {
       }
     }
   }
+  // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
+  await cp(path.join(repoRoot, 'scripts', 'mods'), path.join(scriptsOut, 'mods'), {
+    recursive: true,
+    filter: src => !src.endsWith('.test.ts') && !src.replaceAll('\\', '/').includes('/.claude-plugin/types'),
+  });
 
   // Copy role docs and agent-context (fallback for uninitialised projects)
   const rolesOut = path.join(outputRoot, 'docs', 'roles');

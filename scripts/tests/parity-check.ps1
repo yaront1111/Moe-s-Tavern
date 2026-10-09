@@ -63,7 +63,9 @@ $required = [ordered]@{
     'settings keys' = @('autoCommit', 'checkpointCommits', 'checkpointPush', 'commitBoardState', 'commitHooks', 'attribution', 'undeclared', 'contested', 'exclude', 'qualityGate', 'qualityGateScope', 'consolidationBranch')
     'env names' = @('GIT_TERMINAL_PROMPT', 'MOE_DISABLE_CHECKPOINT', 'MOE_ATTRIBUTION', 'MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF', 'MOE_DISABLE_QUALITY_GATE', 'MOE_RESUME_MAX_ATTEMPTS',
         'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
-        'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC')
+        'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC',
+        'CLAUDE_CODE_PROMPT_CACHE_TTL', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+        'MOE_COMPACT_WINDOW_DEFAULT', 'CLAUDE_CODE_PLUGIN_DIRS', 'MOE_DISABLE_COMPACTION_KEEPER')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
     'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')

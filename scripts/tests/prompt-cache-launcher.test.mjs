@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,4 +124,48 @@ process.exitCode=23;
     assert.match(result.stdout, /hit=90.0%/);
     assert.match(result.stdout, /CHILD_EXIT=23/);
   });
+}
+
+// Per-role auto-compact window and the compaction keeper's plugin dir: the
+// wrapper's real env block, run twice (a reload pass) over each inherited env.
+const compactCases = [
+  // [role, inherited env, window, marker, keeper on]
+  ['qa', {}, '500000', '500000', true],
+  // 300000 unmarked: the pre-2026-10-09 flat default, inherited by the reload that installs this wrapper
+  ['architect', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' }, '600000', '600000', true],
+  // the wrapper's own marked value is re-derived for the role
+  ['worker', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '600000', MOE_COMPACT_WINDOW_DEFAULT: '600000' }, '300000', '300000', true],
+  // an operator value wins
+  ['qa', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '400000' }, '400000', '', true],
+  ['governor', { MOE_DISABLE_COMPACTION_KEEPER: '1' }, '600000', '600000', false],
+];
+const compactVars = /^(CLAUDE_CODE_AUTO_COMPACT_WINDOW|MOE_COMPACT_WINDOW_DEFAULT|CLAUDE_CODE_PLUGIN_DIRS|MOE_DISABLE_COMPACTION_KEEPER)$/;
+
+for (const [ext, engine] of engines) {
+  for (const [role, inherited, window, marker, keeperOn] of compactCases) {
+    test(`${engine}: ${role} compact window over ${JSON.stringify(inherited)}`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe compact '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      mkdirSync(path.join(dir, 'mods', 'moe-compaction-keeper'), { recursive: true });
+      let script, keeperDir;
+      if (ext === 'ps1') {
+        const block = between(read('ps1'), '            if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL)', '            # Inline stream-json parser.');
+        keeperDir = path.join(dir, 'mods', 'moe-compaction-keeper');
+        script = `$ErrorActionPreference='Stop'\n$Role='${role}'\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS")`;
+      } else {
+        const block = between(read('sh'), '        if [ "$CLI_TYPE" = "claude" ]; then\n            export CLAUDE_CODE_PROMPT_CACHE_TTL', '        # Per-task one-shot mode');
+        keeperDir = `${dir.replaceAll('\\', '/')}/mods/moe-compaction-keeper`;
+        script = `set -eu\nCLI_TYPE=claude\nROLE=${role}\nSCRIPT_DIR=${quote(dir.replaceAll('\\', '/'))}\n${block}\n${block}\nprintf '%s|%s|%s' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" "\${MOE_COMPACT_WINDOW_DEFAULT:-}" "\${CLAUDE_CODE_PLUGIN_DIRS:-}"`;
+      }
+      const file = path.join(dir, `compact.${ext}`);
+      writeFileSync(file, script);
+      const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !compactVars.test(k)));
+      const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
+        encoding: 'utf8', timeout: 20000, env: { ...env, ...inherited, CLAUDE_CODE_PLUGIN_DIRS: 'operator-dir' },
+      });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const sep = ext === 'ps1' ? path.delimiter : ':';
+      assert.equal(result.stdout, `${window}|${marker}|operator-dir${keeperOn ? sep + keeperDir : ''}`);
+    });
+  }
 }

@@ -165,6 +165,9 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     from(repoRoot.resolve("scripts")) {
         include("prompt-cache*.mjs")
         include("usage-receipt.mjs", "usage-session.mjs", "usage-report.mjs", "analyze-usage.mjs")
+        // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
+        include("mods/**")
+        exclude("mods/**/*.test.ts", "mods/*/.claude-plugin/types/**")
         into("$pluginContentRoot/scripts")
     }
     from(listOf(bundledAgentScriptSh, bundledCallScriptSh)) {

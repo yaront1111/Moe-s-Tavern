@@ -6582,13 +6582,35 @@ $mentionsJson
             # FORCE_PROMPT_CACHING_5M still overrides both. Claude Code
             # < 2.1.242 ignores the variables.
             # Auto-compact window: native-1M models compact at ~967K by default
-            # and a long worker session re-reads that context on every turn
-            # (measured: 700-1300 turns at 500-950K). 300K caps the per-turn
-            # cost and only bites sessions that would have grown past it.
-            # Operator env wins; older Claude Code ignores the variable.
+            # and a long session re-reads that context on every turn (measured:
+            # 700-1300 turns at 500-950K). Per role, since a flat 300K made
+            # architects compact every ~116 turns and QA mid-review (fleet
+            # audit 2026-10-09): worker 300K (its state lives on the board), qa
+            # 500K, architect and governor 600K; compaction fires ~32K under the
+            # window. A reload pass inherits this process env, so
+            # MOE_COMPACT_WINDOW_DEFAULT marks the value as the wrapper's own and
+            # a reload re-derives it; an unmarked value is the operator's and
+            # wins, except 300000, the flat default of the wrappers before this
+            # one, inherited by the reload that installs it. Older Claude Code
+            # ignores the variable.
+            # moe-compaction-keeper (scripts/mods/) carries the seat's task
+            # state through each compaction; MOE_DISABLE_COMPACTION_KEEPER=1
+            # leaves it out.
             if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_PROMPT_CACHE_TTL = '1h' }
             if (-not $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL = '1h' }
-            if (-not $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW) { $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = '300000' }
+            $moeCompactWindow = switch ($Role) { 'qa' { '500000' } 'architect' { '600000' } 'governor' { '600000' } default { '300000' } }
+            $moeOwnCompactWindow = if ($env:MOE_COMPACT_WINDOW_DEFAULT) { $env:MOE_COMPACT_WINDOW_DEFAULT } else { '300000' }
+            if (-not $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -or $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW -eq $moeOwnCompactWindow) {
+                $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = $moeCompactWindow
+                $env:MOE_COMPACT_WINDOW_DEFAULT = $moeCompactWindow
+            }
+            $moeKeeperDir = Join-Path $PSScriptRoot 'mods\moe-compaction-keeper'
+            if (-not $env:MOE_DISABLE_COMPACTION_KEEPER -and (Test-Path -LiteralPath $moeKeeperDir -PathType Container)) {
+                $moePluginDirs = @("$env:CLAUDE_CODE_PLUGIN_DIRS" -split [regex]::Escape([IO.Path]::PathSeparator) | Where-Object { $_ })
+                if ($moePluginDirs -notcontains $moeKeeperDir) {
+                    $env:CLAUDE_CODE_PLUGIN_DIRS = (@($moePluginDirs) + $moeKeeperDir) -join [IO.Path]::PathSeparator
+                }
+            }
 
             # Inline stream-json parser. Reads one JSON line at a time, prints
             # human-readable summaries of tool_use / text / rate_limit events.

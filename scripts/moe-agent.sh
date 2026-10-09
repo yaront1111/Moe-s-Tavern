@@ -7331,14 +7331,37 @@ $PROMPT_BODY"
         # prefix; 1h keeps it warm. Operator env wins; FORCE_PROMPT_CACHING_5M
         # still overrides both. Claude Code < 2.1.242 ignores the variables.
         # Auto-compact window: native-1M models compact at ~967K by default and
-        # a long worker session re-reads that context on every turn (measured:
-        # 700-1300 turns at 500-950K). 300K caps the per-turn cost; the window
-        # only bites sessions that would have grown past it. Operator env wins;
-        # older Claude Code ignores the variable.
+        # a long session re-reads that context on every turn (measured: 700-1300
+        # turns at 500-950K). Per role, since a flat 300K made architects
+        # compact every ~116 turns and QA mid-review (fleet audit 2026-10-09):
+        # worker 300K (its state lives on the board), qa 500K, architect and
+        # governor 600K; compaction fires ~32K under the window. A self-restart
+        # inherits this export, so MOE_COMPACT_WINDOW_DEFAULT marks the value as
+        # the wrapper's own and a reload re-derives it; an unmarked value is the
+        # operator's and wins, except 300000, the flat default of the wrappers
+        # before this one, inherited by the reload that installs it. Older
+        # Claude Code ignores the variable.
+        # moe-compaction-keeper (scripts/mods/) carries the seat's task state
+        # through each compaction; MOE_DISABLE_COMPACTION_KEEPER=1 leaves it out.
         if [ "$CLI_TYPE" = "claude" ]; then
             export CLAUDE_CODE_PROMPT_CACHE_TTL="${CLAUDE_CODE_PROMPT_CACHE_TTL:-1h}"
             export CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL="${CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL:-1h}"
-            export CLAUDE_CODE_AUTO_COMPACT_WINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-300000}"
+            case "$ROLE" in
+                qa) moe_compact_window=500000 ;;
+                architect|governor) moe_compact_window=600000 ;;
+                *) moe_compact_window=300000 ;;
+            esac
+            case "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" in
+                ""|"${MOE_COMPACT_WINDOW_DEFAULT:-300000}")
+                    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="$moe_compact_window" MOE_COMPACT_WINDOW_DEFAULT="$moe_compact_window" ;;
+            esac
+            moe_keeper_dir="$SCRIPT_DIR/mods/moe-compaction-keeper"
+            if [ -z "${MOE_DISABLE_COMPACTION_KEEPER:-}" ] && [ -d "$moe_keeper_dir" ]; then
+                case ":${CLAUDE_CODE_PLUGIN_DIRS:-}:" in
+                    *":$moe_keeper_dir:"*) ;;
+                    *) export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$moe_keeper_dir" ;;
+                esac
+            fi
         fi
 
         # Per-task one-shot mode (parity with moe-agent.ps1). --print runs
