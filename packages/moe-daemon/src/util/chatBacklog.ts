@@ -176,7 +176,19 @@ export async function collectChatBacklog(
       ? explicitSinceId
       : worker?.chatCursors?.[channelId];
     try {
-      const messages = await state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT });
+      const page = await state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT });
+      // With no position in a channel, getMessages falls back to its newest
+      // window, which reaches back before this worker existed. Those messages
+      // were routed to the workers registered when they were sent, but their
+      // raw group tokens (@all, @workers) still match this worker's role, so a
+      // freshly registered worker got paged to answer history. Its backlog
+      // starts at registration, except for messages that name it directly (a
+      // reused worker id) or whose timestamp does not parse.
+      const floor = sinceId ? Number.NaN : Date.parse(worker?.startedAt ?? '');
+      const messages = Number.isNaN(floor)
+        ? page
+        : page.filter((message) =>
+          !(Date.parse(message.timestamp) < floor) || (message.mentions ?? []).includes(workerId));
       scannedChannels.add(channelId);
       // A full page means the channel may hold more than this scan returned.
       if (messages.length >= PER_CHANNEL_SCAN_LIMIT) partialChannels.add(channelId);

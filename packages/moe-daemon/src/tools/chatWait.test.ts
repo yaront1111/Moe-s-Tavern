@@ -139,6 +139,57 @@ describe('moe.chat_wait', () => {
       expect(result.messages?.map((m) => m.id)).toEqual(posted.map((m) => m.id));
       expect(result.hasMore).toBeUndefined();
     });
+
+    describe('history from before the worker registered', () => {
+      /** Post history, then let the worker register (a fresh seat id has no cursors). */
+      async function postHistoryThenRegister(channel: string): Promise<ChatMessage> {
+        const history = await post(channel, 'nobody is addressed here, @workers @all', 'worker-earlier');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await state.updateWorker(WORKER_ID, { startedAt: new Date().toISOString() });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return history;
+      }
+
+      it('is not replayed as unread backlog when a new routed message opens the channel', async () => {
+        const history = await postHistoryThenRegister(channels.workers);
+        const routed = await post(channels.workers, `@${WORKER_ID} ping`);
+
+        // The launcher's pre-flight drain: no filter, so it scans the unread channels.
+        const result = await wait({ channels: [] });
+
+        expect(result.messages?.map((m) => m.id)).toEqual([routed.id]);
+        expect(result.messages?.map((m) => m.id)).not.toContain(history.id);
+        expect(cursorFor(channels.workers)).toBe(routed.id);
+      });
+
+      it('leaves a watched channel with only history blocking instead of replaying it', async () => {
+        await postHistoryThenRegister(channels.general);
+
+        const result = await wait({ channels: [channels.general] });
+
+        expect(result.hasMessage).toBe(false);
+        expect(result.timedOut).toBe(true);
+        expect(cursorFor(channels.general)).toBeUndefined();
+      });
+
+      it('still delivers an earlier message that names the worker directly (a reused id)', async () => {
+        const direct = await post(channels.general, `@${WORKER_ID} are you there?`, 'worker-earlier');
+        await postHistoryThenRegister(channels.general);
+
+        const result = await wait({ channels: [channels.general] });
+
+        expect(result.messages?.map((m) => m.id)).toEqual([direct.id]);
+      });
+
+      it('is still returned to an explicit sinceId catch-up', async () => {
+        const first = await post(channels.general, 'first', 'worker-earlier');
+        const history = await postHistoryThenRegister(channels.general);
+
+        const result = await wait({ channels: [channels.general], sinceId: first.id });
+
+        expect(result.messages?.map((m) => m.id)).toEqual([history.id]);
+      });
+    });
   });
 
   describe('burst on wake', () => {
