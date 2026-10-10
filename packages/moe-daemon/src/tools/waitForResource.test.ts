@@ -32,8 +32,8 @@ describe('moe.wait_for_resource', () => {
     h.createEpic();
     h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
     h.createTask({ id: 'task-2', status: 'WORKING', assignedWorkerId: 'worker-2' });
-    h.createWorker({ id: 'worker-1' });
-    h.createWorker({ id: 'worker-2' });
+    h.createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-1' });
+    h.createWorker({ id: 'worker-2', status: 'CODING', currentTaskId: 'task-2' });
     await h.state.load();
     vi.spyOn(h.state, 'postToGeneral').mockResolvedValue();
     vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue();

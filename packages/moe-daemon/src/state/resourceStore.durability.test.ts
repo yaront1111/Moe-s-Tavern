@@ -14,11 +14,15 @@ describe('resourceStore persistence failures', () => {
     h.setupMoeFolder({ schemaVersion: 6 });
     h.createEpic();
     h.createTask({ id: 'task-holder', status: 'WORKING', assignedWorkerId: 'worker-holder' });
+    // The waiter is parked on its live seat: a row no seat holds is passed over
+    // rather than granted (resourceStore.unheld.test.ts), and these cases are
+    // about the durability of the grant itself.
     h.createTask({
-      id: 'task-waiter', status: 'BLOCKED', assignedWorkerId: null,
+      id: 'task-waiter', status: 'BLOCKED', assignedWorkerId: 'worker-waiter',
       blockedResourceId: 'box', blockedFromStatus: 'WORKING',
       blockedReason: 'Waiting for box', blockedAt: new Date().toISOString(),
     });
+    h.createWorker({ id: 'worker-waiter', status: 'BLOCKED', currentTaskId: 'task-waiter' });
     await h.state.load();
     vi.spyOn(h.state, 'postToGeneral').mockResolvedValue();
     vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue();

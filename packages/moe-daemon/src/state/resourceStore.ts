@@ -19,13 +19,16 @@
 // promotes the best queue entry to a lease and — if that task is BLOCKED on
 // this resource — flips it back to blockedFromStatus, which wakes the fleet
 // (TASK_UPDATED wakes wait_for_task; the wrapper's next claim poll resumes a
-// still-assigned task).
+// still-assigned task). An entry whose row no live seat holds is passed over
+// rather than leased: the slot goes to the next waiter, the entry keeps its
+// age, and a row BLOCKED on the resource returns to its claim pool unleased.
 
 import type { StateManager } from './StateManager.js';
 import type {
   ResourceLease,
   ResourceQueueEntry,
   ResourceState,
+  Task,
   TaskPriority,
   TaskStatus,
 } from '../types/schema.js';
@@ -68,6 +71,19 @@ function resourceDependenciesSatisfied(state: StateManager, taskId: string): boo
   // As with claims, dependencies gate WORKING only. An existing assignee can
   // still need the resource to finish; existing leases are never revoked here.
   return !!task.assignedWorkerId || phase !== 'WORKING' || unmetDependsOn(state, task).length === 0;
+}
+
+/**
+ * Whether a live seat holds the task, so a lease granted now would be used.
+ * Mirrors the owner check resumeResourceHolder applies to a parked task: no
+ * assignee, or a known seat that is DEAD or bound to another task, means the
+ * lease would sit idle until someone claims the row. An assignee without a
+ * worker record keeps the old behaviour and is granted.
+ */
+function heldByLiveSeat(state: StateManager, task: Task): boolean {
+  if (!task.assignedWorkerId) return false;
+  const owner = state.getWorker(task.assignedWorkerId);
+  return !owner || (owner.status !== 'DEAD' && owner.currentTaskId === task.id);
 }
 
 export interface ResourceConfig {
@@ -416,11 +432,25 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
   resource.queue = resource.queue.filter((entry) => isResourceTaskEligible(state, entry.taskId));
   const queueCleaned = resource.queue.length !== persisted.queue.length;
 
+  // A row no live seat holds (its seat was freed or deregistered) is passed
+  // over: a lease would sit idle until someone claims the row while live seats
+  // wait behind it. Its entry keeps its age, so the row's next claimant resumes
+  // at the same place in line, and a row still BLOCKED here returns to its
+  // claim pool now, the moment a grant would have restored it.
+  const passedOver = new Set<ResourceQueueEntry>();
+  const unheldBlocked: string[] = [];
   while (resource.holders.length < config.capacity && resource.queue.length > 0) {
     // Keep unready entries (and their age) for a later sweep; skip them rather
     // than blocking ready work behind them or revoking a lease already in use.
-    const next = sortedQueue(state, resource.queue).find((entry) => resourceDependenciesSatisfied(state, entry.taskId));
+    const next = sortedQueue(state, resource.queue)
+      .find((entry) => !passedOver.has(entry) && resourceDependenciesSatisfied(state, entry.taskId));
     if (!next) break;
+    const task = state.tasks.get(next.taskId);
+    if (task && !heldByLiveSeat(state, task)) {
+      passedOver.add(next);
+      if (task.status === 'BLOCKED' && task.blockedResourceId === resourceId) unheldBlocked.push(task.id);
+      continue;
+    }
     resource.queue = resource.queue.filter((q) => q !== next);
     const now = Date.now();
     const lease: ResourceLease = {
@@ -447,7 +477,43 @@ export async function grantNextLeases(state: StateManager, resourceId: string): 
   for (const lease of resource.holders) {
     await resumeResourceHolder(state, resourceId, lease, granted.includes(lease));
   }
+  for (const taskId of unheldBlocked) {
+    await restoreUnheldTask(state, resourceId, taskId);
+  }
   return granted;
+}
+
+/**
+ * A row BLOCKED on this resource reached the front of the queue with no live
+ * seat holding it: return it to blockedFromStatus, unassigned, so a claimant
+ * can pick it up. This is the restore a grant performs, minus the lease. The
+ * queue entry stays, so the claimant's acquire keeps the row's place in line.
+ * Never throws: a failed write leaves the row BLOCKED for the next pass.
+ */
+async function restoreUnheldTask(state: StateManager, resourceId: string, taskId: string): Promise<void> {
+  const task = state.tasks.get(taskId);
+  if (!task || task.status !== 'BLOCKED' || task.blockedResourceId !== resourceId) return;
+  const restored: TaskStatus = task.blockedFromStatus ?? 'WORKING';
+  try {
+    await state.updateTask(task.id, {
+      status: restored,
+      assignedWorkerId: null,
+      ...(task.blockedReason ? { priorBlockedReason: task.blockedReason } : {}),
+      blockedReason: null,
+      blockedResourceId: null,
+      blockedOnTaskIds: null,
+      blockedFromStatus: null,
+      blockedAt: null,
+    }, 'TASK_UNBLOCKED');
+  } catch (err) {
+    logger.warn({ resourceId, taskId, error: err }, 'grantNextLeases: failed to restore a row no live seat holds');
+    return;
+  }
+  const msg = `🟡 Resource ${resourceId}: ${taskId} reached the front of the queue, but no live seat holds it, `
+    + `so no lease was reserved for it. The task is claimable again (${restored}, unassigned) and keeps its `
+    + 'place in line; its next claimant re-acquires.';
+  try { await state.postSystemMessage(taskId, msg); } catch { /* best-effort */ }
+  try { await state.postToGeneral(msg); } catch { /* best-effort */ }
 }
 
 async function resumeResourceHolder(
