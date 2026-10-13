@@ -62,6 +62,7 @@ function parseArgs() {
 }
 
 const DEFAULT_BIND_HOST = '127.0.0.1';
+const LOOPBACK_PROBE_TIMEOUT_MS = 500;
 
 /**
  * Address local probes (port scans, readiness checks) should connect to for a
@@ -363,12 +364,38 @@ async function findAvailablePort(preferred: number, host: string = DEFAULT_BIND_
 }
 
 function isPortAvailable(port: number, host: string = DEFAULT_BIND_HOST): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const server = net.createServer();
     server.unref();
     server.on('error', () => resolve(false));
     server.listen({ port, host }, () => {
       server.close(() => resolve(true));
+    });
+  }).then((bindable) => (bindable ? isLoopbackPortFree(port) : false));
+}
+
+// A bind probe alone is not enough on Windows: without SO_EXCLUSIVEADDRUSE a
+// 0.0.0.0 listener and a 127.0.0.1 listener from two processes share one port
+// with no EADDRINUSE, so two projects can both "own" the same port and a
+// client dialing localhost reaches whichever project bound the specific
+// address. Dial loopback as a client: anything that answers (either bind form)
+// means the port is taken; a refusal (or silence) means it is free.
+function isLoopbackPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: '127.0.0.1' });
+    socket.unref();
+    socket.setTimeout(LOOPBACK_PROBE_TIMEOUT_MS);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      resolve(true);
     });
   });
 }
