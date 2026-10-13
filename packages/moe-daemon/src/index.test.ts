@@ -8,6 +8,7 @@ import { spawn } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
 import {
   acquireLock,
+  isPortAvailable,
   readLockInfo,
   releaseLock,
   stopDaemon,
@@ -174,5 +175,51 @@ describe('daemon lifecycle validation', () => {
     expect(acquireLock(testDir)).toBe(true);
     expect(readLockInfo(testDir)?.pid).toBe(process.pid);
     releaseLock(testDir);
+  });
+});
+
+describe('port probing', () => {
+  const held: net.Server[] = [];
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.all(held.map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+    held.length = 0;
+  });
+
+  async function holdPort(host: string): Promise<number> {
+    const server = net.createServer();
+    held.push(server);
+    await new Promise<void>(resolve => server.listen({ port: 0, host }, resolve));
+    return (server.address() as net.AddressInfo).port;
+  }
+
+  // Windows without SO_EXCLUSIVEADDRUSE lets a second process bind a port that a
+  // 0.0.0.0 or 127.0.0.1 listener already holds, so the bind probe succeeds on a
+  // taken port. Reproduce that on every OS by moving the probe's bind to a free port.
+  function bindProbeAlwaysSucceeds(): void {
+    const createServer = net.createServer as (...args: unknown[]) => net.Server;
+    vi.spyOn(net, 'createServer').mockImplementation(((...args: unknown[]) => {
+      const server = createServer.apply(net, args);
+      const listen = server.listen.bind(server) as (options: net.ListenOptions, callback?: () => void) => net.Server;
+      server.listen = ((options: net.ListenOptions, callback?: () => void) =>
+        listen({ ...options, port: 0 }, callback)) as typeof server.listen;
+      return server;
+    }) as unknown as typeof net.createServer);
+  }
+
+  it.each(['127.0.0.1', '0.0.0.0'])('treats a port held by a %s listener as taken even when the bind probe succeeds', async (heldHost) => {
+    const port = await holdPort(heldHost);
+    bindProbeAlwaysSucceeds();
+
+    expect(await isPortAvailable(port, '0.0.0.0')).toBe(false);
+    expect(await isPortAvailable(port, '127.0.0.1')).toBe(false);
+  });
+
+  it('treats a port nothing listens on as free', async () => {
+    const port = await holdPort('127.0.0.1');
+    await new Promise<void>(resolve => held.pop()!.close(() => resolve()));
+
+    expect(await isPortAvailable(port, '127.0.0.1')).toBe(true);
   });
 });
