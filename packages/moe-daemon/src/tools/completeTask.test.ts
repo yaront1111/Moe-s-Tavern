@@ -629,6 +629,51 @@ describe('moe.complete_task — finalizing attempt', () => {
     expect(typeof nextAction.reason).toBe('string');
   });
 
+  // A seat that claimed without the wrapper's runner identity has no runner to
+  // finalize for it. The old hint ("the wrapper commits them, end your turn")
+  // left its row unclaimable by every QA seat with no signal anywhere.
+  it('tells a seat with no runner identity to finalize the attempt itself', async () => {
+    const attempt = await openRunningAttempt();
+
+    const result = await complete();
+    const nextAction = result.nextAction as Record<string, unknown>;
+    const reason = String(nextAction.reason);
+
+    expect(nextAction).not.toHaveProperty('tool');
+    expect(reason).toContain('moe.finalize_attempt');
+    expect(reason).toContain(`attemptId: "${attempt.id}"`);
+    expect(reason).toContain('generation: 1');
+    expect(reason).toContain('outcome: "landed"');
+    expect(reason).toContain('moe.record_commit');
+    expect(reason).not.toContain('until this session exits and the wrapper commits them');
+  });
+
+  it('keeps the wrapper hint for an attempt claimed with a runner identity', async () => {
+    await openAttempt(h.state, {
+      taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: h.testDir,
+      processStartedAt: '4242@123456', host: 'build-host',
+    });
+
+    const result = await complete();
+    const nextAction = result.nextAction as Record<string, unknown>;
+    const reason = String(nextAction.reason);
+
+    expect(nextAction).not.toHaveProperty('tool');
+    expect(reason).toContain('until this session exits and the wrapper commits them');
+    expect(reason).not.toContain('moe.finalize_attempt');
+  });
+
+  it('treats a blank runner identity as none', async () => {
+    await openAttempt(h.state, {
+      taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: h.testDir,
+      processStartedAt: '   ', host: 'build-host',
+    });
+
+    const result = await complete();
+
+    expect(String((result.nextAction as Record<string, unknown>).reason)).toContain('moe.finalize_attempt');
+  });
+
   it('surfaces the finalizing attempt id and generation with the claim result key names', async () => {
     const attempt = await openRunningAttempt();
 

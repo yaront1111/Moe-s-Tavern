@@ -40,6 +40,7 @@ What you'll see in `#governors`:
 | `CHECKPOINT-UNPUSHED` / `PUSH FAILED` | Wrapper post-flight | Commit exists locally only (`pull --rebase` refuses in a dirty shared checkout) | Visibility, not loss — push by hand or let the next landing retry |
 | `MOE_ATTRIBUTION_UNRESOLVED` | `record_commit` (once per task per 24h) | Changed paths nobody declared were left unstaged because another worker was live | Find the owner; `moe.declare_files { taskId, paths }` onto that task so its next exit lands them |
 | `NO-COMPLETION-COMMIT` | `moe.qa_approve` | QA approved with no completion commit recorded for this review round | Re-check `task.commits` a minute later (post-flight race); still empty → read `task.lastCommitOutcome` |
+| _(no banner)_ REVIEW row QA keeps passing over | Finalizing hold (`claim_next_task` / `wait_for_task` skip it, `qa_approve` refuses it) | The row's attempt is still `finalizing`: no runner called `moe.finalize_attempt`. Typical for a seat run outside the moe-agent wrapper, whose attempt records no `processStartedAt`/`host` | Ask that seat to call `moe.finalize_attempt { outcome: 'landed', landedRevision: <pushed sha> }`; its `complete_task` hint names the call. If the seat is gone, verify the commit is on the delivery target, then, with the human's nod, finalize it `landed` yourself and `record_commit` it. Use `failed` only when the bytes did not land; never record an outcome you have not verified |
 
 ## Runtime-driven workflow
 

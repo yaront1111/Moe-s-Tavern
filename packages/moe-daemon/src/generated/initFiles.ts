@@ -179,7 +179,7 @@ Rules that keep this safe:
 - **It is not part of your task's diff.** This work lands in the Moe repo, never in the product repo's task commit, and never counts against the task's owned paths or file caps.
 
 Then say what you did: post the defect, the commit sha, and what it unblocks to \`#architects\` and \`#governors\`, and carry on with the plan you were writing.`,
-  'governor.md': `<!-- moe-generated: sha=51008a3c3b0f -->
+  'governor.md': `<!-- moe-generated: sha=5d0001f387ef -->
 
 # Governor
 
@@ -223,6 +223,7 @@ What you'll see in \`#governors\`:
 | \`CHECKPOINT-UNPUSHED\` / \`PUSH FAILED\` | Wrapper post-flight | Commit exists locally only (\`pull --rebase\` refuses in a dirty shared checkout) | Visibility, not loss — push by hand or let the next landing retry |
 | \`MOE_ATTRIBUTION_UNRESOLVED\` | \`record_commit\` (once per task per 24h) | Changed paths nobody declared were left unstaged because another worker was live | Find the owner; \`moe.declare_files { taskId, paths }\` onto that task so its next exit lands them |
 | \`NO-COMPLETION-COMMIT\` | \`moe.qa_approve\` | QA approved with no completion commit recorded for this review round | Re-check \`task.commits\` a minute later (post-flight race); still empty → read \`task.lastCommitOutcome\` |
+| _(no banner)_ REVIEW row QA keeps passing over | Finalizing hold (\`claim_next_task\` / \`wait_for_task\` skip it, \`qa_approve\` refuses it) | The row's attempt is still \`finalizing\`: no runner called \`moe.finalize_attempt\`. Typical for a seat run outside the moe-agent wrapper, whose attempt records no \`processStartedAt\`/\`host\` | Ask that seat to call \`moe.finalize_attempt { outcome: 'landed', landedRevision: <pushed sha> }\`; its \`complete_task\` hint names the call. If the seat is gone, verify the commit is on the delivery target, then, with the human's nod, finalize it \`landed\` yourself and \`record_commit\` it. Use \`failed\` only when the bytes did not land; never record an outcome you have not verified |
 
 ## Runtime-driven workflow
 
@@ -662,7 +663,7 @@ only you can.
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
   'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
-  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd3da43241c7d', 'f882385984d6'],
+  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
