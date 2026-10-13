@@ -13,6 +13,37 @@ import {
   planSizeFloor, resolveLaunch,
 } from '../util/routing.js';
 
+/**
+ * The affected-path refusal. `cachedRefMiss` says why the configured cached
+ * origin ref could not vouch for the paths, so a seat can tell a stale ref
+ * from a daemon that cannot read it.
+ */
+function missingPathsError(projectRoot: string, missingPaths: string[], cachedRefMiss?: string): MoeError {
+  const shown = missingPaths.slice(0, 10).join(', ');
+  const extra = missingPaths.length > 10 ? ` (+${missingPaths.length - 10} more)` : '';
+  return new MoeError(
+    MoeErrorCode.INVALID_INPUT,
+    `Plan cites affectedFiles that do not exist under the project root ${projectRoot}: ${shown}${extra}. ` +
+      (cachedRefMiss ? `Cached origin ref check: ${cachedRefMiss}. ` : '') +
+      `If an existing file is absent from this checkout and the configured cached origin ref, provide a current source checkout to Moe. Never omit the path. ` +
+      `(1) Check that affectedFiles paths are relative to the PROJECT ROOT, ` +
+      `not to a package subdirectory — write "packages/moe-daemon/src/x.ts", not "src/x.ts". Correct the path and resubmit. ` +
+      `(2) If this task will CREATE the file, list it in that step's "newFiles" array instead of (or in addition to) affectedFiles; ` +
+      `newFiles are exempt from this check and still count toward the plan-size distinct-file total. ` +
+      `Do NOT park files that already exist in "newFiles" just to silence this gate — that hides a wrong path from the next worker and from collision detection.`,
+    {
+      missingPaths,
+      projectRoot,
+      ...(cachedRefMiss ? { cachedRefMiss } : {}),
+      suggestedAction: {
+        tool: 'moe.submit_plan',
+        reason: 'Correct the paths or declare the ones this task creates in step.newFiles, then resubmit.'
+      }
+    },
+    'INVALID_INPUT'
+  );
+}
+
 /** Upper bound on a single plan step's description — a guard against runaway payloads, not a style limit. */
 // The cap lives with the sanitizer's bound (util/planSize) so they cannot drift;
 // re-exported here for callers/tests that import it from this module.
@@ -347,27 +378,9 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         const cachedKeys = new Set((pathValidation?.paths ?? []).map(pathKey));
         const missingPaths = diskMissing.filter(p => !cachedKeys.has(pathKey(p)));
         if (missingPaths.length > 0) {
-          const shown = missingPaths.slice(0, 10).join(', ');
-          const extra = missingPaths.length > 10 ? ` (+${missingPaths.length - 10} more)` : '';
-          throw new MoeError(
-            MoeErrorCode.INVALID_INPUT,
-            `Plan cites affectedFiles that do not exist under the project root ${state.projectPath}: ${shown}${extra}. ` +
-              `If an existing file is absent from this checkout and the configured cached origin ref, provide a current source checkout to Moe. Never omit the path. ` +
-              `(1) Check that affectedFiles paths are relative to the PROJECT ROOT, ` +
-              `not to a package subdirectory — write "packages/moe-daemon/src/x.ts", not "src/x.ts". Correct the path and resubmit. ` +
-              `(2) If this task will CREATE the file, list it in that step's "newFiles" array instead of (or in addition to) affectedFiles; ` +
-              `newFiles are exempt from this check and still count toward the plan-size distinct-file total. ` +
-              `Do NOT park files that already exist in "newFiles" just to silence this gate — that hides a wrong path from the next worker and from collision detection.`,
-            {
-              missingPaths,
-              projectRoot: state.projectPath,
-              suggestedAction: {
-                tool: 'moe.submit_plan',
-                reason: 'Correct the paths or declare the ones this task creates in step.newFiles, then resubmit.'
-              }
-            },
-            'INVALID_INPUT'
-          );
+          throw missingPathsError(state.projectPath, missingPaths, pathValidation
+            ? `${pathValidation.ref} at ${pathValidation.commit.slice(0, 12)} does not contain them either`
+            : undefined);
         }
 
         const implementationPlan = normalizedSteps.map((step, idx) => ({
@@ -644,9 +657,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // all normal validation, but made no task/worker/approval changes.
         if (!(error instanceof MoeError) || error.code !== MoeErrorCode.INVALID_INPUT
             || !Array.isArray(error.context?.missingPaths)) throw error;
-        cachedPaths = await findCachedPlanPaths(state.projectPath, lookupBranch,
-          error.context.missingPaths as string[]);
-        if (!cachedPaths) throw error;
+        const missing = error.context.missingPaths as string[];
+        const lookup = await findCachedPlanPaths(state.projectPath, lookupBranch, missing);
+        if ('miss' in lookup) throw missingPathsError(state.projectPath, missing, lookup.miss);
+        cachedPaths = lookup;
         // Re-read everything under the lock; never submit from a pre-Git task
         // snapshot if the owner/plan/rails changed while the lookup was running.
         return submit();

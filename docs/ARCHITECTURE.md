@@ -173,7 +173,8 @@ git repository, when the command is non-blank, `autoCommit` is on,
   The latter runs outside the state mutex, never fetches or changes the tree,
   rejects partial clones/redirected roots, and reports stale-worktree provenance
   without claiming remote freshness. Only an explicit literal branch is used;
-  missing Git/ref/object evidence retains the missing-path refusal. Cached
+  missing Git/ref/object evidence retains the missing-path refusal, which names
+  the failed check (the Git step, its error and the elapsed time). Cached
   paths use the exact committed spelling (Git tree lookup is case-sensitive).
   Full plan validation is repeated under the mutex before writing. Every delivery sha,
   exit code and landing it stores is what a runner *reported*, and each store checks shape and binding, never the
