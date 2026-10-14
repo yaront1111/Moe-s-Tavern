@@ -49,7 +49,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_ATTRIBUTION` | `declared` forces `settings.attribution.undeclared` to `never` for this run — declared-only landing, no MEASURED paths | Unset | `declared` |
 | `GIT_TERMINAL_PROMPT` | **Set by the wrapper** (not read) to `0` for its whole lifetime, so a credential or host-key prompt can never hang a push or a `pull --rebase` retry | `0` (wrapper-set) | — |
 | `MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF` | Test seam only: a command the landing runs between `commit-tree` and `update-ref` (the harness uses it to force CAS contention with a peer commit) | Unset | `bash peer-commit.sh` |
-| `MOE_RESUME_MAX_ATTEMPTS` | CLI relaunches onto an already-held task before escalating + idling | `5` | `3` |
+| `MOE_RESUME_MAX_ATTEMPTS` | Consecutive CLI relaunches onto an already-held task before escalating + idling; a session that completes a plan step re-arms the count, and a launch failure is never counted | `5` | `3` |
 | `MOE_ARCHITECT_TASKS_PER_SESSION` | PLANNING tasks an **interactive** architect session may plan (it claims the next one in-session after each `submit_plan`); headless architects always plan one per CLI; non-numeric or `<1` = default | `10` | `1` |
 | `MOE_CODEX_REASONING_EFFORT` | `model_reasoning_effort` written to codex config.toml | `xhigh` | `high` |
 | `MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC` | `startup_timeout_sec` for the codex `moe` MCP entry (survives supervised daemon restarts) | `120` | `180` |

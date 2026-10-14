@@ -5676,6 +5676,43 @@ case "$RESUME_MAX_ATTEMPTS" in
     ''|*[!0-9]*) RESUME_MAX_ATTEMPTS=5 ;;
 esac
 
+# Resume budget vs real progress (PS twin: Get-PlanProgressMark /
+# Update-ResumeBudgetOnProgress). The budget is for a CLI that keeps dying
+# without moving its task; a session that COMPLETED a plan step was not dying.
+# Measured 2026-10-14: a seat on a long multi-session task had five sessions
+# counted, two of which ran ~1 h and completed seven steps between them before
+# a provider usage limit or a SIGTERM ended them (past MOE_LAUNCH_FAIL_SEC, so
+# not launch failures). The wrapper posted "pausing auto-resume" and would have
+# idled on its held task, leases and all, after the limit reset. Progress is
+# the COMPLETED step count in get_context before the launch vs after the exit;
+# a missing, unparseable or foreign payload proves nothing and keeps the count.
+PREFLIGHT_PROGRESS_MARK=""
+plan_progress_mark() { # $1 = get_context JSON, $2 = the task id it must describe
+    [ -n "$1" ] && [ -n "$2" ] && [ -n "${PYTHON_CMD:-}" ] || return 0
+    $PYTHON_CMD -c "
+import json, sys
+try:
+    t = json.loads(sys.stdin.read()).get('task') or {}
+    if t.get('id') == sys.argv[1]:
+        s = t.get('implementationPlan')
+        print(sum(1 for x in (s if isinstance(s, list) else []) if isinstance(x, dict) and x.get('status') == 'COMPLETED'))
+except Exception:
+    pass
+" "$2" <<< "$1" 2>/dev/null || true
+}
+rearm_resume_on_progress() { # $1 = the post-session get_context JSON
+    local after
+    after="$(plan_progress_mark "$1" "${PREFLIGHT_TASK_ID:-}")"
+    case "${PREFLIGHT_PROGRESS_MARK:-}" in ''|*[!0-9]*) return 0 ;; esac
+    case "$after" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$after" -gt "$PREFLIGHT_PROGRESS_MARK" ] || return 0
+    if [ "$RESUME_ATTEMPTS" -gt 0 ] || [ "$RESUME_ESCALATED" = true ]; then
+        echo -e "${GREEN}[resume]${NC} $PREFLIGHT_TASK_ID completed $((after - PREFLIGHT_PROGRESS_MARK)) plan step(s) this session ($PREFLIGHT_PROGRESS_MARK -> $after) -- resume budget re-armed."
+    fi
+    RESUME_ATTEMPTS=0
+    RESUME_ESCALATED=false
+}
+
 # Launch-failure tracking (PS twin parity). A CLI that exits non-zero within
 # MOE_LAUNCH_FAIL_SEC of starting never did any work: provider usage limit,
 # expired credential, a crash at launch. Measured 2026-09-06: an account usage
@@ -5778,6 +5815,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     PREFLIGHT_TASK_TITLE=""
     PREFLIGHT_TASK_CHANNEL=""
     PREFLIGHT_CONTEXT=""
+    PREFLIGHT_PROGRESS_MARK=""
     PREFLIGHT_GENERAL_UNREAD=""
     PREFLIGHT_ROUTED_UNREAD=""
     PREFLIGHT_TASK_UNREAD=""
@@ -6195,6 +6233,7 @@ except Exception:
                     PREFLIGHT_CONTEXT=$(moe_rpc get_context \
                         "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
                         2>/dev/null || echo "")
+                    PREFLIGHT_PROGRESS_MARK="$(plan_progress_mark "$PREFLIGHT_CONTEXT" "$PREFLIGHT_TASK_ID")"
                     # alreadyAssigned carries no chatChannel -- recover it from
                     # the full context on the resume path (the trim below drops it).
                     if [ -z "$PREFLIGHT_TASK_CHANNEL" ] && [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then
@@ -7788,6 +7827,7 @@ except Exception:
                 FINAL_STATUS="${LOOKUP_DETAIL:-}"
                 FINAL_REOPEN_COUNT="${FINAL_REOPEN_COUNT:-0}"
                 TASK_EPIC_ID="${TASK_EPIC_ID:-}"
+                rearm_resume_on_progress "$POSTFLIGHT_CTX"
                 ;;
             MISMATCH)
                 STATUS_LOOKUP_ERROR="get_context resolved a different task (${LOOKUP_DETAIL:-?}) -- the requested id no longer exists"

@@ -113,6 +113,9 @@ for prose in 'run the printed Command by hand' 'a CLI auto-update dropped a flag
   require_both "launch-failure prose" "$prose"
 done
 
+# Resume-budget prose: a session that completed a plan step re-arms the budget.
+require_both "resume-budget prose" 'resume budget re-armed'
+
 # Agent-CLI vocabulary (claude / codex / gemini / grok): the per-CLI config
 # dirs (also the attribution DENY prefixes), the grok cliType value, the grok
 # env names and the grok banners must be spelled identically in both wrappers.
