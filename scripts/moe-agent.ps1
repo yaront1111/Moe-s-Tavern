@@ -5106,6 +5106,42 @@ $script:ResumeEscalated = $false
 $resumeMaxAttempts = 5
 if ($env:MOE_RESUME_MAX_ATTEMPTS -match '^\d+$') { $resumeMaxAttempts = [int]$env:MOE_RESUME_MAX_ATTEMPTS }
 
+# Resume budget vs real progress (sh twin: plan_progress_mark /
+# rearm_resume_on_progress). The budget is for a CLI that keeps dying without
+# moving its task; a session that COMPLETED a plan step was not dying.
+# Measured 2026-10-14: a seat on a long multi-session task had five sessions
+# counted, two of which ran ~1 h and completed seven steps between them before
+# a provider usage limit or a SIGTERM ended them (past MOE_LAUNCH_FAIL_SEC, so
+# not launch failures). The wrapper posted "pausing auto-resume" and would have
+# idled on its held task, leases and all, after the limit reset. Progress is
+# the COMPLETED step count in get_context before the launch vs after the exit;
+# a missing, unparseable or foreign payload proves nothing and keeps the count.
+$script:PreflightProgressMark = $null
+function Get-PlanProgressMark {
+    param($Context, [string]$TaskId)
+    if (-not $Context -or -not $TaskId -or -not $Context.PSObject.Properties['task']) { return $null }
+    $task = $Context.task
+    if (-not $task -or -not $task.PSObject.Properties['id'] -or [string]$task.id -ne $TaskId) { return $null }
+    $completed = 0
+    if ($task.PSObject.Properties['implementationPlan'] -and $task.implementationPlan) {
+        foreach ($step in @($task.implementationPlan)) {
+            if ($step -and $step.PSObject.Properties['status'] -and [string]$step.status -eq 'COMPLETED') { $completed++ }
+        }
+    }
+    return $completed
+}
+function Update-ResumeBudgetOnProgress {
+    param($Context, [string]$TaskId)
+    $after = Get-PlanProgressMark -Context $Context -TaskId $TaskId
+    if ($null -eq $script:PreflightProgressMark -or $null -eq $after) { return }
+    if ($after -le $script:PreflightProgressMark) { return }
+    if ($script:ResumeAttempts -gt 0 -or $script:ResumeEscalated) {
+        Write-Host "[resume] $TaskId completed $($after - $script:PreflightProgressMark) plan step(s) this session ($($script:PreflightProgressMark) -> $after) -- resume budget re-armed." -ForegroundColor Green
+    }
+    $script:ResumeAttempts = 0
+    $script:ResumeEscalated = $false
+}
+
 # Launch-failure tracking. A CLI that exits non-zero within MOE_LAUNCH_FAIL_SEC
 # of starting never did any work: provider usage limit, expired credential, a
 # crash at launch. Measured 2026-09-06: an account usage limit made every
@@ -5220,6 +5256,7 @@ do {
     $preflightTaskTitle = ""
     $preflightTaskChannel = ""
     $preflightContext = $null
+    $script:PreflightProgressMark = $null
     $preflightGeneralUnread = $null
     $preflightRoutedUnread = $null
     $preflightTaskUnread = $null
@@ -5528,6 +5565,7 @@ do {
                 }
                 if ($preflightTaskId) {
                     $preflightContext = Invoke-MoeRpc -Tool "get_context" -Args @{ taskId = $preflightTaskId }
+                    $script:PreflightProgressMark = Get-PlanProgressMark -Context $preflightContext -TaskId $preflightTaskId
                 }
                 # alreadyAssigned carries no chatChannel — recover it from the
                 # fetched context on the resume path.
@@ -6833,6 +6871,7 @@ $mentionsJson
                 if ($matched.PSObject.Properties['reopenCount'] -and $matched.reopenCount) {
                     $finalReopenCount = [int]$matched.reopenCount
                 }
+                Update-ResumeBudgetOnProgress -Context $ctxResp -TaskId $preflightTaskId
                 # Daemon-provided epic-final (get_context isEpicFinal, on the
                 # task projection or top-level beside the epic): only an exact
                 # JSON boolean counts — anything else means an old daemon and

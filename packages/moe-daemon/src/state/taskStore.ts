@@ -430,7 +430,9 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
 
   // Post system message for status changes
   if (updates.status && updates.status !== task.status) {
-    const actor = updated.assignedWorkerId || 'unknown';
+    // Name who moved it: a governor or QA move otherwise read "by unknown",
+    // since those rows are unassigned or are being unassigned by the move.
+    const actor = actorWorkerId || updated.assignedWorkerId || 'unknown';
     state.postSystemMessage(taskId, `Task moved to ${updates.status} by ${actor}`).catch(() => {});
 
     // When a task lands on PLANNING, ping #architects so an architect on

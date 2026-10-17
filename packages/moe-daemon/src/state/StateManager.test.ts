@@ -394,6 +394,18 @@ describe('StateManager', () => {
       expect(events).toContain('TASK_UPDATED');
     });
 
+    it('names the acting worker in the status-change message, else the assignee', async () => {
+      const posts = vi.spyOn(stateManager, 'postSystemMessage').mockResolvedValue();
+      await stateManager.updateTask('task-test123', { status: 'PLANNING' }, undefined, 'governor-1');
+      await stateManager.updateTask('task-test123', { status: 'WORKING', assignedWorkerId: 'worker-2' });
+      await stateManager.updateTask('task-test123', { status: 'BACKLOG', assignedWorkerId: null });
+      expect(posts.mock.calls.map(([, content]) => content).filter(c => c.startsWith('Task moved to'))).toEqual([
+        'Task moved to PLANNING by governor-1',
+        'Task moved to WORKING by worker-2',
+        'Task moved to BACKLOG by unknown',
+      ]);
+    });
+
     it('does not change memory when writeEntity fails', async () => {
       const originalTask = stateManager.getTask('task-test123');
       vi.spyOn(stateManager as unknown as { writeEntity: () => Promise<void> }, 'writeEntity')

@@ -52,7 +52,8 @@ describe('cached plan source evidence', () => {
     const canonical = fs.realpathSync(root);
     vi.spyOn(fs.promises, 'realpath').mockResolvedValue(`${canonical}/*`);
     const run = runner();
-    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toBeUndefined();
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run))
+      .toEqual({ miss: expect.stringContaining('ends in /*') });
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -85,38 +86,61 @@ describe('cached plan source evidence', () => {
 
   it('refuses a project nested inside a different repository', async () => {
     const run = runner({ top: path.dirname(root) });
-    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toBeUndefined();
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run))
+      .toEqual({ miss: expect.stringContaining('is not the project root') });
     expect(run).toHaveBeenCalledTimes(1);
   });
 
   it.each(['extensions.partialclone origin', 'remote.origin.promisor true', 'core.worktree /other'])
     ('refuses hydratable or redirected configuration %s', async config => {
       const run = runner({ config });
-      expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toBeUndefined();
+      expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run))
+        .toEqual({ miss: expect.stringContaining(`local Git config sets ${config.split(' ')[0]};`) });
       expect(run).toHaveBeenCalledTimes(2);
     });
 
   it.each(['timeout', 'ENOENT', 'output overflow', 'object absent'])('keeps uncertainty as missing: %s', async message => {
     const run = vi.fn<PlanPathGitRunner>().mockRejectedValue(new Error(message));
-    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toBeUndefined();
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toEqual({
+      miss: expect.stringMatching(new RegExp(`^git rev-parse --show-toplevel: ${message} \\(\\d+ ms into the 2000 ms budget\\)$`)),
+    });
   });
 
-  it.each(['100644 blob bad\tsrc/existing.ts\0', `100644 blob ${blob}\tsrc/existing.ts`, ''])
-    ('refuses malformed or empty tree output', async tree => {
-      expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], runner({ tree }))).toBeUndefined();
-    });
+  it.each([
+    ['a spawn failure', Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT', stdout: '', stderr: '' }),
+      'ENOENT: spawn git ENOENT'],
+    ['a timeout kill', Object.assign(new Error('Command failed: git rev-parse'), { killed: true, signal: 'SIGTERM', code: null, stderr: '' }),
+      'killed (SIGTERM)'],
+    ['a refused repository', Object.assign(new Error('Command failed: git rev-parse'), { code: 128,
+      stderr: "fatal: detected dubious ownership in repository at '/repo'\n'/repo' is owned by:\n\tsomeone else\n" }),
+      "128: fatal: detected dubious ownership in repository at '/repo'"],
+  ])('names the failing Git step and %s in the miss', async (_kind, failure, detail) => {
+    execFileMock.mockImplementation((_file, _args, _options, callback) => { callback(failure); });
+    const result = await findCachedPlanPaths(root, 'main', ['src/existing.ts']);
+    expect(result).toEqual({ miss: expect.stringContaining(`git rev-parse --show-toplevel: ${detail} (`) });
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['100644 blob bad\tsrc/existing.ts\0', 'unparsable ls-tree output for refs/remotes/origin/main'],
+    [`100644 blob ${blob}\tsrc/existing.ts`, 'unparsable ls-tree output for refs/remotes/origin/main'],
+    ['', `refs/remotes/origin/main at ${commit.slice(0, 12)} does not contain them either`],
+  ])('refuses malformed or empty tree output %#', async (tree, miss) => {
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], runner({ tree }))).toEqual({ miss });
+  });
 
   it('accepts an existing directory and a newline-containing literal filename', async () => {
     const files = ['src', 'a\nb.ts'];
     const run = runner({ tree: `040000 tree ${blob}\tsrc\0` + `100644 blob ${blob}\ta\nb.ts\0` });
-    expect((await findCachedPlanPaths(root, 'main', files, run))?.paths).toEqual(files);
+    expect(await findCachedPlanPaths(root, 'main', files, run)).toMatchObject({ paths: files });
   });
 
   it.each([['../escape'], ['/absolute'], ['bad\0name'], Array(101).fill('src/x.ts')])
     ('refuses unsafe or excessive candidates before spawning Git', async (...args) => {
       const paths = args as string[];
       const run = runner();
-      expect(await findCachedPlanPaths(root, 'main', paths, run)).toBeUndefined();
+      expect(await findCachedPlanPaths(root, 'main', paths, run))
+        .toEqual({ miss: expect.stringMatching(/not in normalized project-relative form|lookup limit/) });
       expect(run).not.toHaveBeenCalled();
     });
 
@@ -124,7 +148,9 @@ describe('cached plan source evidence', () => {
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => now);
     const run = vi.fn<PlanPathGitRunner>(async () => { now = 2001; return root; });
-    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toBeUndefined();
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toEqual({
+      miss: 'git config --get-regexp: budget exhausted before the step started (2001 ms into the 2000 ms budget)',
+    });
     expect(run).toHaveBeenCalledTimes(1);
   });
 });

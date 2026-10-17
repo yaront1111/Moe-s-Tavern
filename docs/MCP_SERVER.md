@@ -483,6 +483,8 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
 
 **Runner-called.** Closes a task's execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. `complete_task` hands the task to QA but deliberately leaves the attempt **open** in `finalizing`, because the bytes are only landed after the session exits and the wrapper commits them. This tool is the acknowledgement of that artifact boundary, and closing the attempt is what lifts the holds the open attempt imposes (see the notes).
 
+A seat that runs **without** the moe-agent wrapper has no runner to make this call. Its claim carries no runner identity (`processStartedAt`/`host`), so the attempt records none. Such a seat is its own runner: once its bytes are on the delivery target it calls `moe.finalize_attempt` itself (`outcome: 'landed'` with the commit as `landedRevision`, or `'nothing-to-commit'`). `complete_task`'s `nextAction.reason` says so whenever the finalizing attempt records no runner identity. Until then the task is invisible to every other seat's claim and `qa_approve` refuses it.
+
 **Parameters:**
 ```typescript
 {
