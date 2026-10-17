@@ -5278,7 +5278,13 @@ do {
     # tasks: the session id, the repo probe, the baseline path, the
     # "bytes handled" flag the teardown rescue keys on, and the stream-json
     # tool-write harvest.
-    $moeSid = ""
+    # The pre-flight instant, `<workerId>@<preflight-iso>`: the Moe-Session id of this
+    # iteration's landing, computed once here (not only under autoCommit) and exported for
+    # the seat, because moe.record_commit requires it as `sessionId` and an isolated-clone
+    # delivery can read it from nowhere else (no preflight scope.json when
+    # settings.autoCommit is false). Twin: moe-agent.sh MOE_SID / MOE_SESSION_ID.
+    $moeSid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    $env:MOE_SESSION_ID = $moeSid
     $moeGit = $null
     $moeSettings = $null
     $moeBaselinePath = ""
@@ -5873,7 +5879,6 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
             if ($null -eq $moeGit) {
                 Write-Host "[info] $projectPath is not a git repo — no baseline, no auto-commit." -ForegroundColor Cyan
             } else {
-                $moeSid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
                 $moeBaselinePath = Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId
                 $moeClaimStatus = ""
                 if ($preflightContext -and $preflightContext.task -and $preflightContext.task.PSObject.Properties['status']) {

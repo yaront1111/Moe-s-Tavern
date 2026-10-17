@@ -5840,6 +5840,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     # tool-write harvest must never leak into this task's attribution.
     MOE_PREFLIGHT_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     MOE_SID="$WORKER_ID@$MOE_PREFLIGHT_ISO"
+    # Exported for the seat: moe.record_commit requires this `<workerId>@<preflight-iso>`
+    # as `sessionId`, and an isolated-clone delivery can read it from nowhere else (the
+    # wrapper writes no preflight scope.json when settings.autoCommit is false). Twin:
+    # moe-agent.ps1 sets $env:MOE_SESSION_ID from $moeSid at the same point.
+    export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
     MOE_REL=""
     MOE_GITDIR=""
