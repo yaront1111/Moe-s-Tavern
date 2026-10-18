@@ -3394,7 +3394,11 @@ else {
                     if ($scopeZArgs -contains '--full-auto') { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: codex 0.147+ rejects --full-auto; it must never be on argv' }
                     # -cnotcontains: the default -contains is case-insensitive, so `-C` would be
                     # satisfied by the `-c` seat overrides that precede every codex launch.
-                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
+                    # The workerId rides a complete moe server table: codex 0.163's TUI rejects a
+                    # partial dotted `mcp_servers.moe.env.MOE_WORKER_ID=` override at bootstrap.
+                    $scopeZMoe = @($scopeZArgs | Where-Object { $_ -clike "mcp_servers.moe={command=*MOE_WORKER_ID='worker-scope-z'}}" })
+                    if ($scopeZMoe.Count -lt 1 -or @($scopeZArgs | Where-Object { $_ -like 'mcp_servers.moe.env.MOE_WORKER_ID=*' }).Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: headless codex argv must carry the workerId inside a complete mcp_servers.moe={command=...} override' }
+                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'approvals_reviewer=user')) {
                         if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
@@ -3403,7 +3407,7 @@ else {
                     # appears once per invocation; every occurrence must point under $env:TEMP.
                     $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
                     if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
-                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec --json -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, JSON mode, the reviewer pin and --sandbox danger-full-access' }
+                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains("-c mcp_servers.moe={command=") -or -not $scopeZText.Contains("MOE_WORKER_ID='worker-scope-z'}}") -or -not $scopeZText.Contains('-c approvals_reviewer=user exec --json -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, JSON mode, the reviewer pin and --sandbox danger-full-access' }
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
                     $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)

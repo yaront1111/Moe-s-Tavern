@@ -1150,6 +1150,41 @@ GEMINIEOF
     fi
 fi
 
+# Print this seat's `mcp_servers.moe=<inline table>` codex override: the
+# [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
+# plus MOE_WORKER_ID=$2. The override must be a complete server definition:
+# codex 0.163 TUI bootstrap rejects a partial dotted one
+# (`-c mcp_servers.moe.env.MOE_WORKER_ID=...`) with "account/read failed:
+# failed to load workspace requirements (code -32603)", exit 1 before any work.
+# The writer above emits every value as one-line TOML, so values are reused
+# verbatim. Falls back to the dotted form when the tables are missing.
+codex_moe_server_override() {
+    $PYTHON_CMD - "$1" "$2" << 'PYEOF' 2>/dev/null || printf 'mcp_servers.moe.env.MOE_WORKER_ID=%s' "$2"
+import sys, json
+config_file, worker_id = sys.argv[1], sys.argv[2]
+server, env, section = [], [], None
+with open(config_file, "r", encoding="utf-8-sig") as f:
+    for line in f:
+        s = line.strip()
+        if s.startswith("["):
+            section = s
+            continue
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        key, value = (p.strip() for p in s.split("=", 1))
+        if key == "MOE_WORKER_ID":
+            continue
+        if section == "[mcp_servers.moe]":
+            server.append(key + "=" + value)
+        elif section == "[mcp_servers.moe.env]":
+            env.append(key + "=" + value)
+if not any(p.startswith("command=") for p in server):
+    sys.exit(1)
+env.append("MOE_WORKER_ID=" + json.dumps(worker_id))
+print("mcp_servers.moe={" + ",".join(server + ["env={" + ",".join(env) + "}"]) + "}", end="")
+PYEOF
+}
+
 # For grok: write project-scoped .grok/config.toml (same [mcp_servers.*] TOML
 # shape as codex). Project-level grok config may ONLY carry [mcp_servers.*] /
 # [plugins] / [permission] / [mcp] tables -- NO top-level keys -- so this is a
@@ -6973,6 +7008,7 @@ $PROMPT_BODY"
         fi
         printf '%s' "$CODEX_FILE_BODY" > "$CODEX_SEAT_INSTRUCTIONS_FILE"
         echo -e "${GREEN}[OK]${NC} Agent instructions written to: $CODEX_SEAT_INSTRUCTIONS_FILE (shared role doc: $AGENT_INSTRUCTIONS_PATH)"
+        CODEX_MOE_OVERRIDE="$(codex_moe_server_override "$PROJECT/.codex/config.toml" "$WORKER_ID")"
 
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
@@ -7089,7 +7125,7 @@ $PROMPT_BODY"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
@@ -7109,7 +7145,7 @@ $PROMPT_BODY"
             echo ""
             # The banner is the line the launch-failure hint tells the operator to re-run by
             # hand, so it carries every argv token the real launch does (ps1 twin parity).
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
             start_moe_usage_receipt codex headless
             set +e
 
@@ -7119,7 +7155,7 @@ $PROMPT_BODY"
             # seats clobbering them.
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
-                -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
+                -c "$CODEX_MOE_OVERRIDE" \
                 "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
             CLI_EXIT_CODE=${PIPESTATUS[0]}
@@ -7129,13 +7165,13 @@ $PROMPT_BODY"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID${CODEX_TASK_BANNER} -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} -C \"$PROJECT\" \"<prompt>\""
             start_moe_usage_receipt codex interactive
             set +e
 
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
-                -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
+                -c "$CODEX_MOE_OVERRIDE" \
                 "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?

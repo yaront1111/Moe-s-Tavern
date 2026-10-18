@@ -3863,7 +3863,14 @@ EOF
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "codex 0.147+ rejects --full-auto; it must never be on argv" "$TMP_DIR/scope-z.out"
   fi
-  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '-c' 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' 'approvals_reviewer=user'; do
+  # The workerId rides a complete moe server table: codex 0.163's TUI rejects a
+  # partial dotted `mcp_servers.moe.env.MOE_WORKER_ID=` override at bootstrap.
+  if ! grep -Eqx -- 'mcp_servers\.moe=\{command=.*MOE_WORKER_ID="worker-scope-z"\}\}' "$CODEX_ARGS_FILE" \
+     || grep -Fq -- 'mcp_servers.moe.env.MOE_WORKER_ID=' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "expected the workerId inside a complete mcp_servers.moe={command=...} override on the codex argv" "$TMP_DIR/scope-z.out"
+  fi
+  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '-c' 'approvals_reviewer=user'; do
     if ! grep -Fqx -- "$flag" "$CODEX_ARGS_FILE"; then
       cat "$CODEX_ARGS_FILE" >&2 || true
       scope_fail Z "expected [$flag] on the headless codex argv" "$TMP_DIR/scope-z.out"
@@ -3880,7 +3887,7 @@ EOF
   # The banner is what the launch-failure hint tells the operator to re-run by
   # hand, so it must carry the seat override and the reviewer pin too.
   if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox danger-full-access' "$TMP_DIR/scope-z.out" \
-     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec --json -C' "$TMP_DIR/scope-z.out"; then
+     || ! grep -Fq -- "-c 'mcp_servers.moe={command=" "$TMP_DIR/scope-z.out" || ! grep -Fq -- 'MOE_WORKER_ID="worker-scope-z"}}'"'" "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec --json -C' "$TMP_DIR/scope-z.out"; then
     scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox danger-full-access" "$TMP_DIR/scope-z.out"
   fi
   if ! grep -Fq 'run the printed Command by hand' "$TMP_DIR/scope-z.out"; then

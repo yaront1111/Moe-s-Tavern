@@ -215,6 +215,34 @@ function Grant-GrokFolderTrust {
     }
 }
 
+# This seat's `mcp_servers.moe=<inline table>` codex override: the
+# [mcp_servers.moe] and [mcp_servers.moe.env] tables of $ConfigPath
+# (.codex/config.toml) plus MOE_WORKER_ID. The override must be a complete
+# server definition: codex 0.163 TUI bootstrap rejects a partial dotted one
+# (`-c mcp_servers.moe.env.MOE_WORKER_ID=...`) with "account/read failed:
+# failed to load workspace requirements (code -32603)", exit 1 before any work.
+# The writer emits one-line values with forward-slashed paths and no escapes, so
+# basic strings become TOML literal strings ('...'): no double quote reaches the
+# native argv, which PS < 7.3 would mangle. Falls back to the dotted form.
+function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
+    $fallback = "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId"
+    if (-not (Test-Path $ConfigPath)) { return $fallback }
+    $server = @(); $envPairs = @(); $section = ''
+    foreach ($line in [System.IO.File]::ReadAllLines($ConfigPath)) {
+        $s = $line.Trim().TrimStart([char]0xFEFF)
+        if ($s.StartsWith('[')) { $section = $s; continue }
+        if (-not $s -or $s.StartsWith('#') -or -not $s.Contains('=')) { continue }
+        $key, $value = $s.Split('=', 2) | ForEach-Object { $_.Trim() }
+        if ($key -eq 'MOE_WORKER_ID') { continue }
+        if (-not $value.Contains("'") -and -not $value.Contains('\')) { $value = $value.Replace('"', "'") }
+        if ($section -eq '[mcp_servers.moe]') { $server += "$key=$value" }
+        elseif ($section -eq '[mcp_servers.moe.env]') { $envPairs += "$key=$value" }
+    }
+    if (-not ($server | Where-Object { $_.StartsWith('command=') })) { return $fallback }
+    $envPairs += "MOE_WORKER_ID='$WorkerId'"
+    return 'mcp_servers.moe={' + (($server + @('env={' + ($envPairs -join ',') + '}')) -join ',') + '}'
+}
+
 function Get-MoeInstallPath {
     $configPath = Join-Path $env:USERPROFILE ".moe\\config.json"
     if (-not (Test-Path $configPath)) { return $null }
@@ -6163,13 +6191,14 @@ $mentionsJson
             # clobbered by a sibling seat writing the shared .codex/config.toml:
             # this seat's instructions file, and its workerId for the proxy's
             # injection (codex does not forward the wrapper's environment to
-            # MCP servers). Values are not valid TOML, so codex keeps them as
-            # strings; forward slashes keep the path free of TOML escapes.
+            # MCP servers). The instructions path is not valid TOML, so codex
+            # keeps it as a string; forward slashes keep it free of TOML escapes.
+            # The workerId rides a complete moe server table (Get-CodexMoeServerOverride).
             $codexSeatArgs = @()
             if ($script:CodexSeatInstructionsFile) {
                 $codexSeatArgs += @('-c', "model_instructions_file=$($script:CodexSeatInstructionsFile.Replace('\', '/'))")
             }
-            $codexSeatArgs += @('-c', "mcp_servers.moe.env.MOE_WORKER_ID=$WorkerId")
+            $codexSeatArgs += @('-c', (Get-CodexMoeServerOverride (Join-Path (Join-Path $projectPath '.codex') 'config.toml') $WorkerId))
             # Per-task model/effort (launch.codex hint). An operator pin wins:
             # --model / settings.models.<role> keeps the model, MOE_CODEX_REASONING_EFFORT
             # keeps the effort; with no hint, config.toml's model_reasoning_effort applies.
