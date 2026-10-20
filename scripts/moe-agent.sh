@@ -8034,11 +8034,13 @@ PYEOF
         STATUS_LOOKUP_ERROR=""
         PARSED_POSTFLIGHT=""
         if [ -n "$POSTFLIGHT_CTX" ]; then
-            # getContext.ts falls back to the CALLER's currentTaskId when the
-            # requested id resolves to nothing (deleted/archived/wrong project),
-            # and moe-proxy injects MOE_WORKER_ID on every call -- so a stale id
-            # comes back as some OTHER task's status. Committing on that would be
-            # worse than not committing at all, hence the id equality check.
+            # Daemons before the explicit-taskId NOT_FOUND fix fell back to the
+            # CALLER's currentTaskId when the requested id resolved to nothing
+            # (deleted/archived/wrong project), and moe-proxy injects
+            # MOE_WORKER_ID on every call -- so a stale id came back as some
+            # OTHER task's status. Committing on that would be worse than not
+            # committing at all, hence the id equality check, kept for
+            # launcher/daemon version skew; current daemons refuse instead.
             # The task projection carries no epicId/order, but get_context
             # returns the resolved epic alongside it.
             PARSED_POSTFLIGHT=$($PYTHON_CMD -c "

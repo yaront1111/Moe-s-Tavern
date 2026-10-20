@@ -462,11 +462,12 @@ switch (tool) {
   }
   case 'get_context': {
     // Mirrors getContext.ts: the task projection carries NO epicId and NO order
-    // (the resolved epic comes back alongside it instead), and an unresolvable
-    // taskId falls back to the CALLER's currentTaskId rather than erroring --
-    // so a stale id silently answers with a different task.
+    // (the resolved epic comes back alongside it instead). Daemons before the
+    // explicit-taskId NOT_FOUND fix let an unresolvable taskId fall back to the
+    // CALLER's currentTaskId rather than erroring -- so a stale id silently
+    // answered with a different task.
     // 'empty'    => daemon answered but carried no task.
-    // 'mismatch' => the real fallback: some OTHER task comes back.
+    // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
     // get_context with NO taskId is the post-flight adoption probe
     // (getContext.ts falls back to the caller's currentTaskId). Every other
     // caller passes a taskId, so this cannot disturb the other scenarios.

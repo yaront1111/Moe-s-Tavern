@@ -7132,11 +7132,13 @@ $mentionsJson
             if (-not $matched -or -not $matched.id) {
                 $statusLookupError = "get_context returned no task"
             } elseif ([string]$matched.id -ne $preflightTaskId) {
-                # getContext.ts falls back to the CALLER's currentTaskId when the
-                # requested id resolves to nothing (deleted/archived/wrong
-                # project), and moe-proxy injects MOE_WORKER_ID on every call —
-                # so a stale id comes back as some OTHER task's status. Committing
-                # on that would be worse than not committing at all.
+                # Daemons before the explicit-taskId NOT_FOUND fix fell back to
+                # the CALLER's currentTaskId when the requested id resolved to
+                # nothing (deleted/archived/wrong project), and moe-proxy injects
+                # MOE_WORKER_ID on every call — so a stale id came back as some
+                # OTHER task's status. Committing on that would be worse than not
+                # committing at all. Current daemons refuse (the no-task branch
+                # above); the check stays for launcher/daemon version skew.
                 $statusLookupError = "get_context resolved a different task ($($matched.id)) — the requested id no longer exists"
             } else {
                 $finalStatus = $matched.status
