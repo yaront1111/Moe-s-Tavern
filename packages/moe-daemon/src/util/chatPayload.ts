@@ -7,6 +7,8 @@ export const DEFAULT_CHAT_CONTEXT_CHARS = 300;
 export const DEFAULT_CHAT_RESYNC_LIMIT = 20;
 export const MAX_CHAT_LIMIT = 200;
 export const MAX_CHAT_CONTENT_CHARS = 10_000;
+/** Hard cap on one stored chat message, in UTF-8 bytes: sendMessage refuses anything larger. */
+export const MAX_CHAT_MESSAGE_BYTES = 10_240;
 /**
  * Ceiling on the TOTAL content a single chat response may carry.
  *

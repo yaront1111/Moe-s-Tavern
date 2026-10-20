@@ -2068,10 +2068,15 @@ Add a comment to a task (for questions or responses). This is how agents answer 
 
 **Returns:**
 ```typescript
-{ success: true, taskId, commentId, totalComments }
+{
+  success: true, taskId, commentId, totalComments,
+  routing?: { messageId, channel, routingTargets },  // the comment's @mentions were relayed to chat
+  routingError?: string                               // they were not; the comment is stored regardless
+}
 ```
 
 **Notes:**
+- A comment whose @mentions would route (the same parse as `moe.chat_send`: quoted, code-span and mid-sentence group mentions do not) is relayed as ONE chat message, `💬 <author> on <taskId> (<commentId>):` followed by the comment, so the named seats' `moe.chat_wait` wakes. It goes to the task's channel (a channel named by the task id) when one exists, else `#general`, sent as the author: the loop guard counts it as one agent hop. Only a registered worker's comment is relayed; any other author gets `routingError`. A comment too long for one chat message is relayed as its explicit `@<workerId>` list instead. A relay failure never fails the comment, and a comment that addresses nobody posts nothing.
 - The stored comment is `{ id, author, content, timestamp }`; `content` is trimmed before storage and validation.
 - Posting a comment clears `hasPendingQuestion` on the task — it counts as answering the outstanding human question (and stops `moe.wait_for_task` waking for it).
 - The task's comment list is bounded: only the most recent `MAX_COMMENTS_PER_TASK` comments are kept (default 200, override via `MOE_MAX_COMMENTS_PER_TASK`); older comments are dropped.

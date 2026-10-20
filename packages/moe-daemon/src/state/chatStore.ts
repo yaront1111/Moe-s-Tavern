@@ -34,6 +34,7 @@ import { sanitizeString } from '../util/sanitize.js';
 import { atomicWriteJson } from '../util/atomicWrite.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { parseRawMentions } from '../util/mentionRouter.js';
+import { MAX_CHAT_MESSAGE_BYTES } from '../util/chatPayload.js';
 
 /** Increment unread count for a worker on a channel. */
 /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -180,7 +181,7 @@ export async function sendMessage(state: StateManager, opts: {
   if (!content || typeof content !== 'string') {
     throw new Error('Message content is required');
   }
-  if (Buffer.byteLength(content, 'utf-8') > 10240) {
+  if (Buffer.byteLength(content, 'utf-8') > MAX_CHAT_MESSAGE_BYTES) {
     throw new Error('Message content exceeds 10KB limit');
   }
 
