@@ -1,5 +1,6 @@
 package com.moe.toolwindow
 
+import com.moe.model.AccountRotation
 import com.moe.model.MoeState
 import com.moe.model.Task
 import com.moe.services.MoeProjectService
@@ -44,6 +45,7 @@ import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
 import java.time.Instant
 import java.time.Duration
+import java.time.ZoneId
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -60,6 +62,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private var selectedEpicId: String? = null
     private var updatingEpicFilter = false
     private val workerPanel = WorkerPanel()
+    /** The header's Claude account line; hidden until the daemon reports accounts. */
+    private val accountsLabel = JBLabel()
     @Volatile private var panelDisposed = false
     private var stateListener: MoeStateListener? = null
     private lateinit var agentsButton: JBLabel
@@ -260,6 +264,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         }
         header.add(settingsButton)
 
+        accountsLabel.apply {
+            isVisible = false
+            foreground = BoardStyles.textSecondary
+            border = com.intellij.util.ui.JBUI.Borders.empty(2, 4)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        }
+        header.add(accountsLabel)
+
         statusLabel.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         statusLabel.toolTipText = "Click for daemon status"
         statusLabel.addMouseListener(object : MouseAdapter() {
@@ -288,6 +300,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val activityLogPanel = ActivityLogPanel(project)
         val chatPanel = ChatPanel(project)
         val metricsPanel = MetricsPanel(project)
+        val accountsPanel = AccountsPanel(project)
 
         val tabbedPane = JTabbedPane().apply {
             addTab(MoeBundle.message("moe.tab.board"), scroll)
@@ -295,7 +308,13 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             addTab(MoeBundle.message("moe.tab.activityLog"), activityLogPanel)
             addTab(MoeBundle.message("moe.tab.chat"), chatPanel)
             addTab(MoeBundle.message("moe.tab.metrics"), metricsPanel)
+            addTab(MoeBundle.message(AccountKeys.TAB), accountsPanel)
         }
+        accountsLabel.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                tabbedPane.selectedComponent = accountsPanel
+            }
+        })
         // Drive metrics polling based on tab visibility (cheaper than continuous polling).
         tabbedPane.addChangeListener {
             val idx = tabbedPane.selectedIndex
@@ -309,6 +328,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         Disposer.register(this, activityLogPanel)
         Disposer.register(this, chatPanel)
         Disposer.register(this, metricsPanel)
+        Disposer.register(this, accountsPanel)
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
@@ -405,6 +425,15 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         popup.show(e.component, e.x, e.y)
     }
 
+    private fun updateAccountsLabel(rotation: AccountRotation?) {
+        val chips = AccountPresentation.chips(rotation, Instant.now(), ZoneId.systemDefault())
+        accountsLabel.isVisible = rotation != null && chips.isNotEmpty()
+        if (rotation == null || chips.isEmpty()) return
+        accountsLabel.text = MoeBundle.message(AccountKeys.HEADER, chips.joinToString(AccountPresentation.SEPARATOR) { it.resolve() })
+        accountsLabel.toolTipText = rotation.error?.let { MoeBundle.message(AccountKeys.ERROR, it) }
+            ?: MoeBundle.message(AccountKeys.HEADER_TOOLTIP, rotation.switchAtPercent)
+    }
+
     private fun styleStatusLabel(connected: Boolean, message: String) {
         statusLabel.text = if (connected) MoeBundle.message("moe.panel.connected") else message
         statusLabel.isOpaque = true
@@ -426,7 +455,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             // Update worker panel
             val taskMap = state.tasks.associateBy { it.id }
-            workerPanel.updateWorkers(state.workers, taskMap, state.teams)
+            workerPanel.updateWorkers(state.workers, taskMap, state.teams, AccountPresentation.labels(state.accountRotation))
+            updateAccountsLabel(state.accountRotation)
 
             val boardFingerprint = runCatching {
                 val taskFingerprint = state.tasks.joinToString(",") {

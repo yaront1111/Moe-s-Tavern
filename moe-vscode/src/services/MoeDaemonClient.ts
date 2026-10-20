@@ -929,6 +929,11 @@ export class MoeDaemonClient implements vscode.Disposable {
                     }
                     break;
 
+                case 'ACCOUNTS_UPDATED':
+                case 'ACCOUNT_ADDED':
+                    // Claude accounts are managed in the JetBrains Accounts tab; VS Code has no account UI.
+                    break;
+
                 case 'TEAM_CREATED':
                 case 'TEAM_UPDATED':
                     if (this.state) {

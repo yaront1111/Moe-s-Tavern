@@ -22,4 +22,6 @@ interface MoeStateListener {
     fun onDecisionProposed(decision: Decision) {}
     fun onDecisionResolved(decision: Decision) {}
     fun onMetrics(aggregate: MetricsAggregate) {}
+    /** The daemon registered the account this connection asked for with ADD_ACCOUNT. */
+    fun onAccountAdded(accountId: String) {}
 }

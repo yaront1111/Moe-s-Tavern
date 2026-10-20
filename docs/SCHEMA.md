@@ -879,6 +879,10 @@ interface Worker {
 
   // Chat cursors — per-channel last-read message ID
   chatCursors?: Record<string, string>;  // { channelId: lastReadMessageId }
+
+  // Claude account rotation: the account the seat's current claude launch runs under.
+  // Set by every moe.lease_account; null when the lease gave no account. See Claude Accounts.
+  accountId?: string | null;
 }
 
 type WorkerType =
@@ -1518,6 +1522,69 @@ type ProposalStatus =
 
 ---
 
+## Claude Accounts
+
+Machine-level, outside every `.moe/` folder: one account list per machine, shared by every project's daemon and by the `accounts` CLI. Contracts and behaviour: `docs/MCP_SERVER.md`, **Claude Account Rotation**.
+
+**File:** `~/.moe/claude-accounts.json` (`MOE_ACCOUNTS_FILE` overrides). Written by the daemons and the CLI (tmp + rename), mode 0600.
+
+```typescript
+interface ClaudeAccountRegistry {
+  version: 1;
+  switchAtPercent: number;            // 1-100, default 90: leave an account once a live usage window reaches it
+  accounts: Array<{                   // fill order; at most 32
+    id: string;                       // "acct-1"; [A-Za-z0-9][A-Za-z0-9_-]{0,63}
+    label: string;                    // ≤64 chars, no control characters; defaults to the id
+    signIn: 'subscription' | 'signed_out' | 'other';   // only "subscription" accounts are leased
+    signInCheckedAt: string | null;
+  }>;
+}
+```
+
+Any key not listed here makes the whole file invalid: rotation turns off and the view's `error` says why, so a stray `dir` or `token` cannot ride along unnoticed.
+
+**Folders next to the list:**
+- `claude-accounts/<id>/`: the account's Claude config folder, which Claude's own `claude auth login` fills. Moe creates it and passes its path as `CLAUDE_CONFIG_DIR`, and never opens a file inside it. Removing an account keeps the folder. A new account never reuses an id whose folder still exists.
+- `claude-usage/<id>.json`: usage numbers only, with no credential and no path.
+
+```typescript
+interface AccountUsage {
+  id: string;
+  windows: Record<string, {           // "five_hour", "seven_day", …, as claude reports them
+    percent: number | null;           // 0-100, one decimal
+    resetsAt: string | null;          // null: live for 1 hour after sampledAt
+    status: string | null;            // claude's status; "rejected" / "overage" mean spent
+    sampledAt: string;
+  }>;
+  refusedUntil: string | null;        // a launch was refused at the limit; spent until then
+  updatedAt: string;
+}
+```
+
+**View** (`STATE_SNAPSHOT.accountRotation`, the `ACCOUNTS_UPDATED` payload):
+
+```typescript
+interface AccountRotationView {
+  registryFile: string;
+  switchAtPercent: number;
+  error: string | null;               // why the list cannot be used; null when it is fine
+  cli: { node: string; script: string };   // how the IDE runs the accounts CLI
+  accounts: Array<{
+    id: string;
+    label: string;
+    signIn: 'subscription' | 'signed_out' | 'other';
+    signInCheckedAt: string | null;
+    windows: Record<string, { percent: number | null; resetsAt: string | null }>;   // live windows only
+    peakPercent: number | null;
+    blockedUntil: string | null;      // when usage or a refusal stops blocking it; null when not blocked
+    active: boolean;                  // the account the next lease picks
+    seats: string[];                  // non-DEAD workers whose current launch runs under it
+  }>;
+}
+```
+
+---
+
 ## Activity Event
 
 **File:** `.moe/activity.log` (append-only, one JSON per line)
@@ -1577,6 +1644,11 @@ type ActivityEventType =
   | 'WORKER_BLOCKED'
   | 'WORKER_RELEASED'    // Task released from worker via moe.release_task
   | 'WORKER_GOVERNING'   // Governor entered governance mode via moe.enter_governance
+
+  // Claude account rotation (see Claude Accounts)
+  | 'ACCOUNT_SWITCHED'   // Launches moved accounts. Payload: { workerId, from, to, fromPeakPercent, switchAtPercent, reason }
+  | 'ACCOUNTS_EXHAUSTED' // Every signed-in account is spent (once per episode). Payload: { workerId, accounts, retryAt, switchAtPercent }
+  | 'ACCOUNT_SIGNED_OUT' // A wrapper probe found an account signed out or off its subscription. Payload: { accountId, state, workerId }
 
   // Shared resources
   | 'RESOURCE_ACQUIRED'      // Lease granted directly on moe.acquire_resource

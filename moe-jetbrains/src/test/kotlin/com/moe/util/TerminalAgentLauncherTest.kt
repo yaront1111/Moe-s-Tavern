@@ -1,5 +1,7 @@
 package com.moe.util
 
+import com.moe.model.AccountCli
+import com.moe.util.TerminalAgentLauncher.AccountsShell
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -363,5 +365,68 @@ class TerminalAgentLauncherTest {
         // no PowerShell backtick escapes may survive — bash treats ` as command substitution
         assertFalse(wrapped.contains("`\$"))
         assertFalse(wrapped.contains("`\""))
+    }
+
+    @Test
+    fun `accounts commands run in the shell agents run in`() {
+        assertEquals(AccountsShell.WSL_BASH, TerminalAgentLauncher.accountsShellFor(windows = true, wslAgents = true))
+        assertEquals(AccountsShell.POWERSHELL, TerminalAgentLauncher.accountsShellFor(windows = true, wslAgents = false))
+        assertEquals(AccountsShell.BASH, TerminalAgentLauncher.accountsShellFor(windows = false, wslAgents = false))
+        assertEquals(AccountsShell.BASH, TerminalAgentLauncher.accountsShellFor(windows = false, wslAgents = true))
+    }
+
+    @Test
+    fun `PowerShell accounts command quotes every word for the inner and outer shell`() {
+        val command = TerminalAgentLauncher.buildAccountsCommand(
+            AccountCli(
+                "C:\\Program Files\\nodejs\\node.exe",
+                "C:\\Users\\O'Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js"
+            ),
+            "D:\\moe\$\\claude-accounts.json",
+            listOf("login", "acct-1"),
+            AccountsShell.POWERSHELL
+        )
+
+        assertEquals(
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& 'C:\\Program Files\\nodejs\\node.exe' " +
+                "'C:\\Users\\O''Brien\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js' " +
+                "'--accounts-file' 'D:\\moe`\$\\claude-accounts.json' 'login' 'acct-1'\"",
+            command
+        )
+    }
+
+    @Test
+    fun `WSL accounts command runs WSL node on mnt paths`() {
+        val command = TerminalAgentLauncher.buildAccountsCommand(
+            AccountCli(
+                "C:\\Program Files\\nodejs\\node.exe",
+                "C:\\Users\\Yaron\\AppData\\Roaming\\JetBrains\\PyCharm2026.2\\plugins\\moe-jetbrains\\daemon\\accounts\\cli.js"
+            ),
+            "C:\\Users\\Yaron\\.moe\\claude-accounts.json",
+            listOf("remove", "acct-2", "--sign-out"),
+            AccountsShell.WSL_BASH
+        )
+
+        // The daemon's Windows node cannot sign claude in where WSL agents run it.
+        assertEquals(
+            "node '/mnt/c/Users/Yaron/AppData/Roaming/JetBrains/PyCharm2026.2/plugins/moe-jetbrains/daemon/accounts/cli.js' " +
+                "'--accounts-file' '/mnt/c/Users/Yaron/.moe/claude-accounts.json' 'remove' 'acct-2' '--sign-out'",
+            command
+        )
+    }
+
+    @Test
+    fun `bash accounts command single-quotes every word`() {
+        val command = TerminalAgentLauncher.buildAccountsCommand(
+            AccountCli("/usr/local/bin/node", "/opt/moe/daemon/accounts/cli.js"),
+            "/home/o'neil/.moe/claude-accounts.json",
+            listOf("check"),
+            AccountsShell.BASH
+        )
+
+        assertEquals(
+            "'/usr/local/bin/node' '/opt/moe/daemon/accounts/cli.js' '--accounts-file' '/home/o'\"'\"'neil/.moe/claude-accounts.json' 'check'",
+            command
+        )
     }
 }

@@ -91,6 +91,15 @@ When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a
 2. **Busy → park, never poll**: follow the returned `nextAction` — `moe.report_blocked` with the same `resourceId`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling `acquire_resource`. For a short wait inside a live session, `moe.wait_for_resource` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
 3. **Release when done**: `moe.release_resource { resourceId, workerId }` — the next waiter unparks immediately. The 24h `maxLeaseMs` auto-expiry is a crash bound, not a substitute for releasing.
 
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. Once a usage window on yours reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed, the daemon moves you at the next step boundary:
+
+- `moe.complete_step` adds `accountSwitch { from, to, fromPeakPercent, switchAtPercent, reason, instruction }`. The step you just finished is saved. Do not start the next step. End the turn, even though `nextAction` still names `moe.start_step`.
+- `moe.start_step` refuses with `NOT_ALLOWED` and a reason starting `ACCOUNT-SWITCH:`. The step stays `PENDING`. End the turn; do not retry it in this session.
+
+The wrapper lands your work as usual, relaunches the same task on the next account, and the new session starts the pending step. A switch is not a failure: report nothing, block nothing, and do not call `release_task`. If you are mid-step when the account fills up, finish the step first. The switch only ever happens at a step boundary.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, `.serena/memories/`), not in Moe. On task start, `list_memories` and `read_memory` to pick up prior knowledge; before you finish, `write_memory` so the next agent benefits.

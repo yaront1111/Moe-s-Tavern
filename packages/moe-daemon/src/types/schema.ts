@@ -938,6 +938,8 @@ export interface Worker {
   errorCount: number;
   teamId: string | null;
   chatCursors?: Record<string, string>; // channelId → lastReadMessageId (default: {})
+  /** Claude account the seat's current claude launch runs under (moe.lease_account); null/absent when not rotating. */
+  accountId?: string | null;
 }
 
 // =============================================================================
@@ -991,6 +993,42 @@ export interface ResourceSettings {
    */
   releaseOnDeregister?: boolean;
   description?: string;
+}
+
+// =============================================================================
+// Claude account rotation — the machine's Claude subscription accounts
+// (accounts/registry.ts) plus the usage the daemons learned for them
+// (state/accountStore.ts). Served in the snapshot and ACCOUNTS_UPDATED.
+// Holds no credential: ids, labels, sign-in states and usage numbers.
+// =============================================================================
+
+export interface AccountView {
+  id: string;
+  label: string;
+  /** Only "subscription" accounts are leased. */
+  signIn: 'subscription' | 'signed_out' | 'other';
+  signInCheckedAt: string | null;
+  /** Live usage windows by name ("five_hour", "seven_day", …). */
+  windows: Record<string, { percent: number | null; resetsAt: string | null }>;
+  /** Highest live percent; null before any report. */
+  peakPercent: number | null;
+  /** When usage or a refusal stops blocking the account; null when it does not block it now. */
+  blockedUntil: string | null;
+  /** The account the next lease would pick. */
+  active: boolean;
+  /** Non-DEAD workers whose current launch runs under this account. */
+  seats: string[];
+}
+
+export interface AccountRotationView {
+  registryFile: string;
+  switchAtPercent: number;
+  /** Why the registry cannot be used (rotation is off until it is fixed); null when it is fine. */
+  error: string | null;
+  /** How to run the `accounts` CLI on this machine (the IDE runs sign-in through it). */
+  cli: { node: string; script: string };
+  /** Registry (fill) order. */
+  accounts: AccountView[];
 }
 
 // =============================================================================
@@ -1315,6 +1353,9 @@ export const ACTIVITY_EVENT_TYPES = [
   'RESOURCE_RELEASED',
   'RESOURCE_GRANTED',
   'RESOURCE_LEASE_EXPIRED',
+  'ACCOUNT_SWITCHED',
+  'ACCOUNTS_EXHAUSTED',
+  'ACCOUNT_SIGNED_OUT',
   'PROPOSAL_CREATED',
   'PROPOSAL_APPROVED',
   'PROPOSAL_REJECTED',
@@ -1361,6 +1402,7 @@ export interface MoeStateSnapshot {
   channels: ChatChannel[];
   decisions: Decision[];
   resources: ResourceState[];
+  accountRotation: AccountRotationView;
 }
 
 // =============================================================================

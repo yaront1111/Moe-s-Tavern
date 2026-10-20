@@ -31,6 +31,7 @@ import fs from 'fs';
 import path from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
 import type {
+  AccountRotationView,
   ActivityEvent,
   ActivityEventType,
   Candidate,
@@ -227,6 +228,7 @@ import {
   validateTeamUpdates,
 } from './validators.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
+import { accountRotationView } from './accountStore.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -347,7 +349,8 @@ export type StateChangeEvent =
   | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }
   | { type: 'DECISION_PROPOSED'; payload: Decision }
   | { type: 'DECISION_RESOLVED'; payload: Decision }
-  | { type: 'RESOURCE_UPDATED'; payload: ResourceState };
+  | { type: 'RESOURCE_UPDATED'; payload: ResourceState }
+  | { type: 'ACCOUNTS_UPDATED'; payload: AccountRotationView };
 
 type StateSubscriber = (event: StateChangeEvent) => void;
 
@@ -1200,7 +1203,8 @@ export class StateManager {
       ),
       resources: Array.from(this.resources.values()).sort(
         (a, b) => a.id.localeCompare(b.id)
-      )
+      ),
+      accountRotation: accountRotationView(this, nowMs)
     };
   }
 

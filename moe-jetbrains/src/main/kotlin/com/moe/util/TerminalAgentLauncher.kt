@@ -1,5 +1,6 @@
 package com.moe.util
 
+import com.moe.model.AccountCli
 import com.moe.services.MoeProjectService
 import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
@@ -287,6 +288,47 @@ object TerminalAgentLauncher {
         launchRole(project, ctx, role)
     }
 
+    /** The shell an Accounts tab command is typed into: the one agents run in. */
+    internal enum class AccountsShell { POWERSHELL, WSL_BASH, BASH }
+
+    internal fun accountsShellFor(windows: Boolean, wslAgents: Boolean): AccountsShell = when {
+        windows && wslAgents -> AccountsShell.WSL_BASH
+        windows -> AccountsShell.POWERSHELL
+        else -> AccountsShell.BASH
+    }
+
+    /**
+     * `node <cli.js> --accounts-file <file> <args>` with every word quoted. Under
+     * WSL the daemon's Windows paths become /mnt paths for WSL's own node, so
+     * claude signs in where WSL agents run it.
+     */
+    internal fun buildAccountsCommand(cli: AccountCli, registryFile: String, args: List<String>, shell: AccountsShell): String =
+        when (shell) {
+            AccountsShell.POWERSHELL -> powerShellLine(
+                "& " + (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { psQuote(it) }
+            )
+            AccountsShell.WSL_BASH ->
+                "node " + (listOf(toWslPath(cli.script), "--accounts-file", toWslPath(registryFile)) + args).joinToString(" ") { shQuote(it) }
+            AccountsShell.BASH ->
+                (listOf(cli.node, cli.script, "--accounts-file", registryFile) + args).joinToString(" ") { shQuote(it) }
+        }
+
+    /** The accounts CLI line for this project's agent shell, for a person to run when no terminal tab can. */
+    fun accountsCommandLine(project: Project, cli: AccountCli, registryFile: String, args: List<String>): String =
+        buildAccountsCommand(cli, registryFile, args, accountsShellFor(SystemInfo.isWindows, isWslAgentsEnabled(project)))
+
+    /**
+     * Runs the daemon's `accounts` CLI in a new terminal tab (sign in, check, sign
+     * out): claude's own sign-in prompts need a person, and the daemon never runs
+     * claude. False when no terminal tab could run it.
+     */
+    fun runAccountsCommand(project: Project, cli: AccountCli, registryFile: String, args: List<String>, tabName: String): Boolean {
+        val manager = resolveTerminalManager(project) ?: return false
+        val workingDir = project.basePath ?: System.getProperty("user.home")
+        val widget = runCatching { createTerminalWidget(manager, workingDir, tabName) }.getOrNull() ?: return false
+        return sendCommand(widget, accountsCommandLine(project, cli, registryFile, args))
+    }
+
     private fun buildCommand(
         basePath: String,
         role: String,
@@ -403,7 +445,13 @@ object TerminalAgentLauncher {
             }
         } else ""
         val interactiveArg = if (shouldLaunchClaudeInteractive(role, agentCommand, codexExec)) " -Interactive" else ""
-        val psCommand = "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg$interactiveArg"
+        return powerShellLine(
+            "${envSet}& $scriptArg -Role $role -Project $projectArg -WorkerId $workerIdArg -Command $commandArg$teamArg$execArg$interactiveArg"
+        )
+    }
+
+    /** Runs [psCommand] in a fresh `powershell`, escaped for the PowerShell prompt it is typed into. */
+    private fun powerShellLine(psCommand: String): String {
         val escaped = psCommand.replace("\"", "`\"").replace("\$", "`\$")
         return "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$escaped\""
     }

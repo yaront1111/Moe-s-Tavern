@@ -14,7 +14,9 @@ data class MoeState(
     val proposals: List<RailProposal> = emptyList(),
     val workers: List<Worker> = emptyList(),
     val teams: List<Team> = emptyList(),
-    val channels: List<ChatChannel> = emptyList()
+    val channels: List<ChatChannel> = emptyList(),
+    /** Null when the daemon predates Claude account rotation. */
+    val accountRotation: AccountRotation? = null
 )
 
 data class Project(
@@ -268,7 +270,56 @@ data class Worker(
     val currentTaskId: String?,
     val status: String,
     val lastError: String?,
-    val teamId: String? = null
+    val teamId: String? = null,
+    /** The Claude account the seat's last launch leased; null when it runs without rotation. */
+    val accountId: String? = null
+)
+
+/**
+ * Claude account rotation as the daemon reports it: `accountRotation` in the
+ * snapshot and the whole `ACCOUNTS_UPDATED` payload. The account file is
+ * machine-wide, so every project shows the same accounts. It carries ids,
+ * labels, usage and paths, never a credential.
+ */
+data class AccountRotation(
+    /** The account file the daemon reads; the `accounts` CLI gets it as `--accounts-file`. */
+    val registryFile: String,
+    /** A worker moves to the next account after its current step once a usage window reaches this. */
+    val switchAtPercent: Int,
+    /** Why the account file is unusable; while set the daemon leases no account. */
+    val error: String?,
+    val cli: AccountCli?,
+    /** In the order Moe uses them. */
+    val accounts: List<ClaudeAccount>
+)
+
+/** The daemon's `accounts` CLI: the node binary that runs the daemon, and `dist/accounts/cli.js`. */
+data class AccountCli(
+    val node: String,
+    val script: String
+)
+
+data class ClaudeAccount(
+    val id: String,
+    val label: String,
+    /** `subscription`, `signed_out` or `other`; only `subscription` accounts are used. */
+    val signIn: String,
+    val signInCheckedAt: String?,
+    /** Live usage windows by name, e.g. `five_hour`, `seven_day`. */
+    val windows: Map<String, UsageWindow>,
+    /** Highest live percent; null before any sample. */
+    val peakPercent: Double?,
+    /** ISO time the account is usable again; null when it is not blocked. */
+    val blockedUntil: String?,
+    /** The account the next claude launch gets. */
+    val active: Boolean,
+    /** Worker ids whose last launch leased this account. */
+    val seats: List<String>
+)
+
+data class UsageWindow(
+    val percent: Double?,
+    val resetsAt: String?
 )
 
 data class Team(

@@ -507,7 +507,7 @@ only you can.
 - "Rejecting: \`rejectionDetails[2]\` — the nil-guard in \`foo.ts:41\` is missing. Reopening with a fix note."
 - "Approved: all DoD items verified, tests green on commit \`abcd123\`."
 - "Before I approve, can you confirm the migration is idempotent? My read says it isn't."`,
-  'worker.md': `<!-- moe-generated: sha=0d4a56256314 -->
+  'worker.md': `<!-- moe-generated: sha=bb8c2906ee23 -->
 
 # Worker
 
@@ -528,6 +528,8 @@ You execute an approved plan step-by-step, producing production-ready code, test
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. After your terminal call for the row (\`complete_task\`, \`report_blocked\`, \`submit_plan\`) END THE TURN — never \`claim_next_task\` inside the same session: the wrapper lands the row it launched you on when the process exits, so a session that hops rows strands every row but the last (measured 2026-09-06: one completion in three reached REVIEW with its bytes only in the dirty tree). The wrapper relaunches you in seconds. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
 
+\`ACCOUNT-SWITCH\` (a \`complete_step\` \`accountSwitch\`, or a \`start_step\` refusal) means your Claude account is spent: end the turn now and start no other step. The wrapper relaunches this task on the next account, and the new session picks up at the next step. Detail: \`worker.reference.md\`, **Claude account switch**.
+
 ## Runtime-driven workflow
 Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSkill\`, load that skill before calling the hinted tool.
 
@@ -536,7 +538,7 @@ The runtime enforces ownership, step ordering, and task completion gates, so rel
 Memory lives in Serena. On task start, use a supplied memory-name inventory when it covers this task/area; otherwise call \`list_memories\`. Then \`read_memory\` for the relevant prior knowledge. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Blocking on another task landing? Pass its id(s) in \`blockedOnTaskIds\` — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=7a2b7f00dfd3 -->
+  'worker.reference.md': `<!-- moe-generated: sha=7642fd40403b -->
 
 # Worker — Reference
 
@@ -631,6 +633,15 @@ When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a
 2. **Busy → park, never poll**: follow the returned \`nextAction\` — \`moe.report_blocked\` with the same \`resourceId\`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling \`acquire_resource\`. For a short wait inside a live session, \`moe.wait_for_resource\` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
 3. **Release when done**: \`moe.release_resource { resourceId, workerId }\` — the next waiter unparks immediately. The 24h \`maxLeaseMs\` auto-expiry is a crash bound, not a substitute for releasing.
 
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. Once a usage window on yours reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed, the daemon moves you at the next step boundary:
+
+- \`moe.complete_step\` adds \`accountSwitch { from, to, fromPeakPercent, switchAtPercent, reason, instruction }\`. The step you just finished is saved. Do not start the next step. End the turn, even though \`nextAction\` still names \`moe.start_step\`.
+- \`moe.start_step\` refuses with \`NOT_ALLOWED\` and a reason starting \`ACCOUNT-SWITCH:\`. The step stays \`PENDING\`. End the turn; do not retry it in this session.
+
+The wrapper lands your work as usual, relaunches the same task on the next account, and the new session starts the pending step. A switch is not a failure: report nothing, block nothing, and do not call \`release_task\`. If you are mid-step when the account fills up, finish the step first. The switch only ever happens at a step boundary.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (a flat per-name markdown store, \`.serena/memories/\`), not in Moe. On task start, \`list_memories\` and \`read_memory\` to pick up prior knowledge; before you finish, \`write_memory\` so the next agent benefits.
@@ -667,8 +678,8 @@ const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
-  'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
-  'worker.reference.md': ['00d768586ec5', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', '7a2b7f00dfd3', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
+  'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
+  'worker.reference.md': ['00d768586ec5', '4818eaa4d242', '4b041787b980', '6b8e906e69d9', '7642fd40403b', '7a2b7f00dfd3', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
 
 /**

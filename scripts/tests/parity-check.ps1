@@ -25,6 +25,7 @@ $dynamicPatterns = @(
     'MOE_ATTR_[A-Z_]+',
     'MOE_CHECKPOINT_[A-Z_]+',
     'MOE_ATTRIBUTION_[A-Z_]+',
+    'MOE_ACCOUNT_[A-Z_]+',
     'MOE_RESCUE_REF'
 )
 # NOTE: the sh wrapper's internal MOE_LAND_* names (env plumbing between bash
@@ -65,11 +66,16 @@ $required = [ordered]@{
         'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
         'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC',
         'CLAUDE_CODE_PROMPT_CACHE_TTL', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
-        'MOE_COMPACT_WINDOW_DEFAULT', 'CLAUDE_CODE_PLUGIN_DIRS', 'MOE_DISABLE_COMPACTION_KEEPER')
+        'MOE_COMPACT_WINDOW_DEFAULT', 'CLAUDE_CODE_PLUGIN_DIRS', 'MOE_DISABLE_COMPACTION_KEEPER',
+        'CLAUDE_CONFIG_DIR', 'MOE_ACCOUNT_ID', 'MOE_ACCOUNT_SAMPLE_FILE')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
     'resume-budget prose' = @('resume budget re-armed')
+    # Claude account rotation: the helper both wrappers call and the lease, wait
+    # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
+    # compared above).
+    'account rotation prose' = @('moe-account-lease.mjs', '[account] ', 'launching without rotation.', 'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', 'relaunching on the next account; the held task stays held.', 'Relaunching now on the next account.')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
-    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')
+    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt', 'lease_account', 'report_account_usage')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     # The landing outcomes finalize_attempt carries: both wrappers map every exit
     # (the interrupted one included) onto the same words. 'failed' is too common a

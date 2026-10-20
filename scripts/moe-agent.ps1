@@ -2005,7 +2005,8 @@ function Start-HeartbeatSidecar {
     # The attempt pinned at claim time, for the reattach below: the job is a
     # separate process and sees none of this script's variables.
     $pin = @{ TaskId = [string]$preflightTaskId; AttemptId = [string]$script:MoeAttemptId; Generation = $script:MoeAttemptGeneration
-        RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost }
+        RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost
+        AccountId = [string]$script:AccountLeasedId; AccountSampleFile = [string]$script:AccountSampleFile }
     try {
         $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
             param($ProxyScript, $ProjectPath, $WorkerId, $IntervalSec, $MaxDurationSec, $WrapperPid, $Pin)
@@ -2013,7 +2014,7 @@ function Start-HeartbeatSidecar {
             # One tools/call through a fresh proxy: @{ Value = <parsed reply> }, or
             # @{ Refused = <codeName> } for a daemon refusal, or $null.
             function Send-SidecarRpc([string]$Name, [hashtable]$Arguments) {
-                $rpc = @{ jsonrpc = "2.0"; id = 1; method = "tools/call"; params = @{ name = $Name; arguments = $Arguments } } | ConvertTo-Json -Depth 5 -Compress
+                $rpc = @{ jsonrpc = "2.0"; id = 1; method = "tools/call"; params = @{ name = $Name; arguments = $Arguments } } | ConvertTo-Json -Depth 8 -Compress
                 $lines = @($rpc | & node $ProxyScript 2>&1 | ForEach-Object { "$_" })
                 for ($i = $lines.Count - 1; $i -ge 0; $i--) {
                     try { $d = $lines[$i] | ConvertFrom-Json -ErrorAction Stop } catch { continue }
@@ -2022,13 +2023,28 @@ function Start-HeartbeatSidecar {
                 }
                 return $null
             }
-            $refused = $false; $noted = @{}
+            $refused = $false; $noted = @{}; $sentSample = ''
             $deadline = (Get-Date).AddSeconds($MaxDurationSec)
             while ((Get-Date) -lt $deadline) {
                 Start-Sleep -Seconds $IntervalSec
                 # The wrapper that owns this job is gone (TerminateProcess leaves
                 # no finally): stop heartbeating on behalf of a dead seat.
                 if ($WrapperPid -and -not (Get-Process -Id $WrapperPid -ErrorAction SilentlyContinue)) { break }
+                # Mid-run usage of the leased account, so the next lease sees a
+                # window crossing the switch percent before this run ends.
+                if ($Pin.AccountId) {
+                    try {
+                        $sample = [IO.File]::ReadAllText($Pin.AccountSampleFile)
+                        if ($sample -and $sample -cne $sentSample) {
+                            $usage = $sample | ConvertFrom-Json -ErrorAction Stop
+                            if ([string]$usage.accountId -ceq $Pin.AccountId) {
+                                $sent = Send-SidecarRpc 'moe.report_account_usage' @{ workerId = $WorkerId; accountId = $Pin.AccountId
+                                    windows = $usage.windows; refused = ($usage.refused -eq $true) }
+                                if ($sent -and $sent.Value) { $sentSample = $sample }
+                            }
+                        }
+                    } catch {}
+                }
                 # A daemon restart parked the attempt this wrapper pinned at claim
                 # time: reattach it with the pinned generation (the answer carries
                 # none). Any other reason names nothing this process may reattach:
@@ -5188,6 +5204,137 @@ if ($env:MOE_LAUNCH_BACKOFF_BASE_SEC -match '^\d+$') { $launchBackoffBaseSec = [
 $launchBackoffMaxSec = 900
 if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [int]$env:MOE_LAUNCH_BACKOFF_MAX_SEC }
 
+# --- Claude account rotation (docs/TROUBLESHOOTING.md "Claude Account Rotation
+# Issues"). Twin of the moe-agent.sh block of the same name. Before every claude
+# launch the wrapper leases a subscription account from the daemon
+# (moe.lease_account) and runs claude under that account's config directory.
+# The directory, MOE_ACCOUNT_ID and MOE_ACCOUNT_SAMPLE_FILE enter this process's
+# environment only around the spawn (Set-MoeAccountEnv / Restore-MoeAccountEnv),
+# with the token variables removed for that spawn. Nothing here opens a file
+# inside a config directory. Every failure mode launches unrotated; only "every
+# signed-in account is spent" waits, holding the task.
+$accountHelper = Join-Path $PSScriptRoot 'moe-account-lease.mjs'
+$script:AccountSampleFile = Join-Path $env:TEMP "moe-account-sample-$Role-$myPid.json"
+$script:AccountSettingsFile = Join-Path $env:TEMP "moe-account-settings-$Role-$myPid.json"
+$script:AccountLeasedId = ''
+$script:AccountLeasedDir = ''
+$script:AccountPrevId = ''
+$script:AccountSampleSent = ''
+$script:AccountWindows = [ordered]@{}
+$script:AccountSampleRefused = $false
+$script:AccountRelaunch = $false
+$script:AccountLastFailed = ''
+$script:AccountSavedEnv = $null
+$accountArgs = @()
+# TOKEN_ENV and PROVIDER_ENV in moe-account-lease.mjs: a token outranks the
+# account's login, and the gate already stood down for a set provider switch.
+$moeAccountChildEnvDrop = @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY')
+
+# One line from moe-account-lease.mjs ('' when it printed nothing), or $null
+# when node or the helper failed.
+function Invoke-MoeAccountHelper {
+    param([string[]]$HelperArgs, [string]$InputText)
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($PSBoundParameters.ContainsKey('InputText')) { $out = @($InputText | & node $accountHelper @HelperArgs 2>$null) }
+        else { $out = @(& node $accountHelper @HelperArgs 2>$null) }
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return [string]($out | Select-Object -First 1)
+    } catch { return $null } finally { $ErrorActionPreference = $prevEAP }
+}
+
+function Clear-MoeAccountLease {
+    $script:AccountLeasedId = ''
+    $script:AccountLeasedDir = ''
+    $script:AccountSampleSent = ''
+    $script:AccountWindows = [ordered]@{}
+    $script:AccountSampleRefused = $false
+    $script:accountArgs = @()
+    Remove-Item -LiteralPath $script:AccountSampleFile -Force -ErrorAction SilentlyContinue
+}
+
+function Get-MoeAccountLease {
+    if (-not (Test-Path -LiteralPath $accountHelper)) {
+        Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE (moe-account-lease.mjs is missing next to this wrapper) - launching without rotation." -ForegroundColor Yellow
+        return
+    }
+    $gate = @("$(Invoke-MoeAccountHelper -HelperArgs @('gate'))" -split "`t")
+    if ($gate[0] -ceq 'off') { return }
+    if ($gate[0] -ceq 'skip') { Write-Host "[account] $($gate[1])" -ForegroundColor Yellow; return }
+    if ($gate[0] -cne 'go') {
+        Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation." -ForegroundColor Yellow
+        return
+    }
+    while ($true) {
+        $reply = Invoke-MoeRpc -Tool 'lease_account' -Args @{ workerId = $WorkerId }
+        $replyJson = if ($null -ne $reply) { $reply | ConvertTo-Json -Depth 5 -Compress } else { '' }
+        $f = @("$(Invoke-MoeAccountHelper -HelperArgs @('pick') -InputText $replyJson)" -split "`t")
+        if ($f[0] -ceq 'leased' -and $f.Count -ge 4) {
+            if ($script:AccountPrevId -and $script:AccountPrevId -cne $f[1]) {
+                Write-Host "[account] MOE_ACCOUNT_SWITCHED from=$($script:AccountPrevId) to=$($f[1])" -ForegroundColor Yellow
+            }
+            $script:AccountPrevId = $f[1]
+            $script:AccountLeasedId = $f[1]
+            $script:AccountLeasedDir = $f[3]
+            $usage = if ($f[2] -ceq '?') { 'unknown' } else { "$($f[2])%" }
+            Write-Host "[account] MOE_ACCOUNT_LEASED account=$($f[1]) usage=$usage" -ForegroundColor Green
+            return
+        }
+        if ($f[0] -ceq 'wait' -and $f.Count -ge 3) {
+            $waitSec = 0
+            if (-not [int]::TryParse($f[1], [ref]$waitSec) -or $waitSec -lt 1) { $waitSec = 60 }
+            Write-Host "[account] MOE_ACCOUNT_WAIT retry_in=${waitSec}s next_reset=$($f[2]) - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
+            Start-Sleep -Seconds $waitSec
+            continue
+        }
+        if ($f[0] -ceq 'off') {
+            if ($f.Count -gt 1 -and $f[1]) { Write-Host "[account] $($f[1])" -ForegroundColor Yellow }
+            return
+        }
+        $why = if ($f[0] -ceq 'unavailable' -and $f.Count -gt 1 -and $f[1]) { $f[1] } else { 'the account helper failed' }
+        Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE ($why) - launching without rotation." -ForegroundColor Yellow
+        return
+    }
+}
+
+# The values never leave this process: they are held in memory only to put
+# back right after the spawn, so an unrotated launch later still sees them.
+function Set-MoeAccountEnv {
+    $script:AccountSavedEnv = $null
+    if (-not $script:AccountLeasedId) { return }
+    $saved = @{}
+    foreach ($name in @('CLAUDE_CONFIG_DIR', 'MOE_ACCOUNT_ID', 'MOE_ACCOUNT_SAMPLE_FILE') + $moeAccountChildEnvDrop) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    $script:AccountSavedEnv = $saved
+    $env:CLAUDE_CONFIG_DIR = $script:AccountLeasedDir
+    $env:MOE_ACCOUNT_ID = $script:AccountLeasedId
+    $env:MOE_ACCOUNT_SAMPLE_FILE = $script:AccountSampleFile
+    foreach ($name in $moeAccountChildEnvDrop) { [Environment]::SetEnvironmentVariable($name, $null) }
+}
+
+function Restore-MoeAccountEnv {
+    if (-not $script:AccountSavedEnv) { return }
+    foreach ($name in @($script:AccountSavedEnv.Keys)) { [Environment]::SetEnvironmentVariable($name, $script:AccountSavedEnv[$name]) }
+    $script:AccountSavedEnv = $null
+}
+
+# Sends the latest usage sample once. $false only when the daemon did not take it.
+function Send-MoeAccountSample {
+    if (-not $script:AccountLeasedId -or -not (Test-Path -LiteralPath $script:AccountSampleFile)) { return $true }
+    $body = try { [IO.File]::ReadAllText($script:AccountSampleFile) } catch { '' }
+    if (-not $body -or $body -ceq $script:AccountSampleSent) { return $true }
+    $sample = try { $body | ConvertFrom-Json -ErrorAction Stop } catch { $null }
+    if (-not $sample -or [string]$sample.accountId -cne $script:AccountLeasedId) { return $true }
+    $sent = Invoke-MoeRpc -Tool 'report_account_usage' -Args @{ workerId = $WorkerId; accountId = $script:AccountLeasedId
+        windows = $sample.windows; refused = ($sample.refused -eq $true) }
+    if ($null -eq $sent) { return $false }
+    $script:AccountSampleSent = $body
+    return $true
+}
+
 # --- Self-restart when this script's own bytes change on disk -----------------
 # PowerShell parses the ENTIRE script at process start, so a long-lived polling
 # loop executes its ORIGINAL bytes for its whole life. A fix can therefore be
@@ -5225,12 +5372,18 @@ do {
         if ($script:LaunchFailBackoffSec -gt 0) {
             Write-Host "[launch-failure] Backing off $($script:LaunchFailBackoffSec)s before relaunching (streak $($script:LaunchFailStreak)); the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
             Start-Sleep -Seconds $script:LaunchFailBackoffSec
+        } elseif ($script:AccountRelaunch) {
+            Write-Host "[account] Relaunching now on the next account." -ForegroundColor Yellow
         } else {
             Write-Host "Agent idle, checking for tasks in ${PollInterval} seconds... (Ctrl+C to stop)"
             Start-Sleep -Seconds $PollInterval
         }
         Write-Host "Relaunching agent..."
     }
+    # Read once, just above: an iteration that skipped the poll sleep for an
+    # account relaunch must not skip it again (the reload deferral below
+    # `continue`s straight back here).
+    $script:AccountRelaunch = $false
 
     # Top of the iteration, AFTER the poll sleep and BEFORE any task dispatch, so
     # a restart can never interleave with a half-done completion.
@@ -6115,6 +6268,15 @@ $mentionsJson
         & node $promptCacheHelper check $cliType "$projectPath" @CommandArgs
         if ($LASTEXITCODE -ne 0) { exit 1 }
     }
+    # Claude account rotation: a fresh lease for every claude launch. The check
+    # above stays on the operator's own config directory; nothing reads inside
+    # an account's.
+    Clear-MoeAccountLease
+    if (-not $moeSkipLaunch -and $cliType -eq 'claude') {
+        Get-MoeAccountLease
+        # A wait for a free account is not launch time.
+        $script:CliLaunchedAt = Get-Date
+    }
     if ($moeSkipLaunch) {
         if ($preflightClaimFailed) {
             Write-Host "MOE_TASKLESS_NO_LAUNCH reason=claim-failed role=$Role worker=$WorkerId - the claim RPC is unreachable; no CLI is launched without a task bound." -ForegroundColor Yellow
@@ -6631,6 +6793,13 @@ $mentionsJson
                     "--verbose"
                 )
             }
+            # An interactive seat prints no stream-json, so its account usage
+            # comes from claude's statusline (moe-account-lease.mjs statusline).
+            if ($script:AccountLeasedId -and -not $usePrintMode) {
+                if ($null -ne (Invoke-MoeAccountHelper -HelperArgs @('statusline-settings', $script:AccountSettingsFile))) {
+                    $accountArgs = @('--settings', $script:AccountSettingsFile)
+                }
+            }
 
             # Prompt-cache stability. The default Claude Code system prompt
             # bakes in per-launch / per-machine sections (cwd, env info, memory
@@ -6771,6 +6940,36 @@ $mentionsJson
                             $resets = if ($rl.resetsAt) { [DateTimeOffset]::FromUnixTimeSeconds($rl.resetsAt).LocalDateTime.ToString('MM-dd HH:mm') } else { "?" }
                             $tag = if ($rl.isUsingOverage) { "OVERAGE" } else { $rl.status }
                             Write-Host "  [rate-limit $tag $($rl.rateLimitType) resets=$resets]" -ForegroundColor Yellow
+                            # Usage of the leased account, for moe.report_account_usage (twin:
+                            # the stream parser in moe-agent.sh). utilization is a 0-1 fraction
+                            # per unifiedWindows entry; status (overage while isUsingOverage)
+                            # belongs to the rateLimitType window. Best-effort.
+                            if ($script:AccountLeasedId) {
+                                try {
+                                    if ($rl.unifiedWindows) {
+                                        foreach ($p in $rl.unifiedWindows.PSObject.Properties) {
+                                            $u = $p.Value.utilization
+                                            if ($u -is [double] -or $u -is [int] -or $u -is [long] -or $u -is [decimal]) {
+                                                if (-not $script:AccountWindows.Contains($p.Name)) { $script:AccountWindows[$p.Name] = [ordered]@{} }
+                                                $script:AccountWindows[$p.Name]['utilization'] = $u
+                                                if ($null -ne $p.Value.resetsAt) { $script:AccountWindows[$p.Name]['resetsAt'] = $p.Value.resetsAt }
+                                            }
+                                        }
+                                    }
+                                    $status = if ($rl.isUsingOverage) { 'overage' } else { $rl.status }
+                                    if ($rl.rateLimitType -is [string] -and $status -is [string]) {
+                                        if (-not $script:AccountWindows.Contains($rl.rateLimitType)) { $script:AccountWindows[$rl.rateLimitType] = [ordered]@{} }
+                                        $acctWin = $script:AccountWindows[$rl.rateLimitType]
+                                        $acctWin['status'] = $status
+                                        if (-not $acctWin.Contains('resetsAt') -and $null -ne $rl.resetsAt) { $acctWin['resetsAt'] = $rl.resetsAt }
+                                        if (@('rejected', 'overage') -ccontains $status) { $script:AccountSampleRefused = $true }
+                                    }
+                                    $json = [ordered]@{ accountId = $script:AccountLeasedId; windows = $script:AccountWindows; refused = [bool]$script:AccountSampleRefused } | ConvertTo-Json -Depth 5 -Compress
+                                    $tmp = "$($script:AccountSampleFile).tmp"
+                                    [IO.File]::WriteAllText($tmp, $json)
+                                    Move-Item -LiteralPath $tmp -Destination $script:AccountSampleFile -Force
+                                } catch {}
+                            }
                         }
                     }
                     "result" {
@@ -6791,8 +6990,9 @@ $mentionsJson
             Start-MoeUsageReceipt 'claude' $usageLaunchMode
             Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
             try {
+            Set-MoeAccountEnv
             if ($userPromptForCli) {
-                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort $iterEffort $($printArgs -join ' ') `"<prompt>`""
+                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') $($accountArgs -join ' ') --effort $iterEffort $($printArgs -join ' ') `"<prompt>`""
                 if ($usePrintMode) {
                     # Stream output through the parser. ForEach-Object processes
                     # lines as they arrive (no buffering), so the user sees
@@ -6801,27 +7001,28 @@ $mentionsJson
                     $script:moeToolName = $null
                     $script:moeInText = $false
                     & {
-                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort $iterEffort @printArgs "$userPromptForCli" 2>&1
+                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs "$userPromptForCli" 2>&1
                         $script:CliExitCode = $LASTEXITCODE
                     } | ForEach-Object { & $parseStreamJson $_ }
                 } else {
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort $iterEffort @printArgs "$userPromptForCli"
+                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs "$userPromptForCli"
                     $script:CliExitCode = $LASTEXITCODE
                 }
             } else {
-                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') --effort $iterEffort $($printArgs -join ' ')"
+                Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') $($accountArgs -join ' ') --effort $iterEffort $($printArgs -join ' ')"
                 if ($usePrintMode) {
                     $script:moeToolJson = ""
                     & {
-                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort $iterEffort @printArgs 2>&1
+                        & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs 2>&1
                         $script:CliExitCode = $LASTEXITCODE
                     } | ForEach-Object { & $parseStreamJson $_ }
                 } else {
-                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs --effort $iterEffort @printArgs
+                    & $Command @CommandArgs @modelArgs --mcp-config "$mcpConfigFile" --append-system-prompt-file "$systemPromptFile" @cacheArgs @accountArgs --effort $iterEffort @printArgs
                     $script:CliExitCode = $LASTEXITCODE
                 }
             }
             } finally {
+                Restore-MoeAccountEnv
                 if ($usePrintMode -and -not $script:MoeUsageResultSeen -and $env:MOE_USAGE_RECEIPT_FILE) {
                     try { '' | & node $promptCacheHelper claude-stream | Out-Null }
                     catch { Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE' }
@@ -6835,7 +7036,44 @@ $mentionsJson
     # Launch-failure classification (tracker declared above the main loop).
     $cliElapsedSec = if ($script:CliLaunchedAt) { [int]((Get-Date) - $script:CliLaunchedAt).TotalSeconds } else { -1 }
     $cliExitForLaunch = if ($null -ne $script:CliExitCode) { [int]$script:CliExitCode } else { 0 }
-    if ($cliExitForLaunch -ne 0 -and $cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) {
+    # Claude account rotation, after a leased run: report its last usage sample,
+    # then ask whether the run failed because of its account. A refusal needs
+    # both signals (the CLI said the account is spent, and the run failed); any
+    # other failure checks the account's sign-in. Once the daemon has answered,
+    # the account is parked, so the relaunch is immediate and lands on the next
+    # one. An unanswered report, or the account the previous account relaunch
+    # moved away from failing again (a daemon that hands it back would
+    # otherwise relaunch with no backoff forever), falls through to the
+    # launch-failure classes below.
+    if ($script:AccountLeasedId) {
+        $moeAccountReported = Send-MoeAccountSample
+        if ($cliExitForLaunch -eq 0) {
+            $script:AccountLastFailed = ''
+        } elseif ($script:AccountLeasedId -cne $script:AccountLastFailed) {
+            if ($script:AccountSampleRefused -and $moeAccountReported) {
+                Write-Host "[account] MOE_ACCOUNT_REFUSED account=$($script:AccountLeasedId) exit=$cliExitForLaunch - relaunching on the next account; the held task stays held." -ForegroundColor Yellow
+                $script:AccountRelaunch = $true
+            } else {
+                $moeProbeWords = @($Command) + @($CommandArgs | Where-Object { $null -ne $_ })
+                $moeSignIn = Invoke-MoeAccountHelper -HelperArgs (@('signin-state', $script:AccountLeasedDir) + $moeProbeWords)
+                if (($moeSignIn -ceq 'signed_out' -or $moeSignIn -ceq 'other') -and
+                    $null -ne (Invoke-MoeRpc -Tool 'report_account_usage' -Args @{ workerId = $WorkerId; accountId = $script:AccountLeasedId; signIn = $moeSignIn })) {
+                    Write-Host "[account] MOE_ACCOUNT_SIGNED_OUT account=$($script:AccountLeasedId) state=$moeSignIn - relaunching on the next account; the held task stays held." -ForegroundColor Yellow
+                    $script:AccountRelaunch = $true
+                }
+            }
+        }
+    }
+    if ($script:AccountRelaunch) {
+        # The account ran out or signed out, not the session: give the resume
+        # attempt back and skip the launch-failure backoff. A fast exit is still
+        # a launch that did no work, which is what the landing reads the flag for.
+        $script:AccountLastFailed = $script:AccountLeasedId
+        if ($cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) { $moeCurrentLaunchFailed = $true }
+        if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }
+        $script:LaunchFailStreak = 0
+        $script:LaunchFailBackoffSec = 0
+    } elseif ($cliExitForLaunch -ne 0 -and $cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) {
         $moeCurrentLaunchFailed = $true
         $script:LaunchFailStreak++
         # Not a mid-task death: give the resume attempt back.
@@ -7087,7 +7325,11 @@ $mentionsJson
     Invoke-PostFlight
     if ($moeStopLoop) { break }
     # -------- End post-flight --------
-} while ($loopEnabled)
+    # A launch failure never started a session, so even a single-shot seat
+    # (codex/gemini/grok TUI) relaunches after the backoff it just announced.
+    # An account relaunch (the account ran out or signed out) never finished
+    # its session either, so it relaunches too, at once.
+} while ($loopEnabled -or $moeCurrentLaunchFailed -or $script:AccountRelaunch)
 } finally {
     # Teardown rescue FIRST (before the deregister releases the task): when
     # this session ends without its post-flight having landed (Ctrl+C during
@@ -7125,6 +7367,9 @@ $mentionsJson
     }
     if ($script:GrokPromptFile -and (Test-Path $script:GrokPromptFile)) {
         Remove-Item -Path $script:GrokPromptFile -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($moeAccountFile in @($script:AccountSampleFile, $script:AccountSettingsFile)) {
+        if ($moeAccountFile) { Remove-Item -LiteralPath $moeAccountFile -Force -ErrorAction SilentlyContinue }
     }
     # Clean up agent teams env var so it doesn't leak to parent session
     Remove-Item Env:\CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS -ErrorAction SilentlyContinue

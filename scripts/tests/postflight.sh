@@ -5,6 +5,8 @@ set -euo pipefail
 # box also running the other harness) can widen both without editing either file.
 POSTFLIGHT_TIMEOUT_SEC=60
 case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOUT_SEC="$MOE_POSTFLIGHT_TIMEOUT_SEC" ;; esac
+# Claude account rotation stays off unless the [accounts] scenario turns it on.
+export MOE_ACCOUNT_ROTATION=off
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WRAPPER="$ROOT_DIR/scripts/moe-agent.sh"
@@ -604,6 +606,25 @@ switch (tool) {
     // teardown rescue.
     fs.appendFileSync(path.join(moe, 'deregister.log'), `${new Date().toISOString()} ${args.workerId} ${args.reason || ''}\n`);
     ok({ success: true });
+    break;
+  }
+  case 'lease_account':
+  case 'report_account_usage': {
+    // leaseAccount.ts in miniature, for the [accounts] scenario: no rotation
+    // without FAKE_ACCOUNT_HOME; with FAKE_ACCOUNT_WAIT_ONCE the first lease
+    // finds every account spent; otherwise the first of acct-1, acct-2 that no
+    // report refused or signed out. Every call is logged.
+    const log = path.join(moe, 'account-rpcs.jsonl');
+    const rows = readRows(log);
+    fs.appendFileSync(log, JSON.stringify({ tool, args }) + '\n');
+    if (tool === 'report_account_usage') { ok({ recorded: true, blockedUntil: null, peakPercent: null }); break; }
+    const home = process.env.FAKE_ACCOUNT_HOME;
+    const spent = { rotation: true, accountId: null, retryAt: new Date(Date.now() + 3600000).toISOString(), retryInSec: 3600, switchAtPercent: 90 };
+    if (!home) { ok({ rotation: false, reason: null }); break; }
+    if (process.env.FAKE_ACCOUNT_WAIT_ONCE && !rows.some(r => r.tool === 'lease_account')) { ok(spent); break; }
+    const parked = new Set(rows.filter(r => r.tool === 'report_account_usage' && (r.args.refused === true || r.args.signIn)).map(r => r.args.accountId));
+    const id = ['acct-1', 'acct-2'].find(a => !parked.has(a));
+    ok(id ? { rotation: true, accountId: id, label: id, configDir: path.join(home, id), peakPercent: id === 'acct-1' ? 12.5 : null, switchAtPercent: 90 } : spent);
     break;
   }
   default: ok({ success: true });
@@ -1537,6 +1558,198 @@ if grep -Fqx -- '--print' "$CLI_ARGS_FILE"; then
   echo "--interactive must NOT pass --print" >&2
   exit 1
 fi
+
+# --- [accounts] Account rotation (twin: the [accounts] block in postflight.ps1).
+# A claude launch whose account is refused at its limit, or found signed out,
+# relaunches at once on the next account, even under --no-loop and without the
+# launch-failure backoff; a lease that finds every account spent waits and
+# leases again. The fake CLI tells its account by CLAUDE_CONFIG_DIR and answers
+# `auth status --json` like claude; no token may reach it or the sign-in probe,
+# and no directory may reach the daemon. Three runs are sh-only: an account
+# signed in some other way (state=other; its email and org must go nowhere),
+# no rotation (the daemon answers rotation:false: nothing printed, env kept),
+# and an interactive seat (--mcp-config, and the --settings statusline that
+# writes the usage sample). ---
+ACCT_HOME="$TMP_DIR/acct-home"
+mkdir -p "$ACCT_HOME/acct-1" "$ACCT_HOME/acct-2"
+ACCT_LOG="$TMP_DIR/acct-cli.log"
+ACCT_ARGV="$TMP_DIR/acct-argv.log"
+ACCT_PROBES="$TMP_DIR/acct-probes.log"
+ACCT_STATUS="$TMP_DIR/acct-status.log"
+ACCT_RPCS="$PROJECT_DIR/.moe/account-rpcs.jsonl"
+ACCT_RESET=$(( $(date +%s) + 3600 ))
+ACCT_SPENT_EVENT='{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":'"$ACCT_RESET"',"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":'"$ACCT_RESET"'}}}}'
+ACCT_FINE_EVENT='{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":'"$ACCT_RESET"',"rateLimitType":"five_hour","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.42,"resetsAt":'"$ACCT_RESET"'}}}}'
+ACCT_STATUS_INPUT='{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":91.5,"resets_at":'"$ACCT_RESET"'}}}'
+ACCT_CLI="$TMP_DIR/acct-cli"
+# FAKE_ACCT_MODE: unset = acct-1 is spent, signout = acct-1 is signed out,
+# other = acct-1 is signed in some other way, fine = every account works.
+cat > "$ACCT_CLI" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN+x}\${ANTHROPIC_API_KEY+x}\${ANTHROPIC_AUTH_TOKEN+x}" ]; then token=set; else token=unset; fi
+if [ "\${1:-}" = auth ]; then
+  echo "dir=\${CLAUDE_CONFIG_DIR-} token=\$token \$*" >> "$ACCT_PROBES"
+  if [ "\${CLAUDE_CONFIG_DIR-}" = "$ACCT_HOME/acct-1" ]; then
+    case "\${FAKE_ACCT_MODE-}" in
+      signout) echo '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}'; exit 1 ;;
+      other) echo '{"loggedIn":true,"authMethod":"console","apiProvider":"firstParty","email":"seat@example.com","orgId":"org-postflight","orgName":"Example Org"}'; exit 0 ;;
+    esac
+  fi
+  echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"seat@example.com","orgId":"org-postflight","orgName":"Example Org"}'
+  exit 0
+fi
+echo "dir=\${CLAUDE_CONFIG_DIR-} token=\$token" >> "$ACCT_LOG"
+printf '%s\n' "\$@" >> "$ACCT_ARGV"
+settings="" prev=""
+for a in "\$@"; do
+  [ "\$prev" != --settings ] || settings="\$a"
+  prev="\$a"
+done
+if [ -n "\$settings" ]; then
+  # What claude does with a statusLine command: runs it through a shell after
+  # a message, the session's JSON on stdin.
+  cmd=\$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).statusLine.command)' "\$settings")
+  printf '%s' '$ACCT_STATUS_INPUT' | sh -c "\$cmd" >> "$ACCT_STATUS"
+  exit 0
+fi
+if [ "\${FAKE_ACCT_MODE-}" != fine ] && [ "\${CLAUDE_CONFIG_DIR-}" = "$ACCT_HOME/acct-1" ]; then
+  case "\${FAKE_ACCT_MODE-}" in signout|other) exit 1 ;; esac
+  echo '$ACCT_SPENT_EVENT'
+  exit 1
+fi
+echo '$ACCT_FINE_EVENT'
+exit 0
+EOF
+chmod +x "$ACCT_CLI"
+
+ACCT_CHECK="$TMP_DIR/accounts-check.cjs"
+cat > "$ACCT_CHECK" <<'ACCTJS'
+// One [accounts] run: node accounts-check.cjs <name> <exit> <wrapper out> <rpcs> <launches> <argv> <probes> <statusline> <home> <.mcp.json>
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const [name, code, outFile, rpcFile, launchFile, argvFile, probeFile, statusFile, home, mcpFile] = process.argv.slice(2);
+const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
+const lines = (file) => read(file).split('\n').filter(Boolean);
+const out = read(outFile).replace(/\x1b\[[0-9;]*m/g, '');
+const rpcText = read(rpcFile);
+const rpcs = lines(rpcFile).map((line) => JSON.parse(line));
+const leases = rpcs.filter((r) => r.tool === 'lease_account');
+const reports = rpcs.filter((r) => r.tool === 'report_account_usage').map((r) => r.args);
+const argv = lines(argvFile);
+const reset = Number(process.env.ACCT_RESET);
+const launch = (id) => `dir=${path.join(home, id)} token=unset`;
+const probe = (id) => `dir=${path.join(home, id)} token=unset auth status --json`;
+const want = (...texts) => texts.forEach((text) => assert.ok(out.includes(text), `expected '${text}'`));
+const after = (flag) => argv[argv.indexOf(flag) + 1];
+function relaunched(state) {
+  want(`[account] MOE_ACCOUNT_SIGNED_OUT account=acct-1 state=${state} - relaunching on the next account; the held task stays held.`,
+    '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2');
+  assert.deepEqual(lines(launchFile), [launch('acct-1'), launch('acct-2')]);
+  assert.deepEqual(lines(probeFile), [probe('acct-1')], 'expected one sign-in probe of acct-1, token-free');
+  assert.deepEqual(reports.filter((r) => r.signIn), [{ workerId: `qa-accounts-${name}`, accountId: 'acct-1', signIn: state }]);
+}
+try {
+  assert.equal(code, '0', `wrapper exited with ${code}`);
+  assert.ok(!out.includes('[launch-failure]'), 'an account relaunch must not take the launch-failure path');
+  assert.ok(!rpcText.includes('acct-home'), 'an account directory reached the daemon');
+  if (name !== 'interactive') {
+    assert.ok(argv.includes('--print'), 'expected one-shot launches');
+    assert.ok(!argv.includes('--mcp-config') && !argv.includes('--settings'), 'a one-shot launch takes no --mcp-config or --settings');
+  }
+  switch (name) {
+    case 'refused': {
+      want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%',
+        '[account] MOE_ACCOUNT_REFUSED account=acct-1 exit=1 - relaunching on the next account; the held task stays held.',
+        '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2',
+        '[account] MOE_ACCOUNT_LEASED account=acct-2 usage=unknown');
+      assert.deepEqual(lines(launchFile), [launch('acct-1'), launch('acct-2')]);
+      assert.equal(leases.length, 2, 'expected two leases');
+      assert.deepEqual(lines(probeFile), [], 'a refusal needs no sign-in probe');
+      assert.deepEqual(reports, [
+        { workerId: 'qa-accounts-refused', accountId: 'acct-1', refused: true,
+          windows: { five_hour: { utilization: 1, resetsAt: reset, status: 'rejected' } } },
+        { workerId: 'qa-accounts-refused', accountId: 'acct-2', refused: false,
+          windows: { five_hour: { utilization: 0.42, resetsAt: reset, status: 'allowed' } } },
+      ]);
+      break;
+    }
+    case 'signout':
+      relaunched('signed_out');
+      break;
+    case 'other':
+      relaunched('other');
+      for (const text of ['example.com', 'Example Org', 'org-postflight']) {
+        assert.ok(!out.includes(text) && !rpcText.includes(text), `'${text}' from auth status --json escaped`);
+      }
+      break;
+    case 'wait':
+      want('[account] MOE_ACCOUNT_WAIT retry_in=1s next_reset=',
+        ' - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', '[account] MOE_ACCOUNT_LEASED account=acct-1');
+      assert.deepEqual(lines(launchFile), [launch('acct-1')]);
+      assert.equal(leases.length, 2, 'expected a spent lease, then a granted one');
+      break;
+    case 'none':
+      assert.ok(!out.includes('[account]'), 'rotation:false must print nothing');
+      assert.deepEqual(lines(launchFile), ['dir= token=set'], 'an unrotated launch keeps the environment');
+      assert.equal(leases.length, 1, 'expected one lease');
+      assert.deepEqual(reports, [], 'nothing to report without a lease');
+      break;
+    case 'interactive':
+      want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%');
+      assert.deepEqual(lines(launchFile), [launch('acct-1')]);
+      assert.ok(!argv.includes('--print'), 'expected the TUI');
+      assert.equal(fs.realpathSync(after('--mcp-config') || '.'), fs.realpathSync(mcpFile), 'expected --mcp-config <project>/.mcp.json');
+      assert.equal(path.basename(after('--settings') || ''), 'account-settings.json', 'expected --settings with the statusline');
+      assert.deepEqual(lines(statusFile), ['Opus | acct-1 | 5h 91%']);
+      assert.deepEqual(reports, [{ workerId: 'qa-accounts-interactive', accountId: 'acct-1', refused: false,
+        windows: { five_hour: { percent: 91.5, resetsAt: reset } } }]);
+      break;
+    default:
+      throw new Error(`unknown run ${name}`);
+  }
+} catch (error) {
+  console.error(out);
+  console.error(`launches: ${JSON.stringify(lines(launchFile))}\nprobes: ${JSON.stringify(lines(probeFile))}\nrpcs: ${rpcText}`);
+  console.error(`[accounts] ${name}: ${error.message}`);
+  process.exit(1);
+}
+ACCTJS
+
+# run_accounts <name> [VAR=value...]: one --no-loop qa seat holding task-resume.
+run_accounts() {
+  local name="$1" code
+  shift
+  local -a mode=(--no-loop)
+  [ "$name" != interactive ] || mode+=(--interactive)
+  rm -f "$ACCT_LOG" "$ACCT_ARGV" "$ACCT_PROBES" "$ACCT_STATUS" "$ACCT_RPCS"
+  set +e
+  env -u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY \
+    -u MOE_ACCOUNT_ID -u MOE_ACCOUNT_SAMPLE_FILE -u FAKE_ACCT_MODE -u FAKE_ACCOUNT_WAIT_ONCE \
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume \
+    MOE_ACCOUNT_ROTATION=on FAKE_ACCOUNT_HOME="$ACCT_HOME" MOE_ACCOUNT_RETRY_SEC=1 MOE_DISABLE_HEARTBEAT=1 \
+    CLAUDE_CODE_OAUTH_TOKEN=must-not-reach-the-child ANTHROPIC_API_KEY=must-not-reach-the-child \
+    ANTHROPIC_AUTH_TOKEN=must-not-reach-the-child "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    "$WRAPPER" \
+    --project "$PROJECT_DIR" \
+    --worker-id "qa-accounts-$name" \
+    --role qa \
+    --team Smoke \
+    --no-start-daemon \
+    --command "$ACCT_CLI" \
+    "${mode[@]}" \
+    >"$TMP_DIR/wrapper-accounts-$name.out" 2>&1
+  code=$?
+  set -e
+  ACCT_RESET="$ACCT_RESET" "$NODE_FOR_TEST" "$ACCT_CHECK" "$name" "$code" "$TMP_DIR/wrapper-accounts-$name.out" \
+    "$ACCT_RPCS" "$ACCT_LOG" "$ACCT_ARGV" "$ACCT_PROBES" "$ACCT_STATUS" "$ACCT_HOME" "$PROJECT_DIR/.mcp.json" || exit 1
+}
+run_accounts refused
+run_accounts signout FAKE_ACCT_MODE=signout
+run_accounts other FAKE_ACCT_MODE=other
+run_accounts wait FAKE_ACCT_MODE=fine FAKE_ACCOUNT_WAIT_ONCE=1
+run_accounts none FAKE_ACCOUNT_HOME=
+run_accounts interactive FAKE_ACCT_MODE=fine
+rm -f "$ACCT_RPCS"
+echo "[accounts] ok"
 
 # --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no moe.*
 # calls of its own for the CLI's whole runtime, so a long silent step (a

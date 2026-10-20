@@ -1,4 +1,4 @@
-# Moe - MCP Server Specification (Current)
+# Moe - MCP Seclaurveracl Specifclaudeication (Current)
 
 ## Overview
 
@@ -89,7 +89,7 @@ The daemon writes `.moe/daemon.json` with `{ port, pid, startedAt, projectPath }
 - Tool results are returned as `content: [{ type: "text", text: "<json>" }]`.
 - Errors are JSON-RPC errors with `code: -32000` and `message` set to the error string.
 - Rails violations include details in `error.data`.
-- **Role-scoped `tools/list`.** `moe-proxy` adds the seat's `MOE_WORKER_ID` to every `tools/list` request. The daemon resolves the caller's role (team role, else the `architect-`/`worker-`/`qa-`/`governor-` id prefix) and lists only the tools that role uses, per `TOOL_AUDIENCE` in `packages/moe-daemon/src/tools/index.ts`. The governor sees every agent-facing tool; wrapper-only tools (`heartbeat`, `deregister_worker`, `get_commit_scope`, `record_candidate`, `record_delivery_receipt`, `reattach_attempt`) are listed to nobody. A request with no `workerId`, or whose role can't be resolved (IDE plugins, `moe-call.sh`, a human), gets the full list. This filters the listing only: `tools/call` still serves every registered tool. A new tool needs a `TOOL_AUDIENCE` entry (`toolAudience.test.ts` enforces it).
+- **Role-scoped `tools/list`.** `moe-proxy` adds the seat's `MOE_WORKER_ID` to every `tools/list` request. The daemon resolves the caller's role (team role, else the `architect-`/`worker-`/`qa-`/`governor-` id prefix) and lists only the tools that role uses, per `TOOL_AUDIENCE` in `packages/moe-daemon/src/tools/index.ts`. The governor sees every agent-facing tool; wrapper-only tools (`heartbeat`, `deregister_worker`, `get_commit_scope`, `record_candidate`, `record_delivery_receipt`, `reattach_attempt`, `lease_account`, `report_account_usage`) are listed to nobody. A request with no `workerId`, or whose role can't be resolved (IDE plugins, `moe-call.sh`, a human), gets the full list. This filters the listing only: `tools/call` still serves every registered tool. A new tool needs a `TOOL_AUDIENCE` entry (`toolAudience.test.ts` enforces it).
 
 ---
 
@@ -353,6 +353,8 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 - A `workerId` that differs from a set `assignedWorkerId` is still refused with `NOT_ALLOWED`.
 - A call without a `workerId` (the JetBrains plugin `/ws` path, legacy clients) keeps the old tolerance.
 
+**Account switch.** When the seat's Claude account is spent (see **Claude Account Rotation**), the call is refused with `NOT_ALLOWED`, and the reason starts with `ACCOUNT-SWITCH:`. The step stays `PENDING`. The worker ends its session; the wrapper relaunches the held task on the next account, and the new session starts the step. The check runs after every other guard. It never fires for a seat that this daemon process did not lease an account to.
+
 **Returns:**
 ```typescript
 { success: true, taskId, stepId, stepNumber, totalSteps }
@@ -387,7 +389,12 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
   amended?: {                         // ABSENT unless an amendment is active on the completed step
     amendmentId, reason, amendedBy, amendedAt
   },
-  nextStep: { stepId, description } | null   // description is amendment-resolved too
+  nextStep: { stepId, description } | null,  // description is amendment-resolved too
+  accountSwitch?: {                   // ABSENT unless the seat's Claude account is spent and a step remains
+    from, to, fromPeakPercent, switchAtPercent,
+    reason: 'usage' | 'limit' | 'signed_out' | 'removed',
+    instruction: string               // "ACCOUNT-SWITCH: …. Step <id> is saved. End your session now …"
+  }
 }
 ```
 
@@ -397,6 +404,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 - `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
 - `modifiedFiles` is the worker's positive assertion and feeds the **ASSERTED** attribution tier: the wrapper's post-flight commits every completed step's `modifiedFiles ?? affectedFiles` regardless of what its baseline says. Omitting it returns `warning`. The wrapper can still pick up unreported edits through the TOOL (stream-json harvest, claude only), PLANNED (plan-declared and changed) and MEASURED (undeclared and changed, solo only) tiers — but with another worker active an undeclared, non-tool-written edit stays **unattributed** (reported as `MOE_ATTRIBUTION_UNRESOLVED`, never staged) until someone declares it via `moe.declare_files`.
 - **Claimed row required**, the same rule as `moe.start_step`: a `workerId` on an unassigned `WORKING` row is refused with `STATE_CONFLICT` (`TASK_NOT_CLAIMED`) before the get_context check. The step stays `IN_PROGRESS`, nothing is recorded (no `note`, `modifiedFiles`, `stepsCompleted` or step metrics), and the caller's worker record is untouched.
+- `accountSwitch` appears when the seat's Claude account has reached the switch percent, hit its limit, been signed out or been removed, and another signed-in account is available (see **Claude Account Rotation**). The step is recorded as usual. The worker follows `instruction`: it ends the session without starting another step, and the wrapper relaunches the held task on `to`. `nextAction` is unchanged, and `moe.start_step` refuses the next step on the spent account anyway. The field is absent after the last step, since `moe.complete_task` comes next and needs no new session.
 
 ---
 
@@ -2695,6 +2703,85 @@ Exactly three conditions produce it:
 - Presence is written without touching the attempt's `lastPhaseAt`. The reconcile-window sweep measures its window from that field, so a 60s ping must never be able to extend it — do not reroute this write through the phase setter
 - A presence kind is the sidecar's **claim about itself, not verified liveness**; the daemon probes no process, and it still never infers death from silence
 
+## Claude Account Rotation
+
+Moe can spread claude seats across several Claude subscription accounts on one machine. Once the active account reaches a set share of its usage limit (90% by default), launches move to the next account.
+
+- **The account list is machine-level.** It is `~/.moe/claude-accounts.json` (`MOE_ACCOUNTS_FILE` overrides), and every project's daemon shares it. An entry holds an id, a label and a sign-in state (`subscription`, `signed_out` or `other`), nothing else: an unknown key makes the file invalid. Each account is a Claude config folder, `claude-accounts/<id>` next to the list.
+- **No credential passes through Moe.** Sign-in is Claude's own `claude auth login --claudeai`, which the daemon's `accounts` CLI runs in an IDE terminal. Moe creates the folder and gives claude its path as `CLAUDE_CONFIG_DIR`. Neither the daemon nor the CLI opens a file inside it. From `claude auth status --json`, the CLI keeps only the exit code and `authMethod`.
+- **Usage numbers come from claude itself.** The wrapper forwards what claude prints (the stream-json `rate_limit_event`, or the interactive statusline's `rate_limits`) through `moe.report_account_usage`. The numbers are stored next to the list as `claude-usage/<id>.json`, so every daemon on the machine sees the same ones.
+- **Fill-first and sticky.** A launch gets the active account while it is eligible, else the first eligible account in list order. An eligible account:
+  - is signed in with a subscription;
+  - has no live usage window at or past `switchAtPercent`;
+  - has no `rejected`/`overage` status;
+  - has no pending refusal.
+
+  A spent account comes back on its own when its window resets. A worker in the middle of a task moves at its next step boundary (`moe.complete_step` `accountSwitch`, `moe.start_step` refusal). Every other seat moves at its next launch.
+- **Activity:**
+  - `ACCOUNT_SWITCHED`, posted to #governors with 🔁;
+  - `ACCOUNTS_EXHAUSTED`, every signed-in account spent, posted with ⏸️ once per episode;
+  - `ACCOUNT_SIGNED_OUT`, posted with 🔑.
+- **CLI.** Run `node <daemon>/dist/index.js accounts <command>`, or `dist/accounts/cli.js` directly.
+  - Commands: `list`, `add [--label <text>]`, `login <id>`, `logout <id>`, `check [<id>]`, `remove <id> [--sign-out]`. `--accounts-file <path>` picks the list.
+  - Exit codes: 0 ok, 1 failed, 2 usage.
+  - Error tokens: `MOE_ACCOUNT_UNKNOWN`, `MOE_ACCOUNT_LOGIN_FAILED`, `MOE_ACCOUNT_LOGOUT_FAILED`, `MOE_ACCOUNT_NOT_SUBSCRIPTION`, `MOE_ACCOUNT_REGISTRY_INVALID`, `MOE_ACCOUNT_LIMIT`, `MOE_ACCOUNT_LABEL_INVALID`, `MOE_CLAUDE_NOT_FOUND`.
+  - `MOE_CLAUDE_BIN` picks the claude binary. On Windows the CLI looks it up on PATH × PATHEXT before running it, so a missing claude is reported as `MOE_CLAUDE_NOT_FOUND`, never as a signed-out account.
+
+### moe.lease_account
+
+Wrapper-only, so no role sees it in `tools/list`. Picks the account for the calling seat's next claude launch, and records it as `Worker.accountId`.
+
+**Parameters:**
+```typescript
+{ workerId: string }
+```
+
+**Returns** one of:
+```typescript
+{ rotation: false, reason: null }       // no list, or no accounts: launch as before
+{ rotation: false, reason: string }     // accounts exist but none is signed in with a subscription, or the list is invalid
+{ rotation: true, accountId: string, label: string, configDir: string, peakPercent: number | null, switchAtPercent: number }
+{ rotation: true, accountId: null, retryAt: string, retryInSec: number, switchAtPercent: number }  // every signed-in account is spent
+```
+
+**Notes:**
+- The wrapper starts claude with `CLAUDE_CONFIG_DIR=configDir`. It removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from claude's environment, since each would outrank the folder's login.
+- `accountId: null` means wait: the held task stays held, and the wrapper tries again at `retryAt`.
+- Which seat holds which account is kept in this daemon process only. After a daemon restart, no seat is told to switch until it leases again.
+
+### moe.report_account_usage
+
+Wrapper-only. Records one report for a leased account.
+
+**Parameters:**
+```typescript
+{
+  workerId?: string,
+  accountId: string,
+  windows?: Record<string, { percent?: number, utilization?: number, resetsAt?: number | string, status?: string }>,
+  refused?: boolean,                 // the launch was refused at the usage limit
+  signIn?: 'signed_out' | 'other'    // a sign-in probe after a fast failure; a wrapper never claims "subscription"
+}
+```
+
+**Returns:**
+```typescript
+{ recorded: boolean, blockedUntil: string | null, peakPercent: number | null }
+```
+
+**Notes:**
+- `utilization` is a 0–1 fraction (stream-json), and `percent` is 0–100 (statusline). `resetsAt` takes epoch seconds, epoch ms or ISO. Malformed windows are dropped, not refused, because neither format is a documented contract.
+- Inside one window, usage only grows: a lower reading never lowers the stored peak. A different reset time starts a new window.
+- The usage file is rewritten only when something changes:
+  - a window moves 1 point or more;
+  - a window crosses `switchAtPercent`;
+  - a window's reset time or status changes;
+  - a refusal is added.
+
+  A window with no reset time is also rewritten every 30 minutes, so it stays live while claude keeps reporting it.
+- `refused: true` parks the account until its spent window resets. The minimum is 5 minutes, and it is 1 hour when no window gives a reset time.
+- An `accountId` that is not on the list is ignored, never created.
+
 ## Plugin WebSocket Messages
 
 The JetBrains/VS Code plugin talks to the daemon over `/ws` using typed JSON envelopes (`{ type, payload? }`). The full list lives in `packages/moe-daemon/src/server/WebSocketServer.ts`; the entries below cover this session's additions.
@@ -2746,6 +2833,22 @@ A malformed token produces the same shape with `code: -32602` and `codeName: "IN
 Clients get the token from the `planRevision` returned by `moe.submit_plan` (see above) or from the task record in `STATE_SNAPSHOT`/`TASK_UPDATED`. Send back the revision that was **rendered and reviewed**, never a newer value re-read from a cache.
 
 End-to-end behaviour across both IDEs — a human reproduction checklist, the recovery paths, and what this deliberately does *not* fence — is in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+
+### Claude accounts — `ADD_ACCOUNT`, `REMOVE_ACCOUNT`, `MOVE_ACCOUNT`, `RENAME_ACCOUNT`, `SET_ACCOUNT_SWITCH_PERCENT`
+
+The JetBrains Accounts tab edits the machine's account list (see **Claude Account Rotation**) with these messages. Each one writes `claude-accounts.json` and broadcasts `ACCOUNTS_UPDATED`. A failure comes back as the usual `ERROR` frame.
+
+```typescript
+{ type: 'ADD_ACCOUNT', payload?: { label?: string } }                       // the sender also gets { type: 'ACCOUNT_ADDED', payload: { accountId } }
+{ type: 'REMOVE_ACCOUNT', payload: { accountId: string } }                  // unregisters only; the folder and its login stay
+{ type: 'MOVE_ACCOUNT', payload: { accountId: string, offset: -1 | 1 } }
+{ type: 'RENAME_ACCOUNT', payload: { accountId: string, label: string } }
+{ type: 'SET_ACCOUNT_SWITCH_PERCENT', payload: { switchAtPercent: number } } // whole number, 1–100
+```
+
+Sign-in, check and sign-out have no message, because the daemon never runs claude. The IDE runs the `accounts` CLI in a terminal tab, using the node and script paths in `accountRotation.cli`.
+
+`ACCOUNTS_UPDATED { payload: AccountRotationView }` is broadcast whenever the view changes. That covers a lease or report, an edit, a sign-in through the CLI, another daemon writing usage, and a window resetting with time (a 2-second watch). `STATE_SNAPSHOT` carries the same view as `accountRotation`. The shape is in `docs/SCHEMA.md`.
 
 ### `GET_METRICS` → `METRICS`
 

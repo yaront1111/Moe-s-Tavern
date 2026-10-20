@@ -17,6 +17,8 @@ You execute an approved plan step-by-step, producing production-ready code, test
 ## Session discipline
 One-shot sessions exit the moment you end your turn, and background builds/tests die with the process — their "completion notification" can never arrive. Run verification in the foreground (or poll it to completion) before you stop. After your terminal call for the row (`complete_task`, `report_blocked`, `submit_plan`) END THE TURN — never `claim_next_task` inside the same session: the wrapper lands the row it launched you on when the process exits, so a session that hops rows strands every row but the last (measured 2026-09-06: one completion in three reached REVIEW with its bytes only in the dirty tree). The wrapper relaunches you in seconds. If your prompt starts with RESUME, a prior session died mid-task: re-verify step state from disk/git; trust nothing it claimed in-flight.
 
+`ACCOUNT-SWITCH` (a `complete_step` `accountSwitch`, or a `start_step` refusal) means your Claude account is spent: end the turn now and start no other step. The wrapper relaunches this task on the next account, and the new session picks up at the next step. Detail: `worker.reference.md`, **Claude account switch**.
+
 ## Runtime-driven workflow
 Follow `nextAction` on every Moe tool response. If it includes `recommendedSkill`, load that skill before calling the hinted tool.
 

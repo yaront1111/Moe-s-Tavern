@@ -29,7 +29,7 @@ INTERNAL_PLUMBING='^(MOE_ATTR_UNDECLARED|MOE_ATTR_EXCLUDE|MOE_ATTR_POLICY_OVERRI
 extract_codes() { # $1 = file, $2 = prefix regex
   grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | sort -u || true
 }
-for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_'; do
+for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -104,7 +104,8 @@ for env_name in GIT_TERMINAL_PROMPT MOE_DISABLE_CHECKPOINT MOE_ATTRIBUTION MOE_P
   MOE_DISABLE_QUALITY_GATE MOE_RESUME_MAX_ATTEMPTS \
   MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC \
   CLAUDE_CODE_PROMPT_CACHE_TTL CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL CLAUDE_CODE_AUTO_COMPACT_WINDOW \
-  MOE_COMPACT_WINDOW_DEFAULT CLAUDE_CODE_PLUGIN_DIRS MOE_DISABLE_COMPACTION_KEEPER; do
+  MOE_COMPACT_WINDOW_DEFAULT CLAUDE_CODE_PLUGIN_DIRS MOE_DISABLE_COMPACTION_KEEPER \
+  CLAUDE_CONFIG_DIR MOE_ACCOUNT_ID MOE_ACCOUNT_SAMPLE_FILE; do
   require_both "env name" "$env_name"
 done
 
@@ -115,6 +116,14 @@ done
 
 # Resume-budget prose: a session that completed a plan step re-arms the budget.
 require_both "resume-budget prose" 'resume budget re-armed'
+
+# Claude account rotation: the helper both wrappers call and the lease, wait and
+# relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are compared above).
+for prose in 'moe-account-lease.mjs' '[account] ' 'launching without rotation.' \
+  'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)' \
+  'relaunching on the next account; the held task stays held.' 'Relaunching now on the next account.'; do
+  require_both "account rotation prose" "$prose"
+done
 
 # Agent-CLI vocabulary (claude / codex / gemini / grok): the per-CLI config
 # dirs (also the attribution DENY prefixes), the grok cliType value, the grok
@@ -166,7 +175,7 @@ require_both "codex per-task hint" 'Per-task model/effort (launch.codex hint)'
 require_both "codex per-task effort" 'model_reasoning_effort='
 
 # MCP tools the wrappers call for the ledger.
-for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt; do
+for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt lease_account report_account_usage; do
   require_both "RPC tool" "$tool"
 done
 

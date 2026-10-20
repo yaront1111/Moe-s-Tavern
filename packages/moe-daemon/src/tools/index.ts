@@ -59,6 +59,8 @@ import { submitPlanCritiqueTool } from './submitPlanCritique.js';
 import { amendPlanStepTool } from './amendPlanStep.js';
 import { deregisterWorkerTool } from './deregisterWorker.js';
 import { heartbeatTool } from './heartbeat.js';
+import { leaseAccountTool } from './leaseAccount.js';
+import { reportAccountUsageTool } from './reportAccountUsage.js';
 import { acquireResourceTool } from './acquireResource.js';
 import { releaseResourceTool } from './releaseResource.js';
 import { listResourcesTool } from './listResources.js';
@@ -152,6 +154,8 @@ export function getTools(state: StateManager): ToolDefinition[] {
     amendPlanStepTool(state),
     deregisterWorkerTool(state),
     heartbeatTool(state),
+    leaseAccountTool(state),
+    reportAccountUsageTool(state),
     acquireResourceTool(state),
     releaseResourceTool(state),
     listResourcesTool(state),
@@ -233,6 +237,8 @@ export const TOOL_AUDIENCE: Readonly<Record<string, readonly Seat[] | 'wrapper'>
   'moe.amend_plan_step': [A],
   'moe.deregister_worker': 'wrapper',
   'moe.heartbeat': 'wrapper',
+  'moe.lease_account': 'wrapper',
+  'moe.report_account_usage': 'wrapper',
   'moe.acquire_resource': [W, Q],
   'moe.release_resource': [W, Q],
   'moe.list_resources': [W, Q],

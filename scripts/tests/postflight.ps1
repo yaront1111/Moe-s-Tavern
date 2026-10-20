@@ -1,5 +1,7 @@
 ﻿param()
 $ErrorActionPreference = 'Stop'
+# Claude account rotation stays off unless the [accounts] scenario turns it on.
+$env:MOE_ACCOUNT_ROTATION = 'off'
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $wrapper = Join-Path $root 'scripts\moe-agent.ps1'
@@ -588,6 +590,25 @@ switch (tool) {
   case 'heartbeat': {
     fs.appendFileSync(path.join(moe, 'heartbeat.log'), `${new Date().toISOString()} ${args.workerId}\n`);
     ok({ ok: true });
+    break;
+  }
+  case 'lease_account':
+  case 'report_account_usage': {
+    // leaseAccount.ts in miniature, for the [accounts] scenario: no rotation
+    // without FAKE_ACCOUNT_HOME; with FAKE_ACCOUNT_WAIT_ONCE the first lease
+    // finds every account spent; otherwise the first of acct-1, acct-2 that no
+    // report refused or signed out. Every call is logged.
+    const log = path.join(moe, 'account-rpcs.jsonl');
+    const rows = readRows(log);
+    fs.appendFileSync(log, JSON.stringify({ tool, args }) + '\n');
+    if (tool === 'report_account_usage') { ok({ recorded: true, blockedUntil: null, peakPercent: null }); break; }
+    const home = process.env.FAKE_ACCOUNT_HOME;
+    const spent = { rotation: true, accountId: null, retryAt: new Date(Date.now() + 3600000).toISOString(), retryInSec: 3600, switchAtPercent: 90 };
+    if (!home) { ok({ rotation: false, reason: null }); break; }
+    if (process.env.FAKE_ACCOUNT_WAIT_ONCE && !rows.some(r => r.tool === 'lease_account')) { ok(spent); break; }
+    const parked = new Set(rows.filter(r => r.tool === 'report_account_usage' && (r.args.refused === true || r.args.signIn)).map(r => r.args.accountId));
+    const id = ['acct-1', 'acct-2'].find(a => !parked.has(a));
+    ok(id ? { rotation: true, accountId: id, label: id, configDir: path.join(home, id), peakPercent: id === 'acct-1' ? 12.5 : null, switchAtPercent: 90 } : spent);
     break;
   }
   default: ok({ success: true });
@@ -1520,6 +1541,107 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         $tierArgs = if (Test-Path $tierArgsFile) { Get-Content -Raw -Path $tierArgsFile } else { '' }
         if ($tierArgs -notlike '*--effort medium*') { Write-Host $tierArgs; throw 'Expected --effort medium from the claim''s launch tier' }
         if ((Get-Content -Raw -Path $wrapperTierOut) -notlike '*Task tier: light (model*') { Get-Content $wrapperTierOut | ForEach-Object { Write-Error $_ }; throw 'Expected the task tier banner' }
+
+        # --- Account rotation (twin of postflight.sh [accounts]). A claude
+        # launch whose account is refused at its limit, or found signed out,
+        # relaunches at once on the next account, even under -NoLoop and
+        # without the launch-failure backoff; a lease that finds every account
+        # spent waits and leases again. The fake CLI tells its account by
+        # CLAUDE_CONFIG_DIR and answers `auth status --json` like claude; no
+        # token may reach it, and no directory may reach the daemon. ---
+        $acctHome = Join-Path $tempRoot 'acct-home'
+        $acct1Dir = Join-Path $acctHome 'acct-1'
+        $acct2Dir = Join-Path $acctHome 'acct-2'
+        New-Item -ItemType Directory -Force -Path $acct1Dir, $acct2Dir | Out-Null
+        $acctLog = Join-Path $tempRoot 'acct-cli.log'
+        $acctRpcs = Join-Path $projectDir '.moe\account-rpcs.jsonl'
+        $acctReset = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3600
+        $spentEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":' + $acctReset + ',"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":' + $acctReset + '}}}}'
+        $fineEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":' + $acctReset + ',"rateLimitType":"five_hour","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.42,"resetsAt":' + $acctReset + '}}}}'
+        $acctCmd = Join-Path $tempRoot 'acct.cmd'
+        # FAKE_ACCT_MODE: unset = acct-1 is spent, signout = acct-1 is signed
+        # out, fine = every account works.
+        Set-Content -Path $acctCmd -Encoding ASCII -Value (@(
+            '@echo off',
+            'if "%~1"=="auth" goto auth',
+            'if defined CLAUDE_CODE_OAUTH_TOKEN (set "ACCT_TOKEN=set") else (set "ACCT_TOKEN=unset")',
+            "echo dir=%CLAUDE_CONFIG_DIR% token=%ACCT_TOKEN%>> `"$acctLog`"",
+            'if "%FAKE_ACCT_MODE%"=="fine" goto fine',
+            "if /I not `"%CLAUDE_CONFIG_DIR%`"==`"$acct1Dir`" goto fine",
+            'if "%FAKE_ACCT_MODE%"=="signout" exit /b 1',
+            "echo $spentEvent",
+            'exit /b 1',
+            ':fine',
+            "echo $fineEvent",
+            'exit /b 0',
+            ':auth',
+            "if /I not `"%CLAUDE_CONFIG_DIR%`"==`"$acct1Dir`" goto authok",
+            'if not "%FAKE_ACCT_MODE%"=="signout" goto authok',
+            'echo {"loggedIn":false,"authMethod":"none"}',
+            'exit /b 1',
+            ':authok',
+            'echo {"loggedIn":true,"authMethod":"claude.ai"}',
+            'exit /b 0'
+        ) -join "`r`n")
+        function Invoke-AccountScenario([string]$Name, [hashtable]$ScenarioEnv) {
+            Remove-Item -LiteralPath $acctLog, $acctRpcs -Force -ErrorAction SilentlyContinue
+            $out = Join-Path $tempRoot "wrapper-accounts-$Name.out"
+            $vars = @{ FAKE_CLAIM_MODE = 'resume'; MOE_ACCOUNT_ROTATION = 'on'; FAKE_ACCOUNT_HOME = $acctHome; FAKE_ACCT_MODE = $null
+                FAKE_ACCOUNT_WAIT_ONCE = $null; MOE_ACCOUNT_RETRY_SEC = '1'; MOE_DISABLE_HEARTBEAT = '1'; CLAUDE_CODE_OAUTH_TOKEN = 'must-not-reach-the-child'
+                CLAUDE_CODE_USE_BEDROCK = $null; CLAUDE_CODE_USE_VERTEX = $null; CLAUDE_CODE_USE_FOUNDRY = $null }
+            foreach ($k in $ScenarioEnv.Keys) { $vars[$k] = $ScenarioEnv[$k] }
+            $saved = @{}
+            foreach ($k in @($vars.Keys)) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
+            try {
+                $code = Invoke-WrapperProcess @('-Project', $projectDir, '-WorkerId', "qa-accounts-$Name", '-Role', 'qa', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $acctCmd, '-NoLoop') $out
+            } finally {
+                foreach ($k in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+            }
+            [pscustomobject]@{
+                Name = $Name; Code = $code
+                Out = $(if (Test-Path $out) { Get-Content -Raw -Path $out } else { '' })
+                Launches = @($(if (Test-Path $acctLog) { Get-Content -Path $acctLog | ForEach-Object { $_.Trim() } }))
+                Rpcs = @($(if (Test-Path $acctRpcs) { Get-Content -Path $acctRpcs | ForEach-Object { $_ | ConvertFrom-Json } }))
+                RpcText = $(if (Test-Path $acctRpcs) { Get-Content -Raw -Path $acctRpcs } else { '' })
+            }
+        }
+        function Assert-AccountScenario($R, [string[]]$Want, [string[]]$Launches) {
+            $fail = { param($why) Write-Host $R.Out; $R.Launches | ForEach-Object { Write-Host "launch: $_" }; throw "[accounts] $($R.Name): $why" }
+            if ($R.Code -ne 0) { & $fail "wrapper exited with $($R.Code)" }
+            foreach ($w in $Want) { if (-not $R.Out.Contains($w)) { & $fail "expected '$w'" } }
+            if ($R.Out.Contains('[launch-failure] Backing off')) { & $fail 'an account relaunch must not take the launch-failure backoff' }
+            if (($R.Launches -join '|') -ne ($Launches -join '|')) { & $fail "expected launches '$($Launches -join '|')', got '$($R.Launches -join '|')'" }
+            if ($R.RpcText.Contains('acct-home')) { & $fail 'an account directory reached the daemon' }
+        }
+
+        $r = Invoke-AccountScenario 'refused' @{}
+        Assert-AccountScenario $r @('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%',
+            '[account] MOE_ACCOUNT_REFUSED account=acct-1 exit=1 - relaunching on the next account; the held task stays held.',
+            '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2',
+            '[account] MOE_ACCOUNT_LEASED account=acct-2 usage=unknown') @("dir=$acct1Dir token=unset", "dir=$acct2Dir token=unset")
+        $reports = @($r.Rpcs | Where-Object { $_.tool -eq 'report_account_usage' } | ForEach-Object { $_.args })
+        $one = @($reports | Where-Object { $_.accountId -eq 'acct-1' })
+        $two = @($reports | Where-Object { $_.accountId -eq 'acct-2' })
+        if ($one.Count -ne 1 -or $one[0].refused -ne $true -or $one[0].windows.five_hour.utilization -ne 1 -or $one[0].windows.five_hour.status -ne 'rejected') {
+            throw "[accounts] refused: expected one refused acct-1 report: $($r.RpcText)"
+        }
+        if ($two.Count -ne 1 -or $two[0].refused -ne $false -or [double]$two[0].windows.five_hour.utilization -ne 0.42) {
+            throw "[accounts] refused: expected one clean acct-2 report: $($r.RpcText)"
+        }
+        if (@($r.Rpcs | Where-Object { $_.tool -eq 'lease_account' }).Count -ne 2) { throw "[accounts] refused: expected two leases: $($r.RpcText)" }
+
+        $r = Invoke-AccountScenario 'signout' @{ FAKE_ACCT_MODE = 'signout' }
+        Assert-AccountScenario $r @('[account] MOE_ACCOUNT_SIGNED_OUT account=acct-1 state=signed_out - relaunching on the next account; the held task stays held.',
+            '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2') @("dir=$acct1Dir token=unset", "dir=$acct2Dir token=unset")
+        $signIn = @($r.Rpcs | Where-Object { $_.tool -eq 'report_account_usage' -and $_.args.signIn } | ForEach-Object { $_.args })
+        if ($signIn.Count -ne 1 -or $signIn[0].accountId -ne 'acct-1' -or $signIn[0].signIn -ne 'signed_out') { throw "[accounts] signout: expected one signed_out report for acct-1: $($r.RpcText)" }
+
+        $r = Invoke-AccountScenario 'wait' @{ FAKE_ACCT_MODE = 'fine'; FAKE_ACCOUNT_WAIT_ONCE = '1' }
+        Assert-AccountScenario $r @('[account] MOE_ACCOUNT_WAIT retry_in=1s next_reset=',
+            ' - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', '[account] MOE_ACCOUNT_LEASED account=acct-1') @("dir=$acct1Dir token=unset")
+        if (@($r.Rpcs | Where-Object { $_.tool -eq 'lease_account' }).Count -ne 2) { throw "[accounts] wait: expected a spent lease, then a granted one: $($r.RpcText)" }
+        Remove-Item -LiteralPath $acctRpcs -Force -ErrorAction SilentlyContinue
+        Write-Host '[accounts] ok'
 
         # --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no
         # moe.* calls of its own for the CLI's whole runtime, so a long silent

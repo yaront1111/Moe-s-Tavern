@@ -23,7 +23,13 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
         isOpaque = false
     }
 
-    fun updateWorkers(workers: List<Worker>, tasks: Map<String, Task>, teams: List<Team> = emptyList()) {
+    /** [accountLabels] maps a Claude account id to its label, for the card titles. */
+    fun updateWorkers(
+        workers: List<Worker>,
+        tasks: Map<String, Task>,
+        teams: List<Team> = emptyList(),
+        accountLabels: Map<String, String> = emptyMap()
+    ) {
         removeAll()
 
         if (workers.isNotEmpty()) {
@@ -49,7 +55,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
                     font = font.deriveFont(Font.BOLD, font.size - 1f)
                 })
                 for (worker in members) {
-                    add(createWorkerCard(worker, tasks))
+                    add(createWorkerCard(worker, tasks, accountLabels))
                 }
             }
 
@@ -61,7 +67,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
                 })
             }
             for (worker in soloWorkers) {
-                add(createWorkerCard(worker, tasks))
+                add(createWorkerCard(worker, tasks, accountLabels))
             }
         }
 
@@ -69,7 +75,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
         repaint()
     }
 
-    private fun createWorkerCard(worker: Worker, tasks: Map<String, Task>): JBPanel<JBPanel<*>> {
+    private fun createWorkerCard(worker: Worker, tasks: Map<String, Task>, accountLabels: Map<String, String>): JBPanel<JBPanel<*>> {
         val card = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             preferredSize = Dimension(200, 60)
             border = BorderFactory.createCompoundBorder(
@@ -84,7 +90,7 @@ class WorkerPanel : JBPanel<WorkerPanel>(WrapLayout(FlowLayout.LEFT, 8, 4)) {
             isOpaque = false
         }
 
-        val typeLabel = JBLabel(worker.type).apply {
+        val typeLabel = JBLabel(AccountPresentation.workerTitle(worker, accountLabels)).apply {
             font = font.deriveFont(Font.BOLD)
             foreground = BoardStyles.textPrimary
         }
