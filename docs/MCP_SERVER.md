@@ -1833,7 +1833,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 - `❌ QA rejected {taskId}: {reason}` (from `moe.qa_reject`).
 - `🔓 {worker} released task: {title}` (from `moe.release_task`).
 - `🛑 task {id} ({title}) parked to BACKLOG after 3 empty-progress releases in 24h …` (from `moe.release_task`'s refusal cascade; needs human reprioritization).
-- `⚠️ {worker} stale on {taskId} ({title}) — last activity {N}s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.` (from the daemon's stale-worker watcher; only fires when at least one governor is online; a presence/triage signal, not a release trigger).
+- `⚠️ {worker} stale on {taskId} ({title}) — last activity {N}s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.` (from the daemon's stale-worker watcher; only fires when at least one governor is online; once per stale stretch, and at most once an hour for the same worker and task; a presence/triage signal, not a release trigger).
 - `📋 New plan needed: {title} ({id})` (cross-post of the PLANNING announcement; informational — governors never claim PLANNING tasks).
 
 ---

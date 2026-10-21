@@ -432,11 +432,11 @@ export class StateManager {
   staleWorkerInterval?: NodeJS.Timeout;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   reconcileWindowInterval?: NodeJS.Timeout;
-  // Memoization to avoid re-alerting on the same (workerId, taskId) tuple
-  // until the staleness clears (worker becomes alive again) or the assignment
-  // moves to a different task.
+  // When each `${workerId}:${taskId}` pair last got a stale alert. An entry
+  // stays while the pair is stale and for STALE_ALERT_COOLDOWN_MS after its
+  // alert, so neither a long stale stretch nor a flapping seat re-alerts.
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
-  alertedStaleAssignments = new Set<string>();
+  staleAlertAt = new Map<string, number>();
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   readonly blockedTimeoutMs: number;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -743,8 +743,8 @@ export class StateManager {
     return checkReconcileWindow(this, nowMs);
   }
 
-  async checkStaleWorkers(livenessTimeoutMs: number): Promise<void> {
-    return checkStaleWorkers(this, livenessTimeoutMs);
+  async checkStaleWorkers(livenessTimeoutMs: number, nowMs = Date.now()): Promise<void> {
+    return checkStaleWorkers(this, livenessTimeoutMs, nowMs);
   }
 
   // ---------------------------------------------------------------------------
