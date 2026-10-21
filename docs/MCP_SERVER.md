@@ -2737,7 +2737,7 @@ Exactly three conditions produce it:
 | `reason` | Condition |
 |---|---|
 | `no-worker-record` | No worker record for `workerId` — a daemon restart purged the seat and the runner has not re-registered. Returned before any refresh; nothing is created or resurrected. |
-| `no-open-attempt` | The worker exists but owns no open attempt (no current task, the attempt is closed, or the task's open attempt belongs to another seat). |
+| `no-open-attempt` | The worker holds a task (`currentTaskId`) but owns no open attempt on it: the attempt is closed, or the task's open attempt belongs to another seat. A seat holding no task (a governor, a seat between claims) has nothing to reattach and gets `{ ok: true }`. |
 | `attempt-reconciling` | The seat's attempt is parked in `reconciling` by a restart that lost sight of it. **No presence is recorded on this path** — a runner that has not proven which process it is does not get to look present. |
 
 **Notes:**
