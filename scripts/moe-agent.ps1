@@ -217,7 +217,9 @@ function Grant-GrokFolderTrust {
 
 # This seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $ConfigPath
-# (.codex/config.toml) plus MOE_WORKER_ID. The override must be a complete
+# (.codex/config.toml) plus MOE_WORKER_ID and, when set, the seat's runner
+# identity (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP
+# server only the env its table names. The override must be a complete
 # server definition: codex 0.163 TUI bootstrap rejects a partial dotted one
 # (`-c mcp_servers.moe.env.MOE_WORKER_ID=...`) with "account/read failed:
 # failed to load workspace requirements (code -32603)", exit 1 before any work.
@@ -233,13 +235,17 @@ function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
         if ($s.StartsWith('[')) { $section = $s; continue }
         if (-not $s -or $s.StartsWith('#') -or -not $s.Contains('=')) { continue }
         $key, $value = $s.Split('=', 2) | ForEach-Object { $_.Trim() }
-        if ($key -eq 'MOE_WORKER_ID') { continue }
+        if ($key -in @('MOE_WORKER_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')) { continue }
         if (-not $value.Contains("'") -and -not $value.Contains('\')) { $value = $value.Replace('"', "'") }
         if ($section -eq '[mcp_servers.moe]') { $server += "$key=$value" }
         elseif ($section -eq '[mcp_servers.moe.env]') { $envPairs += "$key=$value" }
     }
     if (-not ($server | Where-Object { $_.StartsWith('command=') })) { return $fallback }
     $envPairs += "MOE_WORKER_ID='$WorkerId'"
+    foreach ($key in @('MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')) {
+        $value = [Environment]::GetEnvironmentVariable($key)
+        if ($value -and -not $value.Contains("'")) { $envPairs += "$key='$value'" }
+    }
     return 'mcp_servers.moe={' + (($server + @('env={' + ($envPairs -join ',') + '}')) -join ',') + '}'
 }
 
@@ -1136,6 +1142,10 @@ $serenaTomlBlock
         # Single-quoted on purpose: ${MOE_WORKER_ID:-} is grok's template
         # syntax, and a double-quoted PowerShell string would try to expand it.
         $grokWorkerIdLine = 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"'
+        # The same for the runner identity, set for architect/QA/governor seats
+        # only; empty (unset, to the proxy) for a worker or a human run.
+        $grokRunnerStartedLine = 'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"'
+        $grokRunnerHostLine = 'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"'
         # Grok drops any MCP tool whose name contains a dot (it namespaces
         # tools as <server>__<tool> and validates the result), so the daemon's
         # moe.<name> tools all vanish - the server shows as connected with 0
@@ -1166,6 +1176,8 @@ $serenaTomlBlock
             "[mcp_servers.moe.env]",
             "MOE_PROJECT_PATH = `"$projectPathForToml`"",
             $grokWorkerIdLine,
+            $grokRunnerStartedLine,
+            $grokRunnerHostLine,
             ($grokToolNameStyleLine + $grokDaemonHostLine)
         ) -join "`n")
 
@@ -2002,10 +2014,9 @@ function Start-HeartbeatSidecar {
     $maxDurationSec = 86400
     if ($env:MOE_HEARTBEAT_MAX_DURATION_SEC -match '^\d+$') { $maxDurationSec = [int]$env:MOE_HEARTBEAT_MAX_DURATION_SEC }
 
-    # The attempt pinned at claim time, for the reattach below: the job is a
-    # separate process and sees none of this script's variables.
-    $pin = @{ TaskId = [string]$preflightTaskId; AttemptId = [string]$script:MoeAttemptId; Generation = $script:MoeAttemptGeneration
-        RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost
+    # This runner's identity, for the reattach below: the job is a separate
+    # process and sees none of this script's variables.
+    $pin = @{ RunnerId = [string]$script:MoeRunnerId; ProcessStartedAt = [string]$script:MoeProcessStartedAt; Host = [string]$script:MoeHost
         AccountId = [string]$script:AccountLeasedId; AccountSampleFile = [string]$script:AccountSampleFile }
     try {
         $script:CurrentHeartbeatJob = Start-Job -Name "moe-heartbeat-$WorkerId" -ScriptBlock {
@@ -2023,7 +2034,7 @@ function Start-HeartbeatSidecar {
                 }
                 return $null
             }
-            $refused = $false; $noted = @{}; $sentSample = ''
+            $refused = [Collections.Generic.HashSet[string]]::new(); $noted = @{}; $sentSample = ''
             $deadline = (Get-Date).AddSeconds($MaxDurationSec)
             while ((Get-Date) -lt $deadline) {
                 Start-Sleep -Seconds $IntervalSec
@@ -2045,29 +2056,38 @@ function Start-HeartbeatSidecar {
                         }
                     } catch {}
                 }
-                # A daemon restart parked the attempt this wrapper pinned at claim
-                # time: reattach it with the pinned generation (the answer carries
-                # none). Any other reason names nothing this process may reattach:
-                # say so once. A refusal never heals, so it is not asked again on
-                # every later ping. Lines surface when Stop-HeartbeatSidecar
-                # receives the job.
+                # A daemon restart parked this seat's attempt: the one the
+                # wrapper pinned at claim time, or one the agent claimed inside
+                # its session (moe-proxy stamps that claim with this wrapper's
+                # identity). Reattach the attempt the answer names, with the
+                # generation its record carries (the answer has none); the
+                # daemon's identity check decides whether it is this process's.
+                # Any other reason, or no identity to present, names nothing this
+                # process may reattach: say so once. A refusal never heals, so it
+                # is not asked again on every later ping. Lines surface when
+                # Stop-HeartbeatSidecar receives the job.
                 try {
                     $beat = Send-SidecarRpc 'moe.heartbeat' @{ workerId = $WorkerId }
                     if (-not ($beat -and $beat.Value -and $beat.Value.reattachRequired -eq $true)) { continue }
                     $reason = [string]$beat.Value.reason
-                    if ($reason -ceq 'attempt-reconciling' -and $Pin.AttemptId -and $Pin.ProcessStartedAt -and [string]$beat.Value.attemptId -ceq $Pin.AttemptId) {
-                        if ($refused) { continue }
-                        $r = Send-SidecarRpc 'moe.reattach_attempt' @{ taskId = $Pin.TaskId; workerId = $WorkerId; runnerId = $Pin.RunnerId
-                            attemptId = $Pin.AttemptId; generation = $Pin.Generation; processStartedAt = $Pin.ProcessStartedAt; host = $Pin.Host }
+                    if ($reason -ceq 'attempt-reconciling' -and $Pin.ProcessStartedAt) {
+                        $id = [string]$beat.Value.attemptId
+                        if ($id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $refused.Contains($id)) { continue }
+                        $a = [IO.File]::ReadAllText((Join-Path $ProjectPath ".moe/attempts/$id.json")) | ConvertFrom-Json -ErrorAction Stop
+                        $tid = [string]$a.taskId; $g = $a.generation
+                        if ([string]$a.id -cne $id -or [string]$a.workerId -cne $WorkerId -or [string]$a.phase -cne 'reconciling' -or
+                            -not (($g -is [int] -or $g -is [long]) -and $g -gt 0 -and $g -le 9007199254740991) -or $tid -cnotmatch '^[A-Za-z0-9_-]{1,128}$') { continue }
+                        $r = Send-SidecarRpc 'moe.reattach_attempt' @{ taskId = $tid; workerId = $WorkerId; runnerId = $Pin.RunnerId
+                            attemptId = $id; generation = $g; processStartedAt = $Pin.ProcessStartedAt; host = $Pin.Host }
                         if ($r -and $r.Value -and $r.Value.success -eq $true -and $r.Value.phase -ceq 'running') {
-                            "[reattach] attempt $($Pin.AttemptId) (generation $($Pin.Generation)) on task $($Pin.TaskId) is running again after a daemon restart."
+                            "[reattach] attempt $id (generation $g) on task $tid is running again after a daemon restart."
                         } elseif ($r -and $r.Refused) {
-                            $refused = $true
-                            "[reattach] moe.reattach_attempt refused for attempt $($Pin.AttemptId) ($($r.Refused)); not retrying it."
-                        } else { "[WARN] moe.reattach_attempt got no answer for attempt $($Pin.AttemptId); retrying later." }
+                            [void]$refused.Add($id)
+                            "[reattach] moe.reattach_attempt refused for attempt $id ($($r.Refused)); not retrying it."
+                        } else { "[WARN] moe.reattach_attempt got no answer for attempt $id; retrying later." }
                     } elseif (-not $noted.ContainsKey($reason)) {
                         $noted[$reason] = $true
-                        "[reattach] heartbeat asks for reattachment ($reason) but this wrapper pinned no such reconciling attempt; nothing to reattach."
+                        "[reattach] heartbeat asks for reattachment ($reason) but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach."
                     }
                 } catch {}
             }
@@ -2700,6 +2720,20 @@ if ($moeIdentityWhy) {
     $claimRpcArgs | Add-Member -NotePropertyName processStartedAt -NotePropertyValue $moeToken
     $claimRpcArgs | Add-Member -NotePropertyName host -NotePropertyValue $moeHostName
     Write-Host "Runner identity: processStartedAt=$moeToken host=$moeHostName"
+}
+# Architect, QA and governor seats hand the identity to the CLI as well:
+# moe-proxy adds it to a moe.claim_next_task that names none, so a row the
+# agent claims inside its session (an architect plans several per CLI) records
+# it too and the heartbeat sidecar can reattach that attempt after a daemon
+# restart. Never for a worker: an identity on its attempt hands the finalize to
+# this wrapper, which finalizes only the attempt it pinned, so an in-session
+# worker claim would be left `finalizing`. Removed otherwise, so a value
+# inherited from an outer seat never reaches this one. Twin: the same block in
+# moe-agent.sh.
+if ($script:MoeProcessStartedAt -and $Role -ne 'worker') {
+    $env:MOE_RUNNER_PROCESS_STARTED_AT = $script:MoeProcessStartedAt; $env:MOE_RUNNER_HOST = $script:MoeHost
+} else {
+    Remove-Item Env:MOE_RUNNER_PROCESS_STARTED_AT, Env:MOE_RUNNER_HOST -ErrorAction SilentlyContinue
 }
 
 # Claim the task's dirty bytes for THIS session. Best-effort by design: a

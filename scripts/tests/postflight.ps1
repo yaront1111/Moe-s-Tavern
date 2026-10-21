@@ -342,14 +342,15 @@ if (tool === 'claim_next_task') {
 // FAKE_HEARTBEAT_REATTACH mirrors heartbeat.ts's reattach-required answer: `1`
 // reads the caller's attempt (attempt-reconciling while a restart has it parked,
 // a plain ack otherwise); `other` alternates the two reasons that name no
-// attempt. .moe/heartbeat-count counts the pings.
+// attempt. FAKE_HEARTBEAT_ATTEMPT names the attempt the seat's current task
+// holds (default attempt-postflight). .moe/heartbeat-count counts the pings.
 if (tool === 'heartbeat' && process.env.FAKE_HEARTBEAT_REATTACH) {
   const counter = path.join(moe, 'heartbeat-count');
   const n = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1;
   fs.writeFileSync(counter, String(n));
   const reattach = (reason, a) => ({ok:false,reattachRequired:true,reason,reattachWith:'moe.reattach_attempt',...(a ? {attemptId:a.id,phase:a.phase} : {})});
   let a = null;
-  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts','attempt-postflight.json'),'utf8')); } catch {}
+  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',(process.env.FAKE_HEARTBEAT_ATTEMPT || 'attempt-postflight')+'.json'),'utf8')); } catch {}
   if (process.env.FAKE_HEARTBEAT_REATTACH === 'other') ok(reattach(n % 2 ? 'no-worker-record' : 'no-open-attempt'));
   else ok(a && a.workerId === args.workerId && a.phase === 'reconciling' ? reattach('attempt-reconciling', a) : {ok:true});
   process.exit(0);
@@ -639,7 +640,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
-'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
+'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
@@ -804,6 +805,20 @@ if((mode==='reattach-sidecar'||mode==='reattach-refused')&&fs.existsSync(file)){
  else{waitFor(()=>fs.existsSync(moeFile('evidence-rpcs.jsonl'))&&fs.readFileSync(moeFile('evidence-rpcs.jsonl'),'utf8').includes('reattach_attempt'),60000);
   const pings=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>=pings+3,30000);}}
 if(mode==='reattach-none')waitFor(()=>count('heartbeat-count')>=3,30000);
+// reattach-session: the restart parks an attempt of this seat that the wrapper
+// did not pin -- a row the agent claimed inside its session, which moe-proxy
+// stamped with the wrapper's identity. The sidecar reattaches the attempt the
+// heartbeat names while the session runs; the CLI records the phase it saw.
+if(mode==='reattach-session'&&fs.existsSync(file)){const pinned=JSON.parse(fs.readFileSync(file,'utf8')),session=moeFile('attempts/attempt-session.json');
+ const sessionPhase=()=>{try{return JSON.parse(fs.readFileSync(session,'utf8')).phase;}catch(e){return '';}};
+ fs.writeFileSync(session,JSON.stringify({id:'attempt-session',generation:3,taskId:'task-session',workerId:pinned.workerId,runnerId:pinned.workerId,
+  phase:'reconciling',processStartedAt:pinned.processStartedAt,host:pinned.host,workspace:dir,startedAt:new Date().toISOString(),lastPhaseAt:new Date().toISOString()}));
+ waitFor(()=>sessionPhase()==='running',60000);fs.writeFileSync(moeFile('cli-saw-phase'),sessionPhase());
+ // One more ping after the reattach: the sidecar is sequential, so its line is out.
+ const seen=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>seen,30000);}
+// identity-claim: a worker CLI never gets the runner identity, not even one
+// inherited from an outer seat (the harness sets one).
+if(mode==='identity-claim')fs.writeFileSync(moeFile('cli-runner-env'),JSON.stringify([process.env.MOE_RUNNER_PROCESS_STARTED_AT??null,process.env.MOE_RUNNER_HOST??null]));
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
 if(mode.endsWith('-reconciling')||mode==='reattach-postflight')a.phase='reconciling';
 if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if(mode==='stale-attempt'||mode==='freed-generation-bump')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
@@ -843,9 +858,11 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
   // Reattach arms: the sidecar pings every second against the fake heartbeat.
-  if(['reattach-sidecar','reattach-refused','reattach-none'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
+  if(['reattach-sidecar','reattach-refused','reattach-none','reattach-session'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
     env.FAKE_HEARTBEAT_REATTACH=mode==='reattach-none'?'other':'1';}
   if(mode==='reattach-refused')env.FAKE_REATTACH_REFUSE='1';
+  if(mode==='reattach-session')env.FAKE_HEARTBEAT_ATTEMPT='attempt-session';
+  if(mode==='identity-claim'){env.MOE_RUNNER_PROCESS_STARTED_AT='1@outer-seat';env.MOE_RUNNER_HOST='outer-host';}
   if(mode==='reattach-preflight')env.FAKE_ATTEMPT_PHASE='reconciling';
   if(mode==='finalize-loss'||mode==='loop-land-twice'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
@@ -960,9 +977,15 @@ exit "$rc"
     assert.deepEqual(pair(c),pair(claims[0]),'one identity per wrapper process\n'+log);}
   if(mode==='identity-claim'){assert.ok(claims.length>=2,log);
     assert.deepEqual(pair(JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json')))),pair(claims[0]),
-      'the claim recorded the pair on the attempt it opened\n'+log);}
+      'the claim recorded the pair on the attempt it opened\n'+log);
+    assert.deepEqual(JSON.parse(read(path.join(nested,'.moe','cli-runner-env'))),[null,null],'a worker CLI gets no runner identity\n'+log);}
   const reattaches=rpc.filter(r=>r.tool==='reattach_attempt').map(r=>r.args),said=s=>log.split(s).length-1;
-  if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
+  if(mode==='reattach-session'){const r=reattaches[0]||{};
+    assert.equal(reattaches.length,1,'exactly one reattach, for the attempt the heartbeat named\n'+log);
+    assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-session','worker-frozen','attempt-session',3,...pair(claims[0])],log);
+    assert.equal(read(path.join(nested,'.moe','cli-saw-phase')),'running','the sidecar reattached it while the session ran\n'+log);
+    assert.equal(said('attempt attempt-session (generation 3) on task task-session is running again after a daemon restart.'),1,log);
+  }else if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
     const r=reattaches[0]||{};
     assert.equal(reattaches.length,1,'exactly one reattach for the one parked attempt\n'+log);
     assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-postflight','worker-frozen','attempt-postflight',7,...pair(claims[0])],log);
@@ -1384,9 +1407,12 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
 
     # A "slow" fake CLI that sleeps a few seconds before exiting, standing in
     # for a long silent verification step with no moe.* calls of its own —
-    # exactly the scenario the heartbeat sidecar exists to cover.
+    # exactly the scenario the heartbeat sidecar exists to cover. It also
+    # records the runner identity it was handed: a QA seat gets the wrapper's
+    # own pair, which moe-proxy stamps onto a claim made inside the session.
+    $slowRunnerEnv = Join-Path $tempRoot 'slow-runner-env.txt'
     $slowCmd = Join-Path $tempRoot 'slow.cmd'
-    Set-Content -Path $slowCmd -Encoding ASCII -Value "@echo off`r`nping -n 6 127.0.0.1 >nul`r`nexit /b 0`r`n"
+    Set-Content -Path $slowCmd -Encoding ASCII -Value "@echo off`r`n(echo %MOE_RUNNER_PROCESS_STARTED_AT%&echo %MOE_RUNNER_HOST%)> `"$slowRunnerEnv`"`r`nping -n 6 127.0.0.1 >nul`r`nexit /b 0`r`n"
 
     # Fake Grok Build CLI, literally named grok.cmd: the wrapper strips the
     # extension before matching the basename, so this shim takes the grok
@@ -3375,7 +3401,7 @@ else {
                     $scopeYToml = [System.IO.File]::ReadAllText($scopeYConfig)
                     $scopeYBytes1 = [System.IO.File]::ReadAllBytes($scopeYConfig)
                     if ($scopeYBytes1.Length -ge 3 -and $scopeYBytes1[0] -eq 0xEF -and $scopeYBytes1[1] -eq 0xBB -and $scopeYBytes1[2] -eq 0xBF) { throw 'SCENARIO Y FAILED: .grok/config.toml must be written without a BOM' }
-                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'MOE_TOOL_NAME_STYLE = "underscore"', 'startup_timeout_sec = 120', 'tool_timeout_sec = 120', 'moe_wait_for_task = 720', '[mcp_servers.serena]', '"--context", "agent"')) {
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"', 'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"', 'MOE_TOOL_NAME_STYLE = "underscore"', 'startup_timeout_sec = 120', 'tool_timeout_sec = 120', 'moe_wait_for_task = 720', '[mcp_servers.serena]', '"--context", "agent"')) {
                         if (-not $scopeYToml.Contains($needle)) { Write-Host $scopeYToml; throw "SCENARIO Y FAILED: .grok/config.toml must contain [$needle]" }
                     }
                     if ($scopeYToml -match '(?m)^(model_reasoning_effort|developer_instructions|model_instructions_file|project_doc_fallback_filenames)\s*=') { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: a grok project config must carry NO top-level keys' }
@@ -3581,6 +3607,11 @@ else {
                     $scopeZArgs5 = Get-CodexArgv
                     if ($scopeZArgs5 -contains 'exec' -or $scopeZArgs5 -contains '--sandbox' -or $scopeZArgs5 -contains 'approvals_reviewer=user') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: an architect must default to the interactive codex TUI (no exec / --sandbox / reviewer pin)' }
                     if ($scopeZArgs5 -cnotcontains '-C') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: the codex TUI launch must still carry -C <project>' }
+                    # A non-worker seat's override also carries the wrapper's runner
+                    # identity (codex hands the proxy only the env its table names),
+                    # so the proxy can stamp it onto the architect's in-session claims.
+                    $scopeZIdentity = if ((Get-Content -Raw -Path $scopeZOut5) -cmatch '(?m)^Runner identity: processStartedAt=(\S+) host=(\S+)\r?$') { "MOE_WORKER_ID='architect-scope-z',MOE_RUNNER_PROCESS_STARTED_AT='$($Matches[1])',MOE_RUNNER_HOST='$($Matches[2])'}}" } else { '' }
+                    if (-not $scopeZIdentity -or -not @($scopeZArgs5 | Where-Object { $_.EndsWith($scopeZIdentity, [StringComparison]::Ordinal) })) { Write-Host ($scopeZArgs5 -join ' '); throw "SCENARIO Z FAILED: an architect's codex override must carry the runner identity after its workerId" }
 
                     # Run 5b: a worker without -CodexExec defaults to headless exec
                     # (b7f9570, 2026-09-24: the codex TUI never exits on its own, so
@@ -3829,6 +3860,13 @@ else {
     }
     if ($countAfterWait -ne $countAtExit) {
         throw "Heartbeat sidecar kept pinging ($countAfterWait calls) after the wrapper exited ($countAtExit at exit) - Stop-HeartbeatSidecar cleanup failed"
+    }
+    $identityLine = [string]@(Get-Content -LiteralPath $wrapperHeartbeatOut | Where-Object { $_ -like 'Runner identity: processStartedAt=*' })[0]
+    $expectedIdentity = if ($identityLine -match '^Runner identity: processStartedAt=(.+) host=(.+)$') { "$($Matches[1])`n$($Matches[2])" } else { '' }
+    $seenIdentity = @(Get-Content -LiteralPath $slowRunnerEnv -ErrorAction SilentlyContinue) -join "`n"
+    if (-not $expectedIdentity -or $seenIdentity -cne $expectedIdentity) {
+        Get-Content $wrapperHeartbeatOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        throw "Expected the QA CLI to get the wrapper's runner identity ($identityLine); it saw: $seenIdentity"
     }
 
     # Post-flight no longer writes a session-summary file (cross-session memory

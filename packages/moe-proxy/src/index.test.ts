@@ -608,4 +608,49 @@ describe('moe-proxy graceful shutdown', () => {
     proxy.stdin!.end();
     await new Promise<void>((resolve) => { const t = setTimeout(() => { proxy.kill(); resolve(); }, 5000); proxy.on('exit', () => { clearTimeout(t); resolve(); }); });
   }, 20000);
+
+  it('stamps the runner identity from the env onto claim_next_task, and onto nothing else', async () => {
+    const seenByDaemon: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    let clientConnected = false;
+    mockServer!.on('connection', (ws) => {
+      clientConnected = true;
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.method !== 'tools/call') return;
+        seenByDaemon.push(msg.params);
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok' }] } }));
+      });
+    });
+
+    const responses: string[] = [];
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir, MOE_WORKER_ID: 'architect-t',
+        MOE_RUNNER_PROCESS_STARTED_AT: '4242@1337', MOE_RUNNER_HOST: 'build-box' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    proxy.stdout!.on('data', (chunk) => {
+      responses.push(...chunk.toString().trim().split('\n').filter((l: string) => l.startsWith('{')));
+    });
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => { if (clientConnected) { clearInterval(check); resolve(); } }, 50);
+    });
+
+    const call = (id: number, name: string, args: Record<string, unknown>) =>
+      proxy.stdin!.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n');
+    // The in-session claim gets the pair; the wrapper's own pre-flight claim
+    // already names it and is left alone; no other tool is touched.
+    call(1, 'moe.claim_next_task', { statuses: ['PLANNING'] });
+    call(2, 'moe.get_context', {});
+    call(3, 'moe.claim_next_task', { statuses: ['PLANNING'], processStartedAt: '9@9', host: 'wrapper-host' });
+    const t0 = Date.now();
+    while (responses.length < 3 && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25));
+    expect(seenByDaemon).toEqual([
+      { name: 'moe.claim_next_task', arguments: { statuses: ['PLANNING'], workerId: 'architect-t', processStartedAt: '4242@1337', host: 'build-box' } },
+      { name: 'moe.get_context', arguments: { workerId: 'architect-t' } },
+      { name: 'moe.claim_next_task', arguments: { statuses: ['PLANNING'], workerId: 'architect-t', processStartedAt: '9@9', host: 'wrapper-host' } },
+    ]);
+
+    proxy.stdin!.end();
+    await new Promise<void>((resolve) => { const t = setTimeout(() => { proxy.kill(); resolve(); }, 5000); proxy.on('exit', () => { clearTimeout(t); resolve(); }); });
+  }, 20000);
 });

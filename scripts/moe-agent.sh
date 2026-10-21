@@ -1152,7 +1152,9 @@ fi
 
 # Print this seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
-# plus MOE_WORKER_ID=$2. The override must be a complete server definition:
+# plus MOE_WORKER_ID=$2 and, when exported, the seat's runner identity
+# (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP server
+# only the env its table names. The override must be a complete server definition:
 # codex 0.163 TUI bootstrap rejects a partial dotted one
 # (`-c mcp_servers.moe.env.MOE_WORKER_ID=...`) with "account/read failed:
 # failed to load workspace requirements (code -32603)", exit 1 before any work.
@@ -1160,8 +1162,9 @@ fi
 # verbatim. Falls back to the dotted form when the tables are missing.
 codex_moe_server_override() {
     $PYTHON_CMD - "$1" "$2" << 'PYEOF' 2>/dev/null || printf 'mcp_servers.moe.env.MOE_WORKER_ID=%s' "$2"
-import sys, json
+import sys, json, os
 config_file, worker_id = sys.argv[1], sys.argv[2]
+seat_keys = ("MOE_WORKER_ID", "MOE_RUNNER_PROCESS_STARTED_AT", "MOE_RUNNER_HOST")
 server, env, section = [], [], None
 with open(config_file, "r", encoding="utf-8-sig") as f:
     for line in f:
@@ -1172,7 +1175,7 @@ with open(config_file, "r", encoding="utf-8-sig") as f:
         if not s or s.startswith("#") or "=" not in s:
             continue
         key, value = (p.strip() for p in s.split("=", 1))
-        if key == "MOE_WORKER_ID":
+        if key in seat_keys:
             continue
         if section == "[mcp_servers.moe]":
             server.append(key + "=" + value)
@@ -1181,6 +1184,9 @@ with open(config_file, "r", encoding="utf-8-sig") as f:
 if not any(p.startswith("command=") for p in server):
     sys.exit(1)
 env.append("MOE_WORKER_ID=" + json.dumps(worker_id))
+for key in seat_keys[1:]:
+    if os.environ.get(key):
+        env.append(key + "=" + json.dumps(os.environ[key]))
 print("mcp_servers.moe={" + ",".join(server + ["env={" + ",".join(env) + "}"]) + "}", end="")
 PYEOF
 }
@@ -1332,6 +1338,10 @@ moe_block_lines.extend([
     'MOE_PROJECT_PATH = ' + json.dumps(project_path),
     # Literal: grok expands ${MOE_WORKER_ID:-} per process at config load.
     'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"',
+    # The same for the runner identity, set for architect/QA/governor seats
+    # only; empty (unset, to the proxy) for a worker or a human run.
+    'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"',
+    'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"',
     # Grok drops any MCP tool whose name contains a dot (it namespaces tools
     # as <server>__<tool> and validates the result), so the daemon's moe.<name>
     # tools all vanish -- "connected, 0 tools", then "failed to connect"
@@ -2327,16 +2337,18 @@ else: print("none")
 # would fail closed on it) and the moment the CLI exits (a restart inside a
 # session that ended before the sidecar's next ping). Every attempt this seat
 # owns in `reconciling` is reattached once; a refusal is remembered for the life
-# of this wrapper. Twin: Invoke-MoeReattachOwnAttempts.
+# of this wrapper. ATTEMPT_ID (the sidecar's) reads that one record instead of
+# scanning them all. Twin: Invoke-MoeReattachOwnAttempts.
 MOE_REATTACH_REFUSED=" "
 reattach_own_attempts() {
     [ -n "$MOE_PROCESS_STARTED_AT" ] && [ -n "$PYTHON_CMD" ] || return 0
     local parked tid aid gen rc
-    parked=$($PYTHON_CMD - "$PROJECT" "$WORKER_ID" <<'PY' 2>/dev/null
+    parked=$($PYTHON_CMD - "$PROJECT" "$WORKER_ID" "${1:-}" <<'PY' 2>/dev/null
 import glob,json,os,re,sys
-project,worker=sys.argv[1:]
+project,worker,only=sys.argv[1:]
 safe=lambda v: isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',v)
-for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
+attempts=os.path.join(project,'.moe','attempts')
+for p in [os.path.join(attempts,only+'.json')] if safe(only) else sorted(glob.glob(os.path.join(attempts,'*.json'))):
     try:
         a=json.load(open(p,encoding='utf-8-sig'))
         g=a.get('generation')
@@ -2386,7 +2398,7 @@ start_heartbeat_sidecar() {
     local wrapper_pid=$$
     (
         set +e
-        refused="" noted=" "
+        noted=" "
         end_time=$(( $(date +%s) + max_duration_sec ))
         while [ "$(date +%s)" -lt "$end_time" ]; do
             sleep "$interval_sec"
@@ -2396,21 +2408,23 @@ start_heartbeat_sidecar() {
             # window crossing the switch percent before this run ends.
             [ -z "$ACCOUNT_LEASED_ID" ] || report_account_sample
             reply=$(moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" 2>/dev/null) || continue
-            # A daemon restart parked the attempt this wrapper pinned at claim time:
-            # reattach it with the pinned generation (the answer carries none). Any
-            # other reason names nothing this process may reattach: say so once. A
+            # A daemon restart parked this seat's attempt: the one the wrapper
+            # pinned at claim time, or one the agent claimed inside its session
+            # (moe-proxy stamps that claim with this wrapper's identity). Reattach
+            # the attempt the answer names, with the generation its record
+            # carries (the answer has none); the daemon's identity check decides
+            # whether it is this process's. Any other reason, or no identity to
+            # present, names nothing this process may reattach: say so once. A
             # refusal never heals, so it is not asked again on every later ping.
             case "$reply" in *reattachRequired*) ;; *) continue ;; esac
-            ask=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.stdin.read());print(str(d.get("reason") or "?")+" "+str(d.get("attemptId") or "-"))' <<< "$reply" 2>/dev/null) || continue
+            ask=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.stdin.read());print(str(d.get("reason") or "?")+" "+str(d.get("attemptId") or ""))' <<< "$reply" 2>/dev/null) || continue
             reason="${ask%% *}"
-            if [ "$reason" = attempt-reconciling ] && [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_PROCESS_STARTED_AT" ] && [ "${ask#* }" = "$MOE_ATTEMPT_ID" ]; then
-                [ -z "$refused" ] || continue
-                moe_reattach "$PREFLIGHT_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION"
-                [ $? -ne 1 ] || refused=1
+            if [ "$reason" = attempt-reconciling ] && [ -n "$MOE_PROCESS_STARTED_AT" ]; then
+                reattach_own_attempts "${ask#* }"
             else
                 case "$noted" in *" $reason "*) continue ;; esac
                 noted="$noted$reason "
-                echo "[reattach] heartbeat asks for reattachment ($reason) but this wrapper pinned no such reconciling attempt; nothing to reattach."
+                echo "[reattach] heartbeat asks for reattachment ($reason) but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach."
             fi
         done
     ) &
@@ -3000,6 +3014,19 @@ moe_runner_identity() {
     echo "Runner identity: processStartedAt=$MOE_PROCESS_STARTED_AT host=$MOE_HOST"
 }
 moe_runner_identity
+# Architect, QA and governor seats hand the identity to the CLI as well:
+# moe-proxy adds it to a moe.claim_next_task that names none, so a row the
+# agent claims inside its session (an architect plans several per CLI) records
+# it too and the heartbeat sidecar can reattach that attempt after a daemon
+# restart. Never for a worker: an identity on its attempt hands the finalize to
+# this wrapper, which finalizes only the attempt it pinned, so an in-session
+# worker claim would be left `finalizing`. Unset otherwise, so a value inherited
+# from an outer seat never reaches this one. Twin: the same block in moe-agent.ps1.
+if [ -n "$MOE_PROCESS_STARTED_AT" ] && [ "$ROLE" != worker ]; then
+    export MOE_RUNNER_PROCESS_STARTED_AT="$MOE_PROCESS_STARTED_AT" MOE_RUNNER_HOST="$MOE_HOST"
+else
+    unset MOE_RUNNER_PROCESS_STARTED_AT MOE_RUNNER_HOST
+fi
 
 # live_marker_write TASKID -- claim the task's dirty bytes for THIS session.
 # Best-effort by design: a marker that cannot be written is a warning and the

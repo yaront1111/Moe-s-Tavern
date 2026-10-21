@@ -217,13 +217,14 @@ for prose in 'delivery receipt not recorded for candidate' 'for the next pre-fli
   require_both "delivery receipt prose" "$prose"
 done
 
-# Runner identity and reattach: the identity line and its warning, the reattach
+# Runner identity and reattach: the identity line and its warning, the env
+# names that hand the identity to an architect/QA/governor CLI, the reattach
 # call and its three outcomes, and the heartbeat's other reasons, spelled
 # identically in both.
-for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequired '[reattach]'; do
+for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequired '[reattach]' MOE_RUNNER_PROCESS_STARTED_AT MOE_RUNNER_HOST; do
   require_both "runner reattach" "$lit"
 done
-for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this wrapper pinned no such reconciling attempt; nothing to reattach.'; do
+for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach.'; do
   require_both "runner reattach prose" "$prose"
 done
 
