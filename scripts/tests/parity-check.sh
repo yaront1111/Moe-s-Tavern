@@ -268,6 +268,11 @@ for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$PS1"; then fail "deferred setting '$deferred' is referenced by moe-agent.ps1"; fi
 done
 
+# Windows PowerShell 5.1 (the JetBrains plugin's native Windows seats) reads a
+# BOM-less script as ANSI and cannot parse moe-agent.ps1's non-ASCII text.
+[ "$(head -c3 "$PS1" | od -An -tx1 | tr -d ' \n')" = efbbbf ] \
+  || fail "moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)"
+
 if [ "$failures" -ne 0 ]; then
   echo "FAIL parity-check.sh: $failures asymmetr$([ "$failures" -eq 1 ] && echo y || echo ies) between moe-agent.sh and moe-agent.ps1" >&2
   exit 1

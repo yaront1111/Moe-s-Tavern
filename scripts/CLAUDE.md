@@ -1,6 +1,6 @@
 # scripts/CLAUDE.md
 
-Agent launcher detail (`scripts/moe-agent.{sh,ps1}`, `moe-team.{sh,ps1}`). Project overview, build and test commands: root `CLAUDE.md`. Keep `.sh` and `.ps1` in string parity (`bash scripts/tests/parity-check.sh`).
+Agent launcher detail (`scripts/moe-agent.{sh,ps1}`, `moe-team.{sh,ps1}`). Project overview, build and test commands: root `CLAUDE.md`. Keep `.sh` and `.ps1` in string parity (`bash scripts/tests/parity-check.sh`). Keep `moe-agent.ps1` saved as UTF-8 with a BOM: Windows PowerShell 5.1, which the JetBrains plugin uses for native Windows seats, reads a BOM-less script as ANSI and cannot parse its non-ASCII text (the parity check enforces it).
 
 ## Per-CLI launch
 

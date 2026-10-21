@@ -145,6 +145,13 @@ foreach ($gone in @('--full-auto')) {
     if ($shCode.IndexOf($gone, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("removed codex flag '$gone' is still passed by moe-agent.sh") }
 }
 
+# 5. Windows PowerShell 5.1 (the JetBrains plugin's native Windows seats) reads
+#    a BOM-less script as ANSI and cannot parse moe-agent.ps1's non-ASCII text.
+$ps1Head = New-Object byte[] 3
+$ps1Stream = [IO.File]::OpenRead($ps1Path)
+try { [void]$ps1Stream.Read($ps1Head, 0, 3) } finally { $ps1Stream.Dispose() }
+if (($ps1Head -join ',') -ne '239,187,191') { $failures.Add("moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)") }
+
 if ($failures.Count -gt 0) {
     Write-Host "FAIL parity-check.ps1: $($failures.Count) asymmetry(ies) between moe-agent.ps1 and moe-agent.sh"
     foreach ($f in $failures) { Write-Host "  - $f" }
