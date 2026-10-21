@@ -512,7 +512,6 @@ async function restoreUnheldTask(state: StateManager, resourceId: string, taskId
   const msg = `🟡 Resource ${resourceId}: ${taskId} reached the front of the queue, but no live seat holds it, `
     + `so no lease was reserved for it. The task is claimable again (${restored}, unassigned) and keeps its `
     + 'place in line; its next claimant re-acquires.';
-  try { await state.postSystemMessage(taskId, msg); } catch { /* best-effort */ }
   try { await state.postToGeneral(msg); } catch { /* best-effort */ }
 }
 
@@ -543,7 +542,6 @@ async function resumeResourceHolder(
         blockedAt: null,
       }, 'TASK_UNBLOCKED');
       const msg = `🟢 Resource ${resourceId} granted to ${task.id} (${lease.workerId}); task un-blocked → ${restored}.`;
-      try { await state.postSystemMessage(task.id, msg); } catch { /* best-effort */ }
       try { await state.postToGeneral(msg); } catch { /* best-effort */ }
     } catch (err) {
       logger.warn({ resourceId, taskId: task.id, error: err }, 'grantNextLeases: failed to un-block task');

@@ -359,11 +359,13 @@ export function messageExistsInChannel(state: StateManager, channelId: string, m
 }
 
 /**
- * Post a system message to the #general channel.
+ * Post a system message about one entity (a task) to the #general channel.
+ * Callers wrote these for per-task channels, so many never name the task;
+ * the id is prepended unless the content already carries it.
  * Silently skips if no general channel is found. Never throws.
  */
-export async function postSystemMessage(state: StateManager, _entityId: string, content: string): Promise<void> {
-  await state.postToGeneral(content);
+export async function postSystemMessage(state: StateManager, entityId: string, content: string): Promise<void> {
+  await state.postToGeneral(entityId && !content.includes(entityId) ? `${entityId}: ${content}` : content);
 }
 
 /**

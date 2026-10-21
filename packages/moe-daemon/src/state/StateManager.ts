@@ -870,8 +870,8 @@ export class StateManager {
     return messageExistsInChannel(this, channelId, messageId);
   }
 
-  async postSystemMessage(_entityId: string, content: string): Promise<void> {
-    return postSystemMessage(this, _entityId, content);
+  async postSystemMessage(entityId: string, content: string): Promise<void> {
+    return postSystemMessage(this, entityId, content);
   }
 
   async postToGeneral(content: string): Promise<void> {

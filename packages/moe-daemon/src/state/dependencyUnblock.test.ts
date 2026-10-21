@@ -204,7 +204,8 @@ describe('dependencyUnblock', () => {
       vi.spyOn(h.state, 'postToGeneral').mockImplementation(async (msg: string) => { general.push(msg); });
 
       await setTaskStatusTool(h.state).handler({ taskId: 'task-p4e4eq', status: 'DONE' }, h.state);
-      expect(general.some((m) => m.includes('task-ch4tty') && m.includes('un-blocked'))).toBe(true);
+      // Exactly once: the notice used to go out through two paths into #general.
+      expect(general.filter((m) => m.includes('task-ch4tty') && m.includes('un-blocked'))).toHaveLength(1);
     });
   });
 

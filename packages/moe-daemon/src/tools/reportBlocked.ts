@@ -400,12 +400,11 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // `governors` group mention.
       const mentionPrefix = architect ? `@${architect.id} ` : '@governors ';
 
-      // postSystemMessage currently forwards to the general channel, so it stays
-      // unprefixed — prefixing both copies would page the same person twice in
-      // the same channel. Every post keeps its own try/catch: chat is
-      // best-effort and must never fail report_blocked or skip the BLOCKED update.
+      // One #general copy, and it carries the mention (postSystemMessage also
+      // lands in #general, so an extra unprefixed copy would only repeat it).
+      // Every post keeps its own try/catch: chat is best-effort and must never
+      // fail report_blocked or skip the BLOCKED update.
       if (!identicalRepeat) {
-        try { await state.postSystemMessage(task.id, blockedMsg); } catch { /* never block tool */ }
         try { await state.postToGeneral(mentionPrefix + blockedMsg); } catch { /* never block tool */ }
         if (architect) {
           try { await state.postToRoleChannel('architects', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
