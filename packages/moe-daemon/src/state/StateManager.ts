@@ -862,7 +862,7 @@ export class StateManager {
   }
 
   async getMessages(channelId: string,
-  opts?: { sinceId?: string; limit?: number }): Promise<ChatMessage[]> {
+  opts?: { sinceId?: string; limit?: number; hideSystemFeed?: boolean }): Promise<ChatMessage[]> {
     return getMessages(this, channelId, opts);
   }
 

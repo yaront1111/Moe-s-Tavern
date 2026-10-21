@@ -34,7 +34,7 @@ import { sanitizeString } from '../util/sanitize.js';
 import { atomicWriteJson } from '../util/atomicWrite.js';
 import { readLastLinesWithMetadata } from '../util/reverseReader.js';
 import { parseRawMentions } from '../util/mentionRouter.js';
-import { MAX_CHAT_MESSAGE_BYTES } from '../util/chatPayload.js';
+import { MAX_CHAT_MESSAGE_BYTES, isSystemFeedMessage } from '../util/chatPayload.js';
 
 /** Increment unread count for a worker on a channel. */
 /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -215,6 +215,10 @@ export async function sendMessage(state: StateManager, opts: {
     timestamp: new Date().toISOString(),
     ...(opts.decisionId ? { decisionId: opts.decisionId } : {})
   };
+  // A mention-less system line routes to every busy seat, but in #general it
+  // is feed that agent reads skip (isSystemFeedMessage). Page nobody for it:
+  // no unread count and no wake for a line the seat will never be shown.
+  if (isSystemFeedMessage(channel, message)) routingTargets = [];
 
   const messagesFile = path.join(state.moePath, 'messages', `${opts.channel}.jsonl`);
   const channelMutex = state.getMessageMutex(opts.channel);
@@ -276,7 +280,7 @@ export function readTailJsonl(state: StateManager, filePath: string, maxBytes: n
 
 export async function getMessages(state: StateManager,
   channelId: string,
-  opts?: { sinceId?: string; limit?: number }
+  opts?: { sinceId?: string; limit?: number; hideSystemFeed?: boolean }
 ): Promise<ChatMessage[]> {
   const channel = state.channels.get(channelId);
   if (!channel) throw new Error(`Channel not found: ${channelId}`);
@@ -319,6 +323,11 @@ export async function getMessages(state: StateManager,
       result = messages;
     }
   }
+  // Agent reads skip the #general feed (isSystemFeedMessage). Filter AFTER the
+  // cursor lookup, since a cursor may itself be a feed line, and BEFORE the
+  // limit, so hidden lines never fill a page. A reader's cursor then rests on
+  // the last line it was shown, and hidden lines past it are skipped again.
+  if (opts?.hideSystemFeed) result = result.filter((message) => !isSystemFeedMessage(channel, message));
 
   const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
   // Forward paging from a known cursor returns the OLDEST slice so repeated

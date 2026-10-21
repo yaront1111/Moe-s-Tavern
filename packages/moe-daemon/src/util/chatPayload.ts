@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../types/schema.js';
+import type { ChatChannel, ChatMessage } from '../types/schema.js';
 import { truncateForBudget } from './memorySettings.js';
 
 export const DEFAULT_CHAT_CONTENT_CHARS = 1000;
@@ -21,6 +21,19 @@ export const MAX_CHAT_MESSAGE_BYTES = 10_240;
 export const MAX_CHAT_RESPONSE_CHARS = 40_000;
 /** Approximate serialized overhead of one message's metadata fields. */
 export const CHAT_MESSAGE_OVERHEAD_CHARS = 220;
+
+/**
+ * A daemon status line in #general that mentions nobody: the board's activity
+ * feed (task moved, claimed, step completed, landing reports). The IDE shows
+ * it; agents' chat reads skip it (chat_read takes includeSystem to opt back
+ * in). Their tools already carry the same facts, and the feed was most of what
+ * #general put into their context. A system line with an @mention still shows.
+ */
+export function isSystemFeedMessage(channel: ChatChannel | null | undefined, message: ChatMessage): boolean {
+  return message.sender === 'system'
+    && (message.mentions ?? []).length === 0
+    && (channel?.type === 'general' || channel?.name === 'general');
+}
 
 /**
  * How many chars a message will occupy in a response once `maxContentChars`
