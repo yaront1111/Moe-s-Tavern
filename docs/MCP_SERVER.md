@@ -1382,6 +1382,40 @@ Architect/governor escape hatch: replace a task's `dependsOn` list so a mis-decl
 
 ---
 
+### moe.set_task_priority
+
+Governor lever on claim order: change a task's `priority` after `moe.create_task` set it. Humans change it in the board's task dialog; this is the agent path.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",   // case-sensitive
+  workerId?: string      // caller (auto-injected by proxy); role must resolve to governor
+}
+```
+
+**Errors:** `[MISSING_REQUIRED]` without `taskId` or `priority`; `[INVALID_INPUT]` for any other priority value (`high` included); `[NOT_ALLOWED]` when the caller does not act as a governor (team role, else the `governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
+
+**Returns:**
+```typescript
+{
+  success: true, taskId,
+  priority: string,          // the priority now in force
+  previousPriority: string,  // what it replaced
+  changed: boolean,          // false when the task already had this priority: nothing written, no event
+  message: string
+}
+```
+
+**Notes:**
+- `claim_next_task` and `wait_for_task` rank candidates by priority before anything else, and resource queues grant by priority, then FIFO. All three read the live value, so the change applies from the next claim or grant.
+- It never preempts: a task that is already assigned keeps its seat, and raising a row does not interrupt the seat working another one.
+- A change records a `TASK_PRIORITY_SET` activity event with the governor as actor and posts `🎯 <governor> set priority on <taskId>: MEDIUM → CRITICAL` to `#general`.
+- Only governors see it in `tools/list` (humans' role-less clients see every tool).
+
+---
+
 ### moe.archive_task
 
 Archive a single ticket so it drops out of agent context — `list_tasks` and

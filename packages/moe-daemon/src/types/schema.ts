@@ -770,6 +770,11 @@ export interface Task {
    * permanently stick a row.
    */
   dependsOn?: string[];
+  /**
+   * Claim rank: claim_next_task, wait_for_task and resource queues order by
+   * priority first. Set at create_task; changed on the board (UPDATE_TASK) or
+   * via moe.set_task_priority (governor).
+   */
   priority: TaskPriority;
   order: number;
   createdAt: string;
@@ -1348,6 +1353,7 @@ export const ACTIVITY_EVENT_TYPES = [
   'TASK_COMMIT_RECORDED',
   'TASK_FILES_DECLARED',
   'TASK_DEPENDENCIES_SET',
+  'TASK_PRIORITY_SET',
   'RESOURCE_ACQUIRED',
   'RESOURCE_QUEUED',
   'RESOURCE_RELEASED',

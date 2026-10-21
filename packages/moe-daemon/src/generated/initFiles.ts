@@ -179,7 +179,7 @@ Rules that keep this safe:
 - **It is not part of your task's diff.** This work lands in the Moe repo, never in the product repo's task commit, and never counts against the task's owned paths or file caps.
 
 Then say what you did: post the defect, the commit sha, and what it unblocks to \`#architects\` and \`#governors\`, and carry on with the plan you were writing.`,
-  'governor.md': `<!-- moe-generated: sha=5d0001f387ef -->
+  'governor.md': `<!-- moe-generated: sha=d048b3fddbf1 -->
 
 # Governor
 
@@ -231,7 +231,7 @@ Follow \`nextAction\` on every Moe tool response. On \`moe.claim_next_task\` the
 
 1. \`moe.chat_wait\` blocks until a signal lands in \`#governors\` (or you're @mentioned anywhere).
 2. Triage the signal against the cheat sheet above.
-3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict), \`unblock_worker\` (seat-only by default; \`resolveBlocks: true\` clears the task's block), \`set_task_dependencies\` (fix a mis-declared \`dependsOn\` that is withholding a row from WORKING claims), \`declare_files\` (attribute stranded paths to the task that edited them).
+3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict), \`unblock_worker\` (seat-only by default; \`resolveBlocks: true\` clears the task's block), \`set_task_dependencies\` (fix a mis-declared \`dependsOn\` that is withholding a row from WORKING claims), \`set_task_priority\` (change which row is claimed next; never preempts a running task — see the reference), \`declare_files\` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
 If \`nextAction\` includes \`recommendedSkill\`, load that skill before calling the hinted tool.
@@ -286,7 +286,7 @@ Rules that keep this safe:
 - **Governance still applies to you.** Fixing Moe is not planning and not coding product — it is in your lane. But an edit that changes what the fleet may claim (a role gate, a claim filter, a dependency rule) is a hard call: surface it to the human before you push, the same as a release.
 
 Then post it in \`#governors\`: the defect, the commit sha, and what it unblocks. Future-you reads that log to notice the second occurrence of a pattern you have already fixed once.`,
-  'governor.reference.md': `<!-- moe-generated: sha=62d4b73873ab -->
+  'governor.reference.md': `<!-- moe-generated: sha=93549db35473 -->
 
 # Governor — Reference
 
@@ -336,6 +336,16 @@ Your levers:
 - **\`moe.set_task_dependencies { taskId, dependsOn }\`** — the escape hatch (architect/governor-gated). Full replacement, \`[]\` clears. Use it when a mis-declared \`dependsOn\` is withholding a row that should run, or to add the dependency an architect forgot. Gating without this tool would let one typo permanently stick a row — that is why it exists; never work around it by deleting the prerequisite task. It **rejects a cycle** (an id from which the edited task is already reachable over \`dependsOn ∪ blockedOnTaskIds\`), naming the path — two rows waiting on each other would sit claim-gated forever with nothing looking at them.
 - **Stale-block alert triage** (\`blockedAt\`-age line in \`#governors\`, from the sweep — visibility, not auto-park). Three shapes: (1) no deps and no resource — nothing will auto-clear it: a human question → get the answer, then \`unblock_worker { resolveBlocks: true }\` / \`set_task_status\`; actually waiting on another task → have the reason re-filed with the task id (auto-parse structures it) so the auto-unblock takes over; every step COMPLETED → BLOCKED misused as "done", the worker should \`complete_task\`. (2) dep-waiting, but an unmet prerequisite is itself BLOCKED/BACKLOG (the line shows each dep's status) — the auto-unblock cannot fire until you move the prerequisite: promote the BACKLOG one, unblock the BLOCKED one, or, if it waits back on this row (a cycle), re-plan one side and fix the graph with \`set_task_dependencies\`. (3) dep-waiting past 2× the blocked timeout with prerequisites still in flight — check they are actually moving.
 - Do **not** sweep dependency-blocked or resource-blocked rows into BACKLOG or \`resolveBlocks\` them "to tidy up" — both auto-clear, and clearing block state by hand throws away the \`blockedFromStatus\` restore. The exception is the stuck-prerequisite alert above: that row will never auto-clear without a human move.
+
+## Re-prioritizing the queue
+
+\`moe.set_task_priority { taskId, priority }\` (\`CRITICAL\`/\`HIGH\`/\`MEDIUM\`/\`LOW\`, governor-only) changes which row the fleet claims next: \`claim_next_task\` and \`wait_for_task\` rank by priority before epic or order, and resource queues grant by it. Use it on a signal, not as routine tidying:
+
+- A prerequisite that other rows wait on (\`dependsOn\`, \`blockedOnTaskIds\`) sits behind lower-value work: raise it so the chain clears sooner.
+- The human asks for something to go first, or a worker files a \`bug:\` card that breaks other work.
+- A row filed \`CRITICAL\`/\`HIGH\` by mistake keeps jumping the queue: lower it.
+
+It never preempts: an assigned task keeps its seat, so raising a row stops no one mid-task. Post why in \`#governors\` (one sentence). Reordering several rows at once gets the human's nod first.
 
 ## Rail proposal patterns
 
@@ -674,8 +684,8 @@ only you can.
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
   'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
-  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd3da43241c7d', 'f882385984d6'],
-  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
+  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
+  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],

@@ -72,6 +72,7 @@ import { recordCheckRunTool } from './recordCheckRun.js';
 import { recordDeliveryReceiptTool } from './recordDeliveryReceipt.js';
 import { declareFilesTool } from './declareFiles.js';
 import { setTaskDependenciesTool } from './setTaskDependencies.js';
+import { setTaskPriorityTool } from './setTaskPriority.js';
 
 export interface ToolCallContext {
   /** Connection lifetime check for asynchronous setup before a long poll parks. */
@@ -167,6 +168,7 @@ export function getTools(state: StateManager): ToolDefinition[] {
     recordDeliveryReceiptTool(state),
     declareFilesTool(state),
     setTaskDependenciesTool(state),
+    setTaskPriorityTool(state),
   ];
 }
 
@@ -250,6 +252,7 @@ export const TOOL_AUDIENCE: Readonly<Record<string, readonly Seat[] | 'wrapper'>
   'moe.record_delivery_receipt': 'wrapper',
   'moe.declare_files': [W],
   'moe.set_task_dependencies': [A],
+  'moe.set_task_priority': [],
 };
 
 /** The tools/list a caller of this role should see. No role (IDE, moe-call.sh, humans) → every tool. */

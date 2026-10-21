@@ -505,6 +505,10 @@ interface Task {
   parentTaskId: string | null;   // For subtasks
 
   // Ordering
+  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+                                 // Default MEDIUM. claim_next_task, wait_for_task and resource queues rank
+                                 // by priority first. Set at create_task; changed on the board or via
+                                 // moe.set_task_priority (governor)
   order: number;
 
   // Structural dependencies (additive, no schemaVersion bump — the TaskCommit precedent)
@@ -1636,6 +1640,7 @@ type ActivityEventType =
   | 'TASK_COMMIT_RECORDED' // moe.record_commit persisted a landing outcome (commit appended, or refused/failed/nothing recorded)
   | 'TASK_FILES_DECLARED'  // moe.declare_files unioned paths into task.declaredFiles
   | 'TASK_DEPENDENCIES_SET' // moe.set_task_dependencies replaced task.dependsOn
+  | 'TASK_PRIORITY_SET'    // moe.set_task_priority changed task.priority
   
   // Worker
   | 'WORKER_CONNECTED'
