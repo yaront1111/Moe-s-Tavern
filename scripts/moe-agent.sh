@@ -8419,8 +8419,9 @@ except Exception:
 
     # A launch failure never started a session, so even a single-shot seat
     # (codex/gemini/grok TUI) relaunches after the backoff it just announced,
-    # and an account relaunch moves it onto the next account at once.
-    if [ "$LOOP_ENABLED" = false ] && [ "$CURRENT_LAUNCH_FAILED" != true ] && [ "$ACCOUNT_RELAUNCH" != true ]; then
+    # unless the caller asked for one run with --no-loop. An account relaunch
+    # moves it onto the next account at once, even under --no-loop.
+    if [ "$LOOP_ENABLED" = false ] && { [ "$NO_LOOP" = true ] || [ "$CURRENT_LAUNCH_FAILED" != true ]; } && [ "$ACCOUNT_RELAUNCH" != true ]; then
         break
     fi
 done

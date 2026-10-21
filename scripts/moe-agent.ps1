@@ -7362,10 +7362,11 @@ $mentionsJson
     if ($moeStopLoop) { break }
     # -------- End post-flight --------
     # A launch failure never started a session, so even a single-shot seat
-    # (codex/gemini/grok TUI) relaunches after the backoff it just announced.
-    # An account relaunch (the account ran out or signed out) never finished
-    # its session either, so it relaunches too, at once.
-} while ($loopEnabled -or $moeCurrentLaunchFailed -or $script:AccountRelaunch)
+    # (codex/gemini/grok TUI) relaunches after the backoff it just announced,
+    # unless the caller asked for one run with -NoLoop. An account relaunch
+    # (the account ran out or signed out) never finished its session either,
+    # so it relaunches too, at once, even under -NoLoop.
+} while ($loopEnabled -or ($moeCurrentLaunchFailed -and -not $NoLoop) -or $script:AccountRelaunch)
 } finally {
     # Teardown rescue FIRST (before the deregister releases the task): when
     # this session ends without its post-flight having landed (Ctrl+C during
