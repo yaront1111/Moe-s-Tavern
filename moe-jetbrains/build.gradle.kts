@@ -83,7 +83,7 @@ fun requireBundledAssets() {
 
 dependencies {
     intellijPlatform {
-        intellijIdeaCommunity("2025.2")
+        intellijIdea("2026.2.3")
     }
     implementation("com.google.code.gson:gson:2.14.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
@@ -108,7 +108,7 @@ java {
 
 tasks {
     wrapper {
-        gradleVersion = "9.7.1"
+        gradleVersion = "9.8.2"
         distributionType = Wrapper.DistributionType.BIN
     }
 
