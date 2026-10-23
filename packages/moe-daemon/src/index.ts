@@ -25,6 +25,7 @@ import { writeInitFiles } from './generated/initFiles.js';
 import { writeSkillFiles } from './generated/skillFiles.js';
 import { linkClaudeSkills } from './util/claudeSkills.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
+import { startAccountWatch } from './state/accountStore.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
 
@@ -642,6 +643,11 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   state.setFileWatcher(watcher);
   watcher.start();
 
+  // The machine's Claude account list and usage live outside .moe/ (written by
+  // the `accounts` CLI and by every project's daemon), so FileWatcher never
+  // sees them: poll them and push ACCOUNTS_UPDATED to the IDEs on a change.
+  const stopAccountWatch = startAccountWatch(state);
+
   // SPEED-mode auto-approval timers live only in process memory, so a restart
   // would otherwise strand every AWAITING_APPROVAL task whose timer was lost.
   // Re-arm them once from persisted state now that the emitter + WS are wired.
@@ -715,6 +721,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 
     // Cancel any pending SPEED mode auto-approval timeouts
     clearAllSpeedModeTimeouts();
+    stopAccountWatch();
 
     // Flush any pending activity log writes
     try {
@@ -1037,6 +1044,12 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 }
 
 async function main() {
+  // `accounts` manages the machine's Claude accounts and needs no project.
+  if (process.argv[2] === 'accounts') {
+    const { runAccountsCli } = await import('./accounts/cli.js');
+    process.exitCode = runAccountsCli(process.argv.slice(3));
+    return;
+  }
   const { command, projectPath, port, name, host } = parseArgs();
 
   switch (command) {
@@ -1068,6 +1081,7 @@ async function main() {
     }
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init|doctor] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
+      logger.info('       moe-daemon accounts [list|add|login|logout|check|remove] (Claude subscription accounts; see `accounts help`)');
       logger.info('Note: `init` now starts the daemon and keeps running.');
   }
 }

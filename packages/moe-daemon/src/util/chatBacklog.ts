@@ -176,7 +176,7 @@ export async function collectChatBacklog(
       ? explicitSinceId
       : worker?.chatCursors?.[channelId];
     try {
-      const page = await state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT });
+      const page = await state.getMessages(channelId, { sinceId, limit: PER_CHANNEL_SCAN_LIMIT, hideSystemFeed: true });
       // With no position in a channel, getMessages falls back to its newest
       // window, which reaches back before this worker existed. Those messages
       // were routed to the workers registered when they were sent, but their

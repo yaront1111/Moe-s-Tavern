@@ -480,6 +480,16 @@ class MoeProjectService @JvmOverloads constructor(
 
     fun rejectProposal(proposalId: String) = commandSender.rejectProposal(proposalId)
 
+    fun addAccount(label: String?) = commandSender.addAccount(label)
+
+    fun removeAccount(accountId: String) = commandSender.removeAccount(accountId)
+
+    fun moveAccount(accountId: String, offset: Int) = commandSender.moveAccount(accountId, offset)
+
+    fun renameAccount(accountId: String, label: String) = commandSender.renameAccount(accountId, label)
+
+    fun setAccountSwitchPercent(percent: Int) = commandSender.setAccountSwitchPercent(percent)
+
     private fun sendMessage(type: String, payload: JsonObject) = commandSender.sendMessage(type, payload)
 
     private fun closeQuietly(client: WebSocketClient?) {

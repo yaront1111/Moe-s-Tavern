@@ -234,7 +234,6 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
         unblocked.push(task.id);
         const via = triggerTaskId ? ` (${triggerTaskId} landed)` : ' (dependency sweep)';
         const msg = `🟢 ${task.id} un-blocked → ${safeRestored}: all blockedOnTaskIds [${ids.join(', ')}] are DONE/ARCHIVED${via}.`;
-        try { await state.postSystemMessage(task.id, msg); } catch { /* best-effort */ }
         try { await state.postToGeneral(msg); } catch { /* best-effort */ }
       } catch (err) {
         logger.warn({ taskId: task.id, error: err }, 'dependencyUnblock: failed to un-block task');

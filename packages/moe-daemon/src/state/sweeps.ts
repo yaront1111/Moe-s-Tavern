@@ -318,13 +318,24 @@ export async function checkReconcileWindow(
 }
 
 /**
+ * Shortest gap between two stale alerts for one (worker, task) pair. A seat
+ * whose heartbeat hovers at the liveness edge goes stale and fresh again many
+ * times an hour, and alerting on every stretch buried #governors in repeats.
+ */
+export const STALE_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+
+/**
  * Walk workers; for each with a stale assignment AND not previously alerted,
  * post a one-line ⚠️ message to #governors. Gated on a governor being alive
  * (alive = lastActivityAt within livenessTimeoutMs, team.role === 'governor').
+ * One alert per stale stretch, and a pair alerts again only after it has been
+ * fresh and STALE_ALERT_COOLDOWN_MS has passed since its last alert.
  */
-export async function checkStaleWorkers(state: StateManager, livenessTimeoutMs: number): Promise<void> {
-  const now = Date.now();
-
+export async function checkStaleWorkers(
+  state: StateManager,
+  livenessTimeoutMs: number,
+  now = Date.now()
+): Promise<void> {
   // Cheap pre-check: is any governor alive? If not, skip the whole loop.
   let governorAlive = false;
   for (const w of state.workers.values()) {
@@ -347,20 +358,20 @@ export async function checkStaleWorkers(state: StateManager, livenessTimeoutMs: 
 
     const key = `${w.id}:${w.currentTaskId}`;
     seenKeys.add(key);
-    if (state.alertedStaleAssignments.has(key)) continue;
+    if (state.staleAlertAt.has(key)) continue;
 
     const secs = sinceMs === Number.POSITIVE_INFINITY ? 'unknown' : Math.floor(sinceMs / 1000) + 's';
     const task = state.getTask(w.currentTaskId);
     const taskTitle = task?.title || w.currentTaskId;
     const alert = `⚠️ ${w.id} stale on ${w.currentTaskId} (${taskTitle}) — last activity ${secs} ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.`;
     try { await state.postToRoleChannel('governors', alert); } catch { /* never throw */ }
-    state.alertedStaleAssignments.add(key);
+    state.staleAlertAt.set(key, now);
   }
 
-  // Clear memoization for assignments that are no longer stale (worker recovered
-  // or task reassigned), so future staleness triggers a fresh alert.
-  for (const key of state.alertedStaleAssignments) {
-    if (!seenKeys.has(key)) state.alertedStaleAssignments.delete(key);
+  // Forget a pair once it is no longer stale (worker recovered or task
+  // reassigned) and its cooldown is over, so the next stale stretch alerts.
+  for (const [key, alertedAt] of state.staleAlertAt) {
+    if (!seenKeys.has(key) && now - alertedAt >= STALE_ALERT_COOLDOWN_MS) state.staleAlertAt.delete(key);
   }
 }
 

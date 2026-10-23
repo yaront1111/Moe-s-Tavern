@@ -3,7 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ChatMessage } from '../types/schema.js';
 import { invalidInput, missingRequired } from '../util/errors.js';
 import { logger } from '../util/logger.js';
-import { DEFAULT_CHAT_CONTENT_CHARS, MAX_CHAT_CONTENT_CHARS } from '../util/chatPayload.js';
+import { DEFAULT_CHAT_CONTENT_CHARS, MAX_CHAT_CONTENT_CHARS, isSystemFeedMessage } from '../util/chatPayload.js';
 import {
   applyChatDelivery,
   chatBurstResponse,
@@ -148,6 +148,8 @@ class ChatWaitSession {
 
   private isRelevant(event: { type: string; payload?: unknown; routingTargets?: string[] }): boolean {
     const message = event.payload as ChatMessage;
+    // The #general feed never wakes a waiter; the drain skips it too.
+    if (isSystemFeedMessage(this.ctx.state.getChannel(message.channel), message)) return false;
     const targets = event.routingTargets ?? message.mentions ?? [];
     if (this.ctx.channelSet) {
       // Watch ambient channel traffic AND mentions routed to this worker

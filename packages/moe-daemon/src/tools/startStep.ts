@@ -1,8 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState } from '../util/errors.js';
+import { notFound, invalidState, notAllowed } from '../util/errors.js';
 import { assertWorkerHoldsTask, assertContextFetched } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { accountSwitchCause, accountSwitchFor } from '../state/accountStore.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -40,6 +41,16 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       const step = task.implementationPlan[stepIndex];
       if (step.status !== 'PENDING') {
         throw invalidState('Step', step.status, 'PENDING');
+      }
+
+      // The seat's Claude account is spent: stop at this step boundary, and the
+      // wrapper's relaunch of the held task runs on the next account.
+      const accountSwitch = accountSwitchFor(state, params.workerId ?? task.assignedWorkerId ?? undefined);
+      if (accountSwitch) {
+        throw notAllowed(
+          'moe.start_step',
+          `ACCOUNT-SWITCH: ${accountSwitchCause(accountSwitch)}. Do not start step ${params.stepId} in this session; it stays pending. End your session now: Moe relaunches this task on ${accountSwitch.toLabel}, and the new session starts the step.`
+        );
       }
 
       const steps = task.implementationPlan.map((step) =>

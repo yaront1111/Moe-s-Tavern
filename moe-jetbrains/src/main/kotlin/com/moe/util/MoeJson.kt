@@ -2,8 +2,11 @@ package com.moe.util
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.moe.model.AccountCli
+import com.moe.model.AccountRotation
 import com.moe.model.ActivityEvent
 import com.moe.model.ChatChannel
+import com.moe.model.ClaudeAccount
 import com.moe.model.ChatMessage
 import com.moe.model.Decision
 import com.moe.model.PinEntry
@@ -29,6 +32,7 @@ import com.moe.model.DeliveryCandidate
 import com.moe.model.DeliveryCheckRun
 import com.moe.model.DeliveryReceipt
 import com.moe.model.Team
+import com.moe.model.UsageWindow
 import com.moe.model.Worker
 import java.math.BigDecimal
 
@@ -313,8 +317,12 @@ object MoeJson {
         val workers = parseWorkers(workersArray)
         val teams = parseTeams(teamsArray)
         val channels = parseChannels(channelsArray)
+        val accountRotation = payload.get("accountRotation")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.let { parseAccountRotation(it) }
 
-        return MoeState(project, epics, tasks, proposals, workers, teams, channels)
+        return MoeState(project, epics, tasks, proposals, workers, teams, channels, accountRotation)
     }
 
     private fun parseEpics(array: JsonArray): List<Epic> {
@@ -652,8 +660,78 @@ object MoeJson {
             currentTaskId = obj.getStringOrNull("currentTaskId"),
             status = obj.getStringOrDefault("status", "IDLE"),
             lastError = obj.getStringOrNull("lastError"),
-            teamId = obj.getStringOrNull("teamId")
+            teamId = obj.getStringOrNull("teamId"),
+            accountId = obj.getStrictStringOrNull("accountId")?.takeIf { it.isNotBlank() }
         )
+    }
+
+    /**
+     * The snapshot's `accountRotation`, or a whole `ACCOUNTS_UPDATED` payload.
+     * Null when `registryFile` is missing, which only a payload that is not a
+     * rotation view can lack. Every field is read strictly (real JSON types
+     * only) because the Accounts tab turns `cli` and the ids into a command line.
+     */
+    fun parseAccountRotation(obj: JsonObject): AccountRotation? {
+        val registryFile = obj.getStrictStringOrNull("registryFile")?.takeIf { it.isNotBlank() } ?: return null
+        val switchAtPercent = obj.getStrictFiniteDoubleOrNull("switchAtPercent")
+            ?.takeIf { it % 1.0 == 0.0 && it in 1.0..100.0 }
+            ?.toInt()
+            ?: 90
+        val cli = obj.get("cli")?.takeIf { it.isJsonObject }?.asJsonObject?.let { cliObj ->
+            val node = cliObj.getStrictStringOrNull("node")?.takeIf { it.isNotBlank() }
+            val script = cliObj.getStrictStringOrNull("script")?.takeIf { it.isNotBlank() }
+            if (node != null && script != null) AccountCli(node, script) else null
+        }
+        val accounts = obj.get("accounts")?.takeIf { it.isJsonArray }?.asJsonArray
+            ?.mapNotNull { if (it.isJsonObject) parseClaudeAccount(it.asJsonObject) else null }
+            ?.distinctBy { it.id }
+            ?: emptyList()
+        return AccountRotation(
+            registryFile = registryFile,
+            switchAtPercent = switchAtPercent,
+            error = obj.getStrictStringOrNull("error")?.takeIf { it.isNotBlank() },
+            cli = cli,
+            accounts = accounts
+        )
+    }
+
+    private val ACCOUNT_SIGN_IN_STATES = setOf("subscription", "signed_out", "other")
+
+    private fun parseClaudeAccount(obj: JsonObject): ClaudeAccount? {
+        val id = obj.getStrictStringOrNull("id")?.takeIf { it.isNotBlank() } ?: return null
+        val windows = obj.get("windows")?.takeIf { it.isJsonObject }?.asJsonObject?.entrySet()
+            ?.mapNotNull { (name, value) ->
+                if (!value.isJsonObject) return@mapNotNull null
+                val window = value.asJsonObject
+                name to UsageWindow(
+                    percent = window.getStrictFiniteDoubleOrNull("percent"),
+                    resetsAt = window.getStrictStringOrNull("resetsAt")?.takeIf { it.isNotBlank() }
+                )
+            }
+            ?.toMap()
+            ?: emptyMap()
+        return ClaudeAccount(
+            id = id,
+            label = obj.getStrictStringOrNull("label")?.takeIf { it.isNotBlank() } ?: id,
+            // An unknown state reads as signed out: the tab then asks for a sign-in
+            // instead of claiming the account is usable.
+            signIn = obj.getStrictStringOrNull("signIn")?.takeIf { it in ACCOUNT_SIGN_IN_STATES } ?: "signed_out",
+            signInCheckedAt = obj.getStrictStringOrNull("signInCheckedAt")?.takeIf { it.isNotBlank() },
+            windows = windows,
+            peakPercent = obj.getStrictFiniteDoubleOrNull("peakPercent"),
+            blockedUntil = obj.getStrictStringOrNull("blockedUntil")?.takeIf { it.isNotBlank() },
+            active = getStrictBooleanOrDefault(obj, "active", false),
+            seats = obj.getStrictStringListOrNull("seats") ?: emptyList()
+        )
+    }
+
+    /** A real JSON number that is finite; strings such as "NaN" and "42" give null. */
+    private fun JsonObject.getStrictFiniteDoubleOrNull(key: String): Double? {
+        val element = get(key)
+        if (element == null || !element.isJsonPrimitive) return null
+        val primitive = element.asJsonPrimitive
+        if (!primitive.isNumber) return null
+        return primitive.asDouble.takeIf { it.isFinite() }
     }
 
     private fun parseTeams(array: JsonArray): List<Team> {

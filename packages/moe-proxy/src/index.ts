@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 import {
   getDaemonHost,
   getProjectPath,
+  injectRunnerIdentity,
   injectWorkerId,
   readDaemonInfoResult,
   resolveToolCallName,
@@ -520,7 +521,8 @@ function connect(projectPath: string): void {
           // filter list below see the real tool name.
           const renamed = resolveToolCallName(parsed, toolAliases);
           const mutated = injectWorkerId(parsed, process.env.MOE_WORKER_ID);
-          const payload = (renamed || mutated) ? JSON.stringify(parsed) : line;
+          const stamped = injectRunnerIdentity(parsed, process.env.MOE_RUNNER_PROCESS_STARTED_AT, process.env.MOE_RUNNER_HOST);
+          const payload = (renamed || mutated || stamped) ? JSON.stringify(parsed) : line;
           if (TOOL_NAME_STYLE === 'underscore' && parsed.method === 'tools/list' &&
               parsed.id !== undefined && parsed.id !== null) {
             pendingToolsListIds.add(parsed.id);

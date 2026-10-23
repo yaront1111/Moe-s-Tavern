@@ -10,8 +10,9 @@ Common issues and solutions for Moe's Tavern.
 2. [Plugin Issues](#plugin-issues)
 3. [MCP/Proxy Issues](#mcpproxy-issues)
 4. [Task Sync Issues](#task-sync-issues)
-5. [Performance Issues](#performance-issues)
-6. [Diagnostic Commands](#diagnostic-commands)
+5. [Claude Account Rotation Issues](#claude-account-rotation-issues)
+6. [Performance Issues](#performance-issues)
+7. [Diagnostic Commands](#diagnostic-commands)
 
 ---
 
@@ -762,6 +763,107 @@ hand-editing `.moe/`:
 3. **One-shot backfill**: re-file the stale BLOCKED rows' referenced task ids into `blockedOnTaskIds`
    (`report_blocked` auto-parses `task-…` ids out of the reason on the next report; the sweep backstop
    then clears every row whose deps are all DONE).
+
+---
+
+## Claude Account Rotation Issues
+
+Moe can run claude seats across several Claude subscription accounts. The accounts are managed in the Moe tool
+window, **Accounts** tab, or with `node packages/moe-daemon/dist/index.js accounts …`; the rules are in
+`docs/MCP_SERVER.md` (**Claude Account Rotation**). Wrapper lines below start with `[account]`.
+
+### A worker ends its session with steps left: `ACCOUNT-SWITCH`
+
+**Symptom:** a worker's `complete_step` reply carries `accountSwitch`, or `start_step` fails with `NOT_ALLOWED` and a
+message starting `ACCOUNT-SWITCH:`. The session ends early, and the wrapper relaunches the same task with
+`MOE_ACCOUNT_SWITCHED from=<a> to=<b>`. #governors gets a 🔁 post.
+
+**Cause:** expected. The seat's account reached the switch point (default 90% of any usage window), hit its limit,
+was signed out or was removed, and another signed-in account is free. Completed steps stay completed and the
+refused step stays PENDING, so the new session starts the next step on the next account. A refused launch
+(`MOE_ACCOUNT_REFUSED account=<id> exit=<n>`) is expected too: the wrapper relaunches on the next account at once,
+with no back-off and no resume attempt spent.
+
+**Fix:** none needed. To switch later, raise "Switch to the next account at" in the Accounts tab.
+
+### `MOE_ACCOUNT_WAIT retry_in=…`
+
+**Symptom:** a claude seat prints `[account] MOE_ACCOUNT_WAIT retry_in=<s>s next_reset=<iso> - every signed-in
+account is spent; …` and launches nothing. Its task stays held. #governors gets one ⏸️ post per episode.
+
+**Cause:** every account signed in with a subscription is at the switch point, or Anthropic refused it at its limit.
+The wrapper asks again at the earliest reset, and at least every `MOE_ACCOUNT_RETRY_SEC` seconds (default 300).
+
+**Fix:** wait for the reset, or add and sign in another account. Raising the switch point frees accounts that only
+Moe's threshold holds back, not ones Anthropic refused. Ctrl+C stops the seat; the task stays assigned to it until
+the seat deregisters or the task is released.
+
+### Seats launch without rotation: `MOE_ACCOUNT_LEASE_UNAVAILABLE` or `MOE_ACCOUNT_SKIPPED`
+
+**Symptom:** `[account] MOE_ACCOUNT_LEASE_UNAVAILABLE (<why>) - launching without rotation.`, or a line starting
+`MOE_ACCOUNT_SKIPPED:`. The seat runs on the default claude login (`~/.claude`), exactly as before rotation existed.
+
+**Cause:**
+- `LEASE_UNAVAILABLE`: the wrapper could not get an answer from `moe.lease_account` (daemon down or restarting, or a
+  daemon older than the wrapper). Rotation never stops a launch.
+- `SKIPPED: CLAUDE_CODE_USE_BEDROCK is set` (or `_VERTEX`, `_FOUNDRY`): claude then uses that cloud provider, not a
+  claude.ai login.
+- `SKIPPED: none of the N Claude accounts is signed in with a subscription …`: sign one in (next entry).
+- `SKIPPED: the Claude account list cannot be used (…)`: see `MOE_ACCOUNT_REGISTRY_INVALID` below.
+
+**Fix:** restart the daemon after updating Moe, and rebuild and reinstall the plugin so the wrapper and daemon match.
+Unset the provider switch for claude seats that should rotate. `MOE_ACCOUNT_ROTATION=off` turns rotation off on purpose.
+
+### Sign-in fails: `MOE_ACCOUNT_NOT_SUBSCRIPTION`, `MOE_ACCOUNT_LOGIN_FAILED`, `MOE_ACCOUNT_LOGOUT_FAILED`, `MOE_CLAUDE_NOT_FOUND`
+
+**Symptom:** the terminal tab that **Sign in**, **Check sign-ins** or **Sign out** opened ends with one of these
+tokens, and the account's Sign-in column does not read Subscription (or, after a sign-out, Signed out).
+
+**Cause and fix:**
+- `MOE_ACCOUNT_NOT_SUBSCRIPTION`: the login worked, but `claude auth status` reports a method other than `claude.ai`
+  (a Console or API login). Moe never uses that account. Run **Sign in** again and choose the Claude subscription.
+- `MOE_ACCOUNT_LOGIN_FAILED`: `claude auth login --claudeai` ended and the account is still signed out (browser closed,
+  code not pasted, timeout). Run **Sign in** again.
+- `MOE_ACCOUNT_LOGOUT_FAILED`: the account still reports a login after `claude auth logout`. **Sign out and remove**
+  then keeps the account in the list. Run **Sign out** again.
+- `MOE_CLAUDE_NOT_FOUND`: that terminal cannot run claude. Install Claude Code where the agents run (inside the WSL
+  distro under "Run Agents in WSL") and put it on PATH, or set `MOE_CLAUDE_BIN`. The account's state is unchanged.
+
+### `MOE_ACCOUNT_SIGNED_OUT account=<id> state=…`
+
+**Symptom:** a seat prints it after claude exits with an error, then relaunches at once on the next account.
+#governors gets a 🔑 post, and the account's Sign-in column reads Signed out or Not a subscription.
+
+**Cause:** the wrapper checked the account's folder (`claude auth status`) after the failed run and found the login
+gone (expired, revoked, or signed out elsewhere) or replaced by a non-subscription login. The daemon stops using
+that account.
+
+**Fix:** Accounts tab → select the account → **Sign in**.
+
+### `MOE_ACCOUNT_REGISTRY_INVALID` or "account file error"
+
+**Symptom:** the Accounts tab says "Moe cannot use the account file, so agents start without account rotation: …",
+the header reads `account file error`, every `accounts` command exits with `MOE_ACCOUNT_REGISTRY_INVALID`, and seats
+print `MOE_ACCOUNT_SKIPPED: the Claude account list cannot be used (…)`.
+
+**Cause:** `~/.moe/claude-accounts.json` (or `MOE_ACCOUNTS_FILE`) is not valid JSON or breaks the schema in
+`docs/SCHEMA.md` (**Claude Accounts**): an unknown key, a bad or duplicate id, more than 32 accounts, or
+`switchAtPercent` outside 1–100. It is almost always a hand edit.
+
+**Fix:** correct the field the message names. Prefer that to starting over: the logins live in
+`~/.moe/claude-accounts/<id>`, which Moe never deletes, and a fresh list never reuses a folder that exists, so
+re-added accounts get new ids (`acct-7`, …) and must sign in again.
+
+### The Accounts tab shows no usage (`-`)
+
+**Symptom:** an account is signed in and in use, but its 5-hour and Weekly columns stay `-`.
+
+**Cause:** usage comes only from claude's own output in seats the Moe wrapper launched, and only after the seat's
+first model response. A claude session started by hand reports nothing.
+
+**Fix:** none while no seat has answered yet. If the columns stay empty after a seat has worked on the account,
+claude's output format may have changed. Rotation then keeps using the current account (the safe fallback); file a
+task with the wrapper's output.
 
 ---
 

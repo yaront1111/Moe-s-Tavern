@@ -48,7 +48,7 @@ Follow `nextAction` on every Moe tool response. On `moe.claim_next_task` the dae
 
 1. `moe.chat_wait` blocks until a signal lands in `#governors` (or you're @mentioned anywhere).
 2. Triage the signal against the cheat sheet above.
-3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict), `unblock_worker` (seat-only by default; `resolveBlocks: true` clears the task's block), `set_task_dependencies` (fix a mis-declared `dependsOn` that is withholding a row from WORKING claims), `declare_files` (attribute stranded paths to the task that edited them).
+3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict), `unblock_worker` (seat-only by default; `resolveBlocks: true` clears the task's block), `set_task_dependencies` (fix a mis-declared `dependsOn` that is withholding a row from WORKING claims), `set_task_priority` (change which row is claimed next; never preempts a running task — see the reference), `declare_files` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
 If `nextAction` includes `recommendedSkill`, load that skill before calling the hinted tool.

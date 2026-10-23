@@ -1150,6 +1150,47 @@ GEMINIEOF
     fi
 fi
 
+# Print this seat's `mcp_servers.moe=<inline table>` codex override: the
+# [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
+# plus MOE_WORKER_ID=$2 and, when exported, the seat's runner identity
+# (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP server
+# only the env its table names. The override must be a complete server definition:
+# codex 0.163 TUI bootstrap rejects a partial dotted one
+# (`-c mcp_servers.moe.env.MOE_WORKER_ID=...`) with "account/read failed:
+# failed to load workspace requirements (code -32603)", exit 1 before any work.
+# The writer above emits every value as one-line TOML, so values are reused
+# verbatim. Falls back to the dotted form when the tables are missing.
+codex_moe_server_override() {
+    $PYTHON_CMD - "$1" "$2" << 'PYEOF' 2>/dev/null || printf 'mcp_servers.moe.env.MOE_WORKER_ID=%s' "$2"
+import sys, json, os
+config_file, worker_id = sys.argv[1], sys.argv[2]
+seat_keys = ("MOE_WORKER_ID", "MOE_RUNNER_PROCESS_STARTED_AT", "MOE_RUNNER_HOST")
+server, env, section = [], [], None
+with open(config_file, "r", encoding="utf-8-sig") as f:
+    for line in f:
+        s = line.strip()
+        if s.startswith("["):
+            section = s
+            continue
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        key, value = (p.strip() for p in s.split("=", 1))
+        if key in seat_keys:
+            continue
+        if section == "[mcp_servers.moe]":
+            server.append(key + "=" + value)
+        elif section == "[mcp_servers.moe.env]":
+            env.append(key + "=" + value)
+if not any(p.startswith("command=") for p in server):
+    sys.exit(1)
+env.append("MOE_WORKER_ID=" + json.dumps(worker_id))
+for key in seat_keys[1:]:
+    if os.environ.get(key):
+        env.append(key + "=" + json.dumps(os.environ[key]))
+print("mcp_servers.moe={" + ",".join(server + ["env={" + ",".join(env) + "}"]) + "}", end="")
+PYEOF
+}
+
 # For grok: write project-scoped .grok/config.toml (same [mcp_servers.*] TOML
 # shape as codex). Project-level grok config may ONLY carry [mcp_servers.*] /
 # [plugins] / [permission] / [mcp] tables -- NO top-level keys -- so this is a
@@ -1297,6 +1338,10 @@ moe_block_lines.extend([
     'MOE_PROJECT_PATH = ' + json.dumps(project_path),
     # Literal: grok expands ${MOE_WORKER_ID:-} per process at config load.
     'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"',
+    # The same for the runner identity, set for architect/QA/governor seats
+    # only; empty (unset, to the proxy) for a worker or a human run.
+    'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"',
+    'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"',
     # Grok drops any MCP tool whose name contains a dot (it namespaces tools
     # as <server>__<tool> and validates the result), so the daemon's moe.<name>
     # tools all vanish -- "connected, 0 tools", then "failed to connect"
@@ -2292,16 +2337,18 @@ else: print("none")
 # would fail closed on it) and the moment the CLI exits (a restart inside a
 # session that ended before the sidecar's next ping). Every attempt this seat
 # owns in `reconciling` is reattached once; a refusal is remembered for the life
-# of this wrapper. Twin: Invoke-MoeReattachOwnAttempts.
+# of this wrapper. ATTEMPT_ID (the sidecar's) reads that one record instead of
+# scanning them all. Twin: Invoke-MoeReattachOwnAttempts.
 MOE_REATTACH_REFUSED=" "
 reattach_own_attempts() {
     [ -n "$MOE_PROCESS_STARTED_AT" ] && [ -n "$PYTHON_CMD" ] || return 0
     local parked tid aid gen rc
-    parked=$($PYTHON_CMD - "$PROJECT" "$WORKER_ID" <<'PY' 2>/dev/null
+    parked=$($PYTHON_CMD - "$PROJECT" "$WORKER_ID" "${1:-}" <<'PY' 2>/dev/null
 import glob,json,os,re,sys
-project,worker=sys.argv[1:]
+project,worker,only=sys.argv[1:]
 safe=lambda v: isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',v)
-for p in sorted(glob.glob(os.path.join(project,'.moe','attempts','*.json'))):
+attempts=os.path.join(project,'.moe','attempts')
+for p in [os.path.join(attempts,only+'.json')] if safe(only) else sorted(glob.glob(os.path.join(attempts,'*.json'))):
     try:
         a=json.load(open(p,encoding='utf-8-sig'))
         g=a.get('generation')
@@ -2351,28 +2398,33 @@ start_heartbeat_sidecar() {
     local wrapper_pid=$$
     (
         set +e
-        refused="" noted=" "
+        noted=" "
         end_time=$(( $(date +%s) + max_duration_sec ))
         while [ "$(date +%s)" -lt "$end_time" ]; do
             sleep "$interval_sec"
             # The wrapper that owns this job is gone: stop heartbeating for a dead seat.
             kill -0 "$wrapper_pid" 2>/dev/null || break
+            # Mid-run usage of the leased account, so the next lease sees a
+            # window crossing the switch percent before this run ends.
+            [ -z "$ACCOUNT_LEASED_ID" ] || report_account_sample
             reply=$(moe_rpc "heartbeat" "{\"workerId\":\"$worker_id\"}" 2>/dev/null) || continue
-            # A daemon restart parked the attempt this wrapper pinned at claim time:
-            # reattach it with the pinned generation (the answer carries none). Any
-            # other reason names nothing this process may reattach: say so once. A
+            # A daemon restart parked this seat's attempt: the one the wrapper
+            # pinned at claim time, or one the agent claimed inside its session
+            # (moe-proxy stamps that claim with this wrapper's identity). Reattach
+            # the attempt the answer names, with the generation its record
+            # carries (the answer has none); the daemon's identity check decides
+            # whether it is this process's. Any other reason, or no identity to
+            # present, names nothing this process may reattach: say so once. A
             # refusal never heals, so it is not asked again on every later ping.
             case "$reply" in *reattachRequired*) ;; *) continue ;; esac
-            ask=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.stdin.read());print(str(d.get("reason") or "?")+" "+str(d.get("attemptId") or "-"))' <<< "$reply" 2>/dev/null) || continue
+            ask=$($PYTHON_CMD -c 'import json,sys;d=json.loads(sys.stdin.read());print(str(d.get("reason") or "?")+" "+str(d.get("attemptId") or ""))' <<< "$reply" 2>/dev/null) || continue
             reason="${ask%% *}"
-            if [ "$reason" = attempt-reconciling ] && [ -n "$MOE_ATTEMPT_ID" ] && [ -n "$MOE_PROCESS_STARTED_AT" ] && [ "${ask#* }" = "$MOE_ATTEMPT_ID" ]; then
-                [ -z "$refused" ] || continue
-                moe_reattach "$PREFLIGHT_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION"
-                [ $? -ne 1 ] || refused=1
+            if [ "$reason" = attempt-reconciling ] && [ -n "$MOE_PROCESS_STARTED_AT" ]; then
+                reattach_own_attempts "${ask#* }"
             else
                 case "$noted" in *" $reason "*) continue ;; esac
                 noted="$noted$reason "
-                echo "[reattach] heartbeat asks for reattachment ($reason) but this wrapper pinned no such reconciling attempt; nothing to reattach."
+                echo "[reattach] heartbeat asks for reattachment ($reason) but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach."
             fi
         done
     ) &
@@ -2962,6 +3014,19 @@ moe_runner_identity() {
     echo "Runner identity: processStartedAt=$MOE_PROCESS_STARTED_AT host=$MOE_HOST"
 }
 moe_runner_identity
+# Architect, QA and governor seats hand the identity to the CLI as well:
+# moe-proxy adds it to a moe.claim_next_task that names none, so a row the
+# agent claims inside its session (an architect plans several per CLI) records
+# it too and the heartbeat sidecar can reattach that attempt after a daemon
+# restart. Never for a worker: an identity on its attempt hands the finalize to
+# this wrapper, which finalizes only the attempt it pinned, so an in-session
+# worker claim would be left `finalizing`. Unset otherwise, so a value inherited
+# from an outer seat never reaches this one. Twin: the same block in moe-agent.ps1.
+if [ -n "$MOE_PROCESS_STARTED_AT" ] && [ "$ROLE" != worker ]; then
+    export MOE_RUNNER_PROCESS_STARTED_AT="$MOE_PROCESS_STARTED_AT" MOE_RUNNER_HOST="$MOE_HOST"
+else
+    unset MOE_RUNNER_PROCESS_STARTED_AT MOE_RUNNER_HOST
+fi
 
 # live_marker_write TASKID -- claim the task's dirty bytes for THIS session.
 # Best-effort by design: a marker that cannot be written is a warning and the
@@ -5730,6 +5795,150 @@ case "$LAUNCH_BACKOFF_BASE_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_BASE_SEC=60 ;; es
 LAUNCH_BACKOFF_MAX_SEC="${MOE_LAUNCH_BACKOFF_MAX_SEC:-900}"
 case "$LAUNCH_BACKOFF_MAX_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_MAX_SEC=900 ;; esac
 
+# --- Claude account rotation (docs/TROUBLESHOOTING.md "Claude Account Rotation
+# Issues"). Twin of the moe-agent.ps1 block of the same name. Before every
+# claude launch the wrapper leases a subscription account from the daemon
+# (moe.lease_account) and runs claude under that account's config directory.
+# The directory, MOE_ACCOUNT_ID and MOE_ACCOUNT_SAMPLE_FILE reach only the CLI's
+# subshell (apply_account_env), with the token variables removed there. Nothing
+# here opens a file inside a config directory. Every failure mode launches
+# unrotated; only "every signed-in account is spent" waits, holding the task.
+ACCOUNT_HELPER="$SCRIPT_DIR/moe-account-lease.mjs"
+ACCOUNT_SAMPLE_FILE="$SECURE_TEMP_DIR/account-sample.json"
+ACCOUNT_SETTINGS_FILE="$SECURE_TEMP_DIR/account-settings.json"
+ACCOUNT_LEASED_ID=""
+ACCOUNT_LEASED_DIR=""
+ACCOUNT_PREV_ID=""
+ACCOUNT_SAMPLE_SENT=""
+ACCOUNT_SAMPLE_REFUSED=false
+ACCOUNT_RELAUNCH=false
+ACCOUNT_LAST_FAILED=""
+ACCOUNT_ARGS=()
+
+# printf, not echo -e: a reason from the daemon is printed as is.
+account_say() { printf '%b[account] %b%s\n' "${2:-$YELLOW}" "$NC" "$1"; }
+
+clear_account_lease() {
+    ACCOUNT_LEASED_ID=""
+    ACCOUNT_LEASED_DIR=""
+    ACCOUNT_SAMPLE_SENT=""
+    ACCOUNT_ARGS=()
+    rm -f "$ACCOUNT_SAMPLE_FILE" 2>/dev/null || true
+}
+
+# Sets ACCOUNT_LEASED_ID and ACCOUNT_LEASED_DIR, or leaves them empty to launch
+# unrotated. moe-account-lease.mjs reads the reply and maps the directory to
+# this machine (a Windows path becomes its /mnt form under WSL).
+get_account_lease() {
+    local gate reply pick kind f1 f2 f3 rest why
+    if [ ! -f "$ACCOUNT_HELPER" ]; then
+        account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (moe-account-lease.mjs is missing next to this wrapper) - launching without rotation."
+        return 0
+    fi
+    gate=$("$NODE_CMD" "$ACCOUNT_HELPER" gate 2>/dev/null) || gate=""
+    case "$gate" in
+        go) ;;
+        off) return 0 ;;
+        skip$'\t'*) account_say "${gate#*$'\t'}"; return 0 ;;
+        *) account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation."; return 0 ;;
+    esac
+    while true; do
+        reply=$(moe_rpc lease_account "{\"workerId\":\"$WORKER_ID\"}" 2>/dev/null) || reply=""
+        pick=$(printf '%s' "$reply" | "$NODE_CMD" "$ACCOUNT_HELPER" pick 2>/dev/null) || pick=""
+        IFS=$'\t' read -r kind f1 f2 f3 <<< "$pick" || true
+        rest=""
+        case "$pick" in *$'\t'*) rest="${pick#*$'\t'}" ;; esac
+        if [ "$kind" = leased ] && [ -n "$f1" ] && [ -n "$f3" ]; then
+            if [ -n "$ACCOUNT_PREV_ID" ] && [ "$ACCOUNT_PREV_ID" != "$f1" ]; then
+                account_say "MOE_ACCOUNT_SWITCHED from=$ACCOUNT_PREV_ID to=$f1"
+            fi
+            ACCOUNT_PREV_ID="$f1"
+            ACCOUNT_LEASED_ID="$f1"
+            ACCOUNT_LEASED_DIR="$f3"
+            if [ "$f2" = "?" ]; then f2=unknown; else f2="$f2%"; fi
+            account_say "MOE_ACCOUNT_LEASED account=$f1 usage=$f2" "$GREEN"
+            return 0
+        fi
+        if [ "$kind" = wait ] && [ -n "$f2" ]; then
+            case "$f1" in ''|*[!0-9]*) f1=60 ;; esac
+            [ "$f1" -ge 1 ] || f1=60
+            account_say "MOE_ACCOUNT_WAIT retry_in=${f1}s next_reset=$f2 - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)"
+            sleep "$f1"
+            continue
+        fi
+        if [ "$kind" = off ]; then
+            [ -z "$rest" ] || account_say "$rest"
+            return 0
+        fi
+        why="the account helper failed"
+        if [ "$kind" = unavailable ] && [ -n "$rest" ]; then why="$rest"; fi
+        account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE ($why) - launching without rotation."
+        return 0
+    done
+}
+
+# Runs inside the CLI's subshell, so the account's directory and the removed
+# token variables never reach this wrapper's own environment.
+apply_account_env() {
+    [ -n "$ACCOUNT_LEASED_ID" ] || return 0
+    export CLAUDE_CONFIG_DIR="$ACCOUNT_LEASED_DIR" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE"
+    # TOKEN_ENV and PROVIDER_ENV in moe-account-lease.mjs: a token outranks the
+    # account's login, and the gate already stood down for a set provider switch.
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
+        CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
+}
+
+# Sends the latest usage sample (written by the stream parser or the
+# statusline) once and sets ACCOUNT_SAMPLE_REFUSED from it. Returns 1 only when
+# the daemon did not take it.
+report_account_sample() {
+    local body args
+    ACCOUNT_SAMPLE_REFUSED=false
+    [ -n "$ACCOUNT_LEASED_ID" ] && [ -s "$ACCOUNT_SAMPLE_FILE" ] || return 0
+    body=$(cat "$ACCOUNT_SAMPLE_FILE" 2>/dev/null) || return 0
+    args=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c '
+import json, sys
+s = json.loads(sys.stdin.read())
+if not isinstance(s, dict) or s.get("accountId") != sys.argv[2]:
+    sys.exit(1)
+w = s.get("windows")
+print(json.dumps({"workerId": sys.argv[1], "accountId": sys.argv[2], "windows": w if isinstance(w, dict) else {}, "refused": s.get("refused") is True}))
+' "$WORKER_ID" "$ACCOUNT_LEASED_ID" <<< "$body" 2>/dev/null) || return 0
+    case "$args" in *'"refused": true}') ACCOUNT_SAMPLE_REFUSED=true ;; esac
+    [ "$body" != "$ACCOUNT_SAMPLE_SENT" ] || return 0
+    moe_rpc report_account_usage "$args" >/dev/null 2>&1 || return 1
+    ACCOUNT_SAMPLE_SENT="$body"
+}
+
+# After a leased run: report its last usage sample, then ask whether the run
+# failed because of its account. A refusal needs both signals (the CLI said the
+# account is spent, and the run failed); any other failure checks the account's
+# sign-in. Once the daemon has answered, the account is parked, so the relaunch
+# is immediate and lands on the next one (ACCOUNT_RELAUNCH). An unanswered
+# report, or the account the previous account relaunch moved away from failing
+# again (a daemon that hands it back would otherwise relaunch with no backoff
+# forever), falls through to the launch-failure classes.
+account_after_exit() {
+    local reported=true state
+    [ -n "$ACCOUNT_LEASED_ID" ] || return 0
+    report_account_sample || reported=false
+    if [ "$1" = 0 ]; then
+        ACCOUNT_LAST_FAILED=""
+        return 0
+    fi
+    [ "$ACCOUNT_LEASED_ID" != "$ACCOUNT_LAST_FAILED" ] || return 0
+    if [ "$ACCOUNT_SAMPLE_REFUSED" = true ] && [ "$reported" = true ]; then
+        account_say "MOE_ACCOUNT_REFUSED account=$ACCOUNT_LEASED_ID exit=$1 - relaunching on the next account; the held task stays held."
+        ACCOUNT_RELAUNCH=true
+        return 0
+    fi
+    state=$("$NODE_CMD" "$ACCOUNT_HELPER" signin-state "$ACCOUNT_LEASED_DIR" "$COMMAND_BIN" "${COMMAND_ARGV[@]}" 2>/dev/null) || state=""
+    case "$state" in signed_out|other) ;; *) return 0 ;; esac
+    moe_rpc report_account_usage "{\"workerId\":\"$WORKER_ID\",\"accountId\":\"$ACCOUNT_LEASED_ID\",\"signIn\":\"$state\"}" >/dev/null 2>&1 || return 0
+    account_say "MOE_ACCOUNT_SIGNED_OUT account=$ACCOUNT_LEASED_ID state=$state - relaunching on the next account; the held task stays held."
+    ACCOUNT_RELAUNCH=true
+}
+
 # --- Self-restart when this script's own bytes change on disk -----------------
 # The shell reads this file incrementally, so an edit to a running script can
 # even corrupt the current execution; either way a long-lived loop keeps serving
@@ -5757,6 +5966,8 @@ while [ "$LOOP_RUNNING" = true ]; do
         if [ "${LAUNCH_FAIL_BACKOFF_SEC:-0}" -gt 0 ]; then
             echo -e "${YELLOW}[launch-failure]${NC} Backing off ${LAUNCH_FAIL_BACKOFF_SEC}s before relaunching (streak $LAUNCH_FAIL_STREAK); the held task stays held. (Ctrl+C to stop)"
             sleep "$LAUNCH_FAIL_BACKOFF_SEC"
+        elif [ "$ACCOUNT_RELAUNCH" = true ]; then
+            account_say "Relaunching now on the next account."
         else
             echo -e "${YELLOW}Agent idle, checking for tasks in ${POLL_INTERVAL} seconds... (Ctrl+C to stop)${NC}"
             # Honor --poll-interval (PS parity); a hardcoded 2s near-busy-spins a
@@ -5765,6 +5976,10 @@ while [ "$LOOP_RUNNING" = true ]; do
         fi
         echo -e "${BLUE}Relaunching agent...${NC}"
     fi
+    # Read once, just above: an iteration that skipped the poll sleep for an
+    # account relaunch must not skip it again (the reload deferral below
+    # `continue`s straight back here).
+    ACCOUNT_RELAUNCH=false
 
     # Top of the iteration, AFTER the poll sleep and BEFORE any task dispatch, so
     # a restart can never interleave with a half-done completion.
@@ -5840,6 +6055,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     # tool-write harvest must never leak into this task's attribution.
     MOE_PREFLIGHT_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     MOE_SID="$WORKER_ID@$MOE_PREFLIGHT_ISO"
+    # Exported for the seat: moe.record_commit requires this `<workerId>@<preflight-iso>`
+    # as `sessionId`, and an isolated-clone delivery can read it from nowhere else (the
+    # wrapper writes no preflight scope.json when settings.autoCommit is false). Twin:
+    # moe-agent.ps1 sets $env:MOE_SESSION_ID from $moeSid at the same point.
+    export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
     MOE_REL=""
     MOE_GITDIR=""
@@ -6933,6 +7153,14 @@ $PROMPT_BODY"
         # Settings can change between tasks in a long-lived wrapper.
         "$NODE_CMD" "$PROMPT_CACHE_HELPER" check "$CLI_TYPE" "$PROJECT" "${COMMAND_ARGV[@]}" || exit 1
     fi
+    # Claude account rotation: a fresh lease for every claude launch. The check
+    # above stays on the operator's own config directory; nothing reads inside
+    # an account's. A wait for a free account is not launch time, so the
+    # launch timestamp is taken after the lease.
+    clear_account_lease
+    if [ "$MOE_SKIP_LAUNCH" != true ] && [ "$CLI_TYPE" = claude ]; then
+        get_account_lease
+    fi
     CLI_LAUNCHED_AT=$(date +%s)
     start_heartbeat_sidecar "$WORKER_ID"
 
@@ -6968,6 +7196,7 @@ $PROMPT_BODY"
         fi
         printf '%s' "$CODEX_FILE_BODY" > "$CODEX_SEAT_INSTRUCTIONS_FILE"
         echo -e "${GREEN}[OK]${NC} Agent instructions written to: $CODEX_SEAT_INSTRUCTIONS_FILE (shared role doc: $AGENT_INSTRUCTIONS_PATH)"
+        CODEX_MOE_OVERRIDE="$(codex_moe_server_override "$PROJECT/.codex/config.toml" "$WORKER_ID")"
 
         # Build role-aware short prompt for Codex CLI argument
         # Codex instruction delivery chain:
@@ -7084,7 +7313,7 @@ $PROMPT_BODY"
             if [ "${CODEX_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != "1" ]; then
                 CODEX_ARGV_PROBED=true
                 PROBE_EXIT=0
-                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
+                PROBE_OUT="$("$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1)" || PROBE_EXIT=$?
                 if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|unrecognized subcommand|unexpected value'; then
                     PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -i 'error' | head -n1)"
                     [ -n "$PROBE_LINE" ] || PROBE_LINE="exit $PROBE_EXIT"
@@ -7104,7 +7333,7 @@ $PROMPT_BODY"
             echo ""
             # The banner is the line the launch-failure hint tells the operator to re-run by
             # hand, so it carries every argv token the real launch does (ps1 twin parity).
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} ${CODEX_EXEC_OVERRIDES[*]} exec --json -C \"$PROJECT\"${CODEX_SANDBOX_BANNER} \"<prompt>\""
             start_moe_usage_receipt codex headless
             set +e
 
@@ -7114,7 +7343,7 @@ $PROMPT_BODY"
             # seats clobbering them.
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
-                -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
+                -c "$CODEX_MOE_OVERRIDE" \
                 "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT" | "$NODE_CMD" "$PROMPT_CACHE_HELPER" codex-stream
 
             CLI_EXIT_CODE=${PIPESTATUS[0]}
@@ -7124,13 +7353,13 @@ $PROMPT_BODY"
             # Interactive TUI mode
             echo "Starting Codex (interactive TUI)..."
             echo ""
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID${CODEX_TASK_BANNER} -C \"$PROJECT\" \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -c model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE -c '$CODEX_MOE_OVERRIDE'${CODEX_TASK_BANNER} -C \"$PROJECT\" \"<prompt>\""
             start_moe_usage_receipt codex interactive
             set +e
 
             "$COMMAND_BIN" "${COMMAND_ARGV[@]}" \
                 -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" \
-                -c "mcp_servers.moe.env.MOE_WORKER_ID=$WORKER_ID" \
+                -c "$CODEX_MOE_OVERRIDE" \
                 "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"
 
             CLI_EXIT_CODE=$?
@@ -7417,6 +7646,17 @@ $PROMPT_BODY"
         if [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; then
             PRINT_ARGS=(--print --permission-mode bypassPermissions --output-format stream-json --include-partial-messages --verbose)
         fi
+        # An interactive leased seat prints no stream-json, so its account usage
+        # comes from claude's statusline (moe-account-lease.mjs statusline). The
+        # account's config directory also holds none of the operator's
+        # approvals for the project's .mcp.json servers, so they are named
+        # explicitly (a -p seat connects them without asking).
+        if [ -n "$ACCOUNT_LEASED_ID" ] && [ ${#PRINT_ARGS[@]} -eq 0 ]; then
+            if [ -f "$PROJECT/.mcp.json" ]; then ACCOUNT_ARGS+=(--mcp-config "$PROJECT/.mcp.json"); fi
+            if "$NODE_CMD" "$ACCOUNT_HELPER" statusline-settings "$ACCOUNT_SETTINGS_FILE" >/dev/null 2>&1; then
+                ACCOUNT_ARGS+=(--settings "$ACCOUNT_SETTINGS_FILE")
+            fi
+        fi
 
         # Inline stream-json pretty-printer for --print mode (mirrors the
         # PowerShell launcher's parser): terse per-event lines for init /
@@ -7462,6 +7702,43 @@ REPLACED_HEADER = re.compile(r'^Replaced \d+ ' + re.escape('occurrence(s) in') +
 REPLACED_FILE = re.compile(r'^  (.+): \d+$')
 def w(s):
     sys.stdout.write(s); sys.stdout.flush()
+ACCOUNT_ID = os.environ.get('MOE_ACCOUNT_ID') or ''
+ACCOUNT_SAMPLE_FILE = os.environ.get('MOE_ACCOUNT_SAMPLE_FILE') or ''
+account_windows = {}
+account_refused = False
+def account_sample(rl):
+    # Usage of the leased account, for moe.report_account_usage (twin: the ps1
+    # rate_limit_event branch). utilization is a 0-1 fraction per
+    # unifiedWindows entry; status (overage while isUsingOverage) belongs to
+    # the rateLimitType window. Best-effort.
+    global account_refused
+    if not ACCOUNT_ID or not ACCOUNT_SAMPLE_FILE:
+        return
+    try:
+        uw = rl.get('unifiedWindows')
+        if isinstance(uw, dict):
+            for name, win in uw.items():
+                u = win.get('utilization') if isinstance(win, dict) else None
+                if isinstance(u, (int, float)) and not isinstance(u, bool):
+                    entry = account_windows.setdefault(name, {})
+                    entry['utilization'] = u
+                    if win.get('resetsAt') is not None:
+                        entry['resetsAt'] = win.get('resetsAt')
+        status = 'overage' if rl.get('isUsingOverage') else rl.get('status')
+        kind = rl.get('rateLimitType')
+        if isinstance(kind, str) and isinstance(status, str):
+            entry = account_windows.setdefault(kind, {})
+            entry['status'] = status
+            if 'resetsAt' not in entry and rl.get('resetsAt') is not None:
+                entry['resetsAt'] = rl.get('resetsAt')
+            if status in ('rejected', 'overage'):
+                account_refused = True
+        tmp = ACCOUNT_SAMPLE_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump({'accountId': ACCOUNT_ID, 'windows': account_windows, 'refused': account_refused}, fh)
+        os.replace(tmp, ACCOUNT_SAMPLE_FILE)
+    except Exception:
+        pass
 def base_name(n):
     n = n or ''
     return n.split('__')[-1] if n.startswith('mcp__') else n
@@ -7648,6 +7925,7 @@ for line in sys.stdin:
         rl = evt.get('rate_limit_info') or {}
         tag = 'OVERAGE' if rl.get('isUsingOverage') else rl.get('status')
         w('  [rate-limit %s %s]\n' % (tag, rl.get('rateLimitType')))
+        account_sample(rl)
     elif t == 'result':
         dur = evt.get('duration_ms')
         dur_s = ('%.1fs' % (dur / 1000.0)) if dur else '?'
@@ -7678,10 +7956,10 @@ PYEOF
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 # Pipe through the parser; the subshell's exit (the CLI's) is
                 # PIPESTATUS[0] — the parser's own status is irrelevant.
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" "$PROMPT" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
+                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "$PROMPT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -7691,11 +7969,11 @@ PYEOF
 
             if [ ${#PRINT_ARGS[@]} -gt 0 ]; then
                 start_moe_usage_receipt "$CLI_TYPE" headless
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
+                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT" "${PRINT_ARGS[@]}" 2>&1) | "$NODE_CMD" "$PROMPT_CACHE_HELPER" claude-stream | MOE_TOOL_WRITES_FILE="$MOE_TOOL_WRITES_FILE" MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" MOE_SERENA_PROJECT_ROOT="${SERENA_PROJECT:-$PROJECT}" MOE_ACCOUNT_ID="$ACCOUNT_LEASED_ID" MOE_ACCOUNT_SAMPLE_FILE="$ACCOUNT_SAMPLE_FILE" $PYTHON_CMD -u -c "$STREAM_JSON_PARSER"
                 CLI_EXIT_CODE=${PIPESTATUS[0]}
             else
                 start_moe_usage_receipt "$CLI_TYPE" interactive
-                (cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" --effort "$ITER_EFFORT")
+                (apply_account_env; cd "$PROJECT" && "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${MODEL_ARGS[@]}" --append-system-prompt-file "$SYSTEM_PROMPT_FILE" "${CACHE_ARGS[@]}" "${ACCOUNT_ARGS[@]}" --effort "$ITER_EFFORT")
                 CLI_EXIT_CODE=$?
             fi
 
@@ -7709,7 +7987,17 @@ PYEOF
     CLI_ELAPSED_SEC=-1
     if [ -n "$CLI_LAUNCHED_AT" ]; then CLI_ELAPSED_SEC=$(( $(date +%s) - CLI_LAUNCHED_AT )); fi
     CLI_EXIT_FOR_LAUNCH="${CLI_EXIT_CODE:-0}"
-    if [ "$CLI_EXIT_FOR_LAUNCH" != "0" ] && [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then
+    account_after_exit "$CLI_EXIT_FOR_LAUNCH"
+    if [ "$ACCOUNT_RELAUNCH" = true ]; then
+        # The account ran out or signed out, not the session: give the resume
+        # attempt back and skip the launch-failure backoff. A fast exit is still
+        # a launch that did no work, which is what the landing reads the flag for.
+        ACCOUNT_LAST_FAILED="$ACCOUNT_LEASED_ID"
+        if [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then CURRENT_LAUNCH_FAILED=true; fi
+        if [ "$RESUME_ATTEMPTS" -gt 0 ]; then RESUME_ATTEMPTS=$((RESUME_ATTEMPTS - 1)); fi
+        LAUNCH_FAIL_STREAK=0
+        LAUNCH_FAIL_BACKOFF_SEC=0
+    elif [ "$CLI_EXIT_FOR_LAUNCH" != "0" ] && [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then
         CURRENT_LAUNCH_FAILED=true
         LAUNCH_FAIL_STREAK=$((LAUNCH_FAIL_STREAK + 1))
         # Not a mid-task death: give the resume attempt back.
@@ -7773,11 +8061,13 @@ PYEOF
         STATUS_LOOKUP_ERROR=""
         PARSED_POSTFLIGHT=""
         if [ -n "$POSTFLIGHT_CTX" ]; then
-            # getContext.ts falls back to the CALLER's currentTaskId when the
-            # requested id resolves to nothing (deleted/archived/wrong project),
-            # and moe-proxy injects MOE_WORKER_ID on every call -- so a stale id
-            # comes back as some OTHER task's status. Committing on that would be
-            # worse than not committing at all, hence the id equality check.
+            # Daemons before the explicit-taskId NOT_FOUND fix fell back to the
+            # CALLER's currentTaskId when the requested id resolved to nothing
+            # (deleted/archived/wrong project), and moe-proxy injects
+            # MOE_WORKER_ID on every call -- so a stale id came back as some
+            # OTHER task's status. Committing on that would be worse than not
+            # committing at all, hence the id equality check, kept for
+            # launcher/daemon version skew; current daemons refuse instead.
             # The task projection carries no epicId/order, but get_context
             # returns the resolved epic alongside it.
             PARSED_POSTFLIGHT=$($PYTHON_CMD -c "
@@ -8127,7 +8417,11 @@ except Exception:
     fi
     # -------- End post-flight --------
 
-    if [ "$LOOP_ENABLED" = false ]; then
+    # A launch failure never started a session, so even a single-shot seat
+    # (codex/gemini/grok TUI) relaunches after the backoff it just announced,
+    # unless the caller asked for one run with --no-loop. An account relaunch
+    # moves it onto the next account at once, even under --no-loop.
+    if [ "$LOOP_ENABLED" = false ] && { [ "$NO_LOOP" = true ] || [ "$CURRENT_LAUNCH_FAILED" != true ]; } && [ "$ACCOUNT_RELAUNCH" != true ]; then
         break
     fi
 done

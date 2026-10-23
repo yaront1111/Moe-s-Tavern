@@ -1,5 +1,7 @@
 ﻿param()
 $ErrorActionPreference = 'Stop'
+# Claude account rotation stays off unless the [accounts] scenario turns it on.
+$env:MOE_ACCOUNT_ROTATION = 'off'
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $wrapper = Join-Path $root 'scripts\moe-agent.ps1'
@@ -340,14 +342,15 @@ if (tool === 'claim_next_task') {
 // FAKE_HEARTBEAT_REATTACH mirrors heartbeat.ts's reattach-required answer: `1`
 // reads the caller's attempt (attempt-reconciling while a restart has it parked,
 // a plain ack otherwise); `other` alternates the two reasons that name no
-// attempt. .moe/heartbeat-count counts the pings.
+// attempt. FAKE_HEARTBEAT_ATTEMPT names the attempt the seat's current task
+// holds (default attempt-postflight). .moe/heartbeat-count counts the pings.
 if (tool === 'heartbeat' && process.env.FAKE_HEARTBEAT_REATTACH) {
   const counter = path.join(moe, 'heartbeat-count');
   const n = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1;
   fs.writeFileSync(counter, String(n));
   const reattach = (reason, a) => ({ok:false,reattachRequired:true,reason,reattachWith:'moe.reattach_attempt',...(a ? {attemptId:a.id,phase:a.phase} : {})});
   let a = null;
-  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts','attempt-postflight.json'),'utf8')); } catch {}
+  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',(process.env.FAKE_HEARTBEAT_ATTEMPT || 'attempt-postflight')+'.json'),'utf8')); } catch {}
   if (process.env.FAKE_HEARTBEAT_REATTACH === 'other') ok(reattach(n % 2 ? 'no-worker-record' : 'no-open-attempt'));
   else ok(a && a.workerId === args.workerId && a.phase === 'reconciling' ? reattach('attempt-reconciling', a) : {ok:true});
   process.exit(0);
@@ -460,11 +463,12 @@ switch (tool) {
   }
   case 'get_context': {
     // Mirrors getContext.ts: the task projection carries NO epicId and NO order
-    // (the resolved epic comes back alongside it instead), and an unresolvable
-    // taskId falls back to the CALLER's currentTaskId rather than erroring --
-    // so a stale id silently answers with a different task.
+    // (the resolved epic comes back alongside it instead). Daemons before the
+    // explicit-taskId NOT_FOUND fix let an unresolvable taskId fall back to the
+    // CALLER's currentTaskId rather than erroring -- so a stale id silently
+    // answered with a different task.
     // 'empty'    => daemon answered but carried no task.
-    // 'mismatch' => the real fallback: some OTHER task comes back.
+    // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
     // get_context with NO taskId is the post-flight adoption probe
     // (getContext.ts falls back to the caller's currentTaskId). Every other
     // caller passes a taskId, so this cannot disturb the other scenarios.
@@ -590,6 +594,25 @@ switch (tool) {
     ok({ ok: true });
     break;
   }
+  case 'lease_account':
+  case 'report_account_usage': {
+    // leaseAccount.ts in miniature, for the [accounts] scenario: no rotation
+    // without FAKE_ACCOUNT_HOME; with FAKE_ACCOUNT_WAIT_ONCE the first lease
+    // finds every account spent; otherwise the first of acct-1, acct-2 that no
+    // report refused or signed out. Every call is logged.
+    const log = path.join(moe, 'account-rpcs.jsonl');
+    const rows = readRows(log);
+    fs.appendFileSync(log, JSON.stringify({ tool, args }) + '\n');
+    if (tool === 'report_account_usage') { ok({ recorded: true, blockedUntil: null, peakPercent: null }); break; }
+    const home = process.env.FAKE_ACCOUNT_HOME;
+    const spent = { rotation: true, accountId: null, retryAt: new Date(Date.now() + 3600000).toISOString(), retryInSec: 3600, switchAtPercent: 90 };
+    if (!home) { ok({ rotation: false, reason: null }); break; }
+    if (process.env.FAKE_ACCOUNT_WAIT_ONCE && !rows.some(r => r.tool === 'lease_account')) { ok(spent); break; }
+    const parked = new Set(rows.filter(r => r.tool === 'report_account_usage' && (r.args.refused === true || r.args.signIn)).map(r => r.args.accountId));
+    const id = ['acct-1', 'acct-2'].find(a => !parked.has(a));
+    ok(id ? { rotation: true, accountId: id, label: id, configDir: path.join(home, id), peakPercent: id === 'acct-1' ? 12.5 : null, switchAtPercent: 90 } : spent);
+    break;
+  }
   default: ok({ success: true });
 }
 '@
@@ -617,7 +640,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
-'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
+'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
@@ -782,6 +805,20 @@ if((mode==='reattach-sidecar'||mode==='reattach-refused')&&fs.existsSync(file)){
  else{waitFor(()=>fs.existsSync(moeFile('evidence-rpcs.jsonl'))&&fs.readFileSync(moeFile('evidence-rpcs.jsonl'),'utf8').includes('reattach_attempt'),60000);
   const pings=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>=pings+3,30000);}}
 if(mode==='reattach-none')waitFor(()=>count('heartbeat-count')>=3,30000);
+// reattach-session: the restart parks an attempt of this seat that the wrapper
+// did not pin -- a row the agent claimed inside its session, which moe-proxy
+// stamped with the wrapper's identity. The sidecar reattaches the attempt the
+// heartbeat names while the session runs; the CLI records the phase it saw.
+if(mode==='reattach-session'&&fs.existsSync(file)){const pinned=JSON.parse(fs.readFileSync(file,'utf8')),session=moeFile('attempts/attempt-session.json');
+ const sessionPhase=()=>{try{return JSON.parse(fs.readFileSync(session,'utf8')).phase;}catch(e){return '';}};
+ fs.writeFileSync(session,JSON.stringify({id:'attempt-session',generation:3,taskId:'task-session',workerId:pinned.workerId,runnerId:pinned.workerId,
+  phase:'reconciling',processStartedAt:pinned.processStartedAt,host:pinned.host,workspace:dir,startedAt:new Date().toISOString(),lastPhaseAt:new Date().toISOString()}));
+ waitFor(()=>sessionPhase()==='running',60000);fs.writeFileSync(moeFile('cli-saw-phase'),sessionPhase());
+ // One more ping after the reattach: the sidecar is sequential, so its line is out.
+ const seen=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>seen,30000);}
+// identity-claim: a worker CLI never gets the runner identity, not even one
+// inherited from an outer seat (the harness sets one).
+if(mode==='identity-claim')fs.writeFileSync(moeFile('cli-runner-env'),JSON.stringify([process.env.MOE_RUNNER_PROCESS_STARTED_AT??null,process.env.MOE_RUNNER_HOST??null]));
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
 if(mode.endsWith('-reconciling')||mode==='reattach-postflight')a.phase='reconciling';
 if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if(mode==='stale-attempt'||mode==='freed-generation-bump')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
@@ -821,9 +858,11 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
   // Reattach arms: the sidecar pings every second against the fake heartbeat.
-  if(['reattach-sidecar','reattach-refused','reattach-none'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
+  if(['reattach-sidecar','reattach-refused','reattach-none','reattach-session'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
     env.FAKE_HEARTBEAT_REATTACH=mode==='reattach-none'?'other':'1';}
   if(mode==='reattach-refused')env.FAKE_REATTACH_REFUSE='1';
+  if(mode==='reattach-session')env.FAKE_HEARTBEAT_ATTEMPT='attempt-session';
+  if(mode==='identity-claim'){env.MOE_RUNNER_PROCESS_STARTED_AT='1@outer-seat';env.MOE_RUNNER_HOST='outer-host';}
   if(mode==='reattach-preflight')env.FAKE_ATTEMPT_PHASE='reconciling';
   if(mode==='finalize-loss'||mode==='loop-land-twice'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
@@ -938,9 +977,15 @@ exit "$rc"
     assert.deepEqual(pair(c),pair(claims[0]),'one identity per wrapper process\n'+log);}
   if(mode==='identity-claim'){assert.ok(claims.length>=2,log);
     assert.deepEqual(pair(JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json')))),pair(claims[0]),
-      'the claim recorded the pair on the attempt it opened\n'+log);}
+      'the claim recorded the pair on the attempt it opened\n'+log);
+    assert.deepEqual(JSON.parse(read(path.join(nested,'.moe','cli-runner-env'))),[null,null],'a worker CLI gets no runner identity\n'+log);}
   const reattaches=rpc.filter(r=>r.tool==='reattach_attempt').map(r=>r.args),said=s=>log.split(s).length-1;
-  if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
+  if(mode==='reattach-session'){const r=reattaches[0]||{};
+    assert.equal(reattaches.length,1,'exactly one reattach, for the attempt the heartbeat named\n'+log);
+    assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-session','worker-frozen','attempt-session',3,...pair(claims[0])],log);
+    assert.equal(read(path.join(nested,'.moe','cli-saw-phase')),'running','the sidecar reattached it while the session ran\n'+log);
+    assert.equal(said('attempt attempt-session (generation 3) on task task-session is running again after a daemon restart.'),1,log);
+  }else if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
     const r=reattaches[0]||{};
     assert.equal(reattaches.length,1,'exactly one reattach for the one parked attempt\n'+log);
     assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-postflight','worker-frozen','attempt-postflight',7,...pair(claims[0])],log);
@@ -1362,9 +1407,12 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
 
     # A "slow" fake CLI that sleeps a few seconds before exiting, standing in
     # for a long silent verification step with no moe.* calls of its own —
-    # exactly the scenario the heartbeat sidecar exists to cover.
+    # exactly the scenario the heartbeat sidecar exists to cover. It also
+    # records the runner identity it was handed: a QA seat gets the wrapper's
+    # own pair, which moe-proxy stamps onto a claim made inside the session.
+    $slowRunnerEnv = Join-Path $tempRoot 'slow-runner-env.txt'
     $slowCmd = Join-Path $tempRoot 'slow.cmd'
-    Set-Content -Path $slowCmd -Encoding ASCII -Value "@echo off`r`nping -n 6 127.0.0.1 >nul`r`nexit /b 0`r`n"
+    Set-Content -Path $slowCmd -Encoding ASCII -Value "@echo off`r`n(echo %MOE_RUNNER_PROCESS_STARTED_AT%&echo %MOE_RUNNER_HOST%)> `"$slowRunnerEnv`"`r`nping -n 6 127.0.0.1 >nul`r`nexit /b 0`r`n"
 
     # Fake Grok Build CLI, literally named grok.cmd: the wrapper strips the
     # extension before matching the basename, so this shim takes the grok
@@ -1520,6 +1568,107 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         $tierArgs = if (Test-Path $tierArgsFile) { Get-Content -Raw -Path $tierArgsFile } else { '' }
         if ($tierArgs -notlike '*--effort medium*') { Write-Host $tierArgs; throw 'Expected --effort medium from the claim''s launch tier' }
         if ((Get-Content -Raw -Path $wrapperTierOut) -notlike '*Task tier: light (model*') { Get-Content $wrapperTierOut | ForEach-Object { Write-Error $_ }; throw 'Expected the task tier banner' }
+
+        # --- Account rotation (twin of postflight.sh [accounts]). A claude
+        # launch whose account is refused at its limit, or found signed out,
+        # relaunches at once on the next account, even under -NoLoop and
+        # without the launch-failure backoff; a lease that finds every account
+        # spent waits and leases again. The fake CLI tells its account by
+        # CLAUDE_CONFIG_DIR and answers `auth status --json` like claude; no
+        # token may reach it, and no directory may reach the daemon. ---
+        $acctHome = Join-Path $tempRoot 'acct-home'
+        $acct1Dir = Join-Path $acctHome 'acct-1'
+        $acct2Dir = Join-Path $acctHome 'acct-2'
+        New-Item -ItemType Directory -Force -Path $acct1Dir, $acct2Dir | Out-Null
+        $acctLog = Join-Path $tempRoot 'acct-cli.log'
+        $acctRpcs = Join-Path $projectDir '.moe\account-rpcs.jsonl'
+        $acctReset = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 3600
+        $spentEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":' + $acctReset + ',"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":' + $acctReset + '}}}}'
+        $fineEvent = '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":' + $acctReset + ',"rateLimitType":"five_hour","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.42,"resetsAt":' + $acctReset + '}}}}'
+        $acctCmd = Join-Path $tempRoot 'acct.cmd'
+        # FAKE_ACCT_MODE: unset = acct-1 is spent, signout = acct-1 is signed
+        # out, fine = every account works.
+        Set-Content -Path $acctCmd -Encoding ASCII -Value (@(
+            '@echo off',
+            'if "%~1"=="auth" goto auth',
+            'if defined CLAUDE_CODE_OAUTH_TOKEN (set "ACCT_TOKEN=set") else (set "ACCT_TOKEN=unset")',
+            "echo dir=%CLAUDE_CONFIG_DIR% token=%ACCT_TOKEN%>> `"$acctLog`"",
+            'if "%FAKE_ACCT_MODE%"=="fine" goto fine',
+            "if /I not `"%CLAUDE_CONFIG_DIR%`"==`"$acct1Dir`" goto fine",
+            'if "%FAKE_ACCT_MODE%"=="signout" exit /b 1',
+            "echo $spentEvent",
+            'exit /b 1',
+            ':fine',
+            "echo $fineEvent",
+            'exit /b 0',
+            ':auth',
+            "if /I not `"%CLAUDE_CONFIG_DIR%`"==`"$acct1Dir`" goto authok",
+            'if not "%FAKE_ACCT_MODE%"=="signout" goto authok',
+            'echo {"loggedIn":false,"authMethod":"none"}',
+            'exit /b 1',
+            ':authok',
+            'echo {"loggedIn":true,"authMethod":"claude.ai"}',
+            'exit /b 0'
+        ) -join "`r`n")
+        function Invoke-AccountScenario([string]$Name, [hashtable]$ScenarioEnv) {
+            Remove-Item -LiteralPath $acctLog, $acctRpcs -Force -ErrorAction SilentlyContinue
+            $out = Join-Path $tempRoot "wrapper-accounts-$Name.out"
+            $vars = @{ FAKE_CLAIM_MODE = 'resume'; MOE_ACCOUNT_ROTATION = 'on'; FAKE_ACCOUNT_HOME = $acctHome; FAKE_ACCT_MODE = $null
+                FAKE_ACCOUNT_WAIT_ONCE = $null; MOE_ACCOUNT_RETRY_SEC = '1'; MOE_DISABLE_HEARTBEAT = '1'; CLAUDE_CODE_OAUTH_TOKEN = 'must-not-reach-the-child'
+                CLAUDE_CODE_USE_BEDROCK = $null; CLAUDE_CODE_USE_VERTEX = $null; CLAUDE_CODE_USE_FOUNDRY = $null }
+            foreach ($k in $ScenarioEnv.Keys) { $vars[$k] = $ScenarioEnv[$k] }
+            $saved = @{}
+            foreach ($k in @($vars.Keys)) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
+            try {
+                $code = Invoke-WrapperProcess @('-Project', $projectDir, '-WorkerId', "qa-accounts-$Name", '-Role', 'qa', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $acctCmd, '-NoLoop') $out
+            } finally {
+                foreach ($k in @($saved.Keys)) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+            }
+            [pscustomobject]@{
+                Name = $Name; Code = $code
+                Out = $(if (Test-Path $out) { Get-Content -Raw -Path $out } else { '' })
+                Launches = @($(if (Test-Path $acctLog) { Get-Content -Path $acctLog | ForEach-Object { $_.Trim() } }))
+                Rpcs = @($(if (Test-Path $acctRpcs) { Get-Content -Path $acctRpcs | ForEach-Object { $_ | ConvertFrom-Json } }))
+                RpcText = $(if (Test-Path $acctRpcs) { Get-Content -Raw -Path $acctRpcs } else { '' })
+            }
+        }
+        function Assert-AccountScenario($R, [string[]]$Want, [string[]]$Launches) {
+            $fail = { param($why) Write-Host $R.Out; $R.Launches | ForEach-Object { Write-Host "launch: $_" }; throw "[accounts] $($R.Name): $why" }
+            if ($R.Code -ne 0) { & $fail "wrapper exited with $($R.Code)" }
+            foreach ($w in $Want) { if (-not $R.Out.Contains($w)) { & $fail "expected '$w'" } }
+            if ($R.Out.Contains('[launch-failure] Backing off')) { & $fail 'an account relaunch must not take the launch-failure backoff' }
+            if (($R.Launches -join '|') -ne ($Launches -join '|')) { & $fail "expected launches '$($Launches -join '|')', got '$($R.Launches -join '|')'" }
+            if ($R.RpcText.Contains('acct-home')) { & $fail 'an account directory reached the daemon' }
+        }
+
+        $r = Invoke-AccountScenario 'refused' @{}
+        Assert-AccountScenario $r @('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%',
+            '[account] MOE_ACCOUNT_REFUSED account=acct-1 exit=1 - relaunching on the next account; the held task stays held.',
+            '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2',
+            '[account] MOE_ACCOUNT_LEASED account=acct-2 usage=unknown') @("dir=$acct1Dir token=unset", "dir=$acct2Dir token=unset")
+        $reports = @($r.Rpcs | Where-Object { $_.tool -eq 'report_account_usage' } | ForEach-Object { $_.args })
+        $one = @($reports | Where-Object { $_.accountId -eq 'acct-1' })
+        $two = @($reports | Where-Object { $_.accountId -eq 'acct-2' })
+        if ($one.Count -ne 1 -or $one[0].refused -ne $true -or $one[0].windows.five_hour.utilization -ne 1 -or $one[0].windows.five_hour.status -ne 'rejected') {
+            throw "[accounts] refused: expected one refused acct-1 report: $($r.RpcText)"
+        }
+        if ($two.Count -ne 1 -or $two[0].refused -ne $false -or [double]$two[0].windows.five_hour.utilization -ne 0.42) {
+            throw "[accounts] refused: expected one clean acct-2 report: $($r.RpcText)"
+        }
+        if (@($r.Rpcs | Where-Object { $_.tool -eq 'lease_account' }).Count -ne 2) { throw "[accounts] refused: expected two leases: $($r.RpcText)" }
+
+        $r = Invoke-AccountScenario 'signout' @{ FAKE_ACCT_MODE = 'signout' }
+        Assert-AccountScenario $r @('[account] MOE_ACCOUNT_SIGNED_OUT account=acct-1 state=signed_out - relaunching on the next account; the held task stays held.',
+            '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2') @("dir=$acct1Dir token=unset", "dir=$acct2Dir token=unset")
+        $signIn = @($r.Rpcs | Where-Object { $_.tool -eq 'report_account_usage' -and $_.args.signIn } | ForEach-Object { $_.args })
+        if ($signIn.Count -ne 1 -or $signIn[0].accountId -ne 'acct-1' -or $signIn[0].signIn -ne 'signed_out') { throw "[accounts] signout: expected one signed_out report for acct-1: $($r.RpcText)" }
+
+        $r = Invoke-AccountScenario 'wait' @{ FAKE_ACCT_MODE = 'fine'; FAKE_ACCOUNT_WAIT_ONCE = '1' }
+        Assert-AccountScenario $r @('[account] MOE_ACCOUNT_WAIT retry_in=1s next_reset=',
+            ' - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', '[account] MOE_ACCOUNT_LEASED account=acct-1') @("dir=$acct1Dir token=unset")
+        if (@($r.Rpcs | Where-Object { $_.tool -eq 'lease_account' }).Count -ne 2) { throw "[accounts] wait: expected a spent lease, then a granted one: $($r.RpcText)" }
+        Remove-Item -LiteralPath $acctRpcs -Force -ErrorAction SilentlyContinue
+        Write-Host '[accounts] ok'
 
         # --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no
         # moe.* calls of its own for the CLI's whole runtime, so a long silent
@@ -3252,7 +3401,7 @@ else {
                     $scopeYToml = [System.IO.File]::ReadAllText($scopeYConfig)
                     $scopeYBytes1 = [System.IO.File]::ReadAllBytes($scopeYConfig)
                     if ($scopeYBytes1.Length -ge 3 -and $scopeYBytes1[0] -eq 0xEF -and $scopeYBytes1[1] -eq 0xBB -and $scopeYBytes1[2] -eq 0xBF) { throw 'SCENARIO Y FAILED: .grok/config.toml must be written without a BOM' }
-                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'MOE_TOOL_NAME_STYLE = "underscore"', 'startup_timeout_sec = 120', 'tool_timeout_sec = 120', 'moe_wait_for_task = 720', '[mcp_servers.serena]', '"--context", "agent"')) {
+                    foreach ($needle in @('[mcp_servers.moe]', '[mcp_servers.moe.env]', 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"', 'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"', 'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"', 'MOE_TOOL_NAME_STYLE = "underscore"', 'startup_timeout_sec = 120', 'tool_timeout_sec = 120', 'moe_wait_for_task = 720', '[mcp_servers.serena]', '"--context", "agent"')) {
                         if (-not $scopeYToml.Contains($needle)) { Write-Host $scopeYToml; throw "SCENARIO Y FAILED: .grok/config.toml must contain [$needle]" }
                     }
                     if ($scopeYToml -match '(?m)^(model_reasoning_effort|developer_instructions|model_instructions_file|project_doc_fallback_filenames)\s*=') { Write-Host $scopeYToml; throw 'SCENARIO Y FAILED: a grok project config must carry NO top-level keys' }
@@ -3394,7 +3543,11 @@ else {
                     if ($scopeZArgs -contains '--full-auto') { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: codex 0.147+ rejects --full-auto; it must never be on argv' }
                     # -cnotcontains: the default -contains is case-insensitive, so `-C` would be
                     # satisfied by the `-c` seat overrides that precede every codex launch.
-                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z', 'approvals_reviewer=user')) {
+                    # The workerId rides a complete moe server table: codex 0.163's TUI rejects a
+                    # partial dotted `mcp_servers.moe.env.MOE_WORKER_ID=` override at bootstrap.
+                    $scopeZMoe = @($scopeZArgs | Where-Object { $_ -clike "mcp_servers.moe={command=*MOE_WORKER_ID='worker-scope-z'}}" })
+                    if ($scopeZMoe.Count -lt 1 -or @($scopeZArgs | Where-Object { $_ -like 'mcp_servers.moe.env.MOE_WORKER_ID=*' }).Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: headless codex argv must carry the workerId inside a complete mcp_servers.moe={command=...} override' }
+                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'approvals_reviewer=user')) {
                         if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
@@ -3403,7 +3556,7 @@ else {
                     # appears once per invocation; every occurrence must point under $env:TEMP.
                     $scopeZSeatBad = @($scopeZSeatFile | Where-Object { $_.IndexOf($tempRoot.Replace('\', '/'), [System.StringComparison]::OrdinalIgnoreCase) -lt 0 })
                     if ($scopeZSeatFile.Count -lt 1 -or $scopeZSeatBad.Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: the per-seat model_instructions_file override must point under $env:TEMP with forward slashes' }
-                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains('-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z') -or -not $scopeZText.Contains('-c approvals_reviewer=user exec --json -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, JSON mode, the reviewer pin and --sandbox danger-full-access' }
+                    if (-not $scopeZText.Contains('--sandbox danger-full-access') -or -not $scopeZText.Contains("-c mcp_servers.moe={command=") -or -not $scopeZText.Contains("MOE_WORKER_ID='worker-scope-z'}}") -or -not $scopeZText.Contains('-c approvals_reviewer=user exec --json -C')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: the Command banner must show the seat override, JSON mode, the reviewer pin and --sandbox danger-full-access' }
                     if (-not $scopeZText.Contains('run the printed Command by hand')) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: a fast non-zero exit must print the launch-failure argv hint' }
                     if (-not (Test-Path -LiteralPath $scopeZConfig)) { Write-Host $scopeZText; throw 'SCENARIO Z FAILED: .codex/config.toml was not written' }
                     $scopeZToml = [System.IO.File]::ReadAllText($scopeZConfig)
@@ -3454,6 +3607,11 @@ else {
                     $scopeZArgs5 = Get-CodexArgv
                     if ($scopeZArgs5 -contains 'exec' -or $scopeZArgs5 -contains '--sandbox' -or $scopeZArgs5 -contains 'approvals_reviewer=user') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: an architect must default to the interactive codex TUI (no exec / --sandbox / reviewer pin)' }
                     if ($scopeZArgs5 -cnotcontains '-C') { Write-Host ($scopeZArgs5 -join ' '); throw 'SCENARIO Z FAILED: the codex TUI launch must still carry -C <project>' }
+                    # A non-worker seat's override also carries the wrapper's runner
+                    # identity (codex hands the proxy only the env its table names),
+                    # so the proxy can stamp it onto the architect's in-session claims.
+                    $scopeZIdentity = if ((Get-Content -Raw -Path $scopeZOut5) -cmatch '(?m)^Runner identity: processStartedAt=(\S+) host=(\S+)\r?$') { "MOE_WORKER_ID='architect-scope-z',MOE_RUNNER_PROCESS_STARTED_AT='$($Matches[1])',MOE_RUNNER_HOST='$($Matches[2])'}}" } else { '' }
+                    if (-not $scopeZIdentity -or -not @($scopeZArgs5 | Where-Object { $_.EndsWith($scopeZIdentity, [StringComparison]::Ordinal) })) { Write-Host ($scopeZArgs5 -join ' '); throw "SCENARIO Z FAILED: an architect's codex override must carry the runner identity after its workerId" }
 
                     # Run 5b: a worker without -CodexExec defaults to headless exec
                     # (b7f9570, 2026-09-24: the codex TUI never exits on its own, so
@@ -3702,6 +3860,13 @@ else {
     }
     if ($countAfterWait -ne $countAtExit) {
         throw "Heartbeat sidecar kept pinging ($countAfterWait calls) after the wrapper exited ($countAtExit at exit) - Stop-HeartbeatSidecar cleanup failed"
+    }
+    $identityLine = [string]@(Get-Content -LiteralPath $wrapperHeartbeatOut | Where-Object { $_ -like 'Runner identity: processStartedAt=*' })[0]
+    $expectedIdentity = if ($identityLine -match '^Runner identity: processStartedAt=(.+) host=(.+)$') { "$($Matches[1])`n$($Matches[2])" } else { '' }
+    $seenIdentity = @(Get-Content -LiteralPath $slowRunnerEnv -ErrorAction SilentlyContinue) -join "`n"
+    if (-not $expectedIdentity -or $seenIdentity -cne $expectedIdentity) {
+        Get-Content $wrapperHeartbeatOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Error $_ }
+        throw "Expected the QA CLI to get the wrapper's runner identity ($identityLine); it saw: $seenIdentity"
     }
 
     # Post-flight no longer writes a session-summary file (cross-session memory

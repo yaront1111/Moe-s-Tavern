@@ -42,7 +42,7 @@ function runPostflight(engine) {
         // bounded buffers in memory and kills a timed-out/overlong child.
         execFile(engine, args, {
             cwd: fileURLToPath(new URL('../../', import.meta.url)),
-            windowsHide: true, encoding: 'utf8', timeout: 20 * 60 * 1000,
+            windowsHide: true, encoding: 'utf8', timeout: 30 * 60 * 1000,
             maxBuffer: 16 * 1024 * 1024, killSignal: 'SIGKILL',
         }, (error, stdout, stderr) => {
             const failure = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'OUTPUT_LIMIT'

@@ -6,7 +6,9 @@ import { claimNextTaskTool } from '../tools/claimNextTask.js';
 import { listAttempts, openAttempt, setAttemptPhase } from './attemptStore.js';
 import {
   DEFAULT_RECONCILE_WINDOW_MS,
+  STALE_ALERT_COOLDOWN_MS,
   checkReconcileWindow,
+  checkStaleWorkers,
   startReconcileWindowCheck,
   stopReconcileWindowCheck,
 } from './sweeps.js';
@@ -474,5 +476,86 @@ describe('periodic sweep arming', () => {
     vi.advanceTimersByTime(5 * MINUTE);
     // Five one-minute ticks, and no sixth from the 5-minute interval load() armed.
     expect(reconcile).toHaveBeenCalledTimes(5);
+  });
+});
+
+// =============================================================================
+// The stale-worker alert: one ⚠️ in #governors per stale stretch of a
+// (worker, task) pair, and at most one per pair per hour. A seat whose
+// heartbeat hovers at the liveness edge used to re-alert on every flap.
+// =============================================================================
+
+describe('stale-worker alerts', () => {
+  const h = new ToolTestHarness();
+  const LIVENESS_MS = 120_000;
+  const MINUTE = 60_000;
+  const T0 = Date.parse('2026-10-21T08:00:00.000Z');
+  let alerts: string[];
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder({ schemaVersion: 6 });
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+    await h.state.load();
+    await h.state.createWorker({
+      id: 'worker-1', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: 'task-1', status: 'CODING',
+    });
+    await h.state.createWorker({
+      id: 'governor-1', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'IDLE',
+    });
+    const governors = await h.state.createTeam({ name: 'governors', role: 'governor' });
+    await h.state.addTeamMember(governors.id, 'governor-1');
+    alerts = [];
+    vi.spyOn(h.state, 'postToRoleChannel').mockImplementation(async (role: string, content: string) => {
+      if (role === 'governors') alerts.push(content);
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    h.state.clearEmitter();
+    h.cleanup();
+  });
+
+  async function workerSeenAt(at: number): Promise<void> {
+    await h.state.updateWorker('worker-1', { lastActivityAt: new Date(at).toISOString() });
+  }
+
+  /** One sweep pass at `at`, with the governor online so alerts can fire. */
+  async function sweepAt(at: number): Promise<void> {
+    await h.state.updateWorker('governor-1', { lastActivityAt: new Date(at).toISOString() });
+    await checkStaleWorkers(h.state, LIVENESS_MS, at);
+  }
+
+  it('alerts once for a seat that stays stale, however long', async () => {
+    await workerSeenAt(T0);
+    for (const minutes of [3, 30, 61, 120, 300]) await sweepAt(T0 + minutes * MINUTE);
+
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatch(/^⚠️ worker-1 stale on task-1 /);
+  });
+
+  it('a seat that flaps at the liveness edge alerts at most once an hour', async () => {
+    expect(STALE_ALERT_COOLDOWN_MS).toBe(60 * MINUTE);
+    await workerSeenAt(T0);
+    await sweepAt(T0 + 3 * MINUTE);
+    expect(alerts).toHaveLength(1);
+
+    // Fresh, then stale again, twice inside the hour: no new alert.
+    for (const minutes of [10, 50]) {
+      await workerSeenAt(T0 + minutes * MINUTE);
+      await sweepAt(T0 + minutes * MINUTE);
+      await sweepAt(T0 + (minutes + 3) * MINUTE);
+    }
+    expect(alerts).toHaveLength(1);
+
+    // Fresh after the hour has passed, then stale: that stretch alerts.
+    await workerSeenAt(T0 + 64 * MINUTE);
+    await sweepAt(T0 + 64 * MINUTE);
+    await sweepAt(T0 + 67 * MINUTE);
+    expect(alerts).toHaveLength(2);
   });
 });

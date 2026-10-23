@@ -19,6 +19,7 @@
             </pre>
             <h1>Moe's Tavern</h1>
             <p class="tagline">An AI agent task board for Claude Code, Codex, Gemini CLI and Grok Build</p>
+            <p class="announcement"><a href="#accounts"><span class="badge">New</span> Run agents across several Claude accounts →</a></p>
             <div class="cta-buttons">
                 <a href="https://github.com/yaront1111/Moe-s-Tavern" class="btn btn-primary">View on GitHub</a>
                 <a href="#getting-started" class="btn btn-secondary">Get Started</a>
@@ -59,6 +60,37 @@
         </div>
     </section>
 
+    <!-- Claude Account Rotation Section -->
+    <section class="accounts" id="accounts">
+        <div class="container">
+            <h2><span class="badge">New</span> Claude Account Rotation</h2>
+            <p class="section-intro">Have more than one Claude subscription account? Sign each one in once, and Moe picks the account each Claude Code session starts on. It fills the accounts in your order and moves to the next one once any usage window of the active account (5-hour or weekly) reaches the switch point, 90% by default.</p>
+            <div class="feature-grid">
+                <div class="feature">
+                    <h3>No Step Cut Short</h3>
+                    <p>A worker whose account reaches the switch point finishes its current step and ends its session. The launcher restarts the same task on the next account, and the new session picks up at the next step.</p>
+                </div>
+                <div class="feature">
+                    <h3>Limits Handled</h3>
+                    <p>If Claude refuses a launch at its limit, the launcher retries on the next account at once. When every account is spent, agents keep their tasks and resume at the earliest reset.</p>
+                </div>
+                <div class="feature">
+                    <h3>Credentials Stay with Claude</h3>
+                    <p>Each account is its own Claude config folder, signed in through Claude's own login. Moe never reads, copies, or stores a credential.</p>
+                </div>
+            </div>
+
+            <h3>Set it up</h3>
+            <p>In JetBrains, open the Moe tool window's <strong>Accounts</strong> tab and click <strong>Add...</strong>. A terminal tab opens with Claude's own sign-in; finish it in your browser. The tab then shows each account's 5-hour and weekly usage. From a terminal:</p>
+            <pre><code>moe-daemon accounts add --label "Personal"   # prints the new id, e.g. acct-1
+moe-daemon accounts login acct-1             # Claude's own sign-in for that account
+moe-daemon accounts check                    # exits 0 when every account is on a subscription</code></pre>
+            <p>New on the <code>main</code> branch: <a href="#getting-started">build from source</a> to use it before the next release. <a href="https://github.com/yaront1111/Moe-s-Tavern#run-claude-agents-across-several-accounts">Read the full guide</a>.</p>
+
+            <p class="terms-note"><strong>Use your own accounts, within Anthropic's terms.</strong> Rotation only chooses which of your accounts a new session starts on; it never raises a limit. Pro and Max limits <a href="https://code.claude.com/docs/en/legal-and-compliance">assume ordinary, individual use</a>, and logins <a href="https://www.anthropic.com/legal/consumer-terms">may not be shared</a>, so check that your setup fits before relying on it. If you run a large, always-on fleet, API keys or a Team or Enterprise plan are the better fit.</p>
+        </div>
+    </section>
+
     <!-- Architecture Section -->
     <section class="architecture" id="architecture">
         <div class="container">
@@ -94,8 +126,8 @@
     <section class="getting-started" id="getting-started">
         <div class="container">
             <h2>Getting Started</h2>
-            <p><strong>Install from a marketplace (v0.8.0 and later):</strong> in a JetBrains IDE open <strong>Settings → Plugins → Marketplace</strong> and search for "Moe's Tavern"; in VS Code or Antigravity install <code>yaront1111.moe-vscode</code> (VS Code Marketplace or Open VSX); for terminal-only use, <code>npm install -g moe-daemon moe-proxy</code>. The ZIP and .vsix are also attached to each <a href="https://github.com/yaront1111/Moe-s-Tavern/releases">GitHub Release</a>. The IDE plugins bundle the daemon and proxy; you still need Node.js and a coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build).</p>
-            <p><strong>Build from source:</strong> <a href="https://github.com/yaront1111/Moe-s-Tavern/archive/refs/heads/main.zip">download the source ZIP</a>, extract it, and open a terminal in the extracted Moe folder. The installer handles missing dependencies, installs your coding CLI, and builds Moe and the board plugin.</p>
+            <p><strong>Install a release:</strong> download the plugin from the <a href="https://github.com/yaront1111/Moe-s-Tavern/releases/latest">latest GitHub Release</a>: <code>moe-jetbrains-&lt;version&gt;.zip</code> for JetBrains IDEs, or <code>moe-vscode-&lt;version&gt;.vsix</code> for VS Code and Antigravity. The IDE plugins bundle the daemon and proxy; you still need Node.js and a coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build). JetBrains Marketplace, VS Code Marketplace, Open VSX, and npm listings are not published yet.</p>
+            <p><strong>Build from source:</strong> <a href="https://github.com/yaront1111/Moe-s-Tavern/archive/refs/heads/main.zip">download the source ZIP</a>, extract it, and open a terminal in the extracted Moe folder. The installer handles missing dependencies, installs your coding CLI, and builds Moe and the board plugin. Build from source to use <a href="#accounts">Claude account rotation</a> before the next release.</p>
             <p>Use a JetBrains IDE for the board. Automatic dependency installation supports Windows with WinGet, macOS with Homebrew and Command Line Tools, and Linux with apt-get or dnf. It may request operating system permission to install system packages.</p>
 
             <div class="platform-tabs">
@@ -107,10 +139,11 @@
                     <pre><code>bash scripts/install-mac.sh --global --skip-mcp --with-plugin</code></pre>
                 </div>
             </div>
+            <p><strong>Terminal only?</strong> Leave off <code>-BuildPlugin</code> or <code>--with-plugin</code>. The installer still puts <code>moe-daemon</code> and <code>moe-proxy</code> on your PATH; run <code>moe-daemon init --project .</code> inside your project to create <code>.moe/</code> and keep the daemon running in that terminal.</p>
 
             <h3>Open the board and complete a task</h3>
             <ol>
-                <li>Install the plugin from the Marketplace, or the ZIP you built from <code>moe-jetbrains/build/distributions/</code> through your IDE's <strong>Plugins → Install Plugin from Disk</strong> menu, and restart. Run your CLI once to sign in. Open your target project and its Moe tool window; wait for <strong>Connected</strong>.</li>
+                <li>Install the release ZIP, or the ZIP you built in <code>moe-jetbrains/build/distributions/</code>, through your IDE's <strong>Plugins → Install Plugin from Disk</strong> menu, and restart. Run your CLI once to sign in. Open your target project and its Moe tool window; wait for <strong>Connected</strong>.</li>
                 <li>Keep <strong>Approval Mode: CONTROL</strong> in Project Settings. Click <strong>+ Epic</strong>, then use the <strong>+</strong> in its Backlog column to create one small task with a description and Definition of Done.</li>
                 <li>Drag the task to <strong>Planning</strong>. Choose <strong>Agents → Architect → your CLI</strong>.</li>
                 <li>When the task shows <strong>Awaiting Approval</strong>, open it, read the plan, and click <strong>Approve</strong>.</li>
@@ -118,7 +151,7 @@
                 <li>Follow <strong>Working → Review → Done</strong>, then inspect the verification result, QA summary, changed files, and recorded Git commit.</li>
             </ol>
             <p>Moe's launchers commit task changes and attempt to push them by default. Review any reported Git or verification failure before treating a task as delivered.</p>
-            <p><a href="https://github.com/yaront1111/Moe-s-Tavern/blob/main/docs/GETTING_STARTED.md">Follow the full first-task guide</a> for exact commands, CLI selection, PATH fixes, and troubleshooting. Marketplace builds and GitHub Release assets are built from the release tag; if you build from source, install the plugin you built.</p>
+            <p><a href="https://github.com/yaront1111/Moe-s-Tavern/blob/main/docs/GETTING_STARTED.md">Follow the full first-task guide</a> for exact commands, CLI selection, PATH fixes, and troubleshooting. GitHub Release assets are built from the release tag; if you build from source, install the plugin you built.</p>
         </div>
     </section>
 

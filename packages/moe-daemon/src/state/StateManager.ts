@@ -31,6 +31,7 @@ import fs from 'fs';
 import path from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
 import type {
+  AccountRotationView,
   ActivityEvent,
   ActivityEventType,
   Candidate,
@@ -227,6 +228,7 @@ import {
   validateTeamUpdates,
 } from './validators.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
+import { accountRotationView } from './accountStore.js';
 
 // Configurable timeout for state load operations (default 30 seconds)
 const STATE_LOAD_TIMEOUT_MS = parseInt(process.env.MOE_STATE_LOAD_TIMEOUT_MS || '30000', 10);
@@ -347,7 +349,8 @@ export type StateChangeEvent =
   | { type: 'PINS_UPDATED'; payload: { channel: string; pins: PinEntry[] } }
   | { type: 'DECISION_PROPOSED'; payload: Decision }
   | { type: 'DECISION_RESOLVED'; payload: Decision }
-  | { type: 'RESOURCE_UPDATED'; payload: ResourceState };
+  | { type: 'RESOURCE_UPDATED'; payload: ResourceState }
+  | { type: 'ACCOUNTS_UPDATED'; payload: AccountRotationView };
 
 type StateSubscriber = (event: StateChangeEvent) => void;
 
@@ -429,11 +432,11 @@ export class StateManager {
   staleWorkerInterval?: NodeJS.Timeout;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   reconcileWindowInterval?: NodeJS.Timeout;
-  // Memoization to avoid re-alerting on the same (workerId, taskId) tuple
-  // until the staleness clears (worker becomes alive again) or the assignment
-  // moves to a different task.
+  // When each `${workerId}:${taskId}` pair last got a stale alert. An entry
+  // stays while the pair is stale and for STALE_ALERT_COOLDOWN_MS after its
+  // alert, so neither a long stale stretch nor a flapping seat re-alerts.
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
-  alertedStaleAssignments = new Set<string>();
+  staleAlertAt = new Map<string, number>();
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
   readonly blockedTimeoutMs: number;
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -740,8 +743,8 @@ export class StateManager {
     return checkReconcileWindow(this, nowMs);
   }
 
-  async checkStaleWorkers(livenessTimeoutMs: number): Promise<void> {
-    return checkStaleWorkers(this, livenessTimeoutMs);
+  async checkStaleWorkers(livenessTimeoutMs: number, nowMs = Date.now()): Promise<void> {
+    return checkStaleWorkers(this, livenessTimeoutMs, nowMs);
   }
 
   // ---------------------------------------------------------------------------
@@ -859,7 +862,7 @@ export class StateManager {
   }
 
   async getMessages(channelId: string,
-  opts?: { sinceId?: string; limit?: number }): Promise<ChatMessage[]> {
+  opts?: { sinceId?: string; limit?: number; hideSystemFeed?: boolean }): Promise<ChatMessage[]> {
     return getMessages(this, channelId, opts);
   }
 
@@ -867,8 +870,8 @@ export class StateManager {
     return messageExistsInChannel(this, channelId, messageId);
   }
 
-  async postSystemMessage(_entityId: string, content: string): Promise<void> {
-    return postSystemMessage(this, _entityId, content);
+  async postSystemMessage(entityId: string, content: string): Promise<void> {
+    return postSystemMessage(this, entityId, content);
   }
 
   async postToGeneral(content: string): Promise<void> {
@@ -1200,7 +1203,8 @@ export class StateManager {
       ),
       resources: Array.from(this.resources.values()).sort(
         (a, b) => a.id.localeCompare(b.id)
-      )
+      ),
+      accountRotation: accountRotationView(this, nowMs)
     };
   }
 
