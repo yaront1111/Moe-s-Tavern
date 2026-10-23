@@ -134,7 +134,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
           type: 'object',
           description: 'Evidence the verification command was run fresh and passed. exitCode must be 0.',
           properties: {
-            command: { type: 'string', description: 'The exact verification command that was run (the one the plan named)' },
+            command: { type: 'string', description: 'The exact verification command that was run (the one the plan named), verbatim and runnable as-is: QA re-runs it, so never shorten it with "..." or prose' },
             exitCode: { type: 'number', description: 'Its exit code — must be 0' },
             outputTail: { type: 'string', description: 'Tail of its output (last ~2000 chars), e.g. the test-run summary line' }
           },

@@ -902,19 +902,41 @@ describe('moe.complete_task — legacy verification provenance', () => {
     expect(await verificationAfterReload()).toStrictEqual(expected);
   });
 
-  it('accepts a 500-character command, measured before trimming, and stores it trimmed', async () => {
+  it('accepts a 10000-character command, measured before trimming, and stores it trimmed', async () => {
     await boot();
-    const command = ' ' + 'a'.repeat(498) + ' ';
-    expect(command).toHaveLength(500);
+    const command = ' ' + 'a'.repeat(9998) + ' ';
+    expect(command).toHaveLength(10000);
 
     await complete({ command, exitCode: 0 });
 
     const task = h.state.getTask('task-1')!;
     expect(task.status).toBe('REVIEW');
-    expect(task.verification?.command).toBe('a'.repeat(498));
+    expect(task.verification?.command).toBe('a'.repeat(9998));
     expect(task.verification).toStrictEqual({
-      command: 'a'.repeat(498), exitCode: 0, reportedAt: task.reviewStartedAt, source: 'agent-reported',
+      command: 'a'.repeat(9998), exitCode: 0, reportedAt: task.reviewStartedAt, source: 'agent-reported',
     });
+  });
+
+  it('records a plan-named command longer than the old 500-char cap verbatim', async () => {
+    // The 558-char command a px4swarm plan step told its worker to run EXACTLY.
+    // The old cap refused it, and the paraphrase the worker recorded instead
+    // could not be re-run by QA.
+    const command =
+      "bash -lc 'set -e; source /opt/ros/jazzy/setup.bash; export MAKEFLAGS=-j1; " +
+      'colcon --log-base /home/sysadmin/tmp/task-acea9eb7-build/log build --base-paths reylink/src ' +
+      '--build-base /home/sysadmin/tmp/task-acea9eb7-build/build ' +
+      '--install-base /home/sysadmin/tmp/task-acea9eb7-build/install --executor sequential ' +
+      '--packages-up-to reylink_observability operator_api --cmake-args -DBUILD_TESTING=OFF; ' +
+      'PYTHONPYCACHEPREFIX=/home/sysadmin/tmp/task-acea9eb7-build/pycache python3 -m py_compile ' +
+      "reylink/src/operator_api/operator_api/handlers/mission_status_presenter.py'";
+    expect(command).toHaveLength(558);
+    await boot();
+
+    await complete({ command, exitCode: 0 });
+
+    const task = h.state.getTask('task-1')!;
+    expect(task.status).toBe('REVIEW');
+    expect(task.verification?.command).toBe(command);
   });
 
   it.each([
@@ -924,8 +946,8 @@ describe('moe.complete_task — legacy verification provenance', () => {
     ['string evidence', 'npm test', 'INVALID_INPUT', `Invalid verification: must be an object. ${CONTRACT}`],
     ['a blank command', { command: '   ', exitCode: 0 }, 'MISSING_REQUIRED', 'Missing required field: verification.command'],
     ['a non-string command', { command: 42, exitCode: 0 }, 'MISSING_REQUIRED', 'Missing required field: verification.command'],
-    // 501 raw characters but 499 once trimmed: the cap is measured before trimming.
-    ['a 501-character command', { command: ' ' + 'a'.repeat(499) + ' ', exitCode: 0 }, 'INVALID_INPUT', 'Invalid verification.command: too long (max 500 chars)'],
+    // 10001 raw characters but 9999 once trimmed: the cap is measured before trimming.
+    ['a 10001-character command', { command: ' ' + 'a'.repeat(9999) + ' ', exitCode: 0 }, 'INVALID_INPUT', 'Invalid verification.command: too long (max 10000 chars)'],
     ['a fractional exitCode', { command: 'npm test', exitCode: 0.5 }, 'INVALID_INPUT', 'Invalid verification.exitCode: must be an integer exit code'],
     ['a string exitCode', { command: 'npm test', exitCode: '0' }, 'INVALID_INPUT', 'Invalid verification.exitCode: must be an integer exit code'],
     ['a nonzero exitCode', { command: 'npm test', exitCode: 2 }, 'INVALID_INPUT', failedExit(2)],
