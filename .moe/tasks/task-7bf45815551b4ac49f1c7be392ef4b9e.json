@@ -1,0 +1,151 @@
+{
+  "id": "task-7bf45815551b4ac49f1c7be392ef4b9e",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01a] Profile configuration primitives",
+  "description": "Objective: first independently reviewable part of CQ-M01. Add typed executionProfile legacy/observe/verified-local, strict pure resolvers and settings validation. verified-local remains unconditionally unavailable until isolated execution is certified. Deliverable: schema, delivery/executionProfile.ts, settings integration, regression tests. NOT in scope: claiming persisted task-policy snapshot enforcement, enabling any runner or weakening existing deliveryPolicy. Original CQ-M01 retains snapshot/gate integration and depends on this child. Preserve dirty bytes, exact legacy policy, and old held-out tests. Fresh verification: isolated Linux daemon npm test -- --maxWorkers=4 using unchanged package-lock; root Windows node_modules must remain untouched.",
+  "definitionOfDone": [
+    "Missing profile preserves legacy behavior and any existing strict deliveryPolicy; observe never relaxes policy.",
+    "Malformed/unknown/null profiles and caller-supplied readiness flags are refused with tests.",
+    "verified-local activation returns concrete not-ready refusal before settings persistence; no environment bypass.",
+    "Pure snapshot resolution cannot downgrade a valid strict snapshot; malformed snapshots fail closed.",
+    "Fresh full daemon regression passes from Linux-native dependencies; no runtime isolation/completion claims."
+  ],
+  "taskRails": [
+    "Do not enable verified-local. Original CQ-M01 owns persisted snapshot/lifecycle gating.",
+    "No direct .moe or Git writes; task operations use Moe MCP."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Use TDD to add table-driven regression tests for profile decoding, malformed/null input, observe preserving current strict deliveryPolicy, verified-local refusing activation, readiness injection, and strict snapshot non-downgrade. Run red in the isolated Linux dependency snapshot; distinguish missing-behavior failures from imports/typos. Tests and error handling are required.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "note": "TDD red established in dedicated Linux-native snapshot: validators.test.ts ran 31 tests, 14 failed/17 passed. Failures show executionProfile is unsupported and stored unavailable profiles are not guarded; no import/transform errors were counted as behavioral red. Added table-driven pure resolver/snapshot tests for the next step. Existing CRLF preserved.",
+      "startedAt": "2026-10-23T23:38:16.514Z",
+      "completedAt": "2026-10-23T23:40:01.086Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the smallest schema/pure profile resolution primitives and validateSettingsUpdate integration. Reuse existing enum/error helpers. Only absent profile means legacy; do not coerce null. No user-supplied ready flag or environment bypass. Existing deliveryPolicy is independent. Guard verified-local activation before persistence with stable EXECUTION_PROFILE_NOT_READY reasons. Pure snapshot results must not alias inputs. Do not claim persisted snapshot enforcement; original M01 owns it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts"
+      ],
+      "note": "72/72 focused tests pass in dedicated Linux-native snapshot. Added profile/snapshot types and strict detached decoders; settings use existing enum/error helpers, preserve deliveryPolicy and omitted defaults, reject injected flags, and unconditionally refuse verified-local before persistence with stable EXECUTION_PROFILE_NOT_READY. No persisted task snapshot enforcement or runner activation was added.",
+      "startedAt": "2026-10-23T23:40:05.934Z",
+      "completedAt": "2026-10-23T23:41:03.293Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run fresh full daemon regression using Linux-native dependencies and unchanged lockfile: npm test -- --maxWorkers=4 in the synchronized isolated daemon package. Check source type safety without running build generators against the original workspace. Record counts and actual command/output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "note": "Fresh full daemon regression passes: 142/142 test files; 2511 passed, 19 existing skipped (2530 total), exit 0. Command in synchronized /tmp/moe-m01a-test._mchvbt5/repo/packages/moe-daemon: PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npm test -- --maxWorkers=4. tsc --noEmit --incremental false passed. First run exposed inherited inaccessible WSL PATH entries (missing binary => EACCES); isolating Linux PATH restores ENOENT without source changes. Lockfile unchanged and all five owned files match tested snapshot.",
+      "startedAt": "2026-10-23T23:41:11.952Z",
+      "completedAt": "2026-10-23T23:44:32.095Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Perform exactly one adversarial self-review of this task diff: malformed/unknown inputs, property mutation/aliasing, strict downgrade precedence, fake readiness, and accidental policy weakening. Fix issues with tests, then capture fresh verification for Moe complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.test.ts"
+      ],
+      "note": "Completed one scoped adversarial review: pure helpers have no shared mutable inputs or IO; malformed/null/unknown profile and snapshot values fail closed; verified snapshot wins rollback; snapshot copies do not alias; fake readiness cannot enable verified-local; deliveryPolicy is untouched. No source fixes required. Four behavioral mutants in disposable test copy were killed (strict precedence, null coercion, snapshot alias, fake readiness); restored copy matches owned source and 72/72 focused tests pass. Fresh full suite: 142 files pass, 2511 tests pass, 19 skipped; typecheck clean. Original M01 still owns persisted snapshot/lifecycle enforcement.",
+      "startedAt": "2026-10-23T23:44:33.981Z",
+      "completedAt": "2026-10-23T23:45:37.209Z"
+    }
+  ],
+  "planRevision": 9,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "priority": "CRITICAL",
+  "order": 5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:51.481Z",
+  "updatedAt": "2026-10-23T23:45:53.699Z",
+  "tier": "standard",
+  "effort": "xhigh",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-23T23:34:54.708Z",
+  "metrics": {
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "firstClaimAt": "2026-10-23T23:35:34.244Z",
+    "executedStepCount": 4
+  },
+  "planApprovedAt": "2026-10-23T23:34:54.742Z",
+  "contextFetchedBy": [
+    "worker-cq-m01a"
+  ],
+  "workStartedAt": "2026-10-23T23:38:16.514Z",
+  "reviewStartedAt": "2026-10-23T23:45:53.696Z",
+  "verification": {
+    "command": "cd /tmp/moe-m01a-test._mchvbt5/repo/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npm test -- --maxWorkers=4",
+    "exitCode": 0,
+    "outputTail": "Test Files 142 passed (142)\nTests 2511 passed | 19 skipped (2530)\nStart at 02:43:25\nDuration 42.44s. Typecheck: tsc --noEmit --incremental false exited 0. Focused profile/settings tests: 72 passed (72). Four disposable-copy behavior mutants fail as expected; restored source exactly matches tested five files.",
+    "reportedAt": "2026-10-23T23:45:53.696Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "packages/moe-daemon/src/delivery/executionProfile.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/delivery/executionProfile.ts"
+  ],
+  "completionSummary": "Implemented CQ-M01a in exactly five planned files: profile/schema primitives, detached strict snapshot decoding and precedence, and settings validation preserving existing deliveryPolicy. verified-local always returns EXECUTION_PROFILE_NOT_READY; no runner activation or persisted snapshot enforcement. TDD red: 14 expected validator failures. Focused: 72/72 pass; full daemon: 142 files, 2511 passed/19 skipped; TypeScript noEmit clean; four meaningful mutants killed. Existing CRLF/lockfile preserved. Linux-only PATH required to avoid inherited WSL EACCES on deliberately missing binaries."
+}
