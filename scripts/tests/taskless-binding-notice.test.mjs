@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -10,19 +10,27 @@ import { test } from 'node:test';
 // or ownership. This changes diagnostics, NEVER the refusal to guess/land.
 const read = ext => readFileSync(new URL(`../moe-agent.${ext}`, import.meta.url), 'utf8');
 const sh = read('sh'), ps = read('ps1');
-const block = source => source.slice(source.indexOf('        # -------- Adoption boundary'), source.indexOf('        # -------- End adoption boundary'));
+const block = source => {
+  const start = source.indexOf('        # -------- Adoption boundary');
+  const end = source.indexOf('        # -------- End adoption boundary', start);
+  assert.ok(start >= 0 && end > start, 'missing actual adoption boundary');
+  return source.slice(start, end);
+};
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : '/bin/bash';
 const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
 const hasPwsh = spawnSync(pwsh, ['-NoProfile', '-Command', 'exit 0']).status === 0;
 
-for (const engine of ['bash', 'pwsh']) {
+const engines = process.platform === 'win32'
+  ? [['bash', bash], ['powershell', 'powershell.exe'], ['pwsh', pwsh]]
+  : [['bash', bash], ['pwsh', pwsh]];
+for (const [engine, executable] of engines) {
   for (const held of ['', 'task-other', 'task-fixture']) {
     test(`${engine}: taskless dirty-tree notice distinguishes held=${held || 'unknown'}`, { skip: engine === 'pwsh' && !hasPwsh }, () => {
       const dir = mkdtempSync(path.join(tmpdir(), 'moe-binding-notice-'));
       const file = path.join(dir, engine === 'bash' ? 'notice.sh' : 'notice.ps1');
       const notice = path.join(dir, 'notice.json');
       const script = engine === 'bash' ? `set -euo pipefail
-PYTHON_CMD=python3; GENERAL_CHANNEL_ID=general; WORKER_ID=worker-fixture
+PYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}; GENERAL_CHANNEL_ID=general; WORKER_ID=worker-fixture
 MOE_TOP=/no-real-repo; PREFLIGHT_HELD_TASK_ID='${held}'
 git() { printf ' M peer.txt\\0'; }
 moe_rpc() { if [ "$1" = get_context ]; then printf '{"task":{"id":"task-fixture"}}'; else printf '%s' "$2" > "$NOTICE_FILE"; fi; }
@@ -36,18 +44,30 @@ function Invoke-MoeRpc { param($Tool, [Alias('Args')]$RpcArgs)
 }
 ` + block(ps);
       try {
-        writeFileSync(file, script);
-        const r = spawnSync(engine === 'bash' ? bash : pwsh,
+        writeFileSync(file, engine === 'bash' ? script : '\ufeff' + script);
+        const r = spawnSync(executable,
           engine === 'bash' ? [file.replaceAll('\\', '/')] : ['-NoProfile', '-NonInteractive', '-File', file],
-          { encoding: 'utf8', timeout: 20000, env: { ...process.env, NOTICE_FILE: notice } });
+          { encoding: 'utf8', timeout: 20000, env: { ...process.env, NOTICE_FILE: notice.replaceAll('\\', '/') } });
         assert.ifError(r.error);
         assert.equal(r.status, 0, r.stdout + r.stderr);
-        const { content } = JSON.parse(readFileSync(notice, 'utf8'));
+        const retained = held === 'task-fixture';
+        let content = '';
+        if (retained) {
+          assert.equal(existsSync(notice), false, 'retained holds must not repeatedly page governors');
+        } else {
+          const message = JSON.parse(readFileSync(notice, 'utf8'));
+          assert.equal(message.channel, 'general');
+          assert.equal(message.workerId, 'worker-fixture');
+          content = message.content;
+          assert.match(content, /MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE/);
+          assert.match(content, /binding=unverified/);
+          assert.match(content, /Shared dirty paths do not establish this session's ownership/);
+          assert.match(content, /Preserve them and identify their owners/);
+        }
         assert.match(r.stdout, /MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE/);
-        assert.match(content, /MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE/);
-        assert.match(content, new RegExp(`binding=${held === 'task-fixture' ? 'retained' : 'unverified'}`));
-        assert.match(content, /Shared dirty paths do not establish this session's ownership/);
-        assert.match(content, /Preserve them and identify their owners/);
+        assert.match(r.stdout, new RegExp(`binding=${retained ? 'retained' : 'unverified'}`));
+        assert.match(r.stdout, /Shared dirty paths do not establish this session's ownership/);
+        assert.match(r.stdout, /Preserve them and identify their owners/);
         assert.doesNotMatch(content + r.stdout, /a session launched with no task ended holding one|left 1 dirty|A human must land or discard/);
       } finally {
         for (const f of [file, notice]) { try { unlinkSync(f); } catch (e) { if (e.code !== 'ENOENT') throw e; } }

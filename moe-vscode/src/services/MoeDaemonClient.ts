@@ -6,7 +6,6 @@ import { spawn } from 'child_process';
 import WebSocket from 'ws';
 import type {
     Task,
-    ImplementationStep,
     Epic,
     MoeStateSnapshot,
     ConnectionState,
@@ -17,7 +16,6 @@ import type {
     TaskPriority,
     EpicStatus,
     ProjectSettings,
-    Project,
     ChatMessage,
     ChatChannel,
     PinEntry,

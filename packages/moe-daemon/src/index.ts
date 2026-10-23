@@ -1053,6 +1053,11 @@ async function main() {
   const { command, projectPath, port, name, host } = parseArgs();
 
   switch (command) {
+    case '--version':
+    case '-v':
+    case 'version':
+      process.stdout.write(`${VERSION}\n`);
+      break;
     case 'start':
       await superviseDaemon(projectPath, port, host);
       break;
@@ -1080,7 +1085,7 @@ async function main() {
       break;
     }
     default:
-      logger.info('Usage: moe-daemon [start|stop|status|init|doctor] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
+      logger.info('Usage: moe-daemon [start|stop|status|init|doctor|version] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
       logger.info('       moe-daemon accounts [list|add|login|logout|check|remove] (Claude subscription accounts; see `accounts help`)');
       logger.info('Note: `init` now starts the daemon and keeps running.');
   }

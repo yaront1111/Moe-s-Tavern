@@ -156,6 +156,22 @@ test('Windows unsupported Node is upgraded before installation continues', optio
   assert.match(result.calls, /OpenJS.NodeJS.LTS/);
 });
 
+for (const version of ['v22.12.0', 'v22.21.1']) {
+  test(`Windows Node ${version} below the daemon minimum is upgraded`, options, t => {
+    const result = run(t, { nodeVersion: version });
+    pass(result);
+    assert.match(result.calls, /OpenJS.NodeJS.LTS/);
+  });
+}
+
+for (const version of ['v22.22.0', 'v22.23.1', 'v24.0.0', 'v26.0.0']) {
+  test(`Windows supported Node ${version} is reused`, options, t => {
+    const result = run(t, { nodeVersion: version });
+    pass(result);
+    assert.doesNotMatch(result.calls, /OpenJS.NodeJS.LTS/);
+  });
+}
+
 test('Windows missing winget fails with App Installer recovery instructions', options, t => {
   const result = run(t, { tools: [] });
   assert.notEqual(result.status, 0);

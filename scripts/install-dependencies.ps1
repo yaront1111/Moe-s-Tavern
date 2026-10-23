@@ -57,7 +57,7 @@ function Test-MoeNodeVersion {
     if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '^v?(\d+)\.(\d+)\.(\d+)$') { return $false }
     $major = [int]$Matches[1]
     $minor = [int]$Matches[2]
-    return (($major -eq 22 -and $minor -ge 12) -or $major -eq 24 -or $major -eq 26)
+    return (($major -eq 22 -and $minor -ge 22) -or $major -eq 24 -or $major -eq 26)
 }
 
 function Install-MoeWinGetPackage([string]$Id) {
@@ -127,7 +127,7 @@ Update-MoeInstallPath
 if (-not (Test-MoeNodeVersion) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) {
     Install-MoeWinGetPackage 'OpenJS.NodeJS.LTS'
 }
-if (-not (Test-MoeNodeVersion)) { throw 'A supported Node.js version is required (22.12+, 24 LTS, or 26). Reopen PowerShell after installation, or update your Node version manager to Node 24.' }
+if (-not (Test-MoeNodeVersion)) { throw 'A supported Node.js version is required (22.22+, 24 LTS, or 26). Reopen PowerShell after installation, or update your Node version manager to Node 24.' }
 Assert-MoeCommand 'node'
 Assert-MoeCommand 'npm'
 $npmPrefix = (npm config get prefix | Out-String).Trim()

@@ -57,9 +57,10 @@ chmod -R 755 .moe/
 
 **Symptom:** Syntax errors or missing features.
 
-**Solution:** Ensure Node.js 18+ is installed:
+**Solution:** Use Node.js 22.22+, 24 LTS (recommended), or 26. Node.js 18/20 and
+Node.js 22.12–22.21 cannot run the current daemon dependencies:
 ```bash
-node --version  # Should be v18.x or higher
+node --version  # Use v22.22+ on the 22.x line, v24.x (recommended), or v26.x
 ```
 
 #### daemon.json is stale

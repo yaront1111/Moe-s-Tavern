@@ -2,6 +2,15 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 
+interface AntigravityApi {
+    registerMcpServer?: (server: {
+        name: string;
+        command: string;
+        args: string[];
+        cwd: string;
+    }) => void;
+}
+
 /**
  * Detect whether the extension is running inside Antigravity (VS Code fork)
  * rather than vanilla VS Code.
@@ -29,7 +38,7 @@ export function registerMcpServer(
         }
         // Antigravity exposes an MCP registration API on the vscode namespace.
         // If the API is not available, this is a no-op.
-        const antigravityApi = (vscode as any).antigravity;
+        const antigravityApi = (vscode as typeof vscode & { antigravity?: AntigravityApi }).antigravity;
         if (antigravityApi?.registerMcpServer) {
             antigravityApi.registerMcpServer({
                 name: 'moe-proxy',
@@ -39,7 +48,13 @@ export function registerMcpServer(
             });
             outputChannel.appendLine('Registered moe-proxy as Antigravity MCP server');
         }
-    } catch (err: any) {
-        outputChannel.appendLine(`Antigravity MCP registration failed: ${err.message}`);
+    } catch (err) {
+        let message = 'Unknown error';
+        try {
+            message = err instanceof Error ? err.message : String(err);
+        } catch {
+            // A third-party API can throw an object that rejects coercion.
+        }
+        outputChannel.appendLine(`Antigravity MCP registration failed: ${message}`);
     }
 }

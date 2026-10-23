@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import type { ChatChannel, ChatMessage, PinEntry, Decision } from '../types/moe';
+import type { ChatMessage } from '../types/moe';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
     public static readonly viewType = 'moe.chat';
@@ -110,9 +110,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
 
     resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        _context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken
+        webviewView: vscode.WebviewView
     ): void {
         // Release any listeners from a prior view to avoid leaking handlers
         // when the webview is re-resolved (visibility toggle, reload).
