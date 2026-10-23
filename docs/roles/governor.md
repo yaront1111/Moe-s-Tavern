@@ -40,6 +40,7 @@ What you'll see in `#governors`:
 | `CHECKPOINT-UNPUSHED` / `PUSH FAILED` | Wrapper post-flight | Commit exists locally only (`pull --rebase` refuses in a dirty shared checkout) | Visibility, not loss — push by hand or let the next landing retry |
 | `MOE_ATTRIBUTION_UNRESOLVED` | `record_commit` (once per task per 24h) | Changed paths nobody declared were left unstaged because another worker was live | Find the owner; `moe.declare_files { taskId, paths }` onto that task so its next exit lands them |
 | `NO-COMPLETION-COMMIT` | `moe.qa_approve` | QA approved with no completion commit recorded for this review round | Re-check `task.commits` a minute later (post-flight race); still empty → read `task.lastCommitOutcome` |
+| _(no banner)_ REVIEW row QA keeps passing over | Finalizing hold (`claim_next_task` / `wait_for_task` skip it, `qa_approve` refuses it) | The row's attempt is still `finalizing`: no runner called `moe.finalize_attempt`. Typical for a seat run outside the moe-agent wrapper, whose attempt records no `processStartedAt`/`host` | Ask that seat to call `moe.finalize_attempt { outcome: 'landed', landedRevision: <pushed sha> }`; its `complete_task` hint names the call. If the seat is gone, verify the commit is on the delivery target, then, with the human's nod, finalize it `landed` yourself and `record_commit` it. Use `failed` only when the bytes did not land; never record an outcome you have not verified |
 
 ## Runtime-driven workflow
 
@@ -47,7 +48,7 @@ Follow `nextAction` on every Moe tool response. On `moe.claim_next_task` the dae
 
 1. `moe.chat_wait` blocks until a signal lands in `#governors` (or you're @mentioned anywhere).
 2. Triage the signal against the cheat sheet above.
-3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict), `unblock_worker` (seat-only by default; `resolveBlocks: true` clears the task's block), `set_task_dependencies` (fix a mis-declared `dependsOn` that is withholding a row from WORKING claims), `declare_files` (attribute stranded paths to the task that edited them).
+3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict), `unblock_worker` (seat-only by default; `resolveBlocks: true` clears the task's block), `set_task_dependencies` (fix a mis-declared `dependsOn` that is withholding a row from WORKING claims), `set_task_priority` (change which row is claimed next; never preempts a running task — see the reference), `declare_files` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
 If `nextAction` includes `recommendedSkill`, load that skill before calling the hinted tool.

@@ -9,7 +9,7 @@ export function deregisterWorkerTool(_state: StateManager): ToolDefinition {
     description:
       'Deregister a worker: FIRST close every attempt of this worker still in the finalizing phase (keyed on the attempt, ' +
       'so it works even after the worker record was pruned, and an exiting runner cannot wedge its row), then release every ' +
-      'task it held, mark the record DEAD (kept, not deleted) and post chat-leave messages. ' +
+      'task it held (dropping their leases and queue entries on resources declared releaseOnDeregister), mark the record DEAD (kept, not deleted) and post chat-leave messages. ' +
       'Called by the agent wrapper shell trap on terminal close (try/finally in moe-agent.ps1, ' +
       'trap EXIT in moe-agent.sh). Idempotent — a repeat call on a DEAD worker that holds no task is a quiet ' +
       'close-only retry: it retries a failed finalizing close and posts nothing.',

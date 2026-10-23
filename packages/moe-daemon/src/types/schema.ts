@@ -124,6 +124,8 @@ export interface RoutingSettings {
   light?: TierLaunch;
   standard?: TierLaunch;
   heavy?: TierLaunch;
+  /** Reviewer floor: a qa seat launches at no less than `effort` (default xhigh) and on `model` when set. */
+  qa?: TierLaunch;
 }
 
 /**
@@ -768,6 +770,11 @@ export interface Task {
    * permanently stick a row.
    */
   dependsOn?: string[];
+  /**
+   * Claim rank: claim_next_task, wait_for_task and resource queues order by
+   * priority first. Set at create_task; changed on the board (UPDATE_TASK) or
+   * via moe.set_task_priority (governor).
+   */
   priority: TaskPriority;
   order: number;
   createdAt: string;
@@ -936,6 +943,8 @@ export interface Worker {
   errorCount: number;
   teamId: string | null;
   chatCursors?: Record<string, string>; // channelId → lastReadMessageId (default: {})
+  /** Claude account the seat's current claude launch runs under (moe.lease_account); null/absent when not rotating. */
+  accountId?: string | null;
 }
 
 // =============================================================================
@@ -981,7 +990,50 @@ export interface ResourceSettings {
   capacity?: number;
   /** Hard lease cap in ms before the reaper force-releases. default: 86400000 (24h) */
   maxLeaseMs?: number;
+  /**
+   * When the seat holding a task deregisters, drop that task's lease and queue
+   * entry and grant the freed slot onward. Only for resources whose work dies
+   * with its seat (a build slot); leave it off for an exclusive stateful host,
+   * where a dead holder may have left the host dirty. default: false
+   */
+  releaseOnDeregister?: boolean;
   description?: string;
+}
+
+// =============================================================================
+// Claude account rotation — the machine's Claude subscription accounts
+// (accounts/registry.ts) plus the usage the daemons learned for them
+// (state/accountStore.ts). Served in the snapshot and ACCOUNTS_UPDATED.
+// Holds no credential: ids, labels, sign-in states and usage numbers.
+// =============================================================================
+
+export interface AccountView {
+  id: string;
+  label: string;
+  /** Only "subscription" accounts are leased. */
+  signIn: 'subscription' | 'signed_out' | 'other';
+  signInCheckedAt: string | null;
+  /** Live usage windows by name ("five_hour", "seven_day", …). */
+  windows: Record<string, { percent: number | null; resetsAt: string | null }>;
+  /** Highest live percent; null before any report. */
+  peakPercent: number | null;
+  /** When usage or a refusal stops blocking the account; null when it does not block it now. */
+  blockedUntil: string | null;
+  /** The account the next lease would pick. */
+  active: boolean;
+  /** Non-DEAD workers whose current launch runs under this account. */
+  seats: string[];
+}
+
+export interface AccountRotationView {
+  registryFile: string;
+  switchAtPercent: number;
+  /** Why the registry cannot be used (rotation is off until it is fixed); null when it is fine. */
+  error: string | null;
+  /** How to run the `accounts` CLI on this machine (the IDE runs sign-in through it). */
+  cli: { node: string; script: string };
+  /** Registry (fill) order. */
+  accounts: AccountView[];
 }
 
 // =============================================================================
@@ -1301,11 +1353,15 @@ export const ACTIVITY_EVENT_TYPES = [
   'TASK_COMMIT_RECORDED',
   'TASK_FILES_DECLARED',
   'TASK_DEPENDENCIES_SET',
+  'TASK_PRIORITY_SET',
   'RESOURCE_ACQUIRED',
   'RESOURCE_QUEUED',
   'RESOURCE_RELEASED',
   'RESOURCE_GRANTED',
   'RESOURCE_LEASE_EXPIRED',
+  'ACCOUNT_SWITCHED',
+  'ACCOUNTS_EXHAUSTED',
+  'ACCOUNT_SIGNED_OUT',
   'PROPOSAL_CREATED',
   'PROPOSAL_APPROVED',
   'PROPOSAL_REJECTED',
@@ -1352,6 +1408,7 @@ export interface MoeStateSnapshot {
   channels: ChatChannel[];
   decisions: Decision[];
   resources: ResourceState[];
+  accountRotation: AccountRotationView;
 }
 
 // =============================================================================

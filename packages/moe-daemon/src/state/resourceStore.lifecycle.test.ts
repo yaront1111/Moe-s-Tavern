@@ -40,7 +40,8 @@ describe('resourceStore lifecycle reconciliation', () => {
 
   it('keeps an unassigned dependency waiter queued while granting ready work', async () => {
     h.createTask({ id: 'task-dependency', status: 'PLANNING' });
-    h.createTask({ id: 'task-ready', status: 'WORKING', priority: 'LOW' });
+    h.createTask({ id: 'task-ready', status: 'WORKING', priority: 'LOW', assignedWorkerId: 'worker-ready' });
+    h.createWorker({ id: 'worker-ready', status: 'CODING', currentTaskId: 'task-ready' });
     await loadState();
     await h.state.acquireResource(holder);
     await h.state.acquireResource(waiter);
@@ -62,12 +63,14 @@ describe('resourceStore lifecycle reconciliation', () => {
     expect(readResource().holders).toEqual([]);
     expect(readResource().queue).toEqual([queued]);
 
-    // The normal sweep retries admission once the prerequisite is satisfied.
+    // The normal sweep retries admission once the prerequisite is satisfied. No
+    // live seat holds the row, so it returns to its claim pool unleased and its
+    // entry keeps its place in line for the claimant's acquire.
     await h.state.updateTask('task-dependency', { status: 'DONE' });
     await h.state.reapResources();
-    expect(readResource().holders.map((lease) => lease.taskId)).toEqual([waiter.taskId]);
-    expect(readResource().queue).toEqual([]);
-    expect(h.state.getTask(waiter.taskId)!.status).toBe('WORKING');
+    expect(readResource().holders).toEqual([]);
+    expect(readResource().queue).toEqual([queued]);
+    expect(h.state.getTask(waiter.taskId)).toMatchObject({ status: 'WORKING', assignedWorkerId: null });
   });
 
   it.each(['WORKING', 'BLOCKED'] as const)('queues dependency-unready unassigned %s work even with spare capacity', async (status) => {
@@ -84,7 +87,7 @@ describe('resourceStore lifecycle reconciliation', () => {
     expect(h.state.getTask(waiter.taskId)!.status).toBe(status);
   });
 
-  it.each(['PLANNING', 'REVIEW'] as const)('does not apply WORKING dependencies to %s resource grants', async (phase) => {
+  it.each(['PLANNING', 'REVIEW'] as const)('does not apply WORKING dependencies to %s resource rows', async (phase) => {
     h.createTask({ id: 'task-dependency', status: 'BACKLOG' });
     await loadState();
     await h.state.updateTask(waiter.taskId, {
@@ -92,8 +95,11 @@ describe('resourceStore lifecycle reconciliation', () => {
     });
     await h.state.acquireResource(holder);
     await h.state.acquireResource(waiter);
-    expect((await h.state.releaseResource(holder)).granted.map((lease) => lease.taskId)).toEqual([waiter.taskId]);
-    expect(h.state.getTask(waiter.taskId)!.status).toBe(phase);
+    // Unlike an unready WORKING row, the row is not held back: it reaches its
+    // turn and, with no live seat on it, returns to its phase unleased.
+    expect((await h.state.releaseResource(holder)).granted).toEqual([]);
+    expect(h.state.getTask(waiter.taskId)).toMatchObject({ status: phase, assignedWorkerId: null });
+    expect(readResource().queue.map((entry) => entry.taskId)).toEqual([waiter.taskId]);
   });
 
   it('does not withhold a grant from an already assigned worker', async () => {
@@ -184,7 +190,9 @@ describe('resourceStore lifecycle reconciliation', () => {
     expect(restored.status).toBe('WORKING');
     expect(restored.assignedWorkerId).toBeNull();
     expect(h.state.isTaskClaimable(restored)).toBe(true);
-    expect(readResource().holders.map((lease) => lease.taskId)).toEqual([waiter.taskId]);
+    // No lease is reserved for a row nobody holds; its entry waits for the claimant.
+    expect(readResource().holders).toEqual([]);
+    expect(readResource().queue.map((entry) => entry.taskId)).toEqual([waiter.taskId]);
   });
 
   const absentOwners: Array<{ name: string; overrides?: Partial<Worker> }> = [

@@ -29,7 +29,7 @@ INTERNAL_PLUMBING='^(MOE_ATTR_UNDECLARED|MOE_ATTR_EXCLUDE|MOE_ATTR_POLICY_OVERRI
 extract_codes() { # $1 = file, $2 = prefix regex
   grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | sort -u || true
 }
-for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_'; do
+for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -102,13 +102,27 @@ done
 # Env names.
 for env_name in GIT_TERMINAL_PROMPT MOE_DISABLE_CHECKPOINT MOE_ATTRIBUTION MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF \
   MOE_DISABLE_QUALITY_GATE MOE_RESUME_MAX_ATTEMPTS \
-  MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC; do
+  MOE_CODEX_SANDBOX MOE_CODEX_REASONING_EFFORT MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC \
+  CLAUDE_CODE_PROMPT_CACHE_TTL CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL CLAUDE_CODE_AUTO_COMPACT_WINDOW \
+  MOE_COMPACT_WINDOW_DEFAULT CLAUDE_CODE_PLUGIN_DIRS MOE_DISABLE_COMPACTION_KEEPER \
+  CLAUDE_CONFIG_DIR MOE_ACCOUNT_ID MOE_ACCOUNT_SAMPLE_FILE; do
   require_both "env name" "$env_name"
 done
 
 # Launch-failure prose (the operator reads the same diagnosis from either wrapper).
 for prose in 'run the printed Command by hand' 'a CLI auto-update dropped a flag the wrapper passes'; do
   require_both "launch-failure prose" "$prose"
+done
+
+# Resume-budget prose: a session that completed a plan step re-arms the budget.
+require_both "resume-budget prose" 'resume budget re-armed'
+
+# Claude account rotation: the helper both wrappers call and the lease, wait and
+# relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are compared above).
+for prose in 'moe-account-lease.mjs' '[account] ' 'launching without rotation.' \
+  'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)' \
+  'relaunching on the next account; the held task stays held.' 'Relaunching now on the next account.'; do
+  require_both "account rotation prose" "$prose"
 done
 
 # Agent-CLI vocabulary (claude / codex / gemini / grok): the per-CLI config
@@ -161,7 +175,7 @@ require_both "codex per-task hint" 'Per-task model/effort (launch.codex hint)'
 require_both "codex per-task effort" 'model_reasoning_effort='
 
 # MCP tools the wrappers call for the ledger.
-for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt; do
+for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt lease_account report_account_usage; do
   require_both "RPC tool" "$tool"
 done
 
@@ -203,13 +217,14 @@ for prose in 'delivery receipt not recorded for candidate' 'for the next pre-fli
   require_both "delivery receipt prose" "$prose"
 done
 
-# Runner identity and reattach: the identity line and its warning, the reattach
+# Runner identity and reattach: the identity line and its warning, the env
+# names that hand the identity to an architect/QA/governor CLI, the reattach
 # call and its three outcomes, and the heartbeat's other reasons, spelled
 # identically in both.
-for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequired '[reattach]'; do
+for lit in reattach_attempt processStartedAt attempt-reconciling reattachRequired '[reattach]' MOE_RUNNER_PROCESS_STARTED_AT MOE_RUNNER_HOST; do
   require_both "runner reattach" "$lit"
 done
-for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this wrapper pinned no such reconciling attempt; nothing to reattach.'; do
+for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (' 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.' 'is running again after a daemon restart.' 'moe.reattach_attempt refused for attempt' '; not retrying it.' 'moe.reattach_attempt got no answer for attempt' '; retrying later.' 'heartbeat asks for reattachment (' 'but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach.'; do
   require_both "runner reattach prose" "$prose"
 done
 
@@ -252,6 +267,11 @@ for deferred in recoverOrphanBaselines parkUnassignedBlocked; do
   if grep -Fq -- "$deferred" "$SH"; then fail "deferred setting '$deferred' is referenced by moe-agent.sh"; fi
   if grep -Fq -- "$deferred" "$PS1"; then fail "deferred setting '$deferred' is referenced by moe-agent.ps1"; fi
 done
+
+# Windows PowerShell 5.1 (the JetBrains plugin's native Windows seats) reads a
+# BOM-less script as ANSI and cannot parse moe-agent.ps1's non-ASCII text.
+[ "$(head -c3 "$PS1" | od -An -tx1 | tr -d ' \n')" = efbbbf ] \
+  || fail "moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)"
 
 if [ "$failures" -ne 0 ]; then
   echo "FAIL parity-check.sh: $failures asymmetr$([ "$failures" -eq 1 ] && echo y || echo ies) between moe-agent.sh and moe-agent.ps1" >&2

@@ -168,7 +168,8 @@ describe('moe.get_context status polling', () => {
   it('handles a taskless status query without implying complete context', async () => {
     h.setupMoeFolder();
     await h.state.load();
-    const result = await status();
+    // Taskless means no taskId at all: an explicit id that names no task is NOT_FOUND.
+    const result = await status({ taskId: undefined });
     expect(result).toMatchObject({ contextScope: 'status', requiresFullContext: true, task: null });
     expect(result).not.toHaveProperty('currentCandidate');
     expect(result.nextAction.tool).toBe('moe.get_context');

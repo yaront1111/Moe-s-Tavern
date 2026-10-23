@@ -908,19 +908,57 @@ describe('affected-path existence gate', () => {
 
   it.each(['typo.ts', 'literal*.ts', ':(glob)**'])('still rejects missing literal path %s in the cached ref', async (missing) => {
     const tool = await loadTool({ consolidationBranch: 'main' });
-    cachedBranch(['literal1.ts']);
+    const commit = cachedBranch(['literal1.ts']);
+    const reason = `refs/remotes/origin/main at ${commit.slice(0, 12)} does not contain them either`;
     await expect(tool.handler({ taskId: 'task-exists', steps: [
       { description: 'Change', affectedFiles: [missing] },
-    ] }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT, context: { missingPaths: [missing] } });
+    ] }, state)).rejects.toMatchObject({
+      code: MoeErrorCode.INVALID_INPUT,
+      message: expect.stringContaining(`Cached origin ref check: ${reason}.`),
+      context: { missingPaths: [missing], cachedRefMiss: reason },
+    });
     expect(state.getTask('task-exists')!.status).toBe('PLANNING');
   });
 
-  it.each([undefined, '', 'moe/work-*', 'different'])('does not borrow arbitrary branch evidence for setting %s', async (branch) => {
+  it('names the cached ref when it vouches for some paths but not the rest', async () => {
+    const tool = await loadTool({ consolidationBranch: 'main' });
+    const commit = cachedBranch(['delivered.ts']);
+    await expect(tool.handler({ taskId: 'task-exists', steps: [
+      { description: 'Change', affectedFiles: ['delivered.ts', 'typo.ts'] },
+    ] }, state)).rejects.toMatchObject({
+      code: MoeErrorCode.INVALID_INPUT,
+      message: expect.stringContaining(`typo.ts. Cached origin ref check: refs/remotes/origin/main at ${commit.slice(0, 12)} does not contain them either.`),
+      context: { missingPaths: ['typo.ts'] },
+    });
+    expect(state.getTask('task-exists')!.implementationPlan).toEqual([]);
+  });
+
+  it('puts a failed cached-ref lookup reason in the refusal the seat reads', async () => {
+    const tool = await loadTool({ consolidationBranch: 'main' });
+    const miss = 'git rev-parse --show-toplevel: ENOENT: spawn git ENOENT (3 ms into the 2000 ms budget)';
+    const spy = vi.spyOn(cachedPlanPaths, 'findCachedPlanPaths').mockResolvedValue({ miss });
+    try {
+      await expect(tool.handler({ taskId: 'task-exists', steps: [
+        { description: 'Change', affectedFiles: ['delivered.ts'] },
+      ] }, state)).rejects.toMatchObject({
+        code: MoeErrorCode.INVALID_INPUT,
+        message: expect.stringContaining(`delivered.ts. Cached origin ref check: ${miss}. If an existing file`),
+        context: { missingPaths: ['delivered.ts'], cachedRefMiss: miss },
+      });
+    } finally { spy.mockRestore(); }
+  });
+
+  it.each([
+    [undefined, /^consolidationBranch null is not a literal branch name$/],
+    ['', /^consolidationBranch "" is not a literal branch name$/],
+    ['moe/work-*', /^consolidationBranch "moe\/work-\*" is not a literal branch name$/],
+    ['different', /^git rev-parse --verify: 128: fatal: .* \(\d+ ms into the 2000 ms budget\)$/],
+  ])('does not borrow arbitrary branch evidence for setting %s', async (branch, reason) => {
     const tool = await loadTool({ consolidationBranch: branch });
     cachedBranch(['delivered.ts']);
     await expect(tool.handler({ taskId: 'task-exists', steps: [
       { description: 'Change', affectedFiles: ['delivered.ts'] },
-    ] }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT });
+    ] }, state)).rejects.toMatchObject({ code: MoeErrorCode.INVALID_INPUT, context: { cachedRefMiss: expect.stringMatching(reason) } });
   });
 
   it('rejects a plan citing a missing path with no newFiles declaration', async () => {

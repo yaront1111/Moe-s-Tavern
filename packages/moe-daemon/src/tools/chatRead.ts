@@ -15,7 +15,8 @@ import {
 export function chatReadTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.chat_read',
-    description: 'Read chat messages from a channel with cursor-based pagination. Auto-tracks read position per worker.',
+    description: 'Read chat messages from a channel with cursor-based pagination. Auto-tracks read position per worker. '
+      + 'Skips the daemon\'s status lines in #general (system posts that mention nobody) unless includeSystem is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -26,6 +27,10 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
         maxContentChars: {
           type: 'number',
           description: 'Max chars per message content in the response (default 1000, 0 = full content)'
+        },
+        includeSystem: {
+          type: 'boolean',
+          description: 'Also return the daemon\'s status lines in #general (task moved, claimed, step completed...). Default false.'
         }
       },
       additionalProperties: false
@@ -37,6 +42,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
         sinceId?: string;
         limit?: number;
         maxContentChars?: number;
+        includeSystem?: boolean;
       };
 
       if (params.limit !== undefined && (typeof params.limit !== 'number' || !Number.isFinite(params.limit) || params.limit < 1)) {
@@ -55,6 +61,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       const maxContentChars = params.maxContentChars !== undefined
         ? Math.min(Math.floor(params.maxContentChars), MAX_CHAT_CONTENT_CHARS)
         : DEFAULT_CHAT_CONTENT_CHARS;
+      const hideSystemFeed = params.includeSystem !== true;
 
       // Callers name a channel the way the role docs and the seat pre-flight
       // prompts do ("#general") at least as often as by id. Resolve the
@@ -84,7 +91,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
 
       if (channelId) {
         // Read from a specific channel
-        messages = await state.getMessages(channelId, { sinceId, limit });
+        messages = await state.getMessages(channelId, { sinceId, limit, hideSystemFeed });
       } else {
         // Read from all channels, merge and sort by timestamp
         const channels = state.getChannels();
@@ -98,7 +105,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
           const chSinceId = params.workerId && !params.sinceId
             ? existingCursors[ch.id]
             : sinceId;
-          const chMessages = await state.getMessages(ch.id, { sinceId: chSinceId, limit });
+          const chMessages = await state.getMessages(ch.id, { sinceId: chSinceId, limit, hideSystemFeed });
           allMessages.push(...chMessages);
         }
 

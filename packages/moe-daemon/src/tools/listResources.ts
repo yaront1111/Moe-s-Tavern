@@ -39,6 +39,7 @@ export function listResourcesTool(_state: StateManager): ToolDefinition {
           id,
           capacity: config.capacity,
           maxLeaseMs: config.maxLeaseMs,
+          ...(config.releaseOnDeregister ? { releaseOnDeregister: true } : {}),
           description: config.description,
           holders: (runtime?.holders ?? []).map((h) => ({
             ...h,

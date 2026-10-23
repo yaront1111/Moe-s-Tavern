@@ -122,7 +122,7 @@ describe('chat tools accept a channel name as well as an id', () => {
       // Guards the half of the defect a validation-only fix would leave behind —
       // a resolved-looking filter that matches no message.channel and blocks to
       // timeout on a channel that exists and has traffic.
-      await post(channels.general, 'not in the governors channel', 'system');
+      await post(channels.general, 'not in the governors channel');
 
       const result = await wait({ channels: ['#governors'] });
 
@@ -149,7 +149,7 @@ describe('chat tools accept a channel name as well as an id', () => {
 
   describe('moe.chat_read', () => {
     it('reads a named channel instead of returning an empty page', async () => {
-      const message = await post(channels.general, 'governor online', 'system');
+      const message = await post(channels.general, 'governor online');
 
       const result = await read({ channel: '#general', workerId: WORKER_ID, limit: 10 });
 
@@ -157,7 +157,7 @@ describe('chat tools accept a channel name as well as an id', () => {
     });
 
     it('keys the saved cursor on the canonical id, not on the reference', async () => {
-      const message = await post(channels.general, 'first', 'system');
+      const message = await post(channels.general, 'first');
       await read({ channel: '#general', workerId: WORKER_ID, limit: 10 });
 
       const cursors = state.getWorker(WORKER_ID)?.chatCursors ?? {};
@@ -187,7 +187,7 @@ describe('chat tools accept a channel name as well as an id', () => {
     });
 
     it('threads a reply by name against the resolved channel', async () => {
-      const parent = await post(channels.general, 'parent', 'system');
+      const parent = await post(channels.general, 'parent');
 
       await send({ channel: '#general', content: 'child', workerId: WORKER_ID, replyTo: parent.id });
 

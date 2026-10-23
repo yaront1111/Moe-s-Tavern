@@ -236,6 +236,24 @@ describe('moe.heartbeat', () => {
     expect(fs.existsSync(path.join(h.moePath, 'workers', 'worker-does-not-exist.json'))).toBe(false);
   });
 
+  it('acknowledges a seat that holds no task, refreshing it and writing no attempt', async () => {
+    // A governor, or a seat between claims: nothing to reattach, so the ping
+    // is a plain presence refresh rather than a reattach-required answer.
+    await h.state.createWorker({
+      id: 'governor-hb', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1',
+      currentTaskId: null, status: 'IDLE',
+    });
+    const before = h.state.getWorker('governor-hb')!.lastActivityAt;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const result = await tool().handler({ workerId: 'governor-hb', presenceKind: 'waiting' }, h.state);
+
+    expect(result).toEqual({ ok: true });
+    expect(new Date(h.state.getWorker('governor-hb')!.lastActivityAt).getTime())
+      .toBeGreaterThan(new Date(before).getTime());
+    expect(h.state.attempts.size).toBe(0);
+  });
+
   it('tells a ping whose worker owns no open attempt to reattach', async () => {
     const result = await tool().handler(
       { workerId: 'worker-hb', presenceKind: 'process' },

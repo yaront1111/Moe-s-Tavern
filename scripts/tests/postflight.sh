@@ -5,6 +5,8 @@ set -euo pipefail
 # box also running the other harness) can widen both without editing either file.
 POSTFLIGHT_TIMEOUT_SEC=60
 case "${MOE_POSTFLIGHT_TIMEOUT_SEC:-}" in ''|*[!0-9]*) : ;; *) POSTFLIGHT_TIMEOUT_SEC="$MOE_POSTFLIGHT_TIMEOUT_SEC" ;; esac
+# Claude account rotation stays off unless the [accounts] scenario turns it on.
+export MOE_ACCOUNT_ROTATION=off
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WRAPPER="$ROOT_DIR/scripts/moe-agent.sh"
@@ -319,14 +321,15 @@ if (tool === 'claim_next_task') {
 // FAKE_HEARTBEAT_REATTACH mirrors heartbeat.ts's reattach-required answer: `1`
 // reads the caller's attempt (attempt-reconciling while a restart has it parked,
 // a plain ack otherwise); `other` alternates the two reasons that name no
-// attempt. .moe/heartbeat-count counts the pings.
+// attempt. FAKE_HEARTBEAT_ATTEMPT names the attempt the seat's current task
+// holds (default attempt-postflight). .moe/heartbeat-count counts the pings.
 if (tool === 'heartbeat' && process.env.FAKE_HEARTBEAT_REATTACH) {
   const counter = path.join(moe, 'heartbeat-count');
   const n = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1;
   fs.writeFileSync(counter, String(n));
   const reattach = (reason, a) => ({ok:false,reattachRequired:true,reason,reattachWith:'moe.reattach_attempt',...(a ? {attemptId:a.id,phase:a.phase} : {})});
   let a = null;
-  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts','attempt-postflight.json'),'utf8')); } catch {}
+  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',(process.env.FAKE_HEARTBEAT_ATTEMPT || 'attempt-postflight')+'.json'),'utf8')); } catch {}
   if (process.env.FAKE_HEARTBEAT_REATTACH === 'other') ok(reattach(n % 2 ? 'no-worker-record' : 'no-open-attempt'));
   else ok(a && a.workerId === args.workerId && a.phase === 'reconciling' ? reattach('attempt-reconciling', a) : {ok:true});
   process.exit(0);
@@ -440,11 +443,12 @@ switch (tool) {
   }
   case 'get_context': {
     // Mirrors getContext.ts: the task projection carries NO epicId and NO order
-    // (the resolved epic comes back alongside it instead), and an unresolvable
-    // taskId falls back to the CALLER's currentTaskId rather than erroring --
-    // so a stale id silently answers with a different task.
+    // (the resolved epic comes back alongside it instead). Daemons before the
+    // explicit-taskId NOT_FOUND fix let an unresolvable taskId fall back to the
+    // CALLER's currentTaskId rather than erroring -- so a stale id silently
+    // answered with a different task.
     // 'empty'    => daemon answered but carried no task.
-    // 'mismatch' => the real fallback: some OTHER task comes back.
+    // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
     if (!args.taskId) {
       const adopted = process.env.FAKE_ADOPTED_TASK_ID;
       ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
@@ -606,6 +610,25 @@ switch (tool) {
     ok({ success: true });
     break;
   }
+  case 'lease_account':
+  case 'report_account_usage': {
+    // leaseAccount.ts in miniature, for the [accounts] scenario: no rotation
+    // without FAKE_ACCOUNT_HOME; with FAKE_ACCOUNT_WAIT_ONCE the first lease
+    // finds every account spent; otherwise the first of acct-1, acct-2 that no
+    // report refused or signed out. Every call is logged.
+    const log = path.join(moe, 'account-rpcs.jsonl');
+    const rows = readRows(log);
+    fs.appendFileSync(log, JSON.stringify({ tool, args }) + '\n');
+    if (tool === 'report_account_usage') { ok({ recorded: true, blockedUntil: null, peakPercent: null }); break; }
+    const home = process.env.FAKE_ACCOUNT_HOME;
+    const spent = { rotation: true, accountId: null, retryAt: new Date(Date.now() + 3600000).toISOString(), retryInSec: 3600, switchAtPercent: 90 };
+    if (!home) { ok({ rotation: false, reason: null }); break; }
+    if (process.env.FAKE_ACCOUNT_WAIT_ONCE && !rows.some(r => r.tool === 'lease_account')) { ok(spent); break; }
+    const parked = new Set(rows.filter(r => r.tool === 'report_account_usage' && (r.args.refused === true || r.args.signIn)).map(r => r.args.accountId));
+    const id = ['acct-1', 'acct-2'].find(a => !parked.has(a));
+    ok(id ? { rotation: true, accountId: id, label: id, configDir: path.join(home, id), peakPercent: id === 'acct-1' ? 12.5 : null, switchAtPercent: 90 } : spent);
+    break;
+  }
   default: ok({ success: true });
 }
 JS
@@ -633,7 +656,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'freed-closed','freed-generation-bump','freed-corrupt-sibling','finalizing-acked-continues','unborn','cleanup-retry','hidden-mutation',
 'receipt-replay','receipt-cached-check','receipt-same-tree-race','receipt-push','receipt-push-failed','receipt-refused','receipt-conflict',
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
-'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none',
+'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
 'teardown-finalizing','teardown-manual','teardown-no-git','teardown-sha256','teardown-no-baseline','teardown-recovered','teardown-scope','teardown-landed','teardown-nothing','teardown-running'];
 // Loop modes run --loop: the fake daemon answers the second claim idle, and the
@@ -798,6 +821,20 @@ if((mode==='reattach-sidecar'||mode==='reattach-refused')&&fs.existsSync(file)){
  else{waitFor(()=>fs.existsSync(moeFile('evidence-rpcs.jsonl'))&&fs.readFileSync(moeFile('evidence-rpcs.jsonl'),'utf8').includes('reattach_attempt'),60000);
   const pings=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>=pings+3,30000);}}
 if(mode==='reattach-none')waitFor(()=>count('heartbeat-count')>=3,30000);
+// reattach-session: the restart parks an attempt of this seat that the wrapper
+// did not pin -- a row the agent claimed inside its session, which moe-proxy
+// stamped with the wrapper's identity. The sidecar reattaches the attempt the
+// heartbeat names while the session runs; the CLI records the phase it saw.
+if(mode==='reattach-session'&&fs.existsSync(file)){const pinned=JSON.parse(fs.readFileSync(file,'utf8')),session=moeFile('attempts/attempt-session.json');
+ const sessionPhase=()=>{try{return JSON.parse(fs.readFileSync(session,'utf8')).phase;}catch(e){return '';}};
+ fs.writeFileSync(session,JSON.stringify({id:'attempt-session',generation:3,taskId:'task-session',workerId:pinned.workerId,runnerId:pinned.workerId,
+  phase:'reconciling',processStartedAt:pinned.processStartedAt,host:pinned.host,workspace:dir,startedAt:new Date().toISOString(),lastPhaseAt:new Date().toISOString()}));
+ waitFor(()=>sessionPhase()==='running',60000);fs.writeFileSync(moeFile('cli-saw-phase'),sessionPhase());
+ // One more ping after the reattach: the sidecar is sequential, so its line is out.
+ const seen=count('heartbeat-count');waitFor(()=>count('heartbeat-count')>seen,30000);}
+// identity-claim: a worker CLI never gets the runner identity, not even one
+// inherited from an outer seat (the harness sets one).
+if(mode==='identity-claim')fs.writeFileSync(moeFile('cli-runner-env'),JSON.stringify([process.env.MOE_RUNNER_PROCESS_STARTED_AT??null,process.env.MOE_RUNNER_HOST??null]));
 if(fs.existsSync(file)){const a=JSON.parse(fs.readFileSync(file,'utf8'));if(!exitOnly)a.phase='finalizing';
 if(mode.endsWith('-reconciling')||mode==='reattach-postflight')a.phase='reconciling';
 if(mode==='closed-attempt'||mode==='freed-closed'||qaClaimed)a.phase='closed';if(mode==='stale-attempt'||mode==='freed-generation-bump')a.generation++;if(mode==='missing-attempt')fs.unlinkSync(file);else fs.writeFileSync(file,JSON.stringify(a));}
@@ -837,9 +874,11 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running)$/.
   if(mode.startsWith('freed-'))env.FAKE_TASK_STATUS='BLOCKED';
   if(mode.endsWith('-unpinned'))env.FAKE_CLAIM_TOKENS='missing';
   // Reattach arms: the sidecar pings every second against the fake heartbeat.
-  if(['reattach-sidecar','reattach-refused','reattach-none'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
+  if(['reattach-sidecar','reattach-refused','reattach-none','reattach-session'].includes(mode)){delete env.MOE_DISABLE_HEARTBEAT;env.MOE_HEARTBEAT_INTERVAL_SEC='1';
     env.FAKE_HEARTBEAT_REATTACH=mode==='reattach-none'?'other':'1';}
   if(mode==='reattach-refused')env.FAKE_REATTACH_REFUSE='1';
+  if(mode==='reattach-session')env.FAKE_HEARTBEAT_ATTEMPT='attempt-session';
+  if(mode==='identity-claim'){env.MOE_RUNNER_PROCESS_STARTED_AT='1@outer-seat';env.MOE_RUNNER_HOST='outer-host';}
   if(mode==='reattach-preflight')env.FAKE_ATTEMPT_PHASE='reconciling';
   if(mode==='finalize-loss'||mode==='loop-land-twice'||loopModes.includes(mode)){
     args[args.indexOf(win?'-NoLoop':'--no-loop')]=win?'-Loop':'--loop';
@@ -954,9 +993,15 @@ exit "$rc"
     assert.deepEqual(pair(c),pair(claims[0]),'one identity per wrapper process\n'+log);}
   if(mode==='identity-claim'){assert.ok(claims.length>=2,log);
     assert.deepEqual(pair(JSON.parse(read(path.join(nested,'.moe','attempts','attempt-postflight.json')))),pair(claims[0]),
-      'the claim recorded the pair on the attempt it opened\n'+log);}
+      'the claim recorded the pair on the attempt it opened\n'+log);
+    assert.deepEqual(JSON.parse(read(path.join(nested,'.moe','cli-runner-env'))),[null,null],'a worker CLI gets no runner identity\n'+log);}
   const reattaches=rpc.filter(r=>r.tool==='reattach_attempt').map(r=>r.args),said=s=>log.split(s).length-1;
-  if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
+  if(mode==='reattach-session'){const r=reattaches[0]||{};
+    assert.equal(reattaches.length,1,'exactly one reattach, for the attempt the heartbeat named\n'+log);
+    assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-session','worker-frozen','attempt-session',3,...pair(claims[0])],log);
+    assert.equal(read(path.join(nested,'.moe','cli-saw-phase')),'running','the sidecar reattached it while the session ran\n'+log);
+    assert.equal(said('attempt attempt-session (generation 3) on task task-session is running again after a daemon restart.'),1,log);
+  }else if(['reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','checkpoint-reconciling','manual-reconciling'].includes(mode)){
     const r=reattaches[0]||{};
     assert.equal(reattaches.length,1,'exactly one reattach for the one parked attempt\n'+log);
     assert.deepEqual([r.taskId,r.workerId,r.attemptId,r.generation,...pair(r)],['task-postflight','worker-frozen','attempt-postflight',7,...pair(claims[0])],log);
@@ -1538,16 +1583,211 @@ if grep -Fqx -- '--print' "$CLI_ARGS_FILE"; then
   exit 1
 fi
 
+# --- [accounts] Account rotation (twin: the [accounts] block in postflight.ps1).
+# A claude launch whose account is refused at its limit, or found signed out,
+# relaunches at once on the next account, even under --no-loop and without the
+# launch-failure backoff; a lease that finds every account spent waits and
+# leases again. The fake CLI tells its account by CLAUDE_CONFIG_DIR and answers
+# `auth status --json` like claude; no token may reach it or the sign-in probe,
+# and no directory may reach the daemon. Three runs are sh-only: an account
+# signed in some other way (state=other; its email and org must go nowhere),
+# no rotation (the daemon answers rotation:false: nothing printed, env kept),
+# and an interactive seat (--mcp-config, and the --settings statusline that
+# writes the usage sample). ---
+ACCT_HOME="$TMP_DIR/acct-home"
+mkdir -p "$ACCT_HOME/acct-1" "$ACCT_HOME/acct-2"
+ACCT_LOG="$TMP_DIR/acct-cli.log"
+ACCT_ARGV="$TMP_DIR/acct-argv.log"
+ACCT_PROBES="$TMP_DIR/acct-probes.log"
+ACCT_STATUS="$TMP_DIR/acct-status.log"
+ACCT_RPCS="$PROJECT_DIR/.moe/account-rpcs.jsonl"
+ACCT_RESET=$(( $(date +%s) + 3600 ))
+ACCT_SPENT_EVENT='{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":'"$ACCT_RESET"',"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":1,"resetsAt":'"$ACCT_RESET"'}}}}'
+ACCT_FINE_EVENT='{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":'"$ACCT_RESET"',"rateLimitType":"five_hour","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.42,"resetsAt":'"$ACCT_RESET"'}}}}'
+ACCT_STATUS_INPUT='{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":91.5,"resets_at":'"$ACCT_RESET"'}}}'
+ACCT_CLI="$TMP_DIR/acct-cli"
+# FAKE_ACCT_MODE: unset = acct-1 is spent, signout = acct-1 is signed out,
+# other = acct-1 is signed in some other way, fine = every account works.
+cat > "$ACCT_CLI" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN+x}\${ANTHROPIC_API_KEY+x}\${ANTHROPIC_AUTH_TOKEN+x}" ]; then token=set; else token=unset; fi
+if [ "\${1:-}" = auth ]; then
+  echo "dir=\${CLAUDE_CONFIG_DIR-} token=\$token \$*" >> "$ACCT_PROBES"
+  if [ "\${CLAUDE_CONFIG_DIR-}" = "$ACCT_HOME/acct-1" ]; then
+    case "\${FAKE_ACCT_MODE-}" in
+      signout) echo '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}'; exit 1 ;;
+      other) echo '{"loggedIn":true,"authMethod":"console","apiProvider":"firstParty","email":"seat@example.com","orgId":"org-postflight","orgName":"Example Org"}'; exit 0 ;;
+    esac
+  fi
+  echo '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"seat@example.com","orgId":"org-postflight","orgName":"Example Org"}'
+  exit 0
+fi
+echo "dir=\${CLAUDE_CONFIG_DIR-} token=\$token" >> "$ACCT_LOG"
+printf '%s\n' "\$@" >> "$ACCT_ARGV"
+settings="" prev=""
+for a in "\$@"; do
+  [ "\$prev" != --settings ] || settings="\$a"
+  prev="\$a"
+done
+if [ -n "\$settings" ]; then
+  # What claude does with a statusLine command: runs it through a shell after
+  # a message, the session's JSON on stdin.
+  cmd=\$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).statusLine.command)' "\$settings")
+  printf '%s' '$ACCT_STATUS_INPUT' | sh -c "\$cmd" >> "$ACCT_STATUS"
+  exit 0
+fi
+if [ "\${FAKE_ACCT_MODE-}" != fine ] && [ "\${CLAUDE_CONFIG_DIR-}" = "$ACCT_HOME/acct-1" ]; then
+  case "\${FAKE_ACCT_MODE-}" in signout|other) exit 1 ;; esac
+  echo '$ACCT_SPENT_EVENT'
+  exit 1
+fi
+echo '$ACCT_FINE_EVENT'
+exit 0
+EOF
+chmod +x "$ACCT_CLI"
+
+ACCT_CHECK="$TMP_DIR/accounts-check.cjs"
+cat > "$ACCT_CHECK" <<'ACCTJS'
+// One [accounts] run: node accounts-check.cjs <name> <exit> <wrapper out> <rpcs> <launches> <argv> <probes> <statusline> <home> <.mcp.json>
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const [name, code, outFile, rpcFile, launchFile, argvFile, probeFile, statusFile, home, mcpFile] = process.argv.slice(2);
+const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
+const lines = (file) => read(file).split('\n').filter(Boolean);
+const out = read(outFile).replace(/\x1b\[[0-9;]*m/g, '');
+const rpcText = read(rpcFile);
+const rpcs = lines(rpcFile).map((line) => JSON.parse(line));
+const leases = rpcs.filter((r) => r.tool === 'lease_account');
+const reports = rpcs.filter((r) => r.tool === 'report_account_usage').map((r) => r.args);
+const argv = lines(argvFile);
+const reset = Number(process.env.ACCT_RESET);
+const launch = (id) => `dir=${path.join(home, id)} token=unset`;
+const probe = (id) => `dir=${path.join(home, id)} token=unset auth status --json`;
+const want = (...texts) => texts.forEach((text) => assert.ok(out.includes(text), `expected '${text}'`));
+const after = (flag) => argv[argv.indexOf(flag) + 1];
+function relaunched(state) {
+  want(`[account] MOE_ACCOUNT_SIGNED_OUT account=acct-1 state=${state} - relaunching on the next account; the held task stays held.`,
+    '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2');
+  assert.deepEqual(lines(launchFile), [launch('acct-1'), launch('acct-2')]);
+  assert.deepEqual(lines(probeFile), [probe('acct-1')], 'expected one sign-in probe of acct-1, token-free');
+  assert.deepEqual(reports.filter((r) => r.signIn), [{ workerId: `qa-accounts-${name}`, accountId: 'acct-1', signIn: state }]);
+}
+try {
+  assert.equal(code, '0', `wrapper exited with ${code}`);
+  assert.ok(!out.includes('[launch-failure]'), 'an account relaunch must not take the launch-failure path');
+  assert.ok(!rpcText.includes('acct-home'), 'an account directory reached the daemon');
+  if (name !== 'interactive') {
+    assert.ok(argv.includes('--print'), 'expected one-shot launches');
+    assert.ok(!argv.includes('--mcp-config') && !argv.includes('--settings'), 'a one-shot launch takes no --mcp-config or --settings');
+  }
+  switch (name) {
+    case 'refused': {
+      want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%',
+        '[account] MOE_ACCOUNT_REFUSED account=acct-1 exit=1 - relaunching on the next account; the held task stays held.',
+        '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2',
+        '[account] MOE_ACCOUNT_LEASED account=acct-2 usage=unknown');
+      assert.deepEqual(lines(launchFile), [launch('acct-1'), launch('acct-2')]);
+      assert.equal(leases.length, 2, 'expected two leases');
+      assert.deepEqual(lines(probeFile), [], 'a refusal needs no sign-in probe');
+      assert.deepEqual(reports, [
+        { workerId: 'qa-accounts-refused', accountId: 'acct-1', refused: true,
+          windows: { five_hour: { utilization: 1, resetsAt: reset, status: 'rejected' } } },
+        { workerId: 'qa-accounts-refused', accountId: 'acct-2', refused: false,
+          windows: { five_hour: { utilization: 0.42, resetsAt: reset, status: 'allowed' } } },
+      ]);
+      break;
+    }
+    case 'signout':
+      relaunched('signed_out');
+      break;
+    case 'other':
+      relaunched('other');
+      for (const text of ['example.com', 'Example Org', 'org-postflight']) {
+        assert.ok(!out.includes(text) && !rpcText.includes(text), `'${text}' from auth status --json escaped`);
+      }
+      break;
+    case 'wait':
+      want('[account] MOE_ACCOUNT_WAIT retry_in=1s next_reset=',
+        ' - every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', '[account] MOE_ACCOUNT_LEASED account=acct-1');
+      assert.deepEqual(lines(launchFile), [launch('acct-1')]);
+      assert.equal(leases.length, 2, 'expected a spent lease, then a granted one');
+      break;
+    case 'none':
+      assert.ok(!out.includes('[account]'), 'rotation:false must print nothing');
+      assert.deepEqual(lines(launchFile), ['dir= token=set'], 'an unrotated launch keeps the environment');
+      assert.equal(leases.length, 1, 'expected one lease');
+      assert.deepEqual(reports, [], 'nothing to report without a lease');
+      break;
+    case 'interactive':
+      want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%');
+      assert.deepEqual(lines(launchFile), [launch('acct-1')]);
+      assert.ok(!argv.includes('--print'), 'expected the TUI');
+      assert.equal(fs.realpathSync(after('--mcp-config') || '.'), fs.realpathSync(mcpFile), 'expected --mcp-config <project>/.mcp.json');
+      assert.equal(path.basename(after('--settings') || ''), 'account-settings.json', 'expected --settings with the statusline');
+      assert.deepEqual(lines(statusFile), ['Opus | acct-1 | 5h 91%']);
+      assert.deepEqual(reports, [{ workerId: 'qa-accounts-interactive', accountId: 'acct-1', refused: false,
+        windows: { five_hour: { percent: 91.5, resetsAt: reset } } }]);
+      break;
+    default:
+      throw new Error(`unknown run ${name}`);
+  }
+} catch (error) {
+  console.error(out);
+  console.error(`launches: ${JSON.stringify(lines(launchFile))}\nprobes: ${JSON.stringify(lines(probeFile))}\nrpcs: ${rpcText}`);
+  console.error(`[accounts] ${name}: ${error.message}`);
+  process.exit(1);
+}
+ACCTJS
+
+# run_accounts <name> [VAR=value...]: one --no-loop qa seat holding task-resume.
+run_accounts() {
+  local name="$1" code
+  shift
+  local -a mode=(--no-loop)
+  [ "$name" != interactive ] || mode+=(--interactive)
+  rm -f "$ACCT_LOG" "$ACCT_ARGV" "$ACCT_PROBES" "$ACCT_STATUS" "$ACCT_RPCS"
+  set +e
+  env -u CLAUDE_CONFIG_DIR -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u CLAUDE_CODE_USE_FOUNDRY \
+    -u MOE_ACCOUNT_ID -u MOE_ACCOUNT_SAMPLE_FILE -u FAKE_ACCT_MODE -u FAKE_ACCOUNT_WAIT_ONCE \
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=resume \
+    MOE_ACCOUNT_ROTATION=on FAKE_ACCOUNT_HOME="$ACCT_HOME" MOE_ACCOUNT_RETRY_SEC=1 MOE_DISABLE_HEARTBEAT=1 \
+    CLAUDE_CODE_OAUTH_TOKEN=must-not-reach-the-child ANTHROPIC_API_KEY=must-not-reach-the-child \
+    ANTHROPIC_AUTH_TOKEN=must-not-reach-the-child "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" \
+    "$WRAPPER" \
+    --project "$PROJECT_DIR" \
+    --worker-id "qa-accounts-$name" \
+    --role qa \
+    --team Smoke \
+    --no-start-daemon \
+    --command "$ACCT_CLI" \
+    "${mode[@]}" \
+    >"$TMP_DIR/wrapper-accounts-$name.out" 2>&1
+  code=$?
+  set -e
+  ACCT_RESET="$ACCT_RESET" "$NODE_FOR_TEST" "$ACCT_CHECK" "$name" "$code" "$TMP_DIR/wrapper-accounts-$name.out" \
+    "$ACCT_RPCS" "$ACCT_LOG" "$ACCT_ARGV" "$ACCT_PROBES" "$ACCT_STATUS" "$ACCT_HOME" "$PROJECT_DIR/.mcp.json" || exit 1
+}
+run_accounts refused
+run_accounts signout FAKE_ACCT_MODE=signout
+run_accounts other FAKE_ACCT_MODE=other
+run_accounts wait FAKE_ACCT_MODE=fine FAKE_ACCOUNT_WAIT_ONCE=1
+run_accounts none FAKE_ACCOUNT_HOME=
+run_accounts interactive FAKE_ACCT_MODE=fine
+rm -f "$ACCT_RPCS"
+echo "[accounts] ok"
+
 # --- Heartbeat sidecar: the CLI invocation blocks the wrapper with no moe.*
 # calls of its own for the CLI's whole runtime, so a long silent step (a
 # build, a test run) risks the REVIEW self-heal sweep evicting a still-alive
 # session. SLOW_CLI stands in for that -- it sleeps ~5s making zero tool
 # calls. With a 1s heartbeat interval the sidecar should ping several times
 # DURING that window, and stop promptly once the CLI (and the wrapper) exit
-# -- not leak an orphaned background process. ---
+# -- not leak an orphaned background process. The CLI also records the runner
+# identity it was handed: a QA seat gets the wrapper's own pair, which
+# moe-proxy stamps onto a claim made inside the session. ---
 SLOW_CLI="$TMP_DIR/slow-cli"
 cat > "$SLOW_CLI" <<EOF
 #!/usr/bin/env bash
+printf '%s\n' "\${MOE_RUNNER_PROCESS_STARTED_AT-unset}" "\${MOE_RUNNER_HOST-unset}" > "$TMP_DIR/slow-runner-env"
 sleep 5
 exit 0
 EOF
@@ -1580,6 +1820,14 @@ fi
 if [ "$count_at_exit" -lt 2 ]; then
   cat "$TMP_DIR/wrapper-heartbeat.out" >&2 || true
   echo "Expected the heartbeat sidecar to ping at least twice during a ~5s silent CLI step; got $count_at_exit" >&2
+  exit 1
+fi
+identity_line=$(grep -m1 '^Runner identity: processStartedAt=' "$TMP_DIR/wrapper-heartbeat.out" || true)
+identity_line=${identity_line#Runner identity: processStartedAt=}
+seen_identity=$(cat "$TMP_DIR/slow-runner-env" 2>/dev/null || true)
+if [ -z "$identity_line" ] || [ "$seen_identity" != "${identity_line% host=*}"$'\n'"${identity_line##* host=}" ]; then
+  cat "$TMP_DIR/wrapper-heartbeat.out" >&2 || true
+  echo "Expected the QA CLI to get the wrapper's runner identity ($identity_line); it saw: $seen_identity" >&2
   exit 1
 fi
 # The wrapper process (and any background subshell it started) has already
@@ -3664,7 +3912,7 @@ EOF
   if [ "$(grep -c "^\[folders\.'" "$SCOPE_Y_TRUST")" -ne 1 ] || ! grep -Fq 'trusted = true' "$SCOPE_Y_TRUST"; then
     scope_fail Y "expected exactly one trusted [folders.'…'] table in $SCOPE_Y_TRUST" "$SCOPE_Y_TRUST"
   fi
-  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'tool_timeout_sec = 120' 'moe_wait_for_task = 720' 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"' 'MOE_TOOL_NAME_STYLE = "underscore"' '[mcp_servers.serena]' '"--context", "agent"'; do
+  for needle in '[mcp_servers.moe]' '[mcp_servers.moe.env]' 'startup_timeout_sec = 120' 'tool_timeout_sec = 120' 'moe_wait_for_task = 720' 'MOE_WORKER_ID = "${MOE_WORKER_ID:-}"' 'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"' 'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"' 'MOE_TOOL_NAME_STYLE = "underscore"' '[mcp_servers.serena]' '"--context", "agent"'; do
     if ! grep -Fq -- "$needle" "$SCOPE_Y_CFG"; then
       cat "$SCOPE_Y_CFG" >&2 || true
       scope_fail Y "expected [$needle] in .grok/config.toml" "$TMP_DIR/scope-y.out"
@@ -3863,7 +4111,14 @@ EOF
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "codex 0.147+ rejects --full-auto; it must never be on argv" "$TMP_DIR/scope-z.out"
   fi
-  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '-c' 'mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' 'approvals_reviewer=user'; do
+  # The workerId rides a complete moe server table: codex 0.163's TUI rejects a
+  # partial dotted `mcp_servers.moe.env.MOE_WORKER_ID=` override at bootstrap.
+  if ! grep -Eqx -- 'mcp_servers\.moe=\{command=.*MOE_WORKER_ID="worker-scope-z"\}\}' "$CODEX_ARGS_FILE" \
+     || grep -Fq -- 'mcp_servers.moe.env.MOE_WORKER_ID=' "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "expected the workerId inside a complete mcp_servers.moe={command=...} override on the codex argv" "$TMP_DIR/scope-z.out"
+  fi
+  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '-c' 'approvals_reviewer=user'; do
     if ! grep -Fqx -- "$flag" "$CODEX_ARGS_FILE"; then
       cat "$CODEX_ARGS_FILE" >&2 || true
       scope_fail Z "expected [$flag] on the headless codex argv" "$TMP_DIR/scope-z.out"
@@ -3880,7 +4135,7 @@ EOF
   # The banner is what the launch-failure hint tells the operator to re-run by
   # hand, so it must carry the seat override and the reviewer pin too.
   if ! grep -Fq 'Command: ' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '--sandbox danger-full-access' "$TMP_DIR/scope-z.out" \
-     || ! grep -Fq -- '-c mcp_servers.moe.env.MOE_WORKER_ID=worker-scope-z' "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec --json -C' "$TMP_DIR/scope-z.out"; then
+     || ! grep -Fq -- "-c 'mcp_servers.moe={command=" "$TMP_DIR/scope-z.out" || ! grep -Fq -- 'MOE_WORKER_ID="worker-scope-z"}}'"'" "$TMP_DIR/scope-z.out" || ! grep -Fq -- '-c approvals_reviewer=user exec --json -C' "$TMP_DIR/scope-z.out"; then
     scope_fail Z "expected the Command banner to show the seat override, the reviewer pin and --sandbox danger-full-access" "$TMP_DIR/scope-z.out"
   fi
   if ! grep -Fq 'run the printed Command by hand' "$TMP_DIR/scope-z.out"; then
@@ -3974,6 +4229,14 @@ EOF
   if ! grep -Fqx -- '-C' "$CODEX_ARGS_FILE"; then
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "the codex TUI launch must still carry -C <project>" "$TMP_DIR/scope-z5.out"
+  fi
+  # A non-worker seat's override also carries the wrapper's runner identity
+  # (codex hands the proxy only the env its table names), so the proxy can
+  # stamp it onto the claims the architect makes inside its session.
+  scope_z5_identity="$(sed -n 's/^Runner identity: processStartedAt=\(.*\) host=\(.*\)$/MOE_RUNNER_PROCESS_STARTED_AT="\1",MOE_RUNNER_HOST="\2"/p' "$TMP_DIR/scope-z5.out" | head -n1)"
+  if [ -z "$scope_z5_identity" ] || ! grep -Fq -- "MOE_WORKER_ID=\"architect-scope-z\",$scope_z5_identity}}" "$CODEX_ARGS_FILE"; then
+    cat "$CODEX_ARGS_FILE" >&2 || true
+    scope_fail Z "an architect's codex override must carry the runner identity after its workerId" "$TMP_DIR/scope-z5.out"
   fi
   # -- polarity: a worker without --codex-exec defaults to headless exec
   # (b7f9570, 2026-09-24: the codex TUI never exits on its own, so an

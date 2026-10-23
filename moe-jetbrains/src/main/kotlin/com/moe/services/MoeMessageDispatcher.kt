@@ -235,6 +235,30 @@ class MoeMessageDispatcher(
                     publishState(newState)
                 }
             }
+            "ACCOUNTS_UPDATED" -> {
+                val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
+                // A payload that is not a rotation view leaves the last good one in place.
+                val rotation = MoeJson.parseAccountRotation(payload) ?: return
+                applyMessageOnEdt(type) {
+                    val current = currentState()
+                    if (current == null) {
+                        log.debug("Ignoring $type message because state is not initialized")
+                        return@applyMessageOnEdt
+                    }
+                    val newState = current.copy(accountRotation = rotation)
+                    updateState(newState)
+                    publishState(newState)
+                }
+            }
+            "ACCOUNT_ADDED" -> {
+                val accountId = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.get("accountId")
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                    ?.asString
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return
+                publishAccountAdded(accountId)
+            }
             "WORKER_DELETED" -> {
                 val payload = json.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject ?: return
                 val worker = MoeJson.parseWorker(payload)
@@ -526,6 +550,12 @@ class MoeMessageDispatcher(
     private fun publishMetrics(aggregate: MetricsAggregate) {
         invokeLater {
             listeners.forEach { it.onMetrics(aggregate) }
+        }
+    }
+
+    private fun publishAccountAdded(accountId: String) {
+        invokeLater {
+            listeners.forEach { it.onAccountAdded(accountId) }
         }
     }
 }

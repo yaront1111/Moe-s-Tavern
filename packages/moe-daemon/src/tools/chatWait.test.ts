@@ -7,6 +7,12 @@ import { chatWaitTool, MAX_BURST_MESSAGES, PER_CHANNEL_SCAN_LIMIT, summarizeChat
 import type { ChatMessage, Worker } from '../types/schema.js';
 
 const WORKER_ID = 'worker-wait';
+/**
+ * A registered peer agent. Its posts without a mention route to nobody, so it
+ * stands in for unrouted chatter (a system line in #general is feed agents
+ * never see).
+ */
+const PEER_ID = 'worker-peer';
 const TIMEOUT_MS = 1000;
 
 interface WaitResult {
@@ -73,6 +79,7 @@ describe('moe.chat_wait', () => {
       errorCount: 0,
     };
     fs.writeFileSync(path.join(moePath, 'workers', `${WORKER_ID}.json`), JSON.stringify(worker, null, 2));
+    fs.writeFileSync(path.join(moePath, 'workers', `${PEER_ID}.json`), JSON.stringify({ ...worker, id: PEER_ID }, null, 2));
 
     state = new StateManager({ projectPath: testDir });
     await state.load();
@@ -102,7 +109,7 @@ describe('moe.chat_wait', () => {
       });
     }
     it('returns a message posted before the call instead of blocking (channel-filtered)', async () => {
-      const message = await post(channels.general, 'landed before the wait', 'system');
+      const message = await post(channels.general, 'landed before the wait', PEER_ID);
 
       const startedAt = Date.now();
       const result = await wait({ channels: [channels.general] });
@@ -129,7 +136,7 @@ describe('moe.chat_wait', () => {
       for (const [index, channel] of [
         channels.general, channels.workers, channels.general, channels.workers, channels.general
       ].entries()) {
-        posted.push(await post(channel, `burst ${index}`, 'system'));
+        posted.push(await post(channel, `burst ${index}`, PEER_ID));
         await new Promise((resolve) => setTimeout(resolve, 2));
       }
 
@@ -138,6 +145,57 @@ describe('moe.chat_wait', () => {
       expect(result.hasMessage).toBe(true);
       expect(result.messages?.map((m) => m.id)).toEqual(posted.map((m) => m.id));
       expect(result.hasMore).toBeUndefined();
+    });
+
+    describe('history from before the worker registered', () => {
+      /** Post history, then let the worker register (a fresh seat id has no cursors). */
+      async function postHistoryThenRegister(channel: string): Promise<ChatMessage> {
+        const history = await post(channel, 'nobody is addressed here, @workers @all', 'worker-earlier');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        await state.updateWorker(WORKER_ID, { startedAt: new Date().toISOString() });
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return history;
+      }
+
+      it('is not replayed as unread backlog when a new routed message opens the channel', async () => {
+        const history = await postHistoryThenRegister(channels.workers);
+        const routed = await post(channels.workers, `@${WORKER_ID} ping`);
+
+        // The launcher's pre-flight drain: no filter, so it scans the unread channels.
+        const result = await wait({ channels: [] });
+
+        expect(result.messages?.map((m) => m.id)).toEqual([routed.id]);
+        expect(result.messages?.map((m) => m.id)).not.toContain(history.id);
+        expect(cursorFor(channels.workers)).toBe(routed.id);
+      });
+
+      it('leaves a watched channel with only history blocking instead of replaying it', async () => {
+        await postHistoryThenRegister(channels.general);
+
+        const result = await wait({ channels: [channels.general] });
+
+        expect(result.hasMessage).toBe(false);
+        expect(result.timedOut).toBe(true);
+        expect(cursorFor(channels.general)).toBeUndefined();
+      });
+
+      it('still delivers an earlier message that names the worker directly (a reused id)', async () => {
+        const direct = await post(channels.general, `@${WORKER_ID} are you there?`, 'worker-earlier');
+        await postHistoryThenRegister(channels.general);
+
+        const result = await wait({ channels: [channels.general] });
+
+        expect(result.messages?.map((m) => m.id)).toEqual([direct.id]);
+      });
+
+      it('is still returned to an explicit sinceId catch-up', async () => {
+        const first = await post(channels.general, 'first', 'worker-earlier');
+        const history = await postHistoryThenRegister(channels.general);
+
+        const result = await wait({ channels: [channels.general], sinceId: first.id });
+
+        expect(result.messages?.map((m) => m.id)).toEqual([history.id]);
+      });
     });
   });
 
@@ -167,7 +225,7 @@ describe('moe.chat_wait', () => {
       await new Promise(resolve => setTimeout(resolve, 30));
       expect(settled).toBe(false);
       expect(cursorFor(channels.workers)).toBeUndefined();
-      const message = await post(channels.general, 'watched status', 'system');
+      const message = await post(channels.general, 'watched status', PEER_ID);
       expect((await pending).messages?.map(m => m.id)).toEqual([message.id]);
       expect(cursorFor(channels.workers)).toBeUndefined();
     });
@@ -178,9 +236,9 @@ describe('moe.chat_wait', () => {
 
       // Unrouted chatter: does not wake a broad-scope waiter and does not
       // increment unread — but it IS in the channel the wake drain scans.
-      const quiet1 = await post(channels.general, 'unrelated status one', 'system');
-      const quiet2 = await post(channels.general, 'unrelated status two', 'system');
-      const trigger = await post(channels.general, `@${WORKER_ID} now look`, 'system');
+      const quiet1 = await post(channels.general, 'unrelated status one', PEER_ID);
+      const quiet2 = await post(channels.general, 'unrelated status two', PEER_ID);
+      const trigger = await post(channels.general, `@${WORKER_ID} now look`, PEER_ID);
 
       const result = await waitPromise;
 
@@ -193,7 +251,7 @@ describe('moe.chat_wait', () => {
       // A human post wakes a broad-scope waiter WITHOUT incrementing unread, so
       // the drain has no channel to scan. Advancing the cursor to that message
       // would strand every earlier message in the channel forever.
-      const stranded = await post(channels.general, 'earlier unrouted chatter', 'system');
+      const stranded = await post(channels.general, 'earlier unrouted chatter', PEER_ID);
 
       const waitPromise = wait({});
       await new Promise((resolve) => setTimeout(resolve, 30));
@@ -209,9 +267,9 @@ describe('moe.chat_wait', () => {
 
   describe('sinceId catch-up', () => {
     it('overrides the stored cursor and re-delivers older messages', async () => {
-      const first = await post(channels.general, 'one', 'system');
-      const second = await post(channels.general, 'two', 'system');
-      const third = await post(channels.general, 'three', 'system');
+      const first = await post(channels.general, 'one', PEER_ID);
+      const second = await post(channels.general, 'two', PEER_ID);
+      const third = await post(channels.general, 'three', PEER_ID);
       await state.updateWorkerCursors(WORKER_ID, { [channels.general]: third.id });
 
       const result = await wait({ channels: [channels.general], sinceId: first.id });
@@ -220,10 +278,10 @@ describe('moe.chat_wait', () => {
     });
 
     it('applies the id only to the channel that holds it; other channels keep their stored cursor', async () => {
-      const a1 = await post(channels.general, 'a1', 'system');
-      const a2 = await post(channels.general, 'a2', 'system');
-      await post(channels.workers, 'b1', 'system');
-      const b2 = await post(channels.workers, 'b2', 'system');
+      const a1 = await post(channels.general, 'a1', PEER_ID);
+      const a2 = await post(channels.general, 'a2', PEER_ID);
+      await post(channels.workers, 'b1', PEER_ID);
+      const b2 = await post(channels.workers, 'b2', PEER_ID);
       await state.updateWorkerCursors(WORKER_ID, { [channels.general]: a2.id, [channels.workers]: b2.id });
 
       const result = await wait({ channels: [channels.general, channels.workers], sinceId: a1.id });
@@ -241,8 +299,8 @@ describe('moe.chat_wait', () => {
 
   describe('cursor bookkeeping', () => {
     it('advances the cursor to the last delivered message and then has nothing left', async () => {
-      const first = await post(channels.general, 'one', 'system');
-      const last = await post(channels.general, 'two', 'system');
+      const first = await post(channels.general, 'one', PEER_ID);
+      const last = await post(channels.general, 'two', PEER_ID);
 
       const result = await wait({ channels: [channels.general] });
       expect(result.messages?.map((m) => m.id)).toEqual([first.id, last.id]);
@@ -287,17 +345,17 @@ describe('moe.chat_wait', () => {
       // Regression: the scan pages 50 at a time, so with more than that waiting
       // the trigger is newest by timestamp — letting it set the cursor would
       // strand every message the scan never reached.
-      const anchor = await post(channels.general, 'anchor', 'system');
+      const anchor = await post(channels.general, 'anchor', PEER_ID);
       await state.updateWorkerCursors(WORKER_ID, { [channels.general]: anchor.id });
       const fillers: ChatMessage[] = [];
       for (let i = 0; i < PER_CHANNEL_SCAN_LIMIT + 10; i++) {
-        fillers.push(await post(channels.general, `filler ${i}`, 'system'));
+        fillers.push(await post(channels.general, `filler ${i}`, PEER_ID));
       }
 
       // Broad scope: unrouted fillers neither wake the waiter nor mark unread.
       const waitPromise = wait({});
       await new Promise((resolve) => setTimeout(resolve, 30));
-      const trigger = await post(channels.general, `@${WORKER_ID} wake up`, 'system');
+      const trigger = await post(channels.general, `@${WORKER_ID} wake up`, PEER_ID);
 
       const first = await waitPromise;
       expect(first.messages?.map((m) => m.id)).toContain(trigger.id);
@@ -319,11 +377,11 @@ describe('moe.chat_wait', () => {
     it('does not advance a partially scanned channel past what the scan read (entry path)', async () => {
       // Seed a cursor so the scan pages FORWARD from it (an absent cursor makes
       // getMessages return the most recent window instead — a resync, not a page).
-      const anchor = await post(channels.general, 'anchor', 'system');
+      const anchor = await post(channels.general, 'anchor', PEER_ID);
       await state.updateWorkerCursors(WORKER_ID, { [channels.general]: anchor.id });
       const fillers: ChatMessage[] = [];
       for (let i = 0; i < PER_CHANNEL_SCAN_LIMIT + 10; i++) {
-        fillers.push(await post(channels.general, `filler ${i}`, 'system'));
+        fillers.push(await post(channels.general, `filler ${i}`, PEER_ID));
       }
 
       // Slow the scan so the post below is guaranteed to land mid-drain and
@@ -337,7 +395,7 @@ describe('moe.chat_wait', () => {
 
       const waitPromise = wait({ channels: [channels.general] });
       await new Promise((resolve) => setTimeout(resolve, 20));
-      const late = await post(channels.general, 'landed during the drain', 'system');
+      const late = await post(channels.general, 'landed during the drain', PEER_ID);
 
       const first = await waitPromise;
       expect(first.messages?.map((m) => m.id)).toContain(late.id);
@@ -356,7 +414,7 @@ describe('moe.chat_wait', () => {
       for (const channel of watched) {
         posted[channel] = [];
         for (let i = 0; i < perChannel; i++) {
-          posted[channel].push(await post(channel, `msg ${i}`, 'system'));
+          posted[channel].push(await post(channel, `msg ${i}`, PEER_ID));
         }
       }
 
@@ -384,8 +442,8 @@ describe('moe.chat_wait', () => {
 
   describe('error handling', () => {
     it('delivers readable channels when one channel scan fails', async () => {
-      const readable = await post(channels.workers, 'still delivered', 'system');
-      await post(channels.general, 'unreadable channel', 'system');
+      const readable = await post(channels.workers, 'still delivered', PEER_ID);
+      await post(channels.general, 'unreadable channel', PEER_ID);
 
       const original = state.getMessages.bind(state);
       vi.spyOn(state, 'getMessages').mockImplementation(async (channelId, opts) => {
@@ -400,7 +458,7 @@ describe('moe.chat_wait', () => {
     });
 
     it('still returns messages when the cursor write fails', async () => {
-      const message = await post(channels.general, 'cursor write will fail', 'system');
+      const message = await post(channels.general, 'cursor write will fail', PEER_ID);
       vi.spyOn(state, 'updateWorkerCursors').mockRejectedValue(new Error('worker file locked'));
 
       const result = await wait({ channels: [channels.general] });

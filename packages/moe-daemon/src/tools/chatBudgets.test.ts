@@ -22,6 +22,7 @@ describe('chat token budgets', () => {
   async function setupChat(): Promise<string> {
     h.setupMoeFolder();
     h.createWorker({ id: 'worker-chat' });
+    h.createWorker({ id: 'worker-peer' });
     await h.state.load();
     const general = h.state.getChannels().find((channel) => channel.name === 'general');
     expect(general).toBeDefined();
@@ -180,7 +181,7 @@ describe('chat token budgets', () => {
     // Plain status update from a different worker — no @-mention, no human sender.
     await h.state.sendMessage({
       channel,
-      sender: 'system',
+      sender: 'worker-peer',
       content: 'status update from somebody else',
     });
     const result = await waitPromise;
@@ -215,7 +216,7 @@ describe('chat token budgets', () => {
           .toBeGreaterThan(new Date(before).getTime());
       }, { timeout: 2000, interval: 10 });
     } finally {
-      await h.state.sendMessage({ channel, sender: 'system', content: 'wake up' });
+      await h.state.sendMessage({ channel, sender: 'worker-peer', content: 'wake up' });
       await waitPromise;
     }
   });

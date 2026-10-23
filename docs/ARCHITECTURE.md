@@ -69,8 +69,9 @@ A VS Code / Antigravity extension (`moe-vscode/`) is a secondary client speaking
 
 ```
 packages/moe-daemon/
-├── src/index.ts                # CLI entry + supervisor (start/stop/status/doctor/_run)
+├── src/index.ts                # CLI entry + supervisor (start/stop/status/doctor/accounts/_run)
 ├── src/commands/               # doctor (offline health check)
+├── src/accounts/               # Claude account list, usage-window math, `accounts` CLI (sign-in runs here, never in the daemon)
 ├── src/server/
 │   ├── McpAdapter.ts           # JSON-RPC handler for MCP
 │   └── WebSocketServer.ts      # /ws and /mcp endpoints
@@ -91,6 +92,11 @@ Key behaviors:
 - **Cross-session memory**: Not handled by the daemon — delegated to the Serena MCP server (injected by the agent launchers). See `docs/MEMORY.md`.
 - Watches `.moe` for changes and broadcasts state snapshots.
 - Handles plugin actions (create/update/reorder/approve/reject/reopen).
+- **Claude account rotation** (`state/accountStore.ts`):
+  - The machine has one account list, `~/.moe/claude-accounts.json`, which every project's daemon shares. The wrapper calls `moe.lease_account` before each claude launch and runs claude with the returned `CLAUDE_CONFIG_DIR`.
+  - The wrapper forwards claude's own rate-limit figures through `moe.report_account_usage`. Once a live window reaches the switch percent (90% by default), new launches go to the next signed-in account, and a running worker moves at its next step boundary (`complete_step` `accountSwitch`, `start_step` refusal).
+  - The daemon never runs claude and never opens a file inside a Claude config folder. The IDE signs accounts in by running the `accounts` CLI in a terminal. A 2-second watch rebroadcasts `ACCOUNTS_UPDATED` when the list, another daemon's usage writes or the clock change the view.
+  - Contracts: `docs/MCP_SERVER.md`, **Claude Account Rotation**.
 
 ### 3) Moe Proxy (Node.js/TypeScript)
 
@@ -173,7 +179,8 @@ git repository, when the command is non-blank, `autoCommit` is on,
   The latter runs outside the state mutex, never fetches or changes the tree,
   rejects partial clones/redirected roots, and reports stale-worktree provenance
   without claiming remote freshness. Only an explicit literal branch is used;
-  missing Git/ref/object evidence retains the missing-path refusal. Cached
+  missing Git/ref/object evidence retains the missing-path refusal, which names
+  the failed check (the Git step, its error and the elapsed time). Cached
   paths use the exact committed spelling (Git tree lookup is case-sensitive).
   Full plan validation is repeated under the mutex before writing. Every delivery sha,
   exit code and landing it stores is what a runner *reported*, and each store checks shape and binding, never the

@@ -30,6 +30,20 @@ describe('routing tiers', () => {
     expect(maxTier('heavy', 'light')).toBe('heavy');
   });
 
+  it('floors a qa seat at xhigh (or settings.routing.qa) and never lowers the task pick', () => {
+    const codex = (model: string, effort: string) => ({ model, effort });
+    const light = { tier: 'light', status: 'REVIEW', effort: 'high', model: 'claude-sonnet-5-5', codexModel: 'gpt-6-luna' } as const;
+    expect(resolveLaunch(light, undefined, 'worker')?.effort).toBe('high');
+    expect(resolveLaunch(light, undefined, 'qa'))
+      .toEqual({ tier: 'light', effort: 'xhigh', model: 'claude-sonnet-5-5', codex: codex('gpt-6-luna', 'xhigh') });
+    expect(resolveLaunch({ tier: 'heavy', status: 'REVIEW', effort: 'max' }, undefined, 'qa')?.effort).toBe('max');
+    // Configured floor and model; a model the tier disallows is ignored.
+    expect(resolveLaunch(light, { routing: { qa: { effort: 'max', model: 'claude-opus-5-5' } } }, 'qa'))
+      .toEqual({ tier: 'light', effort: 'max', model: 'claude-opus-5-5', codex: codex('gpt-6-luna', 'max') });
+    expect(resolveLaunch({ tier: 'heavy', status: 'REVIEW' }, { routing: { qa: { model: 'claude-sonnet-5-5' } } }, 'qa')?.model)
+      .toBe('claude-opus-5-5');
+  });
+
   it('resolves launch with defaults, overrides, and ignores bad config', () => {
     const opus = 'claude-opus-5-5';
     const codex = (model: string, effort: string) => ({ model, effort });

@@ -353,7 +353,9 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
         outcome,
         duplicate,
         commitCount: finalCommits.length,
-        filesModified: updated.filesModified ?? [],
+        // Count, not the list: the union can run to dozens of paths and this
+        // response lands in the agent's context on every landing of the task.
+        filesModifiedCount: (updated.filesModified ?? []).length,
         addedPaths,
         ...(warnings.length > 0 ? { warning: warnings.join('; ') } : {}),
       };

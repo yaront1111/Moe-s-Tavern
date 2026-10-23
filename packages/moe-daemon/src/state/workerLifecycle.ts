@@ -10,6 +10,7 @@ import type { StateManager } from './StateManager.js';
 import type { Task, TaskStatus } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
+import { releaseDeregisteredClaims } from './resourceStore.js';
 
 export { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
@@ -211,9 +212,10 @@ export async function closeOwnFinalizingAttempts(state: StateManager, workerId: 
 
 /**
  * Full deregister flow: close the worker's own finalizing attempts, release
- * tasks, mark worker DEAD, post chat-leave system messages to every channel the
- * worker had a cursor for, and emit a single banner to #workers / #governors
- * summarizing the cleanup.
+ * tasks, mark worker DEAD, drop the released tasks' claims on
+ * releaseOnDeregister resources, post chat-leave system messages to every
+ * channel the worker had a cursor for, and emit a single banner to #workers /
+ * #governors summarizing the cleanup.
  *
  * Marking the worker DEAD (rather than deleting it) keeps lastError/history for
  * post-mortem and makes repeat calls idempotent; the record prune in
@@ -265,6 +267,14 @@ export async function deregisterWorker(
     logger.warn({ workerId, error: err }, 'deregisterWorker: updateWorker failed');
   }
 
+  // Leases stay task-keyed for the next claimant, except on resources declared
+  // releaseOnDeregister: those claims leave with the seat, and a task BLOCKED
+  // on one comes back claimable. Deregistration only, never a release_task
+  // hand-off or the restart purge. After the DEAD mark, so a grant it triggers
+  // does not restore a row onto this seat. Never throws.
+  const { dropped, restored } = await releaseDeregisteredClaims(state, released.map((r) => r.taskId));
+  for (const r of released) r.newStatus = restored.get(r.taskId) ?? r.newStatus;
+
   // Post chat-leave system messages to every channel this worker has touched.
   const cursorChannelIds = Object.keys(worker.chatCursors ?? {});
   for (const channelId of cursorChannelIds) {
@@ -287,13 +297,23 @@ export async function deregisterWorker(
     : `released ${released.length} task${released.length === 1 ? '' : 's'}: ${released
         .map((r) => `${r.taskId}→${r.newStatus}`)
         .join(', ')}`;
-  const banner = `🔌 ${workerId} deregistered (${reason}); ${releasedSummary}`;
+  const droppedSummary = dropped.length === 0
+    ? ''
+    : `; dropped ${dropped.length} resource claim${dropped.length === 1 ? '' : 's'}: ${dropped
+        .map((d) => `${d.resourceId} ${d.claim} (${d.taskId})`)
+        .join(', ')}`;
+  const banner = `🔌 ${workerId} deregistered (${reason}); ${releasedSummary}${droppedSummary}`;
   try { await state.postToRoleChannel('workers', banner); } catch { /* never block */ }
   try { await state.postToRoleChannel('governors', banner); } catch { /* never block */ }
 
   state.appendActivity(
     'WORKER_DISCONNECTED',
-    { workerId, reason, releasedTaskIds: released.map((r) => r.taskId) },
+    {
+      workerId,
+      reason,
+      releasedTaskIds: released.map((r) => r.taskId),
+      ...(dropped.length > 0 ? { droppedResourceClaims: dropped } : {}),
+    },
     undefined,
     worker
   );

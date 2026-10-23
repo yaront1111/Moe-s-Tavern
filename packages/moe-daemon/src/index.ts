@@ -25,6 +25,7 @@ import { writeInitFiles } from './generated/initFiles.js';
 import { writeSkillFiles } from './generated/skillFiles.js';
 import { linkClaudeSkills } from './util/claudeSkills.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
+import { startAccountWatch } from './state/accountStore.js';
 import os from 'os';
 import type { DaemonInfo } from './types/schema.js';
 
@@ -62,6 +63,7 @@ function parseArgs() {
 }
 
 const DEFAULT_BIND_HOST = '127.0.0.1';
+const LOOPBACK_PROBE_TIMEOUT_MS = 500;
 
 /**
  * Address local probes (port scans, readiness checks) should connect to for a
@@ -363,12 +365,38 @@ async function findAvailablePort(preferred: number, host: string = DEFAULT_BIND_
 }
 
 function isPortAvailable(port: number, host: string = DEFAULT_BIND_HOST): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise<boolean>((resolve) => {
     const server = net.createServer();
     server.unref();
     server.on('error', () => resolve(false));
     server.listen({ port, host }, () => {
       server.close(() => resolve(true));
+    });
+  }).then((bindable) => (bindable ? isLoopbackPortFree(port) : false));
+}
+
+// A bind probe alone is not enough on Windows: without SO_EXCLUSIVEADDRUSE a
+// 0.0.0.0 listener and a 127.0.0.1 listener from two processes share one port
+// with no EADDRINUSE, so two projects can both "own" the same port and a
+// client dialing localhost reaches whichever project bound the specific
+// address. Dial loopback as a client: anything that answers (either bind form)
+// means the port is taken; a refusal (or silence) means it is free.
+function isLoopbackPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ port, host: '127.0.0.1' });
+    socket.unref();
+    socket.setTimeout(LOOPBACK_PROBE_TIMEOUT_MS);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      resolve(true);
     });
   });
 }
@@ -615,6 +643,11 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   state.setFileWatcher(watcher);
   watcher.start();
 
+  // The machine's Claude account list and usage live outside .moe/ (written by
+  // the `accounts` CLI and by every project's daemon), so FileWatcher never
+  // sees them: poll them and push ACCOUNTS_UPDATED to the IDEs on a change.
+  const stopAccountWatch = startAccountWatch(state);
+
   // SPEED-mode auto-approval timers live only in process memory, so a restart
   // would otherwise strand every AWAITING_APPROVAL task whose timer was lost.
   // Re-arm them once from persisted state now that the emitter + WS are wired.
@@ -688,6 +721,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 
     // Cancel any pending SPEED mode auto-approval timeouts
     clearAllSpeedModeTimeouts();
+    stopAccountWatch();
 
     // Flush any pending activity log writes
     try {
@@ -1010,6 +1044,12 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 }
 
 async function main() {
+  // `accounts` manages the machine's Claude accounts and needs no project.
+  if (process.argv[2] === 'accounts') {
+    const { runAccountsCli } = await import('./accounts/cli.js');
+    process.exitCode = runAccountsCli(process.argv.slice(3));
+    return;
+  }
   const { command, projectPath, port, name, host } = parseArgs();
 
   switch (command) {
@@ -1041,6 +1081,7 @@ async function main() {
     }
     default:
       logger.info('Usage: moe-daemon [start|stop|status|init|doctor] [--project <path>] [--port <port>] [--host <addr>] [--name <name>]');
+      logger.info('       moe-daemon accounts [list|add|login|logout|check|remove] (Claude subscription accounts; see `accounts help`)');
       logger.info('Note: `init` now starts the daemon and keeps running.');
   }
 }
@@ -1062,6 +1103,7 @@ export {
   initProject,
   stopDaemon,
   statusDaemon,
+  isPortAvailable,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

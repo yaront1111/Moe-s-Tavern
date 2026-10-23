@@ -34,6 +34,23 @@ describe('moe.get_context', () => {
     expect(result.epic?.id).toBe('epic-1');
   });
 
+  it.each([undefined, 'status' as const])('rejects an unknown explicit taskId instead of answering with the caller task (view %s)', async (view) => {
+    h.setupMoeFolder();
+    h.createEpic();
+    const held = 'task-67b4604f6c8b4a98ad9eee7b49d0c8f5';
+    h.createWorker({ id: 'architect-own', currentTaskId: held });
+    h.createTask({ id: held, status: 'PLANNING', assignedWorkerId: 'architect-own' });
+    h.createTask({ id: 'task-4566537d0d264ddc91811889fe1ac636', status: 'WORKING' });
+    await h.state.load();
+    const tool = getContextTool(h.state);
+
+    // A short prefix of a real id is not an id: it must not resolve to the
+    // caller's own task, and must not stamp that task as context-fetched.
+    await expect(tool.handler({ taskId: 'task-4566537d', workerId: 'architect-own', view }, h.state))
+      .rejects.toThrow('Task not found: task-4566537d');
+    expect(h.state.getTask(held)?.contextFetchedBy).toBeUndefined();
+  });
+
   it('throws if project not loaded', async () => {
     const tool = getContextTool(h.state);
     await expect(tool.handler({}, h.state)).rejects.toThrow('not loaded state, expected loaded');

@@ -80,6 +80,11 @@ const GLOBAL_FACT_PATHS: Readonly<Record<string, string>> = {
   'terminalHandoff.pollingSuppressed': 'the same shared TUI block',
   'sessionMode.modes[1].optIn': 'flags are parsed in the argument parser, before any provider branch',
   'resume.wrapperRelaunch': 'resume is wrapper-level and provider-agnostic',
+  // The per-seat `mcp_servers.moe={...}` table is assembled by a top-level helper
+  // (codex_moe_server_override / Get-CodexMoeServerOverride); its codex-branch
+  // call sites stay emitter-pinned.
+  'argv.perSeatOverrides[1]': 'the moe server override table is built by a top-level helper',
+  'config.envKeys[1]': 'the moe server override table is built by a top-level helper',
 };
 
 /**
@@ -234,7 +239,7 @@ describe('provider descriptor contract: fixtures are real', () => {
     for (const factPath of Object.keys(GLOBAL_FACT_PATHS)) {
       expect(known.has(factPath), `GLOBAL_FACT_PATHS names ${factPath}, which the descriptor does not declare`).toBe(true);
     }
-    expect(Object.keys(GLOBAL_FACT_PATHS)).toHaveLength(4);
+    expect(Object.keys(GLOBAL_FACT_PATHS)).toHaveLength(6);
   });
 
   it('the matcher rejects a string that is not in either launcher', () => {

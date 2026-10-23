@@ -343,4 +343,48 @@ class MoeCommandSender(
         val payload = JsonObject().apply { addProperty("proposalId", proposalId) }
         sendMessage("REJECT_PROPOSAL", payload)
     }
+    /**
+     * Registers a new Claude account. A blank [label] is left out, so the daemon
+     * labels the account with its id. The daemon answers this connection with
+     * ACCOUNT_ADDED, then broadcasts ACCOUNTS_UPDATED.
+     */
+    fun addAccount(label: String?) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            val trimmed = label?.trim()
+            if (!trimmed.isNullOrEmpty()) addProperty("label", trimmed)
+        }
+        sendMessage("ADD_ACCOUNT", payload)
+    }
+    /** Unregisters the account only; its Claude login stays in its folder. */
+    fun removeAccount(accountId: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply { addProperty("accountId", accountId) }
+        sendMessage("REMOVE_ACCOUNT", payload)
+    }
+    /** Moves the account one place earlier (-1) or later (1) in the order Moe uses the accounts. */
+    fun moveAccount(accountId: String, offset: Int) {
+        require(offset == -1 || offset == 1) { "offset must be -1 or 1, was $offset" }
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("accountId", accountId)
+            addProperty("offset", offset)
+        }
+        sendMessage("MOVE_ACCOUNT", payload)
+    }
+    fun renameAccount(accountId: String, label: String) {
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply {
+            addProperty("accountId", accountId)
+            addProperty("label", label.trim())
+        }
+        sendMessage("RENAME_ACCOUNT", payload)
+    }
+    /** Sets the usage percent at which workers move to the next account after their current step. */
+    fun setAccountSwitchPercent(percent: Int) {
+        require(percent in 1..100) { "switchAtPercent must be in 1..100, was $percent" }
+        if (!ensureConnected()) return
+        val payload = JsonObject().apply { addProperty("switchAtPercent", percent) }
+        sendMessage("SET_ACCOUNT_SWITCH_PERCENT", payload)
+    }
 }

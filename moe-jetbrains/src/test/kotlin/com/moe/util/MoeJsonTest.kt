@@ -6,7 +6,11 @@ import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.JsonPrimitive
+import com.moe.model.AccountCli
+import com.moe.model.AccountRotation
+import com.moe.model.ClaudeAccount
 import com.moe.model.Task
+import com.moe.model.UsageWindow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -851,5 +855,213 @@ class MoeJsonTest {
             assertEquals("$path numeric title", "42", task.title)
             assertTrue("$path string hasPendingQuestion", task.hasPendingQuestion)
         }
+    }
+
+    // ------------------------------------------------------------- claude accounts
+
+    private val rotationJson = """
+        {
+          "registryFile": "C:\\Users\\dev\\.moe\\claude-accounts.json",
+          "switchAtPercent": 85,
+          "error": null,
+          "cli": { "node": "C:\\Program Files\\nodejs\\node.exe", "script": "C:\\moe\\daemon\\accounts\\cli.js" },
+          "accounts": [
+            {
+              "id": "acct-1", "label": "Work Max", "signIn": "subscription", "signInCheckedAt": "2026-10-20T10:00:00.000Z",
+              "windows": {
+                "five_hour": { "percent": 92.5, "resetsAt": "2026-10-20T14:05:00.000Z" },
+                "seven_day": { "percent": 40, "resetsAt": null }
+              },
+              "peakPercent": 92.5, "blockedUntil": "2026-10-20T14:05:00.000Z", "active": false, "seats": ["worker-a"]
+            },
+            {
+              "id": "acct-2", "label": "Personal", "signIn": "signed_out", "signInCheckedAt": null,
+              "windows": {}, "peakPercent": null, "blockedUntil": null, "active": false, "seats": []
+            },
+            {
+              "id": "acct-3", "label": "acct-3", "signIn": "subscription", "signInCheckedAt": "2026-10-20T09:00:00.000Z",
+              "windows": { "five_hour": { "percent": 12, "resetsAt": "2026-10-20T15:00:00.000Z" } },
+              "peakPercent": 12, "blockedUntil": null, "active": true, "seats": ["worker-b", "qa-c"]
+            }
+          ]
+        }
+    """.trimIndent()
+
+    private val expectedRotation = AccountRotation(
+        registryFile = "C:\\Users\\dev\\.moe\\claude-accounts.json",
+        switchAtPercent = 85,
+        error = null,
+        cli = AccountCli("C:\\Program Files\\nodejs\\node.exe", "C:\\moe\\daemon\\accounts\\cli.js"),
+        accounts = listOf(
+            ClaudeAccount(
+                id = "acct-1",
+                label = "Work Max",
+                signIn = "subscription",
+                signInCheckedAt = "2026-10-20T10:00:00.000Z",
+                windows = mapOf(
+                    "five_hour" to UsageWindow(92.5, "2026-10-20T14:05:00.000Z"),
+                    "seven_day" to UsageWindow(40.0, null)
+                ),
+                peakPercent = 92.5,
+                blockedUntil = "2026-10-20T14:05:00.000Z",
+                active = false,
+                seats = listOf("worker-a")
+            ),
+            ClaudeAccount(
+                id = "acct-2",
+                label = "Personal",
+                signIn = "signed_out",
+                signInCheckedAt = null,
+                windows = emptyMap(),
+                peakPercent = null,
+                blockedUntil = null,
+                active = false,
+                seats = emptyList()
+            ),
+            ClaudeAccount(
+                id = "acct-3",
+                label = "acct-3",
+                signIn = "subscription",
+                signInCheckedAt = "2026-10-20T09:00:00.000Z",
+                windows = mapOf("five_hour" to UsageWindow(12.0, "2026-10-20T15:00:00.000Z")),
+                peakPercent = 12.0,
+                blockedUntil = null,
+                active = true,
+                seats = listOf("worker-b", "qa-c")
+            )
+        )
+    )
+
+    private fun parseRotation(json: String) =
+        MoeJson.parseAccountRotation(JsonParser.parseString(json).asJsonObject)
+
+    @Test
+    fun `parseState reads the account rotation and each worker's account`() {
+        val state = parseState(
+            """
+            {
+              "project": { "id": "proj-1", "name": "Moe" },
+              "epics": [], "tasks": [],
+              "workers": [
+                { "id": "worker-a", "type": "CLAUDE", "epicId": "", "status": "CODING", "accountId": "acct-1" },
+                { "id": "worker-b", "type": "CODEX", "epicId": "", "status": "IDLE", "accountId": null },
+                { "id": "worker-c", "type": "CLAUDE", "epicId": "", "status": "IDLE", "accountId": 42 },
+                { "id": "worker-d", "type": "CLAUDE", "epicId": "", "status": "IDLE", "accountId": "" }
+              ],
+              "accountRotation": $rotationJson
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(expectedRotation, state.accountRotation)
+        assertEquals("acct-1", state.workers.single { it.id == "worker-a" }.accountId)
+        for (id in listOf("worker-b", "worker-c", "worker-d")) {
+            assertNull("$id accountId", state.workers.single { it.id == id }.accountId)
+        }
+    }
+
+    @Test
+    fun `a snapshot from a daemon without account rotation parses to null`() {
+        for (member in listOf("", ",\"accountRotation\": null", ",\"accountRotation\": []", ",\"accountRotation\": {}")) {
+            val state = parseState("""{ "project": { "id": "proj-1", "name": "Moe" }, "epics": [], "tasks": [] $member }""")
+            assertNull("member '$member'", state.accountRotation)
+        }
+    }
+
+    @Test
+    fun `parseAccountRotation reads an ACCOUNTS_UPDATED payload exactly`() {
+        assertEquals(expectedRotation, parseRotation(rotationJson))
+    }
+
+    @Test
+    fun `parseAccountRotation needs a registry file string`() {
+        for (member in listOf("", "\"registryFile\": \"\",", "\"registryFile\": \"  \",", "\"registryFile\": 7,", "\"registryFile\": null,")) {
+            assertNull("member '$member'", parseRotation("""{ $member "switchAtPercent": 90, "accounts": [] }"""))
+        }
+    }
+
+    @Test
+    fun `parseAccountRotation keeps only a whole switch percent from 1 to 100`() {
+        val cases = listOf(
+            "1" to 1, "100" to 100, "90.0" to 90,
+            "0" to 90, "101" to 90, "50.5" to 90, "\"80\"" to 90, "null" to 90, "true" to 90, "[]" to 90
+        )
+        for ((literal, expected) in cases) {
+            val rotation = parseRotation("""{ "registryFile": "/home/dev/.moe/claude-accounts.json", "switchAtPercent": $literal }""")
+            assertEquals("switchAtPercent $literal", expected, rotation?.switchAtPercent)
+        }
+    }
+
+    @Test
+    fun `parseAccountRotation drops bad accounts and reads wrong-typed fields as absent`() {
+        val rotation = parseRotation(
+            """
+            {
+              "registryFile": "/home/dev/.moe/claude-accounts.json",
+              "error": "",
+              "cli": { "node": "/usr/bin/node" },
+              "accounts": [
+                "acct-0",
+                { "label": "no id" },
+                { "id": "", "label": "blank id" },
+                { "id": 42, "label": "numeric id" },
+                {
+                  "id": "acct-3", "label": "", "signIn": "bogus", "signInCheckedAt": 5,
+                  "windows": { "five_hour": 5, "seven_day": { "percent": "40", "resetsAt": 7 } },
+                  "peakPercent": "NaN", "blockedUntil": {}, "active": "true", "seats": ["worker-a", 2]
+                },
+                { "id": "acct-3", "label": "a second acct-3" },
+                {
+                  "id": "acct-4", "signIn": "other", "signInCheckedAt": " ",
+                  "windows": { "five_hour": { "percent": 5, "resetsAt": "" } }, "blockedUntil": ""
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(
+            AccountRotation(
+                registryFile = "/home/dev/.moe/claude-accounts.json",
+                switchAtPercent = 90,
+                error = null,
+                cli = null,
+                accounts = listOf(
+                    ClaudeAccount(
+                        id = "acct-3",
+                        label = "acct-3",
+                        signIn = "signed_out",
+                        signInCheckedAt = null,
+                        windows = mapOf("seven_day" to UsageWindow(null, null)),
+                        peakPercent = null,
+                        blockedUntil = null,
+                        active = false,
+                        seats = listOf("worker-a")
+                    ),
+                    // Blank times read as absent, so nothing renders "Spent until " with no time.
+                    ClaudeAccount(
+                        id = "acct-4",
+                        label = "acct-4",
+                        signIn = "other",
+                        signInCheckedAt = null,
+                        windows = mapOf("five_hour" to UsageWindow(5.0, null)),
+                        peakPercent = null,
+                        blockedUntil = null,
+                        active = false,
+                        seats = emptyList()
+                    )
+                )
+            ),
+            rotation
+        )
+    }
+
+    @Test
+    fun `parseAccountRotation keeps the daemon's error text`() {
+        val rotation = parseRotation(
+            """{ "registryFile": "/home/dev/.moe/claude-accounts.json", "error": "unknown key \"foo\" in accounts[0]", "accounts": [] }"""
+        )
+        assertEquals("unknown key \"foo\" in accounts[0]", rotation?.error)
+        assertTrue(rotation?.accounts?.isEmpty() == true)
     }
 }

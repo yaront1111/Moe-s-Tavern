@@ -20,8 +20,9 @@ import { invalidInput } from '../util/errors.js';
  * whose worker record no longer exists. A daemon restart wipes worker records,
  * so that sidecar kept pinging happily forever and nothing ever told it to
  * re-register. Three conditions now answer reattach-required instead: no worker
- * record, no open attempt for that seat, and an attempt parked in `reconciling`
- * by a restart that lost sight of it.
+ * record, a task held with no open attempt of the seat's own on it, and an
+ * attempt parked in `reconciling` by a restart that lost sight of it. A seat
+ * that holds no task (a governor, an idle seat) is simply acknowledged.
  *
  * A RETURNED VALUE, NEVER A THROW. This fires every 60 seconds from every seat,
  * so a thrown refusal would turn a routine daemon restart into an error loop in
@@ -88,9 +89,8 @@ function readPresenceKind(value: unknown): AttemptPresenceKind | undefined {
 function resolveOwnAttempt(
   state: StateManager,
   workerId: string,
-  currentTaskId: string | null
+  currentTaskId: string
 ): ExecutionAttempt | null {
-  if (!currentTaskId) return null;
   const attempt = currentAttempt(state, currentTaskId);
   if (!attempt || attempt.workerId !== workerId) return null;
   return attempt;
@@ -100,7 +100,7 @@ export function heartbeatTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.heartbeat',
     description:
-      'Presence ping: refreshes the calling worker\'s lastActivityAt and records an optional presence kind on its open execution attempt. Answers reattach-required (a returned value, never an error) when the worker record is gone, when the seat owns no open attempt, or when its attempt is parked in `reconciling` by a daemon restart — in which case the runner must call moe.reattach_attempt. Used by the agent wrapper sidecar during long silent steps; not intended to be called by agents directly. A presence kind is what the sidecar CLAIMS about itself, never verified liveness.',
+      'Presence ping: refreshes the calling worker\'s lastActivityAt and records an optional presence kind on its open execution attempt. Answers reattach-required (a returned value, never an error) when the worker record is gone, when the seat holds a task but owns no open attempt on it, or when its attempt is parked in `reconciling` by a daemon restart — in which case the runner must call moe.reattach_attempt. A seat holding no task is just acknowledged. Used by the agent wrapper sidecar during long silent steps; not intended to be called by agents directly. A presence kind is what the sidecar CLAIMS about itself, never verified liveness.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -131,6 +131,15 @@ export function heartbeatTool(_state: StateManager): ToolDefinition {
       // tool's original job, and it is independent of whether a runner has to
       // reattach.
       await state.touchWorker(params.workerId);
+
+      // A seat holding no task (a governor, a seat between claims) has no
+      // execution to reattach, so its ping is only the refresh above. Answering
+      // no-open-attempt here made every taskless sidecar log a [reattach] line
+      // it could do nothing about.
+      if (!worker.currentTaskId) {
+        const ack: HeartbeatAck = { ok: true };
+        return ack;
+      }
 
       const attempt = resolveOwnAttempt(state, params.workerId, worker.currentTaskId);
       if (!attempt) return reattachRequired('no-open-attempt');

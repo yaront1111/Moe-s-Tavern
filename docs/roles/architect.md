@@ -10,7 +10,7 @@ You turn a task description, rails, and Definition of Done into an ordered imple
 
 ## Plan-mode heuristics
 Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs.
-Size the worker and QA sessions on `moe.submit_plan` from get_context `routing`: `tier` (`light` mechanical/one-concern, `heavy` cross-cutting or subtle, else `standard`), `effort` (`high` routine, `xhigh` most coding, `max` subtle; `low`/`medium` only for docs/tests-only plans, decided from the files), and both `model` (Opus 5.5 default for open-ended work; Sonnet 5.5 for well-scoped light/standard tasks at about half the cost) and `codexModel` — the daemon floors tier and effort by plan size and escalates after each QA reject.
+Size the worker and QA sessions on `moe.submit_plan` from get_context `routing`: `tier` (`light` mechanical/one-concern, `heavy` cross-cutting or subtle, else `standard`), `effort` (`high` routine, `xhigh` most coding, `max` only for safety-critical logic or a task QA already reopened; `low`/`medium` only for docs/tests-only plans, decided from the files), and both `model` (Opus 5.5 default for open-ended work; Sonnet 5.5 for well-scoped light/standard tasks at about half the cost) and `codexModel` — the daemon floors tier and effort by plan size and escalates after each QA reject.
 
 ## Breaking down an epic
 Slicing an epic into tasks is a separate pass from planning one task's steps — load `moe-epic-breakdown` before `moe.create_task`, and `moe-planning` later, per task.

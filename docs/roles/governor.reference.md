@@ -21,7 +21,7 @@ Leases over exclusive-use infrastructure (benchmark box, staging DB) are daemon-
 
 - **Visibility**: `moe.list_resources` shows every resource — resolved capacity/lease cap, current holders (note/ETA/expiry) and the wait queue in grant order. Use it to spot convoys (a long queue behind one holder) and stale leases nearing expiry.
 - **Stuck lease**: `moe.release_resource { resourceId, workerId: <you>, taskId: <holder's task>, force: true }` force-releases another holder's lease and grants the queue onward. Omitting `taskId` with `force: true` clears ALL leases and queue entries — scope it unless you mean that. The reaper already force-releases past `maxLeaseMs` (default 24h) and posts a ⏱️ line to `#governors`, so force is for when the queue can't wait for the cap.
-- **Declaration**: tune capacity/lease caps in `.moe/project.json` `settings.resources` — `{ "<id>": { capacity, maxLeaseMs, description } }` (defaults capacity 1, 24h; undeclared ids auto-create with those). A settings update replaces the whole map.
+- **Declaration**: tune capacity/lease caps in `.moe/project.json` `settings.resources` — `{ "<id>": { capacity, maxLeaseMs, releaseOnDeregister, description } }` (defaults capacity 1, 24h, `releaseOnDeregister: false`; undeclared ids auto-create with those). A settings update replaces the whole map. `releaseOnDeregister: true` drops a deregistered seat's lease and queue entries on that resource: use it for build slots, never for a stateful host a dead holder may have left dirty.
 - **Leave resource-blocked tasks alone**: a task BLOCKED with `blockedResourceId` set is waiting legitimately and auto-unblocks on grant — the blocked-timeout sweep deliberately skips parking it. Human-blocked tasks (no resourceId) are the ones your triage playbook applies to.
 
 ## Unblocking: seat vs task
@@ -46,6 +46,16 @@ Your levers:
 - **`moe.set_task_dependencies { taskId, dependsOn }`** — the escape hatch (architect/governor-gated). Full replacement, `[]` clears. Use it when a mis-declared `dependsOn` is withholding a row that should run, or to add the dependency an architect forgot. Gating without this tool would let one typo permanently stick a row — that is why it exists; never work around it by deleting the prerequisite task. It **rejects a cycle** (an id from which the edited task is already reachable over `dependsOn ∪ blockedOnTaskIds`), naming the path — two rows waiting on each other would sit claim-gated forever with nothing looking at them.
 - **Stale-block alert triage** (`blockedAt`-age line in `#governors`, from the sweep — visibility, not auto-park). Three shapes: (1) no deps and no resource — nothing will auto-clear it: a human question → get the answer, then `unblock_worker { resolveBlocks: true }` / `set_task_status`; actually waiting on another task → have the reason re-filed with the task id (auto-parse structures it) so the auto-unblock takes over; every step COMPLETED → BLOCKED misused as "done", the worker should `complete_task`. (2) dep-waiting, but an unmet prerequisite is itself BLOCKED/BACKLOG (the line shows each dep's status) — the auto-unblock cannot fire until you move the prerequisite: promote the BACKLOG one, unblock the BLOCKED one, or, if it waits back on this row (a cycle), re-plan one side and fix the graph with `set_task_dependencies`. (3) dep-waiting past 2× the blocked timeout with prerequisites still in flight — check they are actually moving.
 - Do **not** sweep dependency-blocked or resource-blocked rows into BACKLOG or `resolveBlocks` them "to tidy up" — both auto-clear, and clearing block state by hand throws away the `blockedFromStatus` restore. The exception is the stuck-prerequisite alert above: that row will never auto-clear without a human move.
+
+## Re-prioritizing the queue
+
+`moe.set_task_priority { taskId, priority }` (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`, governor-only) changes which row the fleet claims next: `claim_next_task` and `wait_for_task` rank by priority before epic or order, and resource queues grant by it. Use it on a signal, not as routine tidying:
+
+- A prerequisite that other rows wait on (`dependsOn`, `blockedOnTaskIds`) sits behind lower-value work: raise it so the chain clears sooner.
+- The human asks for something to go first, or a worker files a `bug:` card that breaks other work.
+- A row filed `CRITICAL`/`HIGH` by mistake keeps jumping the queue: lower it.
+
+It never preempts: an assigned task keeps its seat, so raising a row stops no one mid-task. Post why in `#governors` (one sentence). Reordering several rows at once gets the human's nod first.
 
 ## Rail proposal patterns
 

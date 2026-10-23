@@ -29,6 +29,7 @@ import {
 } from '../util/metrics.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { MoeError } from '../util/errors.js';
+import { applyAccountMessage, type AccountMessageType } from './accountMessages.js';
 
 /**
  * The ONLY error-context keys allowed to cross the /ws boundary. A MoeError's
@@ -170,6 +171,7 @@ export type PluginMessage =
   | { type: 'PIN_MESSAGE'; payload: { channel: string; messageId: string } }
   | { type: 'UNPIN_MESSAGE'; payload: { channel: string; messageId: string } }
   | { type: 'TOGGLE_PIN_DONE'; payload: { channel: string; messageId: string } }
+  | { type: AccountMessageType; payload?: Record<string, unknown> }
   | { type: 'GET_DECISIONS' }
   | { type: 'APPROVE_DECISION'; payload: { decisionId: string } }
   | { type: 'REJECT_DECISION'; payload: { decisionId: string } };
@@ -1067,6 +1069,20 @@ export class MoeWebSocketServer {
           }
           const rejected = await this.withMutex(() => this.state.rejectDecision(rejectDecId));
           this.safeSend(ws, JSON.stringify({ type: 'DECISION_RESOLVED', payload: rejected }));
+          return;
+        }
+        case 'ADD_ACCOUNT':
+        case 'REMOVE_ACCOUNT':
+        case 'MOVE_ACCOUNT':
+        case 'RENAME_ACCOUNT':
+        case 'SET_ACCOUNT_SWITCH_PERCENT': {
+          // The Accounts tab edits the machine's Claude account list; the
+          // broadcast ACCOUNTS_UPDATED is every client's confirmation.
+          const accountMessage = message;
+          const reply = await this.withMutex(async () =>
+            applyAccountMessage(this.state, accountMessage.type, accountMessage.payload)
+          );
+          if (reply) this.safeSend(ws, JSON.stringify(reply));
           return;
         }
         default:

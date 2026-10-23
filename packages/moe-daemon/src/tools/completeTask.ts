@@ -23,6 +23,47 @@ export function resetBranchPolicyGovernorRateLimit(): void {
   branchWarningAt = undefined;
 }
 
+function nonBlank(value: unknown): boolean {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * The hint for a completion whose attempt is left `finalizing`.
+ *
+ * Only a runner closes that boundary. The moe-agent wrapper is one: it claims
+ * with a runner identity (processStartedAt + host) and calls
+ * moe.finalize_attempt from its exit path. A seat that claimed WITHOUT that
+ * identity was not launched by the wrapper, so nothing will ever finalize for
+ * it. Telling that seat "the wrapper commits them, end your turn" strands the
+ * row: claim_next_task and wait_for_task skip it for every other seat, and
+ * qa_approve refuses it, with no signal anywhere. Such a seat is its own runner
+ * and is told so.
+ *
+ * The identity is advisory, never proof that a wrapper is alive (see
+ * ExecutionAttempt.processStartedAt), so the hint is worded for both cases and
+ * names no tool field: a wrapper whose identity was unreadable still finalizes
+ * on its own, and must not have that done for it before it lands the bytes.
+ */
+function finalizingReason(attempt: ExecutionAttempt, taskId: string): string {
+  const head = `Task handed to QA, but attempt ${attempt.id} (generation ${attempt.generation}) is FINALIZING`;
+  const tail =
+    'Record a Serena write_memory `task-' + taskId + '-handoff` note (and any gotcha-<area> ' +
+    'learnings) for the next agent, then END YOUR TURN. Do not claim or wait for another task — ' +
+    'a claim from you is refused while this attempt is finalizing.';
+  if (nonBlank(attempt.processStartedAt) && nonBlank(attempt.host)) {
+    return `${head}: your bytes are NOT landed until this session exits and the wrapper commits them. ${tail}`;
+  }
+  return (
+    `${head}, and it records no runner identity, so no moe-agent wrapper is known to land and close it. ` +
+    'Until moe.finalize_attempt closes it, no other seat can claim this task and qa_approve refuses it. ' +
+    'If you delivered the bytes yourself, you are its runner: once they are on the delivery target, call ' +
+    `moe.finalize_attempt { taskId: "${taskId}", attemptId: "${attempt.id}", generation: ${attempt.generation}, ` +
+    'outcome: "landed", landedRevision: "<the 40-hex commit>" } (outcome "nothing-to-commit" if you committed ' +
+    'nothing), then record that commit with moe.record_commit. If a moe-agent wrapper does run this session, ' +
+    `leave the finalize to it. ${tail}`
+  );
+}
+
 interface BranchPolicyOutcome {
   pattern: string;
   currentBranch?: string;
@@ -230,14 +271,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         // legacy row with no attempt opened no boundary, so it keeps the old
         // hint unchanged.
         nextAction: finalizing
-          ? {
-              reason:
-                `Task handed to QA, but attempt ${finalizing.id} (generation ${finalizing.generation}) is ` +
-                'FINALIZING: your bytes are NOT landed until this session exits and the wrapper commits them. ' +
-                'Record a Serena write_memory `task-' + updated.id + '-handoff` note (and any gotcha-<area> ' +
-                'learnings) for the next agent, then END YOUR TURN. Do not claim or wait for another task — ' +
-                'a claim from you is refused while this attempt is finalizing.'
-            }
+          ? { reason: finalizingReason(finalizing, updated.id) }
           : {
               tool: 'moe.wait_for_task',
               args: {

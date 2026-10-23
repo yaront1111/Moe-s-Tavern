@@ -77,7 +77,9 @@ describe('moe.record_commit', () => {
     expect(result.commitCount).toBe(1);
     expect(result.sha).toBe(SHA_A);
     expect(result.addedPaths).toEqual(['src/a.ts', 'src/b.ts']);
-    expect(result.filesModified).toEqual(['src/existing.ts', 'src/a.ts', 'src/b.ts']);
+    expect(result.filesModifiedCount).toBe(3);
+    expect(result).not.toHaveProperty('filesModified');
+    expect(h.state.getTask('task-1')!.filesModified).toEqual(['src/existing.ts', 'src/a.ts', 'src/b.ts']);
 
     const task = h.state.getTask('task-1')!;
     const commit = task.commits![0];
