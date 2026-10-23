@@ -6455,7 +6455,7 @@ except Exception:
                         2>/dev/null || echo "")
                     PREFLIGHT_PROGRESS_MARK="$(plan_progress_mark "$PREFLIGHT_CONTEXT" "$PREFLIGHT_TASK_ID")"
                     # alreadyAssigned carries no chatChannel -- recover it from
-                    # the full context on the resume path (the trim below drops it).
+                    # the daemon context on the resume path.
                     if [ -z "$PREFLIGHT_TASK_CHANNEL" ] && [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then
                         PREFLIGHT_TASK_CHANNEL=$($PYTHON_CMD -c "
 import json, sys
@@ -6466,60 +6466,8 @@ except Exception:
     pass
 " <<< "$PREFLIGHT_CONTEXT" 2>/dev/null || echo "")
                     fi
-                    # Trim the get_context payload before injection. Full JSON is
-                    # 5-30KB; retain recent comments and their omission metadata
-                    # so governor holds survive a fresh session. Plan notes are
-                    # capped to 300 chars per step.
-                    if [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then
-                        PREFLIGHT_CONTEXT_TRIMMED=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    proj = d.get('project') or {}
-    epic = d.get('epic') or {}
-    tk = d.get('task') or {}
-    plan = []
-    for s in (tk.get('implementationPlan') or []):
-        note = s.get('note') or ''
-        if isinstance(note, str) and len(note) > 300:
-            note = note[:300] + '...'
-        plan.append({
-            'stepId': s.get('stepId'),
-            'title': s.get('title'),
-            'description': s.get('description'),
-            'status': s.get('status'),
-            'note': note,
-            'modifiedFiles': s.get('modifiedFiles'),
-        })
-    out = {
-        'project': ({'id': proj.get('id'), 'name': proj.get('name'), 'globalRails': proj.get('globalRails')} if proj else None),
-        'epic': ({'id': epic.get('id'), 'title': epic.get('title'), 'epicRails': epic.get('epicRails')} if epic else None),
-        'task': ({
-            'id': tk.get('id'),
-            'title': tk.get('title'),
-            'description': tk.get('description'),
-            'status': tk.get('status'),
-            'reopenCount': tk.get('reopenCount'),
-            'reopenReason': tk.get('reopenReason'),
-            'rejectionDetails': tk.get('rejectionDetails'),
-            'definitionOfDone': tk.get('definitionOfDone'),
-            'implementationPlan': plan,
-            'taskRails': tk.get('taskRails'),
-            'comments': tk.get('comments'),
-            'commentSummary': tk.get('commentSummary'),
-        } if tk else None),
-        'allRails': d.get('allRails'),
-        'planningNotes': d.get('planningNotes'),
-        'nextAction': d.get('nextAction'),
-    }
-    sys.stdout.write(json.dumps(out, separators=(',', ':')))
-except Exception:
-    pass
-" <<< "$PREFLIGHT_CONTEXT" 2>/dev/null || true)
-                        if [ -n "$PREFLIGHT_CONTEXT_TRIMMED" ]; then
-                            PREFLIGHT_CONTEXT="$PREFLIGHT_CONTEXT_TRIMMED"
-                        fi
-                    fi
+                    # get_context owns role scoping and bounded sections. Pass it
+                    # through intact so plans, architecture and evidence reach the CLI.
                 fi
 
                 # 6. Read task channel backlog
@@ -6939,7 +6887,7 @@ except Exception:
 You ARE: $ROLE agent, workerId=$WORKER_ID.
 The wrapper has claimed your task and surfaced unread counts in <inbox> below. Fetch the full content via moe.chat_read when it is relevant; prior-knowledge memory names are preloaded in <inbox> - read the relevant ones via Serena read_memory. Routed mentions tagging you are listed verbatim further down -- those are mandatory replies before any other planned tool call.
 
-DO NOT re-call at session start: moe.chat_join, moe.claim_next_task, moe.get_context. They are done.
+Do not repeat moe.chat_join or moe.claim_next_task at session start. The daemon-scoped moe.get_context payload is below; re-fetch it if it is missing or stale. Use view:\"full\" only if you need a section listed in omitted.
 
 Claimed task id: $PREFLIGHT_TASK_ID
 
@@ -7038,16 +6986,16 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
                     case "$ARCHITECT_SESSION_TASKS" in ''|*[!0-9]*) ARCHITECT_SESSION_TASKS=10 ;; esac
                     if [ "$ARCHITECT_SESSION_TASKS" -lt 1 ]; then ARCHITECT_SESSION_TASKS=10; fi
                     if { [ "$CLAUDE_INTERACTIVE" = true ] || [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ]; } && [ "$ARCHITECT_SESSION_TASKS" -gt 1 ]; then
-                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its launcher-curated context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $ARCHITECT_SESSION_TASKS tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WORKER_ID'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $ARCHITECT_SESSION_TASKS tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
+                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $ARCHITECT_SESSION_TASKS tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WORKER_ID'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $ARCHITECT_SESSION_TASKS tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     else
-                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its launcher-curated context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
+                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     fi
                     ;;
                 worker)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its launcher-curated context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code and run only verification permitted by the current rails; if a required check is prohibited rather than explicitly deferred, call moe.report_blocked and never treat an unrun check as passing), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then execute the approved implementationPlan: call moe.start_step for step 0, implement it (write/edit code and run only verification permitted by the current rails; if a required check is prohibited rather than explicitly deferred, call moe.report_blocked and never treat an unrun check as passing), call moe.complete_step, and repeat through the final step. Then call moe.complete_task. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note plus any non-obvious 'gotcha-<area>' learnings. Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     ;;
                 qa)
-                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its launcher-curated context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then verify the implementation against definitionOfDone and rails. Run only verification permitted by the current rails; if a required check is prohibited rather than explicitly deferred, call moe.report_blocked and never treat an unrun check as passing. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
+                    PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then verify the implementation against definitionOfDone and rails. Run only verification permitted by the current rails; if a required check is prohibited rather than explicitly deferred, call moe.report_blocked and never treat an unrun check as passing. If it passes, call moe.qa_approve. If it fails, call moe.qa_reject with a detailed list of issues. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any 'gotcha-<area>' failure pattern). Then output a one-line text summary and STOP. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     ;;
             esac
             if [ "$PREFLIGHT_IS_RESUME" = true ] && [ -n "$PROMPT_BODY" ]; then

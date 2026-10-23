@@ -19,6 +19,72 @@ const engines = process.platform === 'win32'
   : [['sh', '/bin/bash']];
 const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 
+// The daemon owns role scoping. Exercise the real launcher projection AND
+// injected block, so a shell-side allowlist cannot silently strip fresh fields.
+const scopedContext = role => ({
+  project: { id: 'project-context', name: 'Context fixture', globalRails: { requiredPatterns: ['reuse'], forbiddenPatterns: [] },
+    settings: { consolidationBranch: 'moe/work-context' } },
+  epic: { id: 'epic-context', title: 'Preserve contracts', description: 'Shared behavior',
+    architectureNotes: 'Reuse the existing service. Preserve the caller contract — שלום 漢字.', epicRails: ['No duplicate helper'] },
+  task: { id: 'task-context', title: 'Reuse a shared helper', status: role === 'qa' ? 'REVIEW' : 'WORKING',
+    description: 'Update both caller and callee.', definitionOfDone: ['Existing caller still works'], taskRails: [],
+    implementationPlan: [{ stepId: 'step-1', description: 'Extend the existing helper', status: 'PENDING',
+      affectedFiles: ['src/shared.ts'], newFiles: ['src/new feature.ts'], modifiedFiles: [],
+      note: 'Keep this complete: ' + 'detail '.repeat(60) + '"quoted" $literal `text` — שלום 漢字' }],
+    verification: { command: 'npm test -- shared', exitCode: 0, outputTail: '1 test passed', source: 'agent-reported' },
+    commits: [{ sha: 'a'.repeat(40), treeId: 'b'.repeat(40), kind: 'completion', ref: 'moe/work-context',
+      pushed: true, recordedAt: '2026-10-21T18:35:19Z' }],
+    landing: { lastCompletion: { sha: 'a'.repeat(40), ref: 'moe/work-context', pushed: true, recordedAt: '2026-10-21T18:35:19Z' } }, declaredPaths: ['src/shared.ts'], dependsOn: ['task-prerequisite'],
+    ...(role === 'worker' ? { epicSiblings: [{ id: 'task-prerequisite', status: 'DONE', landed: true }] } : {}),
+    comments: [], commentSummary: { total: 0, returned: 0, omitted: 0, truncated: 0 } },
+  currentCandidate: { id: 'candidate-context', attemptId: 'attempt-context', taskId: 'task-context',
+    baseRevision: 'c'.repeat(40), treeSha: 'b'.repeat(40), deliveryTarget: 'refs/heads/moe/work-context',
+    createdAt: '2026-10-21T18:35:19Z' },
+  ...(role === 'worker' ? { planningNotes: { codebaseInsights: 'Reuse shared.ts', keyFiles: ['src/shared.ts'] } } : {}),
+  omitted: role === 'qa' ? ['task.epicSiblings', 'planningNotes', 'routing'] : ['routing'],
+  omittedHint: 'Pass view:"full" only if you need one of these sections.',
+  nextAction: { tool: role === 'qa' ? 'moe.qa_approve' : 'moe.start_step', args: { taskId: 'task-context' } },
+  futureContextField: { version: 2, note: 'A newer daemon field must reach an older wrapper.' },
+});
+
+for (const [ext, engine] of engines) {
+  for (const [label, role, context] of [
+    ['worker', 'worker', scopedContext('worker')],
+    ['QA', 'qa', scopedContext('qa')],
+    ['legacy sparse', 'worker', { task: { id: 'task-context', status: 'WORKING' } }],
+  ]) {
+    test(`${engine}: claimed task context preserves the daemon's ${label} payload`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe context '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const fixture = path.join(dir, 'context.json');
+      writeFileSync(fixture, JSON.stringify(context));
+      const source = read(ext);
+      let script;
+      if (ext === 'ps1') {
+        const project = between(source, '        $ctxJson = if ($preflightContext) {', '        $pendingJson =');
+        const inject = between(source, '        $dynamicContext += @"\n# Pre-flight Complete', '        # JIT reminder:');
+        script = `\ufeff$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n$preflightContext=[IO.File]::ReadAllText($env:MOE_CONTEXT_FIXTURE) | ConvertFrom-Json\n$dynamicContext=''\n$Role='${role}'\n$WorkerId='worker-context'\n$preflightTaskId='task-context'\n$generalCount=0\n$taskCount=0\n$mentionsCount=0\n$memTotal=0\n$memTaskLine='none'\n$memRecentLine='none'\n$pendingJson='{}'\n${project}\n${inject}\n[Console]::Write($dynamicContext)`;
+      } else {
+        const project = between(source, '                # 5. Fetch context for the claimed task', '                # 6. Read task channel backlog');
+        const inject = between(source, '        DYNAMIC_CONTEXT="# Pre-flight Complete', '        # JIT reminder:');
+        script = `set -eu\nPYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}\nPREFLIGHT_TASK_ID=task-context\nPREFLIGHT_TASK_CHANNEL=channel-context\nPREFLIGHT_CONTEXT=''\nmoe_rpc() { cat "$MOE_CONTEXT_FIXTURE"; }\nplan_progress_mark() { :; }\nROLE=${role}\nWORKER_ID=worker-context\nPREFLIGHT_GENERAL_COUNT=0\nPREFLIGHT_TASK_COUNT=0\nPREFLIGHT_ROUTED_MENTIONS_COUNT=0\nMEM_TOTAL=0\nMEM_TASK_NAMES=none\nMEM_RECENT_NAMES=none\nPREFLIGHT_PENDING='{}'\n${project}\n${inject}\nprintf '%s' "$DYNAMIC_CONTEXT"`;
+      }
+      const file = path.join(dir, `context.${ext}`);
+      writeFileSync(file, script);
+      const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
+        encoding: 'utf8', timeout: 20000,
+        env: { ...process.env, MOE_CONTEXT_FIXTURE: fixture.replaceAll('\\', '/') },
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const injected = result.stdout.match(/<claimed_task_context>\s*([\s\S]*?)\s*<\/claimed_task_context>/);
+      assert.ok(injected, 'launch must inject the claimed task context');
+      assert.deepEqual(JSON.parse(injected[1]), context,
+        'launchers must preserve the daemon-scoped payload, including source scope, architecture and review evidence');
+    });
+  }
+}
+
 for (const [ext, engine] of engines) {
   test(`${engine}: Codex task text never enters stable model instructions`, t => {
     const dir = mkdtempSync(path.join(tmpdir(), 'moe cache '));
