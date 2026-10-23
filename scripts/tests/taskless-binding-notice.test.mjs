@@ -55,7 +55,9 @@ function Invoke-MoeRpc { param($Tool, [Alias('Args')]$RpcArgs)
         if (retained) {
           assert.equal(existsSync(notice), false, 'retained holds must not repeatedly page governors');
         } else {
-          const message = JSON.parse(readFileSync(notice, 'utf8'));
+          const payload = readFileSync(notice, 'utf8');
+          assert.notEqual(payload, '', 'unverified binding RPC must receive a serialized JSON payload');
+          const message = JSON.parse(payload);
           assert.equal(message.channel, 'general');
           assert.equal(message.workerId, 'worker-fixture');
           content = message.content;
