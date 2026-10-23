@@ -30,6 +30,7 @@ import type {
   TeamRole,
 } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
+import { assertExecutionProfileReady, EXECUTION_PROFILES, resolveExecutionProfile } from '../delivery/executionProfile.js';
 import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
@@ -183,6 +184,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   }
   const input = requirePlainObject(settings, 'settings');
   rejectUnknownFields(input, [
+    'executionProfile',
     'approvalMode',
     'speedModeDelayMs',
     'autoCreateBranch',
@@ -212,6 +214,14 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   ], 'project setting');
 
   const next: ProjectSettings = { ...project.settings };
+
+  // Readiness is daemon-owned, never a caller-provided setting. Check before
+  // updateSettings can persist anything, including unrelated partial updates.
+  const executionProfile = input.executionProfile === undefined
+    ? resolveExecutionProfile(project.settings)
+    : validateEnumValue(input.executionProfile, 'executionProfile', EXECUTION_PROFILES);
+  assertExecutionProfileReady(executionProfile);
+  if (input.executionProfile !== undefined) next.executionProfile = executionProfile;
 
   if (input.approvalMode !== undefined) {
     next.approvalMode = validateEnumValue(input.approvalMode, 'approvalMode', ['CONTROL', 'SPEED', 'TURBO'] as const);

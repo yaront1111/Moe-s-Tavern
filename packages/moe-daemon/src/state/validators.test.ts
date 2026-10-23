@@ -156,3 +156,46 @@ describe('sanitizeImplementationPlan — bounds equal the tool caps', () => {
     expect(amendment.description).toBe(description);
   });
 });
+
+
+describe('validateSettingsUpdate — execution profile foundation', () => {
+  it.each(['legacy', 'observe'] as const)('accepts %s without relaxing an existing strict deliveryPolicy', executionProfile => {
+    const original = project({ deliveryPolicy: 'remote-push', qualityGate: 'npm test' });
+    const next = validateSettingsUpdate(original, { executionProfile } as never);
+    expect(next).toMatchObject({ executionProfile, deliveryPolicy: 'remote-push', qualityGate: 'npm test' });
+    expect(original.settings).not.toHaveProperty('executionProfile');
+  });
+
+  it('keeps an omitted profile absent and preserves observe on unrelated updates', () => {
+    expect(validateSettingsUpdate(project({ deliveryPolicy: 'local-branch' }), {})).not.toHaveProperty('executionProfile');
+    expect(validateSettingsUpdate(project({ executionProfile: 'observe', deliveryPolicy: 'local-branch' }), { agentCommand: 'codex' }))
+      .toMatchObject({ executionProfile: 'observe', deliveryPolicy: 'local-branch', agentCommand: 'codex' });
+  });
+
+  it.each([null, '', 'verified', 'VERIFIED-LOCAL', ' verified-local ', false, 1, [], {}].map(value => [value]))('refuses malformed profile %j', value => {
+    expect(() => validateSettingsUpdate(project(), { executionProfile: value } as never)).toThrow('must be one of: legacy, observe, verified-local');
+  });
+
+  it('refuses verified-local before returning settings for persistence', () => {
+    const original = project({ deliveryPolicy: 'remote-push' });
+    expect(() => validateSettingsUpdate(original, { executionProfile: 'verified-local', agentCommand: 'codex' } as never))
+      .toThrowError(expect.objectContaining({ codeName: 'EXECUTION_PROFILE_NOT_READY', code: -32003 }));
+    expect(original.settings).toMatchObject({ deliveryPolicy: 'remote-push', agentCommand: 'claude' });
+    expect(original.settings).not.toHaveProperty('executionProfile');
+  });
+
+  it('does not silently persist an already stored unavailable profile on an unrelated update', () => {
+    expect(() => validateSettingsUpdate(project({ executionProfile: 'verified-local' }), { agentCommand: 'codex' }))
+      .toThrowError(expect.objectContaining({ codeName: 'EXECUTION_PROFILE_NOT_READY' }));
+  });
+
+  it('permits an explicit project rollback without rewriting existing policy', () => {
+    expect(validateSettingsUpdate(project({ executionProfile: 'verified-local', deliveryPolicy: 'local-branch' }), { executionProfile: 'observe' } as never))
+      .toMatchObject({ executionProfile: 'observe', deliveryPolicy: 'local-branch' });
+  });
+
+  it.each(['ready', 'executionProfileReady', 'capabilities', 'executionPolicySnapshot'])('refuses caller readiness/policy injection through %s', key => {
+    expect(() => validateSettingsUpdate(project(), { executionProfile: 'observe', [key]: true } as never))
+      .toThrow('is not a supported project setting field');
+  });
+});

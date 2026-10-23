@@ -149,6 +149,19 @@ export interface AttributionSettings {
   exclude?: string[];
 }
 
+/** Workflow selection; independent of the existing deliveryPolicy requirements. */
+export type ExecutionProfile = 'legacy' | 'observe' | 'verified-local';
+
+/**
+ * Pure policy identity for an approved revision. This foundation only decodes
+ * snapshots; lifecycle persistence and enforcement are separate rollout work.
+ */
+export interface ExecutionPolicySnapshot {
+  version: 1;
+  profile: ExecutionProfile;
+  planRevision: number;
+}
+
 /**
  * What DONE requires: settings.deliveryPolicy, judged by delivery/policy.ts.
  * 'legacy' is the default, and what an absent or null value means: the soft
@@ -157,6 +170,8 @@ export interface AttributionSettings {
 export type DeliveryPolicy = 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact';
 
 export interface ProjectSettings {
+  /** Absent = legacy. Observe never weakens deliveryPolicy; verified-local is not yet runnable. */
+  executionProfile?: ExecutionProfile;
   approvalMode: 'CONTROL' | 'SPEED' | 'TURBO';
   speedModeDelayMs: number;
   autoCreateBranch: boolean;
