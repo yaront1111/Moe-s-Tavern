@@ -1,4 +1,4 @@
-# Moe - MCP Server Specification (Current)
+# Moe - MCP Seclaurveracl Specifclaudeication (Current)
 
 ## Overview
 
@@ -89,7 +89,7 @@ The daemon writes `.moe/daemon.json` with `{ port, pid, startedAt, projectPath }
 - Tool results are returned as `content: [{ type: "text", text: "<json>" }]`.
 - Errors are JSON-RPC errors with `code: -32000` and `message` set to the error string.
 - Rails violations include details in `error.data`.
-- **Role-scoped `tools/list`.** `moe-proxy` adds the seat's `MOE_WORKER_ID` to every `tools/list` request. The daemon resolves the caller's role (team role, else the `architect-`/`worker-`/`qa-`/`governor-` id prefix) and lists only the tools that role uses, per `TOOL_AUDIENCE` in `packages/moe-daemon/src/tools/index.ts`. The governor sees every agent-facing tool; wrapper-only tools (`heartbeat`, `deregister_worker`, `get_commit_scope`, `record_candidate`, `record_delivery_receipt`, `reattach_attempt`) are listed to nobody. A request with no `workerId`, or whose role can't be resolved (IDE plugins, `moe-call.sh`, a human), gets the full list. This filters the listing only: `tools/call` still serves every registered tool. A new tool needs a `TOOL_AUDIENCE` entry (`toolAudience.test.ts` enforces it).
+- **Role-scoped `tools/list`.** `moe-proxy` adds the seat's `MOE_WORKER_ID` to every `tools/list` request. The daemon resolves the caller's role (team role, else the `architect-`/`worker-`/`qa-`/`governor-` id prefix) and lists only the tools that role uses, per `TOOL_AUDIENCE` in `packages/moe-daemon/src/tools/index.ts`. The governor sees every agent-facing tool; wrapper-only tools (`heartbeat`, `deregister_worker`, `get_commit_scope`, `record_candidate`, `record_delivery_receipt`, `reattach_attempt`, `lease_account`, `report_account_usage`) are listed to nobody. A request with no `workerId`, or whose role can't be resolved (IDE plugins, `moe-call.sh`, a human), gets the full list. This filters the listing only: `tools/call` still serves every registered tool. A new tool needs a `TOOL_AUDIENCE` entry (`toolAudience.test.ts` enforces it).
 
 ---
 
@@ -353,6 +353,8 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 - A `workerId` that differs from a set `assignedWorkerId` is still refused with `NOT_ALLOWED`.
 - A call without a `workerId` (the JetBrains plugin `/ws` path, legacy clients) keeps the old tolerance.
 
+**Account switch.** When the seat's Claude account is spent (see **Claude Account Rotation**), the call is refused with `NOT_ALLOWED`, and the reason starts with `ACCOUNT-SWITCH:`. The step stays `PENDING`. The worker ends its session; the wrapper relaunches the held task on the next account, and the new session starts the step. The check runs after every other guard. It never fires for a seat that this daemon process did not lease an account to.
+
 **Returns:**
 ```typescript
 { success: true, taskId, stepId, stepNumber, totalSteps }
@@ -387,7 +389,12 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
   amended?: {                         // ABSENT unless an amendment is active on the completed step
     amendmentId, reason, amendedBy, amendedAt
   },
-  nextStep: { stepId, description } | null   // description is amendment-resolved too
+  nextStep: { stepId, description } | null,  // description is amendment-resolved too
+  accountSwitch?: {                   // ABSENT unless the seat's Claude account is spent and a step remains
+    from, to, fromPeakPercent, switchAtPercent,
+    reason: 'usage' | 'limit' | 'signed_out' | 'removed',
+    instruction: string               // "ACCOUNT-SWITCH: …. Step <id> is saved. End your session now …"
+  }
 }
 ```
 
@@ -397,6 +404,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 - `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
 - `modifiedFiles` is the worker's positive assertion and feeds the **ASSERTED** attribution tier: the wrapper's post-flight commits every completed step's `modifiedFiles ?? affectedFiles` regardless of what its baseline says. Omitting it returns `warning`. The wrapper can still pick up unreported edits through the TOOL (stream-json harvest, claude only), PLANNED (plan-declared and changed) and MEASURED (undeclared and changed, solo only) tiers — but with another worker active an undeclared, non-tool-written edit stays **unattributed** (reported as `MOE_ATTRIBUTION_UNRESOLVED`, never staged) until someone declares it via `moe.declare_files`.
 - **Claimed row required**, the same rule as `moe.start_step`: a `workerId` on an unassigned `WORKING` row is refused with `STATE_CONFLICT` (`TASK_NOT_CLAIMED`) before the get_context check. The step stays `IN_PROGRESS`, nothing is recorded (no `note`, `modifiedFiles`, `stepsCompleted` or step metrics), and the caller's worker record is untouched.
+- `accountSwitch` appears when the seat's Claude account has reached the switch percent, hit its limit, been signed out or been removed, and another signed-in account is available (see **Claude Account Rotation**). The step is recorded as usual. The worker follows `instruction`: it ends the session without starting another step, and the wrapper relaunches the held task on `to`. `nextAction` is unchanged, and `moe.start_step` refuses the next step on the spent account anyway. The field is absent after the last step, since `moe.complete_task` comes next and needs no new session.
 
 ---
 
@@ -563,7 +571,7 @@ All seven are required; `additionalProperties` is `false`.
 - **A daemon restart now holds, it does not purge.** This is a deliberate change from the old purge-everything startup. On every start, *before* the worker purge, the daemon moves each `running` attempt whose task still exists and is still assigned to the attempt's worker to `reconciling`, and the purge then **spares** any worker seat that owns a non-closed attempt: its record stays on disk and in the map with its `currentTaskId` intact, and its task stays `WORKING` and assigned rather than being routed through the release path. A `running` attempt whose task is missing, unassigned or assigned to a different worker is **closed** at startup instead (logged at info with the row's current assignee), and so is a `reconciling` attempt an earlier restart parked whose task is in that state now: its seat had already given the task up, so there is no owner to hold the row for, and the purge does not spare that seat for it. A `reconciling` attempt whose task is still assigned to its worker is left exactly as it is, its window still measured from the original park. The deciding fact is the assignment alone, never presence or an idle signal. Previously a restart mid-build deleted the worker and handed live work to the next claimant.
 - **`reconciling` means the daemon has lost sight of the execution — not that it thinks the process is alive, and not that it thinks it is dead.** It is the absence of both. Nothing in the hold consults `lastActivityAt` or any other idle signal, in either direction: a quiet build is not evidence of a dead worker.
 - **All four identity elements must match exactly**: the attempt id, the `generation`, the recorded `processStartedAt` and the recorded `host`. `processStartedAt` is compared as the **exact stored string**, never parsed to a date — a re-serialised spelling of the same instant is refused, because parsing would silently widen the match. An attempt that recorded no `processStartedAt`/`host` can never be matched.
-- **Where the recorded values come from.** The claim that opened the attempt, and nowhere else: `moe.claim_next_task` takes the same `processStartedAt`/`host` pair from the runner as an optional both-or-neither argument and records it verbatim (see its **Runner process identity**). The daemon derives, defaults and normalises nothing, so what this tool compares is exactly what some runner once sent. A claim that sent no pair — every non-runner caller, and every claim made before the pair existed — opens an attempt this tool can never match, which is the `processStartedAt (none recorded)` mismatch below. **The shipped wrappers call it**: their heartbeat sidecar when `moe.heartbeat` answers `attempt-reconciling` for the attempt they pinned, and their main loop right after a claim and right after the CLI exits for any `reconciling` attempt of the seat (see `moe.heartbeat`). An attempt whose claim predates the wrapper sending the pair stays unmatchable and is given up after `reconcileWindowMs` as before.
+- **Where the recorded values come from.** The claim that opened the attempt, and nowhere else: `moe.claim_next_task` takes the same `processStartedAt`/`host` pair from the runner as an optional both-or-neither argument and records it verbatim (see its **Runner process identity**). The daemon derives, defaults and normalises nothing, so what this tool compares is exactly what some runner once sent. A claim that sent no pair — every non-runner caller, and every claim made before the pair existed — opens an attempt this tool can never match, which is the `processStartedAt (none recorded)` mismatch below. **The shipped wrappers call it**: their heartbeat sidecar when `moe.heartbeat` answers `attempt-reconciling`, for the attempt that answer names, and their main loop right after a claim and right after the CLI exits for any `reconciling` attempt of the seat (see `moe.heartbeat`). An attempt whose claim sent no pair (one that predates the wrapper sending it, or one a worker CLI claimed inside its own session; see `moe.claim_next_task`) stays unmatchable and is given up after `reconcileWindowMs` as before.
 - **What a match does and does not prove.** Matching narrows **which process** the runner means: it rules out a reused pid, a stale session and another machine. It is **not** evidence that the process is alive — the daemon never probes a process, and nothing may treat these values as proof of liveness. What the match buys is that the seat is not handed to a stranger while its owner may still be mid-build.
 - **Two refusals, both by name.** A wrong identity is `-32002` / **`ATTEMPT_IDENTITY_MISMATCH`**. A *competing* claim on a held task — an explicit-`taskId` `moe.claim_next_task` from any worker other than the holder, while the task is still assigned to that holder — is `-32002` / **`ATTEMPT_RECONCILING`**, raised before any eligibility check or assignment write (only a missing task answers `TASK_NOT_FOUND` first), so a refused claim never changes an owner. Unlike the worker-scoped finalizing hold (and like the finalizing hold on the task — see `moe.claim_next_task`), this one is scoped **by task, not by caller**: the whole point is to stop a *different* worker taking a task whose owner is still out there. It is retryable (`context.retryable: true`), and since `MoeError.context` is not forwarded over the wire, the message names the attempt; key on `codeName`.
 - **Idempotent.** Reattaching an already-`running` attempt is a successful no-op that writes nothing — a byte-identical `.moe/attempts/<id>.json`, no touched `lastPhaseAt` — so a retry after a lost response is safe.
@@ -1155,7 +1163,7 @@ When `taskId` is provided the priority/order ranking is bypassed — you get the
 
 **Reconciling hold:** an explicit-`taskId` claim of a task whose attempt a daemon restart parked in `reconciling` is **refused with a thrown `-32002` / `ATTEMPT_RECONCILING`** while that task is still assigned to the attempt's worker: its runner may be moments from `moe.reattach_attempt`, and handing the row to anyone else would start a second execution of live work. Like the finalizing hold on the task, it is scoped by task, not by caller, and the holder itself is exempt. It is checked right after the missing-task check (a missing row answers `TASK_NOT_FOUND` first) and before any other eligibility check or write. A reconciling attempt on a row that is **unassigned or assigned to a different worker** holds nothing, so the claim falls through to the ordinary checks: an unassigned row is claimed, its leftover attempt is closed and the successor generation opened — exactly what a ranked claim does — and a row a live worker holds is refused as assigned (`NOT_ALLOWED`). The ranked pool never offers a held row, because its still-assigned owner is spared by the startup purge.
 
-**Runner process identity (optional, both or neither):** a runner may send `processStartedAt` and `host` — the identity of the process it is about to run its CLI in — and the claim records them **verbatim** on the attempt it opens. That is the only place they ever come from: the daemon never probes a process and never derives, defaults or normalises either value, and it never reads them as evidence that anything is alive. They exist so that a later `moe.reattach_attempt` can match the attempt a daemon restart parked against the process that opened it, comparing both as **exact strings** (see that tool). Rules: both or neither — a half identity would record something no reattach could reproduce, since both are compared — and each must be a non-blank string with no control characters, at most 200 characters for `processStartedAt` and 255 for `host`. A supplied-but-malformed value (blank, `null`, a non-string, over-long, or one of the pair without the other) is **refused** with `-32602` / `INVALID_INPUT` naming the field, before any eligibility check, assignment write or attempt open, so a refused claim assigns nobody. Refusing rather than silently dropping is deliberate: a dropped value reads as a successful claim and costs the seat its reattachability hours later, at a restart, with nothing in the log. **Omitting both is fully supported** and is what every non-runner caller does (the IDE board, `scripts/moe-call.sh`, older wrappers): the claim takes exactly the path it always did and writes the same attempt record, byte for byte — that attempt is simply unmatchable by `moe.reattach_attempt`, by design. A **resume never rewrites** what is already recorded: re-claiming a task you already hold adopts the open attempt as it stands, whatever identity the resuming claim presents, so no second process can re-point a live execution at itself. The shipped wrappers (`scripts/moe-agent.{sh,ps1}`) send the pair on every claim they make, including a resume: `processStartedAt` is `<wrapper pid>@<process start token>` (sh: `/proc/<pid>/stat` starttime, else `ps` lstart; ps1: the process `StartTime` in UTC ticks) and `host` the lowercased host name, computed once per wrapper process — the wrapper, not the CLI, because it outlives every CLI respawn. A wrapper that cannot determine both sends neither and says so in one `[WARN]`. A respawned wrapper is a different process and cannot reattach an attempt its predecessor opened; see `moe.heartbeat` for how the wrappers react to a parked attempt.
+**Runner process identity (optional, both or neither):** a runner may send `processStartedAt` and `host` — the identity of the process it is about to run its CLI in — and the claim records them **verbatim** on the attempt it opens. That is the only place they ever come from: the daemon never probes a process and never derives, defaults or normalises either value, and it never reads them as evidence that anything is alive. They exist so that a later `moe.reattach_attempt` can match the attempt a daemon restart parked against the process that opened it, comparing both as **exact strings** (see that tool). Rules: both or neither — a half identity would record something no reattach could reproduce, since both are compared — and each must be a non-blank string with no control characters, at most 200 characters for `processStartedAt` and 255 for `host`. A supplied-but-malformed value (blank, `null`, a non-string, over-long, or one of the pair without the other) is **refused** with `-32602` / `INVALID_INPUT` naming the field, before any eligibility check, assignment write or attempt open, so a refused claim assigns nobody. Refusing rather than silently dropping is deliberate: a dropped value reads as a successful claim and costs the seat its reattachability hours later, at a restart, with nothing in the log. **Omitting both is fully supported** and is what every non-runner caller does (the IDE board, `scripts/moe-call.sh`, older wrappers): the claim takes exactly the path it always did and writes the same attempt record, byte for byte — that attempt is simply unmatchable by `moe.reattach_attempt`, by design. A **resume never rewrites** what is already recorded: re-claiming a task you already hold adopts the open attempt as it stands, whatever identity the resuming claim presents, so no second process can re-point a live execution at itself. The shipped wrappers (`scripts/moe-agent.{sh,ps1}`) send the pair on every claim they make, including a resume: `processStartedAt` is `<wrapper pid>@<process start token>` (sh: `/proc/<pid>/stat` starttime, else `ps` lstart; ps1: the process `StartTime` in UTC ticks) and `host` the lowercased host name, computed once per wrapper process — the wrapper, not the CLI, because it outlives every CLI respawn. A wrapper that cannot determine both sends neither and says so in one `[WARN]`. An architect, QA or governor seat also hands the pair to its CLI as `MOE_RUNNER_PROCESS_STARTED_AT` and `MOE_RUNNER_HOST`, and `moe-proxy` adds both, verbatim, to every `moe.claim_next_task` that names neither key, so a task that CLI claims inside its own session (an interactive architect plans up to `MOE_ARCHITECT_TASKS_PER_SESSION` per launch) is as reattachable as one the wrapper claimed. A worker seat never gets them, and the wrapper unsets both so an outer seat's values cannot leak in: an identity on a worker's attempt tells `moe.complete_task` that a wrapper will land and close it, and a worker's wrapper finalizes only the attempt its own claim opened. A respawned wrapper is a different process and cannot reattach an attempt its predecessor opened; see `moe.heartbeat` for how the wrappers react to a parked attempt.
 
 **BLOCKED hold:** when the held task is `BLOCKED`, `alreadyAssigned` additionally carries `blockedReason`, `blockedResourceId` and `blockedOnTaskIds` (each present only when set on the task), and `nextAction` points at `moe.release_task` instead of `get_context`, spelling out the two workable exits: end the session and let the wrapper idle (the resource grant / dependency auto-unblock / a human clears it), or `moe.release_task { taskId }` to hand the task back with its `blockedReason` intact and free the slot for other work — never re-enter `wait_for_task` hoping for different work (nothing else is claimable while the hold stands). Note that an assignee-reported **non-resource** `report_blocked` frees the seat at report time, so a BLOCKED hold is the resource-block (hold+idle) shape or a third-party (workerId-less) block on an assigned task — an assignee-reported non-resource BLOCKED task is unassigned and simply not offered. A BLOCKED hold is not resumable work — the wrapper reads this status and suppresses the CLI relaunch entirely; a live session should end rather than spin. A set `blockedResourceId` means the daemon auto-unblocks the task the moment its lease is granted (see `## Shared Resources`); a set `blockedOnTaskIds` means it auto-unblocks when every listed task is DONE/ARCHIVED; neither set means the block needs a human (`moe.unblock_worker { resolveBlocks: true }` / `set_task_status` — a bare `unblock_worker` only frees the seat). Before idling on a BLOCKED hold the wrapper lands any lingering baseline for the held task as a recovery checkpoint (`MOE_CHECKPOINT_RECOVERED`), so a blocked task's files reach the branch with no CLI launched.
 
@@ -1371,6 +1379,40 @@ Architect/governor escape hatch: replace a task's `dependsOn` list so a mis-decl
 - Withheld rows are explainable: `moe.list_tasks` rows carry `dependsOnUnmet`.
 - **Cycles are rejected**, not stored: a `dependsOn` cycle (A→B then B→A, directly or through a longer chain) would leave every member claim-gated forever with nothing — no sweep, no alert, no wrapper path — ever looking at it. This tool is the hard-validation escape hatch, so it throws and names the path; `create_task` and `report_blocked` apply the same check advisorily (drop + warning).
 - Distinct from `blockedOnTaskIds` (a `report_blocked` field for dependencies discovered mid-flight): `dependsOn` prevents a bad claim up front; `blockedOnTaskIds` parks an already-claimed task. Both are cleared by the same all-deps-done machinery, and both count as edges for the cycle check.
+
+---
+
+### moe.set_task_priority
+
+Governor lever on claim order: change a task's `priority` after `moe.create_task` set it. Humans change it in the board's task dialog; this is the agent path.
+
+**Parameters:**
+```typescript
+{
+  taskId: string,
+  priority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",   // case-sensitive
+  workerId?: string      // caller (auto-injected by proxy); role must resolve to governor
+}
+```
+
+**Errors:** `[MISSING_REQUIRED]` without `taskId` or `priority`; `[INVALID_INPUT]` for any other priority value (`high` included); `[NOT_ALLOWED]` when the caller does not act as a governor (team role, else the `governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
+
+**Returns:**
+```typescript
+{
+  success: true, taskId,
+  priority: string,          // the priority now in force
+  previousPriority: string,  // what it replaced
+  changed: boolean,          // false when the task already had this priority: nothing written, no event
+  message: string
+}
+```
+
+**Notes:**
+- `claim_next_task` and `wait_for_task` rank candidates by priority before anything else, and resource queues grant by priority, then FIFO. All three read the live value, so the change applies from the next claim or grant.
+- It never preempts: a task that is already assigned keeps its seat, and raising a row does not interrupt the seat working another one.
+- A change records a `TASK_PRIORITY_SET` activity event with the governor as actor and posts `🎯 <governor> set priority on <taskId>: MEDIUM → CRITICAL` to `#general`.
+- Only governors see it in `tools/list` (humans' role-less clients see every tool).
 
 ---
 
@@ -1791,7 +1833,7 @@ Non-governor callers are rejected with `NOT_ALLOWED`. Architects on an empty PLA
 - `❌ QA rejected {taskId}: {reason}` (from `moe.qa_reject`).
 - `🔓 {worker} released task: {title}` (from `moe.release_task`).
 - `🛑 task {id} ({title}) parked to BACKLOG after 3 empty-progress releases in 24h …` (from `moe.release_task`'s refusal cascade; needs human reprioritization).
-- `⚠️ {worker} stale on {taskId} ({title}) — last activity {N}s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.` (from the daemon's stale-worker watcher; only fires when at least one governor is online; a presence/triage signal, not a release trigger).
+- `⚠️ {worker} stale on {taskId} ({title}) — last activity {N}s ago. Quiet ≠ dead (long builds/tests are silent): ping before acting; never release on idle alone.` (from the daemon's stale-worker watcher; only fires when at least one governor is online; once per stale stretch, and at most once an hour for the same worker and task; a presence/triage signal, not a release trigger).
 - `📋 New plan needed: {title} ({id})` (cross-post of the PLANNING announcement; informational — governors never claim PLANNING tasks).
 
 ---
@@ -2060,10 +2102,15 @@ Add a comment to a task (for questions or responses). This is how agents answer 
 
 **Returns:**
 ```typescript
-{ success: true, taskId, commentId, totalComments }
+{
+  success: true, taskId, commentId, totalComments,
+  routing?: { messageId, channel, routingTargets },  // the comment's @mentions were relayed to chat
+  routingError?: string                               // they were not; the comment is stored regardless
+}
 ```
 
 **Notes:**
+- A comment whose @mentions would route (the same parse as `moe.chat_send`: quoted, code-span and mid-sentence group mentions do not) is relayed as ONE chat message, `💬 <author> on <taskId> (<commentId>):` followed by the comment, so the named seats' `moe.chat_wait` wakes. It goes to the task's channel (a channel named by the task id) when one exists, else `#general`, sent as the author: the loop guard counts it as one agent hop. Only a registered worker's comment is relayed; any other author gets `routingError`. A comment too long for one chat message is relayed as its explicit `@<workerId>` list instead. A relay failure never fails the comment, and a comment that addresses nobody posts nothing.
 - The stored comment is `{ id, author, content, timestamp }`; `content` is trimmed before storage and validation.
 - Posting a comment clears `hasPendingQuestion` on the task — it counts as answering the outstanding human question (and stops `moe.wait_for_task` waking for it).
 - The task's comment list is bounded: only the most recent `MAX_COMMENTS_PER_TASK` comments are kept (default 200, override via `MOE_MAX_COMMENTS_PER_TASK`); older comments are dropped.
@@ -2117,7 +2164,8 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
   workerId?: string,    // Worker ID for auto-cursor tracking
   sinceId?: string,     // Return messages after this message ID
   limit?: number,       // Max messages (default 10, max 200)
-  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
+  maxContentChars?: number, // Max chars/message in response (default 1000, 0 = full)
+  includeSystem?: boolean   // Also return the #general system feed (default false)
 }
 ```
 
@@ -2136,6 +2184,8 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
 - When no `channel` specified, reads up to `limit` messages per channel, merges them by timestamp, and returns the newest global `limit` messages
 - In all-channel mode, per-channel cursors and unread counts advance/clear only when doing so cannot skip fetched-but-omitted messages; any channel with omitted fetched messages stays unchanged so those messages remain readable on a later call
 - Long message content is truncated by default; pass `maxContentChars: 0` only when exact full text is needed
+- **Skips the `#general` system feed** unless `includeSystem: true`: daemon posts (`sender: "system"`) in `#general` that @mention nobody — task moved, claimed, step completed, landing reports. The same facts reach agents through their tools; the IDE board reads the channel unfiltered. A system line that @mentions someone is always returned, and so is every line in role and custom channels. Hidden lines do not count toward `limit`, and the cursor stays on the last message returned.
+- Feed lines also page nobody: they never raise an unread count, so a worker's unread total counts people, agents and mentions only
 
 ---
 
@@ -2210,6 +2260,7 @@ Long-poll for chat messages mentioning this worker or from humans. **Burst-aware
 - **Cursors advance only for delivered messages the drain actually read.** A capped burst stops the cursor at the last message returned; a channel the drain never scanned moves no cursor at all; and a message delivered straight off the event bus (the wake trigger, or anything that arrived mid-drain) never moves its channel's cursor, because it says nothing about the messages between it and where the scan stopped — a channel with more than 50 waiting would otherwise be skipped. Such a message is simply re-delivered on the next call. Unread counts are cleared only for channels that were fully drained. A failed cursor write is logged and the messages are still returned (a duplicate delivery beats a lost one).
 - Cancels any previous wait for the same worker
 - Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
+- The `#general` system feed (see `moe.chat_read`) never wakes a waiter and is never returned in a burst
 
 ---
 
@@ -2332,6 +2383,9 @@ Clear chat cursors and return a bounded, token-budgeted message window — for a
 ```typescript
 { success: true, messagesCount, messages, cursorsReset: true, truncated, hint? }
 ```
+
+**Notes:**
+- Skips the `#general` system feed, like `moe.chat_read` without `includeSystem`
 
 ## Cross-Session Memory
 
@@ -2683,17 +2737,96 @@ Exactly three conditions produce it:
 | `reason` | Condition |
 |---|---|
 | `no-worker-record` | No worker record for `workerId` — a daemon restart purged the seat and the runner has not re-registered. Returned before any refresh; nothing is created or resurrected. |
-| `no-open-attempt` | The worker exists but owns no open attempt (no current task, the attempt is closed, or the task's open attempt belongs to another seat). |
+| `no-open-attempt` | The worker holds a task (`currentTaskId`) but owns no open attempt on it: the attempt is closed, or the task's open attempt belongs to another seat. A seat holding no task (a governor, a seat between claims) has nothing to reattach and gets `{ ok: true }`. |
 | `attempt-reconciling` | The seat's attempt is parked in `reconciling` by a restart that lost sight of it. **No presence is recorded on this path** — a runner that has not proven which process it is does not get to look present. |
 
 **Notes:**
 - Called by the agent-wrapper heartbeat sidecar during long silent local steps (builds, test runs) so a live CLI isn't mistaken for a stale one; not intended to be called by agents directly
 - Reattach-required is a **returned value, never an error**, so a sidecar does not log a routine daemon restart as a failure. Recover with `moe.reattach_attempt`
-- **What the shipped wrappers do with it** (`scripts/moe-agent.{sh,ps1}`): on `attempt-reconciling` naming the attempt the wrapper pinned at claim time, the sidecar calls `moe.reattach_attempt` with that attempt id, the generation it pinned (this answer carries none) and the runner identity its claim recorded, and logs one `[reattach]` line. `no-worker-record`, `no-open-attempt` and any other attempt id name nothing that process may reattach: logged once per sidecar, nothing sent. A refusal (`ATTEMPT_IDENTITY_MISMATCH` and friends never heal) is logged once and not asked again; no answer at all is retried at the next ping. The main loop covers what the sidecar cannot see: right after its claim and right after the CLI exits it reattaches any `reconciling` attempt this seat owns. None of it can fail the session
+- **What the shipped wrappers do with it** (`scripts/moe-agent.{sh,ps1}`): on `attempt-reconciling`, the sidecar reattaches the attempt the answer names: the one the wrapper's own claim opened, or one its architect, QA or governor CLI claimed inside the session (`moe-proxy` stamps that claim with the wrapper's identity; see `moe.claim_next_task`). It reads the attempt's `taskId` and `generation` from `.moe/attempts/<attemptId>.json` (this answer carries neither), goes on only while that record names this seat's worker and is still `reconciling`, calls `moe.reattach_attempt` with the wrapper's own runner identity (the daemon's exact match decides whether the attempt is this process's) and logs one `[reattach]` line. `no-worker-record`, `no-open-attempt`, and any answer while the wrapper has no identity to present, name nothing that process may reattach: logged once per reason per sidecar, nothing sent. A refusal (`ATTEMPT_IDENTITY_MISMATCH` and friends never heal) is logged once and that attempt is not asked about again; no answer at all is retried at the next ping. The main loop covers what the sidecar cannot see: right after its claim and right after the CLI exits it reattaches any `reconciling` attempt this seat owns. None of it can fail the session
 - `lastActivityAt` is still refreshed for a live worker even when the response is reattach-required — a long silent build must keep looking alive either way. Still no-ops safely on a `DEAD` record
 - An old-style ping that sends no `presenceKind` behaves exactly as before and writes nothing to the attempt, so an un-upgraded wrapper is safe
 - Presence is written without touching the attempt's `lastPhaseAt`. The reconcile-window sweep measures its window from that field, so a 60s ping must never be able to extend it — do not reroute this write through the phase setter
 - A presence kind is the sidecar's **claim about itself, not verified liveness**; the daemon probes no process, and it still never infers death from silence
+
+## Claude Account Rotation
+
+Moe can spread claude seats across several Claude subscription accounts on one machine. Once the active account reaches a set share of its usage limit (90% by default), launches move to the next account.
+
+- **The account list is machine-level.** It is `~/.moe/claude-accounts.json` (`MOE_ACCOUNTS_FILE` overrides), and every project's daemon shares it. An entry holds an id, a label and a sign-in state (`subscription`, `signed_out` or `other`), nothing else: an unknown key makes the file invalid. Each account is a Claude config folder, `claude-accounts/<id>` next to the list.
+- **No credential passes through Moe.** Sign-in is Claude's own `claude auth login --claudeai`, which the daemon's `accounts` CLI runs in an IDE terminal. Moe creates the folder and gives claude its path as `CLAUDE_CONFIG_DIR`. Neither the daemon nor the CLI opens a file inside it. From `claude auth status --json`, the CLI keeps only the exit code and `authMethod`.
+- **Usage numbers come from claude itself.** The wrapper forwards what claude prints (the stream-json `rate_limit_event`, or the interactive statusline's `rate_limits`) through `moe.report_account_usage`. The numbers are stored next to the list as `claude-usage/<id>.json`, so every daemon on the machine sees the same ones.
+- **Fill-first and sticky.** A launch gets the active account while it is eligible, else the first eligible account in list order. An eligible account:
+  - is signed in with a subscription;
+  - has no live usage window at or past `switchAtPercent`;
+  - has no `rejected`/`overage` status;
+  - has no pending refusal.
+
+  A spent account comes back on its own when its window resets. A worker in the middle of a task moves at its next step boundary (`moe.complete_step` `accountSwitch`, `moe.start_step` refusal). Every other seat moves at its next launch.
+- **Activity:**
+  - `ACCOUNT_SWITCHED`, posted to #governors with 🔁;
+  - `ACCOUNTS_EXHAUSTED`, every signed-in account spent, posted with ⏸️ once per episode;
+  - `ACCOUNT_SIGNED_OUT`, posted with 🔑.
+- **CLI.** Run `node <daemon>/dist/index.js accounts <command>`, or `dist/accounts/cli.js` directly.
+  - Commands: `list`, `add [--label <text>]`, `login <id>`, `logout <id>`, `check [<id>]`, `remove <id> [--sign-out]`. `--accounts-file <path>` picks the list.
+  - Exit codes: 0 ok, 1 failed, 2 usage.
+  - Error tokens: `MOE_ACCOUNT_UNKNOWN`, `MOE_ACCOUNT_LOGIN_FAILED`, `MOE_ACCOUNT_LOGOUT_FAILED`, `MOE_ACCOUNT_NOT_SUBSCRIPTION`, `MOE_ACCOUNT_REGISTRY_INVALID`, `MOE_ACCOUNT_LIMIT`, `MOE_ACCOUNT_LABEL_INVALID`, `MOE_CLAUDE_NOT_FOUND`.
+  - `MOE_CLAUDE_BIN` picks the claude binary. On Windows the CLI looks it up on PATH × PATHEXT before running it, so a missing claude is reported as `MOE_CLAUDE_NOT_FOUND`, never as a signed-out account.
+
+### moe.lease_account
+
+Wrapper-only, so no role sees it in `tools/list`. Picks the account for the calling seat's next claude launch, and records it as `Worker.accountId`.
+
+**Parameters:**
+```typescript
+{ workerId: string }
+```
+
+**Returns** one of:
+```typescript
+{ rotation: false, reason: null }       // no list, or no accounts: launch as before
+{ rotation: false, reason: string }     // accounts exist but none is signed in with a subscription, or the list is invalid
+{ rotation: true, accountId: string, label: string, configDir: string, peakPercent: number | null, switchAtPercent: number }
+{ rotation: true, accountId: null, retryAt: string, retryInSec: number, switchAtPercent: number }  // every signed-in account is spent
+```
+
+**Notes:**
+- The wrapper starts claude with `CLAUDE_CONFIG_DIR=configDir`. It removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from claude's environment, since each would outrank the folder's login.
+- `accountId: null` means wait: the held task stays held, and the wrapper tries again at `retryAt`.
+- Which seat holds which account is kept in this daemon process only. After a daemon restart, no seat is told to switch until it leases again.
+
+### moe.report_account_usage
+
+Wrapper-only. Records one report for a leased account.
+
+**Parameters:**
+```typescript
+{
+  workerId?: string,
+  accountId: string,
+  windows?: Record<string, { percent?: number, utilization?: number, resetsAt?: number | string, status?: string }>,
+  refused?: boolean,                 // the launch was refused at the usage limit
+  signIn?: 'signed_out' | 'other'    // a sign-in probe after a fast failure; a wrapper never claims "subscription"
+}
+```
+
+**Returns:**
+```typescript
+{ recorded: boolean, blockedUntil: string | null, peakPercent: number | null }
+```
+
+**Notes:**
+- `utilization` is a 0–1 fraction (stream-json), and `percent` is 0–100 (statusline). `resetsAt` takes epoch seconds, epoch ms or ISO. Malformed windows are dropped, not refused, because neither format is a documented contract.
+- Inside one window, usage only grows: a lower reading never lowers the stored peak. A different reset time starts a new window.
+- The usage file is rewritten only when something changes:
+  - a window moves 1 point or more;
+  - a window crosses `switchAtPercent`;
+  - a window's reset time or status changes;
+  - a refusal is added.
+
+  A window with no reset time is also rewritten every 30 minutes, so it stays live while claude keeps reporting it.
+- `refused: true` parks the account until its spent window resets. The minimum is 5 minutes, and it is 1 hour when no window gives a reset time.
+- An `accountId` that is not on the list is ignored, never created.
 
 ## Plugin WebSocket Messages
 
@@ -2746,6 +2879,22 @@ A malformed token produces the same shape with `code: -32602` and `codeName: "IN
 Clients get the token from the `planRevision` returned by `moe.submit_plan` (see above) or from the task record in `STATE_SNAPSHOT`/`TASK_UPDATED`. Send back the revision that was **rendered and reviewed**, never a newer value re-read from a cache.
 
 End-to-end behaviour across both IDEs — a human reproduction checklist, the recovery paths, and what this deliberately does *not* fence — is in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+
+### Claude accounts — `ADD_ACCOUNT`, `REMOVE_ACCOUNT`, `MOVE_ACCOUNT`, `RENAME_ACCOUNT`, `SET_ACCOUNT_SWITCH_PERCENT`
+
+The JetBrains Accounts tab edits the machine's account list (see **Claude Account Rotation**) with these messages. Each one writes `claude-accounts.json` and broadcasts `ACCOUNTS_UPDATED`. A failure comes back as the usual `ERROR` frame.
+
+```typescript
+{ type: 'ADD_ACCOUNT', payload?: { label?: string } }                       // the sender also gets { type: 'ACCOUNT_ADDED', payload: { accountId } }
+{ type: 'REMOVE_ACCOUNT', payload: { accountId: string } }                  // unregisters only; the folder and its login stay
+{ type: 'MOVE_ACCOUNT', payload: { accountId: string, offset: -1 | 1 } }
+{ type: 'RENAME_ACCOUNT', payload: { accountId: string, label: string } }
+{ type: 'SET_ACCOUNT_SWITCH_PERCENT', payload: { switchAtPercent: number } } // whole number, 1–100
+```
+
+Sign-in, check and sign-out have no message, because the daemon never runs claude. The IDE runs the `accounts` CLI in a terminal tab, using the node and script paths in `accountRotation.cli`.
+
+`ACCOUNTS_UPDATED { payload: AccountRotationView }` is broadcast whenever the view changes. That covers a lease or report, an edit, a sign-in through the CLI, another daemon writing usage, and a window resetting with time (a 2-second watch). `STATE_SNAPSHOT` carries the same view as `accountRotation`. The shape is in `docs/SCHEMA.md`.
 
 ### `GET_METRICS` → `METRICS`
 

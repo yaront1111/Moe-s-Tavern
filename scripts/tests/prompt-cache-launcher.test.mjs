@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,7 @@ for (const [ext, engine] of engines) {
       script = `\ufeff$ErrorActionPreference='Stop'\n$projectPath=$env:MOE_TEST_DIR\n$env:TEMP=$env:MOE_TEST_DIR\n$cliType='codex'\n$Role='worker'\n$systemAppend='stable role instructions'\n$dynamicContext='task-A "quoted" 漢字'\n${block}\n[Console]::Write([IO.File]::ReadAllText($script:CodexSeatInstructionsFile))`;
     } else {
       const block = between(source, '        AGENT_INSTRUCTIONS_PATH="$PROJECT/.codex/agent-instructions.md"', '        # Build role-aware short prompt');
-      script = `set -e\nPROJECT=${quote(dir.replaceAll('\\', '/'))}\nROLE=worker\nSYSTEM_APPEND='stable role instructions'\nDYNAMIC_CONTEXT='task-A "quoted" 漢字'\ncreate_secure_temp() { printf '%s' "$PROJECT"; }\n${block}\nprintf '\\036'\ncat "$CODEX_SEAT_INSTRUCTIONS_FILE"`;
+      script = `set -e\nPROJECT=${quote(dir.replaceAll('\\', '/'))}\nROLE=worker\nSYSTEM_APPEND='stable role instructions'\nDYNAMIC_CONTEXT='task-A "quoted" 漢字'\ncreate_secure_temp() { printf '%s' "$PROJECT"; }\ncodex_moe_server_override() { :; }\n${block}\nprintf '\\036'\ncat "$CODEX_SEAT_INSTRUCTIONS_FILE"`;
     }
     const file = path.join(dir, `render.${ext}`);
     writeFileSync(file, script);
@@ -144,7 +144,8 @@ const compactVars = /^(CLAUDE_CODE_AUTO_COMPACT_WINDOW|MOE_COMPACT_WINDOW_DEFAUL
 for (const [ext, engine] of engines) {
   for (const [role, inherited, window, marker, keeperOn] of compactCases) {
     test(`${engine}: ${role} compact window over ${JSON.stringify(inherited)}`, t => {
-      const dir = mkdtempSync(path.join(tmpdir(), 'moe compact '));
+      // Long form: $PSScriptRoot expands an 8.3 TEMP such as C:\Users\RUNNER~1.
+      const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'moe compact ')));
       t.after(() => rmSync(dir, { recursive: true, force: true }));
       mkdirSync(path.join(dir, 'mods', 'moe-compaction-keeper'), { recursive: true });
       let script, keeperDir;

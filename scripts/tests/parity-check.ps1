@@ -25,6 +25,7 @@ $dynamicPatterns = @(
     'MOE_ATTR_[A-Z_]+',
     'MOE_CHECKPOINT_[A-Z_]+',
     'MOE_ATTRIBUTION_[A-Z_]+',
+    'MOE_ACCOUNT_[A-Z_]+',
     'MOE_RESCUE_REF'
 )
 # NOTE: the sh wrapper's internal MOE_LAND_* names (env plumbing between bash
@@ -65,11 +66,16 @@ $required = [ordered]@{
         'MOE_GROK_MODEL', 'MOE_GROK_EFFORT', 'MOE_GROK_MCP_STARTUP_TIMEOUT_SEC', 'GROK_CLAUDE_MCPS_ENABLED', 'GROK_CURSOR_MCPS_ENABLED', 'GROK_DISABLE_AUTOUPDATER', 'MOE_TOOL_NAME_STYLE', 'MOE_GROK_MCP_TOOL_TIMEOUT_SEC',
         'MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_CODEX_MCP_STARTUP_TIMEOUT_SEC',
         'CLAUDE_CODE_PROMPT_CACHE_TTL', 'CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
-        'MOE_COMPACT_WINDOW_DEFAULT', 'CLAUDE_CODE_PLUGIN_DIRS', 'MOE_DISABLE_COMPACTION_KEEPER')
+        'MOE_COMPACT_WINDOW_DEFAULT', 'CLAUDE_CODE_PLUGIN_DIRS', 'MOE_DISABLE_COMPACTION_KEEPER',
+        'CLAUDE_CONFIG_DIR', 'MOE_ACCOUNT_ID', 'MOE_ACCOUNT_SAMPLE_FILE')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
     'resume-budget prose' = @('resume budget re-armed')
+    # Claude account rotation: the helper both wrappers call and the lease, wait
+    # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
+    # compared above).
+    'account rotation prose' = @('moe-account-lease.mjs', '[account] ', 'launching without rotation.', 'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', 'relaunching on the next account; the held task stays held.', 'Relaunching now on the next account.')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
-    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt')
+    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt', 'lease_account', 'report_account_usage')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     # The landing outcomes finalize_attempt carries: both wrappers map every exit
     # (the interrupted one included) onto the same words. 'failed' is too common a
@@ -93,11 +99,12 @@ $required = [ordered]@{
     # result it reports and the reused-gate line, spelled identically in both.
     'delivery receipt' = @('moe/receipt', '[receipt]', 'record_delivery_receipt', 'DELIVERY_RECEIPT_CONFLICT', 'targetBefore', 'targetAfter', 'landedRevision', 'pushResult', 'Moe-Kind: completion')
     'delivery receipt prose' = @('delivery receipt not recorded for candidate', 'for the next pre-flight to replay.', 'already has a delivery receipt that differs from this report; keeping the recorded one, not retrying.', 'a crash before the receipt would leave this landing without one.', 'replaying the delivery receipt of task', 'that landing never moved the ref; dropping', 'kept: malformed journal', 'is still finalizing after its replayed receipt; its finalizing holds stay until it closes.', 'recording the owed ledger row of task', 'did not record the owed ledger row', 'a pull --rebase rewrote', 'push result unknown: the landing stopped before its push finished', 'no git remote configured; push skipped, the commit stays local on', 'push failed: ', 'git push failed', 'qualityGate result reused: the rebuilt candidate has the same tree and base.')
-    # Runner identity and reattach: the identity line and its warning, the reattach
+    # Runner identity and reattach: the identity line and its warning, the env
+    # names that hand the identity to an architect/QA/governor CLI, the reattach
     # call and its three outcomes, and the heartbeat's other reasons, spelled
     # identically in both.
-    'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]')
-    'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this wrapper pinned no such reconciling attempt; nothing to reattach.')
+    'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')
+    'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach.')
     # Hot reload: the restart announcement an operator sees and the deregister
     # reason both postflight hot-reload cases assert, spelled identically in both.
     'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart')
@@ -137,6 +144,13 @@ foreach ($gone in @('--full-auto')) {
     if ($ps1Code.IndexOf($gone, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("removed codex flag '$gone' is still passed by moe-agent.ps1") }
     if ($shCode.IndexOf($gone, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("removed codex flag '$gone' is still passed by moe-agent.sh") }
 }
+
+# 5. Windows PowerShell 5.1 (the JetBrains plugin's native Windows seats) reads
+#    a BOM-less script as ANSI and cannot parse moe-agent.ps1's non-ASCII text.
+$ps1Head = New-Object byte[] 3
+$ps1Stream = [IO.File]::OpenRead($ps1Path)
+try { [void]$ps1Stream.Read($ps1Head, 0, 3) } finally { $ps1Stream.Dispose() }
+if (($ps1Head -join ',') -ne '239,187,191') { $failures.Add("moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)") }
 
 if ($failures.Count -gt 0) {
     Write-Host "FAIL parity-check.ps1: $($failures.Count) asymmetry(ies) between moe-agent.ps1 and moe-agent.sh"

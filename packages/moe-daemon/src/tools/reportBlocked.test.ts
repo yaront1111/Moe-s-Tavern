@@ -198,14 +198,15 @@ describe('moe.report_blocked', () => {
     expect(result.notified).toEqual({ target: 'architect-a', via: 'freshest-live-architect' });
     expect(result.message).toBe('Task blocked; seat freed — this response does not start another task session. Pinged architect-a (freshest live architect).');
 
-    // Exactly one general copy is prefixed — postSystemMessage forwards to the
-    // same channel, so a second prefixed copy would page architect-a twice.
+    // Exactly one general copy of the block, and it carries the mention: a
+    // second copy would repeat it, and a second prefixed one would page twice.
     expect(mentionedGeneralPosts()).toHaveLength(1);
     expect(mentionedGeneralPosts()[0]).toMatch(/^@architect-a 🚧 worker-1 blocked on task-1: /);
-    // Three unprefixed+prefixed general posts total: the taskStore's
-    // "Task moved to BLOCKED" status-change message (report_blocked now flips
-    // the task), postSystemMessage's general forward, and the mentioned copy.
-    expect(generalPosts).toHaveLength(3);
+    expect(generalPosts.filter(content => content.includes('🚧'))).toHaveLength(1);
+    // The only other general post is taskStore's status-change line, which
+    // names the task (report_blocked flips it to BLOCKED).
+    expect(generalPosts).toHaveLength(2);
+    expect(generalPosts.find(content => !content.startsWith('@'))).toMatch(/^task-1: Task moved to BLOCKED by /);
 
     expect(rolePosts).toContainEqual(['architects', mentionedGeneralPosts()[0]]);
   });
@@ -347,7 +348,7 @@ describe('moe.report_blocked', () => {
     await state.load();
     await addWorker('worker-holder', 'worker', 1);
     // load() re-created maps; re-stub the chat spies' target state object.
-    vi.spyOn(state, 'postToGeneral').mockImplementation(async () => {});
+    vi.spyOn(state, 'postToGeneral').mockImplementation(async (content: string) => { generalPosts.push(content); });
     vi.spyOn(state, 'postToRoleChannel').mockImplementation(async () => {});
     await state.acquireResource({ resourceId: 'benchmark-box', taskId: 'task-holder', workerId: 'worker-holder' });
 
@@ -376,6 +377,8 @@ describe('moe.report_blocked', () => {
     expect(unblocked.blockedReason).toBeNull();
     expect(unblocked.blockedAt).toBeNull();
     expect(state.getResource('benchmark-box')!.holders.map((h) => h.taskId)).toEqual(['task-1']);
+    // One #general notice for the grant, not two.
+    expect(generalPosts.filter(content => content.startsWith('🟢 Resource benchmark-box granted to task-1'))).toHaveLength(1);
   });
 
   it('resourceId on an UNASSIGNED task still enqueues, so the grant can un-block it', async () => {

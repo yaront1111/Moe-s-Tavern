@@ -93,12 +93,12 @@ process.exitCode=23;`;
       if (ext === 'ps1') {
         const parser = between(text, '            $parseStreamJson = {', '            # Usage receipt launch boundary.');
         const pipeline = between(text, '            # Usage receipt launch boundary.', '\n        }\n    }\n\n    # Launch-failure classification');
-        body = `function Start-HeartbeatSidecar {}\nfunction Stop-HeartbeatSidecar {}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$modelArgs=@('--model',$resolvedModel)\n$iterEffort='max'\n$printArgs=@('--print')\n$cacheArgs=@()\n$usePrintMode=$true\n$userPromptForCli='pointer'\n${parser}\n${pipeline}\nWrite-Output "CHILD_EXIT=$script:CliExitCode"`;
+        body = `function Start-HeartbeatSidecar {}\nfunction Stop-HeartbeatSidecar {}\n$Command=$env:MOE_TEST_NODE\n$CommandArgs=@($env:MOE_TEST_FAKE)\n$modelArgs=@('--model',$resolvedModel)\n$iterEffort='max'\n$printArgs=@('--print')\n$cacheArgs=@()\n$accountArgs=@()\nfunction Set-MoeAccountEnv {}\nfunction Restore-MoeAccountEnv {}\n$usePrintMode=$true\n$userPromptForCli='pointer'\n${parser}\n${pipeline}\nWrite-Output "CHILD_EXIT=$script:CliExitCode"`;
       } else {
         const from = text.lastIndexOf('        LAUNCH_SKIPPED=false');
         assert.ok(from > 0);
         const pipeline = between(text.slice(from), '        LAUNCH_SKIPPED=false', '\n    fi\n\n    stop_heartbeat_sidecar');
-        body = `COMMAND_BIN="$MOE_TEST_NODE"\nCOMMAND_ARGV=("$MOE_TEST_FAKE")\nMODEL_ARGS=(--model "$RESOLVED_MODEL")\nITER_EFFORT=max\nPRINT_ARGS=(--print)\nCACHE_ARGS=()\nCLI_TYPE=claude\nAUTO_CLAIM=true\nPROMPT=pointer\nSTREAM_JSON_PARSER='import sys; sys.stdout.write(sys.stdin.read())'\n${pipeline}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
+        body = `COMMAND_BIN="$MOE_TEST_NODE"\nCOMMAND_ARGV=("$MOE_TEST_FAKE")\nMODEL_ARGS=(--model "$RESOLVED_MODEL")\nITER_EFFORT=max\nPRINT_ARGS=(--print)\nCACHE_ARGS=()\nACCOUNT_ARGS=()\napply_account_env() { :; }\nCLI_TYPE=claude\nAUTO_CLAIM=true\nPROMPT=pointer\nSTREAM_JSON_PARSER='import sys; sys.stdout.write(sys.stdin.read())'\n${pipeline}\nprintf 'CHILD_EXIT=%s' "$CLI_EXIT_CODE"`;
       }
       const r = run(t, ext, engine, body, { fakeSource });
       assert.match(r.stdout, /CHILD_EXIT=23/);

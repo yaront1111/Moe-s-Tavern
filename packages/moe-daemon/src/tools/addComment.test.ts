@@ -271,3 +271,152 @@ describe('Task comments', () => {
   });
 });
 
+// ---- @mention relay into chat ----
+import { logger } from '../util/logger.js';
+import { MAX_CHAT_MESSAGE_BYTES } from '../util/chatPayload.js';
+import { chatWaitTool } from './chatWait.js';
+
+interface CommentResult {
+  success: boolean;
+  commentId: string;
+  routing?: { messageId: string; channel: string; routingTargets: string[] };
+  routingError?: string;
+}
+
+describe('add_comment @mention relay', () => {
+  const h = new ToolTestHarness();
+  const AUTHOR = 'worker-author';
+  const GOVERNOR = 'worker-gov';
+  let general: string;
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING' });
+    h.createWorker({ id: AUTHOR, status: 'CODING' });
+    h.createWorker({ id: GOVERNOR });
+    await h.state.load();
+    const team = await h.state.createTeam({ name: 'Governors', role: 'governor' });
+    await h.state.addTeamMember(team.id, GOVERNOR);
+    general = h.state.resolveChannelRef('general')!.id;
+  });
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  const comment = (content: string, workerId?: string) =>
+    addCommentTool(h.state).handler(
+      { taskId: 'task-1', content, ...(workerId ? { workerId } : {}) },
+      h.state
+    ) as Promise<CommentResult>;
+
+  it("relays a registered worker's @governor comment once and wakes the governor's chat_wait", async () => {
+    const send = vi.spyOn(h.state, 'sendMessage');
+    const waiting = chatWaitTool(h.state).handler({ workerId: GOVERNOR, timeoutMs: 2000 }, h.state) as Promise<{
+      hasMessage: boolean;
+      messages?: Array<{ id: string; sender: string; content: string }>;
+    }>;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const text = '@governor C66 step 1: the plan needs more paths than its cap allows; the decision is yours';
+    const result = await comment(text, AUTHOR);
+
+    expect(result.success).toBe(true);
+    expect(result.routing).toEqual({ messageId: expect.any(String), channel: general, routingTargets: [GOVERNOR] });
+    expect(send).toHaveBeenCalledTimes(1);
+    const woke = await waiting;
+    expect(woke.hasMessage).toBe(true);
+    expect(woke.messages).toEqual([expect.objectContaining({
+      id: result.routing!.messageId,
+      sender: AUTHOR,
+      content: `💬 ${AUTHOR} on task-1 (${result.commentId}):\n${text}`,
+    })]);
+    expect(h.state.getTask('task-1')?.comments.at(-1)?.id).toBe(result.commentId);
+  });
+
+  it('posts nothing to chat for a comment that addresses nobody', async () => {
+    const send = vi.spyOn(h.state, 'sendMessage');
+    for (const content of [
+      'Plain progress note',
+      'ping @nobody-registered about it',
+      'mail yaron@worker-gov.com',
+      `@${AUTHOR} note to self`,
+    ]) {
+      const result = await comment(content, AUTHOR);
+      expect(result.success).toBe(true);
+      expect(result).not.toHaveProperty('routing');
+      expect(result).not.toHaveProperty('routingError');
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('posts nothing for a mention that is only quoted or discussed', async () => {
+    const send = vi.spyOn(h.state, 'sendMessage');
+    for (const content of [
+      'see `@governor` for that rule',
+      '```\n@governor please decide\n```',
+      '> @governor please decide',
+      'and no @governor, per the ruling',
+    ]) {
+      const result = await comment(content, AUTHOR);
+      expect(result).not.toHaveProperty('routing');
+      expect(result).not.toHaveProperty('routingError');
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  for (const mode of ['throws', 'rejects'] as const) {
+    it(`keeps the comment and reports routingError when sendMessage ${mode}`, async () => {
+      const failure = new Error('disk full');
+      const send = vi.spyOn(h.state, 'sendMessage');
+      if (mode === 'throws') send.mockImplementation(() => { throw failure; });
+      else send.mockRejectedValue(failure);
+      const warn = vi.spyOn(logger, 'warn');
+
+      const result = await comment('@governor please decide', AUTHOR);
+
+      expect(result.success).toBe(true);
+      expect(result.routingError).toBe('disk full');
+      expect(result).not.toHaveProperty('routing');
+      expect(h.state.getTask('task-1')?.comments.map((c) => c.id)).toContain(result.commentId);
+      expect(warn.mock.calls.filter(([, msg]) => msg === 'Failed to relay comment @mentions to chat')).toHaveLength(1);
+    });
+  }
+
+  it('never sends as "system": only a registered author is relayed, as itself', async () => {
+    const send = vi.spyOn(h.state, 'sendMessage');
+
+    const registered = await comment('@governor one', AUTHOR);
+    const defaulted = await comment('@governor two'); // author defaults to 'agent'
+    const human = await comment('@governor three', 'human');
+
+    expect(registered.routing?.routingTargets).toEqual([GOVERNOR]);
+    for (const result of [defaulted, human]) {
+      expect(result.success).toBe(true);
+      expect(result.routingError).toMatch(/not a registered worker/);
+      expect(result).not.toHaveProperty('routing');
+    }
+    expect(send.mock.calls.map(([opts]) => opts.sender)).toEqual([AUTHOR]);
+    // One agent hop; a human-path send for the unregistered authors would have reset it to 0.
+    expect(h.state.mentionRouter.getChannelState(general).hopCount).toBe(1);
+  });
+
+  it("relays into the task's own channel when one exists", async () => {
+    const taskChannel = await h.state.createChannel({ name: 'task-1', type: 'custom' });
+    const result = await comment('@governor over here', AUTHOR);
+    expect(result.routing?.channel).toBe(taskChannel.id);
+  });
+
+  it('names the routed seats outright when the comment is too long to relay whole', async () => {
+    const send = vi.spyOn(h.state, 'sendMessage');
+    const long = `@governor ${'—'.repeat(4000)}`; // 4010 chars, ~12KB of UTF-8
+
+    const result = await comment(long, AUTHOR);
+
+    expect(result.routing?.routingTargets).toEqual([GOVERNOR]);
+    const sent = send.mock.calls[0][0].content;
+    expect(Buffer.byteLength(sent, 'utf-8')).toBeLessThanOrEqual(MAX_CHAT_MESSAGE_BYTES);
+    expect(sent.startsWith(`💬 ${AUTHOR} on task-1 (${result.commentId}):\n@${GOVERNOR} `)).toBe(true);
+    expect(h.state.getTask('task-1')?.comments.at(-1)?.content).toBe(long);
+  });
+});
+

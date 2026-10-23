@@ -11,6 +11,7 @@ import {
   formatError,
   isValidJson,
   parseJsonLines,
+  injectRunnerIdentity,
   injectWorkerId,
   toolNameStyleFromEnv,
   exposeToolName,
@@ -509,5 +510,76 @@ describe('injectWorkerId: tools where workerId is a filter', () => {
       expect(resolveToolCallName({ jsonrpc: '2.0', id: 5, method: 'tools/list' }, aliases)).toBe(false);
       expect(resolveToolCallName(null, aliases)).toBe(false);
     });
+  });
+});
+
+describe('injectRunnerIdentity', () => {
+  const STARTED = '4242@133729817190000000';
+  const HOST = 'build-box';
+  const claim = (args: Record<string, unknown>, name = 'moe.claim_next_task') =>
+    ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+
+  // An architect plans up to 10 rows in one session, each claimed in-session.
+  // Without the pair those attempts could never be reattached after a daemon
+  // restart, and the reconcile sweep released the row under the live session.
+  it('adds the pair to a claim that carries neither key', () => {
+    const msg = claim({ statuses: ['PLANNING'], workerId: 'architect-1' });
+    expect(injectRunnerIdentity(msg, STARTED, HOST)).toBe(true);
+    expect(msg.params.arguments).toEqual({ statuses: ['PLANNING'], workerId: 'architect-1', processStartedAt: STARTED, host: HOST });
+  });
+
+  it('matches every spelling of the claim tool, and the daemon name reached via the alias', () => {
+    for (const name of ['moe_claim_next_task', 'claim_next_task']) {
+      const msg = claim({}, name);
+      expect(injectRunnerIdentity(msg, STARTED, HOST)).toBe(true);
+    }
+    const aliased = claim({}, 'moe_claim_next_task');
+    resolveToolCallName(aliased, new Map());
+    expect(aliased.params.name).toBe('moe.claim_next_task');
+    expect(injectRunnerIdentity(aliased, STARTED, HOST)).toBe(true);
+  });
+
+  it('leaves a claim that names either key alone (the wrapper pre-flight sends its own)', () => {
+    const both = claim({ processStartedAt: 'x@1', host: 'h' });
+    expect(injectRunnerIdentity(both, STARTED, HOST)).toBe(false);
+    expect(both.params.arguments).toEqual({ processStartedAt: 'x@1', host: 'h' });
+    // Half a pair is the caller's to own: the daemon refuses it either way.
+    const half = claim({ host: 'h' });
+    expect(injectRunnerIdentity(half, STARTED, HOST)).toBe(false);
+    expect(half.params.arguments).toEqual({ host: 'h' });
+  });
+
+  it('needs both env values: one alone, blank or whitespace counts as unset', () => {
+    for (const [started, host] of [[undefined, HOST], [STARTED, undefined], ['', HOST], [STARTED, ''], ['  ', HOST], [STARTED, ' ']]) {
+      const msg = claim({});
+      expect(injectRunnerIdentity(msg, started, host)).toBe(false);
+      expect(msg.params.arguments).toEqual({});
+    }
+  });
+
+  it('sends the values verbatim, because the daemon compares exact strings', () => {
+    const msg = claim({});
+    expect(injectRunnerIdentity(msg, ' 4242@1 ', 'Host.Local')).toBe(true);
+    expect(msg.params.arguments).toEqual({ processStartedAt: ' 4242@1 ', host: 'Host.Local' });
+  });
+
+  it('touches no other tool and no other method', () => {
+    for (const name of ['moe.wait_for_task', 'moe.get_context', 'moe.reattach_attempt', 'serena_find_symbol']) {
+      const msg = claim({}, name);
+      expect(injectRunnerIdentity(msg, STARTED, HOST)).toBe(false);
+      expect(msg.params.arguments).toEqual({});
+    }
+    const list = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} };
+    expect(injectRunnerIdentity(list, STARTED, HOST)).toBe(false);
+    expect(list.params).toEqual({});
+  });
+
+  it('survives malformed messages without throwing', () => {
+    expect(injectRunnerIdentity(null, STARTED, HOST)).toBe(false);
+    expect(injectRunnerIdentity(42, STARTED, HOST)).toBe(false);
+    expect(injectRunnerIdentity({ method: 'tools/call', params: 'bad' }, STARTED, HOST)).toBe(false);
+    expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 'moe.claim_next_task' } }, STARTED, HOST)).toBe(false);
+    expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 'moe.claim_next_task', arguments: [1] } }, STARTED, HOST)).toBe(false);
+    expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 7, arguments: {} } }, STARTED, HOST)).toBe(false);
   });
 });

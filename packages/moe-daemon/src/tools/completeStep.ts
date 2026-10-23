@@ -5,6 +5,7 @@ import { MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
+import { accountSwitchCause, accountSwitchFor } from '../state/accountStore.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -186,6 +187,13 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
             recommendedSkill: recommendSkillFor('worker', 'before_complete_task')
           };
 
+      // The seat's Claude account is spent: the session ends at this step
+      // boundary, and the wrapper's relaunch of the held task runs the next
+      // step on the next account. Absent when no switch is due.
+      const accountChange = nextStep
+        ? accountSwitchFor(state, params.workerId ?? task.assignedWorkerId ?? undefined)
+        : null;
+
       return {
         success: true,
         taskId: task.id,
@@ -218,6 +226,18 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         nextStep: nextStep ? { stepId: nextStep.stepId, description: nextDescription } : null,
         ...(chatHint ? { chatHint } : {}),
         ...(warning ? { warning } : {}),
+        ...(accountChange && nextStep
+          ? {
+              accountSwitch: {
+                from: accountChange.from,
+                to: accountChange.to,
+                fromPeakPercent: accountChange.fromPeakPercent,
+                switchAtPercent: accountChange.switchAtPercent,
+                reason: accountChange.reason,
+                instruction: `ACCOUNT-SWITCH: ${accountSwitchCause(accountChange)}. Step ${params.stepId} is saved. End your session now and do not start another step: Moe relaunches this task on ${accountChange.toLabel}, and the new session continues with step ${nextStep.stepId}.`,
+              },
+            }
+          : {}),
         nextAction
       };
     }

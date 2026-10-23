@@ -18,6 +18,8 @@ describe('TOOL_AUDIENCE', () => {
     expect(names('governor')).toContain('moe.submit_plan_critique');
     for (const role of ['architect', 'worker', 'qa', 'governor'] as const) {
       expect(names(role)).not.toContain('moe.heartbeat');
+      expect(names(role)).not.toContain('moe.lease_account');
+      expect(names(role)).not.toContain('moe.report_account_usage');
       expect(names(role)).toContain('moe.get_context');
       expect(names(role)).toContain('moe.chat_send');
     }

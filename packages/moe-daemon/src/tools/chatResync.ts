@@ -75,12 +75,12 @@ export function chatResyncTool(_state: StateManager): ToolDefinition {
       // Fetch messages from beginning (no sinceId)
       let messages: ChatMessage[];
       if (params.channel) {
-        messages = await state.getMessages(params.channel, { limit });
+        messages = await state.getMessages(params.channel, { limit, hideSystemFeed: true });
       } else {
         const channels = state.getChannels();
         const allMessages: ChatMessage[] = [];
         for (const ch of channels) {
-          const chMessages = await state.getMessages(ch.id, { limit });
+          const chMessages = await state.getMessages(ch.id, { limit, hideSystemFeed: true });
           allMessages.push(...chMessages);
         }
         messages = allMessages

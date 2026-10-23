@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskCommit } from '../types/schema.js';
-import { invalidInput, invalidState } from '../util/errors.js';
+import { invalidInput, invalidState, notFound } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { contextNextAction } from '../util/contextNextAction.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
@@ -115,9 +115,16 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       let task = taskId ? state.getTask(taskId) : null;
       let epic = task ? state.getEpic(task.epicId) : null;
 
+      // An explicit taskId that names no task is NOT_FOUND, as in every other
+      // tool. Falling through to the caller fallback below answered with a
+      // DIFFERENT task (a short id like task-4566537d came back as the
+      // caller's own claimed task) and stamped contextFetchedBy on it.
+      if (!task && params.taskId) throw notFound('Task', params.taskId);
+
       if (!task) {
-        // Try fallback: find the task assigned to the caller (params.workerId,
-        // else MOE_WORKER_ID via callerWorkerId).
+        // No explicit taskId (or a stale MOE_TASK_ID): fall back to the task
+        // assigned to the caller (params.workerId, else MOE_WORKER_ID via
+        // callerWorkerId).
         if (callerWorkerId) {
           const worker = state.getWorker(callerWorkerId);
           if (worker?.currentTaskId) {

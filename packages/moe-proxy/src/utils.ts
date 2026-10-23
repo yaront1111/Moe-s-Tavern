@@ -195,6 +195,52 @@ export function injectWorkerId(
   }
 }
 
+/** The one tool that records a runner identity: the claim that opens an attempt. */
+const CLAIM_TOOL = new Set([
+  'moe.claim_next_task',
+  'moe_claim_next_task',
+  'claim_next_task',
+]);
+
+/**
+ * Inject the wrapper's runner identity (MOE_RUNNER_PROCESS_STARTED_AT +
+ * MOE_RUNNER_HOST) into a moe.claim_next_task that carries neither key, so a
+ * claim the agent makes inside its session records the same pair as the
+ * wrapper's own pre-flight claim, and moe.reattach_attempt can match that
+ * attempt after a daemon restart parks it in `reconciling`. The wrapper sets the
+ * pair for architect, QA and governor seats only: an identity on a worker's
+ * attempt hands its finalize to the wrapper, which finalizes only the attempt it
+ * pinned. Both values or nothing (the daemon refuses half a pair); a blank value
+ * counts as unset, as for MOE_WORKER_ID. Values are sent verbatim, because the
+ * daemon compares exact strings. Returns true if the parsed object was mutated.
+ * Never throws.
+ */
+export function injectRunnerIdentity(
+  parsed: unknown,
+  envProcessStartedAt: string | undefined,
+  envHost: string | undefined
+): boolean {
+  try {
+    if (typeof envProcessStartedAt !== 'string' || envProcessStartedAt.trim() === '') return false;
+    if (typeof envHost !== 'string' || envHost.trim() === '') return false;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const msg = parsed as Record<string, unknown>;
+    if (msg.method !== 'tools/call') return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    if (!params || typeof params !== 'object') return false;
+    if (typeof params.name !== 'string' || !CLAIM_TOOL.has(params.name)) return false;
+    const args = params.arguments as Record<string, unknown> | undefined;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+    if (Object.prototype.hasOwnProperty.call(args, 'processStartedAt')) return false;
+    if (Object.prototype.hasOwnProperty.call(args, 'host')) return false;
+    args.processStartedAt = envProcessStartedAt;
+    args.host = envHost;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function parseJsonLines(buffer: string): { lines: string[]; remaining: string } {
   const lines: string[] = [];
   let remaining = buffer;

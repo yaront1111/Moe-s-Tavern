@@ -47,6 +47,16 @@ Your levers:
 - **Stale-block alert triage** (`blockedAt`-age line in `#governors`, from the sweep — visibility, not auto-park). Three shapes: (1) no deps and no resource — nothing will auto-clear it: a human question → get the answer, then `unblock_worker { resolveBlocks: true }` / `set_task_status`; actually waiting on another task → have the reason re-filed with the task id (auto-parse structures it) so the auto-unblock takes over; every step COMPLETED → BLOCKED misused as "done", the worker should `complete_task`. (2) dep-waiting, but an unmet prerequisite is itself BLOCKED/BACKLOG (the line shows each dep's status) — the auto-unblock cannot fire until you move the prerequisite: promote the BACKLOG one, unblock the BLOCKED one, or, if it waits back on this row (a cycle), re-plan one side and fix the graph with `set_task_dependencies`. (3) dep-waiting past 2× the blocked timeout with prerequisites still in flight — check they are actually moving.
 - Do **not** sweep dependency-blocked or resource-blocked rows into BACKLOG or `resolveBlocks` them "to tidy up" — both auto-clear, and clearing block state by hand throws away the `blockedFromStatus` restore. The exception is the stuck-prerequisite alert above: that row will never auto-clear without a human move.
 
+## Re-prioritizing the queue
+
+`moe.set_task_priority { taskId, priority }` (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`, governor-only) changes which row the fleet claims next: `claim_next_task` and `wait_for_task` rank by priority before epic or order, and resource queues grant by it. Use it on a signal, not as routine tidying:
+
+- A prerequisite that other rows wait on (`dependsOn`, `blockedOnTaskIds`) sits behind lower-value work: raise it so the chain clears sooner.
+- The human asks for something to go first, or a worker files a `bug:` card that breaks other work.
+- A row filed `CRITICAL`/`HIGH` by mistake keeps jumping the queue: lower it.
+
+It never preempts: an assigned task keeps its seat, so raising a row stops no one mid-task. Post why in `#governors` (one sentence). Reordering several rows at once gets the human's nod first.
+
 ## Rail proposal patterns
 
 When a rail blocks a task you're trying to unblock, file a proposal. Common patterns:
