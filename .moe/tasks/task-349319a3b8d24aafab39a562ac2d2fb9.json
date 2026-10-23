@@ -1,0 +1,86 @@
+{
+  "id": "task-349319a3b8d24aafab39a562ac2d2fb9",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F02] Canonical approval revision surface",
+  "description": "Objective: Compare only approval-relevant sanitized fields when deriving planRevision; preserve daemon authority and invalid stored-stamp refusal.\n\nDeliverable: Canonical approval revision surface. This is task F02 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): F01.",
+  "definitionOfDone": [
+    "Step status/timestamps/modifiedFiles/notes do not revise approval.",
+    "Ordered steps, effective instructions, approved files/amendments and DoD do revise approval exactly once.",
+    "Caller supplied revisions remain ignored/rejected and malformed/exhausted counters fail before persistence.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Enable only F02-owned cases in the held-out approvalRevision.acceptance.test.ts; do not edit any assertion, helper, fixture or F05-owned skipped SPEED case. Run the focused acceptance test against existing production first and record semantic red. Existing tests and error handling are required. Explore taskStore derivePlanRevision and util/planAmendments effectiveStepDescription before coding.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the minimal canonical approval projection in taskStore before structural comparison: step identity/order, original and effective instruction text, affectedFiles, newFiles normalized absent/empty. Reuse effectiveStepDescription; exclude execution status/start/completion timestamps/modifiedFiles/note and amendment audit metadata/inactive history. Compare sanitized approval projections, not complete execution records. DoD/material plan changes still bump exactly once and PLAN_SUBMITTED still bumps on every successful submission. Preserve forged-stamp stripping and malformed/exhausted stored-stamp refusal before persistence.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update only the legacy submitPlan.test.ts expectation that execution/reopen evidence clearing advances revision: it must now remain at the submitted approval revision. Keep replan/submission/amendment/material-write expectations. Run focused revision/submission/approval tests then fresh full Linux-native daemon suite npm test -- --maxWorkers=4 on a synchronized isolated source snapshot using unchanged lockfile; record real counts. No direct .moe or Git writes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Perform exactly one adversarial self-review: concurrent writes, null/empty optional scope, active versus inactive amendment changes, counter exhaustion/invalid stamps, metadata aliases, and event-driven submission revision semantics. Preserve held-out assertions; capture final fresh regression evidence for complete_task. F03 owns new contract fields; do not add approvals/context receipts here.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:10.923Z",
+  "updatedAt": "2026-10-23T23:40:50.142Z",
+  "dependsOn": [
+    "task-3c83b5a1d6ab45f7be70bb58c17c5443"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-23T23:40:50.113Z",
+  "metrics": {
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "planApprovedAt": "2026-10-23T23:40:50.142Z"
+}

@@ -1,0 +1,147 @@
+{
+  "id": "task-3ab82a8016514240b53d295792daebe1",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R02] Certified local provider preflight",
+  "description": "Objective: Implement a read-only Multipass provider manifest, bounded direct-argv probe and JSON doctor; this is not execution readiness.\n\nDeliverable: Certified local provider preflight. This is task R02 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): none.",
+  "definitionOfDone": [
+    "Pinned client/daemon versions, certified host/driver/image identity are validated.",
+    "Missing provider, timeout, denied access, malformed output and unknown versions fail closed with stable reasons.",
+    "Doctor invokes no launch/mount/set/delete operations and always reports executionReady:false before later isolation work.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write Node-native red tests for a read-only certified-provider doctor: exact supported client/daemon versions and driver/host combinations, missing executable/auth denial/timeout/nonzero/malformed JSON, unknown/prerelease mismatch, safe direct argv, bounded output, no mutating provider commands, CLI malformed arguments, and providerReady versus executionReady:false. Use injected transport or a fake executable; no actual VM creation. Tests and error handling are mandatory.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/cli.mjs"
+      ],
+      "startedAt": "2026-10-23T23:38:37.008Z",
+      "completedAt": "2026-10-23T23:40:08.282Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement a protected module-relative versioned provider manifest and the smallest stdlib execFile probe/doctor/JSON CLI. Pin Multipass1.17.0 and official dated Ubuntu24.04 release-20261017 amd64/arm64 image URLs/SHA256; verify official references rather than floating aliases. Probe only version --format json, get local.driver and get client.primary-name. Use bounded timeout/maxBuffer and shell:false; no shell interpolation, launch/set/delete/mount operations, task-selected manifests or env readiness bypasses. Report prerequisite readiness separately from executionReady:false. Unknown/unsupported versions/hosts/drivers fail closed. Avoid claiming actual local platform certification from mocks.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "startedAt": "2026-10-23T23:40:09.604Z",
+      "completedAt": "2026-10-23T23:43:45.571Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run node --test scripts/tests/local-runner.test.mjs fresh and capture counts. Review exactly once as an attacker: oversized/invalid provider output, injected executable/args, unknown host/driver/version, mutable manifest loading, and false readiness. Package/caller integration remains follow-up work; do not claim installed runtime enforcement.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/cli.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Completed one scoped adversarial review, including null/huge/malformed inputs, direct argv, exact platform versions, manifest authority, concurrency and error cleanup. Fresh plan gate: node --test scripts/tests/local-runner.test.mjs exited 0; 51 tests, 51 pass, 0 fail/skip, 10659ms. Eight disposable-copy behavioral mutants killed. Fixed allowlisted diagnostic sanitization; no actual VM/protected-runtime claim. git diff --check clean on scoped paths.",
+      "startedAt": "2026-10-23T23:43:47.604Z",
+      "completedAt": "2026-10-23T23:45:09.444Z"
+    }
+  ],
+  "planRevision": 7,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [
+    {
+      "id": "comment-f97954bffeb14bb09fa54a67c0630c83",
+      "author": "worker-cq-r02",
+      "content": "R02 handoff: 51/51 Node tests pass, 0 skips on Linux; no actual Multipass install/VM certification claimed. Initial behavioral RED was permissive baseline accepting unknown version (expected VERSION_UNSUPPORTED), not merely missing import. Eight controlled mutants in disposable copied modules were rejected by assertion tests: version, client/daemon match, driver, executionReady, shell:false, output bound, read-only argv, sanitized diagnostics. Official v1.17.0 sources establish +win/+mac release suffixes (https://raw.githubusercontent.com/canonical/multipass/v1.17.0/src/cmake/versioning.cmake), JSON multipass/multipassd fields, and default primary getter <empty> for disabled primary (get.cpp; client-primary-name.md). Dated official source image hashes verified at https://cloud-images.ubuntu.com/releases/noble/release-20261017/SHA256SUMS. Doctor only probes version --format json, get local.driver, get client.primary-name, and always executionReady:false. Bounded 10s/64KiB execFile uses SIGKILL to handle uncooperative clients; source CLI, real output overflow and real timeout covered. Provider manifest is module-relative/frozen; no environment override. Packaging, caller activation, protected installed runtime, resource/boundary certification and VM lifecycle remain later tasks. Adversarial review found/fixed raw unexpected error-message leak; regression verifies secrets/paths never escape. No shared state writes or provisioning side effects; no source outside the five approved paths modified.",
+      "timestamp": "2026-10-23T23:45:07.976Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:50.459Z",
+  "updatedAt": "2026-10-23T23:45:25.431Z",
+  "tier": "standard",
+  "effort": "xhigh",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-23T23:35:02.948Z",
+  "metrics": {
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 5,
+    "firstClaimAt": "2026-10-23T23:35:39.396Z",
+    "executedStepCount": 3
+  },
+  "planApprovedAt": "2026-10-23T23:35:02.997Z",
+  "dependsOn": [],
+  "contextFetchedBy": [
+    "worker-cq-r02"
+  ],
+  "workStartedAt": "2026-10-23T23:38:37.008Z",
+  "reviewStartedAt": "2026-10-23T23:45:25.428Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "real hung process is killed by bounded timeout (10009.809093ms)\ntests 51\nsuites 0\npass 51\nfail 0\ncancelled 0\nskipped 0\ntodo 0\nduration_ms 10659.322687",
+    "reportedAt": "2026-10-23T23:45:25.428Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/doctor.mjs",
+    "scripts/local-runner/multipass.mjs",
+    "scripts/local-runner/cli.mjs",
+    "scripts/local-runner/certified-provider.json"
+  ],
+  "completionSummary": "Delivered read-only certified-provider prerequisite foundation in exactly five approved files: pinned module-relative Multipass1.17.0/Ubuntu24.04 release-20261017 manifest, bounded direct execFile adapter, fail-closed sanitized doctor and JSON CLI. Source-confirmed platform build versions (+win/+mac/plain Linux) and disabled primary <empty> are handled without accepting arbitrary build/prerelease versions. Only three fixed read-only commands; executionReady is always false. Fresh 51/51 Node tests pass with 0 skips/failures; covers genuine CLI/process success, maxBuffer, uncooperative 10s timeout, malformed inputs and no secret leaks. Eight controlled mutants rejected by assertions, initial behavioral RED documented. One scoped adversarial review plus diff whitespace check completed. No VM provisioning, actual platform certification, packaging, runtime activation or Git writes; those remain later tasks."
+}
