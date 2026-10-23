@@ -34,7 +34,15 @@ Nothing here works around a limit within an account. Moe only chooses which acco
 - **Sign-in is Claude's own.** **Sign in** in the Accounts tab opens an IDE terminal tab that runs `node <daemon dist>/accounts/cli.js login <id>`. That runs `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR` set to the account's folder and the token and cloud-provider variables removed, then checks `claude auth status --json`. Only the exit code and `authMethod` are read: `claude.ai` makes the account a subscription account, any other method marks it "Not a subscription", and Moe never uses such an account. The daemon process itself never runs claude.
 - **Fill-first, sticky.** Each lease returns the account launches are already on while it stays eligible, otherwise the first eligible account in list order. An account is eligible when it is signed in with a subscription, no live usage window (5-hour, weekly, …) is at or above the switch point, and it is not parked after a refusal. A spent account becomes eligible again when its window resets.
 - **Switch after the current step (workers).** When a worker's account stops being eligible and another account is free, its next `complete_step` reply carries `accountSwitch` with an `ACCOUNT-SWITCH:` instruction. The worker then ends its session without starting another step. As a backstop, `start_step` refuses with `NOT_ALLOWED` `ACCOUNT-SWITCH:` and the step stays PENDING. The wrapper's normal relaunch leases again and gets the next account, and the new session picks up at the next step. A running step is never interrupted, which is why the switch point leaves 10% headroom.
-- **Between sessions (other seats).** QA, architect and governor seats take the new account at their next launch. Worker and QA seats launch a fresh one-shot CLI per task. Architect and governor seats are interactive by default and move when their session ends.
+- **Between sessions (QA).** Worker and QA seats launch a fresh one-shot CLI per task, so a QA seat takes the new account at its next launch.
+- **Between tasks (interactive seats).** Architect and governor seats are interactive by default and keep one session across tasks. The wrapper loads the `moe-account-switch` mod into such a claude TUI when its loop relaunches it:
+  - The mod adds `acceptsAccountSwitch` to `submit_plan` and `chat_wait`.
+  - When the seat holds no task and its account must switch, the daemon answers with `accountSwitch`. The architect gets it right after its plan is recorded. The governor gets it at once, or, while parked in `chat_wait`, as soon as a usage report makes the switch due.
+  - The model ends its turn. The mod refuses any further claim or wait, runs `/exit` 10 s after the turn ends, and the wrapper's loop leases again.
+  - The mod also ends a session that claude stopped at the limit (100%).
+
+  With `MOE_DISABLE_ACCOUNT_SWITCH_MOD=1`, `--no-loop` or a one-shot launch, a seat moves at its next launch.
+- **Daemon restart.** Leases live in daemon memory. A running seat's lease is learned back from its wrapper's next usage report, which names only the account the running claude was launched under.
 - **Refused launch.** If the CLI exits non-zero and its last usage sample says `rejected` or overage, the wrapper prints `MOE_ACCOUNT_REFUSED` and relaunches at once on the next account. It keeps the task, spends no resume attempt and adds no back-off. The daemon parks the refused account until its window resets, for at least 5 minutes.
 - **Signed out mid-run.** After a failed run the wrapper checks the account's folder. If the login is gone or is not a subscription, it prints `MOE_ACCOUNT_SIGNED_OUT`, reports it, and relaunches on the next account.
 - **All spent.** The wrapper prints `MOE_ACCOUNT_WAIT`, holds its task, and asks again at the earliest reset, at least every `MOE_ACCOUNT_RETRY_SEC` (default 300 s).
@@ -50,19 +58,20 @@ Nothing here works around a limit within an account. Moe only chooses which acco
 | Daemon store, view, leases, step-boundary switch | `src/state/accountStore.ts`; `src/tools/{leaseAccount,reportAccountUsage}.ts` (wrapper-only, listed to no role); `src/tools/{startStep,completeStep}.ts`; `src/server/accountMessages.ts` + `WebSocketServer.ts`; `src/index.ts` (`accounts` command, list watch) |
 | Daemon tests | `src/accounts/{registry,usageWindows,cli}.test.ts`, `src/state/accountStore.test.ts`, `src/tools/accountTools.test.ts`, `src/server/accountMessages.test.ts`; `vitest.config.ts` points `MOE_ACCOUNTS_FILE` at a file that does not exist |
 | Wrappers | `scripts/moe-account-lease.mjs` (gate, pick, sign-in probe, statusline sample); `scripts/moe-agent.{sh,ps1}`; harnesses `scripts/tests/postflight.{sh,ps1}`, `scripts/tests/parity-check.{sh,ps1}` |
+| Interactive seats | `scripts/mods/moe-account-switch/` (the mod and its `register.test.ts`), loaded by the `CLAUDE_CODE_PLUGIN_DIRS` block of `scripts/moe-agent.{sh,ps1}` (tested in `scripts/tests/prompt-cache-launcher.test.mjs`); daemon side `src/tools/{submitPlan,chatWait}.ts` (`acceptsAccountSwitch`) and `idleSwitchFor`/`accountSwitchReply` in `src/state/accountStore.ts` |
 | PyCharm plugin | `moe-jetbrains/…/model/Models.kt`, `util/MoeJson.kt`, `services/{MoeMessageDispatcher,MoeCommandSender,MoeProjectService,MoeStateListener}.kt`, `util/TerminalAgentLauncher.kt` (`runAccountsCommand`), `toolwindow/{AccountsPanel,AccountPresentation}.kt`, `MoeToolWindowPanel.kt`, `WorkerPanel.kt`, `MoeBundle.properties`; tests `AccountPresentationTest`, `MoeCommandSenderAccountsTest`, `MoeMessageDispatcherAccountsTest`, `TerminalAgentLauncherTest` |
 | VS Code | `moe-vscode/src/services/MoeDaemonClient.ts` ignores `ACCOUNTS_UPDATED` and `ACCOUNT_ADDED` |
 
 ## Limitations
 
-- A running session is never moved. Interactive seats keep their account until they exit, and a refusal inside an interactive session is not detected.
+- A running step or plan is never interrupted. An interactive seat moves only between tasks, and only with the `moe-account-switch` mod loaded: a TUI whose loop relaunches it. Without the mod, it keeps its account until it exits. Inside an interactive session, a refusal is detected only as claude's `rate_limit` stop at 100% usage (V13).
 - Usage comes from CLI output that is only partly documented (V1–V3 below). If the format changes, rotation falls back to "no data" and keeps using the current account.
 - Parallel seats on one account all count against it. Seats that started below the switch point can carry it past 100% before they reach a step boundary. Lower the switch point if many seats run at once.
 - An account is known to be spent only after the CLI reports it, so the first launch on it can be refused once. That case relaunches at once.
 - One list per machine, per OS user. Under "Run Agents in WSL" the WSL seats use the Windows list and folders through `/mnt/…` paths. A daemon started inside a WSL distro reads that distro's own `~/.moe`. The daemon merges usage by id, so never reuse an id for a different account.
 - An account folder replaces `~/.claude` for that launch (V8). User-level settings, `CLAUDE.md`, agents, skills and plugins have to be added to each account folder by hand.
 - An `apiKeyHelper` in a project's `.claude/settings.json` outranks the subscription login, and nothing detects it: rotation then has no effect.
-- Which seat holds which account is kept in daemon memory. After a daemon restart, a running worker is not told to switch until its next launch.
+- Which seat holds which account is kept in daemon memory. After a daemon restart, a running seat is not told to switch until its wrapper reports usage again.
 
 ## What is documented and what is not
 
@@ -87,6 +96,10 @@ Sources are the Claude Code docs (code.claude.com/docs) and `claude auth login -
 | V8 | Seats work without the operator's user-level `~/.claude` settings, `CLAUDE.md`, agents, skills and plugins | Effect documented (D1); impact on Moe seats not checked | Step 4 | |
 | V9 | `claude auth logout` under one `CLAUDE_CONFIG_DIR` signs out only that folder's login | Implied by D1; not seen | Step 6 | |
 | V10 | A worker told `ACCOUNT-SWITCH` in `complete_step` ends its session instead of starting the next step | Model behaviour; `start_step` refuses either way | Step 5 | |
+| V11 | `$.command.run({ command: 'exit' })` from a mod's timer ends an interactive claude session with exit code 0 | The mod API runs a command as if typed; `/exit` from a mod is not seen | Step 7 | |
+| V12 | An interactive architect or governor told `ACCOUNT-SWITCH` ends its turn instead of claiming or waiting again | Model behaviour; the mod refuses the call and ends the turn either way | Step 7 | |
+| V13 | At a hard limit, an interactive session raises `StopFailure` with `error: 'rate_limit'`, and `$.session.usage()` shows a window at 100% | Documented event; the values at a real limit are not seen | Step 8 | |
+| V14 | A mod's `tool.call` rewrite (`acceptsAccountSwitch: true`) reaches the MCP server as a tool argument | Read in Claude Code 2.1.309: an MCP tool's input schema is a passthrough object, so an extra key is neither refused nor dropped, and a daemon without the parameter ignores it. `claude plugin test` covers the hook, not a live MCP call | Step 7 | |
 
 The design degrades safely when V1–V4 turn out wrong. Without usable samples, the current account simply keeps being used, which is the behaviour before rotation. A refusal that the wrapper misses still parks the account through its `rejected` sample, so the next launch moves on.
 
@@ -113,7 +126,8 @@ Ground rules:
   ```bash
   cd packages/moe-daemon && npm install && npm run build && npm test && cd ../..
   cd packages/moe-proxy && npm install && npm run build && npm test && cd ../..
-  node --test scripts/tests/moe-account-lease.test.mjs
+  node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/prompt-cache-launcher.test.mjs
+  CLAUDE_CONFIG_DIR="$(mktemp -d)" claude plugin test scripts/mods/moe-account-switch
   bash scripts/tests/postflight.sh
   bash scripts/tests/parity-check.sh
   cd moe-jetbrains && ./gradlew test buildPlugin && cd ..
@@ -155,10 +169,18 @@ Ground rules:
 - [ ] **Step 7: Interactive seat (checks D6, V6, V7).** Run `scripts/moe-agent.sh --role architect --project "$PWD"` (architect is interactive by default). Expect the statusline at the bottom of claude to show the account and its usage, and the Accounts tab to update within a minute.
   - **V6:** `/mcp` lists `moe` once, not twice.
   - **V7:** on Windows, run the same with `scripts/moe-agent.ps1`, ideally on a project whose path contains a space. The statusline must render, and the tab must update.
+  - **V11, V12, V14 (forced switch):** also start a governor (`--role governor`). With both seats on acct-1, set **Switch to the next account at** to a value at or below acct-1's percent. Expect:
+    - The governor's parked `chat_wait` returns `accountSwitch` within seconds (V14: the daemon only answers it for a call the mod marked). The TUI shows `Moe: Claude account <label> is at N% … This session ends in 10 s and restarts on the next account.` and ends its turn without another `chat_wait` (V12).
+    - About 10 s later the TUI exits by itself (V11). The tab prints `[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2`, and the new session re-enters governance with the unread chat still unread.
+    - The architect switches the same way after its next `submit_plan`, and the relaunched session claims the next PLANNING task.
+    - A seat started with `--no-loop` shows no toast and stays on acct-1.
+
+    Set the switch point back to 90.
 
 - [ ] **Step 8: A real limit, when one happens (checks V4).** Don't force this. When an account genuinely reaches its limit during normal work, look at the wrapper output:
   - **Expected:** `MOE_ACCOUNT_REFUSED account=acct-N exit=…`, then an immediate relaunch on the next account with no `[launch-failure] Backing off`.
   - **If the CLI exits 0 at the limit:** the wrapper does not see a refusal, but its final sample still marks the account `rejected`, so the next launch must show `MOE_ACCOUNT_SWITCHED`. Record which of the two happened.
   - **If every account is spent:** expect `MOE_ACCOUNT_WAIT retry_in=…`. The task stays held, and work resumes at the first reset.
+  - **V13, in an architect or governor TUI:** expect the toast `Moe: this Claude account reached its usage limit. This session ends in 10 s …`, then a relaunch with `MOE_ACCOUNT_SWITCHED`. If the TUI stays at the limit with no toast, record what claude showed.
 
 - [ ] **Step 9: WSL agent mode (only if you use "Run Agents in WSL").** Install claude and node inside the distro. With the toggle on, **Sign in** runs the CLI with the distro's node against the Windows list through `/mnt/…` paths. Repeat Step 4 with the toggle on: the lease must name the same accounts, and `MOE_ACCOUNT_LEASED` must appear in the WSL seat's output.

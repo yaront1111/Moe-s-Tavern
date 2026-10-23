@@ -6871,6 +6871,11 @@ $mentionsJson
             # moe-compaction-keeper (scripts/mods/) carries the seat's task
             # state through each compaction; MOE_DISABLE_COMPACTION_KEEPER=1
             # leaves it out.
+            # moe-account-switch (scripts/mods/) ends a TUI session once Moe
+            # says its Claude account is spent, so this loop relaunches the seat
+            # on the next one. Only for an interactive seat whose loop relaunches
+            # it (a --print run already ends per task; a -NoLoop seat would end
+            # for good); MOE_DISABLE_ACCOUNT_SWITCH_MOD=1 leaves it out.
             if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_PROMPT_CACHE_TTL = '1h' }
             if (-not $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL = '1h' }
             $moeCompactWindow = switch ($Role) { 'qa' { '500000' } 'architect' { '600000' } 'governor' { '600000' } default { '300000' } }
@@ -6884,6 +6889,13 @@ $mentionsJson
                 $moePluginDirs = @("$env:CLAUDE_CODE_PLUGIN_DIRS" -split [regex]::Escape([IO.Path]::PathSeparator) | Where-Object { $_ })
                 if ($moePluginDirs -notcontains $moeKeeperDir) {
                     $env:CLAUDE_CODE_PLUGIN_DIRS = (@($moePluginDirs) + $moeKeeperDir) -join [IO.Path]::PathSeparator
+                }
+            }
+            $moeSwitchDir = Join-Path $PSScriptRoot 'mods\moe-account-switch'
+            if ($claudeInteractive -and $loopEnabled -and -not $env:MOE_DISABLE_ACCOUNT_SWITCH_MOD -and (Test-Path -LiteralPath $moeSwitchDir -PathType Container)) {
+                $moePluginDirs = @("$env:CLAUDE_CODE_PLUGIN_DIRS" -split [regex]::Escape([IO.Path]::PathSeparator) | Where-Object { $_ })
+                if ($moePluginDirs -notcontains $moeSwitchDir) {
+                    $env:CLAUDE_CODE_PLUGIN_DIRS = (@($moePluginDirs) + $moeSwitchDir) -join [IO.Path]::PathSeparator
                 }
             }
 

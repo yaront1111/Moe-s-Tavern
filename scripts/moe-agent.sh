@@ -7611,6 +7611,11 @@ $PROMPT_BODY"
         # Claude Code ignores the variable.
         # moe-compaction-keeper (scripts/mods/) carries the seat's task state
         # through each compaction; MOE_DISABLE_COMPACTION_KEEPER=1 leaves it out.
+        # moe-account-switch (scripts/mods/) ends a TUI session once Moe says
+        # its Claude account is spent, so this loop relaunches the seat on the
+        # next one. Only for an interactive seat whose loop relaunches it (a
+        # --print run already ends per task; a --no-loop seat would end for
+        # good); MOE_DISABLE_ACCOUNT_SWITCH_MOD=1 leaves it out.
         if [ "$CLI_TYPE" = "claude" ]; then
             export CLAUDE_CODE_PROMPT_CACHE_TTL="${CLAUDE_CODE_PROMPT_CACHE_TTL:-1h}"
             export CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL="${CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL:-1h}"
@@ -7628,6 +7633,14 @@ $PROMPT_BODY"
                 case ":${CLAUDE_CODE_PLUGIN_DIRS:-}:" in
                     *":$moe_keeper_dir:"*) ;;
                     *) export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$moe_keeper_dir" ;;
+                esac
+            fi
+            moe_switch_dir="$SCRIPT_DIR/mods/moe-account-switch"
+            if [ "$CLAUDE_INTERACTIVE" = true ] && [ "$LOOP_ENABLED" = true ] \
+                && [ -z "${MOE_DISABLE_ACCOUNT_SWITCH_MOD:-}" ] && [ -d "$moe_switch_dir" ]; then
+                case ":${CLAUDE_CODE_PLUGIN_DIRS:-}:" in
+                    *":$moe_switch_dir:"*) ;;
+                    *) export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$moe_switch_dir" ;;
                 esac
             fi
         fi

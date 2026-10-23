@@ -21,7 +21,7 @@ import { atomicWriteText } from '../util/atomicWrite.js';
  * is not a customization: it is a vendored pre-stamp copy and is upgraded.
  */
 export const ROLE_DOCS: Record<string, string> = {
-  'architect.md': `<!-- moe-generated: sha=9ef88be32dd8 -->
+  'architect.md': `<!-- moe-generated: sha=34f5914e26d6 -->
 
 # Architect
 
@@ -56,13 +56,13 @@ Follow \`nextAction\` on every Moe tool response. If it includes \`recommendedSk
 
 ## Idle behavior
 
-Tasks per session: an interactive session plans up to the number its prompt names (default 10, \`MOE_ARCHITECT_TASKS_PER_SESSION\`) — after each \`moe.submit_plan\` and its handoff memory, \`moe.claim_next_task\` \`{statuses:["PLANNING"]}\` then \`moe.get_context\`, until \`hasNext:false\` or the budget is spent; then your last line tells the operator to exit. A headless session plans only its claimed task, then ends its turn. Only a manually launched session with no task claimed for it calls \`moe.wait_for_task\`, which blocks until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …").
+Tasks per session: an interactive session plans up to the number its prompt names (default 10, \`MOE_ARCHITECT_TASKS_PER_SESSION\`) — after each \`moe.submit_plan\` and its handoff memory, \`moe.claim_next_task\` \`{statuses:["PLANNING"]}\` then \`moe.get_context\`, until \`hasNext:false\` or the budget is spent; then your last line tells the operator to exit. A \`submit_plan\` reply with \`accountSwitch\` (\`ACCOUNT-SWITCH:\`) outranks the budget and \`nextAction\`: claim nothing more and end the turn — Moe restarts you on the next Claude account (\`architect.reference.md\`, **Claude account switch**). A headless session plans only its claimed task, then ends its turn. Only a manually launched session with no task claimed for it calls \`moe.wait_for_task\`, which blocks until a new PLANNING task is announced in \`#architects\` ("📋 New plan needed: …").
 
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and the wrapper routes it to your next session. See \`docs/roles/governor.md\` for the full division of labor.
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=64a50f8344b8 -->
+  'architect.reference.md': `<!-- moe-generated: sha=399590c0e5e5 -->
 
 # Architect — Reference
 
@@ -140,6 +140,16 @@ The proposal lands in \`.moe/proposals/\` for human Approve/Reject. Do NOT loop 
 
 The wrapper lands a \`wip(task-<id>): <title> [status=<STATUS> role=architect cli-exit=<N>]\` checkpoint on every exit of a session that holds a task — including yours, when the task moves to AWAITING_APPROVAL. Only paths attributed to the task are staged (a scaffold you created, a doc or test you touched, the task's own \`.moe/tasks/<id>.json\`), never the shared checkout's foreign dirt. Two consequences: exploratory edits you do not want landed belong in a step note, not on disk; and your plan's \`affectedFiles\`/\`newFiles\` are the worker's PLANNED attribution tier — name every path a step will touch, because an undeclared, unreported edit made while another worker is live is left unstaged (\`MOE_ATTRIBUTION_UNRESOLVED\`). Do not use \`using-git-worktrees\` on your own initiative: the post-flight commits from the project root only.
 
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. An interactive session plans several tasks, so the daemon can also move it between them. Once a usage window on your account reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed, \`moe.submit_plan\` adds \`accountSwitch { from, to, fromPeakPercent, switchAtPercent, reason, instruction }\`:
+
+- The plan you just submitted is recorded; the switch never interrupts one.
+- Write that task's handoff memory if you have not, then end the turn. Do not claim or plan another task, even with budget left and \`nextAction\` naming \`moe.claim_next_task\`.
+- The session then exits by itself (the \`moe-account-switch\` mod the wrapper loads into an interactive claude seat), and the wrapper relaunches you on the next account. The new session claims the next PLANNING task.
+
+A switch is not a failure: report nothing and block nothing. A claim made anyway is refused, and the turn is ended for you. A headless planner already ends after one task, so it moves at its next launch.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (\`.serena/memories/\`), not in Moe. On task start, \`list_memories\` / \`read_memory\` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, \`write_memory\` a \`decision-<area>\` / \`gotcha-<area>\` note (or \`edit_memory\` an existing one). Names are the only index — be consistent.
@@ -179,7 +189,7 @@ Rules that keep this safe:
 - **It is not part of your task's diff.** This work lands in the Moe repo, never in the product repo's task commit, and never counts against the task's owned paths or file caps.
 
 Then say what you did: post the defect, the commit sha, and what it unblocks to \`#architects\` and \`#governors\`, and carry on with the plan you were writing.`,
-  'governor.md': `<!-- moe-generated: sha=d048b3fddbf1 -->
+  'governor.md': `<!-- moe-generated: sha=9b4b1f77fc16 -->
 
 # Governor
 
@@ -234,6 +244,8 @@ Follow \`nextAction\` on every Moe tool response. On \`moe.claim_next_task\` the
 3. Act via the appropriate tool: \`chat_send\` (reply), \`release_task\`, \`set_task_status\` (flip to PLANNING for re-plan), \`propose_rail\` (rail conflict), \`unblock_worker\` (seat-only by default; \`resolveBlocks: true\` clears the task's block), \`set_task_dependencies\` (fix a mis-declared \`dependsOn\` that is withholding a row from WORKING claims), \`set_task_priority\` (change which row is claimed next; never preempts a running task — see the reference), \`declare_files\` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
+One exception ends the loop: a \`moe.chat_wait\` that returns \`accountSwitch\` (\`ACCOUNT-SWITCH:\`) means your Claude account is spent. End the turn and do not call \`chat_wait\` again; Moe restarts this seat on the next account, and the new session re-enters governance with the unread chat still unread. Detail: \`governor.reference.md\`, **Claude account switch**.
+
 If \`nextAction\` includes \`recommendedSkill\`, load that skill before calling the hinted tool.
 
 ## Escalation ladder
@@ -286,7 +298,7 @@ Rules that keep this safe:
 - **Governance still applies to you.** Fixing Moe is not planning and not coding product — it is in your lane. But an edit that changes what the fleet may claim (a role gate, a claim filter, a dependency rule) is a hard call: surface it to the human before you push, the same as a release.
 
 Then post it in \`#governors\`: the defect, the commit sha, and what it unblocks. Future-you reads that log to notice the second occurrence of a pattern you have already fixed once.`,
-  'governor.reference.md': `<!-- moe-generated: sha=93549db35473 -->
+  'governor.reference.md': `<!-- moe-generated: sha=b613fb62e997 -->
 
 # Governor — Reference
 
@@ -394,6 +406,23 @@ The wrapper — never the daemon — lands every session's files (completion com
 - **Foreign-WIP debris** — dirty paths whose only owner is a DONE task — is \`MOE_ATTR_PREEXISTING\` for every later task and never swept. Runbook in \`docs/TROUBLESHOOTING.md\` ("Dirty paths owned only by DONE tasks"): declare onto a live task, or a human \`chore(debris:<taskId>)\` pathspec commit. Never land it under your own identity as a fleet-wide \`chore\` commit.
 - **\`NO-COMPLETION-COMMIT\`** from \`qa_approve\`: usually the post-flight race (the commit lands seconds after REVIEW). Re-check \`task.commits\` a minute later; if still empty, \`lastCommitOutcome\` says why. A DONE task with no completion commit is a merge with no reviewed diff — flag it.
 - \`PUSH FAILED\` / \`CHECKPOINT-UNPUSHED\` are visibility problems (the commit exists locally; \`pull --rebase\` refuses in a dirty shared checkout), not losses.
+
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. An interactive seat whose wrapper loop relaunches it also loads the \`moe-account-switch\` mod, which lets the daemon move it between accounts mid-run. Once a usage window on your account reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed:
+
+- \`moe.chat_wait\` returns \`{ hasMessage: false, accountSwitch: { from, to, fromPeakPercent, switchAtPercent, reason, instruction } }\`. It returns at once, or, while parked, as soon as a usage report makes the switch due.
+- Nothing was read: every message stays unread for the next session.
+- End the turn. Do not call \`chat_wait\` again: it is refused, and the turn is ended for you.
+- The session exits by itself about 10 s later. The wrapper relaunches you on the next account, and you re-enter governance as on any launch.
+
+A switch is not a failure; post nothing about it. You will also see it on other seats:
+
+- the 🔁 \`ACCOUNT_SWITCHED\` line in #governors;
+- a worker session ending after \`complete_step\` and coming back on the same task;
+- an architect session ending after \`submit_plan\` and coming back on the next PLANNING task.
+
+All of these are rotation working, not a crash: never release a task over one.
 
 ## Mention reply examples
 
@@ -682,10 +711,10 @@ only you can.
  * role doc (git history of docs/roles plus the working copy at generation).
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
-  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
-  'architect.reference.md': ['08b07943437a', '28353487e190', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
-  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
-  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
+  'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
+  'architect.reference.md': ['08b07943437a', '28353487e190', '399590c0e5e5', '4cc7254d0592', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
+  'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
+  'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'b613fb62e997', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '52ffd8f5e35c', '6cf327f722c6', '7a4154466321', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '2901ab4e47c9', '2b22d0d22444', '4351f8a02fb9', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a7e172e84fd7', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],

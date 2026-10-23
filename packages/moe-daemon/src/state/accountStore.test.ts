@@ -90,8 +90,8 @@ function usage(percent: number, nowMs: number, resetInMs = 2 * HOUR) {
   return parseUsageWindows({ five_hour: { percent, resetsAt: Math.floor((nowMs + resetInMs) / 1000) } }, nowMs);
 }
 
-function report(accountId: string, windows: ReturnType<typeof usage>, nowMs: number, extra: { refused?: boolean; signIn?: 'signed_out' | 'other' } = {}) {
-  return recordAccountReport(state, { workerId: 'w1', accountId, windows, refused: extra.refused ?? false, signIn: extra.signIn }, nowMs);
+function report(accountId: string, windows: ReturnType<typeof usage>, nowMs: number, extra: { refused?: boolean; signIn?: 'signed_out' | 'other'; workerId?: string } = {}) {
+  return recordAccountReport(state, { workerId: extra.workerId ?? 'w1', accountId, windows, refused: extra.refused ?? false, signIn: extra.signIn }, nowMs);
 }
 
 beforeEach(async () => {
@@ -285,8 +285,19 @@ describe('accountSwitchFor', () => {
     await leaseAccount(state, 'w1', T0);
     fs.rmSync(accountsFile);
     threeAccounts();
-    await report('acct-2', usage(95, T0), T0);
+    await report('acct-2', usage(95, T0), T0, { workerId: 'w2' }); // another seat on that account
     expect(accountSwitchFor(state, 'w1', T0)).toBeNull();
+  });
+
+  it('learns a seat\'s account back from its own report after a restart, and never replaces a lease', async () => {
+    threeAccounts();
+    await report('acct-2', usage(40, T0), T0);
+    expect(state.getWorker('w1')?.accountId).toBe('acct-2');
+    expect(accountRotationView(state, T0).accounts[1]?.seats).toEqual(['w1']);
+    await report('acct-3', usage(30, T0), T0); // not the account w1 runs on
+    expect(state.getWorker('w1')?.accountId).toBe('acct-2');
+    await report('acct-2', usage(92, T0), T0);
+    expect(accountSwitchFor(state, 'w1', T0)).toMatchObject({ from: 'acct-2', to: 'acct-3', reason: 'usage' });
   });
 });
 

@@ -51,6 +51,8 @@ Follow `nextAction` on every Moe tool response. On `moe.claim_next_task` the dae
 3. Act via the appropriate tool: `chat_send` (reply), `release_task`, `set_task_status` (flip to PLANNING for re-plan), `propose_rail` (rail conflict), `unblock_worker` (seat-only by default; `resolveBlocks: true` clears the task's block), `set_task_dependencies` (fix a mis-declared `dependsOn` that is withholding a row from WORKING claims), `set_task_priority` (change which row is claimed next; never preempts a running task — see the reference), `declare_files` (attribute stranded paths to the task that edited them).
 4. Loop back to step 1.
 
+One exception ends the loop: a `moe.chat_wait` that returns `accountSwitch` (`ACCOUNT-SWITCH:`) means your Claude account is spent. End the turn and do not call `chat_wait` again; Moe restarts this seat on the next account, and the new session re-enters governance with the unread chat still unread. Detail: `governor.reference.md`, **Claude account switch**.
+
 If `nextAction` includes `recommendedSkill`, load that skill before calling the hinted tool.
 
 ## Escalation ladder

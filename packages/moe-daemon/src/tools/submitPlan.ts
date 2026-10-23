@@ -12,6 +12,7 @@ import {
   allowedEfforts, clampEffort, EFFORTS, effortFloor, isEffort, isLowEffortPlan, isTier, maxEffort, maxTier, modelsForTier,
   planSizeFloor, resolveLaunch,
 } from '../util/routing.js';
+import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchFor, accountSwitchReply } from '../state/accountStore.js';
 
 /**
  * The affected-path refusal. `cachedRefMiss` says why the configured cached
@@ -199,7 +200,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             keyFiles: { type: 'array', items: { type: 'string' }, description: 'Critical files to understand' }
           },
           additionalProperties: false
-        }
+        },
+        acceptsAccountSwitch: ACCEPTS_ACCOUNT_SWITCH
       },
       required: ['taskId', 'steps'],
       additionalProperties: false
@@ -215,6 +217,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           effort?: unknown;
           model?: unknown;
           codexModel?: unknown;
+          acceptsAccountSwitch?: unknown;
           steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
           planningNotes?: {
             approachesConsidered?: string;
@@ -614,6 +617,14 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
               reason: 'Plan submitted; poll approval status until approved or rejected.'
             };
 
+        // The seat's Claude account is spent: the session ends after this
+        // submission, and the wrapper's relaunch picks up the next task on the
+        // next account. Absent when no switch is due, or when the session
+        // cannot end itself (no moe-account-switch mod).
+        const accountChange = params.acceptsAccountSwitch === true
+          ? accountSwitchFor(state, params.workerId)
+          : null;
+
         return {
           success: true,
           taskId: task.id,
@@ -646,6 +657,14 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           })(),
           ...(pathValidation ? { pathValidation } : {}),
           ...(planSize.warnings.length > 0 ? { warnings: planSize.warnings } : {}),
+          ...(accountChange
+            ? {
+                accountSwitch: accountSwitchReply(
+                  accountChange,
+                  `Your submission for ${task.id} is recorded. End your turn now and do not claim or plan another task: Moe restarts this seat on ${accountChange.toLabel}, and the new session picks up the next task.`
+                ),
+              }
+            : {}),
           message,
           nextAction
         };

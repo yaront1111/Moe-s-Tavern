@@ -7,13 +7,18 @@ import { leaseAccountTool } from './leaseAccount.js';
 import { reportAccountUsageTool } from './reportAccountUsage.js';
 import { completeStepTool } from './completeStep.js';
 import { startStepTool } from './startStep.js';
+import { submitPlanTool } from './submitPlan.js';
+import { chatWaitTool } from './chatWait.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { addAccount, recordSignIn } from '../accounts/registry.js';
 import type { Epic, Project, Task, Worker } from '../types/schema.js';
 
-// The wrapper's two account tools, and the step-boundary switch: once a
-// seat's account is spent, complete_step tells the worker to end its session
-// and start_step refuses to begin another step on that account.
+// The wrapper's two account tools, and the in-session switch: once a seat's
+// account is spent, complete_step tells the worker to end its session and
+// start_step refuses to begin another step on that account; between tasks,
+// submit_plan and chat_wait tell an architect or a governor whose session can
+// end itself (acceptsAccountSwitch, set by the moe-account-switch mod) to end
+// its turn.
 
 const VITEST_ACCOUNTS_FILE = process.env.MOE_ACCOUNTS_FILE;
 
@@ -47,14 +52,21 @@ function setupProject(steps: Task['implementationPlan']): void {
     reopenCount: 0, reopenReason: null, createdBy: 'HUMAN', parentTaskId: null,
     priority: 'MEDIUM', order: 1, comments: [], createdAt: now, updatedAt: now,
   };
-  const worker: Worker = {
-    id: 'worker-a', type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId: 'task-1', status: 'CODING',
-    teamId: null, branch: 'main', modifiedFiles: [], startedAt: now, lastActivityAt: now, lastError: null, errorCount: 0,
+  // An architect planning task-2, and a governor that holds no task.
+  const planning: Task = {
+    ...task, id: 'task-2', implementationPlan: [], status: 'PLANNING', assignedWorkerId: 'architect-a', contextFetchedBy: ['architect-a'], order: 2,
   };
+  const seat = (id: string, currentTaskId: string | null, status: Worker['status']): Worker => ({
+    id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId, status,
+    teamId: null, branch: 'main', modifiedFiles: [], startedAt: now, lastActivityAt: now, lastError: null, errorCount: 0,
+  });
   fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
   fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify(epic, null, 2));
   fs.writeFileSync(path.join(moePath, 'tasks', 'task-1.json'), JSON.stringify(task, null, 2));
-  fs.writeFileSync(path.join(moePath, 'workers', 'worker-a.json'), JSON.stringify(worker, null, 2));
+  fs.writeFileSync(path.join(moePath, 'tasks', 'task-2.json'), JSON.stringify(planning, null, 2));
+  for (const worker of [seat('worker-a', 'task-1', 'CODING'), seat('architect-a', 'task-2', 'PLANNING'), seat('governor-a', null, 'IDLE')]) {
+    fs.writeFileSync(path.join(moePath, 'workers', `${worker.id}.json`), JSON.stringify(worker, null, 2));
+  }
 }
 
 const THREE_STEPS: Task['implementationPlan'] = [
@@ -78,12 +90,12 @@ function twoAccounts(): void {
   recordSignIn(accountsFile, 'acct-2', 'subscription');
 }
 
-const lease = () => leaseAccountTool(state).handler({ workerId: 'worker-a' }, state) as Promise<Record<string, unknown>>;
+const lease = (workerId = 'worker-a') => leaseAccountTool(state).handler({ workerId }, state) as Promise<Record<string, unknown>>;
 
-/** The CLI's own report: utilization as a fraction, reset in epoch seconds. */
-function reportUsage(accountId: string, utilization: number) {
+/** The CLI's own report: utilization as a fraction, reset in epoch seconds. A null seat sends no workerId. */
+function reportUsage(accountId: string, utilization: number, workerId: string | null = 'worker-a') {
   return reportAccountUsageTool(state).handler({
-    workerId: 'worker-a',
+    ...(workerId ? { workerId } : {}),
     accountId,
     windows: { five_hour: { utilization, resetsAt: Math.floor(Date.now() / 1000) + 7200, status: 'allowed' } },
   }, state) as Promise<Record<string, unknown>>;
@@ -198,12 +210,154 @@ describe('switching accounts at a step boundary', () => {
     expect(last).not.toHaveProperty('accountSwitch');
   });
 
-  it('never tells a seat that did not lease through this daemon to switch', async () => {
+  it('a restarted daemon learns the seat\'s account back from its usage report', async () => {
     await load();
     twoAccounts();
+    await lease();
+    await load(); // a daemon restart forgets every lease
     await reportUsage('acct-1', 0.97);
+    expect(state.getWorker('worker-a')?.accountId).toBe('acct-1');
+    const result = await completeStepTool(state).handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state) as Record<string, any>;
+    expect(result.accountSwitch).toMatchObject({ from: 'acct-1', to: 'acct-2', fromPeakPercent: 97, reason: 'usage' });
+  });
+
+  it('a report keeps the leased account, and one that names no seat moves nothing', async () => {
+    await load();
+    twoAccounts();
+    await reportUsage('acct-1', 0.97, null);
     const result = await completeStepTool(state).handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state) as Record<string, unknown>;
     expect(result).not.toHaveProperty('accountSwitch');
     await startStepTool(state).handler({ taskId: 'task-1', stepId: 'step-2', workerId: 'worker-a' }, state);
+
+    await load([
+      { stepId: 'step-1', description: 'first', status: 'IN_PROGRESS', affectedFiles: [] },
+      { stepId: 'step-2', description: 'second', status: 'PENDING', affectedFiles: [] },
+    ]);
+    expect(await lease()).toMatchObject({ accountId: 'acct-2' }); // acct-1 is spent
+    await reportUsage('acct-1', 0.98); // a stale sample from the previous launch
+    expect(state.getWorker('worker-a')?.accountId).toBe('acct-2');
+    const kept = await completeStepTool(state).handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state) as Record<string, unknown>;
+    expect(kept).not.toHaveProperty('accountSwitch');
+  });
+});
+
+describe('switching accounts between tasks', () => {
+  const submit = (acceptsAccountSwitch = true) => submitPlanTool(state).handler({
+    taskId: 'task-2',
+    workerId: 'architect-a',
+    steps: [{ description: 'Do the work', affectedFiles: [] }],
+    acceptsAccountSwitch,
+  }, state) as Promise<Record<string, any>>;
+
+  const chatWait = (workerId: string, timeoutMs = 1000, acceptsAccountSwitch = true) =>
+    chatWaitTool(state).handler({ workerId, timeoutMs, acceptsAccountSwitch }, state) as Promise<Record<string, any>>;
+
+  const general = () => state.getChannels().find((channel) => channel.name === 'general')!.id;
+
+  it('submit_plan tells the architect to end its turn when its account is spent', async () => {
+    await load();
+    twoAccounts();
+    await lease('architect-a');
+    await reportUsage('acct-1', 0.93, 'architect-a');
+    const result = await submit();
+    expect(state.getTask('task-2')?.implementationPlan).toHaveLength(1);
+    expect(result.accountSwitch).toEqual({
+      from: 'acct-1',
+      to: 'acct-2',
+      fromPeakPercent: 93,
+      switchAtPercent: 90,
+      reason: 'usage',
+      instruction: 'ACCOUNT-SWITCH: Claude account One is at 93% of its usage limit (Moe switches at 90%). Your submission for task-2 is recorded. End your turn now and do not claim or plan another task: Moe restarts this seat on Two, and the new session picks up the next task.',
+    });
+    expect(result.nextAction.tool).toBe('moe.wait_for_task');
+  });
+
+  it('submit_plan says nothing to a session that cannot end itself', async () => {
+    await load();
+    twoAccounts();
+    await lease('architect-a');
+    await reportUsage('acct-1', 0.93, 'architect-a');
+    expect(await submit(false)).not.toHaveProperty('accountSwitch');
+  });
+
+  it('submit_plan says nothing under the switch percent', async () => {
+    await load();
+    twoAccounts();
+    await lease('architect-a');
+    await reportUsage('acct-1', 0.5, 'architect-a');
+    expect(await submit()).not.toHaveProperty('accountSwitch');
+  });
+
+  it('submit_plan says nothing to a seat without a lease', async () => {
+    await load();
+    twoAccounts();
+    await reportUsage('acct-1', 0.97, null);
+    expect(await submit()).not.toHaveProperty('accountSwitch');
+  });
+
+  it('submit_plan says nothing when no other account is eligible', async () => {
+    await load();
+    twoAccounts();
+    await lease('architect-a');
+    await reportUsage('acct-1', 0.95, 'architect-a');
+    await reportUsage('acct-2', 0.95, null);
+    expect(await submit()).not.toHaveProperty('accountSwitch');
+  });
+
+  it('chat_wait returns at once for a seat without a task, and leaves the chat unread', async () => {
+    await load();
+    twoAccounts();
+    await lease('governor-a');
+    const { message } = await state.sendMessage({ channel: general(), sender: 'human', content: '@governor-a status?' });
+    await reportUsage('acct-1', 0.93, 'governor-a');
+    expect(await chatWait('governor-a')).toEqual({
+      hasMessage: false,
+      accountSwitch: {
+        from: 'acct-1',
+        to: 'acct-2',
+        fromPeakPercent: 93,
+        switchAtPercent: 90,
+        reason: 'usage',
+        instruction: 'ACCOUNT-SWITCH: Claude account One is at 93% of its usage limit (Moe switches at 90%). End your turn now and do not call chat_wait again: Moe restarts this seat on Two.',
+      },
+    });
+    expect(state.getWorker('governor-a')?.chatCursors?.[general()]).toBeUndefined();
+
+    // The wrapper's relaunch leases the next account, and the message is still unread.
+    expect(await lease('governor-a')).toMatchObject({ accountId: 'acct-2' });
+    const next = await chatWait('governor-a');
+    expect(next.messages.map((m: { id: string }) => m.id)).toEqual([message.id]);
+  });
+
+  it('chat_wait blocks as before for a session that cannot end itself', async () => {
+    await load();
+    twoAccounts();
+    await lease('governor-a');
+    await reportUsage('acct-1', 0.93, 'governor-a');
+    const waiting = chatWait('governor-a', 1000, false);
+    await reportUsage('acct-1', 0.97, 'governor-a'); // a parked wait is not woken either
+    expect(await waiting).toEqual({ hasMessage: false, timedOut: true });
+  });
+
+  it('chat_wait delivers as before to a seat that holds a task', async () => {
+    await load();
+    twoAccounts();
+    await lease();
+    await reportUsage('acct-1', 0.93);
+    const { message } = await state.sendMessage({ channel: general(), sender: 'human', content: '@worker-a ping' });
+    const result = await chatWait('worker-a');
+    expect(result).not.toHaveProperty('accountSwitch');
+    expect(result.messages.map((m: { id: string }) => m.id)).toEqual([message.id]);
+  });
+
+  it('a parked chat_wait ends as soon as a usage report makes the switch due', async () => {
+    await load();
+    twoAccounts();
+    await lease('governor-a');
+    const waiting = chatWait('governor-a', 4000);
+    await reportUsage('acct-1', 0.95, 'governor-a');
+    const result = await waiting;
+    expect(result).not.toHaveProperty('timedOut');
+    expect(result).toMatchObject({ hasMessage: false, accountSwitch: { from: 'acct-1', to: 'acct-2', fromPeakPercent: 95 } });
   });
 });

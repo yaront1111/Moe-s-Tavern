@@ -4,6 +4,7 @@ import type { ChatMessage } from '../types/schema.js';
 import { invalidInput, missingRequired } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { DEFAULT_CHAT_CONTENT_CHARS, MAX_CHAT_CONTENT_CHARS, isSystemFeedMessage } from '../util/chatPayload.js';
+import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchReply, idleSwitchFor, type AccountSwitchReply } from '../state/accountStore.js';
 import {
   applyChatDelivery,
   chatBurstResponse,
@@ -53,6 +54,23 @@ export function cleanupStaleChatWaiters(state: StateManager): number {
   return cleaned;
 }
 
+/**
+ * The reply that ends a taskless seat's wait when its Claude account must
+ * switch. Nothing is drained, so unread messages stay unread for the session
+ * the wrapper relaunches. Null when no switch is due.
+ */
+function accountSwitchResponse(state: StateManager, workerId: string): { hasMessage: false; accountSwitch: AccountSwitchReply } | null {
+  const change = idleSwitchFor(state, workerId);
+  if (!change) return null;
+  return {
+    hasMessage: false,
+    accountSwitch: accountSwitchReply(
+      change,
+      `End your turn now and do not call chat_wait again: Moe restarts this seat on ${change.toLabel}.`
+    ),
+  };
+}
+
 interface ChatWaitContext {
   state: StateManager;
   workerId: string;
@@ -60,6 +78,8 @@ interface ChatWaitContext {
   sinceId?: string;
   timeoutMs: number;
   maxContentChars: number;
+  /** The session ends itself on an accountSwitch reply (the moe-account-switch mod). */
+  acceptsAccountSwitch: boolean;
   onWaiterRegistered?: ToolCallContext['onWaiterRegistered'];
 }
 
@@ -168,6 +188,10 @@ class ChatWaitSession {
       this.onChannelDeleted(event);
       return;
     }
+    if (event.type === 'ACCOUNTS_UPDATED') {
+      if (this.ctx.acceptsAccountSwitch) this.onAccountsUpdated();
+      return;
+    }
     if (event.type !== 'MESSAGE_CREATED' || this.finished) return;
     if (!this.isRelevant(event)) return;
 
@@ -205,6 +229,21 @@ class ChatWaitSession {
       cancelled: true,
       error: `Channel ${deletedChannelId} was deleted while waiting`
     });
+  }
+
+  /**
+   * A usage report just made this seat's account due to switch: end the wait
+   * now rather than at the timeout. A delivery already in flight wins; the
+   * next call returns the switch.
+   */
+  private onAccountsUpdated(): void {
+    if (this.finished || this.claimed) return;
+    const response = accountSwitchResponse(this.ctx.state, this.ctx.workerId);
+    if (!response) return;
+    this.finished = true;
+    this.cleanup();
+    logger.info({ workerId: this.ctx.workerId, to: response.accountSwitch.to }, 'Chat wait ended: Claude account switch due');
+    this.resolve(response);
   }
 
   /** Wake path: drain the whole burst, not just the message that woke us. */
@@ -273,6 +312,7 @@ interface ChatWaitParams {
   sinceId?: string;
   timeoutMs?: number;
   maxContentChars?: number;
+  acceptsAccountSwitch?: unknown;
 }
 
 function validateChatWaitParams(params: ChatWaitParams, state: StateManager): void {
@@ -323,7 +363,7 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.chat_wait',
     blocking: true,
-    description: 'Long-poll for chat messages mentioning this worker or from humans. Returns any unread backlog immediately, otherwise blocks until a message arrives or timeout.',
+    description: 'Long-poll for chat messages mentioning this worker or from humans. Returns any unread backlog immediately, otherwise blocks until a message arrives or timeout. With acceptsAccountSwitch, a seat holding no task whose Claude account must switch gets accountSwitch instead (at once, or as soon as a usage report makes it due) and must end its turn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -334,7 +374,8 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         maxContentChars: {
           type: 'number',
           description: 'Max chars per message content in the response (default 1000, 0 = full content)'
-        }
+        },
+        acceptsAccountSwitch: ACCEPTS_ACCOUNT_SWITCH
       },
       required: ['workerId'],
       additionalProperties: false
@@ -352,6 +393,15 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
         existing.unsubscribe();
         existing.resolve({ hasMessage: false, cancelled: true });
         activeChatWaiters.delete(workerId);
+      }
+
+      // A seat between tasks whose Claude account is spent ends its session
+      // instead of parking here (the wrapper relaunches it on the next account).
+      const acceptsAccountSwitch = params.acceptsAccountSwitch === true;
+      const switchResponse = acceptsAccountSwitch ? accountSwitchResponse(state, workerId) : null;
+      if (switchResponse) {
+        logger.info({ workerId, to: switchResponse.accountSwitch.to }, 'Chat wait skipped: Claude account switch due');
+        return switchResponse;
       }
 
       const timeoutMs = Math.min(
@@ -381,6 +431,7 @@ export function chatWaitTool(_state: StateManager): ToolDefinition {
           sinceId: params.sinceId,
           timeoutMs,
           maxContentChars,
+          acceptsAccountSwitch,
           onWaiterRegistered: context?.onWaiterRegistered,
         }, resolve).start();
       });

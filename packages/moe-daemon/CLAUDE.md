@@ -9,6 +9,10 @@ Daemon internals. Project overview, build and test commands: root `CLAUDE.md`; t
 - **Claude account rotation** (`state/accountStore.ts`, `accounts/`, and the wrapper-only tools `lease_account` and `report_account_usage`):
   - The account list is machine-level: `~/.moe/claude-accounts.json` (`MOE_ACCOUNTS_FILE` overrides), shared by every daemon. Per-account usage lives next to it in `claude-usage/<id>.json`.
   - The daemon never runs claude and never opens a file inside a Claude config folder (`claude-accounts/<id>`). Sign-in runs in the `accounts` CLI (`accounts/cli.ts`, `node dist/index.js accounts …`), which the IDE opens in a terminal. Keep `accounts/` free of daemon imports, so any node can run the CLI.
-  - Which seat holds which account is kept in memory, per daemon process. Only a seat this process leased can be told to switch (`accountSwitchFor` → `complete_step.accountSwitch`, and `start_step` `NOT_ALLOWED` with `ACCOUNT-SWITCH:`), so a restart never leaves a worker with a stale switch.
+  - Which seat holds which account is kept in memory, per daemon process. `lease_account` sets it. After a restart, `report_account_usage` learns it back from the seat's own report: the wrapper reports only the account its running claude was launched under, and a report never replaces a lease. Only such a seat can be told to switch (`accountSwitchFor`):
+    - a worker at a step boundary: `complete_step.accountSwitch`, and `start_step` `NOT_ALLOWED` with `ACCOUNT-SWITCH:`;
+    - a seat holding no task (`idleSwitchFor`): `submit_plan.accountSwitch`, or an early `chat_wait` return. A parked wait re-checks on `ACCOUNTS_UPDATED`.
+
+    Both idle signals need `acceptsAccountSwitch: true` on the call. Only the `moe-account-switch` mod (`scripts/mods/`) adds it, for a TUI its wrapper loop relaunches, since no other seat could act on the signal.
   - Tests: `vitest.config.ts` points `MOE_ACCOUNTS_FILE` at a temp file that does not exist; no test may read the developer's real list. CLI tests run a fake claude through `MOE_CLAUDE_BIN`.
   - On Windows, the CLI resolves claude on PATH × PATHEXT before running it. `cmd /c <missing>` exits 1, the same code a signed-out `claude auth status` returns, so the exit code alone cannot tell them apart.

@@ -207,7 +207,7 @@ moe-daemon accounts login acct-1             # Claude's own sign-in for that acc
 moe-daemon accounts check                    # exits 0 when every account is on a subscription
 ```
 
-- **No step is cut short.** A worker whose account reaches the switch point finishes its current step and ends its session. The launcher restarts the same task on the next account, and the new session picks up at the next step. QA, architect, and governor seats move at their next launch.
+- **No step is cut short.** A worker whose account reaches the switch point finishes its current step and ends its session. The launcher restarts the same task on the next account, and the new session picks up at the next step. A QA seat moves at its next launch. An architect or governor terminal moves between tasks: after a plan is recorded, or while it waits on chat, its session ends by itself and the launcher restarts it on the next account.
 - **Limits are handled for you.** If Claude refuses a launch at its limit, the launcher retries on the next account at once. When every account is spent, agents keep their tasks and resume at the earliest reset.
 - **You always know which account is in use.** The **Accounts** tab shows each account's sign-in, 5-hour and weekly usage, and status. The tool-window header shows the active account, worker cards name theirs, and `#governors` gets a 🔁 post on every switch.
 - **Credentials stay with Claude.** Each account is its own Claude config folder under `~/.moe/claude-accounts/`. Moe creates the folder and hands its path to Claude; it never reads, copies, or stores a login.

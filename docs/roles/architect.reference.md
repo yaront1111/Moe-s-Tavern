@@ -74,6 +74,16 @@ The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop be
 
 The wrapper lands a `wip(task-<id>): <title> [status=<STATUS> role=architect cli-exit=<N>]` checkpoint on every exit of a session that holds a task — including yours, when the task moves to AWAITING_APPROVAL. Only paths attributed to the task are staged (a scaffold you created, a doc or test you touched, the task's own `.moe/tasks/<id>.json`), never the shared checkout's foreign dirt. Two consequences: exploratory edits you do not want landed belong in a step note, not on disk; and your plan's `affectedFiles`/`newFiles` are the worker's PLANNED attribution tier — name every path a step will touch, because an undeclared, unreported edit made while another worker is live is left unstaged (`MOE_ATTRIBUTION_UNRESOLVED`). Do not use `using-git-worktrees` on your own initiative: the post-flight commits from the project root only.
 
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. An interactive session plans several tasks, so the daemon can also move it between them. Once a usage window on your account reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed, `moe.submit_plan` adds `accountSwitch { from, to, fromPeakPercent, switchAtPercent, reason, instruction }`:
+
+- The plan you just submitted is recorded; the switch never interrupts one.
+- Write that task's handoff memory if you have not, then end the turn. Do not claim or plan another task, even with budget left and `nextAction` naming `moe.claim_next_task`.
+- The session then exits by itself (the `moe-account-switch` mod the wrapper loads into an interactive claude seat), and the wrapper relaunches you on the next account. The new session claims the next PLANNING task.
+
+A switch is not a failure: report nothing and block nothing. A claim made anyway is refused, and the turn is ended for you. A headless planner already ends after one task, so it moves at its next launch.
+
 ## Quality memory
 
 Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.

@@ -126,10 +126,13 @@ process.exitCode=23;
   });
 }
 
-// Per-role auto-compact window and the compaction keeper's plugin dir: the
-// wrapper's real env block, run twice (a reload pass) over each inherited env.
+// Per-role auto-compact window and the Moe mods' plugin dirs: the wrapper's
+// real env block, run twice (a reload pass) over each inherited env. The
+// account-switch mod joins only a TUI seat whose loop relaunches it.
+const HEADLESS = { interactive: false, loop: true };
+const TUI = { interactive: true, loop: true };
 const compactCases = [
-  // [role, inherited env, window, marker, keeper on]
+  // [role, inherited env, window, marker, keeper on, seat, account-switch on]
   ['qa', {}, '500000', '500000', true],
   // 300000 unmarked: the pre-2026-10-09 flat default, inherited by the reload that installs this wrapper
   ['architect', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '300000' }, '600000', '600000', true],
@@ -137,26 +140,34 @@ const compactCases = [
   ['worker', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '600000', MOE_COMPACT_WINDOW_DEFAULT: '600000' }, '300000', '300000', true],
   // an operator value wins
   ['qa', { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '400000' }, '400000', '', true],
-  ['governor', { MOE_DISABLE_COMPACTION_KEEPER: '1' }, '600000', '600000', false],
+  ['governor', { MOE_DISABLE_COMPACTION_KEEPER: '1' }, '600000', '600000', false, TUI, true],
+  ['architect', {}, '600000', '600000', true, TUI, true],
+  // --no-loop: an ended session would not come back
+  ['architect', {}, '600000', '600000', true, { interactive: true, loop: false }, false],
+  ['governor', { MOE_DISABLE_ACCOUNT_SWITCH_MOD: '1' }, '600000', '600000', true, TUI, false],
 ];
-const compactVars = /^(CLAUDE_CODE_AUTO_COMPACT_WINDOW|MOE_COMPACT_WINDOW_DEFAULT|CLAUDE_CODE_PLUGIN_DIRS|MOE_DISABLE_COMPACTION_KEEPER)$/;
+const compactVars = /^(CLAUDE_CODE_AUTO_COMPACT_WINDOW|MOE_COMPACT_WINDOW_DEFAULT|CLAUDE_CODE_PLUGIN_DIRS|MOE_DISABLE_COMPACTION_KEEPER|MOE_DISABLE_ACCOUNT_SWITCH_MOD)$/;
 
 for (const [ext, engine] of engines) {
-  for (const [role, inherited, window, marker, keeperOn] of compactCases) {
-    test(`${engine}: ${role} compact window over ${JSON.stringify(inherited)}`, t => {
+  for (const [role, inherited, window, marker, keeperOn, seat = HEADLESS, switchOn = false] of compactCases) {
+    const kind = `${seat.interactive ? 'tui' : 'headless'}${seat.loop ? '' : ' no-loop'}`;
+    test(`${engine}: ${role} ${kind} compact window over ${JSON.stringify(inherited)}`, t => {
       // Long form: $PSScriptRoot expands an 8.3 TEMP such as C:\Users\RUNNER~1.
       const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'moe compact ')));
       t.after(() => rmSync(dir, { recursive: true, force: true }));
       mkdirSync(path.join(dir, 'mods', 'moe-compaction-keeper'), { recursive: true });
-      let script, keeperDir;
+      mkdirSync(path.join(dir, 'mods', 'moe-account-switch'), { recursive: true });
+      let script, keeperDir, switchDir;
       if (ext === 'ps1') {
         const block = between(read('ps1'), '            if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL)', '            # Inline stream-json parser.');
         keeperDir = path.join(dir, 'mods', 'moe-compaction-keeper');
-        script = `$ErrorActionPreference='Stop'\n$Role='${role}'\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS")`;
+        switchDir = path.join(dir, 'mods', 'moe-account-switch');
+        script = `$ErrorActionPreference='Stop'\n$Role='${role}'\n$claudeInteractive=$${seat.interactive}\n$loopEnabled=$${seat.loop}\n${block}\n${block}\n[Console]::Write("$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW|$env:MOE_COMPACT_WINDOW_DEFAULT|$env:CLAUDE_CODE_PLUGIN_DIRS")`;
       } else {
         const block = between(read('sh'), '        if [ "$CLI_TYPE" = "claude" ]; then\n            export CLAUDE_CODE_PROMPT_CACHE_TTL', '        # Per-task one-shot mode');
         keeperDir = `${dir.replaceAll('\\', '/')}/mods/moe-compaction-keeper`;
-        script = `set -eu\nCLI_TYPE=claude\nROLE=${role}\nSCRIPT_DIR=${quote(dir.replaceAll('\\', '/'))}\n${block}\n${block}\nprintf '%s|%s|%s' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" "\${MOE_COMPACT_WINDOW_DEFAULT:-}" "\${CLAUDE_CODE_PLUGIN_DIRS:-}"`;
+        switchDir = `${dir.replaceAll('\\', '/')}/mods/moe-account-switch`;
+        script = `set -eu\nCLI_TYPE=claude\nROLE=${role}\nCLAUDE_INTERACTIVE=${seat.interactive}\nLOOP_ENABLED=${seat.loop}\nSCRIPT_DIR=${quote(dir.replaceAll('\\', '/'))}\n${block}\n${block}\nprintf '%s|%s|%s' "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" "\${MOE_COMPACT_WINDOW_DEFAULT:-}" "\${CLAUDE_CODE_PLUGIN_DIRS:-}"`;
       }
       const file = path.join(dir, `compact.${ext}`);
       writeFileSync(file, script);
@@ -166,7 +177,7 @@ for (const [ext, engine] of engines) {
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       const sep = ext === 'ps1' ? path.delimiter : ':';
-      assert.equal(result.stdout, `${window}|${marker}|operator-dir${keeperOn ? sep + keeperDir : ''}`);
+      assert.equal(result.stdout, `${window}|${marker}|operator-dir${keeperOn ? sep + keeperDir : ''}${switchOn ? sep + switchDir : ''}`);
     });
   }
 }

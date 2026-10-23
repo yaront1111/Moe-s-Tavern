@@ -17,8 +17,11 @@
 //
 // A running worker moves at a step boundary: complete_step and start_step ask
 // accountSwitchFor() and tell the worker to end its session, and the
-// wrapper's relaunch of the held task leases again. Everyone else moves at
-// their next launch.
+// wrapper's relaunch of the held task leases again. An interactive seat between
+// tasks moves at submit_plan or chat_wait when its session runs the
+// moe-account-switch mod (scripts/mods/), which marks those calls
+// (ACCEPTS_ACCOUNT_SWITCH) and exits claude when the turn ends, so the
+// wrapper's loop relaunches it. Everyone else moves at their next launch.
 //
 // The daemon never runs claude and never opens a file inside a Claude config
 // directory: it reads the registry and the usage files, and hands the wrapper
@@ -104,7 +107,11 @@ interface Fleet {
   active: string | null;
   /** The "every account is spent" alert was posted this episode. */
   alerted: boolean;
-  /** Account each seat's current launch was leased, in this daemon process only. Drives the step-boundary switch. */
+  /**
+   * Account each seat's current launch runs on: leased by this daemon process,
+   * or learned back from the seat's own usage report after a restart. Drives
+   * every in-session switch.
+   */
   leases: Map<string, string>;
   lastViewKey: string | null;
 }
@@ -386,6 +393,12 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
     fleet.usage.delete(usageFile);
     recorded = true;
   }
+  // A restart forgets every lease. The wrapper only reports the account its
+  // running claude was launched under, so learn it back (after the merge, so
+  // the one broadcast carries both); a lease is never replaced.
+  if (report.workerId && !fleet.leases.has(report.workerId)) {
+    await settleLease(state, fleet, report.workerId, account.id, nowMs);
+  }
   refreshAccounts(state, nowMs);
   const until = blockedUntilMs(usage, threshold, nowMs);
   return { recorded, blockedUntil: until === null ? null : iso(until), peakPercent: peakPercent(usage, nowMs) };
@@ -394,8 +407,9 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
 /**
  * A switch is due when the seat's leased account is no longer eligible (spent,
  * refused, signed out or removed) and the next lease would pick another one.
- * Only leases made by this daemon process count, so a restart or a seat that
- * never leased (rotation off, another CLI) is never told to switch.
+ * Only a seat whose account this process knows counts: one it leased, or one
+ * whose wrapper reported usage since a restart. A seat that never leased
+ * (rotation off, another CLI) is never told to switch.
  */
 export function accountSwitchFor(state: StateManager, workerId: string | undefined, nowMs: number = Date.now()): AccountSwitch | null {
   const fleet = fleets.get(state);
@@ -433,4 +447,46 @@ export function accountSwitchCause(change: AccountSwitch): string {
     case 'removed':
       return `Claude account ${change.fromLabel} was removed from Moe's account list`;
   }
+}
+
+/**
+ * The input the moe-account-switch mod adds to submit_plan and chat_wait. Only
+ * a session that ends itself and is relaunched by its wrapper's loop can act
+ * on a switch between tasks; every other seat keeps its account until its
+ * next launch, as before.
+ */
+export const ACCEPTS_ACCOUNT_SWITCH = {
+  type: 'boolean',
+  description: 'Set by Moe\'s moe-account-switch session mod, which ends this session when the reply carries accountSwitch. Never set it yourself.',
+} as const;
+
+/**
+ * The switch for a seat between tasks: an architect after submit_plan, a
+ * governor in chat_wait. A seat holding a task waits for its step boundary.
+ */
+export function idleSwitchFor(state: StateManager, workerId: string | undefined, nowMs: number = Date.now()): AccountSwitch | null {
+  if (!workerId || state.getWorker(workerId)?.currentTaskId) return null;
+  return accountSwitchFor(state, workerId, nowMs);
+}
+
+/** A tool reply's `accountSwitch`. The instruction starts with "ACCOUNT-SWITCH:", which the moe-account-switch mod keys on. */
+export interface AccountSwitchReply {
+  from: string;
+  to: string;
+  fromPeakPercent: number | null;
+  switchAtPercent: number;
+  reason: AccountSwitch['reason'];
+  instruction: string;
+}
+
+/** `next` tells the seat what to do now, after the cause. */
+export function accountSwitchReply(change: AccountSwitch, next: string): AccountSwitchReply {
+  return {
+    from: change.from,
+    to: change.to,
+    fromPeakPercent: change.fromPeakPercent,
+    switchAtPercent: change.switchAtPercent,
+    reason: change.reason,
+    instruction: `ACCOUNT-SWITCH: ${accountSwitchCause(change)}. ${next}`,
+  };
 }

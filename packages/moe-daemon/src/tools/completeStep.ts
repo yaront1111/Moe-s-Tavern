@@ -5,7 +5,7 @@ import { MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { activeAmendment, effectiveStepDescription } from '../util/planAmendments.js';
-import { accountSwitchCause, accountSwitchFor } from '../state/accountStore.js';
+import { accountSwitchFor, accountSwitchReply } from '../state/accountStore.js';
 
 export function completeStepTool(_state: StateManager): ToolDefinition {
   return {
@@ -228,14 +228,10 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         ...(warning ? { warning } : {}),
         ...(accountChange && nextStep
           ? {
-              accountSwitch: {
-                from: accountChange.from,
-                to: accountChange.to,
-                fromPeakPercent: accountChange.fromPeakPercent,
-                switchAtPercent: accountChange.switchAtPercent,
-                reason: accountChange.reason,
-                instruction: `ACCOUNT-SWITCH: ${accountSwitchCause(accountChange)}. Step ${params.stepId} is saved. End your session now and do not start another step: Moe relaunches this task on ${accountChange.toLabel}, and the new session continues with step ${nextStep.stepId}.`,
-              },
+              accountSwitch: accountSwitchReply(
+                accountChange,
+                `Step ${params.stepId} is saved. End your session now and do not start another step: Moe relaunches this task on ${accountChange.toLabel}, and the new session continues with step ${nextStep.stepId}.`
+              ),
             }
           : {}),
         nextAction

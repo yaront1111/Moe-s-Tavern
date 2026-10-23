@@ -1,4 +1,4 @@
-# Moe - MCP Seclaurveracl Specifclaudeication (Current)
+# Moe - MCP Seclaurveracl SpecifclaudeclaudeCication (Current)
 
 ## Overview
 
@@ -285,7 +285,8 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
                                            // low/medium only for a docs/tests-only plan); omit = default
   model?: string,                          // Claude model from get_context routing.models.claude; omit = default
   codexModel?: string,                     // codex model from routing.models.codex; set both when either CLI may claim
-  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? }
+  planningNotes?: { approachesConsidered?, codebaseInsights?, risks?, keyFiles? },
+  acceptsAccountSwitch?: boolean           // set only by the moe-account-switch session mod; never by an agent
 }
 ```
 
@@ -308,8 +309,9 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 
 **Returns:**
 ```typescript
-{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, tier, effortRaised?, lowEffort?, launch?, planRevision, warnings?: string[], message, nextAction }
+{ success: true, taskId, status: "AWAITING_APPROVAL", stepCount, distinctFileCount, newFileCount, tier, effortRaised?, lowEffort?, launch?, planRevision, warnings?: string[], accountSwitch?, message, nextAction }
 ```
+- `accountSwitch` (the same shape as on `moe.complete_step`) appears only when the call carries `acceptsAccountSwitch: true` and the seat's Claude account must switch (see **Claude Account Rotation**). The plan is recorded as usual. Its `instruction` reads "ACCOUNT-SWITCH: …. Your submission for <taskId> is recorded. End your turn now and do not claim or plan another task: …". The architect ends its turn, the mod ends the session, and the wrapper relaunches the seat on `to`. `nextAction` is unchanged.
 - `planRevision` is the revision this submission committed (read from the write's own Task, not a later cache read). It is the token a client sends back as `expectedPlanRevision` when it later approves the plan — see [Plan approval — `expectedPlanRevision` compare-and-swap](#plan-approval--expectedplanrevision-compare-and-swap).
 
 ---
@@ -353,7 +355,7 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 - A `workerId` that differs from a set `assignedWorkerId` is still refused with `NOT_ALLOWED`.
 - A call without a `workerId` (the JetBrains plugin `/ws` path, legacy clients) keeps the old tolerance.
 
-**Account switch.** When the seat's Claude account is spent (see **Claude Account Rotation**), the call is refused with `NOT_ALLOWED`, and the reason starts with `ACCOUNT-SWITCH:`. The step stays `PENDING`. The worker ends its session; the wrapper relaunches the held task on the next account, and the new session starts the step. The check runs after every other guard. It never fires for a seat that this daemon process did not lease an account to.
+**Account switch.** When the seat's Claude account is spent (see **Claude Account Rotation**), the call is refused with `NOT_ALLOWED`, and the reason starts with `ACCOUNT-SWITCH:`. The step stays `PENDING`. The worker ends its session; the wrapper relaunches the held task on the next account, and the new session starts the step. The check runs after every other guard. It fires only for a seat whose account this daemon process knows: one it leased, or one learned back from the seat's own usage report after a restart (see `moe.report_account_usage`).
 
 **Returns:**
 ```typescript
@@ -2239,7 +2241,8 @@ Long-poll for chat messages mentioning this worker or from humans. **Burst-aware
   channels?: string[],  // Optional: ambient channel filter; routed mentions arrive from anywhere
   sinceId?: string,     // Optional: explicit catch-up cursor, overrides stored per-channel cursors
   timeoutMs?: number,   // Max wait (default 300000, max 600000)
-  maxContentChars?: number // Max chars/message in response (default 1000, 0 = full)
+  maxContentChars?: number, // Max chars/message in response (default 1000, 0 = full)
+  acceptsAccountSwitch?: boolean // Set only by the moe-account-switch session mod; never by an agent
 }
 ```
 
@@ -2248,6 +2251,7 @@ Long-poll for chat messages mentioning this worker or from humans. **Burst-aware
 { hasMessage: true, messages: [ChatMessage], truncated: number, hasMore?: true }  // on match
 { hasMessage: false, timedOut: true }           // on timeout
 { hasMessage: false, cancelled: true }          // if cancelled
+{ hasMessage: false, accountSwitch }            // the seat's Claude account must switch (acceptsAccountSwitch only)
 ```
 
 **Notes:**
@@ -2261,6 +2265,7 @@ Long-poll for chat messages mentioning this worker or from humans. **Burst-aware
 - Cancels any previous wait for the same worker
 - Aborts with `{ hasMessage: false, cancelled: true, error }` if a subscribed channel is deleted while waiting
 - The `#general` system feed (see `moe.chat_read`) never wakes a waiter and is never returned in a burst
+- **Account switch** (see **Claude Account Rotation**): with `acceptsAccountSwitch: true`, a seat holding no task whose Claude account must switch gets `{ hasMessage: false, accountSwitch }` (the shape of `moe.complete_step`'s) in place of a wait. It comes at once, or, while parked, on the first usage report that makes the switch due. Nothing is drained and no cursor moves, so every message stays unread for the next session. The `instruction` reads "ACCOUNT-SWITCH: …. End your turn now and do not call chat_wait again: …". Without the flag, and for a seat holding a task, the wait is unchanged.
 
 ---
 
@@ -2762,7 +2767,7 @@ Moe can spread claude seats across several Claude subscription accounts on one m
   - has no `rejected`/`overage` status;
   - has no pending refusal.
 
-  A spent account comes back on its own when its window resets. A worker in the middle of a task moves at its next step boundary (`moe.complete_step` `accountSwitch`, `moe.start_step` refusal). Every other seat moves at its next launch.
+  A spent account comes back on its own when its window resets. A worker in the middle of a task moves at its next step boundary (`moe.complete_step` `accountSwitch`, `moe.start_step` refusal). An interactive claude seat whose wrapper loop relaunches it (the architect and governor TUIs) runs the `moe-account-switch` mod (`scripts/mods/`), which adds `acceptsAccountSwitch` to its `moe.submit_plan` and `moe.chat_wait` calls. That seat moves between tasks: the architect after `moe.submit_plan`, the governor at `moe.chat_wait`. The mod then ends the session once the turn is over, and the wrapper relaunches it. It also ends a session that claude stopped at the usage limit (100%) before any switch point. Every other seat moves at its next launch.
 - **Activity:**
   - `ACCOUNT_SWITCHED`, posted to #governors with 🔁;
   - `ACCOUNTS_EXHAUSTED`, every signed-in account spent, posted with ⏸️ once per episode;
@@ -2793,7 +2798,7 @@ Wrapper-only, so no role sees it in `tools/list`. Picks the account for the call
 **Notes:**
 - The wrapper starts claude with `CLAUDE_CONFIG_DIR=configDir`. It removes `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` from claude's environment, since each would outrank the folder's login.
 - `accountId: null` means wait: the held task stays held, and the wrapper tries again at `retryAt`.
-- Which seat holds which account is kept in this daemon process only. After a daemon restart, no seat is told to switch until it leases again.
+- Which seat holds which account is kept in this daemon process only. After a daemon restart, a running seat is learned back from its wrapper's next usage report (see `moe.report_account_usage`). Until then, it is not told to switch.
 
 ### moe.report_account_usage
 
@@ -2827,6 +2832,7 @@ Wrapper-only. Records one report for a leased account.
   A window with no reset time is also rewritten every 30 minutes, so it stays live while claude keeps reporting it.
 - `refused: true` parks the account until its spent window resets. The minimum is 5 minutes, and it is 1 hour when no window gives a reset time.
 - An `accountId` that is not on the list is ignored, never created.
+- A report whose `workerId` holds no lease in this daemon process records that seat as running on `accountId`. The wrapper reports only the account its running claude was launched under, so after a daemon restart this restores every in-session switch. A report never replaces a lease the process already holds.
 
 ## Plugin WebSocket Messages
 

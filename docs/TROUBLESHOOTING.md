@@ -786,6 +786,32 @@ with no back-off and no resume attempt spent.
 
 **Fix:** none needed. To switch later, raise "Switch to the next account at" in the Accounts tab.
 
+### An architect or governor session ends and restarts on its own
+
+**Symptom:** an interactive claude seat (an architect or governor TUI) shows the toast
+`Moe: Claude account <label> is at <n>% of its usage limit (Moe switches at <m>%). This session ends in 10 s and restarts
+on the next account.` After that, the TUI exits by itself. The wrapper relaunches it with
+`MOE_ACCOUNT_SWITCHED from=<a> to=<b>`, and #governors gets a 🔁 post. It happens:
+- for an architect, right after a `submit_plan`;
+- for a governor, at a `chat_wait`.
+
+The toast reads `this Claude account reached its usage limit` instead when claude stopped the session at the limit
+itself.
+
+**Cause:** expected. The wrapper loads the `moe-account-switch` mod (`scripts/mods/`) into a claude TUI whose loop
+relaunches it. The mod ends the session once the turn is over, after either of these:
+- the daemon put `accountSwitch` in a `submit_plan` or `chat_wait` reply, for the same reasons as a worker's switch
+  above;
+- claude stopped at the usage limit (100%).
+
+The architect's plan is recorded first. The governor's unread chat stays unread for the new session. A call the
+model makes after the switch (a claim, another `chat_wait`) is refused, and its turn is ended.
+
+**Fix:** none needed. To keep a TUI on one account until you exit it, set `MOE_DISABLE_ACCOUNT_SWITCH_MOD=1` for that
+seat; it then moves at its next launch, as before. A `--no-loop`/`-NoLoop` or one-shot (`--print`) seat never loads
+the mod. If a seat leaves the toast `Type /exit and Moe relaunches it.` and keeps running, the claude build could not
+run `/exit` from the mod. Exit it by hand.
+
 ### `MOE_ACCOUNT_WAIT retry_in=…`
 
 **Symptom:** a claude seat prints `[account] MOE_ACCOUNT_WAIT retry_in=<s>s next_reset=<iso> - every signed-in

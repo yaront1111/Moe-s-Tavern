@@ -105,6 +105,23 @@ The wrapper — never the daemon — lands every session's files (completion com
 - **`NO-COMPLETION-COMMIT`** from `qa_approve`: usually the post-flight race (the commit lands seconds after REVIEW). Re-check `task.commits` a minute later; if still empty, `lastCommitOutcome` says why. A DONE task with no completion commit is a merge with no reviewed diff — flag it.
 - `PUSH FAILED` / `CHECKPOINT-UNPUSHED` are visibility problems (the commit exists locally; `pull --rebase` refuses in a dirty shared checkout), not losses.
 
+## Claude account switch
+
+Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. An interactive seat whose wrapper loop relaunches it also loads the `moe-account-switch` mod, which lets the daemon move it between accounts mid-run. Once a usage window on your account reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed:
+
+- `moe.chat_wait` returns `{ hasMessage: false, accountSwitch: { from, to, fromPeakPercent, switchAtPercent, reason, instruction } }`. It returns at once, or, while parked, as soon as a usage report makes the switch due.
+- Nothing was read: every message stays unread for the next session.
+- End the turn. Do not call `chat_wait` again: it is refused, and the turn is ended for you.
+- The session exits by itself about 10 s later. The wrapper relaunches you on the next account, and you re-enter governance as on any launch.
+
+A switch is not a failure; post nothing about it. You will also see it on other seats:
+
+- the 🔁 `ACCOUNT_SWITCHED` line in #governors;
+- a worker session ending after `complete_step` and coming back on the same task;
+- an architect session ending after `submit_plan` and coming back on the next PLANNING task.
+
+All of these are rotation working, not a crash: never release a task over one.
+
 ## Mention reply examples
 
 - "Saw the stale alert on `worker-foo`. Pinging them in `#workers` first — will report back in one tick."
