@@ -400,3 +400,21 @@ test('legacy receipts without correlation report unknown values, not zero, and k
   assert.equal(report.summary.ambiguousCorrelationGroups, 0);
   assert.deepEqual(report.tasks[0].usage.totalTokens, { observedTokens: 1200, unknownRecords: 0 });
 });
+
+test('each isolated delivery-record defect is incomplete, never a recorded delivery', t => {
+  const joined = { 'cand-R1': { id: 'cand-R1', taskId: 'task-R', attemptId: 'attempt-R1' } };
+  const landed = (id, landedRevision) => ({ id, candidateId: 'cand-R1', landedRevision });
+  const cases = [
+    ['non-string revision', joined, { 'receipt-R1': landed('receipt-R1', [hex]) }, null],
+    ['two receipts for one candidate', joined, { 'receipt-R1': landed('receipt-R1', hex), 'receipt-R2': landed('receipt-R2', hex) }, null],
+    ['malformed sibling candidate', { ...joined, 'cand-bad': { id: 'cand-bad', taskId: 'task-R' } }, { 'receipt-R1': landed('receipt-R1', hex) }, 'receipt-R1'],
+  ];
+  for (const [name, candidates, receipts, receiptId] of cases) {
+    const { project } = fixture(t, { 'a.jsonl': [row({ taskId: 'task-R', attemptId: 'attempt-R1', sessionId: 's-R', eventId: 'e-R' })] });
+    writeRecords(project, 'candidates', candidates);
+    writeRecords(project, 'receipts', receipts);
+    const [task] = run(project).wholeTasks;
+    assert.deepEqual(task.delivery, { evidence: 'record-only', status: 'incomplete', omittedCandidates: 0, candidates: [{
+      candidateId: 'cand-R1', attemptId: 'attempt-R1', deliveryReceiptId: receiptId, landedRevision: receiptId && hex }] }, name);
+  }
+});

@@ -1,0 +1,62 @@
+{
+  "id": "task-0ece1a3552944298af911356f149e150",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M04] Baseline outcome report",
+  "description": "Objective: Run frozen baseline workloads with original behavior and report quality, repair, retrieval, planning, latency and usage together.\n\nDeliverable: Baseline outcome report. This is task M04 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs\n\nDependency aliases (wired by Moe task ids after import): M02, M03.",
+  "definitionOfDone": [
+    "All fixture results retain version/model/budget identities and missing counters.",
+    "No green task or token-only metric is treated as independent acceptance.",
+    "Report contains reproducible inputs and variability/coverage limitations.",
+    "Fresh verification `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Block resolved by the human: pinned current defaults, 1 run per workload, 60-minute cap per workload (see task comment). Back to PLANNING for an architect.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 40,
+  "comments": [
+    {
+      "id": "comment-af9d6a3cebc0433aa5a534279dfcaf42",
+      "author": "architect-cq-coordinator",
+      "content": "User clarification: token efficiency is a cross-cutting requirement on EVERY rollout task, not just context/cache tasks. Six epic rails now carry CQ-TOKEN-v1/safety/accounting. Measure whole-task tokens and cost per independently accepted change across architect, worker, QA, context-building and repair attempts, with cached/uncached/output counters kept distinct and missing data unknown. Do not confuse prompt-size reduction or caching with reduced active-context use; do not claim achieved savings before matched quality/repair/latency evidence. Keep instrumentation itself bounded and avoid logging full prompts/payloads or private reasoning.",
+      "timestamp": "2026-10-24T12:32:34.399Z"
+    },
+    {
+      "id": "comment-700a6a5111ad4a57a3340a2dac0ab586",
+      "author": "governor-187cc44e",
+      "content": "Human decision, 2026-10-24 (relayed by governor-187cc44e). This resolves the run-configuration block. Plan the baseline against this setup:\n\n1. Models and effort: today's defaults, unchanged. No `settings.models` pins are set, so claude seats launch on claude-opus-5-5 with `--effort max`, and a claimed task's plan routing (its `launch` hint: model and effort) overrides that for the session. That is the original behavior being measured. Each fixture result records the actual model id and effort for every participating role, plus the Moe commit under test.\n2. Repetitions: one run per workload, 20 runs in total. The report states n=1 as a variability limitation.\n3. Budget: each workload's whole run is capped at 60 minutes wall-clock, the daemon's task-size target. A run that hits the cap is recorded as capped, with its partial counters. It is not dropped and not silently retried.\n\nMissing counters stay explicitly unknown, per CQ-TOKEN-MEASURE-v1.",
+      "timestamp": "2026-10-24T12:45:29.075Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:32:57.338Z",
+  "updatedAt": "2026-10-24T12:45:30.559Z",
+  "dependsOn": [
+    "task-bb9034eaeed44adcbc1d05c71c2eda5b",
+    "task-cfa74f1b01df4647b57a923bdd961b2a"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T12:39:07.805Z"
+  },
+  "contextFetchedBy": [
+    "architect-da8841dc",
+    "governor-187cc44e"
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Cannot specify a reproducible bounded paid baseline experiment from the supplied contract: actual runs on all 20 frozen workloads are required, but provider/model+effort, per-workload spending or runtime budget, and repetition count are undefined. Read task/comments, measurement reference section and launcher defaults; none supply a matched experiment configuration. Role routing defaults are not an experiment budget and must not be silently substituted. This is missing acceptance/run configuration, not REPL silence or an implementation prerequisite wait. No plan/source change made; M02/M03 plans remain submitted.",
+  "blockedOnTaskIds": null
+}
