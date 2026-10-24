@@ -31,6 +31,7 @@ Environment: every `MOE_*` variable unset except `MOE_ACCOUNTS_FILE` (pinned to 
 ## Layout
 - `records/<id>.json`: the 20 outcome records, byte-identical to what the driver wrote.
 - `usage/<id>/logs/moe-usage/observed.jsonl`: each run's usage receipts, projected onto the receipt writer's allowlisted keys (100 rows; no key was dropped). No prompts, tool arguments, secrets or prices; seat logs, wrapper output and project trees are not archived.
+- `.gitignore` narrowly exempts `docs/baselines/cq-m04/usage/*/logs/` so these receipts are committable; other log directories remain ignored.
 - `expected.json`: the frozen manifest (corpus version, ids, categories, case digests).
 - `report.json`, `report.md`: generated report.
 
