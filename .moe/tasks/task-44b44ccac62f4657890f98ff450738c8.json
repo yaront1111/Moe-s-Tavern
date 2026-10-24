@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:35:25.734Z",
-  "updatedAt": "2026-10-24T13:50:46.462Z",
+  "updatedAt": "2026-10-24T13:52:18.701Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:44:49.901Z",
     "plannedStepCount": 5,
@@ -164,7 +164,8 @@
     "packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts",
     "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts",
     ".moe/tasks/task-44b44ccac62f4657890f98ff450738c8.json",
-    ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json"
+    ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json",
+    ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json"
   ],
   "completionSummary": "Round-1 QA reject fixed. Touches only the two benchmark files: +73/-11 lines against 19dfa68.\n\n**Issue 1 (Trojan Source)**\n- FORBIDDEN_CHAR is now ASCII escapes: [\\\\<>:\"|?*\\u0000-\\u001f\\u007f-\\u009f؜​-‏‪-‮⁠-⁯﻿].\n- A script built the line from code points and first proved the old raw characters encoded exactly 200B-200F, 202A-202E, 2060-206F and FEFF. The original ranges are kept.\n- Deliberate additions, made while the shared contract can still change: U+061C ALM (QA-optional; the last missing Bidi_Control) and C1 controls U+0080-009F (Unicode controls like the C0 set already forbidden).\n- A comment explains why the class must stay escaped.\n- The acceptance git grep finds nothing, and od shows ASCII only.\n\nRelated same-class fix: a private quoted() helper now quotes every echoed key, path or id in validation and readSnapshotFiles messages as printable ASCII. A rejected RLO path or a candidate-planted file name can no longer reorder or hide log text.\n\nUnchanged: exports, the digest framing and the pinned digests.\n\n**Issue 2 (tests)** 151 tests, previously 141.\n- Rows for U+200F, U+202E, U+2066, a leading U+FEFF, U+061C and U+009B, each rejected in every placement.\n- A BMP sweep with an independent oracle that pins the exact forbidden set.\n- An ASCII-quoting test and an RLO-named junction read-back test.\n- An archive-safe source guard: no literal C0/C1 (except tab/CR/LF), Cf or U+2028/9 in either file.\n- RED was confirmed first: 6 failed. The 4 QA-named rows already passed, because runtime behavior was correct.\n- Mutation runs caught 7 of 7 escape typos, including widening.\n\n**Issue 3 (gate)** Fresh git-archive copy with sha256-identical files, Linux node_modules and PATH:\n- vitest exit 0, 151/151, twice;\n- tsc exit 0;\n- 0 leftover dirs.\n\nGotcha: the Edit tool decoded some \\u escapes into literal characters. They were repaired with a script and recorded in the gotcha-invisible-unicode-in-source memory. No production, daemon, MCP or .moe change.",
   "commits": [
@@ -230,6 +231,22 @@
       "treeId": "adff50e3801d2d8b1f7f11e50427ef459fd164f5",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "61b3841a81a44baa335b8c7adff74fc4d26b15e1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T13:42:13Z",
+      "paths": [
+        ".moe/tasks/task-44b44ccac62f4657890f98ff450738c8.json",
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T13:52:18.700Z",
+      "treeId": "bbc383ff1d6d8e8b51f388030a19f6200367d46e",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -239,9 +256,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-24T13:21:19Z",
-    "at": "2026-10-24T13:41:48.305Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T13:42:13Z",
+    "at": "2026-10-24T13:52:18.700Z"
   },
   "reviewCompletedAt": "2026-10-24T13:50:46.462Z",
   "rejectionDetails": {
