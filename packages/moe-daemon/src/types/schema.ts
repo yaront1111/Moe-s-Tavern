@@ -158,7 +158,8 @@ export type ExecutionProfile = 'legacy' | 'observe' | 'verified-local';
  * NOT plan approval, a model receipt, runner trust, isolation readiness, a
  * required-check definition, a delivery destination or verified completion.
  * Decode it with readExecutionPolicySnapshot (delivery/executionProfile.ts);
- * lifecycle persistence and enforcement are separate rollout work.
+ * task persistence is taskStore's; attempt capture and admission are later
+ * rollout work.
  */
 export type ExecutionPolicySnapshot = ExecutionPolicySnapshotV1 | ExecutionPolicySnapshotV2;
 
@@ -748,9 +749,12 @@ export interface Task {
    */
   planRevision?: number;
   /**
-   * Configuration identity (see ExecutionPolicySnapshot). Absent on every
-   * existing record; no daemon path writes or trusts it yet (capture and
-   * ownership guards are separate rollout work). Decode it with
+   * Configuration identity (see ExecutionPolicySnapshot). Daemon-owned:
+   * written only inside the PLAN_SUBMITTED write, together with the
+   * planRevision it records, and stripped from every caller update (and by the
+   * /ws UPDATE_TASK denylist). No other write backfills, refreshes or erases it,
+   * so rows that predate capture stay without one. A stored verified-local
+   * snapshot is a floor a project rollback cannot lower. Decode it with
    * readExecutionPolicySnapshot and never read it as approval or readiness.
    */
   executionPolicySnapshot?: ExecutionPolicySnapshot;

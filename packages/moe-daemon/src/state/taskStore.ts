@@ -18,7 +18,13 @@
 import fs from 'fs';
 import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { ActivityEventType, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import type { ActivityEventType, ExecutionPolicySnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import {
+  assertExecutionProfileReady,
+  readExecutionPolicySnapshot,
+  resolveTaskExecutionProfile,
+} from '../delivery/executionProfile.js';
+import { captureExecutionPolicySnapshot } from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
@@ -37,6 +43,7 @@ import {
 } from './validators.js';
 import { runDependencyUnblock } from './dependencyUnblock.js';
 import { closeHandedBackAttempts, closeOpenAttempts, listAttempts } from './attemptStore.js';
+import { nextStatusForRelease } from './workerLifecycle.js';
 
 /** Hard cap on declared dependency ids per task (dependsOn / blockedOnTaskIds). */
 export const MAX_TASK_DEPENDENCY_IDS = 20;
@@ -162,6 +169,94 @@ function derivePlanRevision(
   return current + 1;
 }
 
+/**
+ * The executionPolicySnapshot a plan submission stores: configuration identity
+ * only, never approval, readiness or runner trust. A stored verified-local
+ * snapshot is the floor and is kept whole (version, profile and captured
+ * deliveryPolicy); only planRevision advances, so neither a project rollback
+ * nor a stale revision can downgrade it or fill a v1 one in. There is no policy
+ * ranking: anything else captures the live settings. Today the strict
+ * progression check refuses every verified-local submission before this runs.
+ *
+ * Error handling: a malformed stored snapshot or malformed live settings throw
+ * INVALID_INPUT, so the submission is refused before any write.
+ */
+export function planSubmissionSnapshot(
+  settings: { executionProfile?: unknown; deliveryPolicy?: unknown } | null | undefined,
+  stored: unknown,
+  planRevision: number
+): ExecutionPolicySnapshot {
+  const prior = readExecutionPolicySnapshot(stored);
+  const captured = captureExecutionPolicySnapshot(settings, planRevision);
+  if (prior?.profile !== 'verified-local') return captured;
+  return readExecutionPolicySnapshot({ ...prior, planRevision }) as ExecutionPolicySnapshot;
+}
+
+/**
+ * Lifecycle rank. A Map, so only its own entries rank: a hand-edited status
+ * such as 'constructor' can never rank through an inherited key. BLOCKED and
+ * ARCHIVED are never progression targets.
+ */
+const PROGRESSION_RANK: ReadonlyMap<TaskStatus, number> = new Map<TaskStatus, number>([
+  ['BACKLOG', 0],
+  ['PLANNING', 1],
+  ['AWAITING_APPROVAL', 2],
+  ['WORKING', 3],
+  ['REVIEW', 4],
+  ['DONE', 5],
+]);
+
+/** A BLOCKED row stands at its recorded blockedFromStatus; ARCHIVED, an unrecorded block or an unknown status at 0. */
+function standing(task: Task): number {
+  const at = task.status === 'BLOCKED' ? task.blockedFromStatus : task.status;
+  return at ? PROGRESSION_RANK.get(at) ?? 0 : 0;
+}
+
+/**
+ * Every plan submission is a new progression, and so is a status change to a
+ * ranked target above where the row stands. A release is not: the stored row
+ * holds a seat, the caller's own update clears it, and the target is exactly
+ * nextStatusForRelease (an all-done WORKING row lands in REVIEW). Pass the
+ * caller's update, never finalUpdates: that clears the seat on every status
+ * change, so each complete_task would look like a hand-back.
+ */
+function isNewProgression(
+  task: Task,
+  callerUpdates: Partial<Task>,
+  nextStatus: TaskStatus,
+  event: ActivityEventType | undefined
+): boolean {
+  if (event === 'PLAN_SUBMITTED') return true;
+  const target = nextStatus === task.status ? undefined : PROGRESSION_RANK.get(nextStatus);
+  if (target === undefined || target <= standing(task)) return false;
+  const release = Boolean(task.assignedWorkerId)
+    && callerUpdates.assignedWorkerId === null
+    && nextStatus === nextStatusForRelease(task);
+  return !release;
+}
+
+/**
+ * The strict-progression backstop, run before any write. It grants nothing:
+ * passing is not approval, readiness or trust. Only a new progression decodes
+ * anything, so reads, metadata, progress, assignment and cleanup/release never
+ * touch the snapshot and a bad record cannot wedge them. The profile is the
+ * live one floored by a stored verified-local snapshot, stale revision or not.
+ * Claim admission and waiters belong to CQ-M01e.
+ *
+ * Error handling: a malformed snapshot or setting throws INVALID_INPUT and
+ * verified-local throws EXECUTION_PROFILE_NOT_READY, both before any write.
+ */
+function assertProgressionReady(
+  state: StateManager,
+  task: Task,
+  callerUpdates: Partial<Task>,
+  nextStatus: TaskStatus,
+  event: ActivityEventType | undefined
+): void {
+  if (!isNewProgression(task, callerUpdates, nextStatus, event)) return;
+  assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
+}
+
 export async function createTask(state: StateManager, input: Partial<Task>): Promise<Task> {
   if (!state.project) {
     throw new Error('Project not loaded');
@@ -204,6 +299,8 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
     implementationPlan: sanitizeImplementationPlan(input.implementationPlan),
     // Daemon-owned: a new task starts at 0 whatever the caller passed (and
     // whatever initial plan it shipped with) — the first submission is 1.
+    // Built field by field, so a caller's executionPolicySnapshot is never
+    // copied either: the first plan submission captures it.
     planRevision: 0,
     status: input.status || 'BACKLOG',
     assignedWorkerId: input.assignedWorkerId || null,
@@ -223,6 +320,12 @@ export async function createTask(state: StateManager, input: Partial<Task>): Pro
     createdAt: now,
     updatedAt: now
   };
+
+  // A row created past BACKLOG is a new progression. It has no snapshot yet,
+  // so the live profile decides, before any write.
+  if ((PROGRESSION_RANK.get(task.status) ?? 0) > 0) {
+    assertExecutionProfileReady(resolveTaskExecutionProfile(state.project.settings));
+  }
 
   await state.writeEntity('tasks', task.id, task);
   state.tasks.set(task.id, task);
@@ -309,6 +412,11 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // any caller-supplied value (MCP tool, plugin UPDATE_TASK) so a client can
   // neither forge a newer stamp nor reset an older one.
   delete (sanitized as Record<string, unknown>).planRevision;
+  // executionPolicySnapshot is daemon-owned as well: only the PLAN_SUBMITTED
+  // capture below writes it, so no caller (MCP tool, plugin UPDATE_TASK, a
+  // board echo of the whole row) may forge, reset, null or erase it. Deleting
+  // the key also keeps an own-key undefined out of the merged row.
+  delete (sanitized as Record<string, unknown>).executionPolicySnapshot;
   if (sanitized.title !== undefined) {
     sanitized.title = sanitizeString(sanitized.title, 'title', 500);
   }
@@ -392,6 +500,8 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   if (statusChanged && (normalizedUpdates.status === 'DONE' || normalizedUpdates.status === 'ARCHIVED')) {
     assertNoFinalizingAttempt(state, taskId);
   }
+  // Strict readiness, also before any write (and before the capture below).
+  assertProgressionReady(state, task, normalizedUpdates, normalizedUpdates.status ?? task.status, event);
 
   // Derive the plan revision from the sanitized surface, BEFORE any write, so a
   // malformed stored stamp or an exhausted counter refuses the whole update
@@ -399,11 +509,19 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // object — and therefore the same writeEntity call — as the plan/DoD it
   // versions, so a reader can never see one without the other.
   const planRevision = derivePlanRevision(task, finalUpdates, event);
+  // Only a plan submission captures the snapshot (planSubmissionSnapshot). It
+  // rides in the same fresh object, and so the same writeEntity, as the
+  // revision it names: a refused or failed write publishes neither. Approval
+  // writes never capture.
+  const capture = event === 'PLAN_SUBMITTED'
+    ? { executionPolicySnapshot: planSubmissionSnapshot(state.project?.settings, task.executionPolicySnapshot, planRevision) }
+    : {};
 
   const updated: Task = {
     ...task,
     ...finalUpdates,
     planRevision,
+    ...capture,
     updatedAt: new Date().toISOString()
   };
 
@@ -570,6 +688,9 @@ export async function approveTask(
       );
     }
   }
+  // Readiness is checked here too, before cancelSpeedModeTimeout, so a refused
+  // approval cancels no pending timer either.
+  assertProgressionReady(state, task, {}, 'WORKING', 'PLAN_APPROVED');
   cancelSpeedModeTimeout(taskId);
   const updated = await state.updateTask(taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED');
   return updated;

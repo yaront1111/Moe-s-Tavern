@@ -122,6 +122,9 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   // `updates` to dodge the compare-and-swap.
   'planRevision',
   'expectedPlanRevision',
+  // Configuration identity, captured by taskStore.updateTask in the
+  // PLAN_SUBMITTED write only: a board echo must not forge, reset or wipe it.
+  'executionPolicySnapshot',
 ]);
 
 export type PluginMessage =

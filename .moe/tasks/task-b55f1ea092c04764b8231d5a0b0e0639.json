@@ -107,7 +107,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.326Z",
-  "updatedAt": "2026-10-24T14:19:08.558Z",
+  "updatedAt": "2026-10-24T14:20:06.205Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:53:44.996Z",
     "plannedStepCount": 5,
@@ -164,7 +164,8 @@
     "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts",
     "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
     ".moe/tasks/task-6694591cea5d43908eb3399b44ca883a.json",
-    ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json"
+    ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json",
+    ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json"
   ],
   "completionSummary": "Adds 2 new files, both test-only benchmark scaffolding with no production change: packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts (exports MAINTENANCE_WORKLOADS, validated and frozen against the landed M03a contract at import) and maintenanceWorkloads.test.ts.\n\n**Five cases**, each a reduced or adapted ESM overlay of source at commit 35cf53c. Each source.note states exactly what was dropped or changed.\n1. truncation-helper-reuse (memorySettings + getPendingQuestions): reuse the helper.\n2. branch-policy-message (branchPolicy): message names the policy kind.\n3. usage-unknown-format (prompt-cache-usage.mjs): input fields stay unknown, never 0.\n4. affected-file-caller (affectedFiles): new caller of the normalizer and pathKey, with an explicit platform argument.\n5. cached-ref-caller (cachedPlanPaths): lookup accepts {branch, remote}; glob is not evidence; read-only recipe kept.\n\n**Controls** run the unchanged held-out node:test rubric through node --test TAP:\n- The original fails an EXACT pinned set that includes intended-change criteria.\n- The corrected variant passes every criterion id.\n- The plausible-wrong variant fails an exact set that includes the named one.\n\nVariants are test-only patches on fresh snapshots. Leakage, unset-root, determinism/reset and source-sha256 checks are included, plus an ASCII-only source guard and pinned digestWorkload values.\n\n**Gate** (fresh git-archive copy, Linux node_modules, lockfile equal to HEAD's):\n- vitest 22/22, exit 0, run 3 times;\n- tsc exit 0, and the test file typechecks;\n- 0 temp dirs left.\n\n**Extra checks:**\n- Windows-native node 24.16: 22/22.\n- CRLF-converted copy: 22/22 (digests stable).\n- Two mutants killed.\n- forbiddenPatterns: 0 hits.\n\nThe dataset file is over 300 lines because the plan puts all fixtures in two files. Possible TAP forgery by a hostile candidate is a note for the M04 runner, not a bug here.",
   "commits": [
@@ -185,6 +186,22 @@
       "treeId": "dcfbe263c18afd375a06196c4c22b825eca9f06f",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "c20b1909f17f81f0e1184bb2498e3119edb4fe25",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T14:14:34Z",
+      "paths": [
+        ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+        ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T14:20:06.205Z",
+      "treeId": "61129459bda1070399a8fdb03c6bd3c597868a54",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -194,9 +211,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-24T13:51:06Z",
-    "at": "2026-10-24T14:13:57.639Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T14:14:34Z",
+    "at": "2026-10-24T14:20:06.205Z"
   },
   "completedAt": "2026-10-24T14:19:08.558Z",
   "reviewCompletedAt": "2026-10-24T14:19:08.558Z",
