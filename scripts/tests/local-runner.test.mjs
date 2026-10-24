@@ -892,3 +892,720 @@ process.exitCode = main();
   assert.deepEqual(JSON.parse(readFileSync(statePath, 'utf8')), { [FOREIGN]: 'Running', primary: 'Running' });
   assert.equal(existsSync(violations), false);
 });
+
+// CQ-R07 pinned guest bootstrap
+import { createHash } from 'node:crypto';
+import { mkdirSync, symlinkSync } from 'node:fs';
+import {
+  buildUserData, GUEST_LAYOUT, GUEST_RESOURCES, hashFile, JOB_IDENTITIES, launchResourceArgs,
+  MAX_CREDENTIAL_BYTES, MAX_SUPERVISOR_BYTES, verifySourceImage,
+} from '../local-runner/guest-bootstrap.mjs';
+import { GUEST_PROBES, readGuestInfo, runGuestProbe, waitForGuestReady } from '../local-runner/guest-readiness.mjs';
+
+const GiB = 2 ** 30;
+const GUEST = nameAt(1);
+const IDENTITIES = ['moe-agent', 'moe-check'];
+const PINS = (await loadCertifiedProvider()).images;
+const SOURCE = { arch: 'x64', url: PINS.x64.url, sha256: PINS.x64.sha256 };
+const PROVIDER_HASH = 'cd'.repeat(32);
+const SUPERVISOR = Buffer.from('#!/bin/sh\nexec /usr/lib/moe/supervisor "$@"\n');
+const CREDENTIAL = Buffer.from('secret-credential-0123456789');
+const BOOTSTRAP = buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL });
+const DENIALS = [
+  ['readCredential', '-r', '/etc/moe/supervisor.credential', 'CREDENTIAL_EXPOSED'],
+  ['readUserData', '-r', '/var/lib/cloud/instance/user-data.txt', 'CREDENTIAL_EXPOSED'],
+  ['readUserDataParts', '-r', '/var/lib/cloud/instance/user-data.txt.i', 'CREDENTIAL_EXPOSED'],
+  ['readCloudConfig', '-r', '/var/lib/cloud/instance/cloud-config.txt', 'CREDENTIAL_EXPOSED'],
+  ['readCachedObject', '-r', '/var/lib/cloud/instance/obj.pkl', 'CREDENTIAL_EXPOSED'],
+  ['readInstanceData', '-r', '/run/cloud-init/instance-data-sensitive.json', 'CREDENTIAL_EXPOSED'],
+  ['readSeed', '-r', '/dev/sr0', 'CREDENTIAL_EXPOSED'],
+  ['writeSupervisor', '-w', '/opt/moe/bin/moe-supervisor', 'SUPERVISOR_WRITABLE'],
+  ['writeSupervisorDir', '-w', '/opt/moe/bin', 'SUPERVISOR_WRITABLE'],
+];
+const EXPECTED_PROBES = {
+  cloudInit: ['cloud-init', 'status', '--format', 'json'],
+  mountinfo: ['cat', '/proc/self/mountinfo'],
+  layout: ['sudo', '-n', 'stat', '--format=%U:%G:%a:%A:%n', '/opt/moe', '/opt/moe/bin', '/opt/moe/bin/moe-supervisor', '/etc/moe', '/etc/moe/supervisor.credential'],
+  supervisorHash: ['sudo', '-n', 'sha256sum', '/opt/moe/bin/moe-supervisor'],
+};
+for (const id of IDENTITIES) {
+  const as = ['sudo', '-n', '-u', id];
+  Object.assign(EXPECTED_PROBES, {
+    [`whoami:${id}`]: [...as, 'id', '--user', '--name'],
+    [`status:${id}`]: ['sudo', '-n', 'passwd', '--status', id],
+    [`groups:${id}`]: ['id', '--groups', '--name', id],
+    ...Object.fromEntries(DENIALS.map(([key, flag, file]) => [`${key}:${id}`, [...as, 'test', flag, file]])),
+    [`sudo:${id}`]: [...as, 'sudo', '-n', 'true'],
+    [`keys:${id}`]: ['sudo', '-n', 'test', '-e', `/home/${id}/.ssh/authorized_keys`],
+  });
+}
+const BOUNDARY = Object.keys(EXPECTED_PROBES).filter(id => id !== 'cloudInit');
+const PROBE_IDS = new Map(Object.entries(EXPECTED_PROBES).map(([id, argv]) => [JSON.stringify(argv), id]));
+const execArgs = id => ['exec', '--no-map-working-directory', GUEST, '--', ...EXPECTED_PROBES[id]];
+
+/** A Multipass v1.17.0 `info --format json` instance detail (json_formatter.cpp generate_instance_details). */
+const guestDetail = (changes = {}) => ({
+  zone: null, state: 'Running', image_hash: PROVIDER_HASH, image_release: '24.04 LTS', release: 'Ubuntu 24.04.3 LTS', cpu_count: '2',
+  load: [0.1, 0.05, 0.01], disks: { sda1: { used: '2147483648', total: String(19 * GiB) } },
+  memory: { used: 268435456, total: 4 * GiB - 2 ** 24 }, ipv4: ['10.0.0.2'], mounts: {}, ...changes,
+});
+const cloudInit = (code, status, extended = status, errors = [], recoverable = {}) =>
+  ({ code, stdout: JSON.stringify({ status, extended_status: extended, errors, recoverable_errors: recoverable }) });
+const MOUNTS = [
+  '22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw,discard,errors=remount-ro',
+  '23 22 8:15 / /boot/efi rw,relatime shared:2 - vfat /dev/sda15 rw,fmask=0077,dmask=0077',
+  '24 22 7:0 / /snap/core22/1612 ro,nodev,relatime shared:3 - squashfs /dev/loop0 ro,errors=continue',
+  '25 22 0:24 / /run rw,nosuid,nodev,noexec,relatime shared:4 - tmpfs tmpfs rw,size=401816k,mode=755',
+  '26 22 0:22 / /proc rw,nosuid,nodev,noexec,relatime shared:5 - proc proc rw',
+  '27 22 0:21 / /sys rw,nosuid,nodev,noexec,relatime shared:6 - sysfs sysfs rw',
+  '28 27 0:26 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:7 - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot',
+  '29 27 0:40 / /sys/fs/fuse/connections rw,nosuid,nodev,noexec,relatime shared:8 - fusectl fusectl rw',
+];
+const mountinfo = (lines = MOUNTS) => ({ code: 0, stdout: `${lines.join('\n')}\n` });
+const LAYOUT = [
+  'root:root:755:drwxr-xr-x:/opt/moe', 'root:root:755:drwxr-xr-x:/opt/moe/bin', 'root:root:500:-r-x------:/opt/moe/bin/moe-supervisor',
+  'root:root:755:drwxr-xr-x:/etc/moe', 'root:root:400:-r--------:/etc/moe/supervisor.credential',
+];
+const layout = (lines = LAYOUT, code = 0) => ({ code, stdout: `${lines.join('\n')}\n` });
+const withLine = (lines, index, line) => lines.map((entry, at) => (at === index ? line : entry));
+
+/** Probe answers of a correctly bootstrapped guest; overrides replace answers by probe id. */
+function healthy(overrides = {}) {
+  const answers = {
+    cloudInit: cloudInit(0, 'done'), mountinfo: mountinfo(), layout: layout(),
+    supervisorHash: { code: 0, stdout: `${BOOTSTRAP.supervisorSha256}  /opt/moe/bin/moe-supervisor\n` },
+  };
+  for (const id of IDENTITIES) {
+    answers[`whoami:${id}`] = { code: 0, stdout: `${id}\n` };
+    answers[`status:${id}`] = { code: 0, stdout: `${id} L 10/24/2026 0 99999 7 -1\n` };
+    answers[`groups:${id}`] = { code: 0, stdout: `${id}\n` };
+    for (const key of [...DENIALS.map(([name]) => name), 'sudo', 'keys']) answers[`${key}:${id}`] = { code: 1, stdout: '' };
+  }
+  return { ...answers, ...overrides };
+}
+
+/** execFile-compatible guest: only `info <guest> --format json` and `exec --no-map-working-directory <guest> -- <probe>`. */
+function fakeGuest({ info = guestDetail(), answers = healthy() } = {}) {
+  const calls = [];
+  const unexpected = [];
+  const take = value => (Array.isArray(value) ? (value.length > 1 ? value.shift() : value[0]) : value);
+  const run = async (executable, args, options) => {
+    calls.push({ executable, args: [...args], options });
+    let answer;
+    if (args.length === 4 && args[0] === 'info' && args[1] === GUEST && args[2] === '--format' && args[3] === 'json') {
+      const detail = take(info);
+      answer = detail.error ? detail : { code: 0, stdout: JSON.stringify({ errors: [], info: { [GUEST]: detail } }) };
+    } else if (args.length > 4 && args[0] === 'exec' && args[1] === '--no-map-working-directory' && args[2] === GUEST && args[3] === '--') {
+      const id = PROBE_IDS.get(JSON.stringify(args.slice(4)));
+      answer = id && Object.hasOwn(answers, id) ? take(answers[id]) : undefined;
+    }
+    if (!answer) {
+      unexpected.push([...args]);
+      throw new Error(`unexpected provider command ${JSON.stringify(args)}`);
+    }
+    if (answer.error) throw answer.error;
+    if (answer.code === 0) return { stdout: answer.stdout, stderr: '' };
+    throw Object.assign(new Error('Command failed /private/path'), { code: answer.code, stdout: answer.stdout, stderr: 'secret-diagnostic' });
+  };
+  const ids = () => calls.map(call => (call.args[0] === 'info' ? 'info' : PROBE_IDS.get(JSON.stringify(call.args.slice(4)))));
+  return { run, calls, unexpected, ids };
+}
+
+async function guestHarness(t) {
+  const dir = scratch(t);
+  const ledger = createLedger(dir, { random: sequence() });
+  const record = await seed(ledger, 'owned');
+  return { dir, ledger, record, file: path.join(dir, `${GUEST}.json`) };
+}
+
+/** One readiness run against a fresh fake guest (healthy unless fakeOptions say otherwise). */
+async function bootGuest(h, fakeOptions = {}, overrides = {}) {
+  const fake = fakeGuest(fakeOptions);
+  const sleeps = [];
+  const result = await waitForGuestReady({
+    ledger: h.ledger, name: GUEST, owner, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: { run: fake.run },
+    sleep: async ms => { sleeps.push(ms); }, pollMs: 5, maxWaitMs: 20, ...overrides,
+  });
+  assert.deepEqual(fake.unexpected, []);
+  return { result, fake, sleeps };
+}
+
+const outcome = (failures, provider = { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' }) => ({
+  instance: GUEST, bootstrapReady: failures.length === 0, executionReady: false,
+  image: { source: SOURCE, provider }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures,
+});
+
+/** Exactly `failures`, no ledger write and no diagnostic text in the report. */
+async function expectRefused(h, fakeOptions, failures, { provider, label, overrides } = {}) {
+  const before = readFileSync(h.file);
+  const run = await bootGuest(h, fakeOptions, overrides);
+  assert.deepEqual(run.result, outcome(failures, provider), label);
+  assert.deepEqual(readFileSync(h.file), before, label);
+  assert.equal(/secret|private/.test(JSON.stringify(run.result)), false, label);
+  return run;
+}
+
+test('hashFile streams sha256 of a regular file and refuses links, directories, relative and oversized paths', async t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe private secret image '));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'source image.img');
+  const bytes = Buffer.alloc(200_000);
+  for (let index = 0; index < bytes.length; index++) bytes[index] = (index * 31) % 251;
+  writeFileSync(file, bytes);
+  const expected = createHash('sha256').update(bytes).digest('hex');
+  assert.equal(await hashFile({ file }), expected);
+  assert.equal(await hashFile({ file, maxBytes: bytes.length }), expected);
+  const invalid = error => assertSanitized(error, 'IMAGE_INPUT_INVALID');
+  await assert.rejects(hashFile({ file, maxBytes: bytes.length - 1 }), invalid);
+  for (const maxBytes of [-1, 1.5, '200000']) await assert.rejects(hashFile({ file, maxBytes }), invalid);
+  const folder = path.join(dir, 'folder');
+  mkdirSync(folder);
+  await assert.rejects(hashFile({ file: folder }), invalid);
+  for (const bad of ['relative/source.img', `${file}\n`, `${file}\u0000`, '', null, 42]) await assert.rejects(hashFile({ file: bad }), invalid);
+  await assert.rejects(hashFile(), invalid);
+  await assert.rejects(hashFile({ file: path.join(dir, 'missing.img') }), error => assertSanitized(error, 'IMAGE_UNREADABLE'));
+  if (process.platform !== 'win32') {
+    const link = path.join(dir, 'link.img');
+    symlinkSync(file, link);
+    await assert.rejects(hashFile({ file: link }), invalid);
+  }
+});
+
+test('verifySourceImage accepts only the installed manifest pin for the requested architecture', async t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe private secret source '));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'ubuntu image.img');
+  writeFileSync(file, 'not the pinned image');
+  await assert.rejects(verifySourceImage({ file, arch: 'x64' }), error => assertSanitized(error, 'IMAGE_CHECKSUM_MISMATCH'));
+  for (const arch of ['x64', 'arm64']) {
+    const seen = [];
+    const verified = await verifySourceImage({ file, arch }, { digest: async input => { seen.push(input); return PINS[arch].sha256; } });
+    assert.deepEqual(verified, { arch, url: PINS[arch].url, sha256: PINS[arch].sha256 });
+    assert.equal(Object.isFrozen(verified), true);
+    assert.deepEqual(seen, [{ file }]);
+  }
+  for (const sha of [PINS.arm64.sha256, PINS.x64.sha256.toUpperCase(), undefined]) {
+    await assert.rejects(verifySourceImage({ file, arch: 'x64' }, { digest: async () => sha }), error => assertSanitized(error, 'IMAGE_CHECKSUM_MISMATCH'));
+  }
+  for (const arch of ['ia32', 'amd64', 'valueOf', 'constructor', undefined]) {
+    let calls = 0;
+    const digest = async () => { calls++; return PINS.x64.sha256; };
+    await assert.rejects(verifySourceImage({ file, arch }, { digest }), error => assertSanitized(error, 'IMAGE_INPUT_INVALID'));
+    assert.equal(calls, 0);
+  }
+  await assert.rejects(verifySourceImage(null), error => assertSanitized(error, 'IMAGE_INPUT_INVALID'));
+  await assert.rejects(verifySourceImage({ file, arch: 'x64' }, { digest: PINS.x64.sha256 }), error => assertSanitized(error, 'IMAGE_INPUT_INVALID'));
+});
+
+test('buildUserData renders deterministic cloud-config with a protected supervisor and locked identities', () => {
+  const expected = [
+    '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: []', 'users:', '  - default',
+    '  - name: moe-agent', '    lock_passwd: true', '    shell: /bin/bash',
+    '  - name: moe-check', '    lock_passwd: true', '    shell: /bin/bash',
+    'write_files:',
+    '  - path: /opt/moe/bin/moe-supervisor', '    owner: root:root', "    permissions: '0500'", '    encoding: b64',
+    `    content: '${SUPERVISOR.toString('base64')}'`,
+    '  - path: /etc/moe/supervisor.credential', '    owner: root:root', "    permissions: '0400'", '    encoding: b64',
+    `    content: '${CREDENTIAL.toString('base64')}'`,
+    '',
+  ].join('\n');
+  const built = buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL });
+  assert.deepEqual(built, { userData: expected, supervisorSha256: createHash('sha256').update(SUPERVISOR).digest('hex') });
+  assert.equal(Object.isFrozen(built), true);
+  assert.equal(buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL }).userData, expected);
+  assert.equal(built.userData.includes(CREDENTIAL.toString('utf8')), false);
+  assert.equal(/groups|sudo/.test(built.userData.split('write_files:')[0]), false);
+  // Payloads whose base64 spells a YAML boolean or integer stay quoted strings.
+  const literal = buildUserData({ supervisor: Buffer.from('true', 'base64'), credential: Buffer.from('1234', 'base64') }).userData;
+  assert.equal(literal.includes("    content: 'true'\n"), true);
+  assert.equal(literal.endsWith("    content: '1234'\n"), true);
+  const largest = { supervisor: Buffer.alloc(MAX_SUPERVISOR_BYTES, 1), credential: Buffer.alloc(MAX_CREDENTIAL_BYTES, 2) };
+  assert.equal(buildUserData(largest).supervisorSha256, createHash('sha256').update(largest.supervisor).digest('hex'));
+  assert.equal(MAX_SUPERVISOR_BYTES, 262_144);
+  assert.equal(MAX_CREDENTIAL_BYTES, 4096);
+  for (const [supervisor, credential] of [
+    [Buffer.alloc(0), CREDENTIAL], [SUPERVISOR, Buffer.alloc(0)],
+    [Buffer.alloc(MAX_SUPERVISOR_BYTES + 1, 1), CREDENTIAL], [SUPERVISOR, Buffer.alloc(MAX_CREDENTIAL_BYTES + 1, 1)],
+    ['#!/bin/sh', CREDENTIAL], [SUPERVISOR, 'secret-credential'], [new Uint8Array([1]), CREDENTIAL], [SUPERVISOR, undefined],
+  ]) assert.throws(() => buildUserData({ supervisor, credential }), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
+  assert.throws(() => buildUserData(null), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
+});
+
+test('guest layout, identities and resource bounds are frozen constants shared with the launchers', () => {
+  assert.deepEqual(launchResourceArgs(), ['--cpus', '2', '--memory', '4G', '--disk', '20G']);
+  assert.notEqual(launchResourceArgs(), launchResourceArgs());
+  assert.deepEqual(GUEST_RESOURCES, { cpus: 2, memoryBytes: 4 * GiB, diskBytes: 20 * GiB });
+  assert.deepEqual(JOB_IDENTITIES, IDENTITIES);
+  assert.deepEqual(GUEST_LAYOUT, {
+    supervisor: '/opt/moe/bin/moe-supervisor', supervisorDirs: ['/opt/moe', '/opt/moe/bin'],
+    credential: '/etc/moe/supervisor.credential', credentialDir: '/etc/moe',
+  });
+  for (const value of [GUEST_RESOURCES, JOB_IDENTITIES, GUEST_LAYOUT, GUEST_LAYOUT.supervisorDirs]) assert.equal(Object.isFrozen(value), true);
+});
+
+test('readGuestInfo runs bounded info on the owned name and parses the v1.17.0 detail strictly', async () => {
+  const fake = fakeGuest();
+  assert.deepEqual(await readGuestInfo(GUEST, { run: fake.run }), {
+    state: 'Running', providerImageHash: PROVIDER_HASH, imageRelease: '24.04 LTS', cpuCount: 2,
+    memoryTotal: 4 * GiB - 2 ** 24, diskTotal: 19 * GiB, mountCount: 0,
+  });
+  assert.deepEqual(fake.calls, [{ executable: 'multipass', args: infoArgs(GUEST), options: lifecycleOptions(QUERY_TIMEOUT_MS) }]);
+  const starting = guestDetail({ image_hash: 'CD'.repeat(32), state: 'Starting', cpu_count: '', memory: {}, disks: { sda1: {} }, mounts: { '/home/ubuntu/x': {} } });
+  const upper = fakeGuest({ info: starting });
+  assert.deepEqual(await readGuestInfo(GUEST, { executable: '/opt/multipass bin/multipass', run: upper.run }), {
+    state: 'Starting', providerImageHash: PROVIDER_HASH, imageRelease: '24.04 LTS', cpuCount: null, memoryTotal: null, diskTotal: null, mountCount: 1,
+  });
+  assert.equal(upper.calls[0].executable, '/opt/multipass bin/multipass');
+  for (const [label, detail] of [
+    ['missing image_hash', guestDetail({ image_hash: undefined })], ['non-hex image_hash', guestDetail({ image_hash: 'zz'.repeat(32) })],
+    ['short image_hash', guestDetail({ image_hash: 'cd'.repeat(31) })], ['array image_hash', guestDetail({ image_hash: [PROVIDER_HASH] })],
+    ['cpu_count two', guestDetail({ cpu_count: 'two' })], ['numeric cpu_count', guestDetail({ cpu_count: 2 })],
+    ['string memory total', guestDetail({ memory: { total: String(4 * GiB) } })], ['negative memory total', guestDetail({ memory: { total: -1 } })],
+    ['fractional memory total', guestDetail({ memory: { total: 1.5 } })], ['missing memory', guestDetail({ memory: undefined })],
+    ['non-decimal disk total', guestDetail({ disks: { sda1: { total: '20G' } } })], ['missing disks', guestDetail({ disks: undefined })],
+    ['array mounts', guestDetail({ mounts: [] })], ['null mounts', guestDetail({ mounts: null })],
+    ['unknown state', guestDetail({ state: 'Booting' })], ['control characters in release', guestDetail({ image_release: '24.04\nsecret' })],
+    ['oversized release', guestDetail({ image_release: 'x'.repeat(129) })], ['numeric release', guestDetail({ image_release: 24.04 })],
+  ]) {
+    await assert.rejects(readGuestInfo(GUEST, { run: fakeGuest({ info: detail }).run }), error => assertSanitized(error, 'PROVIDER_INFO_INVALID'), label);
+  }
+  for (const stdout of [
+    JSON.stringify({ errors: [], info: { [GUEST]: guestDetail(), [FOREIGN]: guestDetail() } }),
+    JSON.stringify({ errors: [], info: { [FOREIGN]: guestDetail() } }),
+    JSON.stringify({ errors: ['secret-diagnostic'], info: { [GUEST]: guestDetail() } }),
+    JSON.stringify({ info: { [GUEST]: guestDetail() } }),
+    JSON.stringify({ errors: [], info: { [GUEST]: guestDetail({ release: 'x'.repeat(MAX_PROBE_BUFFER) }) } }),
+    'not json secret-diagnostic',
+  ]) {
+    await assert.rejects(readGuestInfo(GUEST, { run: async () => ({ stdout, stderr: '' }) }), error => assertSanitized(error, 'PROVIDER_INFO_INVALID'));
+  }
+  for (const [fields, code] of [
+    [{ code: 2, stderr: 'secret-diagnostic' }, 'PROVIDER_COMMAND_FAILED'], [{ killed: true, code: 'ETIMEDOUT' }, 'PROVIDER_TIMEOUT'],
+    [{ code: 'ENOENT' }, 'PROVIDER_NOT_FOUND'], [{ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }, 'PROVIDER_OUTPUT_LIMIT'],
+  ]) await assert.rejects(readGuestInfo(GUEST, { run: async () => { throw failWith(fields); } }), error => assertSanitized(error, code));
+  const counted = fakeGuest();
+  for (const name of ['primary', `moe-vm-${'F0'.repeat(10)}`, '', null]) {
+    await assert.rejects(readGuestInfo(name, { run: counted.run }), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
+  }
+  await assert.rejects(readGuestInfo(GUEST, { executable: '', run: counted.run }), error => assertSanitized(error, 'PROVIDER_INPUT_INVALID'));
+  assert.equal(counted.calls.length, 0);
+});
+
+test('runGuestProbe executes only the frozen fixed-argv table without host-directory mapping', async () => {
+  assert.deepEqual(Object.keys(GUEST_PROBES), Object.keys(EXPECTED_PROBES));
+  assert.deepEqual(GUEST_PROBES, EXPECTED_PROBES);
+  assert.equal(Object.keys(GUEST_PROBES).length, 4 + 14 * IDENTITIES.length);
+  assert.equal(Object.isFrozen(GUEST_PROBES), true);
+  for (const argv of Object.values(GUEST_PROBES)) {
+    assert.equal(Object.isFrozen(argv), true);
+    for (const element of argv) assert.match(element, /^[A-Za-z0-9_.:\/%=+-]+$/);
+  }
+  const fake = fakeGuest({ answers: healthy({ 'sudo:moe-check': { code: 3, stdout: 'x' } }) });
+  const provider = { run: fake.run };
+  assert.deepEqual(await runGuestProbe(GUEST, 'cloudInit', provider), cloudInit(0, 'done'));
+  assert.deepEqual(await runGuestProbe(GUEST, 'readSeed:moe-agent', provider), { code: 1, stdout: '' });
+  assert.deepEqual(await runGuestProbe(GUEST, 'sudo:moe-check', provider), { code: 3, stdout: 'x' });
+  assert.deepEqual(fake.calls.map(call => call.args), [execArgs('cloudInit'), execArgs('readSeed:moe-agent'), execArgs('sudo:moe-check')]);
+  for (const call of fake.calls) assert.deepEqual([call.executable, call.options], ['multipass', lifecycleOptions(QUERY_TIMEOUT_MS)]);
+  let calls = 0;
+  const counting = { run: async () => { calls++; return { stdout: '', stderr: '' }; } };
+  for (const id of ['nope', 'valueOf', 'constructor', 'toString', 'hasOwnProperty', '', null, 42]) {
+    await assert.rejects(runGuestProbe(GUEST, id, counting), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
+  }
+  await assert.rejects(runGuestProbe('primary', 'cloudInit', counting), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
+  assert.equal(calls, 0);
+  const oversized = 'x'.repeat(MAX_PROBE_BUFFER + 1);
+  for (const [answer, code] of [
+    [{ error: failWith({ killed: true, code: null, signal: 'SIGKILL', stdout: '' }) }, 'PROVIDER_TIMEOUT'],
+    [{ error: failWith({ killed: true, code: 1, stdout: '' }) }, 'PROVIDER_TIMEOUT'],
+    [{ error: failWith({ code: 'ENOENT' }) }, 'PROVIDER_NOT_FOUND'],
+    [{ error: failWith({ code: 'EACCES' }) }, 'PROVIDER_ACCESS_DENIED'],
+    [{ error: failWith({ code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: 'x' }) }, 'PROVIDER_OUTPUT_LIMIT'],
+    [{ error: failWith({ code: 1, stderr: 'secret-diagnostic' }) }, 'PROVIDER_COMMAND_FAILED'],
+    [{ error: failWith({ code: 1, stdout: oversized }) }, 'PROVIDER_OUTPUT_LIMIT'],
+    [{ stdout: oversized }, 'PROVIDER_OUTPUT_LIMIT'],
+    [{ stdout: Buffer.from('done') }, 'PROVIDER_OUTPUT_INVALID'],
+  ]) {
+    const run = async () => { if (answer.error) throw answer.error; return { stdout: answer.stdout, stderr: '' }; };
+    await assert.rejects(runGuestProbe(GUEST, 'mountinfo', { run }), error => assertSanitized(error, code));
+  }
+});
+
+test('readiness waits through Starting and unfinished cloud-init, then runs every boundary probe once', async t => {
+  const h = await guestHarness(t);
+  const { result, fake, sleeps } = await bootGuest(h, {
+    info: [guestDetail({ state: 'Starting', cpu_count: '' }), guestDetail()],
+    answers: healthy({ cloudInit: [cloudInit(0, 'not started'), cloudInit(0, 'running'), cloudInit(0, 'done')] }),
+  });
+  assert.deepEqual(result, outcome([]));
+  assert.deepEqual(sleeps, [5, 5, 5]);
+  assert.deepEqual(fake.ids(), ['info', 'info', 'cloudInit', 'info', 'cloudInit', 'info', 'cloudInit', ...BOUNDARY]);
+  assert.deepEqual(fake.calls.at(-1).args, execArgs('keys:moe-check'));
+  for (const call of fake.calls) assert.deepEqual([call.executable, call.options], ['multipass', lifecycleOptions(QUERY_TIMEOUT_MS)]);
+  const reread = await createLedger(h.dir).read(GUEST);
+  assert.deepEqual(reread, { ...h.record, image: { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }, updatedAt: reread.updatedAt });
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(h.file, 'utf8'))).sort(), [...RECORD_KEYS, 'image'].sort());
+});
+
+test('a Running guest whose cloud-init never finishes is not ready and times out after bounded polls', async t => {
+  const h = await guestHarness(t);
+  for (const [maxWaitMs, polls] of [[20, 4], [21, 5], [5, 1], [4, 1]]) {
+    const run = await expectRefused(h, { answers: healthy({ cloudInit: cloudInit(0, 'running') }) }, ['BOOTSTRAP_TIMEOUT'],
+      { overrides: { maxWaitMs }, label: `maxWaitMs ${maxWaitMs}` });
+    assert.deepEqual(run.fake.ids(), Array(polls).fill(['info', 'cloudInit']).flat());
+    assert.deepEqual(run.sleeps, Array(polls - 1).fill(5));
+  }
+  for (const state of ['Starting', 'Restarting']) {
+    const run = await expectRefused(h, { info: guestDetail({ state }) }, ['BOOTSTRAP_TIMEOUT'], { label: state });
+    assert.deepEqual(run.fake.ids(), ['info', 'info', 'info', 'info']);
+  }
+});
+
+test('cloud-init error, degradation, disablement or a stopped guest fails bootstrap without boundary probes', async t => {
+  const h = await guestHarness(t);
+  for (const [label, answer] of [
+    ['exit 1 error', cloudInit(1, 'error', 'error - done', ['secret-diagnostic'])],
+    ['exit 2 degraded done', cloudInit(2, 'done', 'degraded done', [], { WARNING: ['secret-diagnostic'] })],
+    ['exit 2 degraded running', cloudInit(2, 'running', 'degraded running')],
+    ['exit 0 degraded done', cloudInit(0, 'done', 'degraded done')],
+    ['exit 0 degraded running', cloudInit(0, 'running', 'degraded running')],
+    ['exit 0 done with errors', cloudInit(0, 'done', 'done', ['x'])],
+    ['exit 0 done with recoverable errors', cloudInit(0, 'done', 'done', [], { DEPRECATED: ['x'] })],
+    ['exit 0 done with object errors', { code: 0, stdout: JSON.stringify({ status: 'done', extended_status: 'done', errors: {}, recoverable_errors: {} }) }],
+    ['exit 0 done without recoverable errors', { code: 0, stdout: JSON.stringify({ status: 'done', extended_status: 'done', errors: [] }) }],
+    ['exit 0 done without extended status', { code: 0, stdout: JSON.stringify({ status: 'done', errors: [], recoverable_errors: {} }) }],
+    ['exit 0 disabled', cloudInit(0, 'disabled')],
+    ['exit 0 non-JSON', { code: 0, stdout: 'status: done secret-diagnostic' }],
+    ['exit 0 JSON array', { code: 0, stdout: '["done"]' }],
+    ['exit 3 from Multipass', { code: 3, stdout: '' }],
+  ]) {
+    const run = await expectRefused(h, { answers: healthy({ cloudInit: answer }) }, ['BOOTSTRAP_FAILED'], { label });
+    assert.deepEqual(run.fake.ids(), ['info', 'cloudInit'], label);
+    assert.deepEqual(run.sleeps, [], label);
+  }
+  for (const state of ['Stopped', 'Deleted', 'Suspended', 'Unknown', 'Delayed Shutdown']) {
+    const run = await expectRefused(h, { info: [guestDetail({ state: 'Starting' }), guestDetail({ state })] }, ['BOOTSTRAP_FAILED'], { label: state });
+    assert.deepEqual(run.fake.ids(), ['info', 'info'], state);
+    assert.deepEqual(run.sleeps, [5], state);
+  }
+});
+
+test('any provider mount or host-sharing filesystem inside the guest fails the boundary', async t => {
+  const h = await guestHarness(t);
+  const mounted = { '/home/ubuntu/src': { source_path: '/private/secret', uid_mappings: [], gid_mappings: [] } };
+  await expectRefused(h, { info: guestDetail({ mounts: mounted }) }, ['MOUNTS_PRESENT']);
+  for (const fstype of ['9p', 'virtiofs', 'nfs', 'nfs4', 'cifs', 'smb3', 'smbfs', 'vboxsf', 'drvfs', 'fuse', 'fuseblk', 'fuse.sshfs', 'fuse.vmhgfs-fuse']) {
+    const line = `40 22 0:50 / /home/ubuntu/src rw,relatime shared:9 - ${fstype} host-share rw`;
+    await expectRefused(h, { answers: healthy({ mountinfo: mountinfo([...MOUNTS, line]) }) }, ['MOUNTS_PRESENT'], { label: fstype });
+  }
+  for (const [label, answer] of [
+    ['an unparsable line', mountinfo([...MOUNTS, 'secret-diagnostic garbage'])],
+    ['a line without the separator', mountinfo([...MOUNTS, '40 22 0:50 / /mnt rw shared:9 9p host rw'])],
+    ['an empty interior line', mountinfo([MOUNTS[0], '', MOUNTS[1]])],
+    ['empty output', { code: 0, stdout: '' }],
+    ['a failed read', { code: 1, stdout: mountinfo().stdout }],
+  ]) await expectRefused(h, { answers: healthy({ mountinfo: answer }) }, ['MOUNTS_UNKNOWN'], { label });
+  const varied = ['30 22 0:51 / /tmp rw,relatime - tmpfs tmpfs rw', '31 22 8:17 / /srv rw shared:10 master:2 - ext4 /dev/sdb1 rw'];
+  assert.equal((await bootGuest(h, { answers: healthy({ mountinfo: mountinfo([...MOUNTS, ...varied]) }) })).result.bootstrapReady, true);
+});
+
+test('the supervisor and credential must be root-only files under root-owned unwritable directories', async t => {
+  const h = await guestHarness(t);
+  for (const [label, lines] of [
+    ['supervisor owned by ubuntu', withLine(LAYOUT, 2, 'ubuntu:root:500:-r-x------:/opt/moe/bin/moe-supervisor')],
+    ['supervisor group ubuntu', withLine(LAYOUT, 2, 'root:ubuntu:500:-r-x------:/opt/moe/bin/moe-supervisor')],
+    ['supervisor mode 555', withLine(LAYOUT, 2, 'root:root:555:-r-xr-xr-x:/opt/moe/bin/moe-supervisor')],
+    ['supervisor mode 755', withLine(LAYOUT, 2, 'root:root:755:-rwxr-xr-x:/opt/moe/bin/moe-supervisor')],
+    ['supervisor setuid', withLine(LAYOUT, 2, 'root:root:4500:-r-s------:/opt/moe/bin/moe-supervisor')],
+    ['supervisor symlink', withLine(LAYOUT, 2, 'root:root:777:lrwxrwxrwx:/opt/moe/bin/moe-supervisor')],
+    ['credential mode 440', withLine(LAYOUT, 4, 'root:root:440:-r--r-----:/etc/moe/supervisor.credential')],
+    ['credential mode 600', withLine(LAYOUT, 4, 'root:root:600:-rw-------:/etc/moe/supervisor.credential')],
+    ['credential directory', withLine(LAYOUT, 4, 'root:root:400:dr--------:/etc/moe/supervisor.credential')],
+    ['group-writable /opt/moe', withLine(LAYOUT, 0, 'root:root:775:drwxrwxr-x:/opt/moe')],
+    ['other-writable /etc/moe', withLine(LAYOUT, 3, 'root:root:757:drwxr-xrwx:/etc/moe')],
+    ['sticky world-writable /opt/moe/bin', withLine(LAYOUT, 1, 'root:root:1777:drwxrwxrwt:/opt/moe/bin')],
+    ['/opt/moe/bin owned by ubuntu', withLine(LAYOUT, 1, 'ubuntu:ubuntu:755:drwxr-xr-x:/opt/moe/bin')],
+    ['/etc/moe a regular file', withLine(LAYOUT, 3, 'root:root:755:-rwxr-xr-x:/etc/moe')],
+    ['/opt/moe a symlink', withLine(LAYOUT, 0, 'root:root:777:lrwxrwxrwx:/opt/moe')],
+    ['a writable octal mode under a safe-looking type', withLine(LAYOUT, 0, 'root:root:775:drwxr-xr-x:/opt/moe')],
+    ['a writable symbolic mode under a safe-looking octal', withLine(LAYOUT, 3, 'root:root:755:drwxrwxr-x:/etc/moe')],
+    ['a missing line', LAYOUT.slice(0, 4)],
+    ['an extra line', [...LAYOUT, 'root:root:755:drwxr-xr-x:/opt']],
+    ['reordered lines', [LAYOUT[1], LAYOUT[0], ...LAYOUT.slice(2)]],
+    ['an extra field', withLine(LAYOUT, 3, 'root:root:755:drwxr-xr-x:/etc/moe:x')],
+  ]) await expectRefused(h, { answers: healthy({ layout: layout(lines) }) }, ['LAYOUT_INVALID'], { label });
+  await expectRefused(h, { answers: healthy({ layout: layout(LAYOUT, 1) }) }, ['LAYOUT_INVALID'], { label: 'stat exit 1' });
+  const digestLine = sha => `${sha}  /opt/moe/bin/moe-supervisor\n`;
+  for (const [label, answer] of [
+    ['another digest', { code: 0, stdout: digestLine('ef'.repeat(32)) }],
+    ['another path', { code: 0, stdout: `${BOOTSTRAP.supervisorSha256}  /tmp/moe-supervisor\n` }],
+    ['an uppercase digest', { code: 0, stdout: digestLine(BOOTSTRAP.supervisorSha256.toUpperCase()) }],
+    ['a failed sha256sum', { code: 1, stdout: digestLine(BOOTSTRAP.supervisorSha256) }],
+  ]) await expectRefused(h, { answers: healthy({ supervisorHash: answer }) }, ['SUPERVISOR_HASH_MISMATCH'], { label });
+  for (const id of IDENTITIES) {
+    for (const [key, , , exposed] of DENIALS) {
+      for (const [code, failure] of [[0, exposed], [2, 'PROBE_UNKNOWN'], [3, 'PROBE_UNKNOWN'], [126, 'PROBE_UNKNOWN']]) {
+        await expectRefused(h, { answers: healthy({ [`${key}:${id}`]: { code, stdout: '' } }) }, [failure], { label: `${key}:${id} exit ${code}` });
+      }
+    }
+  }
+  const strict = withLine(withLine(LAYOUT, 3, 'root:root:700:drwx------:/etc/moe'), 0, 'root:root:711:drwx--x--x:/opt/moe');
+  assert.equal((await bootGuest(h, { answers: healthy({ layout: layout(strict) }) })).result.bootstrapReady, true);
+});
+
+test('job identities must be locked, unprivileged and without sudo or login keys', async t => {
+  const h = await guestHarness(t);
+  for (const id of IDENTITIES) {
+    for (const [label, overrides, failure] of [
+      ['a usable password', { [`status:${id}`]: { code: 0, stdout: `${id} P 10/24/2026 0 99999 7 -1\n` } }, 'IDENTITY_NOT_LOCKED'],
+      ['no password', { [`status:${id}`]: { code: 0, stdout: `${id} NP 10/24/2026 0 99999 7 -1\n` } }, 'IDENTITY_NOT_LOCKED'],
+      ['another user status', { [`status:${id}`]: { code: 0, stdout: 'ubuntu L 10/24/2026 0 99999 7 -1\n' } }, 'IDENTITY_NOT_LOCKED'],
+      ['a failed passwd', { [`status:${id}`]: { code: 1, stdout: `${id} L\n` } }, 'IDENTITY_NOT_LOCKED'],
+      ['the sudo group', { [`groups:${id}`]: { code: 0, stdout: `${id} sudo\n` } }, 'IDENTITY_PRIVILEGED'],
+      ['the adm group', { [`groups:${id}`]: { code: 0, stdout: `${id} adm\n` } }, 'IDENTITY_PRIVILEGED'],
+      ['a failed id', { [`groups:${id}`]: { code: 1, stdout: '' } }, 'IDENTITY_PRIVILEGED'],
+      ['working sudo', { [`sudo:${id}`]: { code: 0, stdout: '' } }, 'IDENTITY_PRIVILEGED'],
+      ['unknown sudo', { [`sudo:${id}`]: { code: 2, stdout: '' } }, 'PROBE_UNKNOWN'],
+      ['authorized keys', { [`keys:${id}`]: { code: 0, stdout: '' } }, 'IDENTITY_LOGIN_ENABLED'],
+      ['unknown authorized keys', { [`keys:${id}`]: { code: 3, stdout: '' } }, 'PROBE_UNKNOWN'],
+      ['probes running as another user', { [`whoami:${id}`]: { code: 0, stdout: 'ubuntu\n' } }, 'PROBE_UNKNOWN'],
+      ['a failed identity switch', { [`whoami:${id}`]: { code: 1, stdout: '' } }, 'PROBE_UNKNOWN'],
+    ]) await expectRefused(h, { answers: healthy(overrides) }, [failure], { label: `${id}: ${label}` });
+  }
+});
+
+test('guest resources must be reported and within the bootstrap bounds', async t => {
+  const h = await guestHarness(t);
+  for (const [label, changes, failure] of [
+    ['four cpus', { cpu_count: '4' }, 'RESOURCES_UNBOUNDED'],
+    ['three cpus', { cpu_count: '3' }, 'RESOURCES_UNBOUNDED'],
+    ['memory above 4 GiB', { memory: { used: 1, total: 4 * GiB + 1 } }, 'RESOURCES_UNBOUNDED'],
+    ['disk above 20 GiB', { disks: { sda1: { used: '1', total: String(20 * GiB + 1) } } }, 'RESOURCES_UNBOUNDED'],
+    ['an unknown cpu count', { cpu_count: '' }, 'RESOURCES_UNKNOWN'],
+    ['a missing memory total', { memory: { used: 1 } }, 'RESOURCES_UNKNOWN'],
+    ['a missing disk total', { disks: { sda1: { used: '1' } } }, 'RESOURCES_UNKNOWN'],
+    ['too many cpus and unknown memory', { cpu_count: '8', memory: {} }, 'RESOURCES_UNBOUNDED'],
+  ]) await expectRefused(h, { info: guestDetail(changes) }, [failure], { label });
+  const exact = { cpu_count: '2', memory: { used: 1, total: 4 * GiB }, disks: { sda1: { used: '1', total: String(20 * GiB) } } };
+  assert.equal((await bootGuest(h, { info: guestDetail(exact) })).result.bootstrapReady, true);
+});
+
+test('the source checksum and provider image identity are recorded separately and never overwritten', async t => {
+  const h = await guestHarness(t);
+  assert.notEqual(PROVIDER_HASH, SOURCE.sha256);
+  assert.deepEqual((await bootGuest(h)).result, outcome([]));
+  const reread = await createLedger(h.dir).read(GUEST);
+  assert.deepEqual(reread.image, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH });
+  const bytes = readFileSync(h.file);
+  assert.deepEqual((await bootGuest(h)).result, outcome([]));
+  assert.deepEqual(readFileSync(h.file), bytes);
+  const converted = 'ef'.repeat(32);
+  const changed = await bootGuest(h, { info: guestDetail({ image_hash: converted }) });
+  assert.deepEqual(changed.result, outcome(['IMAGE_IDENTITY_CHANGED'], { imageHash: converted, imageRelease: '24.04 LTS' }));
+  assert.deepEqual(readFileSync(h.file), bytes);
+  await assert.rejects(h.ledger.recordImage(reread, { ...reread.image, providerImageHash: converted }), error => assertSanitized(error, 'IMAGE_IDENTITY_CHANGED'));
+  await assert.rejects(h.ledger.recordImage(reread, { ...reread.image, sourceSha256: PINS.arm64.sha256 }), error => assertSanitized(error, 'IMAGE_IDENTITY_CHANGED'));
+  assert.deepEqual(await h.ledger.recordImage(reread, reread.image), reread);
+  assert.deepEqual(readFileSync(h.file), bytes);
+});
+
+test('an image whose provider hash equals the source checksum still stores both fields', async t => {
+  const h = await guestHarness(t);
+  const run = await bootGuest(h, { info: guestDetail({ image_hash: SOURCE.sha256.toUpperCase() }) });
+  assert.deepEqual(run.result, outcome([], { imageHash: SOURCE.sha256, imageRelease: '24.04 LTS' }));
+  assert.deepEqual((await h.ledger.read(GUEST)).image, { sourceSha256: SOURCE.sha256, providerImageHash: SOURCE.sha256 });
+});
+
+test('recordImage is a compare-and-swap on an owned record with an exact image shape, kept by later updates', async t => {
+  const dir = scratch(t);
+  const ledger = createLedger(dir, { random: sequence() });
+  const image = { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH };
+  const unowned = [await seed(ledger, 'reserved'), await seed(ledger, 'launching'), await seed(ledger, 'absent')];
+  const owned = await seed(ledger, 'owned');
+  const snapshot = () => readdirSync(dir).map(name => readFileSync(path.join(dir, name), 'utf8'));
+  const before = snapshot();
+  for (const record of unowned) await assert.rejects(ledger.recordImage(record, image), error => assertSanitized(error, 'LIFECYCLE_PHASE_INVALID'));
+  await assert.rejects(ledger.recordImage({ ...owned, phase: 'launching' }, image), error => assertSanitized(error, 'LEDGER_CONFLICT'));
+  for (const bad of [
+    null, { sourceSha256: SOURCE.sha256 }, { ...image, extra: 1 }, { ...image, providerImageHash: PROVIDER_HASH.toUpperCase() },
+    { ...image, sourceSha256: 'x' }, { ...image, providerImageHash: [PROVIDER_HASH] },
+  ]) await assert.rejects(ledger.recordImage(owned, bad), error => assertSanitized(error, 'LEDGER_INPUT_INVALID'));
+  await assert.rejects(ledger.recordImage({ instance: 'primary' }, image), error => assertSanitized(error, 'LEDGER_INPUT_INVALID'));
+  assert.deepEqual(snapshot(), before);
+  const recorded = await ledger.recordImage(owned, { providerImageHash: PROVIDER_HASH, sourceSha256: SOURCE.sha256 });
+  assert.deepEqual(recorded, { ...owned, image, updatedAt: recorded.updatedAt });
+  assert.equal(JSON.stringify(recorded.image), JSON.stringify(image));
+  assert.deepEqual(await createLedger(dir).read(nameAt(4)), recorded);
+  const deleted = await ledger.update(recorded, { phase: 'deleted' });
+  assert.deepEqual(deleted, { ...recorded, phase: 'deleted', updatedAt: deleted.updatedAt });
+  assert.deepEqual((await createLedger(dir).read(nameAt(4))).image, image);
+  await assert.rejects(ledger.recordImage(deleted, image), error => assertSanitized(error, 'LIFECYCLE_PHASE_INVALID'));
+});
+
+test('a malformed source image or supervisor digest is refused before any provider call', async t => {
+  const h = await guestHarness(t);
+  const before = readFileSync(h.file);
+  const fake = fakeGuest();
+  const call = overrides => waitForGuestReady({
+    ledger: h.ledger, name: GUEST, owner, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: { run: fake.run }, sleep: noSleep, ...overrides,
+  });
+  for (const [label, overrides] of [
+    ['another checksum', { sourceImage: { ...SOURCE, sha256: PINS.arm64.sha256 } }],
+    ['a caller-minted checksum', { sourceImage: { ...SOURCE, sha256: 'ab'.repeat(32) } }],
+    ['another url', { sourceImage: { ...SOURCE, url: PINS.arm64.url } }],
+    ['a mirror url', { sourceImage: { ...SOURCE, url: 'https://example.invalid/ubuntu.img' } }],
+    ['an unknown arch', { sourceImage: { ...SOURCE, arch: 'ia32' } }],
+    ['a prototype arch', { sourceImage: { ...SOURCE, arch: 'constructor' } }],
+    ['an extra key', { sourceImage: { ...SOURCE, file: '/private/secret.img' } }],
+    ['a missing key', { sourceImage: { arch: 'x64', sha256: SOURCE.sha256 } }],
+    ['no source image', { sourceImage: null }],
+    ['an uppercase supervisor digest', { bootstrap: { ...BOOTSTRAP, supervisorSha256: BOOTSTRAP.supervisorSha256.toUpperCase() } }],
+    ['a short supervisor digest', { bootstrap: { supervisorSha256: 'ab' } }],
+    ['an array supervisor digest', { bootstrap: { supervisorSha256: [BOOTSTRAP.supervisorSha256] } }],
+    ['no bootstrap', { bootstrap: undefined }],
+    ['a zero poll interval', { pollMs: 0 }],
+    ['a fractional wait', { maxWaitMs: 1.5 }],
+    ['a negative wait', { maxWaitMs: -5 }],
+    ['a non-function sleep', { sleep: 5 }],
+    ['no ledger', { ledger: null }],
+  ]) await assert.rejects(call(overrides), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'), label);
+  await assert.rejects(call({ provider: { executable: '', run: fake.run } }), error => assertSanitized(error, 'PROVIDER_INPUT_INVALID'));
+  await assert.rejects(call({ provider: { run: 'multipass' } }), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
+  assert.equal(fake.calls.length, 0);
+  assert.deepEqual(readFileSync(h.file), before);
+  const arm = { arch: 'arm64', url: PINS.arm64.url, sha256: PINS.arm64.sha256 };
+  const run = await bootGuest(h, {}, { sourceImage: arm });
+  assert.deepEqual(run.result, { ...outcome([]), image: { source: arm, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } } });
+  assert.deepEqual((await h.ledger.read(GUEST)).image, { sourceSha256: PINS.arm64.sha256, providerImageHash: PROVIDER_HASH });
+});
+
+test('readiness is refused before any provider call unless the caller owns an owned record', async t => {
+  const dir = scratch(t);
+  const ledger = createLedger(dir, { random: sequence() });
+  for (const phase of ['reserved', 'launching', 'absent', 'failed', 'collision']) await seed(ledger, phase);
+  await seed(ledger, 'owned');
+  await ledger.update(await seed(ledger, 'owned'), { phase: 'deleted' });
+  const fake = fakeGuest();
+  const call = (name, who) => waitForGuestReady({ ledger, name, owner: who, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: { run: fake.run }, sleep: noSleep });
+  for (const index of [1, 2, 3, 4, 5, 7]) await assert.rejects(call(nameAt(index), owner), error => assertSanitized(error, 'LIFECYCLE_PHASE_INVALID'));
+  for (const who of [{ ...owner, taskId: 'task-other' }, { ...owner, attemptId: 'attempt-other' }, { ...owner, generation: 4 }, null, undefined]) {
+    await assert.rejects(call(nameAt(6), who), error => assertSanitized(error, 'LIFECYCLE_NOT_OWNER'));
+  }
+  await assert.rejects(call(nameAt(1), { ...owner, generation: 2 }), error => assertSanitized(error, 'LIFECYCLE_NOT_OWNER'));
+  await assert.rejects(call('primary', owner), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
+  await assert.rejects(call(nameAt(9), owner), error => assertSanitized(error, 'LEDGER_RECORD_INVALID'));
+  assert.equal(fake.calls.length, 0);
+  assert.equal((await ledger.read(nameAt(6))).image, undefined);
+});
+
+test('every boundary failure is collected once, without diagnostics, and executionReady stays false', async t => {
+  const h = await guestHarness(t);
+  const secret = 'secret-diagnostic /private/path';
+  const run = await expectRefused(h, {
+    info: guestDetail({ cpu_count: '8' }),
+    answers: healthy({
+      mountinfo: mountinfo([...MOUNTS, '41 22 0:60 / /mnt rw - 9p secret-diagnostic rw']),
+      layout: { code: 1, stdout: secret },
+      'groups:moe-agent': { code: 0, stdout: `moe-agent sudo ${secret}\n` },
+      'groups:moe-check': { code: 0, stdout: 'moe-check sudo\n' },
+      'readSeed:moe-check': { code: 0, stdout: secret },
+      'keys:moe-check': { error: failWith({ killed: true, code: 'ETIMEDOUT', stdout: secret }) },
+    }),
+  }, ['MOUNTS_PRESENT', 'LAYOUT_INVALID', 'IDENTITY_PRIVILEGED', 'CREDENTIAL_EXPOSED', 'PROVIDER_TIMEOUT', 'RESOURCES_UNBOUNDED']);
+  assert.deepEqual(run.fake.ids(), ['info', 'cloudInit', ...BOUNDARY]);
+  for (const [label, info, failure] of [
+    ['an info timeout', [{ error: failWith({ killed: true, code: 'ETIMEDOUT', stderr: secret }) }], 'PROVIDER_TIMEOUT'],
+    ['a missing provider', [{ error: failWith({ code: 'ENOENT' }) }], 'PROVIDER_NOT_FOUND'],
+    ['malformed info', [guestDetail({ state: 'Booting' })], 'PROVIDER_INFO_INVALID'],
+  ]) await expectRefused(h, { info }, [failure], { label, provider: null });
+  await expectRefused(h, { answers: healthy({ cloudInit: { error: failWith({ code: 'EACCES' }) } }) }, ['PROVIDER_ACCESS_DENIED'], { label: 'cloud-init access' });
+  // A concurrent writer moving the record during the wait fences the identity write.
+  const sleep = async () => { await createLedger(h.dir).update(h.record, { phase: 'absent' }); };
+  const fenced = await bootGuest(h, { info: [guestDetail({ state: 'Starting' }), guestDetail()] }, { sleep });
+  assert.deepEqual(fenced.result, outcome(['LEDGER_CONFLICT']));
+  assert.deepEqual(await h.ledger.read(GUEST), { ...h.record, phase: 'absent', updatedAt: (await h.ledger.read(GUEST)).updatedAt });
+});
+
+test('records carrying a valid image still reconcile and clean up, keeping the image', async t => {
+  const image = { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH };
+  const h = harness(t, FOREIGNERS);
+  writeFileSync(path.join(h.dir, `${nameAt(1)}.json`), stored({ image }));
+  const record = await h.ledger.read(nameAt(1));
+  assert.deepEqual(record.image, image);
+  assert.deepEqual(await reconcileOwned({ ledger: h.ledger, provider: h.provider }), {
+    reconciled: [{ instance: nameAt(1), from: 'owned', to: 'absent' }], unknown: [], invalid: [],
+  });
+  const swept = await cleanupOwned({ ledger: h.ledger, provider: h.provider, attemptPhase: () => 'closed', leaseHeld: () => false });
+  assert.deepEqual(swept, { deleted: [nameAt(1)], preserved: [], errors: [], invalid: [] });
+  const deleted = await h.ledger.read(nameAt(1));
+  assert.deepEqual(deleted, { ...record, phase: 'deleted', updatedAt: deleted.updatedAt });
+  assert.deepEqual(h.fake.argv(), [infoArgs(nameAt(1)), infoArgs(nameAt(1))]);
+  assertScoped(h.fake, [nameAt(1)]);
+});
+
+for (const [label, image] of [
+  ['a short source checksum', { sourceSha256: 'x', providerImageHash: PROVIDER_HASH }],
+  ['an extra image key', { sourceSha256: PINS.x64.sha256, providerImageHash: PROVIDER_HASH, url: 'x' }],
+  ['a missing provider hash', { sourceSha256: PINS.x64.sha256 }],
+  ['an uppercase provider hash', { sourceSha256: PINS.x64.sha256, providerImageHash: PROVIDER_HASH.toUpperCase() }],
+  ['a numeric checksum', { sourceSha256: 1, providerImageHash: PROVIDER_HASH }],
+  ['a null image', null],
+  ['a string image', PROVIDER_HASH],
+]) {
+  test(`ledger refuses a record with ${label} and never acts on it`, async t => {
+    const h = harness(t, [[nameAt(1), 'Running'], ...FOREIGNERS]);
+    const file = `${nameAt(1)}.json`;
+    const text = stored({ image });
+    writeFileSync(path.join(h.dir, file), text);
+    assert.deepEqual(await h.ledger.list(), { records: [], invalid: [file] });
+    await assert.rejects(h.ledger.read(nameAt(1)), { code: 'LEDGER_RECORD_INVALID' });
+    assert.deepEqual(await reconcileOwned({ ledger: h.ledger, provider: h.provider }), { reconciled: [], unknown: [], invalid: [file] });
+    const swept = await cleanupOwned({ ledger: h.ledger, provider: h.provider, attemptPhase: () => 'closed', leaseHeld: () => false });
+    assert.deepEqual(swept, { deleted: [], preserved: [], errors: [], invalid: [file] });
+    const ready = waitForGuestReady({ ledger: h.ledger, name: nameAt(1), owner, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: h.provider, sleep: noSleep });
+    await assert.rejects(ready, { code: 'LEDGER_RECORD_INVALID' });
+    assert.equal(h.fake.calls.length, 0);
+    assert.equal(readFileSync(path.join(h.dir, file), 'utf8'), text);
+  });
+}
+
+test('real provider process: readiness uses only info and the fixed exec probes', { skip: process.platform === 'win32' }, async t => {
+  const dir = scratch(t);
+  const scenarioPath = path.join(dir, 'guest scenario.json');
+  const violations = path.join(dir, 'violations.log');
+  const executable = path.join(dir, 'fake multipass');
+  const scenario = answers => JSON.stringify({
+    info: guestDetail(), probes: Object.fromEntries(Object.entries(answers).map(([id, answer]) => [JSON.stringify(EXPECTED_PROBES[id]), answer])),
+  });
+  writeFileSync(executable, `#!${process.execPath}
+const fs = process.getBuiltinModule('node:fs');
+const [scenarioPath, violations, name] = ${JSON.stringify([scenarioPath, violations, GUEST])};
+const args = process.argv.slice(2);
+const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
+function main() {
+  if (args.length === 4 && args[0] === 'info' && args[1] === name && args[2] === '--format' && args[3] === 'json') {
+    process.stdout.write(JSON.stringify({ errors: [], info: { [name]: scenario.info } }));
+    return 0;
+  }
+  const exec = args.length > 4 && args[0] === 'exec' && args[1] === '--no-map-working-directory' && args[2] === name && args[3] === '--';
+  const answer = exec && Object.hasOwn(scenario.probes, JSON.stringify(args.slice(4))) ? scenario.probes[JSON.stringify(args.slice(4))] : undefined;
+  if (answer) {
+    process.stdout.write(answer.stdout);
+    return answer.code;
+  }
+  fs.appendFileSync(violations, JSON.stringify(args) + '\\n');
+  return 64;
+}
+process.exitCode = main();
+`, { mode: 0o755 });
+  const ledger = createLedger(path.join(dir, 'ledger state'), { random: sequence() });
+  await seed(ledger, 'owned');
+  const boot = () => waitForGuestReady({ ledger, name: GUEST, owner, sourceImage: SOURCE, bootstrap: BOOTSTRAP, provider: { executable }, sleep: noSleep });
+  writeFileSync(scenarioPath, scenario(healthy({ mountinfo: mountinfo([...MOUNTS, '41 22 0:60 / /home/ubuntu/src rw - 9p host rw']) })));
+  assert.deepEqual(await boot(), outcome(['MOUNTS_PRESENT']));
+  assert.equal((await ledger.read(GUEST)).image, undefined);
+  writeFileSync(scenarioPath, scenario(healthy()));
+  assert.deepEqual(await boot(), outcome([]));
+  assert.deepEqual((await ledger.read(GUEST)).image, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH });
+  assert.equal(existsSync(violations), false);
+});

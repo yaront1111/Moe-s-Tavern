@@ -29,7 +29,7 @@ export const DELETE_TIMEOUT_MS = 120_000;
 const NAME_BYTES = 10;
 const MAX_RECORD_BYTES = 4096;
 const execute = promisify(execFile);
-const STATES = new Set(['Running', 'Stopped', 'Deleted', 'Starting', 'Restarting', 'Delayed Shutdown', 'Suspending', 'Suspended', 'Unavailable', 'Unknown']);
+export const STATES = new Set(['Running', 'Stopped', 'Deleted', 'Starting', 'Restarting', 'Delayed Shutdown', 'Suspending', 'Suspended', 'Unavailable', 'Unknown']);
 const PHASES = new Set(['reserved', 'launching', 'owned', 'absent', 'failed', 'collision', 'deleted']);
 const UNLAUNCHED = new Set(['reserved', 'collision']);
 const LAUNCHED = new Set(['launching', 'owned', 'absent', 'failed']);
@@ -49,6 +49,7 @@ const MESSAGES = {
   LEDGER_RECORD_INVALID: 'Owned instance ledger record is missing or invalid.',
   LEDGER_CONFLICT: 'Owned instance ledger record changed concurrently.',
   LEDGER_WRITE_FAILED: 'Owned instance ledger write failed.',
+  IMAGE_IDENTITY_CHANGED: 'Owned instance image identity changed; new evidence is required, never an overwrite.',
 };
 const REPORTABLE = new Set([...Object.keys(MESSAGES), ...SURFACED, 'PROVIDER_INPUT_INVALID']);
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -77,7 +78,7 @@ export function jobLeaseResourceId(name) {
 }
 
 /** Validates inputs, then returns a bounded execFile invoker; run is injected only for tests. */
-function invoker(name, provider) {
+export function invoker(name, provider) {
   if (!isOwnedInstanceName(name) || !isRecord(provider)) throw lifecycleError('LIFECYCLE_INPUT_INVALID');
   const { executable = 'multipass', run = execute } = provider;
   if (typeof run !== 'function') throw lifecycleError('LIFECYCLE_INPUT_INVALID');
@@ -130,8 +131,16 @@ function validOwner(owner) {
     && Number.isSafeInteger(owner.generation) && owner.generation > 0;
 }
 
+const isSha256 = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+const IMAGE_KEYS = ['sourceSha256', 'providerImageHash'];
+const validImage = image => isRecord(image) && Object.keys(image).length === IMAGE_KEYS.length
+  && IMAGE_KEYS.every(key => Object.hasOwn(image, key) && isSha256(image[key]));
+
+/** `image` (CQ-R07) is the one optional key: absent on every R06 record, exact when present. */
 function validRecord(record, name) {
-  return isRecord(record) && Object.keys(record).length === RECORD_KEYS.length && RECORD_KEYS.every(key => Object.hasOwn(record, key))
+  const imaged = isRecord(record) && Object.hasOwn(record, 'image');
+  return isRecord(record) && Object.keys(record).length === RECORD_KEYS.length + (imaged ? 1 : 0) && RECORD_KEYS.every(key => Object.hasOwn(record, key))
+    && (!imaged || validImage(record.image))
     && record.schemaVersion === 1 && record.provider === 'multipass' && record.instance === name && isOwnedInstanceName(name)
     && validOwner(record) && PHASES.has(record.phase) && Number.isInteger(record.launchTries)
     && record.launchTries >= 0 && record.launchTries <= MAX_LAUNCH_TRIES
@@ -213,14 +222,14 @@ async function reserveRecord(stateDir, random, owner) {
   return record;
 }
 
-async function updateRecord(stateDir, expected, changes) {
-  const name = expected?.instance;
-  if (!isOwnedInstanceName(name) || !isRecord(changes) || Object.keys(changes).some(key => key !== 'phase' && key !== 'launchTries')) {
-    throw lifecycleError('LEDGER_INPUT_INVALID');
-  }
+/** Compare-and-swap on phase and launchTries; replace(current) returns the next record, or current for no write. */
+async function swapRecord(stateDir, expected, replace) {
+  const name = expected.instance;
   const current = await readRecord(stateDir, name);
   if (current.phase !== expected.phase || current.launchTries !== expected.launchTries) throw lifecycleError('LEDGER_CONFLICT');
-  const next = { ...current, ...changes, updatedAt: new Date().toISOString() };
+  const replacement = replace(current);
+  if (replacement === current) return current;
+  const next = { ...replacement, updatedAt: new Date().toISOString() };
   if (!validRecord(next, name)) throw lifecycleError('LEDGER_INPUT_INVALID');
   // ponytail: compare-then-rename, not a lock: two writers inside the same read/rename window can both
   // pass; the later rename wins. Lifecycle guards keep provision and cleanup on disjoint attempts; add a
@@ -237,6 +246,26 @@ async function updateRecord(stateDir, expected, changes) {
   return next;
 }
 
+async function updateRecord(stateDir, expected, changes) {
+  if (!isOwnedInstanceName(expected?.instance) || !isRecord(changes) || Object.keys(changes).some(key => key !== 'phase' && key !== 'launchTries')) {
+    throw lifecycleError('LEDGER_INPUT_INVALID');
+  }
+  // Spreads the re-read record, so a recorded image survives every later phase change.
+  return swapRecord(stateDir, expected, current => ({ ...current, ...changes }));
+}
+
+/** Set-once image identity on an owned record: the same identity is a no-op, a different one is refused. */
+async function recordImage(stateDir, expected, image) {
+  if (!isOwnedInstanceName(expected?.instance) || !validImage(image)) throw lifecycleError('LEDGER_INPUT_INVALID');
+  return swapRecord(stateDir, expected, current => {
+    if (current.phase !== 'owned') throw lifecycleError('LIFECYCLE_PHASE_INVALID');
+    const { sourceSha256, providerImageHash } = image;
+    if (!current.image) return { ...current, image: { sourceSha256, providerImageHash } };
+    if (current.image.sourceSha256 === sourceSha256 && current.image.providerImageHash === providerImageHash) return current;
+    throw lifecycleError('IMAGE_IDENTITY_CHANGED');
+  });
+}
+
 /**
  * One record per owned instance under a caller-chosen absolute stateDir. There is deliberately no
  * environment or default location: the protected runtime picks it, never inside .moe/ (the daemon is
@@ -249,6 +278,7 @@ export function createLedger(stateDir, { random } = {}) {
     list: () => listRecords(stateDir),
     reserve: owner => reserveRecord(stateDir, random, owner),
     update: (expected, changes) => updateRecord(stateDir, expected, changes),
+    recordImage: (expected, image) => recordImage(stateDir, expected, image),
   };
 }
 

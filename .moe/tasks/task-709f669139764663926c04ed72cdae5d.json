@@ -13,9 +13,36 @@
     "Exactly one dedicated commit: the .gitattributes line plus renormalization of the 16 listed paths. No content edits and no other files.",
     "Never hand-edit or normalize .moe/** records; daemon rewrites handle them."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Pre-flight gate. READ-ONLY: no file edits and no Git writes (only the wrapper lands). Any live-tree change before step 3 could be swept into a checkpoint commit and break the one-dedicated-commit rail.\nThe 16 paths (named in every step; affectedFiles lists only .gitattributes because the plan-size gate rejects more than 10 distinct files and the task rail forbids splitting - step 3 attributes the 16 with moe.declare_files): .github/workflows/ci.yml, moe-jetbrains/build.gradle.kts, moe-jetbrains/gradlew.bat, moe-vscode/scripts/bundle-assets.mjs, packages/moe-daemon/src/server/WebSocketServer.ts, packages/moe-daemon/src/state/taskStore.ts, packages/moe-daemon/src/state/validators.test.ts, packages/moe-daemon/src/state/validators.ts, packages/moe-daemon/src/tools/submitPlan.test.ts, packages/moe-daemon/src/types/schema.ts, scripts/tests/onboarding.mjs, scripts/tests/usage-receipt.test.mjs, scripts/tests/usage-report.test.mjs, scripts/usage-receipt.mjs, scripts/usage-report.mjs, scripts/usage-session.mjs.\nAll checks must pass, else stop:\n(a) `git ls-files --eol | grep '^i/crlf'` lists a subset of the 16 (a path that is already LF in HEAD is skipped and named in the summary). Any CRLF path outside the 16 -> moe.report_blocked with the list and needsFrom 'architect' (the rail fixes the set).\n(b) `git status --porcelain -- .gitattributes <the 16>` shows nothing except moe-jetbrains/gradlew.bat, and `git diff --ignore-cr-at-eol --quiet -- moe-jetbrains/gradlew.bat` exits 0 (its known EOL-only dirt: a CRLF blob under its own `text eol=crlf` rule). Any other dirt is someone's uncommitted work -> report_blocked naming the owner from (c).\n(c) `moe.get_commit_scope { taskId, phase: 'postflight' }`: for every peerDeclared entry on .gitattributes or one of the 16, look up that task. If it has an assigned seat (in flight), OR your CLI has no Edit/Write tool (codex/gemini/grok seats have an always-empty TOOL tier, and a contested path lands only with a TOOL witness), call `moe.report_blocked { blockedOnTaskIds: [those ids], reason }` and end the session; it auto-clears when they reach DONE. A peer without an assigned seat is fine for a Claude seat: step 3 gives those paths TOOL witnesses.\nKnown holders are already wired as dependsOn: CQ-M01 (done), CQ-F03 task-bf86954d (schema.ts, taskStore.ts, validators.ts) and CQ-M04c task-e4adf15c (usage-report.test.mjs).\nError handling: any git or tool error here is a stop, never a guess.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification gate on a SNAPSHOT of the result. Still no live-tree edits. Build it: `SNAP=$(mktemp -d /tmp/moe-eol-gate.XXXXXX); git archive HEAD | tar -x -C $SNAP`. In $SNAP, prepend the line `* text=auto eol=lf` to .gitattributes and convert the 15 text=auto paths (the 16 minus moe-jetbrains/gradlew.bat, which stays CRLF on disk) with step 3's byte-level converter (replace b'\\r\\n' with b'\\n', nothing else). Then run each suite and record its command, exit code and output tail:\n1. `cd packages/moe-daemon && npm test` is THE named verification command for complete_task. Run it from $SNAP/packages/moe-daemon with node_modules symlinked to the native Linux install (`ln -s /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules $SNAP/packages/moe-daemon/node_modules`; if that is gone, npm ci in a separate scratch copy with an unchanged lockfile), every MOE_* variable unset and a Linux-only PATH. The shared checkout's node_modules are Windows-native; never install there.\n2. `bash scripts/tests/postflight.sh` from $SNAP (the harness root is its own directory; set MOE_POSTFLIGHT_TIMEOUT_SEC=180 on a busy box).\n3. scripts/tests/postflight.ps1: copy $SNAP/scripts into a Windows-visible scratch dir (e.g. /mnt/d/moe-scratch/eol-<ts>/scripts) and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\eol-<ts>\\scripts\\tests\\postflight.ps1'` (Windows PowerShell 5.1 lives in /mnt/c/Windows/System32/WindowsPowerShell/v1.0/; pipe its output through `tr -d '\\0'`). If no PowerShell can run it, say so plainly in the summary; never report a pass you did not run.\n4. Parity: `bash scripts/tests/parity-check.sh`, and scripts/tests/parity-check.ps1 through the same powershell.exe route.\n5. Cheap extras on the converted scripts: `node --check` on each converted .mjs, and `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-report.test.mjs`.\n6. BOM: `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints `ef bb bf`.\nRun the long harnesses in the background, in parallel. If a suite fails, rerun it on a plain `git archive HEAD` snapshot: red there too means pre-existing (prove it and report it); red only on the result means stop and report_blocked with the evidence. Never edit tests or sources (rail: no content edits).",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Apply to the live tree. Do this LAST and in one sitting, then go straight to step 4 and complete_task: the wrapper lands at session exit, so the window in which a peer's landing could sweep these bytes stays at minutes.\n(a) .gitattributes: insert `* text=auto eol=lf` as the new first line with your editing tool. Every existing line stays byte-identical after it (`git diff -- .gitattributes` = exactly one added line at the top).\n(b) Convert the 15 text=auto paths (the 16 minus gradlew.bat) with ONE deterministic script, e.g. `python3 -I`. For each path it reads `git cat-file blob HEAD:<path>` and the working file as bytes, and REFUSES (non-zero exit, nothing written) unless they are byte-identical, so no peer's bytes can ride in. It then writes `data.replace(b'\\r\\n', b'\\n')` and reports any lone CR it kept. The result equals what `git add --renormalize` stores under the new attribute.\nDo NOT run git add, --renormalize or any other Git write. With the CRLF blob still in the index, the wrapper's `git add` would keep CRLF (git's safer-autocrlf rule), and moe_temp_index_build's hash-object comparison would drop the path as MOE_ATTR_CONCURRENT. An LF working copy makes both sides agree.\n(c) moe-jetbrains/gradlew.bat: no edit. It stays CRLF on disk, and its `text eol=crlf` rule makes the wrapper store an LF blob.\n(d) TOOL witnesses: Claude seats only, and only for paths that step 1 found peer-declared by a task without a seat. After the conversion, Read the file's first lines, then do an Edit round trip (append a marker to line 1, then remove it). `sha256sum` before and after must match; on gradlew.bat this also proves CRLF survived.\n(e) `moe.declare_files { taskId, paths: [.gitattributes plus every one of the 16 that changed], note }`. This is required for gradlew.bat, whose EOL-only dirt predates the session and is otherwise MOE_ATTR_PREEXISTING and never committed; it is harmless for the rest. Report the same paths in complete_step.modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".gitattributes"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, read-only proofs, then complete_task immediately (load adversarial-self-review).\nProofs on the live tree, all read-only:\n- `head -n1 .gitattributes` is exactly `* text=auto eol=lf`, and the rest is unchanged.\n- `git ls-files --eol -- <15 paths>` shows `w/lf attr/text=auto eol=lf` (the i/ column stays crlf until the wrapper lands and refreshes the index); gradlew.bat shows `w/crlf attr/text eol=crlf`.\n- `git diff --ignore-cr-at-eol --stat -- .gitattributes <the 16>` lists only .gitattributes (1 insertion).\n- Each converted path `cmp`s equal to its CR-stripped HEAD blob. `git hash-object --stdin-paths` (read-only, no -w) over the 16 equals `git hash-object --stdin` of each CR-stripped HEAD blob, so the landing stores LF blobs with identical content.\n- `moe.get_commit_scope { taskId, phase: 'postflight' }`: your asserted/declared paths are exactly the changed set, and nothing else of yours is dirty. Re-check peerDeclared against step 1.\nAttack the result: could a peer byte ride in (cmp guard), a lone CR be lost, the BOM change, an extra path land, or a checkpoint have carried part of it (none should exist, since nothing was edited before step 3)? If anything changed after step 2, rerun step 2 first.\nThen complete_task with verification = step 2's daemon command, exit 0 and its output tail. The summary lists every suite result and the proofs above, plus these QA notes:\n(1) The completion commit also carries the wrapper's .moe BOARD records (commitBoardState). Check DoD 3 as `git diff --ignore-cr-at-eol --stat <sha>^ <sha> -- . ':(exclude).moe'` = only .gitattributes, plus `git diff --stat <sha>^ <sha> -- <the 16>` showing EOL-only rewrites.\n(2) DoD 2's `git ls-files --eol | grep '^i/crlf'` depends on the wrapper's shared-index refresh. If the landing printed MOE_COMMIT_INDEX_REFRESH_FAILED, use `git cat-file blob <sha>:<path> | grep -c $'\\r$'` = 0 for each path instead.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,12 +51,64 @@
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
-    "task-ad95cb270e9e46df8672eb094d0c1e74"
+    "task-ad95cb270e9e46df8672eb094d0c1e74",
+    "task-bf86954dc6bc43279d96d77cf0ebff88",
+    "task-e4adf15c84f0433a9457ea5e8968c3de"
   ],
   "priority": "MEDIUM",
   "order": 230,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a6684813840a4248ad1d145476cd955b",
+      "author": "architect-6e3edf85",
+      "content": "Architect notes for the worker and QA (planRevision 1).\n\n1. **affectedFiles lists only .gitattributes, on purpose.** The honest file count is 17. submit_plan hard-rejects plans over 10 distinct files, and this task's rail forbids splitting the work. All 16 renormalized paths are named in every step. The worker attributes them with moe.declare_files, plus Edit round trips for any contested path.\n\n2. **Why the working copies are converted to LF instead of running `git add --renormalize`.** Agents never write Git. The wrapper lands from a temp index seeded from HEAD, so a renormalized shared index would never reach the commit. With the CRLF blob still in that index, git keeps CRLF on add (safer-autocrlf) while hash-object normalizes to LF, and the wrapper would drop each path as MOE_ATTR_CONCURRENT. That is the sibling task-b62c9fc7 defect. A byte-level CRLF→LF working copy makes the landing store exactly the blobs that --renormalize would.\n\n3. **Dependencies added.** I added dependsOn CQ-F03 (task-bf86954d: schema.ts, taskStore.ts, validators.ts) and CQ-M04c (task-e4adf15c: usage-report.test.mjs). Both are live holders of these paths.\n\n4. **DoD 3 as written vs. the commit.** The completion commit will also carry the wrapper's .moe BOARD records (commitBoardState default). Check DoD 3 on the non-.moe paths: `git diff --ignore-cr-at-eol --stat <sha>^ <sha> -- . ':(exclude).moe'` should show only .gitattributes.\n\n5. **DoD 2 depends on the shared-index refresh.** DoD 2's `git ls-files --eol` reads the shared index, which the wrapper refreshes after landing. If the landing printed MOE_COMMIT_INDEX_REFRESH_FAILED, verify each path with `git cat-file blob <sha>:<path> | grep -c $'\\r$'` = 0.",
+      "timestamp": "2026-10-24T21:50:34.170Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T15:37:07.825Z",
-  "updatedAt": "2026-10-24T15:37:44.655Z"
+  "updatedAt": "2026-10-24T21:50:34.171Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T21:39:26.761Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T21:50:21.774Z",
+  "planningNotes": {
+    "approachesConsidered": "- Worker runs `git add --renormalize`: rejected. Agents never write Git, and the wrapper lands from a temp index seeded from HEAD, so a renormalized shared index would never reach the commit anyway.\n- .gitattributes edit alone: rejected. With CRLF blobs in the index, the wrapper's temp-index `git add` keeps CRLF (git's safer-autocrlf rule) while `hash-object` normalizes to LF, so moe_temp_index_build drops every path as MOE_ATTR_CONCURRENT (the sibling task-b62c9fc7 defect). Converting the working copies to LF first makes both agree, and the stored blobs equal what --renormalize stores.\n- Splitting to respect the 10-file cap: rejected by the task rail (one dedicated commit). affectedFiles lists only .gitattributes. The 16 paths are named in every step and attributed by moe.declare_files, plus TOOL witnesses when contested.\n- Running the suites on the live tree: rejected. Live edits would open a long window for checkpoints and peers' PLANNED-tier whole-file sweeps. The snapshot equals the result byte for byte, and the live apply happens last, right before complete_task.\n- More attribute rules (e.g. for other Windows scripts): out of scope by rail. gradlew.bat is the only .bat in the repo, and its rule stays.",
+    "codebaseInsights": "Census at plan time: 1184 i/lf, exactly the listed 16 i/crlf, 2 i/-text (binary).\n- gradlew.bat shows `M` only because its CRLF blob violates its own `text eol=crlf` rule: the raw diff is 112/112 lines, the --ignore-cr-at-eol diff is empty.\n- scripts/moe-agent.ps1 is i/lf and starts with a UTF-8 BOM (ef bb bf).\n- Repo-local core.autocrlf=false.\nWrapper mechanics:\n- moe_temp_index_build is at scripts/moe-agent.sh ~4021: read-tree HEAD into a temp index, `git add :(literal)p`, compare with the hash-object snapshot blob.\n- index_refresh (~4110) runs `git reset -q -- <landed paths>` on the shared index, so `git ls-files --eol` shows i/lf after landing.\n- Tiers: declare_files is committed regardless of baseline. Pre-existing untouched dirt is MOE_ATTR_PREEXISTING. A contested path needs a TOOL witness under attribution.contested=skip-untouched.\n- get_commit_scope ignores the plan paths of peers that wait on this task.\n- The completion commit also stages BOARD records.",
+    "risks": "- Peer sweep: an in-flight peer whose plan names one of the 16 would commit the converted file whole on its next exit. Mitigated by dependsOn (F03, M04c), the step-1 gate, and doing live edits last.\n- Codex/gemini/grok seats cannot produce TOOL witnesses, so they block on any declaring peer instead of landing a partial set.\n- DoD 3's literal --stat also lists the wrapper's .moe BOARD records. Read it as non-.moe paths; QA note in step 4.\n- A failed shared-index refresh leaves `git ls-files --eol` stale. Use the cat-file CR count.\n- Long harness runtimes; postflight.ps1 needs Windows PowerShell via WSL interop. Prove pre-existing failures on plain HEAD.\n- After landing, checkouts on both sides write LF for every text file except the explicit eol=crlf rule. Expected and intended.",
+    "keyFiles": [
+      ".gitattributes",
+      "scripts/moe-agent.sh",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/declareFiles.ts",
+      ".github/workflows/ci.yml",
+      "moe-jetbrains/build.gradle.kts",
+      "moe-jetbrains/gradlew.bat",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/validators.test.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "scripts/tests/onboarding.mjs",
+      "scripts/tests/usage-receipt.test.mjs",
+      "scripts/tests/usage-report.test.mjs",
+      "scripts/usage-receipt.mjs",
+      "scripts/usage-report.mjs",
+      "scripts/usage-session.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T21:50:21.866Z"
 }

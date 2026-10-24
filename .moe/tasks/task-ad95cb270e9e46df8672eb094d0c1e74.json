@@ -145,7 +145,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:49.511Z",
-  "updatedAt": "2026-10-24T21:32:49.270Z",
+  "updatedAt": "2026-10-24T21:33:42.295Z",
   "dependsOn": [
     "task-7bf45815551b4ac49f1c7be392ef4b9e",
     "task-349319a3b8d24aafab39a562ac2d2fb9",
@@ -221,7 +221,8 @@
     "docs/CONFIGURATION.md",
     "docs/MCP_SERVER.md",
     "docs/SCHEMA.md",
-    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json"
+    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json"
   ],
   "completionSummary": "Reopen round 1 fixes QA's delivery gap only. No code or test changes.\n\n**Fix**\n- The docs/CONFIGURATION.md `executionProfile` row (line 180, plan step 4) was round-tripped with two successful Edit tool calls: a marker added to the row's tail, then removed.\n- The final bytes are identical (sha256 3513b13a… before and after; LF over an LF index). The wrapper's stream parser (WRITE_TOOLS → to_top_rel) therefore records the path as TOOL. The contested skip-untouched rule (peer task-07474ee declares the path) should no longer hold it back.\n- The diff vs HEAD is exactly that +1 row. The wording is unchanged, as QA asked.\n- Before keeping the wording, I re-checked its claims against the landed code: executionProfile.ts:108-125, taskStore.ts:325-328 and :693, validators.ts:220-223, and the WS UPDATE_SETTINGS → state.updateSettings path. Neither IDE plugin references executionProfile.\n- The other six landed files are untouched and cmp-equal to HEAD.\n\n**Gate**\nHEAD moved to 01fb5f7 (peer CQ-M04b adds benchmarks/baselineRun{,.test}.ts, none of this task's paths), so I re-ran the gate on that exact tree plus the owned files, in a fresh native-Linux copy with every MOE_* unset.\n- npm test -- --maxWorkers=4 exits 0: 155 files, 3463 passed, 15 skipped.\n- The earlier run on baeacbf plus the row matched QA's run exactly: 154 files, 3450/9. The delta is the peer's test file.\n- tsc --noEmit exits 0, and the test file's tsc --ignoreConfig exits 0.\n- An explicit run of the docs guards and the lifecycle file passed 3 files and 49 tests, reading the overlaid CONFIGURATION.md.\n\n**For QA:** the wrapper lands at session exit, after this call, so I could not inspect the new SHA. Please confirm `git show --stat <new completion sha>` lists docs/CONFIGURATION.md with only the row.\n\nNo .moe edits or Git writes by me. verified-local stays refused.",
   "commits": [
@@ -277,6 +278,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "ea4e0d66817f6e41810dc4c64cd5c4518c6a073d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T21:25:38Z",
+      "paths": [
+        ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T21:33:42.295Z",
+      "treeId": "b171b7b71a7e6e93cace9c9245cee56728be056f",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -289,9 +306,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-24T16:39:29Z",
-    "at": "2026-10-24T16:52:02.242Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T21:25:38Z",
+    "at": "2026-10-24T21:33:42.295Z"
   },
   "reviewCompletedAt": "2026-10-24T21:32:49.270Z",
   "rejectionDetails": {
