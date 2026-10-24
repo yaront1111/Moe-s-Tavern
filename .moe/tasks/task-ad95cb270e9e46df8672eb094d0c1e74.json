@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 30,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -145,7 +145,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:49.511Z",
-  "updatedAt": "2026-10-24T16:52:02.242Z",
+  "updatedAt": "2026-10-24T21:32:49.270Z",
   "dependsOn": [
     "task-7bf45815551b4ac49f1c7be392ef4b9e",
     "task-349319a3b8d24aafab39a562ac2d2fb9",
@@ -157,7 +157,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 14,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-24T21:32:49.270Z",
+    "wallClockMs": 26216239
   },
   "contextFetchedBy": [
     "worker-c1d9de02",
@@ -291,7 +293,7 @@
     "sessionId": "worker-c1d9de02@2026-10-24T16:39:29Z",
     "at": "2026-10-24T16:52:02.242Z"
   },
-  "reviewCompletedAt": "2026-10-24T16:39:31.768Z",
+  "reviewCompletedAt": "2026-10-24T21:32:49.270Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Plan step-4 deliverable: docs/CONFIGURATION.md executionProfile settings row landed in the completion commit"
@@ -330,5 +332,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-24T21:32:49.270Z",
+  "reviewSummary": "Round-1 fix verified; delivery gap closed.\nDELIVERY: completion 917591f (recorded this round at 16:52Z, after the 16:39Z reject; on moe/work-2026-10-24) carries 2 paths: docs/CONFIGURATION.md +1 (executionProfile row, line 180) and the task's own board record. `git diff baeacbf HEAD` over the owned files shows only that row, so the round-0-reviewed bytes are unchanged. Governor check: baeacbf schema.ts is +9/-6 ignoring CR, all 15 lines comments.\nGATE (QA re-run): isolated native-Linux copy of `git archive 917591f` (no daemon/docs drift to HEAD), lockfile and package.json JSON-equal to the native install, MOE_* unset, Linux PATH. `npm test -- --maxWorkers=4` exit 0: 155 files, 3463 passed, 15 skipped (= task.verification). `tsc --noEmit` exit 0. Focused run (lifecycle, docs guards, getContext): 5 files, 102 passed, the guards reading the landed row.\nROW vs CODE: decodeProfile gives INVALID_INPUT for anything else; assertExecutionProfileReady refuses verified-local unconditionally, with no env/label read; validators.ts:220-224 refuses settings updates while the stored profile is unusable, unless one sets legacy/observe; taskStore.ts:325-328 plus the PLAN_APPROVED backstop; WS UPDATE_SETTINGS goes through state.updateSettings; MCP error data is {tool,codeName} only and WS forwards only allowlisted numeric context, so missingCapabilities stays daemon-side; no IDE plugin references it.\nDoD 1-3: round-0 exact-value tests (G/R/B/F/O/P; mutants 12/28, 2/28 and 2/28 red) on unchanged bytes, green now. DoD 4 verified. The failed plan-step-4 item is now landed.\nSIZE: baeacbf is 655+/9- ignoring CR; 519 is the plan-mandated test file (prod+docs ~136); +1 now. Over 400 only because of that test file, the main deliverable of this residual slice after the M01a-f split. Reviewed on substance with mutants, so not routed to a split. Complexity: nothing to cut.\nNo QA .moe edits or Git writes; verified-local still refused.",
+  "requiredCheckAtDone": null
 }
