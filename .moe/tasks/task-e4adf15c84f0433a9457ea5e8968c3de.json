@@ -19,8 +19,9 @@
     {
       "stepId": "step-1",
       "description": "Preconditions, environment and batch setup. No paid usage happens in this step.\n\n**1. Gates.** Confirm all of the following.\n- CQ-M04b (task-9cfaacf1…), CQ-M04 (task-0ece1a35…) and CQ-M03 (task-cfa74f1b…) are DONE and landed.\n- The human go-ahead is on this task: comment-539240c5, relayed by the governor. It says agent-run, in board order, in the background with checkpoints.\n- The human configuration is comment-700a6a51 on task-0ece1a35:\n  - today's defaults (no settings.models pins; claude seats on claude-opus-5-5, with plan-routing launch hints applying);\n  - n=1;\n  - a 60-minute cap;\n  - capped runs are kept with their partial counters;\n  - missing counters stay unknown.\n- Read the landed M04b CLI (src/benchmarks/baselineRun.ts and its usage) and the M04 CLI (scripts/analyze-baseline.mjs). Use their landed flags; where they differ from this plan, follow the landed code and say so.\n\n**2. Batch dir.** Create B=/var/tmp/moe-m04c-<YYYYMMDD>. It is durable, outside the repo, and never committed. Keep it until QA approves.\n\n**3. Pinned Moe build.** Archive the commit under test into B/moe:\n```\nC=$(git -C /mnt/d/projexts/moes rev-parse HEAD)\ngit -C /mnt/d/projexts/moes archive \"$C\" packages/moe-daemon packages/moe-proxy docs scripts CLAUDE.md .gitignore package.json | tar -x -C B/moe\n```\nThen link the Linux node_modules into both packages and build both dists with tsc, exactly as the CQ-M04b gate does. The shared checkout's HEAD moves as peers land, and this archive pins it. Record C.\n\n**4. Preflight.** No real workload is consumed, because every run is n=1.\n- `claude --version` works on the Linux-only PATH.\n- The machine's Claude accounts are usable. Check this read-only with `node B/moe/packages/moe-daemon/dist/index.js accounts check`, using the same account list this seat uses (its MOE_ACCOUNTS_FILE, else the default).\n- The landed M04b focused suite passes in B/moe. It uses the fake CLI with no paid calls, so it is the environment smoke test.\n- At least 5 GB is free under /var/tmp.\n\n**5. Manifest.** Generate B/expected.json from the landed M03 corpus via tsx in B/moe: {corpusVersion, workloads: [{id, category, caseDigest: digestWorkload(w)}]} in the corpus order.\n- readExpectedManifest must accept it, with 20 ids, 5 per category.\n- Write the ids, one per line, to B/ids.txt.\n\n**6. B/batch.sh** (bash; documented later in the archive README; not committed).\n- **Single instance and env.**\n  - `flock -n` on B/batch.lock, so only one instance runs.\n  - Unset every MOE_* variable except MOE_ACCOUNTS_FILE and MOE_SERENA_PATH.\n  - Use the Linux-only PATH plus the claude binary's directory.\n- **Loop.** For each id in B/ids.txt, in order:\n  - If a record for that id already exists anywhere under B/runs, skip it. Records are the source of truth, so a workload is never rerun.\n  - If a run root for that id exists WITHOUT a record (a driver crash or reboot), stop the batch with exit 3.\n  - Otherwise run the driver from B/moe/packages/moe-daemon: `npx tsx src/benchmarks/baselineRun.ts --workload <id> --cap-minutes 60 --parent B/runs --moe-commit <C>`. Send its output to B/driver-<id>.log, and log UTC start and end plus /proc/loadavg to B/batch.log.\n- **Exit codes.**\n  - The driver exiting 1 means no run happened: stop with exit 1.\n  - A record whose run.status is failed or aborted: log it and stop with exit 2, for triage.\n  - A completed or capped record: continue.\n\n**7. Start.** Launch the batch detached with `setsid nohup bash B/batch.sh >> B/batch.log 2>&1 &`. Record its pid and C in the step note.\n\n**Error handling:** any failed precondition stops here, before a single paid run, and is reported with moe.report_blocked naming the failed check.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-24T16:53:19.308Z"
     },
     {
       "stepId": "step-2",
@@ -79,8 +80,8 @@
       ]
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 2,
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,14 +104,15 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T13:13:52.451Z",
-  "updatedAt": "2026-10-24T14:45:54.427Z",
+  "updatedAt": "2026-10-24T16:54:49.606Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T14:39:53.512Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-e8965f51"
   ],
   "tier": "standard",
   "effort": "high",
@@ -133,5 +135,10 @@
       "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts"
     ]
   },
-  "planApprovedAt": "2026-10-24T14:45:54.427Z"
+  "planApprovedAt": "2026-10-24T14:45:54.427Z",
+  "workStartedAt": "2026-10-24T16:53:19.308Z",
+  "blockedReason": "Step-1 account precondition failed before paid usage: MOE_ACCOUNTS_FILE is unset and default /home/sysadmin/.moe/claude-accounts.json does not exist. Pinned build accounts check prints 'No Claude accounts' yet exits 0; that is not a usable-account pass. No workload started, no records, no batch process; no repo edits. Additionally accounts check is not generally read-only: cli.ts check() calls recordSignIn, so it must not silently probe/update the Windows live-fleet registry under the plan's read-only requirement. B=/var/tmp/moe-m04c-20261024 preserves pinned commit 6eb56809b4038945cfc09f95c3b9138f107dc62f, successful daemon/proxy tsc builds and accounts-check.log. Dependencies DONE+landed; human authorization confirmed. Claude version works; disk sufficient. Fake-CLI suite and remaining gates not run after this failed precondition.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-24T16:54:49.605Z"
 }
