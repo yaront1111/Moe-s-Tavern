@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:02.133Z",
-  "updatedAt": "2026-10-24T17:57:47.176Z",
+  "updatedAt": "2026-10-24T21:23:45.806Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1"
   ],
@@ -89,7 +89,9 @@
     "plannedDistinctFileCount": 3,
     "executedStepCount": 11,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-24T21:23:45.806Z",
+    "wallClockMs": 23763384
   },
   "contextFetchedBy": [
     "worker-3617ccf7",
@@ -176,21 +178,43 @@
       "treeId": "4fa50c1dce1b2663c0f8fb30b933c089ea3cfc73",
       "status": "PLANNING",
       "pushed": true
+    },
+    {
+      "sha": "336c6efdc35e53de65341685b7896cfe4b4add12",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9cda703c@2026-10-24T17:51:47Z",
+      "paths": [
+        ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+      ],
+      "recordedBy": "worker-9cda703c",
+      "recordedAt": "2026-10-24T17:58:07.829Z",
+      "treeId": "8b9dd77ad2e6587b48abdc51d3bb0c5d2ddcdf35",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/local-runner/lifecycle.mjs",
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/multipass.mjs"
+    "scripts/local-runner/multipass.mjs",
+    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
   ],
   "unattributedPaths": [
     "2026-10-24-ai-code-quality-and-context.md"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-3617ccf7@2026-10-24T15:53:19Z",
-    "at": "2026-10-24T15:56:21.235Z"
+    "kind": "completion",
+    "sessionId": "worker-9cda703c@2026-10-24T17:51:47Z",
+    "at": "2026-10-24T17:58:07.829Z"
   },
   "declaredFiles": [
     "scripts/tests/local-runner.test.mjs",
@@ -209,7 +233,7 @@
   "touchedFiles": [
     "scripts/local-runner/lifecycle.mjs"
   ],
-  "reviewCompletedAt": "2026-10-24T15:53:11.456Z",
+  "reviewCompletedAt": "2026-10-24T21:23:45.806Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Epic rail: Other tasks retain normal sizing limits (CQ-R02 ONLY size exception) - diff 972 net LOC > 400"
@@ -320,5 +344,8 @@
       }
     ],
     "stepsCompleted": []
-  }
+  },
+  "completedAt": "2026-10-24T21:23:45.806Z",
+  "reviewSummary": "APPROVE (rail-only resubmission). Explicit R06 epic size exception covers cf7de94's exact slice: lifecycle +351, test +620, multipass +1/-1 (972); no growth, HEAD/WT blobs = cf7de94 (2b7ff81/91a93c8/f08d58a). Size noted per rail, not rejected. Delivery: code in cf7de94; this round's completion 336c6ef is board-only; both on moe/work-2026-10-24 and origin.\nFresh re-run: `node --test scripts/tests/local-runner.test.mjs` (repo root, env -i, Linux PATH, Node 24.21.0) exit 0, 111/111 pass, 0 fail/skip, L22 real-process ran; cf7de94 snapshot 111/111; Windows Node 24.16: 107 pass + 4 expected win32 skips, 0 fail.\nDoD1: random 80-bit name + exclusive 0600 ledger record before launch; pre-launch exact-name query -> collision never launched/adopted/reconciled/cleaned; ledger-only iteration; foreign moe-vm-f0.../primary untouched.\nDoD2: failure/timeout re-queries same name before retry; unknown stays launching (provision refuses until reconcile); persisted MAX=3; reconcile queries own names only.\nDoD3: only `delete --purge <name>`; needs attempt==='closed' (matches daemon ExecutionAttemptPhase) and lease===false; post-delete absence re-query; per-record isolation; sanitized codes. DoD4 reproduced.\nMutation probes 26/26 killed on snapshot copies (8 historical re-checks + 18 new: exit-code-2 drop, foreign info key, generation fence, wx->w, no CAS, launching relaunch, reconcile unknown->absent, non-closed attempt, unknown post-delete, delete --all, etc.).\nScope: 3 files only; R02 274-line prefix identical to a20baef; no forbidden patterns; --check clean; executionReady:false; no verified-local/isolation/integration.\nLimits (documented, non-blocking): compare-then-rename not a lock; residual name squat; no Windows O_NOFOLLOW on direct read; launcher must self-bound; fakes are not VM certification.\nponytail-review: Lean already. net: -0 lines possible.",
+  "requiredCheckAtDone": null
 }
