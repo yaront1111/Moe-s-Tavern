@@ -13,9 +13,60 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 17,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Address rejectionDetails without reimplementation. Current epic rails explicitly allow the exact cf7de94 R06 slice: 972 measured changed lines across these three files (+351, +620, +1/-1). Confirm that completion is reachable on moe/work-2026-10-24 and compare the three current files with cf7de94 using read-only Git commands; at planning time the diff was empty. Record the exception and exact input commit/blob identities. Reuse the landed bytes, do not split/re-land/reformat, edit .moe or perform Git writes. Error handling: attribute any unexpected drift without overwriting peer/pre-existing bytes; do not treat changed code as previously reviewed or silently grow scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/multipass.mjs"
+      ],
+      "note": "Resolved size-only rejection against current explicit R06 exact-slice exception; no code fix requested. Read-only checks: cf7de947749a5a3eb14090cc5a1990a793b3037e (tree ffe4c646637fbf5b1d228dbba0b5ee89212cb1d3) is an ancestor of moe/work-2026-10-24 (HEAD at check 315565ec619da707979b2b22c0677a78772540c0). git diff cf7de94 of all three paths exits 0 and raw byte comparisons match. Numstat matches exception: lifecycle +351, tests +620, multipass +1/-1. Blob IDs: lifecycle 2b7ff818c35e299bbe3ac5f30e3c4ac9620e0499; tests 91a93c8cf306dc6f1445b5ab2e6d0c8fdefef5ba; multipass f08d58a6f55c8d911caba42b0211246ed58e7bdc. Preloaded 430 peer/pre-existing dirty paths and earlier unattributed document are not ours; untouched, not a blocker. No source/test/docs, Git, worktree or manual .moe writes. TDD loaded but new tests/RED cycle intentionally inapplicable to the approved reuse-only plan; verification deferred explicitly to step-3.",
+      "startedAt": "2026-10-24T17:53:09.895Z",
+      "completedAt": "2026-10-24T17:53:43.275Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Reuse the implementation and regression tests unchanged; tests/implementation/documentation phases are reuse-only because QA rejected size alone. Preserve the R02 51-test prefix and all L1-L22 lifecycle groups. Map DoD1 to durable random-name intent and pre-launch collision refusal, never name-prefix/list-based ownership. Map DoD2 to same-owned-name queries after launch failure/timeout, unknown-state refusal and persisted MAX_LAUNCH_TRIES=3. Map DoD3 to launched ledger records, attempt exactly closed, lease exactly false, exact-name delete --purge and post-delete absence confirmation. Error handling must retain active/finalizing/reconciling/unknown attempts, held/unknown leases, invalid ledger records, stable sanitized codes and per-record failure isolation. Retain every guard behind QA's nine killed mutation probes. No new tests or docs edits are needed absent a substantive finding; existing tests/header comments remain the contract. Only a defect fix QA requires may grow this slice; no provisioning/bootstrap/caller integration and executionReady stays false. Record reuse and known limits in step notes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/multipass.mjs"
+      ],
+      "note": "Reuse only: no source/test/documentation changes. Read retained lifecycle and test-contract labels. Raw comparison proves R02's original 274-line / 14807-byte prefix unchanged (SHA256 72e145d60a1288da0c675de27bb3d8dda23dea142aa56167ee9975c80fc228d3); all appended L1-L22 bytes match cf7de94. DoD1: random 80-bit name, exclusive durable reserved record binding taskId/attemptId/generation, pre-launch exact-name query, collision excluded from launch/adoption/cleanup. DoD2: every failed launch queries same name, unknown stops in launching, persisted retries capped at 3. DoD3: cleanup filters launched ledger phases; attempts must be exactly closed and lease exactly false; only delete --purge <name> followed by confirmed absence. Active/finalizing/reconciling/unknown attempts, held/nonboolean/throwing lease ports, invalid records and per-record failures fail closed. Nine historical QA mutation guards remain byte-identical; historical probes are not claimed as fresh. Limits retained: compare-then-rename is not a lock; residual post-absence name squatting and fail-closed resource leaks; no provisioning/bootstrap/caller integration or readiness claim (executionReady:false). Required focused gate remains step-3. Explicit modifiedFiles:[] is accurate despite runtime's empty-list omitted warning; no paths were edited.",
+      "startedAt": "2026-10-24T17:53:54.825Z",
+      "completedAt": "2026-10-24T17:54:23.505Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "One focused verification gate for this mid-epic slice. Run the exact DoD command `node --test scripts/tests/local-runner.test.mjs` fresh from the repository root under env -i, preserving HOME and using Linux-only PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin. Do not replace Windows node_modules or inherit Windows PATH entries. Require exit 0; unchanged reviewed inputs should yield 111 passes, 0 failures/skips, including L22's real-process test. Save input identities and output tail/counts for complete_task.verification with that exact command. Error handling: investigate/report failures, never weaken assertions or manufacture evidence; do not count missing checks as passing. Windows' four existing POSIX skips are not Linux success; another host run is not required. Fake-provider/process tests are not actual VM/hardware/isolation certification.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Fresh gate at 2026-10-24T17:54:33Z from /mnt/d/projexts/moes: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin node --test scripts/tests/local-runner.test.mjs. Node v24.21.0; test process and foreground pipeline exit 0. 111 tests, 111 pass, 0 fail/cancel/skip/todo; duration 11279.806479ms. L22 real-process test passed (144.056321ms). Log /tmp/cq-r06-worker-9cda703c-tests.log; exact input hashes/blobs /tmp/cq-r06-worker-9cda703c-inputs.json. All six actual source/config/test inputs match cf7de94; before/after hashes of captured inputs unchanged. An ancillary hashing command used two nonexistent guessed paths; import inspection corrected that metadata set (cli.mjs, manifest within doctor.mjs); this was not a test failure and no nonexistent-path check is claimed successful. No repo/dependency/Git/manual .moe writes; no Windows node_modules replacement. Mid-epic focused gate only, not actual Multipass/hardware/isolation certification. Temporary evidence files are outside project; modifiedFiles:[] is accurate.",
+      "startedAt": "2026-10-24T17:54:26.073Z",
+      "completedAt": "2026-10-24T17:55:09.667Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Exactly one final scoped adversarial self-review; load adversarial-self-review. Inspect the retained R06 diff and challenge concurrent ledger updates, symlink/corrupt/huge records, collisions, late creation, timeout-to-unknown, retry exhaustion, nonboolean lease states, active/reconciling attempts, deletion failure and re-query. Confirm all L1-L22 and nine mutation guards survive; no global purge/delete, unauthorized edit, readiness/isolation claim or integration expansion. State existing compare-then-rename-not-locking, residual 80-bit-name squatting and fail-closed leak limits honestly. Prior substantive QA/mutation results are historical, not fresh test output. No whole-epic regression/docs sweep in this mid-epic task. If final source/test inputs changed after the gate, rerun the same verification command; otherwise reuse its fresh output. Complete steps with accurate modifiedFiles (empty for no edits), then complete_task with command, exitCode:0, outputTail and a rail-only-resubmission summary for independent QA.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/multipass.mjs"
+      ],
+      "note": "Completed exactly one final scoped adversarial review of retained cf7de94 R06 diff (all three files); current scoped diff empty and retained git diff --check clean. Reviewed concurrency, invalid/huge/corrupt inputs, POSIX O_NOFOLLOW/O_NONBLOCK and non-file rejection, bounded shell:false provider calls, exact-line absence, collision/late creation, timeout-to-unknown, persisted 3-try limit, strict closed/false cleanup ports, delete failure/re-query and partial-write/handle cleanup. L1-L22 plus all nine historical mutation guards remain unchanged. Historical killed mutants were not rerun or represented as fresh. No new substantive defect found within the approved protected-runtime contract. Explicit limits: compare-then-rename detects stale phases but is not a lock; simultaneous writers remain a future integration constraint; random 80-bit names do not eliminate active post-check squatting; directory protection and bounded/settling launch callback are caller obligations; unknown/late state can leak resources. No global purge, readiness/isolation assertion, provisioning/bootstrap/caller integration, or unauthorized edit. Final SHA checks preserve all gate inputs: six direct source/config/test files plus L1's read-only resourceStore.ts drift guard match cf7de94. Fresh step-3 result retained: exact node --test scripts/tests/local-runner.test.mjs exit 0, 111/111 pass, 0 fail/skip. No post-gate source/test changes; no rerun needed. No project paths modified; explicit [] warning is known daemon behavior, not evidence of edits.",
+      "startedAt": "2026-10-24T17:55:23.671Z",
+      "completedAt": "2026-10-24T17:57:12.693Z"
+    }
+  ],
+  "planRevision": 26,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,50 +79,48 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:02.133Z",
-  "updatedAt": "2026-10-24T15:56:21.235Z",
+  "updatedAt": "2026-10-24T17:57:47.176Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-24T14:47:42.422Z",
-    "plannedStepCount": 7,
+    "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 7,
+    "executedStepCount": 11,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "worker-3617ccf7",
     "qa-b0c1741e",
-    "governor-187cc44e"
+    "governor-187cc44e",
+    "architect-bb003851",
+    "worker-9cda703c"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
-  "failedDodItems": [
-    {
-      "item": "Epic rail: Other tasks retain normal sizing limits (CQ-R02 ONLY size exception) - diff 972 net LOC > 400",
-      "rejectedAt": "2026-10-24T15:53:11.456Z",
-      "rejectedBy": "qa-b0c1741e"
-    }
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
   ],
-  "planSubmittedAt": "2026-10-24T15:02:41.345Z",
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T17:51:33.131Z",
   "planningNotes": {
-    "approachesConsidered": "**Chosen: a host-side owned-instance lifecycle in scripts/local-runner/lifecycle.mjs.**\n- It keeps a durable per-instance ledger in a caller-supplied state dir.\n- Each record binds to the EXISTING daemon attempt identity (taskId, attemptId, generation fence). Job leases are the EXISTING daemon resource leases, keyed by the instance name.\n- Cleanup reads attempt phase and lease state through two injected ports (attemptPhase, leaseHeld) that activation wires later.\n- The R06 contract says 'through existing attempts/resources' and the epic forbids a second scheduler or store, so this adds no new daemon store, tool or scheduler.\n\n**Rejected.**\n- **Daemon-side persistence** (new attempt fields or an MCP tool). That is a shared schema and protocol change with broad regression and JetBrains parity, outside R06, whose verification is the scripts suite.\n- **Ownership by name prefix, or scanning `multipass list`.** That is exactly what DoD 1 forbids.\n- **Deterministic names derived from attempt ids.** They are guessable and can be squatted; the plan uses random 80-bit names recorded durably BEFORE launch.\n- **Treating any info failure as absence.** That would duplicate-launch or mis-delete. Only exit 2 with the exact v1.17.0 not-found line counts.\n- **`multipass purge` or `delete --all`.** Both are global.\n- **A ledger inside .moe/** (daemon sole-writer) or inside the repo.\n- **An env-var or default ledger location.** R02 refuses env-selected inputs, and the protected runtime (CQ-R01 / activation) picks the location.\n\nUnder TURBO these choices are recorded here rather than held for a REPL answer.",
-    "codebaseInsights": "**R02 (13f75ca)** shipped scripts/local-runner/{certified-provider.json, multipass.mjs, doctor.mjs, cli.mjs} and scripts/tests/local-runner.test.mjs (LF, 51 tests).\n- Pattern: an injected execFile-compatible `run`, shell:false, a 10 s / 64 KiB bound, SIGKILL, and sanitized MESSAGES maps.\n- multipass.mjs exports providerError, MAX_PROBE_BUFFER and MAX_PROBE_TIMEOUT_MS. classifyFailure is private, so add `export`.\n\n**R02p** made VS Code bundle-assets.mjs and Gradle copy the whole local-runner dir, excluding test patterns. A new production module ships automatically, so no required-list change is needed until something imports it at runtime (activation / R13).\n\n**CI** runs `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs` on Node 24 across OS jobs, so the POSIX-only real-process test must skip on win32.\n\n**Multipass v1.17.0 (verified from the official source):**\n- info and delete on a missing name return NOT_FOUND `instance \"<n>\" does not exist`. The client prints `<cmd> failed: The following errors occurred:\\n…` and exits 2 (CommandFail); UNAVAILABLE exits 3.\n- info JSON is {errors:[], info:{<name>:{state,…}}}.\n- The ten state strings come from format_utils.cpp.\n- A deleted-but-unpurged instance still exists ('Deleted'), and launching with that name fails 'already exists'.\n- `delete --purge <name>` is per-instance with no snapshot prompt; `delete --all` and `purge` are global.\n\n**Daemon facts.**\n- RESOURCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/ (state/resourceStore.ts). Leases are keyed by task and survive respawns and restarts.\n- ExecutionAttemptPhase = running | finalizing | reconciling | closed.\n- Ids are `<prefix>-<32 hex>` (util/ids.ts).",
-    "risks": "**Late VM creation.** The Multipass daemon may finish a launch after the client timed out. The fixed name prevents a duplicate, because a second launch fails 'already exists'. The post-failure query, reconcile and cleanup all treat launchTries > 0 records as possibly owning a VM, so a late VM is adopted or cleaned, never duplicated.\n\n**Name squatting.** Someone could take the name between the absence check and the launch. The random 80-bit name makes this negligible, and the residual risk is stated in the module header comment.\n\n**Fail-closed leaks.** Ledger corruption, unknown provider state, or an unknown attempt or lease port all leave the VM in place. This can leak a VM but never deletes a foreign one. Reports surface it.\n\n**Lost directory fsync on power loss.** It reverts at most one phase, in the safe direction.\n\n**Windows.** Rename-over works; directory fsync is ignored there.\n\n**No real Multipass here.** Tests use a fake transport and a fake executable only. No certification or readiness claim is made; real provisioning evidence is R13.\n\n**Shared dirty checkout.** Touch only the three files and preserve peer bytes. The snapshot gate guards against peer red tests.",
+    "approachesConsidered": "Reuse the already landed cf7de94 bytes under the newly explicit R06 exception; no source change. Splitting/re-landing or shrinking tested behavior is unnecessary and contrary to the exact-slice rail. Test authoring, implementation and documentation are consciously reused; this session's work is rejection reconciliation and fresh verification.",
+    "codebaseInsights": "Read current lifecycle implementation, current rails, complete rejection and prior QA handoff. Planning-time read-only diff vs cf7de94 is empty; numstat matches the rail. lifecycle.mjs contains owned names, exact-name bounded queries/deletes, caller-located ledger, provision/reconcile/cleanup. multipass.mjs only exports classifyFailure. Durable records bind existing taskId/attemptId/generation; job resource id is instance name; injected attempt/lease ports read existing daemon authorities. Appended L1-L22 span test lines 276-894. Current task comments total 0.",
+    "risks": "Reopened safety-sensitive task uses heavy/max routing. Ledger compare-then-rename is not a lock; ownership has documented residual squatting risk; unknown states preserve resources and may leak. No substantive fix was requested. Preserve peer dirty paths and reviewed test prefix. verified-local remains disabled; no provider certification follows. Activation/full regression/docs sweep belong to later epic tasks.",
     "keyFiles": [
-      "scripts/local-runner/multipass.mjs",
-      "scripts/local-runner/doctor.mjs",
+      "scripts/local-runner/lifecycle.mjs",
       "scripts/tests/local-runner.test.mjs",
-      "scripts/tests/local-runner-bundle.test.mjs",
-      "packages/moe-daemon/src/state/resourceStore.ts",
-      "packages/moe-daemon/src/types/schema.ts"
+      "scripts/local-runner/multipass.mjs"
     ]
   },
-  "planApprovedAt": "2026-10-24T15:02:41.436Z",
+  "planApprovedAt": "2026-10-24T17:51:33.217Z",
   "workStartedAt": "2026-10-24T15:03:37.615Z",
   "commits": [
     {
@@ -130,11 +179,9 @@
     }
   ],
   "filesModified": [
-    "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/multipass.mjs",
     "scripts/local-runner/lifecycle.mjs",
-    ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json",
-    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json"
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/multipass.mjs"
   ],
   "unattributedPaths": [
     "2026-10-24-ai-code-quality-and-context.md"
@@ -150,15 +197,15 @@
     "scripts/local-runner/lifecycle.mjs",
     "scripts/local-runner/multipass.mjs"
   ],
-  "reviewStartedAt": "2026-10-24T15:27:40.505Z",
+  "reviewStartedAt": "2026-10-24T17:57:47.174Z",
   "verification": {
     "command": "node --test scripts/tests/local-runner.test.mjs",
     "exitCode": 0,
-    "outputTail": "✔ launcher failure text never reaches errors or ledger bytes (30.553316ms)\n✔ reconcileOwned resolves each crash phase by querying only its own owned name (123.06307ms)\n✔ cleanupOwned deletes only closed, unleased, launched records by exact name (149.525518ms)\n✔ a failed delete keeps the record unless a re-query proves absence, and the sweep continues (51.78414ms)\n✔ cleanup records unknown first queries and concurrent ledger writers without retrying (26.40737ms)\n✔ real provider process: owned query and purge use only per-name commands (140.364894ms)\nℹ tests 111\nℹ suites 0\nℹ pass 111\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11228.62928",
-    "reportedAt": "2026-10-24T15:27:40.505Z",
+    "outputTail": "✔ launcher failure text never reaches errors or ledger bytes (30.496012ms)\n✔ reconcileOwned resolves each crash phase by querying only its own owned name (123.789032ms)\n✔ cleanupOwned deletes only closed, unleased, launched records by exact name (144.764564ms)\n✔ a failed delete keeps the record unless a re-query proves absence, and the sweep continues (51.910093ms)\n✔ cleanup records unknown first queries and concurrent ledger writers without retrying (27.566529ms)\n✔ real provider process: owned query and purge use only per-name commands (144.056321ms)\nℹ tests 111\nℹ suites 0\nℹ pass 111\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11279.806479",
+    "reportedAt": "2026-10-24T17:57:47.174Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Delivered the CQ-R06 owned VM lifecycle in three files. scripts/local-runner/lifecycle.mjs is new; multipass.mjs only gains `export` on classifyFailure; local-runner.test.mjs gets 60 appended tests (L1-L22) with the 274-line R02 block byte-identical.\n\nOwnership: a random `moe-vm-<20hex>` name is durably reserved in a strict, caller-located ledger before launch. Each record carries the existing daemon attempt identity (taskId, attemptId, generation fence). The job-lease id is the name itself, so leases use existing daemon resource leases; there is no new store or scheduler.\n\nLedger: one strictly decoded JSON record per instance (exact keys, phase enum, 4 KiB cap, no symlinks or FIFOs). Updates are compare-and-swap (CAS) and atomic (temp file, fsync, rename, directory fsync).\n\nDoD1 (foreign VMs): a name present before launch becomes 'collision' and is never launched, adopted or deleted. Lookalike, invalid or out-of-ledger names are never touched. Absence requires exit 2 plus the exact v1.17.0 `instance \"<name>\" does not exist` line for that name.\n\nDoD2 (timeout reconciliation): every launch failure, including timeouts, queries the same name before any retry. Present means adopt, absent means bounded retry (at most 3, persisted before launch), unknown means stop with no retry.\n\nDoD3 (cleanup): it runs only `delete --purge <name>` on launched ledger records whose attempt is exactly closed and whose lease is exactly free. Active, reconciling, unknown or throwing ports are preserved. There is no --all, purge or list.\n\nErrors and reports are sanitized to stable codes. executionReady is always false; nothing touches verified-local, isolation, the daemon, launchers, .moe or Git.\n\nVerification, all on the Linux-only PATH under env -i:\n- the DoD command: 111/111 pass, 0 fail, 0 skipped, with the real-process test running;\n- a fresh git-archive snapshot: 111/111;\n- the bundle test: 7/7.\n`git diff --check` is clean. One adversarial review was done; its theoretical limits are in ",
+  "completionSummary": "Rail-only resubmission: the current explicit R06 size exception addresses the sole QA rejection. Reused cf7de947749a5a3eb14090cc5a1990a793b3037e unchanged on moe/work-2026-10-24; exact three-file slice remains lifecycle +351, tests +620, multipass +1/-1. No source/test/docs edits or Git/manual .moe writes; peer bytes untouched. modifiedFiles:[] was truthful despite the daemon's known empty-list fallback warning.\nFresh required command under env -i with preserved HOME/Linux-only PATH and Node v24.21.0: 111/111 pass, 0 fail/skipped, exit 0; L22 real-process fixture executed. Log: /tmp/cq-r06-worker-9cda703c-tests.log. Seven direct/read-only fixture inputs remain pinned unchanged; identities in /tmp/cq-r06-worker-9cda703c-inputs.json.\nR02 prefix and L1-L22 preserved. One scoped adversarial review and whitespace check completed; nine prior mutation guards remain intact (historical mutation results, not rerun). Durable intent/collision refusal, same-name timeout reconciliation, persisted 3-try budget, strict closed/false cleanup and per-name purge/re-query retained. Existing limits: compare-then-rename is not locking, residual name squatting, trusted protected-directory/callback contracts, and fail-closed resource leaks. No activation, provisioning/bootstrap/caller integration or VM/isolation certification claimed; executionReady remains false. Serena handoff and verification-input gotcha saved.",
   "touchedFiles": [
     "scripts/local-runner/lifecycle.mjs"
   ],
