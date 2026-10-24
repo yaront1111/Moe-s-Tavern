@@ -17,7 +17,7 @@
     {
       "stepId": "step-1",
       "description": "Write a Node-native packaging regression that copies the actual VS Code bundler into an isolated temporary repo, provides minimal dist/dependency/role/mod fixtures, seeds the actual production provider helper directory plus a sentinel test file, and runs the real bundler. Assert copied module/manifest importability and test-file exclusion. Add a precise Gradle inclusion contract assertion plus bundled onboarding expected-file assertions. Demonstrate red from missing helper copy, not missing unrelated build prerequisites. Error handling and tests are required.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/build.gradle.kts",
         "moe-vscode/scripts/bundle-assets.mjs",
@@ -27,35 +27,61 @@
       ],
       "newFiles": [
         "scripts/tests/local-runner-bundle.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "Added Node-native real-bundler temp-repo regression, production helper/manifest import checks, nested test/spec/fixture exclusions, missing-required-asset failure, precise Gradle contract, actual onboarding asset-prefix execution and permanent CI assertion. Behavioral RED: actual VS Code bundler exits0 with valid minimal build prerequisites, then assertion fails Missing copied provider asset certified-provider.json (1 test,0 pass,1 fail). No missing-import or unrelated build prerequisite error.",
+      "startedAt": "2026-10-23T23:57:18.283Z",
+      "completedAt": "2026-10-23T23:57:27.276Z"
     },
     {
       "stepId": "step-2",
       "description": "Add explicit production local-runner inclusion to both existing bundle paths (no floating copies of arbitrary tests). Extend packaged onboarding to require modules and manifest, and the cross-platform CI Node list to execute provider and packaging tests. Use byte-aware focused edits to preserve original CRLF and unrelated content. Do not build/provision VMs or enable callers.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/build.gradle.kts",
         "moe-vscode/scripts/bundle-assets.mjs",
         ".github/workflows/ci.yml",
         "scripts/tests/onboarding.mjs",
         "scripts/tests/local-runner-bundle.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        ".github/workflows/ci.yml",
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "Both bundle definitions now explicitly include production local-runner assets and exclude root/nested test, spec and fixture paths. Required modules/manifest must be regular files before shipping. Bundled onboarding requires each asset; permanent cross-platform CI runs both Node suites. Seven bundle regressions pass. Additional RED/GREEN proved directory masquerading as doctor.mjs was previously accepted and is now rejected. Four existing source/config files retained uniform CRLF/no BOM; no caller/runner activation.",
+      "startedAt": "2026-10-23T23:57:29.975Z",
+      "completedAt": "2026-10-23T23:58:45.137Z"
     },
     {
       "stepId": "step-3",
       "description": "Run node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs fresh. Perform one final adversarial review for nested asset paths, missing files, test leakage, shell/path handling and false installed-runtime claims. Report local Java absence honestly; do not claim a JetBrains archive build.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/build.gradle.kts",
         "moe-vscode/scripts/bundle-assets.mjs",
         ".github/workflows/ci.yml",
         "scripts/tests/onboarding.mjs",
         "scripts/tests/local-runner-bundle.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        ".github/workflows/ci.yml",
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "One scoped adversarial review complete: temp directories uniquely owned/cleaned, direct argv, nested exclusions, missing/non-file assets and imported manifest verified. Fresh exact Node gate58/58 pass,0 skips/failures,10562ms;2/2 copied-source mutants killed. Existing CRLF/no-BOM preserved; CRLF-aware whitespace check clean. Java absent: no actual JetBrains archive build claimed; CI gate retained. Assets only, no isolated execution readiness claim.",
+      "startedAt": "2026-10-23T23:58:46.082Z",
+      "completedAt": "2026-10-24T00:00:12.127Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 7,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -68,18 +94,51 @@
   ],
   "priority": "HIGH",
   "order": 25,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2962d4c3b8fd4cd0bf745dce36a2e08a",
+      "author": "worker-cq-r02p",
+      "content": "R02p QA handoff: fresh exact plan command node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs passed58/58,0 skips/failures (7 bundle +51 provider). New fixture executes actual VS Code bundler in disposable repositories, dynamically imports byte-identical copied doctor/manifest, retains nested production module, excludes .test/.spec/tests/__tests__/fixtures/__fixtures__, rejects missing/non-file required assets, and executes actual onboarding asset-check prefix with each required asset removed in turn. Controlled copied-source mutants removing actual helper copying or test exclusions both failed behavioral assertions (2/2). Initial RED was Missing copied provider asset certified-provider.json after unmodified bundler successfully ran, not a missing build prerequisite. Gradle production inclusion/exclusion contract inspected; actual JetBrains archive build NOT performed because no Java executable exists locally. Existing CI archive build+packaged onboarding gate remains intact, and cross-platform CI explicitly runs both suites. All four existing scoped files were already uniform CRLF/no BOM before this task and remain so; raw Git diff/check sees pre-existing LF-vs-CRLF noise. Semantic diff --ignore-space-at-eol is narrowly +31/-1 plus134-line fixture, and git -c core.whitespace=cr-at-eol diff --check is clean. No line-ending normalization, unrelated source edits, real VM/provider activation, installed-runtime/isolation guarantee, Git writes or direct .moe writes.",
+      "timestamp": "2026-10-24T00:00:09.786Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:45:12.804Z",
-  "updatedAt": "2026-10-23T23:45:14.589Z",
+  "updatedAt": "2026-10-24T00:00:25.601Z",
   "tier": "standard",
   "effort": "xhigh",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-23T23:45:14.556Z",
   "metrics": {
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "firstClaimAt": "2026-10-23T23:54:16.416Z",
+    "executedStepCount": 3
   },
-  "planApprovedAt": "2026-10-23T23:45:14.589Z"
+  "planApprovedAt": "2026-10-23T23:45:14.589Z",
+  "contextFetchedBy": [
+    "worker-cq-r02p"
+  ],
+  "workStartedAt": "2026-10-23T23:57:18.283Z",
+  "reviewStartedAt": "2026-10-24T00:00:25.599Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "real hung process is killed by bounded timeout (10009.214579ms)\ntests58\nsuites0\npass58\nfail0\ncancelled0\nskipped0\ntodo0\nduration_ms10562.023269",
+    "reportedAt": "2026-10-24T00:00:25.599Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "moe-jetbrains/build.gradle.kts",
+    "moe-vscode/scripts/bundle-assets.mjs",
+    ".github/workflows/ci.yml",
+    "scripts/tests/onboarding.mjs"
+  ],
+  "completionSummary": "Delivered provider helper asset shipping in exactly five approved files: both IDE bundle definitions include production local-runner modules/manifest and reject missing/non-file required assets; nested tests/spec/fixtures are excluded. Bundled onboarding requires all four assets; cross-platform CI permanently runs both Node suites. Real temp-repository VS Code bundler regression imports copied modules/manifest and exercises actual onboarding asset checks. Fresh58/58 tests pass (7 bundle+51 provider),0 skips/failures;2/2 copied-source behavior mutants killed. Initial meaningful RED and directory-as-module RED/GREEN documented. One final scoped adversarial review complete. Existing CRLF/no-BOM preserved without normalizing unrelated bytes; CRLF-aware whitespace gate clean. No Java installed, so no actual JetBrains archive build performed or claimed; existing CI build/archive onboarding gate retained. Assets only: no VM provisioning, installed-runtime enforcement, isolated execution readiness or hardware certification."
 }

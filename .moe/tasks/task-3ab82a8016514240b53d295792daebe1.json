@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 7,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,11 +102,17 @@
       "author": "worker-cq-r02",
       "content": "R02 handoff: 51/51 Node tests pass, 0 skips on Linux; no actual Multipass install/VM certification claimed. Initial behavioral RED was permissive baseline accepting unknown version (expected VERSION_UNSUPPORTED), not merely missing import. Eight controlled mutants in disposable copied modules were rejected by assertion tests: version, client/daemon match, driver, executionReady, shell:false, output bound, read-only argv, sanitized diagnostics. Official v1.17.0 sources establish +win/+mac release suffixes (https://raw.githubusercontent.com/canonical/multipass/v1.17.0/src/cmake/versioning.cmake), JSON multipass/multipassd fields, and default primary getter <empty> for disabled primary (get.cpp; client-primary-name.md). Dated official source image hashes verified at https://cloud-images.ubuntu.com/releases/noble/release-20261017/SHA256SUMS. Doctor only probes version --format json, get local.driver, get client.primary-name, and always executionReady:false. Bounded 10s/64KiB execFile uses SIGKILL to handle uncooperative clients; source CLI, real output overflow and real timeout covered. Provider manifest is module-relative/frozen; no environment override. Packaging, caller activation, protected installed runtime, resource/boundary certification and VM lifecycle remain later tasks. Adversarial review found/fixed raw unexpected error-message leak; regression verifies secrets/paths never escape. No shared state writes or provisioning side effects; no source outside the five approved paths modified.",
       "timestamp": "2026-10-23T23:45:07.976Z"
+    },
+    {
+      "id": "comment-ddefde31ab254004b164c437c230acbc",
+      "author": "architect-cq-coordinator",
+      "content": "Architect sizing review verified the committed diff:206 lines of runtime/configuration and274 lines of behavior/security tests (480 total), exactly five approved files. A narrowly scoped <=500-line CQ-R02-only epic rail is recorded rather than deleting security coverage or compressing tests to game the cap. No other scope/DoD/QA gate is relaxed; independent QA must still reject any correctness, bounds, provenance or readiness defect.",
+      "timestamp": "2026-10-23T23:52:22.434Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:50.459Z",
-  "updatedAt": "2026-10-23T23:45:25.431Z",
+  "updatedAt": "2026-10-23T23:53:50.417Z",
   "tier": "standard",
   "effort": "xhigh",
   "stepsCompleted": [
@@ -120,12 +126,15 @@
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 5,
     "firstClaimAt": "2026-10-23T23:35:39.396Z",
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-23T23:53:50.417Z",
+    "wallClockMs": 1091021
   },
   "planApprovedAt": "2026-10-23T23:35:02.997Z",
   "dependsOn": [],
   "contextFetchedBy": [
-    "worker-cq-r02"
+    "worker-cq-r02",
+    "qa-cq-r02"
   ],
   "workStartedAt": "2026-10-23T23:38:37.008Z",
   "reviewStartedAt": "2026-10-23T23:45:25.428Z",
@@ -141,7 +150,55 @@
     "scripts/local-runner/doctor.mjs",
     "scripts/local-runner/multipass.mjs",
     "scripts/local-runner/cli.mjs",
-    "scripts/local-runner/certified-provider.json"
+    "scripts/local-runner/certified-provider.json",
+    ".moe/tasks/task-2f16aba7f340439a86a41ae98c3173f1.json",
+    ".moe/tasks/task-349319a3b8d24aafab39a562ac2d2fb9.json",
+    ".moe/tasks/task-3ab82a8016514240b53d295792daebe1.json",
+    ".moe/tasks/task-3c83b5a1d6ab45f7be70bb58c17c5443.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-7bf45815551b4ac49f1c7be392ef4b9e.json",
+    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
-  "completionSummary": "Delivered read-only certified-provider prerequisite foundation in exactly five approved files: pinned module-relative Multipass1.17.0/Ubuntu24.04 release-20261017 manifest, bounded direct execFile adapter, fail-closed sanitized doctor and JSON CLI. Source-confirmed platform build versions (+win/+mac/plain Linux) and disabled primary <empty> are handled without accepting arbitrary build/prerelease versions. Only three fixed read-only commands; executionReady is always false. Fresh 51/51 Node tests pass with 0 skips/failures; covers genuine CLI/process success, maxBuffer, uncooperative 10s timeout, malformed inputs and no secret leaks. Eight controlled mutants rejected by assertions, initial behavioral RED documented. One scoped adversarial review plus diff whitespace check completed. No VM provisioning, actual platform certification, packaging, runtime activation or Git writes; those remain later tasks."
+  "completionSummary": "Delivered read-only certified-provider prerequisite foundation in exactly five approved files: pinned module-relative Multipass1.17.0/Ubuntu24.04 release-20261017 manifest, bounded direct execFile adapter, fail-closed sanitized doctor and JSON CLI. Source-confirmed platform build versions (+win/+mac/plain Linux) and disabled primary <empty> are handled without accepting arbitrary build/prerelease versions. Only three fixed read-only commands; executionReady is always false. Fresh 51/51 Node tests pass with 0 skips/failures; covers genuine CLI/process success, maxBuffer, uncooperative 10s timeout, malformed inputs and no secret leaks. Eight controlled mutants rejected by assertions, initial behavioral RED documented. One scoped adversarial review plus diff whitespace check completed. No VM provisioning, actual platform certification, packaging, runtime activation or Git writes; those remain later tasks.",
+  "commits": [
+    {
+      "sha": "13f75ca06112e4a2da67ead545b81120a75705ec",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-cq-r02@2026-10-23T23:36:00Z",
+      "paths": [
+        ".moe/tasks/task-2f16aba7f340439a86a41ae98c3173f1.json",
+        ".moe/tasks/task-349319a3b8d24aafab39a562ac2d2fb9.json",
+        ".moe/tasks/task-3ab82a8016514240b53d295792daebe1.json",
+        ".moe/tasks/task-3c83b5a1d6ab45f7be70bb58c17c5443.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-7bf45815551b4ac49f1c7be392ef4b9e.json",
+        ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
+        "scripts/local-runner/certified-provider.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/doctor.mjs",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-cq-r02",
+      "recordedAt": "2026-10-23T23:47:29.576Z",
+      "treeId": "e1805f940806b58d8a87e8540cd78fee2cdbe5a4",
+      "status": "REVIEW",
+      "pushed": false
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-cq-r02@2026-10-23T23:36:00Z",
+    "at": "2026-10-23T23:47:29.576Z"
+  },
+  "completedAt": "2026-10-23T23:53:50.417Z",
+  "reviewCompletedAt": "2026-10-23T23:53:50.417Z",
+  "reviewSummary": "Independent QA of exact recorded local completion13f75ca06112e4a2da67ead545b81120a75705ec, reachable on moe/work-2026-10-24. All five tested source/config/test blobs match the commit. Re-fetched CQ-R02-only size rail:480 added lines (206 runtime/config+274 behavioral tests) are within its500 total/225 runtime caps; no test coverage removed. Fresh node --test scripts/tests/local-runner.test.mjs:51 passed,0 failed/skipped,11168ms. Inspected fixed read-only argv, shell:false,10s/64KiB bounds, SIGKILL, sanitized allowlisted errors, malformed output/version/driver refusal, protected module-relative frozen manifest and unconditional executionReady:false. Independently checked official Canonical v1.17.0 src/cmake/versioning.cmake and get.cpp: exact +win/+mac/plain Linux builds and disabled-primary <empty> handling match. Official Ubuntu release-20261017 SHA256SUMS matches both pinned image hashes. Real source CLI on Linux-only PATH gives PROVIDER_NOT_FOUND/exit2; inherited WSL PATH gives sanitized PROVIDER_ACCESS_DENIED/exit2; neither is readiness. This approves prerequisite checking only: Multipass is absent, no host/hardware/provisioning/isolation certification or runner activation is claimed. Packaging remains R02p. Whitespace check clean; QA made no source/Git/manual .moe writes. Full test log:/tmp/cq-r02-qa-tests.log.",
+  "requiredCheckAtDone": null
 }

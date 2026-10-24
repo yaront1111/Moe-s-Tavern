@@ -1377,7 +1377,7 @@ describe('planRevision', () => {
     expect(reloaded.getTask('task-1')?.planRevision).toBe(1);
   });
 
-  it('never resets on reopen and advances once when reopen clears step evidence', async () => {
+  it('preserves approval revision while execution and reopen clear step evidence', async () => {
     await boot();
     await submit();
     await h.state.updateTask('task-1', { status: 'WORKING' });
@@ -1388,12 +1388,12 @@ describe('planRevision', () => {
       modifiedFiles: ['file.ts'],
     }));
     await h.state.updateTask('task-1', { implementationPlan: executed, stepsCompleted: ['step-1'] });
-    expect(h.state.getTask('task-1')?.planRevision).toBe(2);
+    expect(h.state.getTask('task-1')?.planRevision).toBe(1);
     await h.state.updateTask('task-1', { status: 'REVIEW' });
 
     const reopened = await h.state.reopenTask('task-1', 'needs rework');
 
-    expect(reopened.planRevision).toBe(3);
+    expect(reopened.planRevision).toBe(1);
     expect(reopened.implementationPlan[0].status).toBe('PENDING');
   });
 

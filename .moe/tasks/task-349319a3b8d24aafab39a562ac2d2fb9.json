@@ -17,46 +17,72 @@
     {
       "stepId": "step-1",
       "description": "Enable only F02-owned cases in the held-out approvalRevision.acceptance.test.ts; do not edit any assertion, helper, fixture or F05-owned skipped SPEED case. Run the focused acceptance test against existing production first and record semantic red. Existing tests and error handling are required. Explore taskStore derivePlanRevision and util/planAmendments effectiveStepDescription before coding.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts"
+      ],
+      "note": "Enabled only the F02 describe.skip group; every other fixture/helper/assertion byte matches accepted F01 commit ef229b8 and F05 remains skipped. Fresh semantic RED in dedicated Linux-native snapshot: 10 failed,20 passed,1 skipped (31 total), expected approval revision7 but received8 across progress/audit/reopen cases. No import or compilation failures counted. Log:/tmp/cq-f02-red.log. Verified derivePlanRevision and existing effectiveStepDescription definition/callers.",
+      "startedAt": "2026-10-23T23:53:49.659Z",
+      "completedAt": "2026-10-23T23:54:09.104Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement the minimal canonical approval projection in taskStore before structural comparison: step identity/order, original and effective instruction text, affectedFiles, newFiles normalized absent/empty. Reuse effectiveStepDescription; exclude execution status/start/completion timestamps/modifiedFiles/note and amendment audit metadata/inactive history. Compare sanitized approval projections, not complete execution records. DoD/material plan changes still bump exactly once and PLAN_SUBMITTED still bumps on every successful submission. Preserve forged-stamp stripping and malformed/exhausted stored-stamp refusal before persistence.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "note": "Minimal canonical plan projection implemented in taskStore using existing effectiveStepDescription, retaining ordered IDs, original/effective instructions and approved affectedFiles/newFiles with absent/empty normalization. Execution evidence and amendment audit/inactive history excluded. Fresh held-out GREEN:30 passed,1 F05 skipped. Original forged-stamp stripping, invalid/exhausted stored-counter guards and PLAN_SUBMITTED event bump remain unchanged. Log:/tmp/cq-f02-green.log.",
+      "startedAt": "2026-10-23T23:54:10.490Z",
+      "completedAt": "2026-10-23T23:54:55.484Z"
     },
     {
       "stepId": "step-3",
       "description": "Update only the legacy submitPlan.test.ts expectation that execution/reopen evidence clearing advances revision: it must now remain at the submitted approval revision. Keep replan/submission/amendment/material-write expectations. Run focused revision/submission/approval tests then fresh full Linux-native daemon suite npm test -- --maxWorkers=4 on a synchronized isolated source snapshot using unchanged lockfile; record real counts. No direct .moe or Git writes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.test.ts"
+      ],
+      "note": "Verified only one legacy regression before changing expectations: submitPlan.test.ts 91 passed/1 failed because execution revision correctly remained1 instead of old2. Updated only that authorized test title and its2/3 ->1/1 expectations. Focused acceptance/submission/approval suites:167 passed,1 F05 skipped. Fresh synchronized Linux-native full suite:142 files passed,2521 tests passed,9 skipped (F05 one plus8 preexisting),exit0; tsc --noEmit --incremental false clean. Linux-only PATH; unchanged lockfile/native dependencies. Logs:/tmp/cq-f02-focused.log,/tmp/cq-f02-full-suite.log.",
+      "startedAt": "2026-10-23T23:54:57.221Z",
+      "completedAt": "2026-10-23T23:57:54.503Z"
     },
     {
       "stepId": "step-4",
       "description": "Perform exactly one adversarial self-review: concurrent writes, null/empty optional scope, active versus inactive amendment changes, counter exhaustion/invalid stamps, metadata aliases, and event-driven submission revision semantics. Preserve held-out assertions; capture final fresh regression evidence for complete_task. F03 owns new contract fields; do not add approvals/context receipts here.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
         "packages/moe-daemon/src/tools/submitPlan.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts"
+      ],
+      "note": "Completed exactly one scoped adversarial review: canonical bounded projection is pure, existing serialized durable write/counter checks unchanged, original/effective instructions and ordered scope remain material, execution/audit/inactive metadata excluded. Six public-store edge probes pass for absent/[]/null optional newFiles equivalence, material scope, metadata at MAX_SAFE_INTEGER and material exhaustion. Held-out file byte-equals ef229b8 except ONLY F02 skip removal; F05 stays skipped. All3 owned files match tested snapshot; CRLF/lockfile preserved; diff whitespace clean. Fresh full suite142 files,2521 passed,9 skipped; focused167 passed,1 skipped; typecheck clean. No contract/context/runner changes.",
+      "startedAt": "2026-10-23T23:57:55.484Z",
+      "completedAt": "2026-10-23T23:59:25.629Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 9,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -69,18 +95,43 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:10.923Z",
-  "updatedAt": "2026-10-23T23:40:50.142Z",
+  "updatedAt": "2026-10-23T23:59:41.714Z",
   "dependsOn": [
     "task-3c83b5a1d6ab45f7be70bb58c17c5443"
   ],
   "tier": "standard",
   "effort": "xhigh",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-23T23:40:50.113Z",
   "metrics": {
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "firstClaimAt": "2026-10-23T23:51:24.656Z",
+    "executedStepCount": 4
   },
-  "planApprovedAt": "2026-10-23T23:40:50.142Z"
+  "planApprovedAt": "2026-10-23T23:40:50.142Z",
+  "contextFetchedBy": [
+    "worker-cq-f02"
+  ],
+  "workStartedAt": "2026-10-23T23:53:49.659Z",
+  "reviewStartedAt": "2026-10-23T23:59:41.712Z",
+  "verification": {
+    "command": "cd /tmp/moe-m01a-test._mchvbt5/repo/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npm test -- --maxWorkers=4",
+    "exitCode": 0,
+    "outputTail": "Test Files142 passed(142)\nTests2521 passed |9 skipped(2530)\nStart02:56:56; Duration43.41s; exit0. Typecheck:tsc --noEmit --incremental false exited0. Focused revision/submission/approval suites167 passed,1 F05 skipped. Held-out fixture30 passed,1 F05 skipped; assertions/helpers/fixtures byte-identical to accepted F01 except F02 skip removal. Logs:/tmp/cq-f02-red.log,/tmp/cq-f02-focused.log,/tmp/cq-f02-full-suite.log,/tmp/cq-f02-edge-probe.log. Three owned files byte-identical to tested copy; unchanged lockfile.",
+    "reportedAt": "2026-10-23T23:59:41.712Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/submitPlan.test.ts"
+  ],
+  "completionSummary": "Implemented canonical approval-only revision projection in exactly3 planned files, reusing effectiveStepDescription. Execution/audit/inactive history no longer revises approval; original/effective instructions, ordered identity/scope and DoD remain material; PLAN_SUBMITTED and counter defenses preserved. Held-out fixture unchanged except enabling F02 group; F05 remains skipped. TDD RED10 failures/20 passes/1 skip ->GREEN30 passes/1 skip. Only authorized legacy reopen/execution test changed2/3 ->1/1. Focused167 pass/1 skip; full142 files,2521 pass/9 skip; typecheck clean;6 public-store edge probes pass. CRLF/lockfile preserved; no Git/direct .moe writes, contract/context receipts or runner activation."
 }

@@ -23,6 +23,7 @@ import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { sanitizeString, sanitizeStringArray } from '../util/sanitize.js';
+import { effectiveStepDescription } from '../util/planAmendments.js';
 import { computeOrderBetween, sortByOrder } from '../util/order.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { nonHolderFinalizingRefusal } from '../util/claimGuards.js';
@@ -91,10 +92,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Structural comparison of two SANITIZED plan/DoD surfaces. Array order is
- * significant (a reordered plan is a different plan), object key insertion
- * order is not (re-serializing the same step is not a mutation). Compares
- * every retained key, so step execution fields and amendment entries count.
+ * Compare only the instructions and scope that approval authorizes. Sanitizing
+ * both sides preserves the existing input bounds; execution evidence and
+ * amendment audit/history fields never enter this projection.
+ */
+function approvalPlanSurface(plan: unknown) {
+  return sanitizeImplementationPlan(plan).map(step => ({
+    stepId: step.stepId,
+    originalDescription: step.description,
+    effectiveDescription: effectiveStepDescription(step),
+    affectedFiles: step.affectedFiles,
+    newFiles: step.newFiles ?? [],
+  }));
+}
+
+/**
+ * Structural comparison of canonical plan/DoD surfaces. Array order remains
+ * significant; object key insertion order is not a material change.
  */
 function sameSanitizedSurface(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -114,7 +128,7 @@ function sameSanitizedSurface(a: unknown, b: unknown): boolean {
 
 /**
  * The revision to stamp into this write. Bumps once for a plan submission and
- * once for any write that actually changes the sanitized steps/DoD — a write
+ * once for any write that changes the canonical approval surface/DoD — a write
  * that does both still advances by one. `undefined` for either field means the
  * caller did not supply it, so it cannot be a change.
  *
@@ -130,7 +144,7 @@ function derivePlanRevision(
   const current = decodeStoredPlanRevision(task);
   const planChanged =
     updates.implementationPlan !== undefined &&
-    !sameSanitizedSurface(updates.implementationPlan, sanitizeImplementationPlan(task.implementationPlan));
+    !sameSanitizedSurface(approvalPlanSurface(updates.implementationPlan), approvalPlanSurface(task.implementationPlan));
   const dodChanged =
     updates.definitionOfDone !== undefined &&
     !sameSanitizedSurface(updates.definitionOfDone, sanitizeStringArray(task.definitionOfDone, 50, 1000));

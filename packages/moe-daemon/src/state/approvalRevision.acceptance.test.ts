@@ -69,7 +69,7 @@ afterEach(() => {
 
 // Owner CQ-F02: enable after canonical approval-only revision comparison lands.
 // RED against pre-CQ production: all ten cases received revision 8, expected 7.
-describe.skip('CQ-F02: execution and audit metadata preserve the approved revision', () => {
+describe('CQ-F02: execution and audit metadata preserve the approved revision', () => {
   it.each<[string, Partial<ImplementationStep>]>([
     ['step status', { status: 'IN_PROGRESS' }],
     ['start timestamp', { startedAt: '2026-10-24T00:01:00Z' }],
