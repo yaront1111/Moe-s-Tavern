@@ -153,13 +153,28 @@ export interface AttributionSettings {
 export type ExecutionProfile = 'legacy' | 'observe' | 'verified-local';
 
 /**
- * Pure policy identity for an approved revision. This foundation only decodes
- * snapshots; lifecycle persistence and enforcement are separate rollout work.
+ * Configuration identity captured with the canonical Task.planRevision: which
+ * execution profile and (from v2) which deliveryPolicy were configured. It is
+ * NOT plan approval, a model receipt, runner trust, isolation readiness, a
+ * required-check definition, a delivery destination or verified completion.
+ * Decode it with readExecutionPolicySnapshot (delivery/executionProfile.ts);
+ * lifecycle persistence and enforcement are separate rollout work.
  */
-export interface ExecutionPolicySnapshot {
+export type ExecutionPolicySnapshot = ExecutionPolicySnapshotV1 | ExecutionPolicySnapshotV2;
+
+/** The original shape. It carries no deliveryPolicy identity, and nothing may fill one in from current settings. */
+export interface ExecutionPolicySnapshotV1 {
   version: 1;
   profile: ExecutionProfile;
   planRevision: number;
+}
+
+/** v1 plus the captured deliveryPolicy. Strict: a missing or null policy is malformed, never read as 'legacy'. */
+export interface ExecutionPolicySnapshotV2 {
+  version: 2;
+  profile: ExecutionProfile;
+  planRevision: number;
+  deliveryPolicy: DeliveryPolicy;
 }
 
 /**
@@ -732,6 +747,13 @@ export interface Task {
    * revision they rendered against this one; see docs/SCHEMA.md.
    */
   planRevision?: number;
+  /**
+   * Configuration identity (see ExecutionPolicySnapshot). Absent on every
+   * existing record; no daemon path writes or trusts it yet (capture and
+   * ownership guards are separate rollout work). Decode it with
+   * readExecutionPolicySnapshot and never read it as approval or readiness.
+   */
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;
@@ -1129,6 +1151,13 @@ export interface ExecutionAttempt {
    */
   presenceKind?: AttemptPresenceKind;
   presenceAt?: string;
+  /**
+   * Configuration identity (see ExecutionPolicySnapshot). Absent on every
+   * existing record; no daemon path writes or trusts it yet (capture and
+   * ownership guards are separate rollout work). Decode it with
+   * readExecutionPolicySnapshot and never read it as approval or readiness.
+   */
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
 }
 
 // =============================================================================

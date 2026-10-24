@@ -1,0 +1,173 @@
+{
+  "id": "task-6694591cea5d43908eb3399b44ca883a",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01b] Versioned policy snapshot identity",
+  "description": "Objective: Extend the landed CQ-M01a pure primitives with sufficient configuration provenance for durable task/attempt snapshots, without introducing another revision or approval authority.\n\nDeliverable: Define a strict v2 configuration snapshot with version, profile, canonical planRevision and captured deliveryPolicy, plus optional Task/ExecutionAttempt snapshot fields. Keep the existing v1 decoder compatible but never infer a missing strict deliveryPolicy from current settings or treat v1 as certified authorization. Reuse resolveDeliveryPolicy/DELIVERY_POLICIES; if rehomed, preserve policy.ts exports and its absent/null compatibility, avoiding a circular import or a second enum/decoder authority. Preserve live deliveryPolicy behavior for absent/legacy/observe workflows. Required-check definition/destination provenance remains later contract/check/delivery work, not an implicit claim made by v2.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/types/schema.ts; packages/moe-daemon/src/delivery/executionProfile.ts; packages/moe-daemon/src/delivery/executionProfile.test.ts; packages/moe-daemon/src/delivery/policy.ts; proposed new packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts.\n\nNOT in scope: Task/attempt persistence, lifecycle wiring, trusted approval identity, F03/F04/F05 behavior, check-definition certification, runner activation, and old held-out delivery-test edits. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "Focused tests accept exact valid v2 values and preserve captured deliveryPolicy and canonical safe-integer planRevision; malformed/null/unknown/extra fields fail closed.",
+    "Existing valid v1 decoding remains compatible, while a v1 strict snapshot cannot manufacture missing policy identity from current project settings.",
+    "Snapshot results do not alias caller inputs; tests mutate decoded copies without changing originals.",
+    "Existing deliveryPolicy exports and absent/null defaults remain behaviorally identical; absent/legacy/observe profiles do not silently freeze or relax existing live policy.",
+    "Pure types/helpers do not imply approval/readiness; verified-local remains unconditionally EXECUTION_PROFILE_NOT_READY and has no environment/caller bypass.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD red (load test-driven-development). Create packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts (LF; vitest; mirror executionProfile.test.ts style: table-driven it.each, toThrow('<field>') substrings, toStrictEqual / exact Object.keys lists, afterEach(() => vi.unstubAllEnvs())). Import `* as profile from './executionProfile.js'` and `* as policy from './policy.js'` (plus type-only StateManager/Task) so a missing export fails per test, not at load. Cases, each with exact-value assertions:\n1 v2 accept: every profile x every DeliveryPolicy at planRevision 0 and Number.MAX_SAFE_INTEGER returns a NEW object whose keys are exactly [version, profile, planRevision, deliveryPolicy]; an Object.create(null) exact v2 is accepted.\n2 v2 reject, never defaulting to 'legacy': deliveryPolicy missing, null, own key set to undefined, '', 'LOCAL-BRANCH', ' local-branch', 'toString', 'hasOwnProperty', 'constructor', 1, true, {}, [], non-enumerable; profile null / 'VERIFIED-LOCAL'; planRevision -1, 0.5, MAX_SAFE_INTEGER+1, NaN, Infinity, '3', null; extra ready/approved/certified/verified/requiredCheck/destination keys; versions 0, 3, '2', 1.5, null, true, absent; Object.create({...valid}) inherited fields; a class instance. Each throws a message containing 'executionPolicySnapshot'.\n3 v1 compat: exact v1 for every profile decodes to exactly [version, profile, planRevision] with no deliveryPolicy property; a version-1 object carrying deliveryPolicy is rejected.\n4 no manufactured identity: for EACH live settings.deliveryPolicy value, a v1 verified-local snapshot still decodes without deliveryPolicy, profile.readCapturedDeliveryPolicy(v1) and readCapturedDeliveryPolicy(undefined) are undefined, and profile.resolveTaskExecutionProfile({ executionProfile: 'legacy', deliveryPolicy }, v1) is still 'verified-local'; readCapturedDeliveryPolicy(v2) returns exactly the captured value and throws on malformed input.\n5 no aliasing: decoded v1/v2 and captured snapshots are new objects; mutating profile/planRevision/deliveryPolicy or adding keys leaves frozen AND unfrozen originals and frozen settings unchanged; re-decoding the original yields the original; two captures are distinct objects; symbol keys on an input are not copied.\n6 capture: policy.captureExecutionPolicySnapshot(undefined | null | {} | { deliveryPolicy: null }, 0) strictly equals { version: 2, profile: 'legacy', planRevision: 0, deliveryPolicy: 'legacy' }; every profile x policy is captured exactly from Object.freeze'd settings; the result survives JSON.parse(JSON.stringify()) + re-decode; settings deliveryPolicy 'strict' throws exactly '[INVALID_INPUT] Invalid deliveryPolicy: must be one of legacy, local-branch, remote-push, merged-pull-request, manual-artifact (got \"strict\")'; executionProfile null / 'VERIFIED' throws 'executionProfile'; planRevision -1 / 0.5 / NaN / MAX_SAFE_INTEGER+1 / undefined / '1' throws 'executionPolicySnapshot.planRevision'.\n7 live policy unchanged: policy.DELIVERY_POLICIES equals ['legacy','local-branch','remote-push','merged-pull-request','manual-artifact'] AND toBe(profile.DELIVERY_POLICIES); both DEFAULT_DELIVERY_POLICY are 'legacy'; resolveDeliveryPolicy(undefined / null / {} / { deliveryPolicy: null }) is 'legacy'; profile.isDeliveryPolicy accepts exactly the five values; evaluateDeliveryEvidence on a stub `{ project: { settings } } as unknown as StateManager` WITHOUT qualityGate (so no candidate/check store is read) and a REVIEW task with commits [] ignores non-strict snapshots: live 'local-branch' + v2 {observe or legacy profile, deliveryPolicy 'legacy' or 'manual-artifact'} -> { policy: 'local-branch', satisfied: false, missingEvidence: ['completion-commit'] }; live absent + v2 {observe, 'remote-push'} or a v1 observe snapshot -> { policy: 'legacy', satisfied: true, missingEvidence: [] }; resolveTaskExecutionProfile with v2 legacy/observe snapshots returns the live profile while a v2 verified-local snapshot floors every live profile. Do NOT assert evaluateDeliveryEvidence for verified-local snapshots (CQ-M01f owns that).\n8 readiness: capture under { executionProfile: 'verified-local' } records the profile, yet assertExecutionProfileReady(captured.profile) and assertExecutionProfileReady(resolveTaskExecutionProfile({}, v2VerifiedLocal)) still throw codeName EXECUTION_PROFILE_NOT_READY with MOE_EXECUTION_PROFILE_READY=1 and MOE_DISABLE_QUALITY_GATE=1 stubbed; assertExecutionProfileReady(<a snapshot object>) throws 'executionProfile'.\nNever write the dunder-proto property name (a global forbiddenPatterns entry): build prototype cases with Object.create. Run ONLY this file in the isolated Linux copy (recipe in planningNotes) and confirm the red comes from missing behavior (version 2 refused, new exports undefined), not syntax/import typos.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts"
+      ],
+      "note": "RED: new LF test file, 139 cases. Isolated Linux copy /tmp/moe-m01b-test.* (git archive HEAD + owned bytes + symlinked Linux node_modules), Linux-only PATH: 108 failed / 31 passed. Every failure is missing behavior: 'must contain only version, profile and planRevision' (v2 refused), field-specific messages absent, captureExecutionPolicySnapshot/readCapturedDeliveryPolicy/isDeliveryPolicy 'is not a function', profile.DELIVERY_POLICIES undefined. No syntax/import errors. Passing 31 = reject/live-policy regression guards. No dunder-proto literal; prototype cases via Object.create. Pre-existing ~1177 dirty peer paths untouched.",
+      "startedAt": "2026-10-24T12:47:13.269Z",
+      "completedAt": "2026-10-24T12:49:30.849Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Types + leaf decoder. (a) packages/moe-daemon/src/types/schema.ts is CRLF in this checkout: edit in place and keep CRLF. Replace the v1-only ExecutionPolicySnapshot with `ExecutionPolicySnapshotV1 { version: 1; profile: ExecutionProfile; planRevision: number }`, `ExecutionPolicySnapshotV2 { version: 2; profile: ExecutionProfile; planRevision: number; deliveryPolicy: DeliveryPolicy }` and `export type ExecutionPolicySnapshot = ExecutionPolicySnapshotV1 | ExecutionPolicySnapshotV2`. Reword the doc: a CONFIGURATION identity captured with the canonical Task.planRevision - NOT plan approval, model receipt, runner trust, isolation readiness, a required-check definition, a delivery destination or verified completion (drop the current 'for an approved revision' wording); v1 carries no deliveryPolicy identity and nothing may fill one in from current settings. Add `executionPolicySnapshot?: ExecutionPolicySnapshot` to Task (right after planRevision) and to ExecutionAttempt (after presenceAt), each documented: absent on every existing record; no daemon path writes or trusts it yet (capture and ownership guards are separate rollout work), so decode it with readExecutionPolicySnapshot and never read it as approval or readiness. (b) packages/moe-daemon/src/delivery/executionProfile.ts must stay a LEAF: runtime imports only ../util/errors.js, schema imports type-only; it must never import policy.ts or any state store. Move VERBATIM from policy.ts, with their comments: the type-keyed `POLICIES: Record<DeliveryPolicy, true>` record, `export const DELIVERY_POLICIES = Object.keys(POLICIES) as DeliveryPolicy[]` (same order, same unfrozen array - do not freeze) and `export const DEFAULT_DELIVERY_POLICY: DeliveryPolicy = 'legacy'`. Add `export function isDeliveryPolicy(value: unknown): value is DeliveryPolicy` = typeof string + Object.prototype.hasOwnProperty.call(POLICIES, value), exactly the membership test resolveDeliveryPolicy uses today (never DELIVERY_POLICIES.includes). Extend readExecutionPolicySnapshot: keep the undefined -> undefined return and the object/plain-prototype guards; read `version` once and pick the exact own-key set (1 -> version, profile, planRevision with the existing message; 2 -> those plus deliveryPolicy, message naming all four); any other version -> invalidInput('executionPolicySnapshot.version', 'must be 1 or 2'); decode profile with decodeProfile and planRevision with the unchanged non-negative safe-integer rule (same domain as taskStore.decodeStoredPlanRevision, no coercion); for v2 require isDeliveryPolicy(deliveryPolicy) else invalidInput('executionPolicySnapshot.deliveryPolicy', `must be one of: ${DELIVERY_POLICIES.join(', ')}`) - snapshots get NO absent/null -> legacy default. Error handling: every malformed input throws INVALID_INPUT before anything is returned (fail closed, never coerced). Return a fresh literal holding only that version's fields. Add `export function readCapturedDeliveryPolicy(raw: unknown): DeliveryPolicy | undefined` (decode; v2 -> its deliveryPolicy; absent or v1 -> undefined). It deliberately takes no settings; its doc says it is identity only, not the effective policy (absent/legacy/observe tasks keep the live settings.deliveryPolicy). Leave resolveExecutionProfile / resolveTaskExecutionProfile / assertExecutionProfileReady logic unchanged (the union flows through); only reword comments that call a snapshot 'verified' or 'approved'. Define no ordering or ranking between delivery policies (no generic max()).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts"
+      ],
+      "note": "schema.ts (CRLF kept, 1517/1517 CRLF): ExecutionPolicySnapshot = V1 | V2 union, configuration-identity doc (not approval/receipt/trust/readiness/check/destination/completion); optional executionPolicySnapshot on Task (after planRevision) and ExecutionAttempt (after presenceAt), documented unwritten/untrusted. executionProfile.ts (LF) stays a leaf (runtime import only util/errors): POLICIES/DELIVERY_POLICIES/DEFAULT_DELIVERY_POLICY moved here verbatim (policy.ts duplicate removed in step-3), isDeliveryPolicy (own-key membership), decoder reads version once -> exact key set per version; v2 requires isDeliveryPolicy with no default; readCapturedDeliveryPolicy (no settings). Focused: 149 pass / 31 fail (all remaining = capture + shared vocabulary, owned by step-3). Test file: only the NaN title placeholder %j->%s.",
+      "startedAt": "2026-10-24T12:49:31.736Z",
+      "completedAt": "2026-10-24T12:50:52.598Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "policy.ts re-export + capture, then green. In packages/moe-daemon/src/delivery/policy.ts (LF): import DEFAULT_DELIVERY_POLICY, DELIVERY_POLICIES, isDeliveryPolicy, readExecutionPolicySnapshot and resolveExecutionProfile from './executionProfile.js'; re-export `export { DEFAULT_DELIVERY_POLICY, DELIVERY_POLICIES }` so every existing importer and test keeps working; delete the moved declarations. Keep resolveDeliveryPolicy HERE with identical behavior: absent/null -> DEFAULT_DELIVERY_POLICY; isDeliveryPolicy(raw) -> raw; otherwise the SAME invalidInput('deliveryPolicy', `must be one of ${DELIVERY_POLICIES.join(', ')} (got ${renderGot(raw)})`) - that text is asserted verbatim in tools/qaApprove.test.ts and state/dependencyUnblock.test.ts, and renderGot stays imported from candidateStore in this file (never copied into the leaf). Add `export function captureExecutionPolicySnapshot(settings: { executionProfile?: unknown; deliveryPolicy?: unknown } | null | undefined, planRevision: number): ExecutionPolicySnapshotV2` that builds { version: 2, profile: resolveExecutionProfile(settings), planRevision, deliveryPolicy: resolveDeliveryPolicy(settings) } and returns it validated through readExecutionPolicySnapshot (the single decoder; narrow with `as ExecutionPolicySnapshotV2`, the literal is version 2). Error handling: a malformed profile, policy or revision propagates the existing INVALID_INPUT unchanged; nothing is caught or defaulted. It is pure: no state access, no writes, no readiness assertion (admission belongs to later rollout tasks), never reads an existing snapshot, never derives/increments/defaults planRevision (the caller passes the canonical Task.planRevision). Its doc says it is configuration provenance only. Update the module header: resolveDeliveryPolicy remains the single settings.deliveryPolicy authority; the vocabulary lives in executionProfile.ts so the snapshot decoder can share it without importing the evidence stores, and executionProfile.ts must never import this module. Leave evaluateDeliveryEvidence, requiredCheckCommand, completionCommitsForReview, attestations and evidence tokens untouched. Iterate with focused runs only, in the isolated Linux copy: `npx vitest run src/delivery/executionPolicySnapshot.test.ts src/delivery/executionProfile.test.ts src/tools/qaApprove.test.ts src/state/dependencyUnblock.test.ts src/state/validators.test.ts`, all green. executionProfile.test.ts and acceptance.test.ts stay byte-unchanged: M01a's contract must pass as-is (its `{ ...strictSnapshot(), version: 2 }` case stays malformed because it lacks deliveryPolicy).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts"
+      ],
+      "note": "policy.ts (LF): imports vocabulary + decoder from the leaf, re-exports DEFAULT_DELIVERY_POLICY/DELIVERY_POLICIES (same array object), moved declarations deleted; resolveDeliveryPolicy identical (isDeliveryPolicy membership, same message, renderGot still imported from candidateStore); new pure captureExecutionPolicySnapshot validated through readExecutionPolicySnapshot; header documents layering. GREEN focused (isolated Linux copy, Linux-only PATH): 5 files, 401/401 passed (new file 139, executionProfile/qaApprove/dependencyUnblock/validators unchanged). tsc --noEmit --incremental false exit 0. Mutants killed in copy only: in-operator membership (4 fail), v1 gains legacy (10), null policy allowed (3), frozen list (1), captured-defaults-legacy (6), capture-skips-decoder (6); deliveryPolicy??'legacy' after validation is an equivalent mutant. executionProfile.test.ts and acceptance.test.ts byte-unchanged. Log /tmp/cq-m01b-focused.log.",
+      "startedAt": "2026-10-24T12:50:53.388Z",
+      "completedAt": "2026-10-24T12:51:48.579Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "The one verification gate (no earlier full runs). Build a FRESH synchronized isolated copy outside the shared checkout (recipe in planningNotes): git archive HEAD of packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json into a new mktemp dir, overlay the working-tree bytes of the four owned files, and symlink packages/moe-daemon/node_modules to the Linux-native install named by /tmp/moe-linux-test-root.latest (its lockfile is JSON-identical to HEAD) or install natively in the copy. Never touch the original Windows node_modules or any package-lock.json; record sha256 of the shared-tree lockfile before and after. With Linux-only PATH run exactly: `cd <copy>/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npm test -- --maxWorkers=4` (fresh exit 0 required; the 35cf53c baseline was 2521 passed / 9 skipped, so report the actual file/pass/skip counts including the new file), then `npx tsc --noEmit --incremental false` with the same PATH (vitest does not typecheck, and tsconfig excludes tests). Confirm the four tested files are byte-identical (sha256) to the working tree. Keep the command and output tail for complete_task verification.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh copy /tmp/moe-m01b-final.CChQAY (git archive HEAD 35cf53c + 4 owned working-tree files, sha256-identical; node_modules symlinked to Linux-native install whose lock is JSON-identical to HEAD). Linux-only PATH: `npm test -- --maxWorkers=4` exit 0 -> 143 files passed, 2660 passed / 9 skipped (baseline 2521/9 + 139 new). `npx tsc --noEmit --incremental false` exit 0. Shared-tree package-lock.json sha256 unchanged (c49cf69d...). Windows node_modules untouched. Logs /tmp/cq-m01b-full.log, /tmp/cq-m01b-typecheck.log.",
+      "startedAt": "2026-10-24T12:51:49.452Z",
+      "completedAt": "2026-10-24T12:53:06.825Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Exactly one adversarial self-review of this four-file diff (load adversarial-self-review). Check: (a) layering: the import lines of delivery/executionProfile.ts show only ../util/errors.js plus type-only schema imports, so a later attemptStore -> executionProfile import stays acyclic, and policy.ts is the only side importing the other; (b) one authority: POLICIES exists only in executionProfile.ts, no second policy list/enum/decoder, policy.DELIVERY_POLICIES === executionProfile.DELIVERY_POLICIES; (c) compat: every pre-existing policy.ts export still exists with identical values and messages, and the executionProfile, validators, qaApprove, dependencyUnblock and acceptance tests pass unchanged; (d) fail-closed error handling: null / missing / undefined / inherited / non-enumerable / extra fields, wrong versions, prototype tricks and unsafe revisions all throw, no snapshot defaults to 'legacy', and v1 never gains a deliveryPolicy; (e) no aliasing of decode or capture results or of settings; (f) no approval, readiness, check-definition or destination claim in names, comments or fields, and verified-local is still EXECUTION_PROFILE_NOT_READY with env flags set; (g) nothing reads Task/ExecutionAttempt.executionPolicySnapshot yet and no delivery-policy ranking exists; (h) CRLF preserved in schema.ts and LF elsewhere, no dunder-proto literal (forbidden pattern), no edits outside the four files, no .moe or Git writes, and the 1164 peer/pre-existing dirty paths untouched. Fix findings together with tests. If any byte changed after step 4, rerun the step-4 commands fresh and use that output for complete_task. Summary: owned files, new test count, focused and full counts, typecheck result.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionProfile.ts",
+        "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ],
+      "note": "Adversarial review. FINDING (fixed with tests): key check counted Object.keys but tested hasOwnProperty, so a NON-enumerable required key plus an enumerable extra key (e.g. ready) passed with the extra silently dropped (pre-existing for v1 too). Now compares the enumerable key set itself; 2 new cases (hidden deliveryPolicy / planRevision + ready) red -> green. Rest clean: (a) leaf imports = type-only schema + util/errors (errors.ts has no imports); only policy.ts imports the leaf. (b) POLICIES only in executionProfile.ts; policy.DELIVERY_POLICIES === profile.DELIVERY_POLICIES, unfrozen, same order. (c) resolveDeliveryPolicy message/behaviour identical; executionProfile/acceptance tests byte-unchanged and passing. (d) no snapshot default to legacy; v1 never gains deliveryPolicy; version read once. (e) fresh literals; settings untouched. (f) no approval/readiness/check/destination claim; verified-local still EXECUTION_PROFILE_NOT_READY with env flags. (g) nothing reads Task/ExecutionAttempt.executionPolicySnapshot; no ranking. (h) schema.ts CRLF 1517/1517, delivery files LF, no dunder-proto/eval/innerHTML, only 4 owned files, no .moe/Git writes, peer dirty paths untouched. Theoretical only: a Proxy/getter input is read once per field and copied as validated primitives. Bytes changed after step 4 -> fresh copy /tmp/moe-m01b-final2.NA8ZSP: npm test exit 0, 143 files, 2662 passed / 9 skipped; tsc exit 0; focused 5 files 403/403; lockfile sha unchanged; copy sha256 == tree.",
+      "startedAt": "2026-10-24T12:53:07.771Z",
+      "completedAt": "2026-10-24T12:55:29.885Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-7bf45815551b4ac49f1c7be392ef4b9e",
+    "task-349319a3b8d24aafab39a562ac2d2fb9"
+  ],
+  "priority": "HIGH",
+  "order": 6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:35.680Z",
+  "updatedAt": "2026-10-24T12:55:58.283Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T12:25:22.985Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-c1d9de02"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T12:44:10.905Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Have executionProfile.ts import resolveDeliveryPolicy/DELIVERY_POLICIES from policy.ts: rejected. It makes the pure leaf depend on the evidence module (pino logger, candidate/check/attempt stores), and it creates the cycle attemptStore -> executionProfile -> policy -> candidateStore -> attemptStore as soon as CQ-M01d imports the leaf from attemptStore.ts. (2) Move resolveDeliveryPolicy wholesale into the leaf: rejected. Its error text is asserted verbatim (qaApprove.test.ts ~1198, dependencyUnblock.test.ts ~741) and needs renderGot from candidateStore, whose doc says 'import it, never copy it'. That drags the store graph back into the leaf. (3) A new leaf file: rejected by the five-file rail. (4) A second policy list or enum in the leaf: forbidden (a second authority). (5) CHOSEN: rehome only the type-keyed POLICIES record, DELIVERY_POLICIES, DEFAULT_DELIVERY_POLICY and an own-property isDeliveryPolicy predicate into executionProfile.ts. policy.ts imports and re-exports them unchanged and keeps resolveDeliveryPolicy (identical behavior and message). It also gains captureExecutionPolicySnapshot, which composes the two existing settings authorities and validates through the leaf decoder. (6) Deliberately NOT here: an effective task-policy selector (CQ-M01f), floor/merge on replan and persistence/stripping (M01c), attempt capture (M01d) and admission (M01e). executionProfile.test.ts stays byte-unchanged so M01a's contract proves compatibility; all new tests go in the new file. readCapturedDeliveryPolicy exists so the 'no manufactured identity' rule has one explicit, settings-free reader for M01f to consume.",
+    "codebaseInsights": "- readExecutionPolicySnapshot's only caller is resolveTaskExecutionProfile; validators.ts uses EXECUTION_PROFILES, resolveExecutionProfile and assertExecutionProfileReady. No production code reads or writes a task/attempt snapshot yet, and no client or doc mentions one: docs/SCHEMA.md and client parity belong to the original CQ-M01.\n- Import graph today: the runtime closure of policy.ts = util/errors, util/logger, state/candidateStore, util/ids, util/sanitize, state/attemptStore, state/checkRunStore, and candidateStore imports attemptStore. taskStore already reaches policy.ts through dependencyUnblock.ts, and claimNextTask.ts imports policy.ts directly, so M01c and M01d can call captureExecutionPolicySnapshot from those files. attemptStore.ts may import only the leaf.\n- The planRevision domain is taskStore.decodeStoredPlanRevision's: a non-negative safe integer, no coercion. A snapshot reuses the caller's canonical value and never derives one.\n- MoeError text is '[INVALID_INPUT] Invalid <field>: <reason>'. The existing snapshot tests match on the 'executionPolicySnapshot' substring.\n- evaluateDeliveryEvidence on a non-DONE task reads only state.project.settings when qualityGate is unset (requiredCheckCommand returns null before any store lookup), so a `{ project: { settings } }` stub is enough for the live-policy tests.\n- vitest does not typecheck and tsconfig excludes *.test.ts, so run `npx tsc --noEmit --incremental false` for source types.\n- Isolated Linux copy recipe (used by the M01a/F02 workers): D=$(mktemp -d /tmp/moe-m01b-test.XXXXXX); git -C /mnt/d/projexts/moes archive HEAD packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar -x -C \"$D\"; copy the owned files' working-tree bytes into $D; ln -s \"$(cat /tmp/moe-linux-test-root.latest)/repo/packages/moe-daemon/node_modules\" \"$D/packages/moe-daemon/node_modules\". Run with PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin, because inherited Windows PATH entries cause EACCES in the accounts CLI tests. Re-sync the owned files before every focused run, and never run vitest on the shared tree's Windows node_modules.",
+    "risks": "- A leaf -> policy.ts import (even type-only is fine, a runtime one is not) silently reintroduces the future attemptStore cycle. Check the import lines.\n- Freezing DELIVERY_POLICIES or changing its order, type or message text breaks 'behaviorally identical'. Membership must use POLICIES via isDeliveryPolicy, never the exported mutable array.\n- Snapshots must NOT inherit resolveDeliveryPolicy's absent/null -> legacy compatibility: a v2 deliveryPolicy that is missing, null or undefined throws. A v1-labelled object that carries deliveryPolicy is malformed.\n- Declaring Task/ExecutionAttempt.executionPolicySnapshot does not make it daemon-owned. WS UPDATE_TASK uses a denylist, so a plugin could already write unknown keys; stripping belongs to CQ-M01c. No code in this task may read the field as authority.\n- capture must stay pure: no assertExecutionProfileReady (hand-edited verified-local settings must still capture so later admission can refuse visibly), no state, no writes.\n- Do not test or alter evaluateDeliveryEvidence for verified-local snapshots (CQ-M01f changes it). Only lock in that non-strict snapshots neither freeze nor relax the live policy.\n- The epic forbids ranking delivery policies with a generic max(); v2 defines no ordering.\n- schema.ts is CRLF in this checkout, delivery/*.ts are LF. The shared tree has about 1164 peer/pre-existing dirty paths, including packages/moe-daemon/package-lock.json: touch only the four owned files and report them in modifiedFiles.\n- Global forbidden pattern: the dunder-proto property name must not appear anywhere, even in tests. Use Object.create for prototype cases.\n- Token rails: iterate with focused vitest runs, run the full suite once at step 4 (and again only if review changes bytes), and avoid broad rereads and subagent fan-out.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.test.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/qaApprove.test.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T12:44:10.993Z",
+  "workStartedAt": "2026-10-24T12:47:13.269Z",
+  "reviewStartedAt": "2026-10-24T12:55:58.280Z",
+  "verification": {
+    "command": "cd /tmp/moe-m01b-final2.NA8ZSP/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npm test -- --maxWorkers=4",
+    "exitCode": 0,
+    "outputTail": " Test Files  143 passed (143)\n      Tests  2662 passed | 9 skipped (2671)\n   Start at  15:54:19\n   Duration  56.97s (tests 90%, import 7%, transform 2%)\n\n(then, same PATH: npx tsc --noEmit --incremental false -> exit 0). Copy = git archive HEAD 35cf53c + the 4 owned working-tree files (sha256-identical) + symlinked Linux-native node_modules (lock JSON-identical to HEAD). Shared-tree package-lock.json sha256 unchanged. Logs: /tmp/cq-m01b-full.log, /tmp/cq-m01b-typecheck.log.",
+    "reportedAt": "2026-10-24T12:55:58.280Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/executionPolicySnapshot.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/delivery/executionProfile.ts",
+    "packages/moe-daemon/src/delivery/policy.ts"
+  ],
+  "completionSummary": "CQ-M01b in exactly 4 planned files. schema.ts (CRLF kept): ExecutionPolicySnapshot = V1|V2 (V2 adds captured deliveryPolicy), documented as configuration identity only (not approval/receipt/runner trust/readiness/check definition/destination/completion); optional executionPolicySnapshot on Task and ExecutionAttempt, unwritten and untrusted by any daemon path. executionProfile.ts stays a leaf (runtime import only util/errors): it now owns POLICIES/DELIVERY_POLICIES/DEFAULT_DELIVERY_POLICY (moved verbatim) and isDeliveryPolicy. The decoder reads version once and checks the exact enumerable key set per version. v2 deliveryPolicy is strict with no legacy default, and v1 never gains one. New readCapturedDeliveryPolicy takes no settings. policy.ts re-exports the same array, and resolveDeliveryPolicy behaves and words its errors exactly as before. New pure captureExecutionPolicySnapshot is validated through the single decoder and asserts no readiness. verified-local stays EXECUTION_PROFILE_NOT_READY under env flags. TDD: red 108 fail/31 pass, then green. The review found that a hidden (non-enumerable) required key plus an enumerable extra key bypassed the key check; fixed with 2 red-then-green tests. Six meaningful mutants killed. Focused (5 files): 403/403 pass. Full: 143 files, 2662 passed/9 skipped (baseline 2521/9 + 141 new). tsc clean. executionProfile.test.ts and acceptance.test.ts are byte-unchanged. No .moe/Git writes; peer dirty paths untouched. This does not certify activation, approval or isolation."
+}

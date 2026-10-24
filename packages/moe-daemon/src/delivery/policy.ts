@@ -25,28 +25,28 @@
 // default would report unverified work as delivered. Recorded, not re-run: the
 // daemon never runs the gate or checks records against git, so a record that
 // misreports still counts.
+//
+// resolveDeliveryPolicy stays the single settings.deliveryPolicy authority. The
+// vocabulary (DELIVERY_POLICIES, DEFAULT_DELIVERY_POLICY, isDeliveryPolicy) lives
+// in executionProfile.ts so the snapshot decoder shares it without importing the
+// evidence stores; it is re-exported here, and executionProfile.ts must never
+// import this module.
 
 import type { StateManager } from '../state/StateManager.js';
-import type { DeliveryPolicy, Task, TaskCommit, TaskDeliveryEvidence } from '../types/schema.js';
+import type { DeliveryPolicy, ExecutionPolicySnapshotV2, Task, TaskCommit, TaskDeliveryEvidence } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { listCandidatesForTask, renderGot } from '../state/candidateStore.js';
 import { listCheckRunsForCandidate } from '../state/checkRunStore.js';
+import {
+  DEFAULT_DELIVERY_POLICY,
+  DELIVERY_POLICIES,
+  isDeliveryPolicy,
+  readExecutionPolicySnapshot,
+  resolveExecutionProfile,
+} from './executionProfile.js';
 
-/** Keyed by the type, so the recognised list cannot drift from DeliveryPolicy without a compile error. */
-const POLICIES: Record<DeliveryPolicy, true> = {
-  legacy: true,
-  'local-branch': true,
-  'remote-push': true,
-  'merged-pull-request': true,
-  'manual-artifact': true,
-};
-
-/** Every recognised deliveryPolicy, in documentation order. */
-export const DELIVERY_POLICIES = Object.keys(POLICIES) as DeliveryPolicy[];
-
-/** What an absent or null setting means: the soft NO-COMPLETION-COMMIT warning, approval always lands. */
-export const DEFAULT_DELIVERY_POLICY: DeliveryPolicy = 'legacy';
+export { DEFAULT_DELIVERY_POLICY, DELIVERY_POLICIES };
 
 export type StrictDeliveryPolicy = Exclude<DeliveryPolicy, 'legacy'>;
 
@@ -97,8 +97,22 @@ export interface DeliveryEvidenceResult {
 export function resolveDeliveryPolicy(settings: { deliveryPolicy?: unknown } | null | undefined): DeliveryPolicy {
   const raw = settings?.deliveryPolicy;
   if (raw === undefined || raw === null) return DEFAULT_DELIVERY_POLICY;
-  if (typeof raw === 'string' && Object.prototype.hasOwnProperty.call(POLICIES, raw)) return raw as DeliveryPolicy;
+  if (isDeliveryPolicy(raw)) return raw;
   throw invalidInput('deliveryPolicy', `must be one of ${DELIVERY_POLICIES.join(', ')} (got ${renderGot(raw)})`);
+}
+
+/**
+ * Configuration provenance only: the live profile and deliveryPolicy, captured
+ * with the caller's canonical Task.planRevision (never derived or defaulted here).
+ * Not approval, readiness or delivery evidence: pure, no state, no readiness
+ * assertion. Malformed settings or revision throw the existing INVALID_INPUT.
+ */
+export function captureExecutionPolicySnapshot(
+  settings: { executionProfile?: unknown; deliveryPolicy?: unknown } | null | undefined,
+  planRevision: number,
+): ExecutionPolicySnapshotV2 {
+  const captured = { version: 2, profile: resolveExecutionProfile(settings), planRevision, deliveryPolicy: resolveDeliveryPolicy(settings) };
+  return readExecutionPolicySnapshot(captured) as ExecutionPolicySnapshotV2;
 }
 
 /**
