@@ -36,9 +36,21 @@
 // failure is a record that landed on disk with nothing following it, which is why
 // the attempt id is caller-suppliable — re-opening with the same id returns the
 // persisted record instead of writing a second one.
+//
+// An attempt may carry a configuration identity (executionPolicySnapshot),
+// captured once at open, never rewritten, and returned only as detached copies.
 
 import type { StateManager } from './StateManager.js';
-import type { AttemptPresenceKind, ExecutionAttempt, ExecutionAttemptPhase, Task } from '../types/schema.js';
+import type {
+  AttemptPresenceKind,
+  ExecutionAttempt,
+  ExecutionAttemptPhase,
+  ExecutionPolicySnapshot,
+  Task,
+} from '../types/schema.js';
+// The leaf, and the only policy import allowed here: delivery/policy.ts and
+// state/taskStore.ts both import this store, so either would close a cycle.
+import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
@@ -92,15 +104,33 @@ function decodeStoredGeneration(attempt: ExecutionAttempt): number {
   return stored;
 }
 
+/**
+ * What every exported function hands out: the stored snapshot object never
+ * leaves the store, so no caller can rewrite an attempt's identity through an
+ * alias. A copy of the raw value, deliberately not validated, so one hand-edited
+ * record can never make a read throw. A record without a snapshot is returned
+ * as it always was.
+ */
+function detached(attempt: ExecutionAttempt): ExecutionAttempt {
+  if (attempt.executionPolicySnapshot === undefined) return attempt;
+  return { ...attempt, executionPolicySnapshot: structuredClone(attempt.executionPolicySnapshot) };
+}
+
 export function getAttempt(state: StateManager, attemptId: string): ExecutionAttempt | null {
-  return state.attempts.get(attemptId) ?? null;
+  const attempt = state.attempts.get(attemptId);
+  return attempt ? detached(attempt) : null;
+}
+
+/** The stored records in generation order, for this store's own bookkeeping only. */
+function storedAttempts(state: StateManager, taskId?: string): ExecutionAttempt[] {
+  const all = Array.from(state.attempts.values());
+  const scoped = taskId === undefined ? all : all.filter((a) => a.taskId === taskId);
+  return scoped.sort((a, b) => a.generation - b.generation);
 }
 
 /** Attempts in generation order; every attempt when `taskId` is omitted. */
 export function listAttempts(state: StateManager, taskId?: string): ExecutionAttempt[] {
-  const all = Array.from(state.attempts.values());
-  const scoped = taskId === undefined ? all : all.filter((a) => a.taskId === taskId);
-  return scoped.sort((a, b) => a.generation - b.generation);
+  return storedAttempts(state, taskId).map(detached);
 }
 
 /**
@@ -109,14 +139,14 @@ export function listAttempts(state: StateManager, taskId?: string): ExecutionAtt
  * live one and the caller is told about that one.
  */
 export function currentAttempt(state: StateManager, taskId: string): ExecutionAttempt | null {
-  const open = listAttempts(state, taskId).filter((a) => OPEN_PHASES.has(a.phase));
-  return open.length === 0 ? null : open[open.length - 1];
+  const open = storedAttempts(state, taskId).filter((a) => OPEN_PHASES.has(a.phase));
+  return open.length === 0 ? null : detached(open[open.length - 1]);
 }
 
 /** Next generation for a task: max over every prior attempt + 1, never a count. */
 function nextGeneration(state: StateManager, taskId: string): number {
   let max = 0;
-  for (const attempt of listAttempts(state, taskId)) {
+  for (const attempt of storedAttempts(state, taskId)) {
     const generation = decodeStoredGeneration(attempt);
     if (generation > max) max = generation;
   }
@@ -143,6 +173,13 @@ export interface OpenAttemptParams {
   /** Advisory reattachment hints — never evidence that a process is alive. */
   processStartedAt?: string;
   host?: string;
+  /**
+   * Internal: the configuration identity the claim path derived from daemon task
+   * and project state (tools/claimNextTask.ts deriveAttemptPolicySnapshot). Never
+   * an MCP argument, and never approval, readiness or runner trust. Omit it and
+   * the record is the legacy shape, with no key at all.
+   */
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
 }
 
 /**
@@ -193,6 +230,10 @@ function assertNoOpenAttempt(state: StateManager, taskId: string): void {
  * Deliberately does NOT require the task to exist. Whether an attempt may
  * outlive its task is policy for the work that wires attempts into
  * claim/complete/release; this store only records what it was told.
+ *
+ * A supplied executionPolicySnapshot is decoded strictly into a fresh copy, so
+ * a malformed one throws INVALID_INPUT before anything is allocated or written
+ * and the caller's object is never stored. A repair never adopts one.
  */
 export async function openAttempt(
   state: StateManager,
@@ -205,8 +246,9 @@ export async function openAttempt(
   const id = params.id === undefined ? generateId('attempt') : requireNonBlank('id', params.id);
 
   const repaired = repairExisting(state, id, taskId);
-  if (repaired) return repaired;
+  if (repaired) return detached(repaired);
   assertNoOpenAttempt(state, taskId);
+  const snapshot = readExecutionPolicySnapshot(params.executionPolicySnapshot);
 
   // Allocate and persist. writeEntity validates the id against path traversal,
   // creates .moe/attempts itself, and writes atomically.
@@ -223,10 +265,11 @@ export async function openAttempt(
     lastPhaseAt: now,
     ...(params.processStartedAt !== undefined ? { processStartedAt: params.processStartedAt } : {}),
     ...(params.host !== undefined ? { host: params.host } : {}),
+    ...(snapshot !== undefined ? { executionPolicySnapshot: snapshot } : {}),
   };
   await state.writeEntity('attempts', attempt.id, attempt);
   state.attempts.set(attempt.id, attempt);
-  return attempt;
+  return detached(attempt);
 }
 
 /**
@@ -257,7 +300,7 @@ export async function setAttemptPhase(
   // Re-asserting the phase an attempt already holds is a no-op, not a write:
   // lastPhaseAt records when the phase CHANGED, so a repeated call (a retried
   // close from an exit trap) must not churn it.
-  if (existing.phase === phase) return existing;
+  if (existing.phase === phase) return detached(existing);
   if (existing.phase === 'closed') {
     throw conflict(
       `Attempt ${id} is closed; its phase cannot change to ${phase}`,
@@ -269,7 +312,7 @@ export async function setAttemptPhase(
   const updated: ExecutionAttempt = { ...existing, phase, lastPhaseAt: new Date().toISOString() };
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
-  return updated;
+  return detached(updated);
 }
 
 /**
@@ -323,7 +366,7 @@ export async function recordAttemptPresence(
   };
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
-  return updated;
+  return detached(updated);
 }
 
 /**
@@ -378,7 +421,7 @@ export async function recordAttemptPresence(
  */
 export async function reconcileRunningAttempts(state: StateManager): Promise<ExecutionAttempt[]> {
   const reconciled: ExecutionAttempt[] = [];
-  for (const attempt of listAttempts(state)) {
+  for (const attempt of storedAttempts(state)) {
     if (attempt.phase === 'finalizing') {
       if (!state.getTask(attempt.taskId)) await closeOrphanedAttempt(state, attempt, null);
       continue;
@@ -475,7 +518,7 @@ export async function closeOpenAttempts(
   taskId: string
 ): Promise<ExecutionAttempt[]> {
   const closed: ExecutionAttempt[] = [];
-  for (const attempt of listAttempts(state, taskId)) {
+  for (const attempt of storedAttempts(state, taskId)) {
     if (!OPEN_PHASES.has(attempt.phase)) continue;
     closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
   }
@@ -521,7 +564,7 @@ export async function closeHandedBackAttempts(
   taskId: string
 ): Promise<ExecutionAttempt[]> {
   const closed: ExecutionAttempt[] = [];
-  for (const attempt of listAttempts(state, taskId)) {
+  for (const attempt of storedAttempts(state, taskId)) {
     if (!HANDED_BACK_PHASES.has(attempt.phase)) continue;
     closed.push(await setAttemptPhase(state, attempt.id, 'closed'));
   }

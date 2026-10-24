@@ -1415,7 +1415,8 @@ describe('moe.claim_next_task — runner process identity', () => {
     const text = attemptText(result.attemptId);
     const record = JSON.parse(text) as Record<string, unknown>;
     // Today's record, key for key and in today's order. Comparing bytes rather
-    // than checking for `undefined` is what catches a key written as null.
+    // than checking for `undefined` is what catches a key written as null. The
+    // last key is the configuration identity every new claim derives (CQ-M01d).
     expect(text).toBe(JSON.stringify({
       id: result.attemptId,
       taskId: 'task-1',
@@ -1426,6 +1427,7 @@ describe('moe.claim_next_task — runner process identity', () => {
       phase: 'running',
       startedAt: record.startedAt,
       lastPhaseAt: record.lastPhaseAt,
+      executionPolicySnapshot: { version: 2, profile: 'legacy', planRevision: 0, deliveryPolicy: 'legacy' },
     }, null, 2));
   });
 

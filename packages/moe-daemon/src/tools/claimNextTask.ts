@@ -1,8 +1,9 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { ExecutionAttempt, Task, TaskPriority, WorkerType } from '../types/schema.js';
+import type { ExecutionAttempt, ExecutionPolicySnapshot, Task, TaskPriority, WorkerType } from '../types/schema.js';
 import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
+import { planSubmissionSnapshot } from '../state/taskStore.js';
 import { logger } from '../util/logger.js';
 import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/claimableStatuses.js';
 import {
@@ -88,6 +89,24 @@ function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessI
 }
 
 /**
+ * The configuration identity a NEW attempt records, from daemon state alone:
+ * the task's stored snapshot and the live project settings, at the task's
+ * planRevision (absent reads as 0). A stored verified-local task snapshot is a
+ * floor a project rollback cannot lower: taskStore.planSubmissionSnapshot is the
+ * one floor rule tasks and attempts share. A successor records a FRESH identity,
+ * so a predecessor attempt's strict identity that came only from live settings
+ * is history, not a task requirement. Never read from claim arguments, and
+ * never approval or readiness.
+ *
+ * Error handling: a malformed planRevision (null included: no `??` coercion),
+ * task snapshot or setting throws INVALID_INPUT.
+ */
+export function deriveAttemptPolicySnapshot(state: StateManager, task: Task): ExecutionPolicySnapshot {
+  const planRevision = task.planRevision === undefined ? 0 : task.planRevision;
+  return planSubmissionSnapshot(state.project?.settings, task.executionPolicySnapshot, planRevision);
+}
+
+/**
  * Open the attempt for a claim whose assignment write has ALREADY succeeded,
  * or adopt the one still open on a genuine resume. Three arms:
  *  1. Nothing open: open a fresh attempt (generation = max over prior + 1).
@@ -109,6 +128,11 @@ function readProcessIdentity(processStartedAt: unknown, host: unknown): ProcessI
  * assignment write some other way. The caller's handBackUnrecordedClaim then
  * undoes that write, and its seat clear closes only running/reconciling.
  * Any other failure propagates; the caller treats it as fatal to the claim.
+ *
+ * The resume is adopted BEFORE anything is derived, so it keeps its original
+ * snapshot (or none, for a historical attempt) even when the task or settings
+ * are malformed now. Every other arm opens with deriveAttemptPolicySnapshot's
+ * identity; a derivation failure propagates like any other.
  */
 async function openClaimAttempt(
   state: StateManager,
@@ -117,6 +141,10 @@ async function openClaimAttempt(
   resumingOwnSeat: boolean,
   identity: ProcessIdentity | null
 ): Promise<ExecutionAttempt> {
+  const resumed = currentAttempt(state, taskId);
+  if (resumed && resumingOwnSeat && resumed.workerId === workerId) return resumed;
+  const task = state.getTask(taskId);
+  if (!task) throw notFound('Task', taskId);
   const params = {
     taskId,
     workerId,
@@ -128,6 +156,8 @@ async function openClaimAttempt(
     // moe.reattach_attempt can match it after a restart. No identity, no keys:
     // the record is then byte for byte what it was before identities existed.
     ...identity,
+    // Derived from daemon state only; claim arguments never reach openAttempt.
+    executionPolicySnapshot: deriveAttemptPolicySnapshot(state, task),
   };
   try {
     return await openAttempt(state, params);

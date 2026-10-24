@@ -3,15 +3,19 @@ import fs from 'fs';
 import path from 'path';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import {
+  closeHandedBackAttempts,
+  closeOpenAttempts,
   currentAttempt,
   getAttempt,
   listAttempts,
   openAttempt,
+  reconcileRunningAttempts,
+  recordAttemptPresence,
   setAttemptPhase,
   type OpenAttemptParams,
 } from './attemptStore.js';
 import { StateManager } from './StateManager.js';
-import type { ExecutionAttempt, ExecutionAttemptPhase } from '../types/schema.js';
+import type { ExecutionAttempt, ExecutionAttemptPhase, ExecutionPolicySnapshot } from '../types/schema.js';
 
 describe('attemptStore', () => {
   const h = new ToolTestHarness();
@@ -351,5 +355,237 @@ describe('attemptStore', () => {
     expect(hinted.processStartedAt).toBe('2026-09-11T00:00:00.000Z');
     expect(hinted.host).toBe('box-1');
     expect(readAttempt('attempt-b')).toEqual(hinted);
+  });
+});
+
+// =============================================================================
+// Execution policy snapshot (CQ-M01d). An attempt may carry the configuration
+// identity its claim derived: captured once at open, never rewritten by repair,
+// phase, presence or close writes, and handed out only as detached copies.
+// Opening without one keeps the exact legacy record.
+// =============================================================================
+describe('attemptStore execution policy snapshot', () => {
+  const h = new ToolTestHarness();
+
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder({ schemaVersion: 6 });
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+    await h.state.load();
+  });
+
+  afterEach(() => {
+    h.state.clearEmitter();
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  const SNAP: ExecutionPolicySnapshot = { version: 2, profile: 'observe', planRevision: 4, deliveryPolicy: 'local-branch' };
+  const STRICT: ExecutionPolicySnapshot = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };
+  const base = { taskId: 'task-1', workerId: 'worker-1', runnerId: 'runner-1', workspace: 'D:/wt/a' };
+  const LEGACY_KEYS = ['generation', 'id', 'lastPhaseAt', 'phase', 'runnerId', 'startedAt', 'taskId', 'workerId', 'workspace'];
+
+  function attemptFile(id: string): string {
+    return path.join(h.moePath, 'attempts', `${id}.json`);
+  }
+
+  function fileBytes(id: string): string {
+    return fs.readFileSync(attemptFile(id), 'utf8');
+  }
+
+  function readAttempt(id: string): ExecutionAttempt {
+    return JSON.parse(fileBytes(id)) as ExecutionAttempt;
+  }
+
+  function attemptFiles(): string[] {
+    const dir = path.join(h.moePath, 'attempts');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+  }
+
+  function hasOwnSnapshot(record: unknown): boolean {
+    return Object.prototype.hasOwnProperty.call(record, 'executionPolicySnapshot');
+  }
+
+  /** The stored record and its file both still hold `snapshot`. */
+  function expectStored(id: string, snapshot: ExecutionPolicySnapshot = SNAP): void {
+    expect(h.state.attempts.get(id)!.executionPolicySnapshot).toEqual(snapshot);
+    expect(readAttempt(id).executionPolicySnapshot).toEqual(snapshot);
+  }
+
+  /** Mutate a handed-out snapshot in place, then replace it outright. */
+  function vandalize(record: ExecutionAttempt): void {
+    const snapshot = record.executionPolicySnapshot as unknown as Record<string, unknown>;
+    snapshot.profile = 'verified-local';
+    snapshot.planRevision = 99;
+    delete snapshot.deliveryPolicy;
+    record.executionPolicySnapshot = { ...STRICT };
+  }
+
+  it('S1 persists exactly the snapshot it was given, detached from the input and from the returned record', async () => {
+    const input = { ...SNAP };
+    const opened = await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: input });
+
+    expect(opened.executionPolicySnapshot).toEqual(SNAP);
+    expectStored('attempt-a');
+    const bytes = fileBytes('attempt-a');
+
+    (input as unknown as Record<string, unknown>).profile = 'verified-local';
+    expectStored('attempt-a');
+    vandalize(opened);
+    expectStored('attempt-a');
+    expect(getAttempt(h.state, 'attempt-a')!.executionPolicySnapshot).toEqual(SNAP);
+    expect(fileBytes('attempt-a')).toBe(bytes);
+  });
+
+  it.each([
+    ['null', null],
+    ['an extra key', { ...SNAP, trusted: true }],
+    ['version 3', { ...SNAP, version: 3 }],
+    ['v2 without deliveryPolicy', { version: 2, profile: 'observe', planRevision: 4 }],
+    ['planRevision -1', { ...SNAP, planRevision: -1 }],
+  ])('S2 refuses a malformed snapshot (%s) before any write, consuming no generation', async (_label, bad) => {
+    await expect(
+      openAttempt(h.state, { ...base, id: 'attempt-bad', executionPolicySnapshot: bad as unknown as ExecutionPolicySnapshot })
+    ).rejects.toThrow(/\[INVALID_INPUT\] Invalid executionPolicySnapshot/);
+
+    expect(h.state.attempts.size).toBe(0);
+    expect(attemptFiles()).toEqual([]);
+    const next = await openAttempt(h.state, { ...base, id: 'attempt-ok', executionPolicySnapshot: SNAP });
+    expect(next.generation).toBe(1);
+  });
+
+  it('S3 without the param writes the exact legacy record, even for a task that does not exist', async () => {
+    const opened = await openAttempt(h.state, { ...base, taskId: 'task-ghost', id: 'attempt-a' });
+
+    expect(Object.keys(readAttempt('attempt-a')).sort()).toEqual(LEGACY_KEYS);
+    expect(hasOwnSnapshot(opened)).toBe(false);
+    expect(hasOwnSnapshot(h.state.attempts.get('attempt-a'))).toBe(false);
+    expect(opened).toEqual(readAttempt('attempt-a'));
+  });
+
+  it('S4 a same-id repair returns the persisted record and never adopts the new snapshot', async () => {
+    const first = await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP });
+    const bytes = fileBytes('attempt-a');
+
+    const repaired = await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: STRICT });
+
+    expect(repaired).toEqual(first);
+    expect(repaired.executionPolicySnapshot).toEqual(SNAP);
+    expect(repaired.generation).toBe(1);
+    expect(fileBytes('attempt-a')).toBe(bytes);
+    expectStored('attempt-a');
+    expect(attemptFiles()).toEqual(['attempt-a.json']);
+  });
+
+  // Every exported function that hands out an attempt, each returning attempt-a.
+  const RETURNERS: Array<[string, () => Promise<ExecutionAttempt | null | undefined>]> = [
+    ['openAttempt (repair)', () => openAttempt(h.state, { ...base, id: 'attempt-a' })],
+    ['getAttempt', async () => getAttempt(h.state, 'attempt-a')],
+    ['listAttempts (scoped)', async () => listAttempts(h.state, 'task-1')[0]],
+    ['listAttempts (unscoped)', async () => listAttempts(h.state).find((a) => a.id === 'attempt-a')],
+    ['currentAttempt', async () => currentAttempt(h.state, 'task-1')],
+    ['setAttemptPhase (change)', () => setAttemptPhase(h.state, 'attempt-a', 'finalizing')],
+    ['setAttemptPhase (no-op)', () => setAttemptPhase(h.state, 'attempt-a', 'running')],
+    ['recordAttemptPresence', () => recordAttemptPresence(h.state, 'attempt-a', 'process')],
+    ['closeOpenAttempts', async () => (await closeOpenAttempts(h.state, 'task-1'))[0]],
+    ['closeHandedBackAttempts', async () => (await closeHandedBackAttempts(h.state, 'task-1'))[0]],
+    ['reconcileRunningAttempts', async () => (await reconcileRunningAttempts(h.state))[0]],
+  ];
+
+  it.each(RETURNERS)('S5 %s hands out a detached snapshot and carries it into any record it writes', async (_name, call) => {
+    await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP });
+
+    const returned = (await call())!;
+
+    expect(returned.id).toBe('attempt-a');
+    expect(returned.executionPolicySnapshot).toEqual(SNAP);
+    expect(returned).toEqual(readAttempt('attempt-a'));
+    expectStored('attempt-a');
+    const bytes = fileBytes('attempt-a');
+    vandalize(returned);
+    expectStored('attempt-a');
+    expect(fileBytes('attempt-a')).toBe(bytes);
+  });
+
+  it.each(RETURNERS)('S5 %s returns a record opened without a snapshot exactly as before', async (_name, call) => {
+    await openAttempt(h.state, { ...base, id: 'attempt-a' });
+
+    const returned = (await call())!;
+
+    expect(returned.id).toBe('attempt-a');
+    expect(hasOwnSnapshot(returned)).toBe(false);
+    expect(hasOwnSnapshot(h.state.attempts.get('attempt-a'))).toBe(false);
+    expect(returned).toEqual(readAttempt('attempt-a'));
+    expect(Object.keys(readAttempt('attempt-a')).every((key) => key !== 'executionPolicySnapshot')).toBe(true);
+  });
+
+  it('S5 two reads hand out distinct snapshot objects', async () => {
+    await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP });
+    const reads = [
+      getAttempt(h.state, 'attempt-a')!,
+      getAttempt(h.state, 'attempt-a')!,
+      listAttempts(h.state, 'task-1')[0],
+      listAttempts(h.state)[0],
+      currentAttempt(h.state, 'task-1')!,
+    ].map((a) => a.executionPolicySnapshot);
+
+    expect(new Set(reads).size).toBe(reads.length);
+    expect(reads.includes(h.state.attempts.get('attempt-a')!.executionPolicySnapshot)).toBe(false);
+  });
+
+  it('S6 a restart reloads the snapshot unchanged and parking at startup keeps it', async () => {
+    await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP });
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    try {
+      expect(getAttempt(restarted, 'attempt-a')!.executionPolicySnapshot).toEqual(SNAP);
+
+      const parked = await reconcileRunningAttempts(restarted);
+
+      expect(parked.map((a) => [a.id, a.phase])).toEqual([['attempt-a', 'reconciling']]);
+      expect(parked[0].executionPolicySnapshot).toEqual(SNAP);
+      expect(readAttempt('attempt-a').phase).toBe('reconciling');
+      expect(readAttempt('attempt-a').executionPolicySnapshot).toEqual(SNAP);
+    } finally {
+      restarted.clearEmitter();
+    }
+  });
+
+  it('S6 a hand-edited malformed snapshot never makes a read throw, and reads still detach it', async () => {
+    await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP });
+    const raw = { version: 3, nested: { trusted: true } };
+    fs.writeFileSync(attemptFile('attempt-a'), JSON.stringify({ ...readAttempt('attempt-a'), executionPolicySnapshot: raw }));
+    const restarted = new StateManager({ projectPath: h.testDir });
+    await restarted.load();
+    try {
+      const reads = [
+        getAttempt(restarted, 'attempt-a')!,
+        listAttempts(restarted, 'task-1')[0],
+        listAttempts(restarted)[0],
+        currentAttempt(restarted, 'task-1')!,
+      ];
+      for (const read of reads) expect(read.executionPolicySnapshot).toEqual(raw);
+
+      (reads[0].executionPolicySnapshot as unknown as typeof raw).nested.trusted = false;
+      expect(restarted.attempts.get('attempt-a')!.executionPolicySnapshot).toEqual(raw);
+    } finally {
+      restarted.clearEmitter();
+    }
+  });
+
+  it('S7 a failed write publishes no attempt, and the retry still gets generation 1 with the snapshot', async () => {
+    vi.spyOn(h.state, 'writeEntity').mockRejectedValueOnce(new Error('Injected attempt write failure'));
+
+    await expect(
+      openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP })
+    ).rejects.toThrow('Injected attempt write failure');
+
+    expect(getAttempt(h.state, 'attempt-a')).toBeNull();
+    expect(h.state.attempts.size).toBe(0);
+    expect(attemptFiles()).toEqual([]);
+    const retry = await openAttempt(h.state, { ...base, id: 'attempt-a', executionPolicySnapshot: SNAP });
+    expect(retry.generation).toBe(1);
+    expectStored('attempt-a');
   });
 });
