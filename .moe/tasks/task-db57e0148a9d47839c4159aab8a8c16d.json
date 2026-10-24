@@ -15,9 +15,72 @@
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
     "The daemon's only new Git reads are this bounded, read-only measurement inside submit_plan: no fetch, checkout, writes, hooks or network, with config masked as in util/cachedPlanPaths.ts."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Load test-driven-development. First read the LANDED V01a names (task-72efb0b663ec4b3da35a685ebb30ed34): TaskExecutionContract.requiredChecks, definitionDigest and protectedPaths in delivery/requiredChecks.ts. Where they differ from this plan, follow the landed code.\n\nCreate packages/moe-daemon/src/delivery/requiredChecks.snapshot.test.ts. Follow the real-git pattern in tools/submitPlan.test.ts (~796-870): an mkdtemp project with execFileSync git and masked env, so the project root is the git toplevel. Commit cfg/check.json, scripts/check.sh, tests/acc/a.test.ts and tests/acc/deep/b.test.ts.\n\nCases:\n(a) submit_plan with requiredChecks [{configs: ['cfg/check.json'], scripts: ['scripts/check.sh'], assertionRoots: ['tests/acc']}] stores task.requiredCheckSnapshot:\n    - version 1;\n    - revision = `git rev-parse HEAD^{tree}`;\n    - definitionDigest = definitionDigest(validated defs);\n    - entries = the exact sorted blob list under those paths, nested files included.\n    It is written in the same write as the advanced planRevision: reload from disk and see both.\n(b) requiredCheckRevision as an older commit id, and as a tree id, measures there.\n(c) A resubmission without requiredChecks removes the key, on disk and in memory.\n(d) Each of these refuses with INVALID_INPUT and leaves the task bytes unchanged:\n    - a config path absent at the revision;\n    - an unresolvable 40-hex revision;\n    - a non-git project directory;\n    - a nested project whose toplevel is not the root;\n    - the injected runner throwing;\n    - the injected runner returning 2001 entries;\n    - a submodule (gitlink) under a protected path;\n    - a malformed requiredCheckRevision;\n    - requiredCheckRevision sent without requiredChecks.\n(e) An empty assertion root is accepted, and no entries are recorded for it.\n(f) An updateTask carrying requiredCheckSnapshot (set, altered or null) leaves the stored value, or its absence, untouched.\n(g) readRequiredCheckSnapshot:\n    - a valid snapshot returns a detached equal copy;\n    - after an updateTask changes requiredChecks (digest mismatch) it returns null;\n    - each malformed variant returns null: version 2, a short oid, an uppercase oid, unsorted entries, an extra key, a non-array;\n    - no requiredChecks returns null.\n(h) A plan without requiredChecks writes no key, and the injected runner is never called.\n\nRun `cd packages/moe-daemon && npx vitest run src/delivery/requiredChecks.snapshot.test.ts` and record the failure.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.snapshot.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "In packages/moe-daemon/src/types/schema.ts (keep the file's current EOL; task-709f6691 renormalizes it before V01a), add:\n- `export interface RequiredCheckSnapshot { version: 1; revision: string; definitionDigest: string; entries: { path: string; oid: string }[] }`;\n- `requiredCheckSnapshot?: RequiredCheckSnapshot` on Task.\nThe JSDoc must say:\n- the field is daemon-owned and measured only by submit_plan;\n- its value is git object ids of every blob under the approved protected paths at `revision`, a tree id;\n- it is valid only while definitionDigest matches the current contract, so readers go through readRequiredCheckSnapshot;\n- it is never evidence by itself.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Shared Git trust envelope, in packages/moe-daemon/src/util/cachedPlanPaths.ts.\n- Export runGit, adding an optional maxBuffer parameter. The default stays 128 KiB.\n- Extract findCachedPlanPaths' guards into one exported helper (for example `openProjectGit(projectRoot, run, budgetMs)`) that returns a deadline-bounded `git(label, args, opts?)`. It owns:\n  - realpath;\n  - the '/*' guard;\n  - toplevel equality with the project root;\n  - the partial-clone/promisor/core.worktree refusal.\n- findCachedPlanPaths uses the helper with identical behaviour and messages. util/cachedPlanPaths.test.ts and submitPlan's cached-path tests must pass unchanged.\n- Error handling: the helper throws; each caller maps the throw to its own refusal shape.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Measurement and decode, in packages/moe-daemon/src/delivery/requiredChecks.ts. V01a creates this file and this step modifies it. It is listed in newFiles only because it does not exist at plan time.\n\n- Test seam: `export const requiredCheckGit = { run: runGit }`. Production uses it unchanged.\n- `measureRequiredCheckSnapshot(projectRoot, defs, revision = 'HEAD', run = requiredCheckGit.run)` runs through openProjectGit with a budget of about 5000 ms:\n  - `rev-parse --verify --end-of-options <rev>^{tree}` must yield 40-hex. A 64-hex result is refused, since SHA-256 repositories are task-07474ee4.\n  - `--literal-pathspecs ls-tree -r -z --full-tree <tree> -- <protectedPaths>` runs with maxBuffer 1 MiB.\n  - Parse each record strictly as /^(100644|100755|120000) blob ([0-9a-f]{40})\\t([\\s\\S]+)$/. A 160000 gitlink, any other record, or an unterminated listing is refused.\n  - More than 2000 entries is refused.\n  - Every configs and scripts path must cover at least one entry (`path === p || path.startsWith(p + '/')`). An assertion root may cover none.\n  - Entries are sorted in byte order and unique.\n  - Return `{version: 1, revision, definitionDigest: definitionDigest(defs), entries}`.\n- Error handling: every failure throws INVALID_INPUT on field 'executionContract.requiredChecks' (or 'requiredCheckRevision' for revision problems), with a one-line reason: step plus failure, as describeFailure does. No partial snapshot ever escapes.\n- `readRequiredCheckSnapshot(task)` decodes strictly:\n  - exact keys and version 1;\n  - 40-hex revision and 64-hex digest;\n  - at most 2000 strictly ascending entries, each with a normalized path and a lowercase 40-hex oid.\n  It returns a detached copy only when the digest equals definitionDigest(task.executionContract.requiredChecks). Otherwise, including when the contract has no requiredChecks, it returns null.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Daemon ownership, in packages/moe-daemon/src/state/taskStore.ts. Keep the file's current EOL.\n- In the updateTask sanitize block, delete a caller's `requiredCheckSnapshot`, next to executionPolicySnapshot and with the same why-comment. This covers MCP tools, plugin UPDATE_TASK and board echoes of the whole row.\n- Add an optional 6th parameter `daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot }`, honoured ONLY when event === 'PLAN_SUBMITTED':\n  - a snapshot value is set in the same fresh Task object, and so the same writeEntity, as planRevision;\n  - an absent value removes the key.\n- StateManager.updateTask keeps its 4-parameter signature, so no tool or plugin path can pass the parameter.\n- Confirm that createTask's field-by-field build never copies the key.\n- Error handling: a failed write publishes neither the plan nor the snapshot. This is the existing single-writeEntity rule.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "submit_plan, in packages/moe-daemon/src/tools/submitPlan.ts.\n- inputSchema gains `requiredCheckRevision: { type: 'string', pattern: '^[0-9a-f]{40}$', description: 'Commit or tree to measure the protected check snapshot at (default HEAD); use a candidate tree to approve changed protected definitions.' }`.\n- The handler validates it. A malformed value, or one supplied without executionContract.requiredChecks, refuses with INVALID_INPUT before any read.\n- BEFORE calling submit():\n  - validate the contract (pure);\n  - if it has requiredChecks, `await measureRequiredCheckSnapshot(state.projectPath, defs, requiredCheckRevision ?? 'HEAD')` outside the state lock. submit_plan is already `blocking: true` for its Git fallback.\n  - The cached-path retry reuses this snapshot.\n- Inside submit(), make the PLAN_SUBMITTED write through taskStore's updateTask(state, ..., 'PLAN_SUBMITTED', workerId, { requiredCheckSnapshot: snapshot }). With no requiredChecks, pass `{}`, so a previous snapshot is cleared.\n- Plans without requiredChecks run no measurement.\n- Every other behaviour and order is unchanged: rails, size gate, path gate, approval modes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "Verification gate, run once, fresh. A shared schema and the submit_plan contract changed, so run the full suite.\n- NAMED COMMAND: `cd packages/moe-daemon && npm test`, plus `npx tsc --noEmit`.\n- Run them where node_modules matches the OS, per the epic note: on Linux, a separate native dependency install with unchanged lockfile and source hashes; never overwrite the Windows node_modules; Linux-only PATH; MOE_* unset; git on PATH.\n- Supply the npm test output to complete_task.\n- A failure outside this task's files counts as pre-existing only after it is shown on a clean `git archive HEAD` snapshot.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-8",
+      "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task.\n\nAttack:\n- Can a caller mint, alter or clear the snapshot through any writer?\n- Can measurement escape the trust envelope? Check for hooks, network, a promisor fetch, a nested repo, symlinked roots, glob pathspecs, NUL or newlines in paths, a slow git, a huge output.\n- Can a stale snapshot be read as valid?\n- Does a failure leave a partial write?\n- Concurrency: two submit_plan calls racing. Each measures outside the lock, then writes under it, and the last write wins with its own snapshot and digest.\n\nMutation proof, in a scratch copy. Each mutation must turn a step 1 case red:\n(1) skip the toplevel check -> (d) nested project goes red;\n(2) accept a missing config path;\n(3) drop the 2000 bound;\n(4) accept a gitlink;\n(5) let updateTask keep a caller snapshot -> (f) goes red;\n(6) decode without the digest comparison -> (g) goes red;\n(7) measure plans without requiredChecks -> (h) goes red;\n(8) skip the clear on resubmission -> (c) goes red.\nFor any survivor, add a test case. If any byte changed, rerun step 7's named command and submit THAT output.\n\nReport modifiedFiles: the six plan files. No Git writes; no .moe edits; verified-local stays refused.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -40,5 +103,35 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:38:58.620Z",
-  "updatedAt": "2026-10-24T22:43:01.056Z"
+  "updatedAt": "2026-10-24T22:49:27.369Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T22:46:52.452Z",
+    "plannedStepCount": 8,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T22:49:27.273Z",
+  "planningNotes": {
+    "approachesConsidered": "- The snapshot is measured as git object ids at a tree-ish, so a runner's candidate measurement in CQ-V01 compares like with like. Raw-bytes hashing was rejected because it disagrees with git EOL normalization.\n- Measurement happens before the locked write. submit_plan is already blocking for its Git fallback, and the closure revalidates under runExclusive.\n- A daemon-internal updateTask parameter was chosen over a new store write path, keeping one writeEntity with planRevision. StateManager's signature stays unchanged, so callers cannot reach the parameter.\n- The trust envelope is extracted from findCachedPlanPaths rather than duplicated. Behavior is unchanged and its tests pin that.",
+    "codebaseInsights": "- util/cachedPlanPaths.ts runGit masks GIT_* env and global/system config, disables protocols and optional locks, and trusts only safe.directory=<root>. It has MAX_BUFFER 128 KiB and BUDGET_MS 2000.\n- findCachedPlanPaths runs realpath, the /* guard, toplevel equality, refusal of partial-clone/promisor/core.worktree config, `--literal-pathspecs ls-tree -z --full-tree`, and strict record parsing.\n- submitPlan: `submit = () => state.runExclusive(...)`, with the cached-path retry at ~700-720. The PLAN_SUBMITTED write is at ~509.\n- taskStore: the sanitize block (~410-427) strips planRevision and executionPolicySnapshot. Its capture rides the same fresh object as planRevision.\n- The real-git test pattern is in tools/submitPlan.test.ts at ~796-870.",
+    "risks": "- V01a is unlanded at plan time. Step 1 makes the worker follow its landed names. requiredChecks.ts sits in newFiles only because V01a creates it.\n- 2000 entries times path length can exceed 128 KiB, hence maxBuffer 1 MiB for ls-tree. An overflow refuses.\n- SHA-256 repos are refused for now (task-07474ee4).\n- On Windows, git paths are case-sensitive in ls-tree. Exact spelling is required, as cached-path evidence already requires.\n- The cachedPlanPaths refactor must not change its messages: existing tests assert them.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/submitPlan.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T22:49:27.369Z"
 }

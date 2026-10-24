@@ -4530,12 +4530,113 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AB2] ok"
 
+  # Scenarios AC/AD -- a file whose HEAD blob holds CRLF, under line-ending
+  # conversion. The snapshot hashes the worktree with `hash-object`, which loads
+  # no index and so normalizes CRLF to LF; `git add` into the temp index (seeded
+  # from HEAD) keeps CRLF under git's safer-autocrlf rule. Comparing the two
+  # dropped every edit to such a file as MOE_ATTR_CONCURRENT at every landing
+  # (CQ-M01d, 71c7dbe). AC: the edit lands, as the CRLF blob git add made, under
+  # each conversion mode; crlf.mjs is a source file, so the importee guard also
+  # checks its staged-out blob against the temp index. AD: an edit made after
+  # the snapshot still drops.
+  seed_crlf_file() { # $1 = dir, $2 = autocrlf-true|autocrlf-input|text-auto, $3 = scenario letter
+    local dir="$1" mode="$2"
+    printf 'one\r\ntwo\r\n' > "$dir/crlf.txt"
+    printf 'one\r\ntwo\r\n' > "$dir/crlf.mjs"
+    git -C "$dir" -c core.autocrlf=false add crlf.txt crlf.mjs >/dev/null
+    git -C "$dir" -c core.autocrlf=false commit -qm crlf-seed >/dev/null
+    case "$mode" in
+      autocrlf-true)  git -C "$dir" config core.autocrlf true ;;
+      autocrlf-input) git -C "$dir" config core.autocrlf input ;;
+      text-auto)
+        git -C "$dir" config core.autocrlf false
+        printf '* text=auto\n' > "$dir/.gitattributes"
+        git -C "$dir" add .gitattributes >/dev/null
+        git -C "$dir" commit -qm text-auto >/dev/null ;;
+    esac
+    case "$(git -C "$dir" cat-file blob HEAD:crlf.txt)" in
+      *$'\r'*) : ;;
+      *) scope_fail "$3" "fixture: HEAD:crlf.txt must hold CR bytes ($mode)" /dev/null ;;
+    esac
+  }
+
+  echo "[scenario AC] an edit to a CRLF-committed file lands under autocrlf=true, autocrlf=input and text=auto"
+  for scope_ac_mode in autocrlf-true autocrlf-input text-auto; do
+    SCOPE_AC_DIR="$TMP_DIR/scope-ac-$scope_ac_mode"
+    scope_ac_out="$TMP_DIR/scope-ac-$scope_ac_mode.out"
+    make_scope_project "$SCOPE_AC_DIR" '["crlf.txt","crlf.mjs"]'
+    seed_crlf_file "$SCOPE_AC_DIR" "$scope_ac_mode" AC
+    printf 'one\r\ntwo edited\r\n' > "$SCOPE_AC_DIR/crlf.txt"
+    printf 'one\r\ntwo edited\r\n' > "$SCOPE_AC_DIR/crlf.mjs"
+    set +e
+    run_scope_wrapper "$SCOPE_AC_DIR" "$scope_ac_out"
+    scope_ac_code=$?
+    set -e
+    [ "$scope_ac_code" -eq 0 ] || scope_fail AC "$scope_ac_mode: wrapper exited with $scope_ac_code" "$scope_ac_out"
+    if grep -Fq MOE_ATTR_CONCURRENT "$SCOPE_AC_DIR/.moe/record_commit.jsonl" "$scope_ac_out"; then
+      cat "$SCOPE_AC_DIR/.moe/record_commit.jsonl" >&2 || true
+      scope_fail AC "$scope_ac_mode: crlf.txt was dropped as MOE_ATTR_CONCURRENT" "$scope_ac_out"
+    fi
+    git -C "$SCOPE_AC_DIR" log -1 --pretty=%s | grep -Fq 'feat(task-postflight):' \
+      || scope_fail AC "$scope_ac_mode: HEAD is not the completion -- the edit never landed" "$scope_ac_out"
+    scope_ac_files="$(committed_paths "$SCOPE_AC_DIR")"
+    [ "$scope_ac_files" = "crlf.mjs crlf.txt " ] \
+      || scope_fail AC "$scope_ac_mode: the completion must contain exactly crlf.mjs and crlf.txt; got [$scope_ac_files]" "$scope_ac_out"
+    for scope_ac_file in crlf.txt crlf.mjs; do
+      git -C "$SCOPE_AC_DIR" cat-file blob "HEAD:$scope_ac_file" | cmp -s - "$SCOPE_AC_DIR/$scope_ac_file" \
+        || scope_fail AC "$scope_ac_mode: HEAD:$scope_ac_file must be the CRLF bytes git add staged, byte for byte" "$scope_ac_out"
+    done
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AC] ok"
+
+  # AD: the pre-update-ref seam changes crlf.txt and commits a peer file, so the
+  # CAS retry rebuilds the temp index against the OLD snapshot (scenario O). A
+  # rewrite re-hashes differently; a delete leaves no staged entry; a directory
+  # in its place stages crlf.txt/inner while the re-hash fails. None may land.
+  echo "[scenario AD] a CRLF-committed file rewritten, deleted or replaced after the snapshot still drops as MOE_ATTR_CONCURRENT"
+  for scope_ad_variant in rewrite delete dir; do
+    SCOPE_AD_DIR="$TMP_DIR/scope-ad-$scope_ad_variant"
+    scope_ad_out="$TMP_DIR/scope-ad-$scope_ad_variant.out"
+    case "$scope_ad_variant" in
+      rewrite) scope_ad_hook='printf "one\r\nconcurrent\r\n" > crlf.txt' ;;
+      delete)  scope_ad_hook='rm -f crlf.txt' ;;
+      dir)     scope_ad_hook='rm -f crlf.txt && mkdir crlf.txt && echo inner > crlf.txt/inner' ;;
+    esac
+    make_scope_project "$SCOPE_AD_DIR" '["owned-a.txt","crlf.txt"]'
+    seed_crlf_file "$SCOPE_AD_DIR" autocrlf-true AD
+    scope_ad_seed="$(git -C "$SCOPE_AD_DIR" rev-parse HEAD:crlf.txt)"
+    echo owned-a > "$SCOPE_AD_DIR/owned-a.txt"
+    printf 'one\r\ntwo edited\r\n' > "$SCOPE_AD_DIR/crlf.txt"
+    echo hook-peer > "$SCOPE_AD_DIR/peer-hook.txt"
+    set +e
+    MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF="$scope_ad_hook && git add peer-hook.txt && git commit -m peer-race -- peer-hook.txt" \
+      run_scope_wrapper "$SCOPE_AD_DIR" "$scope_ad_out"
+    scope_ad_code=$?
+    set -e
+    [ "$scope_ad_code" -eq 0 ] || scope_fail AD "$scope_ad_variant: wrapper exited with $scope_ad_code" "$scope_ad_out"
+    git -C "$SCOPE_AD_DIR" log -1 --pretty=%s | grep -Fq 'feat(task-postflight):' \
+      || scope_fail AD "$scope_ad_variant: our completion must be on top" "$scope_ad_out"
+    git -C "$SCOPE_AD_DIR" log -2 --pretty=%s | grep -Fq 'peer-race' \
+      || scope_fail AD "$scope_ad_variant: the seam's peer commit must be underneath (the CAS retry never ran)" "$scope_ad_out"
+    git -C "$SCOPE_AD_DIR" cat-file -e HEAD:owned-a.txt 2>/dev/null || scope_fail AD "$scope_ad_variant: owned-a.txt missing from HEAD" "$scope_ad_out"
+    [ "$(git -C "$SCOPE_AD_DIR" rev-parse HEAD:crlf.txt 2>/dev/null)" = "$scope_ad_seed" ] \
+      || scope_fail AD "$scope_ad_variant: crlf.txt changed after the snapshot, so HEAD must keep the seed blob" "$scope_ad_out"
+    if ! awk 'index($0, "\"outcome\":\"committed\"") && index($0, "{\"path\":\"crlf.txt\",\"code\":\"MOE_ATTR_CONCURRENT\"}") { f = 1 } END { exit !f }' \
+        "$SCOPE_AD_DIR/.moe/record_commit.jsonl"; then
+      cat "$SCOPE_AD_DIR/.moe/record_commit.jsonl" >&2 || true
+      scope_fail AD "$scope_ad_variant: the committed record_commit row must report crlf.txt as MOE_ATTR_CONCURRENT" "$scope_ad_out"
+    fi
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AD] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 34 ]; then
-    echo "Expected 34 commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 36 ]; then
+    echo "Expected 36 commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

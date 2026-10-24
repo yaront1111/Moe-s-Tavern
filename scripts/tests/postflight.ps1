@@ -3811,11 +3811,128 @@ else {
                 $scopeScenariosRun++
                 Write-Host '[scenario AB2] ok'
 
+                # Scenarios AC/AD — twin of postflight.sh: a file whose HEAD blob
+                # holds CRLF, under line-ending conversion. The snapshot's
+                # `hash-object` loads no index and normalizes CRLF to LF; `git add`
+                # into the temp index (seeded from HEAD) keeps CRLF under git's
+                # safer-autocrlf rule. Comparing the two dropped every edit to such
+                # a file as MOE_ATTR_CONCURRENT (CQ-M01d, 71c7dbe). AC: the edit
+                # lands, as the CRLF blob git add made, under each conversion mode;
+                # crlf.mjs is a source file the importee guard re-reads from the
+                # index. AD: a change after the snapshot still drops. Fixtures are
+                # raw bytes (Set-Content rewrites line endings on 5.1) and every
+                # seeding git call pins core.autocrlf (Git for Windows defaults it
+                # to true). Byte equality is `hash-object --no-filters` against the
+                # blob id: PowerShell cannot pipe CR bytes out of git intact.
+                function Write-CrlfBytes([string]$path, [string]$text) {
+                    [IO.File]::WriteAllBytes($path, [Text.Encoding]::ASCII.GetBytes($text))
+                }
+                function Get-GitId([string]$dir, [string[]]$gitArgs) {
+                    return ((& git -C $dir @gitArgs 2>$null) -join '').Trim()
+                }
+                function New-CrlfSeed([string]$dir, [string]$mode, [string]$name) {
+                    foreach ($f in 'crlf.txt', 'crlf.mjs') { Write-CrlfBytes (Join-Path $dir $f) "one`r`ntwo`r`n" }
+                    & git -C $dir -c core.autocrlf=false add crlf.txt crlf.mjs 2>$null | Out-Null
+                    & git -C $dir -c core.autocrlf=false commit -qm crlf-seed 2>$null | Out-Null
+                    switch ($mode) {
+                        'autocrlf-true' { & git -C $dir config core.autocrlf true 2>$null | Out-Null }
+                        'autocrlf-input' { & git -C $dir config core.autocrlf input 2>$null | Out-Null }
+                        'text-auto' {
+                            & git -C $dir config core.autocrlf false 2>$null | Out-Null
+                            Write-CrlfBytes (Join-Path $dir '.gitattributes') "* text=auto`n"
+                            & git -C $dir add .gitattributes 2>$null | Out-Null
+                            & git -C $dir commit -qm text-auto 2>$null | Out-Null
+                        }
+                    }
+                    if ((Get-GitId $dir @('rev-parse', 'HEAD:crlf.txt')) -ne (Get-GitId $dir @('hash-object', '--no-filters', '--', 'crlf.txt'))) {
+                        throw "SCENARIO $name FAILED: fixture: HEAD:crlf.txt must hold the raw CRLF bytes ($mode)"
+                    }
+                }
+
+                Write-Host '[scenario AC] an edit to a CRLF-committed file lands under autocrlf=true, autocrlf=input and text=auto'
+                foreach ($acMode in 'autocrlf-true', 'autocrlf-input', 'text-auto') {
+                    $scopeACDir = Join-Path $tempRoot "scope-ac-$acMode"
+                    $scopeACOut = Join-Path $tempRoot "scope-ac-$acMode.out"
+                    New-ScopeProject $scopeACDir @('crlf.txt', 'crlf.mjs')
+                    New-CrlfSeed $scopeACDir $acMode 'AC'
+                    foreach ($f in 'crlf.txt', 'crlf.mjs') { Write-CrlfBytes (Join-Path $scopeACDir $f) "one`r`ntwo edited`r`n" }
+                    Assert-ScopeRun 'AC' (Invoke-GateWrapper $scopeACDir $scopeACOut) $scopeACOut
+                    $acLedger = (Get-RecordCommitLines $scopeACDir) -join "`n"
+                    if ($acLedger.Contains('MOE_ATTR_CONCURRENT') -or "$(Get-Content -Raw -Path $scopeACOut)".Contains('MOE_ATTR_CONCURRENT')) {
+                        Write-Host $acLedger
+                        throw "SCENARIO AC FAILED: ${acMode}: crlf.txt was dropped as MOE_ATTR_CONCURRENT"
+                    }
+                    if ((Get-HeadSubject $scopeACDir) -notlike 'feat(task-postflight): *') {
+                        Get-Content $scopeACOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        throw "SCENARIO AC FAILED: ${acMode}: HEAD is not the completion -- the edit never landed"
+                    }
+                    $acPaths = Get-CommittedPaths $scopeACDir
+                    if ($acPaths -ne 'crlf.mjs crlf.txt') { throw "SCENARIO AC FAILED: ${acMode}: the completion must contain exactly crlf.mjs and crlf.txt; got [$acPaths]" }
+                    foreach ($f in 'crlf.txt', 'crlf.mjs') {
+                        if ((Get-GitId $scopeACDir @('rev-parse', "HEAD:$f")) -ne (Get-GitId $scopeACDir @('hash-object', '--no-filters', '--', $f))) {
+                            throw "SCENARIO AC FAILED: ${acMode}: HEAD:$f must be the CRLF bytes git add staged, byte for byte"
+                        }
+                    }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AC] ok'
+
+                # AD: crlf-hook.cmd changes crlf.txt through node (cmd cannot quote
+                # CR bytes), then hook-peer.cmd commits a peer file, so the CAS
+                # retry rebuilds the temp index against the OLD snapshot (scenario
+                # O). A rewrite re-hashes differently; a delete leaves no staged
+                # entry; a directory in its place stages crlf.txt/inner while the
+                # re-hash fails. None may land.
+                Set-Content -Path (Join-Path $tempRoot 'crlf-hook.cjs') -Encoding ASCII -Value @'
+const fs = require('fs'), path = require('path');
+const f = path.join(process.env.MOE_PROJECT_PATH, 'crlf.txt'), mode = process.env.CRLF_HOOK_MODE;
+fs.rmSync(f, { force: true });
+if (mode === 'rewrite') fs.writeFileSync(f, 'one\r\nconcurrent\r\n');
+if (mode === 'dir') { fs.mkdirSync(f); fs.writeFileSync(path.join(f, 'inner'), 'inner\n'); }
+'@
+                $crlfHookCmd = Join-Path $tempRoot 'crlf-hook.cmd'
+                Set-Content -Path $crlfHookCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                    "node `"%~dp0crlf-hook.cjs`" || exit /b 1`r`n" +
+                    "call `"%~dp0hook-peer.cmd`"`r`n")
+                Write-Host '[scenario AD] a CRLF-committed file rewritten, deleted or replaced after the snapshot still drops as MOE_ATTR_CONCURRENT'
+                foreach ($adVariant in 'rewrite', 'delete', 'dir') {
+                    $scopeADDir = Join-Path $tempRoot "scope-ad-$adVariant"
+                    $scopeADOut = Join-Path $tempRoot "scope-ad-$adVariant.out"
+                    New-ScopeProject $scopeADDir @('owned-a.txt', 'crlf.txt')
+                    New-CrlfSeed $scopeADDir 'autocrlf-true' 'AD'
+                    $adSeed = Get-GitId $scopeADDir @('rev-parse', 'HEAD:crlf.txt')
+                    Set-Content -Path (Join-Path $scopeADDir 'owned-a.txt') -Value 'owned-a'
+                    Write-CrlfBytes (Join-Path $scopeADDir 'crlf.txt') "one`r`ntwo edited`r`n"
+                    $env:CRLF_HOOK_MODE = $adVariant
+                    $env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF = $crlfHookCmd
+                    try {
+                        Assert-ScopeRun 'AD' (Invoke-GateWrapper $scopeADDir $scopeADOut) $scopeADOut
+                    } finally {
+                        Remove-Item Env:MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF -ErrorAction SilentlyContinue
+                        Remove-Item Env:CRLF_HOOK_MODE -ErrorAction SilentlyContinue
+                    }
+                    if ((Get-HeadSubject $scopeADDir) -notlike 'feat(task-postflight): *') { throw "SCENARIO AD FAILED: ${adVariant}: ours must be on top; HEAD is [$(Get-HeadSubject $scopeADDir)]" }
+                    if ((Get-HeadSubject $scopeADDir 'HEAD~1') -ne 'peer-hook') { throw "SCENARIO AD FAILED: ${adVariant}: the hook's peer commit must be HEAD~1 (the CAS retry never ran); got [$(Get-HeadSubject $scopeADDir 'HEAD~1')]" }
+                    & git -C $scopeADDir cat-file -e HEAD:owned-a.txt 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AD FAILED: ${adVariant}: owned-a.txt must be present in HEAD" }
+                    if ((Get-GitId $scopeADDir @('rev-parse', 'HEAD:crlf.txt')) -ne $adSeed) {
+                        throw "SCENARIO AD FAILED: ${adVariant}: crlf.txt changed after the snapshot, so HEAD must keep the seed blob"
+                    }
+                    $adDropped = @(Get-RecordCommitLines $scopeADDir | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.outcome -eq 'committed' } |
+                        ForEach-Object { @($_.skipped) } | Where-Object { $_ -and $_.path -eq 'crlf.txt' -and $_.code -eq 'MOE_ATTR_CONCURRENT' })
+                    if ($adDropped.Count -eq 0) {
+                        Write-Host ((Get-RecordCommitLines $scopeADDir) -join "`n")
+                        throw "SCENARIO AD FAILED: ${adVariant}: the committed record_commit row must report crlf.txt as MOE_ATTR_CONCURRENT"
+                    }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AD] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 34) {
-                    throw "Expected 34 commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 36) {
+                    throw "Expected 36 commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

@@ -4015,8 +4015,9 @@ attr_print_skips() {
 # BASE = commit/tree to start from ('' = unborn -> empty index). Stages every
 # candidate with `:(literal)` into GITDIR/moe/idx-<task>-<pid> (never the
 # shared index), then verifies the staged blob equals the snapshot blob (or no
-# entry for a deletion); a mismatch means the path moved under us and is
-# dropped with MOE_ATTR_CONCURRENT (re-attempted next exit). Sets TI_INDEX,
+# entry for a deletion), else that a fresh snapshot-style hash still does; a
+# path that moved under us is dropped with MOE_ATTR_CONCURRENT (re-attempted
+# next exit). Sets TI_INDEX,
 # TI_N_STAGED, TI_N_INFERRED.
 moe_temp_index_build() {
     local base="$1" cand="$2" staged_out="$3" dropped_out="$4"
@@ -4032,7 +4033,7 @@ moe_temp_index_build() {
     else
         GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" read-tree --empty >/dev/null 2>&1 || return 1
     fi
-    local rec reason rest blob p actual
+    local rec reason rest blob p actual rehash moved
     while IFS= read -r -d '' rec; do
         reason="${rec%%"$MOE_TAB"*}"
         rest="${rec#*"$MOE_TAB"}"
@@ -4044,7 +4045,30 @@ moe_temp_index_build() {
             continue
         fi
         actual=$(GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" ls-files -s -- ":(literal)$p" 2>/dev/null | head -n1 | awk '{print $2}') || actual=""
-        if { [ "$blob" = "D" ] && [ -n "$actual" ]; } || { [ "$blob" != "D" ] && [ "$actual" != "$blob" ]; }; then
+        moved=0
+        if [ "$blob" = "D" ]; then
+            [ -z "$actual" ] || moved=1
+        elif [ "$actual" != "$blob" ]; then
+            # Never compare across conversion paths. `git add` reads the temp
+            # index (seeded from BASE), so git's safer-autocrlf rule keeps a CRLF
+            # blob BASE already holds; the snapshot's `hash-object` loads no index
+            # and normalizes it to LF (core.autocrlf=true/input, text=auto). So
+            # re-run the snapshot's own hash: unchanged since the snapshot keeps
+            # the blob git add staged (recorded as staged, which the importee
+            # guard checks against the index); anything else, a failed hash
+            # included, moved.
+            # ponytail: the re-hash runs after `git add`, so an edit reverted in
+            # that window (ABA) keeps the intermediate staged blob. Hashing the
+            # staged bytes through the same conversion would close it, but needs a
+            # binary pipe the ps1 twin cannot do safely.
+            rehash=$(git -C "$MOE_TOP" hash-object -- "$p" 2>/dev/null) || rehash=""
+            if [ -n "$actual" ] && [ -n "$rehash" ] && [ "$rehash" = "$blob" ]; then
+                blob="$actual"
+            else
+                moved=1
+            fi
+        fi
+        if [ "$moved" = 1 ]; then
             if [ -n "$base" ]; then
                 GIT_INDEX_FILE="$TI_INDEX" git -C "$MOE_TOP" reset -q "$base" -- ":(literal)$p" >/dev/null 2>&1 || true
             else

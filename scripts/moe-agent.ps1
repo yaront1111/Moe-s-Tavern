@@ -3595,8 +3595,9 @@ function Ensure-MoeSafeBranch([string]$Top, [hashtable]$Settings) {
 }
 
 # Stage the candidates into a TEMP index seeded from $OldSha (or empty) and
-# verify each staged blob equals the snapshot blob (a path that changed under
-# us is dropped with MOE_ATTR_CONCURRENT and re-attempted at the next exit).
+# verify each staged blob equals the snapshot blob, else that a fresh
+# snapshot-style hash still does (a path that changed under us is dropped with
+# MOE_ATTR_CONCURRENT and re-attempted at the next exit).
 function Build-MoeTempIndexTree([string]$Top, [string]$IndexFile, [string]$OldSha, [array]$Candidates) {
     $res = @{ Ok = $false; Changed = $false; Tree = ''; Landed = @(); Dropped = @() }
     $idxDir = Split-Path -Parent $IndexFile
@@ -3626,6 +3627,21 @@ function Build-MoeTempIndexTree([string]$Top, [string]$IndexFile, [string]$OldSh
         }
         $match = $false
         if ($c.Blob -eq 'D') { $match = (-not $stagedBlob) } else { $match = ($stagedBlob -eq $c.Blob) }
+        if (-not $match -and $c.Blob -ne 'D' -and $stagedBlob) {
+            # Never compare across conversion paths. `git add` reads the temp
+            # index (seeded from $OldSha), so git's safer-autocrlf rule keeps a
+            # CRLF blob $OldSha already holds; the snapshot's `hash-object` loads
+            # no index and normalizes it to LF (core.autocrlf=true/input,
+            # text=auto). So re-run the snapshot's own hash (no -IndexFile):
+            # unchanged since the snapshot keeps the blob git add staged; anything
+            # else, a failed hash included, moved.
+            # ponytail: the re-hash runs after `git add`, so an edit reverted in
+            # that window (ABA) keeps the intermediate staged blob. Hashing the
+            # staged bytes through the same conversion would close it, but needs a
+            # binary pipe this twin cannot do safely.
+            $rehash = Invoke-MoeGit -Top $Top -GitArgs @('hash-object', '--', $c.Path)
+            $match = ($rehash.Rc -eq 0 -and "$(@($rehash.Out) | Select-Object -First 1)".Trim() -eq $c.Blob)
+        }
         if (-not $match) {
             if ($OldSha) {
                 Invoke-MoeGit -Top $Top -IndexFile $IndexFile -GitArgs @('reset', '-q', $OldSha, '--', $spec) | Out-Null
