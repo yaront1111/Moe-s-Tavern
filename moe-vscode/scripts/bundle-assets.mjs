@@ -117,6 +117,22 @@ async function main() {
       }
     }
   }
+  // Ship prerequisite modules/manifest without activating a runner or copying test fixtures.
+  const localRunnerSource = path.join(repoRoot, 'scripts', 'local-runner');
+  for (const name of ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs']) {
+    const asset = path.join(localRunnerSource, name);
+    if (!(await exists(asset)) || !(await stat(asset)).isFile()) {
+      throw new Error(`Required local-runner/${name} asset not found at ${localRunnerSource}.`);
+    }
+  }
+  await cp(localRunnerSource, path.join(scriptsOut, 'local-runner'), {
+    recursive: true,
+    filter: src => {
+      const relative = path.relative(localRunnerSource, src).replaceAll('\\', '/');
+      return !relative.split('/').some(part => ['tests', '__tests__', 'fixtures', '__fixtures__'].includes(part)) &&
+        !/\.(test|spec)\.[^/]+$/.test(relative);
+    },
+  });
   // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
   await cp(path.join(repoRoot, 'scripts', 'mods'), path.join(scriptsOut, 'mods'), {
     recursive: true,

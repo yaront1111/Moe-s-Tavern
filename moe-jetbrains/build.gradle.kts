@@ -32,6 +32,7 @@ val bundledCallScriptSh = repoRoot.resolve("scripts/moe-call.sh")
 val bundledRoleDocs = repoRoot.resolve("docs/roles")
 val bundledAgentContext = repoRoot.resolve("docs/agent-context.md")
 val bundledSkillsDir = repoRoot.resolve("docs/skills")
+val bundledLocalRunnerDir = repoRoot.resolve("scripts/local-runner")
 
 // Newest mtime of any non-test source file under src. Guards against bundling
 // a dist that predates the sources — an old dist ships silently and resurrects
@@ -78,6 +79,11 @@ fun requireBundledAssets() {
     }
     check(bundledCallScriptSh.exists()) {
         "Bundled moe-call.sh not found at ${bundledCallScriptSh}."
+    }
+    listOf("certified-provider.json", "multipass.mjs", "doctor.mjs", "cli.mjs").forEach { name ->
+        check(bundledLocalRunnerDir.resolve(name).isFile) {
+            "Bundled local-runner/$name not found at $bundledLocalRunnerDir."
+        }
     }
 }
 
@@ -167,6 +173,11 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
         include("usage-receipt.mjs", "usage-session.mjs", "usage-report.mjs", "analyze-usage.mjs")
         // Claude account rotation: the wrappers lease an account through it before every claude launch.
         include("moe-account-lease.mjs")
+        // Provider prerequisite assets only; shipping them does not enable isolated execution.
+        include("local-runner/**")
+        exclude("local-runner/**/*.test.*", "local-runner/**/*.spec.*")
+        exclude("local-runner/**/tests/**", "local-runner/**/__tests__/**")
+        exclude("local-runner/**/fixtures/**", "local-runner/**/__fixtures__/**")
         // Claude Code mods the wrappers load into claude seats (CLAUDE_CODE_PLUGIN_DIRS).
         include("mods/**")
         exclude("mods/**/*.test.ts", "mods/*/.claude-plugin/types/**")
