@@ -130,7 +130,7 @@
     }
   ],
   "planRevision": 15,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -143,19 +143,29 @@
   ],
   "priority": "HIGH",
   "order": 61,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a857bc86e6bb4a87845c3455fb299d1b",
+      "author": "governor-187cc44e",
+      "content": "Governor note for review (facts only; the verdict is QA's). In 803a38d, packages/moe-daemon/src/server/WebSocketServer.ts shows 2713 changed lines, but `git diff --ignore-cr-at-eol` shows only +3. The file went from LF (0/1355 CRLF lines) to CRLF (1358/1358).\n\nThe worker didn't cause this. The shared checkout has 754 tracked files whose only difference from HEAD is CRLF line endings, 227 of them under packages/*/src and scripts/. The cause is Git for Windows' system `core.autocrlf=true` acting on the same checkout that the WSL wrappers commit from; WSL git has it unset. Any landing that touches one of those files commits the whole-file flip. CQ-M02 did the same to scripts/usage-report.mjs in db3172e (516 raw lines, 94 real).\n\nA central fix (repo-local autocrlf, plus restoring the EOL-only files) has been raised with the human.",
+      "timestamp": "2026-10-24T14:31:05.605Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:36.138Z",
-  "updatedAt": "2026-10-24T14:24:06.134Z",
+  "updatedAt": "2026-10-24T14:37:41.223Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:18:27.721Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-24T14:37:41.223Z",
+    "wallClockMs": 4753502
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -204,7 +214,50 @@
     "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
     "packages/moe-daemon/src/state/taskStore.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    ".moe/tasks/task-0f7df75fa8e44a75bf8547e53f48d5d5.json",
+    ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json"
+  ],
+  "completionSummary": "CQ-M01c: daemon-owned task executionPolicySnapshot persistence. updateTask writes the snapshot only inside the PLAN_SUBMITTED write (planSubmissionSnapshot). It shares one object and one writeEntity with the planRevision it records, so a failed write publishes neither (A4). Callers cannot write it: updateTask strips the key (forged, null, undefined or reset values), createTask builds the row field by field, and the /ws UPDATE_TASK denylist drops it (W1-W4, run against a real WS server). Progress, metadata, assignment and release writes leave it unchanged, and legacy WORKING rows gain no strict trust. A stored verified-local snapshot stays the floor through replan and rollback: v1 stays v1, only planRevision advances, and policies are never ranked.\nError handling: a malformed stored snapshot or malformed settings throws INVALID_INPUT before any write; reads, metadata, release and park still work (C4, D2).\nStrict backstop (assertProgressionReady) runs before any write in updateTask, createTask and approveTask (the last before cancelSpeedModeTimeout). It covers every plan submission and every climb up the BACKLOG..DONE ladder. A BLOCKED row stands at its recorded blockedFromStatus; ARCHIVED, an unrecorded block or an unknown status stands at 0. A release (the caller clears a held seat, to exactly nextStatusForRelease) is exempt. Nothing grants approval, readiness or trust. WS ERROR frames carry only {taskId}.\nTests: 247 in taskExecutionPolicy.test.ts and executionPolicySnapshot.test.ts. 15 single mutation probes each go red; probe 10 needed one added test.\nFor QA, theoretical and pre-existing: complete_task marks its attempt finalizing, and qa_approve records its Review, before a refused status write. A legacy all-done WORKING release reaches REVIEW only.\nacceptance.test.ts, executionProfile.ts and policy.ts are untouched; no .moe edits or Git writes.\nGate: full daemon suite exit 0, 147 files, 3082 passed | 9 skipped; tsc exit 0.",
+  "commits": [
+    {
+      "sha": "803a38d4086654563e20974afc4c7b832de59a25",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T13:39:47Z",
+      "paths": [
+        ".moe/tasks/task-0f7df75fa8e44a75bf8547e53f48d5d5.json",
+        ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
+        "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T14:26:08.345Z",
+      "treeId": "704bdad64eac3687334021398ce9d4b2e36a17f8",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+    "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
     "packages/moe-daemon/src/types/schema.ts"
   ],
-  "completionSummary": "CQ-M01c: daemon-owned task executionPolicySnapshot persistence. updateTask writes the snapshot only inside the PLAN_SUBMITTED write (planSubmissionSnapshot). It shares one object and one writeEntity with the planRevision it records, so a failed write publishes neither (A4). Callers cannot write it: updateTask strips the key (forged, null, undefined or reset values), createTask builds the row field by field, and the /ws UPDATE_TASK denylist drops it (W1-W4, run against a real WS server). Progress, metadata, assignment and release writes leave it unchanged, and legacy WORKING rows gain no strict trust. A stored verified-local snapshot stays the floor through replan and rollback: v1 stays v1, only planRevision advances, and policies are never ranked.\nError handling: a malformed stored snapshot or malformed settings throws INVALID_INPUT before any write; reads, metadata, release and park still work (C4, D2).\nStrict backstop (assertProgressionReady) runs before any write in updateTask, createTask and approveTask (the last before cancelSpeedModeTimeout). It covers every plan submission and every climb up the BACKLOG..DONE ladder. A BLOCKED row stands at its recorded blockedFromStatus; ARCHIVED, an unrecorded block or an unknown status stands at 0. A release (the caller clears a held seat, to exactly nextStatusForRelease) is exempt. Nothing grants approval, readiness or trust. WS ERROR frames carry only {taskId}.\nTests: 247 in taskExecutionPolicy.test.ts and executionPolicySnapshot.test.ts. 15 single mutation probes each go red; probe 10 needed one added test.\nFor QA, theoretical and pre-existing: complete_task marks its attempt finalizing, and qa_approve records its Review, before a refused status write. A legacy all-done WORKING release reaches REVIEW only.\nacceptance.test.ts, executionProfile.ts and policy.ts are untouched; no .moe edits or Git writes.\nGate: full daemon suite exit 0, 147 files, 3082 passed | 9 skipped; tsc exit 0."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-07cd2c56@2026-10-24T13:39:47Z",
+    "at": "2026-10-24T14:26:08.345Z"
+  },
+  "completedAt": "2026-10-24T14:37:41.223Z",
+  "reviewCompletedAt": "2026-10-24T14:37:41.223Z",
+  "reviewSummary": "APPROVED. Reviewed completion 803a38d (tree 704bdad6 = recorded) on moe/work-2026-10-24: the 5 owned files + 2 wrapper board records; working tree = commit (EOL-insensitive).\n\nGate in a FRESH git-archive copy of 803a38d (blobs hash-equal; Linux node_modules, lockfile JSON-equal; MOE_* unset; Linux-only PATH):\n- cd packages/moe-daemon && npm test -- --maxWorkers=4: exit 0, 147 files, 3082 passed / 9 skipped\n- npx tsc --noEmit --incremental false: exit 0; strict standalone tsc of both new tests: exit 0\n\nDoD:\n1 capture rides the same object/writeEntity as derivePlanRevision; A4 failed write publishes neither.\n2 store strip + field-by-field createTask + /ws denylist; W1 spy pins the denylist apart from the strip.\n3 progress/metadata writes keep identity; legacy WORKING rows gain none (B4/B5).\n4 strict floor kept whole, v1 stays v1, no ranking; malformed -> INVALID_INPUT before any write.\n5 pre-write backstop in updateTask/createTask/approveTask (before timer cancel); release, park, restore and reads work; no approval granted.\n6 reproduced.\n\nMy 13 mutation probes all killed (1-67 red each): strip, denylist, capture, floor, approve/create/update sites, finalUpdates, <= to <, capture-always, skip live capture, BLOCKED standing, caller-null.\n\nRails: acceptance.test.ts, executionProfile.ts, policy.ts unchanged; no forbidden patterns; ASCII-only additions; verified-local stays refused.\n\nNon-blocking:\n(a) Size: ~125 production + 1097 plan-mandated table-driven test lines; not cited (M02/M03a/M03b precedent).\n(b) Commit flips WebSocketServer.ts LF->CRLF in the index (whole-file EOL churn, as F02/M01a did to taskStore/schema). Review with --ignore-cr-at-eol; normalize in a follow-up.\n(c) Strict-only: reconcile sweep's seatless all-done WORKING->REVIEW routing and unrecorded-block restores (?? 'WORKING') are refused, caught, logged; M01e should align.\n(d) Worker's theoretical notes (a)/(b) are out of scope.",
+  "requiredCheckAtDone": null
 }
