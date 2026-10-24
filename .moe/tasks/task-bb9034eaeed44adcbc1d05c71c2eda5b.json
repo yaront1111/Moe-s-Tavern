@@ -87,7 +87,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -109,11 +109,23 @@
       "author": "architect-cq-coordinator",
       "content": "User clarification: token efficiency is a cross-cutting requirement on EVERY rollout task, not just context/cache tasks. Six epic rails now carry CQ-TOKEN-v1/safety/accounting. Measure whole-task tokens and cost per independently accepted change across architect, worker, QA, context-building and repair attempts, with cached/uncached/output counters kept distinct and missing data unknown. Do not confuse prompt-size reduction or caching with reduced active-context use; do not claim achieved savings before matched quality/repair/latency evidence. Keep instrumentation itself bounded and avoid logging full prompts/payloads or private reasoning.",
       "timestamp": "2026-10-24T12:32:33.846Z"
+    },
+    {
+      "id": "comment-cb3466bfa9ce479c9eba8f54491b2625",
+      "author": "architect-cq-coordinator",
+      "content": "Operator recovery: WSL Git had no credential helper. Configured only credential.https://github.com.helper in the WSL user Git config to invoke the already authenticated Windows GitHub CLI; no token was printed/copied/stored in the repository and Windows Git config/remote URLs are unchanged. Fresh GIT_TERMINAL_PROMPT=0 push --dry-run against refs/heads/moe/work-2026-10-24 succeeded using saved config. Checkpoint1bb42e1 is retained locally. No real push was issued by this recovery: the current wrapper should push normally at its next postflight. Do not force-push or rebase the shared checkout.",
+      "timestamp": "2026-10-24T12:58:39.938Z"
+    },
+    {
+      "id": "comment-f75d09135e624c80ba920ed04e0559fa",
+      "author": "architect-cq-coordinator",
+      "content": "Recovery verification complete: live git ls-remote observed refs/heads/moe/work-2026-10-24 at77cca30e01ad5a2702c0b751b05255c837a66654; local ancestry check proves checkpoint1bb42e1 is contained in that remote commit. The branch is now backed up on GitHub. Historical failed-push flags were not rewritten. WSL GitHub-only helper is persisted; existing Windows login reused, no token files/repo secrets, no force-push/rebase/reset.",
+      "timestamp": "2026-10-24T13:01:14.174Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:51.554Z",
-  "updatedAt": "2026-10-24T12:49:41.920Z",
+  "updatedAt": "2026-10-24T13:01:14.174Z",
   "dependsOn": [
     "task-7bf45815551b4ac49f1c7be392ef4b9e"
   ],
@@ -121,11 +133,14 @@
     "firstClaimAt": "2026-10-24T12:26:33.591Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T13:00:15.865Z",
+    "wallClockMs": 2022274
   },
   "contextFetchedBy": [
     "architect-da8841dc",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -185,6 +200,24 @@
       "treeId": "2e408b793fcc9b41ce356fa66d10906e73fe32c6",
       "status": "WORKING",
       "pushed": false
+    },
+    {
+      "sha": "db3172eff3d31d2a7c6020a0d69d9e89a631a7ec",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T12:32:11Z",
+      "paths": [
+        ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+        ".moe/tasks/task-bb9034eaeed44adcbc1d05c71c2eda5b.json",
+        "scripts/tests/usage-report.test.mjs",
+        "scripts/usage-report.mjs"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T12:51:55.047Z",
+      "treeId": "c93c90a8799cd689a41ef8f30e7c114f08ee537f",
+      "status": "REVIEW",
+      "pushed": false
     }
   ],
   "filesModified": [
@@ -192,14 +225,16 @@
     "scripts/tests/usage-report.test.mjs",
     "scripts/usage-receipt.mjs",
     "scripts/usage-session.mjs",
-    "scripts/usage-report.mjs"
+    "scripts/usage-report.mjs",
+    ".moe/tasks/task-0ece1a3552944298af911356f149e150.json",
+    ".moe/tasks/task-bb9034eaeed44adcbc1d05c71c2eda5b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-da8841dc@2026-10-24T12:26:26Z",
-    "at": "2026-10-24T12:46:34.119Z"
+    "kind": "completion",
+    "sessionId": "worker-07cd2c56@2026-10-24T12:32:11Z",
+    "at": "2026-10-24T12:51:55.047Z"
   },
   "reviewStartedAt": "2026-10-24T12:49:41.918Z",
   "verification": {
@@ -209,5 +244,9 @@
     "reportedAt": "2026-10-24T12:49:41.918Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M02 whole-task usage correlation, five files, launchers untouched. usage-receipt.mjs exports normalizeUsageContext: the one allowlist (8 legacy fields unchanged plus planRevision, packet, retrieval, planner, runner, candidate and deliveryReceipt ids, and a workKind enum; absent or invalid -> null, never 0). It also exports readMoeRecord: a filename-safe id guard, a 1 MiB regular-file limit, and a check that the record's own id matches. Receipts stay v1. usage-session.mjs no longer spreads raw input. It snapshots planRevision from the exact task record and runnerId only from an attempt whose id, taskId and workerId all match; caller overrides are ignored. usage-report.mjs keeps every legacy view. It carries correlation tuples through the existing session/event dedup, adds summary.ambiguousCorrelationGroups, and adds wholeTasks[]: totals across roles and providers, bounded tuples with ambiguity and unknown counts, and observed-records-only coverage. Delivery joins candidates and receipts through observed attempts only and is reported record-only (recorded / not-recorded / incomplete / unknown); DONE status and commits are never read as delivery. Targets, pushResult, prompts and prices are never copied. TDD: RED first, then GREEN. Mutation checks killed 18/18 guard mutants. Self-review fixed a RegExp coercion bug (an array landedRevision was being accepted). Gate: 45/45, exit 0, Linux WSL with the python3 engine only; the PowerShell runs were not exercised. Also 45/45 on a clean snapshot of HEAD plus these five files. Note: architect wrapper checkpoint 1bb42e1 already holds four of the files. Workspace CRLF bytes are kept (inherited churn). Packet, retrieval and planner producers do not exist yet; those fields stay unknown."
+  "completionSummary": "CQ-M02 whole-task usage correlation, five files, launchers untouched. usage-receipt.mjs exports normalizeUsageContext: the one allowlist (8 legacy fields unchanged plus planRevision, packet, retrieval, planner, runner, candidate and deliveryReceipt ids, and a workKind enum; absent or invalid -> null, never 0). It also exports readMoeRecord: a filename-safe id guard, a 1 MiB regular-file limit, and a check that the record's own id matches. Receipts stay v1. usage-session.mjs no longer spreads raw input. It snapshots planRevision from the exact task record and runnerId only from an attempt whose id, taskId and workerId all match; caller overrides are ignored. usage-report.mjs keeps every legacy view. It carries correlation tuples through the existing session/event dedup, adds summary.ambiguousCorrelationGroups, and adds wholeTasks[]: totals across roles and providers, bounded tuples with ambiguity and unknown counts, and observed-records-only coverage. Delivery joins candidates and receipts through observed attempts only and is reported record-only (recorded / not-recorded / incomplete / unknown); DONE status and commits are never read as delivery. Targets, pushResult, prompts and prices are never copied. TDD: RED first, then GREEN. Mutation checks killed 18/18 guard mutants. Self-review fixed a RegExp coercion bug (an array landedRevision was being accepted). Gate: 45/45, exit 0, Linux WSL with the python3 engine only; the PowerShell runs were not exercised. Also 45/45 on a clean snapshot of HEAD plus these five files. Note: architect wrapper checkpoint 1bb42e1 already holds four of the files. Workspace CRLF bytes are kept (inherited churn). Packet, retrieval and planner producers do not exist yet; those fields stay unknown.",
+  "completedAt": "2026-10-24T13:00:15.865Z",
+  "reviewCompletedAt": "2026-10-24T13:00:15.865Z",
+  "reviewSummary": "Reviewed recorded commits db3172e (completion) and 1bb42e1 (same-task checkpoint), both on moe/work-2026-10-24. Scope is the 5 owned scripts; .moe paths are wrapper board staging.\n\nGate re-run (plan command): exit 0, 45/45, on a clean git-archive snapshot of db3172e and on the tree. Linux, python3 engine only; PowerShell attribution not exercised.\n\nDoD:\n1) Counter semantics unchanged: normalizeUsage, dedup and aggregate untouched; no test weakened (only an import widened).\n2) Dedup and participation: fixture asserts duplicateRecords=3 and an exact whole-task total of 10100 +1 unknown across architect, context, implementation, Codex repair and QA (hand-checked). A multi-task session stays unattributed.\n3) No secrets or prices: one allowlist normalizer, no raw spread; tests assert SECRET, costUSD, toolArguments, prompt, pushResult and deliveryTarget are absent.\n4) Evidence reproduces.\n\nExtra checks:\n- Launchers send only allowlisted fields.\n- Live: my QA receipt carries planRevision=11 and runnerId from the matching attempt; older launches show null, not 0.\n- Real-repo analyze-usage run: exit 0, 9 rows, no leakage.\n- Daemon .tmp files and 40-hex landedRevision are compatible.\n- No forbidden patterns, deliveryPolicy or verified-local change.\n\nSize (no size rail): ignoring CR, +477/-15 = 462 net LOC (~150 production, ~329 tests from the plan's fixture matrix). Fully reviewed, not rejected for size: the bytes are already landed, so a split is unactionable without Git writes.\n\nNon-blocking:\n- Blobs flip LF to CRLF (inherited workspace churn, as in 9879f51/f6a79ef).\n- One malformed candidate or receipt marks delivery incomplete for every observed-attempt task (conservative).",
+  "requiredCheckAtDone": null
 }
