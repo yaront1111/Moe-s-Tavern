@@ -18,50 +18,80 @@
     {
       "stepId": "step-1",
       "description": "Prerequisites + harness (TDD red). Confirm CQ-M03a (task-44b44ccac62f4657890f98ff450738c8) is DONE/landed and READ its landed packages/moe-daemon/src/benchmarks/workloadSnapshot.ts; the planned names used below (validateWorkloads, digestFiles, digestWorkload, createCodingSnapshot, createAssessmentSnapshot, readSnapshotFiles, WORKLOAD_CANDIDATE_ROOT_ENV, FROZEN_STARTING_COMMIT, SOURCE_REPOSITORY) may differ, so adapt and NEVER edit that contract (if it blocks a fixture, stop and use moe.report_blocked / an explicit dependency update). Read the grounding sources AT THE FROZEN COMMIT, read-only, via `git show 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71:<path>`: packages/moe-daemon/src/delivery/executionProfile.ts and delivery/policy.ts (HEAD already differs here because CQ-M01b landed after the freeze; ground in the 35cf53c bytes), util/errors.ts, util/taskPayload.ts, tools/getPendingQuestions.ts, util/chatPayload.ts and util/cachedPlanPaths.ts. Create packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts (vitest, LF) importing `DEFECT_WORKLOADS` from './defectWorkloads.js' (red: not created yet) and the M03a API. Follow the shared corpus conventions:\n(a) dataset tests: validateWorkloads(DEFECT_WORKLOADS) succeeds; exactly the five pinned ids in order ['defect-stale-positive-readiness-helper','defect-stale-negative-integer-option','defect-changed-caller-chat-budget','defect-changed-requirements-delivery-policy','defect-recipe-mismatch-platform']; every category 'defect'; startingCommit === FROZEN_STARTING_COMMIT; source.paths limited to the grounding paths above; adaptation 'reduced' or 'adapted' with an honest note that also names the synthetic stale artifact; coverage tags, in order per case, stale-positive-context / stale-negative-context + reusable-helper / changed-caller / changed-requirements / recipe-mismatch; per-case digestWorkload literals (pinned in step 3).\n(b) one control harness: runAssessment(workload, candidateRoot) creates an assessment snapshot and runs `spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...each *.test.mjs], { cwd: assessmentRoot, env: { ...process.env, NODE_OPTIONS: '', [WORKLOAD_CANDIDATE_ROOT_ENV]: candidateRoot }, encoding: 'utf8', timeout: 60000 })`, then parses `ok`/`not ok N - <criterion-id>: ...` TAP lines into passed/failed ids. Error handling: a spawn error, signal or timeout counts as a failure with a bounded output excerpt, never as a pass.\n(c) per-case controls (it.each over { id, corrected, wrong, wrongMustFail }), each variant written into a FRESH coding snapshot: the original exits != 0 and fails at least one intended-change criterion; the corrected variant exits 0 with EVERY rubric criterion id reported ok; the plausible-wrong variant exits != 0 with wrongMustFail among the failures.\n(d) stale-artifact checks: each workload's initialFiles contain exactly one stale artifact under context/ or recipes/ (as designed below), it is plain data that no assessment reads, and every assessment passes on the corrected variant even with the stale artifact deleted from the candidate.\n(e) leakage: no initial file contains or equals any assessment or variant file content, and no coding snapshot contains a *.test.mjs.\n(f) determinism and reset: matching digests, and a mutation followed by a new snapshot restores snapshotDigest.\n(g) source checkout untouched: sha256 of the dataset module and the grounding files is identical before and after the suite.\nDispose every handle; give the control tests a 120s timeout.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
+      ],
+      "note": "M03a confirmed DONE/landed (35579c2); read the landed workloadSnapshot.ts. Its API matches the planned names: validateWorkloads, digestFiles, digestWorkload, createCodingSnapshot, createAssessmentSnapshot, readSnapshotFiles, WORKLOAD_CANDIDATE_ROOT_ENV, FROZEN_STARTING_COMMIT, SOURCE_REPOSITORY, CORPUS_COVERAGE_TAGS. Read the grounding sources at 35cf53c via git show.\n\nCreated defectWorkloads.test.ts with the M03b-style TAP harness and tests (a)-(g): stale-artifact inertness and a deleted-artifact rerun, leakage, an unset-root failure, determinism/reset, an ASCII guard and source sha256. CONTROLS and the pinned digests get filled in during steps 2-3.\n\nRED confirmed in the isolated Linux copy /tmp/moe-m03c-test.fZdH5W: import of ./defectWorkloads.js fails. Shared-tree dirty paths from other sessions are untouched.",
+      "startedAt": "2026-10-24T14:15:50.960Z",
+      "completedAt": "2026-10-24T14:20:44.174Z"
     },
     {
       "stepId": "step-2",
       "description": "Cases 1-2: create packages/moe-daemon/src/benchmarks/defectWorkloads.ts exporting `DEFECT_WORKLOADS = validateWorkloads([...])` (workload objects only; corrected and plausible-wrong variants live only in the test file). Fixture code is bounded Node ESM .mjs adapted from the frozen source; assessments are self-contained node:test files that import the candidate via pathToFileURL(path.join(process.env[WORKLOAD_CANDIDATE_ROOT_ENV], ...)), fail loudly when it is unset, and name tests `<criterion-id>: ...`. Each stale artifact is inert prose/JSON, headed as a capture from an earlier session that may be outdated, and is never imported.\nCASE 1 'defect-stale-positive-readiness-helper' (source delivery/executionProfile.ts + util/errors.ts at 35cf53c, adapted). initialFiles: src/errors.mjs (a minimal MoeError/invalidInput adaptation); src/executionProfile.mjs (decodeProfile/resolveExecutionProfile/assertExecutionProfileReady as frozen, so verified-local is refused unconditionally with codeName EXECUTION_PROFILE_NOT_READY and the five missingCapabilities); src/admission.mjs, whose admitTask(settings) imports `isExecutionProfileReady` - an export that does not exist - so the module fails to load; and context/stale-notes.md, which claims that export exists and returns true for verified-local when MOE_EXECUTION_PROFILE_READY=1. intendedBehavior: admitTask returns { admitted: true, profile } for absent/legacy/observe; returns { admitted: false, profile: 'verified-local', reason: 'EXECUTION_PROFILE_NOT_READY', missingCapabilities } for verified-local regardless of environment; lets malformed profiles throw invalid input; and does not change the shared module's exports. Criteria: loads-with-frozen-exports, admits-legacy-observe, refuses-verified-local (exact object), ignores-readiness-env (the assessment sets MOE_EXECUTION_PROFILE_READY=1 before importing), rejects-malformed-profile, shared-module-unchanged (the export names of executionProfile.mjs equal the frozen list). Corrected: try/catch around assertExecutionProfileReady. Plausible-wrong: adds isExecutionProfileReady to executionProfile.mjs, honouring the env flag as the stale note describes -> wrongMustFail 'ignores-readiness-env'.\nCASE 2 'defect-stale-negative-integer-option' (source util/taskPayload.ts + tools/getPendingQuestions.ts, adapted). initialFiles: src/errors.mjs, src/taskPayload.mjs (normalizeIntegerOption and the list constants as frozen), src/listPayload.mjs whose listOptions(raw) parses limit/offset with parseInt(...) || default, and context/stale-notes.md claiming no shared integer-option normalizer exists. intendedBehavior: listOptions({ limit, offset }) uses the existing helper, with limit defaulting to 100 in [1,500] and offset to 0 in [0, MAX_SAFE_INTEGER]: absent -> default; non-finite or non-number values (including '5', null, NaN, Infinity) throw the helper's invalid-input error naming the field; numbers are truncated and clamped. Criteria: defaults-when-absent, clamps-and-truncates (exact numbers: 9999->500, 0->1, 2.9->2, -3 offset->0), rejects-non-numbers (exact message), reuses-integer-option-helper (static: imports normalizeIntegerOption from './taskPayload.mjs'; no parseInt/Number(/Math.min of its own), helper-unchanged. Corrected: calls the helper twice. Plausible-wrong: an inline Math.max/Math.min/Math.trunc(Number(x ?? default)) duplicate -> wrongMustFail 'rejects-non-numbers'.\nPin each workload's snapshotDigest/assessmentDigest via digestFiles. Run only `npx vitest run src/benchmarks/defectWorkloads.test.ts` in the isolated Linux copy; cases 1-2 controls green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/defectWorkloads.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
+      ],
+      "note": "Created defectWorkloads.ts with cases 1-2, adapted from 35cf53c bytes (executionProfile.ts, errors.ts, taskPayload.ts, and getPendingQuestions as the caller pattern). Snapshot and assessment digests are pinned; I computed them with tsx in the isolated copy (helper script /tmp/m03c-tools/digests.mjs, kept outside the repo).\n\nCase 1 assessment is split across two node:test files, so the env flag is set before import in a separate process:\n- acceptance.test.mjs runs with the env deleted.\n- readiness-env.test.mjs runs with MOE_EXECUTION_PROFILE_READY=1.\n\nA deferred load makes the original's import failure fail each criterion individually rather than the whole file.\n\nControls pin the exact failed sets:\n- Case 1 original fails loads/admits/refuses/ignores-env/malformed. Wrong (env-honouring isExecutionProfileReady added to the shared module) fails ignores-readiness-env and shared-module-unchanged.\n- Case 2 original fails clamps/rejects/reuses. Wrong (inline Number/clamp) fails rejects-non-numbers and reuses-integer-option-helper.\n\nIsolated Linux copy, focused run: all case 1-2 tests pass, 9/9, including the deleted-stale-artifact reruns. The 9 failures in the full file are only the case 3-5 ids, which step 3 adds. Both files are printable ASCII.",
+      "startedAt": "2026-10-24T14:20:47.347Z",
+      "completedAt": "2026-10-24T14:24:00.173Z"
     },
     {
       "stepId": "step-3",
       "description": "Cases 3-5 in the same two files, then freeze.\nCASE 3 'defect-changed-caller-chat-budget' (source util/chatPayload.ts, reduced: CHAT_MESSAGE_OVERHEAD_CHARS, chatMessageResponseCost, capChatMessagesToResponseBudget). initialFiles: src/chatPayload.mjs with the positional (messages, maxContentChars, budget) helper as frozen; src/chatRead.mjs, the CHANGED caller, whose readPage(messages, options) now passes `{ maxContentChars, budget }` so the old positional helper silently computes the wrong split; and context/cached-signatures.json, a stale signature index that says callers must pass numbers. intendedBehavior: the helper accepts the new options object AND the legacy positional form, validates that both values are finite numbers (budget > 0), keeps 'always deliver at least one message' and returns the exact undelivered tail. Criteria: accepts-options-shape (exact delivered/dropped ids for a fixed message set), legacy-positional-still-works, always-delivers-one, keeps-undelivered-tail, rejects-bad-options. Corrected: normalizes both call shapes. Plausible-wrong: switches the helper to options-only -> wrongMustFail 'legacy-positional-still-works'.\nCASE 4 'defect-changed-requirements-delivery-policy' (source delivery/policy.ts resolveDeliveryPolicy + delivery/executionProfile.ts at 35cf53c, adapted: the fixture deliberately RE-INTRODUCES the superseded lenient branch as the defect, and the note says so). initialFiles: src/deliveryPolicy.mjs, whose resolveDeliveryPolicy maps unknown values to 'legacy'; src/effectivePolicy.mjs, whose effectiveDeliveryPolicy(settings) returns 'legacy' for the observe profile; and context/stale-review-notes.md, recommending exactly those fallbacks. intendedBehavior (the changed requirement): absent/null -> 'legacy'; the five exact values pass; any other value (case variants, '', non-strings) throws invalid input naming the allowed values; absent/legacy/observe profiles return the live policy unchanged (observe never relaxes a strict policy); verified-local is refused as not ready. Criteria: absent-null-default-legacy, recognized-values-pass, unknown-refused, observe-never-relaxes, verified-local-not-ready. Corrected: strict decoding. Plausible-wrong: refuses unknown values but lower-cases input first, so 'LOCAL-BRANCH' is accepted -> wrongMustFail 'unknown-refused'.\nCASE 5 'defect-recipe-mismatch-platform' (source util/cachedPlanPaths.ts runGit: shell-free execFile argv and the platform-specific GIT_CONFIG_GLOBAL NUL vs /dev/null; adapted, with the recipe-selection logic synthetic and the note saying so). initialFiles: recipes/verify.json, a stored stale recipe set (a win32/pwsh recipe with GIT_CONFIG_GLOBAL=NUL first, a linux/bun recipe, then a linux/node recipe with /dev/null), and src/verification.mjs, whose runVerification(recipes, env, exec) optimistically executes the FIRST stored recipe. intendedBehavior: never execute an incompatible recipe. Select the first recipe whose platform === env.platform, whose runtime is in env.runtimes and whose argv is a non-empty array of non-empty strings with argv[0] === runtime. Call exec(argv, { env: recipe.env }) exactly once with it - argv only, never a shell string. When none fits, return { action: 'reject', reason: 'NO_COMPATIBLE_RECIPE', rejected: [{ id, reason }] } without calling exec. Malformed recipes are rejected, never run. Criteria: selects-compatible-recipe (the injected exec spy receives the posix argv/env once), rejects-platform-mismatch (no exec call), rejects-unavailable-runtime, rejects-malformed-recipe, passes-argv-without-shell. Corrected: filters plus validation. Plausible-wrong: checks only the platform, so the linux/bun recipe runs -> wrongMustFail 'rejects-unavailable-runtime'.\nFreeze: pin snapshotDigest/assessmentDigest per workload and the five digestWorkload literals. Make the whole file green with focused runs in the isolated Linux copy.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/defectWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
+      ],
+      "note": "Added cases 3-5 and froze the corpus.\n\nCase 3 (chatPayload reduced at 35cf53c):\n- Changed caller: chatRead.mjs.\n- Stale artifact: context/cached-signatures.json.\n- Corrected: readBudgetOptions accepts both call shapes. Wrong (options-only) fails only legacy-positional-still-works.\n\nCase 4 (policy.ts + executionProfile.ts at 35cf53c):\n- The lenient fallback is a synthetic re-introduction, and the note says so.\n- Stale artifact: context/stale-review-notes.md.\n- Corrected: strict decoder plus assertExecutionProfileReady. Wrong (trim + lower-case) fails only unknown-refused.\n\nCase 5 (cachedPlanPaths runGit contract):\n- The selector and recipes/verify.json are synthetic, and the note says so.\n- Only the injected exec spy ever runs.\n- Corrected: shape-first, then platform, then runtime. Wrong (platform only) fails only rejects-unavailable-runtime.\n\nI kept the criteria orthogonal: the runtime-skipping scenario lives in rejects-unavailable-runtime.\n\nFrozen digests: STALE_HEADER became one line, so the JSON artifacts carry it, and all 5 cases' digests were recomputed. snapshotDigest/assessmentDigest are pinned per workload, along with the five digestWorkload literals.\n\nIsolated Linux copy: the focused vitest run passes 28/28. A separate probe confirmed each original fails on the defect's real assertion, not on an incidental crash. The exceptions are case 1's load error (which is the defect) and the exact failed sets the test pins. Both files are printable ASCII, with no forbidden-pattern substrings.",
+      "startedAt": "2026-10-24T14:24:01.133Z",
+      "completedAt": "2026-10-24T14:29:27.987Z"
     },
     {
       "stepId": "step-4",
       "description": "The one verification gate. Build a FRESH synchronized isolated copy (recipe in planningNotes; it must include the landed M03a contract), add the two owned files' working-tree bytes, and with Linux-only PATH run exactly: `cd <copy>/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/defectWorkloads.test.ts` (fresh exit 0; report actual pass/skip counts). Then run `npx tsc --noEmit --incremental false` with the same PATH (the dataset compiles into dist; vitest does not typecheck). Repeat the focused run once to show repeatability and confirm no `moe-workload-*` temp dirs remain. Never touch the original Windows node_modules or any package-lock.json, and confirm the tested files are byte-identical (sha256) to the working tree. Keep the command and output tail for complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate run in a FRESH git-archive copy, /tmp/moe-m03c-test.NnHrz6, with Linux node_modules symlinked and a Linux-only PATH. The owned files and workloadSnapshot.ts are sha256-identical to the working tree, and the contract is unchanged vs HEAD.\n\nResults:\n- `npx vitest run src/benchmarks/defectWorkloads.test.ts`: exit 0, 28 passed, 0 skipped. Repeat run also exit 0, 28/28.\n- `npx tsc --noEmit --incremental false`: exit 0.\n- Test file through a temp tsconfig (types: node) inside the copy: tsc exit 0.\n- 0 leftover moe-workload-* temp dirs.\n\nNo Windows node_modules or lockfile was touched.",
+      "startedAt": "2026-10-24T14:29:28.842Z",
+      "completedAt": "2026-10-24T14:30:15.688Z"
     },
     {
       "stepId": "step-5",
       "description": "Exactly one adversarial self-review of the two-file diff (load adversarial-self-review). Challenge each case. Does the original fail an intended-change criterion for the defect's real reason (case 1's load failure IS the stale-positive defect)? Does the corrected variant pass every criterion and the wrong variant fail the named one rather than crash? Could a solution that obeys the stale artifact pass anything it should not? Can the rubric be met by ignoring the changed caller or requirement? Are the stale artifacts inert (never imported or read by assessments) and labeled as stale, with separate provenance? Are the fixture deviations from the frozen source (case 4's re-introduced lenient branch, case 5's synthetic selector) disclosed? Do any criteria depend on the real environment, platform, clock, network or git (case 5 must use only the injected exec spy)? Are template-literal escapes and digests stable? Confirm: no production/daemon edit, no edit to workloadSnapshot.ts or sibling datasets, no Git or .moe writes, no benchmark/VM/readiness claims, and no substring from the project's global forbiddenPatterns (project.globalRails) anywhere in the files, fixture strings included. Fix findings with tests; if any byte changed after step 4, rerun the step-4 commands fresh and use that output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/defectWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts"
+      ],
+      "note": "Adversarial self-review of both new files, done once. One finding was fixed.\n\n**Fix:** case 2's reuse check could be gamed. A candidate could import normalizeIntegerOption without calling it and throw via `throw(`. The assessment now also requires a normalizeIntegerOption( call and rejects any `\\bthrow\\b`, and the criterion description says \"imports and calls\". Only case 2's digests and digestWorkload changed; the pin is updated. I proved the hole is closed with a one-off probe: a gaming variant (unused import plus a hand-built throw( error) passes behaviour but fails reuses-integer-option-helper. Corrected and wrong controls are unchanged and still green.\n\n**Checked, no change needed:**\n- **Originals fail for the right reason.** Each original fails on the defect's real assertion, as the probe showed. Case 1's load error is the defect itself.\n- **Wrong variants fail cleanly.** Each fails exactly its pinned set, with assertion failures rather than crashes.\n- **Obeying the stale artifact fails** in every case:\n  - env bypass, or adding the helper to the shared module (case 1);\n  - an own parser (case 2);\n  - reverting to positional (case 3), because the helper is tested directly with options;\n  - lenient fallbacks (case 4);\n  - running the first recipe (case 5).\n- **Stale artifacts are inert.** Each is labelled and never read by a module or assessment; a test enforces this, and the corrected variant passes with the artifact deleted.\n- **Deviations are disclosed** in source.note: case 4's re-introduced lenient branch and case 5's synthetic selector.\n- **No dependence on the real environment, clock, network or git.** Case 5 uses only the exec spy. Case 1 deletes or sets its env flag per file.\n- **Digests are stable** on a CRLF-converted copy: 28/28.\n- **Hygiene:** no forbidden-pattern substrings; files are printable ASCII.\n- **Scope:** no production, contract, sibling, Git or .moe writes, and no benchmark, VM or readiness claims.\n\n**Considered, accepted:**\n- The artifact headers say \"synthetic ... benchmark\". Both arms of a matched comparison see identical inputs, and this keeps the disclosure honest.\n- The harness passes process.env through (same as M03b). A NODE_TEST_CONTEXT inherited from a node --test parent is theoretical.\n- Both files exceed 300 lines, following the M03b precedent: five fixtures plus their assessments.\n\n**Gate (bytes changed after step 4, so rerun FRESH in /tmp/moe-m03c-test.eQ7nqb):** sha256-identical to the working tree.\n- vitest: exit 0, 28/28, twice.\n- tsc --noEmit: exit 0.\n- Test file via temp tsconfig: exit 0.\n- 0 leftover temp dirs.",
+      "startedAt": "2026-10-24T14:30:16.606Z",
+      "completedAt": "2026-10-24T14:32:11.644Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -77,20 +107,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.397Z",
-  "updatedAt": "2026-10-24T13:03:30.273Z",
+  "updatedAt": "2026-10-24T14:32:44.470Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:00:09.616Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-c1d9de02"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T13:03:30.170Z",
   "planningNotes": {
@@ -108,5 +146,19 @@
       "packages/moe-daemon/src/util/cachedPlanPaths.ts"
     ]
   },
-  "planApprovedAt": "2026-10-24T13:03:30.273Z"
+  "planApprovedAt": "2026-10-24T13:03:30.273Z",
+  "workStartedAt": "2026-10-24T14:15:50.960Z",
+  "reviewStartedAt": "2026-10-24T14:32:44.468Z",
+  "verification": {
+    "command": "cd /tmp/moe-m03c-test.eQ7nqb/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/defectWorkloads.test.ts  # plan's command (cd packages/moe-daemon && npx vitest run src/benchmarks/defectWorkloads.test.ts) in a FRESH git-archive copy of HEAD with the two owned files sha256-identical to the working tree and Linux-native node_modules",
+    "exitCode": 0,
+    "outputTail": " RUN  v5.0.3 /tmp/moe-m03c-test.eQ7nqb/packages/moe-daemon\n\n Test Files  1 passed (1)\n      Tests  28 passed (28)\n   Start at  17:31:47\n   Duration  2.39s (tests 96%, transform 3%, import 1%)\n\nRepeat run: exit 0, 28 passed (28). npx tsc --noEmit --incremental false: exit 0. Test file via temp tsconfig (types: node): tsc exit 0. CRLF-converted copy: 28 passed. Leftover moe-workload-* temp dirs: 0.",
+    "reportedAt": "2026-10-24T14:32:44.468Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts",
+    "packages/moe-daemon/src/benchmarks/defectWorkloads.ts"
+  ],
+  "completionSummary": "Delivered two new files, and nothing else changed: packages/moe-daemon/src/benchmarks/defectWorkloads.ts, which exports DEFECT_WORKLOADS = validateWorkloads([...]), and defectWorkloads.test.ts.\n\nThere are five frozen defect cases on the landed M03a contract, at commit 35cf53c, with pinned digests:\n1. **stale-positive-readiness-helper:** a stale note claims an isExecutionProfileReady env bypass.\n2. **stale-negative-integer-option:** a stale note says no normalizer exists; the fix must call normalizeIntegerOption.\n3. **changed-caller-chat-budget:** the caller now passes an options object; legacy positional calls must still work.\n4. **changed-requirements-delivery-policy:** strict decoding; observe never relaxes; verified-local is not ready.\n5. **recipe-mismatch-platform:** shape, then platform, then runtime selection, using only an injected exec spy.\n\nEach case ships one inert stale artifact under context/ or recipes/. It has a staleness header and synthetic provenance, and source.note discloses every deviation, including case 4's re-introduced lenient branch and case 5's synthetic selector.\n\nControls run the unchanged node:test rubric against fresh snapshots and pin the exact failed sets. In every case, the original fails intended-change criteria, the test-only corrected variant passes all of them (even with the stale artifact deleted), and the plausible-wrong variant fails its named criterion.\n\nSelf-review hardened case 2's reuse check: it now requires a call to normalizeIntegerOption and bans `\\bthrow\\b`. A probe confirmed that a gaming variant is now rejected.\n\nFresh isolated Linux copy:\n- vitest: 28/28, twice;\n- tsc: exit 0;\n- the test file typechecks;\n- a CRLF copy passes 28/28;\n- 0 leftover temp dirs.\n\nThere are no production, contract, sibling, Git or .moe edits, and no benchmark, VM or readiness claims."
 }
