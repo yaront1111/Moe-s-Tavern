@@ -21,6 +21,7 @@ import type {
   ImplementationStep,
   Project,
   ProjectSettings,
+  ProtectedCheckDefinition,
   StepAmendment,
   StepStatus,
   Task,
@@ -33,7 +34,7 @@ import type {
 import { invalidInput } from '../util/errors.js';
 import { assertExecutionProfileReady, EXECUTION_PROFILES, resolveExecutionProfile } from '../delivery/executionProfile.js';
 import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
-import { normalizeAffectedFiles } from '../util/affectedFiles.js';
+import { normalizeAffectedFile, normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
 
@@ -122,10 +123,67 @@ export const MAX_CONTRACT_BEHAVIOR_CHARS = 2000;
 export const MAX_CONTRACT_LIST_ITEMS = 50;
 export const MAX_CONTRACT_ITEM_CHARS = 1000;
 
-const CONTRACT_FIELD_KINDS: { [K in keyof Required<TaskExecutionContract>]: 'text' | 'list' } = {
+export const MAX_REQUIRED_CHECKS = 20;
+export const MAX_REQUIRED_CHECK_PATHS = 50;
+export const MAX_REQUIRED_CHECK_COMMAND_CHARS = 1000;
+const CHECK_PATH_KINDS = ['configs', 'scripts', 'assertionRoots'] as const;
+const CHECK_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+function validateCheckPaths(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) throw invalidInput(field, 'must be an array of paths');
+  if (value.length > MAX_REQUIRED_CHECK_PATHS) {
+    throw invalidInput(field, `must contain ${MAX_REQUIRED_CHECK_PATHS} paths or fewer`);
+  }
+  return [...new Set(Array.from(value, (entry, index) => {
+    const itemField = `${field}[${index}]`;
+    const normalized = normalizeAffectedFile(entry, itemField);
+    if (entry !== normalized) throw invalidInput(itemField, `must be normalized: ${normalized}`);
+    if (CHECK_CONTROL_CHARACTERS.test(normalized)) throw invalidInput(itemField, 'cannot contain control characters');
+    if (/[*?\[\]]/.test(normalized) || normalized.startsWith(':')) {
+      throw invalidInput(itemField, 'cannot contain glob or pathspec magic');
+    }
+    return normalized;
+  }))];
+}
+
+function validateRequiredChecks(value: unknown, field: string): ProtectedCheckDefinition[] {
+  if (!Array.isArray(value)) throw invalidInput(field, 'must be an array of check definitions');
+  if (value.length > MAX_REQUIRED_CHECKS) {
+    throw invalidInput(field, `must contain ${MAX_REQUIRED_CHECKS} definitions or fewer`);
+  }
+  const ids = new Set<string>();
+  return Array.from(value, (entry, index) => {
+    const itemField = `${field}[${index}]`;
+    const input = requirePlainObject(entry, itemField);
+    const prototype: unknown = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) throw invalidInput(itemField, 'must be a plain object');
+    for (const key of Object.keys(input)) {
+      if (!['id', 'command', ...CHECK_PATH_KINDS].includes(key)) {
+        throw invalidInput(`${itemField}.${key}`, 'is not a supported check definition field');
+      }
+    }
+    const id = input.id;
+    if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
+      throw invalidInput(`${itemField}.id`, 'must be 1-64 alphanumeric, dot, underscore or hyphen characters, starting alphanumeric');
+    }
+    if (ids.has(id)) throw invalidInput(`${itemField}.id`, 'must be unique');
+    ids.add(id);
+    const command = validateStringValue(input.command, `${itemField}.command`, { maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS });
+    if (CHECK_CONTROL_CHARACTERS.test(command)) throw invalidInput(`${itemField}.command`, 'cannot contain control characters');
+    const definition: ProtectedCheckDefinition = { id, command };
+    for (const kind of CHECK_PATH_KINDS) {
+      if (input[kind] === undefined || input[kind] === null) continue;
+      const paths = validateCheckPaths(input[kind], `${itemField}.${kind}`);
+      if (paths.length) definition[kind] = paths;
+    }
+    return definition;
+  });
+}
+
+const CONTRACT_FIELD_KINDS: { [K in keyof Required<TaskExecutionContract>]: 'text' | 'list' | 'checks' } = {
   intendedBehavior: 'text', acceptanceCriteria: 'list', invariants: 'list',
   compatibility: 'list', approvedScope: 'list', reuse: 'list',
-  sourceAssumptions: 'list', checkRefs: 'list',
+  sourceAssumptions: 'list', checkRefs: 'list', requiredChecks: 'checks',
 };
 export const EXECUTION_CONTRACT_FIELDS = Object.keys(CONTRACT_FIELD_KINDS) as (keyof TaskExecutionContract)[];
 
@@ -139,6 +197,11 @@ export function validateExecutionContract(value: unknown, fieldName = 'execution
     const item = input[key];
     if (item === undefined || item === null) continue;
     const field = `${fieldName}.${key}`;
+    if (key === 'requiredChecks') {
+      const checks = validateRequiredChecks(item, field);
+      if (checks.length) contract[key] = checks;
+      continue;
+    }
     if (key === 'intendedBehavior') {
       contract[key] = validateStringValue(item, field, { maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, allowNewlines: true });
       continue;

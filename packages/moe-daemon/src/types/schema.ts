@@ -720,6 +720,15 @@ export interface TaskDeliveryEvidence {
   recordedAt: string; // ISO
 }
 
+/** Approved commands and their defining configs/scripts and protected assertion roots; approval material, never evidence. */
+export interface ProtectedCheckDefinition {
+  id: string;
+  command: string;
+  configs?: string[];
+  scripts?: string[];
+  assertionRoots?: string[];
+}
+
 /**
  * Optional execution intent, canonicalized by validateExecutionContract. A docs
  * fix may supply only intendedBehavior; an API change may also need compatibility.
@@ -742,6 +751,7 @@ export interface TaskExecutionContract {
   sourceAssumptions?: string[];
   /** Required verification commands, exactly as they will be run. */
   checkRefs?: string[];
+  requiredChecks?: ProtectedCheckDefinition[];
 }
 
 export interface Task {

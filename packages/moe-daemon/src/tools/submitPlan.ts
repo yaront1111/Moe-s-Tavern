@@ -3,7 +3,10 @@ import type { StateManager } from '../state/StateManager.js';
 import type { Effort, ProjectSettings, TaskStatus } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
 import { checkPlanRails, type RailsCheckResult } from '../util/rails.js';
-import { validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS } from '../state/validators.js';
+import {
+  validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS,
+  MAX_REQUIRED_CHECKS, MAX_REQUIRED_CHECK_PATHS, MAX_REQUIRED_CHECK_COMMAND_CHARS,
+} from '../state/validators.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles, findMissingPaths, pathKey } from '../util/affectedFiles.js';
@@ -213,6 +216,20 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             reuse: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Existing implementations reused, or why a new one is needed.' },
             sourceAssumptions: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Source facts with path and symbol references.' },
             checkRefs: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Required verification commands, exactly as run.' },
+            requiredChecks: {
+              type: 'array', maxItems: MAX_REQUIRED_CHECKS,
+              description: 'Protected required checks: approved commands plus the config/script files and assertion roots whose content defines them; changes advance planRevision.',
+              items: {
+                type: 'object', additionalProperties: false, required: ['id', 'command'],
+                properties: {
+                  id: { type: 'string', maxLength: 64, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' },
+                  command: { type: 'string', maxLength: MAX_REQUIRED_CHECK_COMMAND_CHARS },
+                  configs: { type: 'array', maxItems: MAX_REQUIRED_CHECK_PATHS, items: { type: 'string' } },
+                  scripts: { type: 'array', maxItems: MAX_REQUIRED_CHECK_PATHS, items: { type: 'string' } },
+                  assertionRoots: { type: 'array', maxItems: MAX_REQUIRED_CHECK_PATHS, items: { type: 'string' } },
+                },
+              },
+            },
           },
         },
         workerId: { type: 'string' },
@@ -348,7 +365,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
         assertPlanRails(railsCheck, task.id);
         if (executionContract !== undefined) {
-          const contractText = Object.values(executionContract).flat().join(' ');
+          const { requiredChecks, ...textContract } = executionContract;
+          const contractText = [...Object.values(textContract).flat(), ...(requiredChecks ?? []).flatMap(check => [
+            check.id, check.command, ...(check.configs ?? []), ...(check.scripts ?? []), ...(check.assertionRoots ?? []),
+          ])].join(' ');
           assertPlanRails(checkPlanRails(contractText, { ...project.globalRails, requiredPatterns: [] }, epic, task), task.id);
         }
 

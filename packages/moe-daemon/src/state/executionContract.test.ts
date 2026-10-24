@@ -152,7 +152,7 @@ describe('validateExecutionContract', () => {
     expect(() => validators.validateExecutionContract(value)).toThrowError(expect.objectContaining(invalid(field as string)));
   });
   it('shares the exact ordered allowlist', () => {
-    expect(validators.EXECUTION_CONTRACT_FIELDS).toStrictEqual([...FIELDS]);
+    expect(validators.EXECUTION_CONTRACT_FIELDS).toStrictEqual([...FIELDS, 'requiredChecks']);
   });
   it('reports a custom dotted field path', () => {
     expect(() => validators.validateExecutionContract({ checkRefs: [null] }, 'custom'))
