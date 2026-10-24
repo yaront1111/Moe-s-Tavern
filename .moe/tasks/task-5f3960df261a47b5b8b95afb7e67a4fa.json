@@ -1,0 +1,28 @@
+{
+  "id": "task-5f3960df261a47b5b8b95afb7e67a4fa",
+  "epicId": "epic-be924fb8",
+  "title": "bug: Git Bash postflight account fixture compares Windows CLAUDE_CONFIG_DIR with POSIX ACCT_HOME and misses refused launches",
+  "description": "Native Windows Git Bash `bash scripts/tests/postflight.sh` fails at [accounts] refused after all 73 frozen cases pass: expected MOE_ACCOUNT_REFUSED, but fake acct-1 emits allowed usage and exits 0. The generated ACCT_CLI compares Windows-form CLAUDE_CONFIG_DIR (C:\\\\Users\\\\...\\\\acct-home\\\\acct-1) with POSIX $ACCT_HOME/acct-1 (/tmp/...); raw equality fails even for the same normalized path (confirmed with cygpath probe). Evidence: /tmp/moe-account-switch-full-native.log; inspect scripts/tests/postflight.sh account fixture around lines 1600–1650. Do not change the mod or real-account configuration.",
+  "definitionOfDone": [
+    "The fake account CLI recognizes the same account folder in Windows and POSIX forms without reading any real Claude config directory.",
+    "Native Windows Git Bash `bash scripts/tests/postflight.sh` passes all account scenarios, including refused, signout, other, wait, none and interactive; retain regression coverage.",
+    "Linux/WSL postflight behavior remains green and no real-account/model requests are introduced."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 15,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T22:28:10.463Z",
+  "updatedAt": "2026-10-24T22:28:10.463Z"
+}

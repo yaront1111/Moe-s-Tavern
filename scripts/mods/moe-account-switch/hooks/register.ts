@@ -60,6 +60,14 @@ async function isSeat($: EngineInterface): Promise<boolean> {
   return Boolean((await $.env.get('MOE_WORKER_ID')) && (await $.env.get('MOE_ACCOUNT_ID')))
 }
 
+async function checkHardLimit($: EngineInterface, session: Session): Promise<void> {
+  if (session.pending || !(await isSeat($))) return
+  const { rateLimits } = await $.session.usage()
+  if (rateLimits.some(window => window.percentUsed >= 100)) {
+    session.pending ??= `${MARK} this Claude account reached its usage limit. End your turn now: Moe restarts this seat on the next account.`
+  }
+}
+
 async function exit($: EngineInterface): Promise<void> {
   try {
     await $.command.run({ command: 'exit' })
@@ -100,7 +108,11 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (e.agentId === undefined) leave($, session)
+    if (e.agentId === undefined) {
+      // An earlier mod can skip classic.StopFailure; check usage independently.
+      await checkHardLimit($, session)
+      leave($, session)
+    }
     return done
   }).catch(($, e, next) => next(e))
 
@@ -108,12 +120,9 @@ export const register: Register = on => {
   // and the statusline sample already tells the daemon the account is spent.
   on('classic.StopFailure', async ($, e, next) => {
     const done = await next(e)
-    if (e.error !== 'rate_limit' || e.agent_id !== undefined || session.pending || !(await isSeat($))) return done
-    const { rateLimits } = await $.session.usage()
-    if (rateLimits.some(window => window.percentUsed >= 100)) {
-      session.pending = `${MARK} this Claude account reached its usage limit. End your turn now: Moe restarts this seat on the next account.`
-      leave($, session)
-    }
+    if (e.error !== 'rate_limit' || e.agent_id !== undefined || session.pending) return done
+    await checkHardLimit($, session)
+    leave($, session)
     return done
   }).catch(($, e, next) => next(e))
 }

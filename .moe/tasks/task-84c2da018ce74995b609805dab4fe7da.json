@@ -13,9 +13,37 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 17,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "GATE FIRST: make no edit before the human's rail decision is known.\nThis is a size-only reopen. QA found no failed DoD item in e587474 and offered two options:\n- (b) an explicit R07 size exception on the epic rail, which is the R06 precedent;\n- (a) a re-slice.\nThe architect filed (b) as rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (MODIFY_RAIL, EPIC).\n\n1. Read allRails.epic from moe.get_context.\n   - If the size-exception rail contains 'CQ-R07: the pinned guest bootstrap as landed in e587474', continue with step 2.\n   - Otherwise read the decision READ-ONLY from .moe/proposals/prop-d3ccceade25f4af19518ce0e930e4123.json (field status):\n     - PENDING: call moe.report_blocked { reason: 'awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a)' } with no blockedOnTaskIds, then end the session.\n     - REJECTED: call moe.request_replan { reason: 'R07 size exception rejected (prop-d3ccceade25f4af19518ce0e930e4123): re-slice R07 per QA option (a), the A/B/C/D1/D2 cut in rejectionDetails' }, then end the session.\n2. Confirm the landed bytes are untouched: `git diff --stat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` prints nothing. If a peer changed them, stop and report_blocked with the diff summary.\n\nThe four files are not contested: R03, R04 and R05 depend on this task, so their plan paths do not count against it. Any editor works.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "QA's carried-forward hardening note, test first. These are the only bytes this task adds on top of e587474.\n\n1. RED, in scripts/tests/local-runner.test.mjs (LF):\n   - In the DENIALS table (~914-924), right after the readInstanceData row, add `['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED']`.\n   - EXPECTED_PROBES (~937), the healthy answers (~982) and the exposure loop (~1346) all derive from DENIALS. So the probe is asserted in the frozen argv table and as an exit-0 exposure without further test code.\n   - Run `node --test scripts/tests/local-runner.test.mjs` and record the failure: the source does not run the probe yet.\n2. GREEN, in scripts/local-runner/guest-readiness.mjs:\n   - Add the identical row at the same index of DENIED (~34-44).\n   - Extend the comment above DENIED with cloud-init's combined config: the internal_files docs describe it as a root-readable, unredacted merged config with user-data overrides applied, so it can carry the write_files credential. Its mode on the pinned image is R13 real-guest certification.\n   - Error handling stays as it is: deny() treats only exit 1 as a denial, exit 0 is CREDENTIAL_EXPOSED and any other code is PROBE_UNKNOWN. A missing file reads as denied, because `test -r` exits 1.\n   - Run again and confirm it passes.\n\nNo other source or test change. The rail allows growth only by fixes QA requires.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run each command once, fresh.\n\n1. NAMED COMMAND (DoD 4, the complete_task evidence): `node --test scripts/tests/local-runner.test.mjs` from the repo root, on Linux/WSL with a Linux Node 24.\n   - Use `env -i HOME=\"$HOME\" PATH=<Linux node bin + /usr/local/bin:/usr/bin:/bin>`, with no MOE_* vars.\n   - It must exit 0 with 0 failed and 0 skipped: 139 tests on Linux, and the real-provider-process test must run.\n2. `node --test scripts/tests/local-runner-bundle.test.mjs` exits 0.\n3. `git diff --check` is clean.\n4. Prove the growth: `git diff --numstat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` lists only guest-readiness.mjs (the row plus its comment lines) and local-runner.test.mjs (one row).\n\nA failure outside these files must be reproduced on a clean `git archive HEAD scripts` snapshot before you call it pre-existing.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task. QA ran no independent mutation probes on R07, so this evidence is part of the deliverable.\n\nScratch tree: build it read-only with `git archive HEAD scripts | tar -x -C <scratch>`, overlay this session's two files, and run the named command there. Never mutate the live tree.\n\nEach mutation must turn the command red:\n(1) remove the new DENIED row;\n(2) make deny() treat exit 2 as a denial;\n(3) accept a Multipass 'Running' guest as ready without the cloud-init wait;\n(4) accept cloud-init 'degraded done' (exit 2) as done;\n(5) make recordImage overwrite a different stored image instead of answering IMAGE_IDENTITY_CHANGED;\n(6) make waitForGuestReady accept a caller sourceImage whose sha256 differs from the manifest pin.\n\nFor any survivor, add the smallest test that kills it. That counts as a QA-required fix inside the rail; say so.\n\nIn complete_step's note, list each mutation with the test name that went red, so QA can re-run them.\n\nAlso attack:\n- Is the new probe's argv fixed, with no caller data?\n- Is the comment accurate, claiming no mode?\n- executionReady stays false, and nothing claims verified-local.\n\nIf any byte changed after step 3, rerun step 3's named command and submit that output.\n\nmodifiedFiles: scripts/local-runner/guest-readiness.mjs, scripts/tests/local-runner.test.mjs. No Git writes; no .moe edits.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 18,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,21 +56,22 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:05.514Z",
-  "updatedAt": "2026-10-24T22:05:33.057Z",
+  "updatedAt": "2026-10-24T22:28:43.082Z",
   "dependsOn": [
     "task-deba1a56a8104786ae25b84c58c363b4"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-24T15:03:07.413Z",
-    "plannedStepCount": 7,
-    "plannedDistinctFileCount": 4,
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
     "executedStepCount": 7,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "worker-07cd2c56",
-    "qa-b0c1741e"
+    "qa-b0c1741e",
+    "architect-6e3edf85"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -50,20 +79,19 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [],
   "failedDodItems": [],
-  "planSubmittedAt": "2026-10-24T15:13:42.204Z",
+  "planSubmittedAt": "2026-10-24T22:28:42.981Z",
   "planningNotes": {
-    "approachesConsidered": "**Chosen.** Two new host-side modules plus a small ledger extension:\n- guest-bootstrap.mjs verifies the pinned source image and builds deterministic cloud-init: the protected root-only supervisor and credential, and locked moe-agent / moe-check identities.\n- guest-readiness.mjs reads provider info, runs fixed-argv guest probes, waits for cloud-init, and evaluates the boundaries.\n- R06's ledger gains an optional set-once `image` {sourceSha256, providerImageHash}. One durable record per owned instance carries provenance; CQ-R11 reads it for environment-identity changes.\n- R03-R05 compose: verifySourceImage, then reserve, then buildUserData, then provisionOwned (launch file://<verified> --cloud-init with launchResourceArgs()), then waitForGuestReady.\n\n**Rejected.**\n- **Launching from the https URL.** Multipass then derives the id from the URL string, not content.\n- **A separate evidence store per instance.** It would duplicate R06's atomic writer and drift from the ledger.\n- **A single in-guest shell script probe.** That means an opaque guest self-report plus shell parsing; fixed argv probes are individually testable.\n- **Trusting Multipass 'Running' or the cloud-init exit code alone.**\n- **Exact 0755 on cloud-init-created dirs.** That depends on umask; the plan requires root-owned with no group or other write.\n- **A caller-injectable manifest.** R02 forbids it; only the digest function is injectable, for tests.\n\nUnder TURBO these choices are recorded here, not held for a REPL answer.\n\n**Process note.** lifecycle.mjs sits in newFiles only because R06 (a dependency) creates it after this plan was written; R07 modifies it.",
-    "codebaseInsights": "**Multipass v1.17.0 (verified from the official source):**\n- **info detail JSON** (json_formatter.cpp generate_instance_details):\n  - fields: zone, state, image_hash (=instance id), image_release, release, cpu_count (string), snapshot_count, load, disks {sda1:{used,total} strings}, memory {used,total numbers}, ipv4, mounts {target:{uid_mappings,gid_mappings,source_path}}.\n  - For file:// images the id is compute_file_hash of the PREPARED (converted) image (default_vm_image_vault.cpp). For HTTP without a checksum it is sha256 of the URL string.\n- **exec** (exec.cpp, ssh_client.cpp):\n  - it runs over SSH as the default user and returns the remote exit code;\n  - it quotes every arg (utils::to_cmd quote_every_arg);\n  - without --no-map-working-directory it queries mounts to map the host cwd.\n\n**cloud-init cmd/status.py.**\n- JSON keys: status, extended_status, errors, recoverable_errors, plus the v1 stages.\n- translate_status gives 'degraded done' and 'error - done'.\n- Exit codes: 1 for error, 2 for degraded, 0 otherwise (including running and not started).\n\n**R02** provides loadCertifiedProvider, with module-relative pins only, and providerError and MAX_PROBE_BUFFER.\n\n**R06 (plan rev 1)** provides lifecycle.mjs: createLedger with a strict exact-key record and compare-and-swap on phase and launchTries; isOwnedInstanceName; classifyFailure exported from multipass.mjs; the fakeMultipass helper in the test file; and the phases reserved, launching, owned, absent, failed, collision, deleted.\n\n**Packaging and CI.** The bundler copies all of scripts/local-runner. CI runs the local-runner tests on Node 24 across OS jobs.",
-    "risks": "**R06 is unlanded at plan time.** Use its LANDED names and helpers. Where they differ from this plan's description, follow the landed code and note it.\n\n**cloud-init and image facts are unverified on real hardware.** cloud-init semantics, /dev/sr0 permissions and write_files parent-dir modes are not checked against a booted guest. The probes fail closed, and real certification is R13.\n\n**Credential exposure through cloud-init artifacts.** It is covered by the deny probes on user-data.txt and /dev/sr0. Logs under /var/log need adm, which the identities lack.\n\n**TOCTOU between hashing and launch.** R03-R05 must keep the verified image in a controller-private dir; document this in the header.\n\n**Multipass exit codes 2 and 3 can mimic probe failures.** Only an exact 1 counts as a denial and only 0 as success; everything else is unknown and therefore not ready.\n\n**Test file growth.** It grows past 900 lines; keep fixtures shared and assertions exact.\n\n**Shared dirty checkout.** Touch only the four files.",
+    "approachesConsidered": "Option (b), an explicit epic-rail size exception, was filed as prop-d3ccceade25f4af19518ce0e930e4123, mirroring R06's approved prop-1256842e. It edits the existing 'ONLY size exceptions' rail in place. Option (a), QA's A/B/C/D1/D2 re-slice, was not chosen as the default: the bytes are already landed and pushed (e587474), so each slice would be a plan+work+QA cycle over committed bytes with no behaviour change. That runs against CQ-TOKEN-v1, and R03, R04 and R05 all wait on R07. A rejection of the proposal routes back to planning through step 1's request_replan, and (a) is planned then. The architect did not call report_blocked: an assignee block would end this planning session. The worker's step-1 gate is a cheap claim-read-block when the decision is still pending.",
+    "codebaseInsights": "guest-readiness.mjs: DENIED (~34-44) holds [kind, test flag, path, failure] rows; deny() makes only exit 1 a denial. Test file: DENIALS (~914-924) mirrors DENIED, and EXPECTED_PROBES (~937), the healthy answers (~982) and the exposure loop (~1346) derive from it, so one row in each table covers argv, health and exposure. R07's tests are the '// CQ-R07 pinned guest bootstrap' section (~896-1611); the real-process test skips on win32. Working-tree bytes equal e587474 at plan time. The four files are uncontested: R03-R05 dependOn R07, so the waitsOnThis rule counts only their asserted paths, and they have none.",
+    "risks": "The proposal may stay PENDING. A claim before the human decides only reads and blocks (step 1); the governor unblocks after approval. A survivor mutation forces a small extra test, which is allowed as a QA-required fix but must be called out. combined-cloud-config.json may not exist on the pinned image; `test -r` exits 1 for a missing file, which is treated as denied, the correct fail-closed reading. Run on Linux, where the real-process test runs; a Windows-only run skips it and is not acceptable evidence.",
     "keyFiles": [
-      "scripts/local-runner/doctor.mjs",
-      "scripts/local-runner/multipass.mjs",
-      "scripts/local-runner/certified-provider.json",
+      "scripts/local-runner/guest-readiness.mjs",
       "scripts/tests/local-runner.test.mjs",
-      "scripts/tests/local-runner-bundle.test.mjs"
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/lifecycle.mjs"
     ]
   },
-  "planApprovedAt": "2026-10-24T15:13:42.292Z",
+  "planApprovedAt": "2026-10-24T22:28:43.082Z",
   "workStartedAt": "2026-10-24T21:35:20.520Z",
   "reviewStartedAt": "2026-10-24T21:57:34.924Z",
   "verification": {
