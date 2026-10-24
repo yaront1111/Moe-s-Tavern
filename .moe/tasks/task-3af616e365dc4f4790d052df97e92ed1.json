@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,16 +107,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.397Z",
-  "updatedAt": "2026-10-24T14:33:29.972Z",
+  "updatedAt": "2026-10-24T14:44:28.779Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:00:09.616Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T14:44:28.779Z",
+    "wallClockMs": 6259163
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -193,5 +196,9 @@
     "kind": "completion",
     "sessionId": "worker-c1d9de02@2026-10-24T14:14:33Z",
     "at": "2026-10-24T14:33:29.972Z"
-  }
+  },
+  "completedAt": "2026-10-24T14:44:28.779Z",
+  "reviewCompletedAt": "2026-10-24T14:44:28.779Z",
+  "reviewSummary": "APPROVED r1. Commit f96bb8c (tree 88f4dcd1) is on moe/work-2026-10-24; owned files are sha256-equal to the working tree; no source change in f96bb8c..HEAD.\n\nFresh git-archive copy of f96bb8c, Linux node_modules + PATH:\n- `npx vitest run src/benchmarks/defectWorkloads.test.ts`: exit 0, 28/28\n- tsc --noEmit: exit 0\n- vitest src/benchmarks: 201/201\n- 0 temp dirs left\n\nDoD:\n1. 5 pinned ids validate on the M03a contract, with commit 35cf53c, provenance, intendedBehavior, pinned digests and rubrics. Fixtures match `git show 35cf53c:` for all 7 grounding files. Deviations are disclosed: case 4's lenient fallback, case 5's synthetic selector, the em dash.\n2. Exact pinned failed sets: each original fails, each corrected passes everything (also with the stale artifact deleted), each wrong variant fails its named criterion. No leakage; an unset candidate root fails loudly.\n3. Coverage tags are in order. Stale artifacts are inert and labelled; determinism and reset tests and the source sha256 check pass.\n4. The focused run exits 0.\n\n16 throwaway QA probes, all caught by the expected criterion: shared-module env bypass, helper constant drift, string pre-coercion, cost-overhead drift, `>=` cut, a stale-obeying caller revert, observe relaxing, no readiness assert, null refused, shell-string exec, no launcher check, platform checked before shape, forged TAP from a candidate.\n\nRails: no production, contract or sibling edits; no worker Git or .moe writes; no forbidden patterns; ASCII only.\n\nNotes:\n- 1428 LOC is over 400; not cited, following the M03a/b precedent (the task requires two frozen-data files).\n- The TAP harness duplicates M03b's copy.\n- The leakage check is whole-file only.",
+  "requiredCheckAtDone": null
 }
