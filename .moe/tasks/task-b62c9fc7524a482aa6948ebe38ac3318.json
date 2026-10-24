@@ -1,0 +1,30 @@
+{
+  "id": "task-b62c9fc7524a482aa6948ebe38ac3318",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "fix(wrapper): moe_temp_index_build drops edits to CRLF-committed files as MOE_ATTR_CONCURRENT when git converts EOLs on add",
+  "description": "Defect, observed 2026-10-24: scripts/moe-agent.sh `moe_temp_index_build` (and presumably its moe-agent.ps1 twin) stages each candidate with `GIT_INDEX_FILE=<temp, seeded from HEAD> git add`. It then requires the staged blob to equal the snapshot blob from `git hash-object --stdin-paths`, and on a mismatch drops the path as MOE_ATTR_CONCURRENT (\"moved under us\"), to be retried at the next exit.\n\nWhen git converts line endings on add (core.autocrlf=true, the Git for Windows default; core.autocrlf=input; or a `text`/`text=auto` attribute), the two paths disagree for any file whose HEAD blob contains CRLF. git's safer-autocrlf rule makes `git add` keep the CRLF blob, but `hash-object` has no index entry to consult, so it normalizes to LF.\n\nResult: every edit to such a file is silently dropped at every landing. Seen in CQ-M01d's 71c7dbe: schema.ts was dropped, with snapshot 30fd236 vs staged 34ffef5. qa-b0c1741e confirmed the mechanism (msg cb08c18b in #governors).\n\nThis repo works around it with repo-local core.autocrlf=false, and the sibling line-endings chore removes all CRLF blobs. Other Moe users on Windows with the default autocrlf=true and any CRLF-committed file remain exposed.\n\nSuggested fix: detect \"moved under us\" by re-running the same `hash-object` after `git add` and comparing it with the snapshot. Keep the staged blob as-is, and never compare across the two conversion paths. Keep the sh and ps1 twins in parity.",
+  "definitionOfDone": [
+    "moe_temp_index_build in both scripts/moe-agent.sh and scripts/moe-agent.ps1 no longer compares a `git add`-staged blob against a `hash-object` snapshot from a different conversion path; a genuinely concurrent edit between snapshot and staging is still detected and dropped as MOE_ATTR_CONCURRENT.",
+    "New postflight regression cases (bash and ps1): edit a file whose HEAD blob is CRLF under core.autocrlf=true, under core.autocrlf=input, and under a `* text=auto` attribute. Each lands in the completion commit with no MOE_ATTR_CONCURRENT; a concurrent-modification case still drops.",
+    "bash scripts/tests/postflight.sh, scripts/tests/postflight.ps1 and bash scripts/tests/parity-check.sh pass."
+  ],
+  "taskRails": [
+    "Fix the twins together (scripts/moe-agent.sh and scripts/moe-agent.ps1); keep moe-agent.ps1 UTF-8 with BOM."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Feed rule (human-approved, by order): no prerequisites. MEDIUM wrapper hardening for the MOE_ATTR_CONCURRENT drop on CRLF-committed files.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T15:37:18.097Z",
+  "updatedAt": "2026-10-24T15:37:45.982Z"
+}

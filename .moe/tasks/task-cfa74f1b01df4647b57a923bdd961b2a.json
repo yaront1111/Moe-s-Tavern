@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:54.742Z",
-  "updatedAt": "2026-10-24T15:26:29.263Z",
+  "updatedAt": "2026-10-24T15:39:07.227Z",
   "dependsOn": [
     "task-44b44ccac62f4657890f98ff450738c8",
     "task-b55f1ea092c04764b8231d5a0b0e0639",
@@ -132,11 +132,14 @@
     "firstClaimAt": "2026-10-24T12:32:09.083Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T15:39:07.227Z",
+    "wallClockMs": 11218144
   },
   "contextFetchedBy": [
     "architect-da8841dc",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -647,5 +650,9 @@
     "reportedAt": "2026-10-24T15:25:29.740Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Froze the CQ-M03 matched corpus: exactly 20 cases (5 maintenance, defect, refactor, non-routine), all rooted at full commit 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71, assembled over the landed M03a-e exports. Three owned files, no producer/held-out-test/daemon/schema/.moe change.\n\n- matchedCorpus.ts (278 lines): pure assembler + committed CORPUS_FREEZE (ordered ids, per-case digests, corpus digest sha256:9d0e42e6...). Compares data with the literals, never recomputes the baseline. Bounded printable-ASCII errors; deeply frozen; exports MATCHED_CORPUS for M04.\n- matchedCorpus.test.ts (31 tests): pinned ids/digests, coverage tags via real fixture ids (reusable-helper, stale +/-, changed-caller, changed-requirements, recipe-mismatch), rejection tests (missing/imbalanced/duplicate/cosmetic/leaked/changed bytes/malformed freeze). Integration over the REAL M03a materializer, per case: two snapshots, mutate, reset restores frozen bytes/digest, sibling, fixture and user-tree sentinel unchanged; 40 concurrent creates/disposes; coding snapshots hold no held-out data; the unmodified original fails the UNCHANGED rubric with every criterion evaluated; TMPDIR with spaces/Unicode; junction not followed; ENOSPC partial-IO cleanup for all cases. 4 mutation probes in a scratch copy all killed.\n- docs/matched-workload-corpus.md: ids, digest encoding, update process, limits, executable example (run over all 20).\n\nGate: fresh `npm test` in a git-archive copy of HEAD: 151 files, 3254 passed | 9 skipped, exit 0; focused matchedCorpus 31/31; tsc exit 0.\n\nDisclosures: reduced/adapted overlays, not whole-repo archives. Real data finding: maintenance-usage-unknown-format and refactor-usage-counter-normalization start from cosmetically identical source (assessments/behavior/rubric differ); pinned by a test, follow-up LOW task-db4847bca0ee4132a2c64ee69578e651. Leak check is whole-file/title based. No Windows/macOS run available. Not baseline execution, model-quality evidence, isolation certificat"
+  "completionSummary": "Froze the CQ-M03 matched corpus: exactly 20 cases (5 maintenance, defect, refactor, non-routine), all rooted at full commit 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71, assembled over the landed M03a-e exports. Three owned files, no producer/held-out-test/daemon/schema/.moe change.\n\n- matchedCorpus.ts (278 lines): pure assembler + committed CORPUS_FREEZE (ordered ids, per-case digests, corpus digest sha256:9d0e42e6...). Compares data with the literals, never recomputes the baseline. Bounded printable-ASCII errors; deeply frozen; exports MATCHED_CORPUS for M04.\n- matchedCorpus.test.ts (31 tests): pinned ids/digests, coverage tags via real fixture ids (reusable-helper, stale +/-, changed-caller, changed-requirements, recipe-mismatch), rejection tests (missing/imbalanced/duplicate/cosmetic/leaked/changed bytes/malformed freeze). Integration over the REAL M03a materializer, per case: two snapshots, mutate, reset restores frozen bytes/digest, sibling, fixture and user-tree sentinel unchanged; 40 concurrent creates/disposes; coding snapshots hold no held-out data; the unmodified original fails the UNCHANGED rubric with every criterion evaluated; TMPDIR with spaces/Unicode; junction not followed; ENOSPC partial-IO cleanup for all cases. 4 mutation probes in a scratch copy all killed.\n- docs/matched-workload-corpus.md: ids, digest encoding, update process, limits, executable example (run over all 20).\n\nGate: fresh `npm test` in a git-archive copy of HEAD: 151 files, 3254 passed | 9 skipped, exit 0; focused matchedCorpus 31/31; tsc exit 0.\n\nDisclosures: reduced/adapted overlays, not whole-repo archives. Real data finding: maintenance-usage-unknown-format and refactor-usage-counter-normalization start from cosmetically identical source (assessments/behavior/rubric differ); pinned by a test, follow-up LOW task-db4847bca0ee4132a2c64ee69578e651. Leak check is whole-file/title based. No Windows/macOS run available. Not baseline execution, model-quality evidence, isolation certificat",
+  "completedAt": "2026-10-24T15:39:07.227Z",
+  "reviewCompletedAt": "2026-10-24T15:39:07.227Z",
+  "reviewSummary": "APPROVED from recorded commits (completion cc1040f + checkpoint a3f1aeb, on moe/work-2026-10-24); the 3 owned worktree files are byte-identical to cc1040f. Size: 278 runtime + 648 test + 134 doc = 1060 LOC. No rail waives size; not rejected because the plan mandated the slice and CQ-M precedent (M02, M03a-e) approved the same. No producer, held-out test, daemon, schema or production file touched.\n\nRe-ran in a fresh git-archive copy of cc1040f (lockfile sha-identical, Linux node_modules/PATH, node 24.21.0): `cd packages/moe-daemon && npm test` with scrubbed env = 151 files, 3254 passed | 9 skipped, exit 0 (matches task.verification). tsc --noEmit 0; matchedCorpus.test.ts 31/31. My first run with this seat's ambient MOE_WORKER_ID failed 4 getContext.test.ts tests (pre-existing env artifact, not this task).\n\nIndependent evidence: tsx probe = 20 cases, 5 per category, each with the full 35cf53c startingCommit, intendedBehavior, 3-7 criterion rubric and held-out assessment; corpus deeply frozen. My recomputed corpus digest sha256:9d0e42e6...be10 equals CORPUS_FREEZE and the doc. Scratch mutation probes (changed fixture byte, dropped case, reordered category, duplicate id, swapped categories) all rejected with bounded INVALID_INPUT. Only its own test imports matchedCorpus.\n\nDoD: (1) all six coverage tags carried by real fixtures, enforced by checkCoverage and a pinned test. (2) every fixture names commit, intended behavior, rubric. (3) reset via the real M03a materializer into owned temp roots; sibling, fixture and user-tree sentinel unchanged for all 20; concurrency, junction, ENOSPC, Unicode TMPDIR covered. (4) fresh npm test exit 0, reproduced. Rails OK: no .moe edits, no Git writes, verified-local untouched.\n\nNon-blocking: maintenance-usage-unknown-format and refactor-usage-counter-normalization start from cosmetically identical source (disclosed; follow-up LOW task-db4847bca0ee4132a2c64ee69578e651). Leak check is whole-file/title based. No native Windows/macOS run.",
+  "requiredCheckAtDone": null
 }

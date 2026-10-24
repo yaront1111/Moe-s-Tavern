@@ -1,0 +1,35 @@
+{
+  "id": "task-709f669139764663926c04ed72cdae5d",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "chore: normalize line endings — `* text=auto eol=lf` + renormalize the 16 CRLF-committed files in one commit",
+  "description": "Why: the shared checkout is used by both Git for Windows (system core.autocrlf=true) and WSL git. Before the repo-local core.autocrlf=false pin of 2026-10-24, landings committed whole-file LF→CRLF flips. 15 source files are now stored as CRLF (\"i/crlf\"), plus moe-jetbrains/gradlew.bat, which was committed CRLF despite `text eol=crlf`. Raw diff stats run to thousands of lines (QA's >400-LOC check must use --ignore-cr-at-eol until this lands), and blame is polluted. Found and measured by qa-b0c1741e (msgs 17f13542, 33b5a4b4 in #governors).\n\nFlipping commits (raw vs --ignore-cr-at-eol):\n- 204d5a6 CQ-M01a: packages/moe-daemon/src/types/schema.ts, src/state/validators.ts, src/state/validators.test.ts\n- f6a79ef CQ-F02: src/state/taskStore.ts, src/tools/submitPlan.test.ts\n- 803a38d CQ-M01c: src/server/WebSocketServer.ts\n- 9879f51 CQ-R02p: .github/workflows/ci.yml, moe-jetbrains/build.gradle.kts, moe-vscode/scripts/bundle-assets.mjs, scripts/tests/onboarding.mjs\n- 1bb42e1 + db3172e CQ-M02: scripts/usage-receipt.mjs, scripts/usage-report.mjs, scripts/usage-session.mjs, scripts/tests/usage-receipt.test.mjs, scripts/tests/usage-report.test.mjs\n- plus moe-jetbrains/gradlew.bat (pre-existing).\n\nDo, in ONE dedicated commit:\n(a) Make `* text=auto eol=lf` the first line of .gitattributes. The existing *.sh, gradlew, gradlew.bat and *.jar rules stay after it and keep overriding it.\n(b) `git add --renormalize` exactly the 16 paths above, with no content edits.\n\n(a) and (b) must land together. With (a) alone, the wrapper's moe_temp_index_build would again drop edits to any CRLF blob still in the index as MOE_ATTR_CONCURRENT: `git add` keeps it, while `hash-object` normalizes it. See the sibling hardening task.\n\nAfterwards, hashing follows .gitattributes on Windows and WSL alike, checkouts write LF on both sides, and the ~195 .moe records still CRLF on disk read clean.\n\nSequencing: depends on CQ-M01 (task-ad95cb27), which carries CQ-M01d's stranded schema.ts doc-comment hunk as a declared file. Landing this first would sweep that hunk in. Also serialize against any in-flight task that holds one of the 16 paths (schema.ts, taskStore.ts and WebSocketServer.ts are hot in CQ). Leave the repo-local core.autocrlf=false in place; the attribute governs.",
+  "definitionOfDone": [
+    ".gitattributes starts with `* text=auto eol=lf`; every pre-existing rule is unchanged and still follows it.",
+    "`git ls-files --eol | grep '^i/crlf'` prints nothing (all 16 listed paths renormalized), and moe-jetbrains/gradlew.bat is still checked out CRLF per its eol=crlf rule.",
+    "In the commit, `git diff --ignore-cr-at-eol --stat <parent>..<commit>` shows only .gitattributes: no content change to any of the 16 files.",
+    "Daemon tests (npm test), bash scripts/tests/postflight.sh, scripts/tests/postflight.ps1 and the parity checks all pass on the result, and moe-agent.ps1 keeps its UTF-8 BOM."
+  ],
+  "taskRails": [
+    "Exactly one dedicated commit: the .gitattributes line plus renormalization of the 16 listed paths. No content edits and no other files.",
+    "Never hand-edit or normalize .moe/** records; daemon rewrites handle them."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Feed rule (human-approved, by order): prerequisite CQ-M01 is already planned (WORKING). MEDIUM, so it is planned after HIGH CQ rows; execution waits for CQ-M01 to land.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ad95cb270e9e46df8672eb094d0c1e74"
+  ],
+  "priority": "MEDIUM",
+  "order": 230,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T15:37:07.825Z",
+  "updatedAt": "2026-10-24T15:37:44.655Z"
+}
