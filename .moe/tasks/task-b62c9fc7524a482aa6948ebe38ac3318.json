@@ -154,7 +154,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T15:37:18.097Z",
-  "updatedAt": "2026-10-24T23:00:28.539Z",
+  "updatedAt": "2026-10-24T23:01:09.153Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T21:54:32.559Z",
     "plannedStepCount": 6,
@@ -207,7 +207,70 @@
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+    ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+    ".moe/tasks/task-b62c9fc7524a482aa6948ebe38ac3318.json",
+    ".moe/tasks/task-db4847bca0ee4132a2c64ee69578e651.json",
+    ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json"
+  ],
+  "completionSummary": "Fixed the false MOE_ATTR_CONCURRENT drop of edits to CRLF-committed files, in both wrapper twins (moe_temp_index_build in scripts/moe-agent.sh, Build-MoeTempIndexTree in scripts/moe-agent.ps1).\nCause: `git add` into the temp index seeded from HEAD keeps a CRLF blob that HEAD already holds (safer-autocrlf). The snapshot's `hash-object` loads no index, so under core.autocrlf=true/input or text=auto it hashes the LF-normalized content. Staged and snapshot blobs then never match.\nFix: on a mismatch, re-run the snapshot's own hash (`git -C TOP hash-object -- <p>`, no index). If it still equals the snapshot, keep the blob git add staged. Otherwise, or if the hash fails, drop as MOE_ATTR_CONCURRENT as before. The fast path is unchanged.\n- sh records the STAGED blob, which the importee guard checks against :0:path.\n- The ABA window is marked with a ponytail: comment.\nTests: postflight.sh/.ps1 add scenario AC (CRLF HEAD blob under autocrlf=true, autocrlf=input and `* text=auto`; crlf.txt and crlf.mjs land byte-exact with no CONCURRENT skip) and scenario AD (CAS-retry seam; rewrite, delete or dir-replace after the snapshot still drops crlf.txt as CONCURRENT while owned-a.txt lands). The scenario count goes from 34 to 36.\nRED: the parent wrappers fail AC in sh and ps1.\nMutations, killed in both twins: accept-all (AD), old behaviour (AC), failed-re-hash-as-unchanged (AD dir), compare-to-staged (AC). Recording the snapshot blob in sh fails AC.\nFresh gate from a snapshot identical to the live files:\n- postflight.sh: PASS, 36, exit 0.\n- postflight.ps1: PASS, 36, exit 0 on PS 5.1 and on pwsh 7.\n- parity-check.sh and parity-check.ps1 (BOM check included): PASS.\n- importee-guard-bash.test.mjs 40/40; importee-guard.ps1 48/0.\nFollow-up: task-c532d223459b4ef4b5bab2ba0eb4005e. The snapshot fingerprints a symlink by its target's content.",
+  "commits": [
+    {
+      "sha": "2895a843eaa4299de992158926425443b6362dac",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T22:00:21Z",
+      "paths": [
+        ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+        ".moe/tasks/task-72efb0b663ec4b3da35a685ebb30ed34.json",
+        ".moe/tasks/task-b62c9fc7524a482aa6948ebe38ac3318.json",
+        ".moe/tasks/task-db4847bca0ee4132a2c64ee69578e651.json",
+        ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T23:01:09.153Z",
+      "treeId": "9f1e76afad6e277fda1a3cecc3dd0db150800b70",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
     "scripts/tests/postflight.ps1"
   ],
-  "completionSummary": "Fixed the false MOE_ATTR_CONCURRENT drop of edits to CRLF-committed files, in both wrapper twins (moe_temp_index_build in scripts/moe-agent.sh, Build-MoeTempIndexTree in scripts/moe-agent.ps1).\nCause: `git add` into the temp index seeded from HEAD keeps a CRLF blob that HEAD already holds (safer-autocrlf). The snapshot's `hash-object` loads no index, so under core.autocrlf=true/input or text=auto it hashes the LF-normalized content. Staged and snapshot blobs then never match.\nFix: on a mismatch, re-run the snapshot's own hash (`git -C TOP hash-object -- <p>`, no index). If it still equals the snapshot, keep the blob git add staged. Otherwise, or if the hash fails, drop as MOE_ATTR_CONCURRENT as before. The fast path is unchanged.\n- sh records the STAGED blob, which the importee guard checks against :0:path.\n- The ABA window is marked with a ponytail: comment.\nTests: postflight.sh/.ps1 add scenario AC (CRLF HEAD blob under autocrlf=true, autocrlf=input and `* text=auto`; crlf.txt and crlf.mjs land byte-exact with no CONCURRENT skip) and scenario AD (CAS-retry seam; rewrite, delete or dir-replace after the snapshot still drops crlf.txt as CONCURRENT while owned-a.txt lands). The scenario count goes from 34 to 36.\nRED: the parent wrappers fail AC in sh and ps1.\nMutations, killed in both twins: accept-all (AD), old behaviour (AC), failed-re-hash-as-unchanged (AD dir), compare-to-staged (AC). Recording the snapshot blob in sh fails AC.\nFresh gate from a snapshot identical to the live files:\n- postflight.sh: PASS, 36, exit 0.\n- postflight.ps1: PASS, 36, exit 0 on PS 5.1 and on pwsh 7.\n- parity-check.sh and parity-check.ps1 (BOM check included): PASS.\n- importee-guard-bash.test.mjs 40/40; importee-guard.ps1 48/0.\nFollow-up: task-c532d223459b4ef4b5bab2ba0eb4005e. The snapshot fingerprints a symlink by its target's content."
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-24T22:00:21Z",
+    "at": "2026-10-24T23:01:09.153Z"
+  }
 }
