@@ -18,50 +18,80 @@
     {
       "stepId": "step-1",
       "description": "Prerequisites + harness (TDD red). First confirm CQ-M03a (task-44b44ccac62f4657890f98ff450738c8) is DONE/landed and READ its landed packages/moe-daemon/src/benchmarks/workloadSnapshot.ts; this plan uses its planned names (validateWorkloads, digestFiles, digestWorkload, createCodingSnapshot, createAssessmentSnapshot, readSnapshotFiles, WORKLOAD_CANDIDATE_ROOT_ENV, FROZEN_STARTING_COMMIT, SOURCE_REPOSITORY, CORPUS_COVERAGE_TAGS), so adapt to the actual exports and NEVER edit that contract (if it blocks a fixture, stop and use moe.report_blocked / an explicit dependency update). Read the grounding sources at the frozen commit, read-only: `git show 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71:<path>` for packages/moe-daemon/src/util/{memorySettings,branchPolicy,affectedFiles,cachedPlanPaths}.ts, packages/moe-daemon/src/tools/getPendingQuestions.ts and scripts/prompt-cache-usage.mjs (the dirty working-tree copies differ only by CRLF). Create packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts (vitest, LF) importing `MAINTENANCE_WORKLOADS` from './maintenanceWorkloads.js' (red: the module does not exist yet) and the M03a API. Build:\n(a) dataset tests: validateWorkloads(MAINTENANCE_WORKLOADS) succeeds; exactly the five pinned ids in order ['maintenance-truncation-helper-reuse','maintenance-branch-policy-message','maintenance-usage-unknown-format','maintenance-affected-file-caller','maintenance-cached-ref-caller']; every category 'maintenance'; startingCommit === FROZEN_STARTING_COMMIT; each source.paths entry is one of the grounding paths above, adaptation is 'reduced' or 'adapted' with an honest note; coverage tags include 'reusable-helper' on case 1 and 'changed-caller' on case 5; per-case digestWorkload literals (pinned in step 3).\n(b) one shared control harness: runAssessment(workload, candidateRoot) creates an assessment snapshot and runs `spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...each *.test.mjs path], { cwd: assessmentRoot, env: { ...process.env, NODE_OPTIONS: '', [WORKLOAD_CANDIDATE_ROOT_ENV]: candidateRoot }, encoding: 'utf8', timeout: 60000 })`, then parses `ok N - <name>` / `not ok N - <name>` lines into passed/failed criterion ids. Assessment test names must start with `<criterion-id>: `. Error handling: a spawn error, signal or timeout is reported as a failure with a bounded output excerpt, never as a pass. Variants are applied by writing their bytes into a FRESH coding snapshot root (test-only; never into the dataset).\n(c) generic per-case control test (it.each over a table of { id, corrected: files, wrong: files, wrongMustFail: criterionId }): the original fails with status != 0 and at least one intended-change criterion in failed; the corrected variant exits 0 with EVERY rubric criterion id in passed (so each criterion really executed); the plausible-wrong variant exits != 0 with wrongMustFail in failed (it fails for the intended reason, not a crash).\n(d) leakage: no initial file contains or equals any assessment file or corrected/wrong variant file content, and no coding snapshot contains a *.test.mjs file.\n(e) determinism and reset: two coding snapshots read back identically with digest === snapshotDigest; after mutating one, a new snapshot restores the frozen digest.\n(f) source checkout untouched: sha256 of the dataset module and the six grounding files is identical before and after the suite.\nDispose every handle in afterEach. Give the control tests a 120s timeout.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
+      ],
+      "note": "M03a confirmed DONE/landed (35579c2); read the landed workloadSnapshot.ts and used its real exports. Grounding read via git show 35cf53c (memorySettings, getPendingQuestions, branchPolicy, prompt-cache-usage.mjs, affectedFiles, cachedPlanPaths). Harness written: runAssessment (node --test --test-reporter=tap, NODE_OPTIONS='', 60s timeout; spawn error/signal/non-zero never a pass), TAP parse by '<criterion-id>: ' prefix (SKIP/TODO = fail), exact-edit patch() helper for variants, fresh-snapshot candidate(). Tests: dataset validation/ids/provenance/tags/1:1 criterion naming/pinned digests; leakage; unset-candidate-root fails loudly; controls pin the EXACT failed set for original and wrong, all-ok for corrected; determinism+reset; ASCII-only source guard; sha256 of grounding + owned files unchanged. RED confirmed in an isolated Linux git-archive copy: fails on missing ./maintenanceWorkloads.js. The 1167 peer/pre-existing dirty paths are untouched.",
+      "startedAt": "2026-10-24T13:53:12.781Z",
+      "completedAt": "2026-10-24T14:04:02.146Z"
     },
     {
       "stepId": "step-2",
       "description": "Cases 1-2: create packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts exporting `MAINTENANCE_WORKLOADS = validateWorkloads([...])` (validated and frozen at import; the dataset module holds ONLY workload objects - corrected and plausible-wrong variants live in the test file). Fixture code is bounded Node ESM .mjs adapted from the grounding source (types removed, behaviour kept); assessment files are self-contained node:test + node:assert + node:fs/path/url, and import candidate modules via pathToFileURL(path.join(process.env[WORKLOAD_CANDIDATE_ROOT_ENV], ...)), failing loudly if the env var is unset.\nCASE 1 'maintenance-truncation-helper-reuse' (tags reusable-helper, utf8-boundary; source memorySettings.ts + tools/getPendingQuestions.ts, adapted). initialFiles: src/textBudget.mjs = truncateForBudget adapted to never split a surrogate pair (note says so), and src/compactQuestion.mjs = compactQuestion adapted from getPendingQuestions, but in the ORIGINAL it truncates by itself with a naive content.slice(0, max) and no flags. intendedBehavior: over-budget content must use the existing helper and return { ...question, content, contentTruncated: true, contentOriginalLength }; within budget or max <= 0 returns the same object; never duplicate truncation logic. Criteria: returns-compact-shape (exact fields, ends with the ellipsis, length <= max); keeps-complete-characters (emoji at the cut is not split, no lone surrogate); passes-short-through (toBe the input); reuses-text-budget-helper (static: compactQuestion.mjs imports truncateForBudget from './textBudget.mjs' and contains no .slice(/.substring(/ellipsis literal of its own); helper-unchanged (textBudget compatibility table). Test-only corrected: imports and uses the helper. Plausible-wrong: an inline copy of the helper code (behaviour correct) -> wrongMustFail 'reuses-text-budget-helper'.\nCASE 2 'maintenance-branch-policy-message' (tags message-update, compatibility; source branchPolicy.ts, adapted). initialFiles: src/branchPolicy.mjs with matchesBranchPattern and describeBranchPolicyFailure as at the frozen commit. intendedBehavior: the failure message must name the policy kind - a literal pattern says `requires branch \"<pattern>\"`, a glob (contains *) says `requires a branch matching \"<pattern>\"` - keeping the completed-branch clause and the remediation sentence verbatim, with match semantics unchanged. Criteria: literal-policy-message and glob-policy-message (exact full strings); keeps-remediation; match-semantics-unchanged (table: literal equal/case-different, 'moe/work-*' on a dated branch, 'release/v1.0-*' must NOT match 'release/v1X0-a' but must match 'release/v1.0-a', literal 'feature/(x)', '**' collapsing, anchoring, empty, a 256-char branch, 11 wildcards, non-strings -> false). Corrected: branches only the message on pattern.includes('*'). Plausible-wrong: also 'simplifies' the matcher to an unescaped replace of * with .* -> wrongMustFail 'match-semantics-unchanged'.\nPin each workload's snapshotDigest/assessmentDigest from digestFiles. Run only `npx vitest run src/benchmarks/maintenanceWorkloads.test.ts` in the isolated Linux copy; cases 1-2 controls green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
+      ],
+      "note": "Created maintenanceWorkloads.ts (MAINTENANCE_WORKLOADS = validateWorkloads([...])) with cases 1-2. Fixture files are String.raw templates (backslashes verbatim, no template literals inside fixtures), ASCII-only (ellipsis/emoji via fromCharCode/fromCodePoint). Digests pinned from digestFiles via a throwaway tsx script in an isolated copy. Variants (test-only, built by exact-once patch() edits on the frozen originals): case 1 corrected imports the helper, wrong = inline helper copy; case 2 corrected branches the message on pattern.includes('*'), wrong also replaces the escape chain with split('*').join('.*'). Isolated Linux copy, focused run: both controls GREEN with exact sets - case 1 original fails {returns-compact-shape, keeps-complete-characters, reuses-text-budget-helper}, wrong fails only reuses-text-budget-helper; case 2 original fails {literal-policy-message, glob-policy-message}, wrong fails only match-semantics-unchanged. The remaining 10 failures are the expected cases 3-5 absence plus the unpinned digest literals (step 3). File length: the dataset module exceeds 300 lines by necessity (plan mandates exactly these two files holding all fixtures).",
+      "startedAt": "2026-10-24T14:04:03.289Z",
+      "completedAt": "2026-10-24T14:06:28.314Z"
     },
     {
       "stepId": "step-3",
       "description": "Cases 3-5 in the same two files, then freeze.\nCASE 3 'maintenance-usage-unknown-format' (tags unknown-preservation, format-update, compatibility; source scripts/prompt-cache-usage.mjs, reduced: count/counter/sum, normalizeUsage and formatUsage only). intendedBehavior: new line format `[prompt-cache] provider=<p> input=<total> cached=<read> written=<write> uncached=<uncached> hit=<pct> output=<o> reasoning=<r> total=<t>`. When input accounting is incomplete, input/cached/written/uncached/hit are each the literal `unknown` (replacing the single usage=unknown token) while output/reasoning/total keep their own values. A missing or invalid counter is never shown as 0; codex has written=unknown; a zero total gives hit=n/a; normalizeUsage is unchanged. Criteria: claude-complete-line (exact string for input 10/read 30/write 60/output 7 -> input=100 cached=30 written=60 uncached=10 hit=30.0% output=7 reasoning=unknown total=107); codex-complete-line (exact string with reasoning); unknown-input-fields; unknown-output-fields (missing output, inconsistent reasoning); zero-total-hit; normalize-unchanged (table incl. codex read>input -> cacheReadTokens null). Corrected: the new format with ?? 'unknown'. Plausible-wrong: the new format but `?? 0` defaults -> wrongMustFail 'unknown-input-fields'.\nCASE 4 'maintenance-affected-file-caller' (tags reusable-helper, new-caller, windows-paths, unicode-paths; source affectedFiles.ts, adapted). initialFiles: src/affectedFiles.mjs = normalizeAffectedFile, normalizeAffectedFiles and pathKey adapted to take an explicit platform argument (deterministic on every OS; note says so), plus src/declaredFiles.mjs whose mergeDeclaredFiles(existing, incoming, platform) throws 'not implemented'. intendedBehavior: append newly declared paths normalized by the shared normalizer, dedupe by pathKey(p, platform) keeping the first spelling and order, preserve Unicode spelling exactly, and let the normalizer's traversal/absolute error propagate without mutating `existing`. Criteria: windows-separators (multiple backslashes, leading ./); platform-case-folding (win32/darwin fold 'Src/A.ts' with 'src/a.ts' and 'DOCS/CAF\\u00c9.md' with 'docs/caf\\u00e9.md'; linux keeps both); unicode-preserved; rejects-traversal (normalizer message, input arrays unchanged); reuses-normalizer (static: imports from './affectedFiles.mjs', no own backslash replace or toLowerCase); normalizer-unchanged. Corrected: reuses both helpers. Plausible-wrong: own p.replace('\\\\','/') (first match only) plus an unconditional toLowerCase -> wrongMustFail 'windows-separators'.\nCASE 5 'maintenance-cached-ref-caller' (tags changed-caller, protected-branch-intent, read-only-recipe; source cachedPlanPaths.ts, reduced: cachedPlanRef plus findCachedPlanPaths with an injected runner, the realpath/toplevel/budget parts dropped, as the note says). initialFiles also hold src/submitPlanLookup.mjs, the CHANGED caller, which now passes `{ branch, remote }` so the original lookup always misses. intendedBehavior: accept { branch, remote = 'origin' } (and still the legacy string) and resolve refs/remotes/<remote>/<branch>. Only a literal branch is evidence (same cachedPlanRef rules); remote must be one safe component, else miss before any git call. The recipe stays exactly config --local --includes --get-regexp, rev-parse --verify --end-of-options <ref>^{commit}, --literal-pathspecs ls-tree -z --full-tree <commit> -- <paths>, with no fetch/for-each-ref/ls-remote/checkout. Criteria: accepts-caller-options, legacy-string-still-works, glob-is-not-evidence (miss, zero runner calls), rejects-unsafe-remote ('origin/../heads', '*', '-x', '', 'a.lock'), read-only-recipe (exact recorded argv via a fake runner). Corrected: options support plus remote validation. Plausible-wrong: resolves a glob branch through `for-each-ref` -> wrongMustFail 'glob-is-not-evidence'.\nFreeze: pin snapshotDigest/assessmentDigest in each workload and the five digestWorkload literals in the test. Make the whole file green in the isolated Linux copy (focused runs only).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
+      ],
+      "note": "Cases 3-5 added and frozen. Case 3 (reduced prompt-cache-usage.mjs): corrected = new keys + all five input fields 'unknown' when incomplete; wrong = same keys with ?? 0 defaults -> fails only unknown-input-fields. Case 4 (adapted affectedFiles with explicit platform pathKey + new declaredFiles stub): corrected reuses normalizeAffectedFile + pathKey; wrong = own first-only backslash replace + unconditional toLowerCase -> fails {windows-separators, platform-case-folding, rejects-traversal, reuses-normalizer} (exact set pinned; named reason windows-separators included). Case 5 (reduced cachedPlanPaths with injected runner + changed caller submitPlanLookup passing {branch, remote}): corrected = options + SAFE_REMOTE validation; wrong = resolves a glob via for-each-ref -> fails only glob-is-not-evidence. Original fail sets pinned exactly per case. snapshot/assessment digests pinned in the dataset; five digestWorkload literals pinned in the test. Isolated Linux git-archive copy, focused run: 22/22 passed, exit 0. Both files printable ASCII (grep -P clean).",
+      "startedAt": "2026-10-24T14:06:29.585Z",
+      "completedAt": "2026-10-24T14:08:51.529Z"
     },
     {
       "stepId": "step-4",
       "description": "The one verification gate. Build a FRESH synchronized isolated copy (recipe in planningNotes; it must contain the landed M03a contract), add the two owned files' working-tree bytes, and with Linux-only PATH run exactly: `cd <copy>/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/maintenanceWorkloads.test.ts` (fresh exit 0; report actual pass/skip counts). Then run `npx tsc --noEmit --incremental false` with the same PATH (the dataset is under src/ and compiles into dist; vitest does not typecheck). Run the focused file a second time to show the controls are repeatable, and confirm no `moe-workload-*` temp dirs are left behind. Never touch the original Windows node_modules or any package-lock.json, and confirm the two tested files are byte-identical (sha256) to the working tree. Keep the command and output tail for complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in a FRESH git-archive copy of HEAD (contains landed M03a workloadSnapshot.ts) + the two owned working-tree files (sha256-identical to the working tree, 3/3 incl. the contract), Linux-native node_modules symlink whose package-lock (CRLF-normalized) sha256 equals HEAD's, Linux-only PATH (node v24.21.0). `npx vitest run src/benchmarks/maintenanceWorkloads.test.ts`: exit 0, 22 passed / 0 skipped, run twice (repeatable). `npx tsc --noEmit --incremental false`: exit 0. Test file typechecked via a temp tsconfig in the copy (types: node, include only the test): exit 0. Leftover /tmp/moe-workload-* dirs: 0. No Windows node_modules or lockfile touched; no repo bytes changed in this step.",
+      "startedAt": "2026-10-24T14:08:52.729Z",
+      "completedAt": "2026-10-24T14:09:22.746Z"
     },
     {
       "stepId": "step-5",
       "description": "Exactly one adversarial self-review of the two-file diff (load adversarial-self-review). Challenge each case. Does the original really fail an intended-change criterion, and not just crash? Does the corrected variant pass EVERY criterion and the wrong variant fail the named one? Could a no-op or a solution that only rewrites the tests pass? Are the static reuse checks too loose (an aliased import) or too strict (formatting)? Is the solution, an assessment file or a variant leaking into initialFiles, intendedBehavior or the dataset module? Are provenance labels honest (reduced/adapted notes match what changed)? Are template-literal escapes right (backslashes, backticks and `${` inside fixture code), and are digests pinned and stable on CRLF checkouts (template literals normalize line endings)? Do any criteria depend on the platform, clock, network, locale or a real git? Is os.tmpdir() left clean and the source checkout unchanged? Confirm: no edit to workloadSnapshot.ts or sibling datasets, no production/daemon change, no Git or .moe writes, no benchmark results or VM/readiness claims. Also confirm no substring from the project's global forbiddenPatterns (project.globalRails) appears anywhere in the two files, fixture strings included; a substring match also fires inside longer identifiers. Fix findings with tests; if any byte changed after step 4, rerun the step-4 commands fresh and use that output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts"
+      ],
+      "note": "Adversarial self-review done. FIXED: provenance notes understated changes. The case-5 note now names the dropped projectRoot argument, the dropped 24000-char limit and the shortened path-list miss text. The case-2 note now says comments were reworded without backticks. This re-pinned 2 digestWorkload literals; snapshot and assessment digests are unchanged. Probes, run in throwaway copies:\n- (a) CRLF-converted both files: 22/22, so the pinned digests are stable (String.raw and template newlines normalize).\n- (b) Mutant: corrected case-5 variant without remote validation. KILLED: the corrected run fails, because every criterion must pass.\n- (c) Mutant: the wrong case-1 variant set to the corrected one (a vacuous wrong). KILLED.\n- (d) Windows-native node 24.16 in a temp copy: 22/22, 0 leftover Windows temp dirs.\nChecked:\n- forbiddenPatterns substrings: 0 hits in both files.\n- Both files are printable ASCII, guarded by a test.\n- The only ${ in fixtures is the deliberate PRELUDE/IMPORT_CHECK interpolation; there are no fixture backticks.\n- No platform, clock, network, locale or real-git dependency: case 4 takes an explicit platform, case 5 uses a fake runner, toFixed and toLowerCase are locale-free.\n- afterEach disposes every handle on all paths; dispose is idempotent.\nTheoretical, not fixed:\n- A hostile candidate could print forged TAP lines. This harness only runs our own variants; the M04 runner should count each id once.\n- An inherited NODE_TEST_CONTEXT would alter child output; that only happens under node --test.\nNo edit to workloadSnapshot.ts, sibling datasets, production code, Git or .moe. No benchmark results or VM claims.\nFresh gate after the change, in a new git-archive copy (owned files sha256-identical; lockfile equals HEAD; Linux PATH):\n- vitest: exit 0, 22/22, run x3;\n- tsc --noEmit: exit 0;\n- test-file tsc: exit 0;\n- 0 moe-workload temp dirs left.",
+      "startedAt": "2026-10-24T14:09:23.995Z",
+      "completedAt": "2026-10-24T14:12:27.646Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -77,20 +107,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.326Z",
-  "updatedAt": "2026-10-24T12:59:32.110Z",
+  "updatedAt": "2026-10-24T14:13:02.794Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:53:44.996Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-c1d9de02"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T12:59:32.012Z",
   "planningNotes": {
@@ -109,5 +147,19 @@
       "packages/moe-daemon/src/util/cachedPlanPaths.ts"
     ]
   },
-  "planApprovedAt": "2026-10-24T12:59:32.110Z"
+  "planApprovedAt": "2026-10-24T12:59:32.110Z",
+  "workStartedAt": "2026-10-24T13:53:12.781Z",
+  "reviewStartedAt": "2026-10-24T14:13:02.791Z",
+  "verification": {
+    "command": "cd /tmp/moe-m03b-gate.dNfcE0/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/maintenanceWorkloads.test.ts  # plan's command (cd packages/moe-daemon && npx vitest run src/benchmarks/maintenanceWorkloads.test.ts) in a FRESH git-archive copy of HEAD plus the two owned working-tree files (sha256-identical), Linux node_modules whose lockfile equals HEAD's",
+    "exitCode": 0,
+    "outputTail": " RUN  v5.0.3 /tmp/moe-m03b-gate.dNfcE0/packages/moe-daemon\n\n Test Files  1 passed (1)\n      Tests  22 passed (22)\n   Start at  17:12:09\n   Duration  1.78s (tests 95%, transform 3%, import 1%)\n\nEXIT=0\n(also in the same copy: npx tsc --noEmit --incremental false -> exit 0; test file typechecked via a temp tsconfig -> exit 0; second and third vitest runs 22/22; leftover /tmp/moe-workload-* dirs: 0)",
+    "reportedAt": "2026-10-24T14:13:02.791Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts",
+    "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts"
+  ],
+  "completionSummary": "Adds 2 new files, both test-only benchmark scaffolding with no production change: packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts (exports MAINTENANCE_WORKLOADS, validated and frozen against the landed M03a contract at import) and maintenanceWorkloads.test.ts.\n\n**Five cases**, each a reduced or adapted ESM overlay of source at commit 35cf53c. Each source.note states exactly what was dropped or changed.\n1. truncation-helper-reuse (memorySettings + getPendingQuestions): reuse the helper.\n2. branch-policy-message (branchPolicy): message names the policy kind.\n3. usage-unknown-format (prompt-cache-usage.mjs): input fields stay unknown, never 0.\n4. affected-file-caller (affectedFiles): new caller of the normalizer and pathKey, with an explicit platform argument.\n5. cached-ref-caller (cachedPlanPaths): lookup accepts {branch, remote}; glob is not evidence; read-only recipe kept.\n\n**Controls** run the unchanged held-out node:test rubric through node --test TAP:\n- The original fails an EXACT pinned set that includes intended-change criteria.\n- The corrected variant passes every criterion id.\n- The plausible-wrong variant fails an exact set that includes the named one.\n\nVariants are test-only patches on fresh snapshots. Leakage, unset-root, determinism/reset and source-sha256 checks are included, plus an ASCII-only source guard and pinned digestWorkload values.\n\n**Gate** (fresh git-archive copy, Linux node_modules, lockfile equal to HEAD's):\n- vitest 22/22, exit 0, run 3 times;\n- tsc exit 0, and the test file typechecks;\n- 0 temp dirs left.\n\n**Extra checks:**\n- Windows-native node 24.16: 22/22.\n- CRLF-converted copy: 22/22 (digests stable).\n- Two mutants killed.\n- forbiddenPatterns: 0 hits.\n\nThe dataset file is over 300 lines because the plan puts all fixtures in two files. Possible TAP forgery by a hostile candidate is a note for the M04 runner, not a bug here."
 }
