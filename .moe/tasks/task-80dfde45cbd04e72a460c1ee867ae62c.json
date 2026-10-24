@@ -128,7 +128,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:36.722Z",
-  "updatedAt": "2026-10-24T15:14:24.661Z",
+  "updatedAt": "2026-10-24T15:15:47.171Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:40:15.349Z",
     "plannedStepCount": 6,
@@ -186,7 +186,11 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/tools/claimNextTask.test.ts",
     ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
-    ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json"
+    ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json",
+    ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+    ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+    ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json"
   ],
   "completionSummary": "CQ-M01d: each new execution attempt records a detached policy-configuration identity, derived only from daemon state.\n\nattemptStore.ts:\n- openAttempt takes an internal executionPolicySnapshot and decodes it with the leaf readExecutionPolicySnapshot after the repair and exclusivity checks. A malformed value throws INVALID_INPUT before any allocation or write.\n- With no snapshot, no key is written, so historical and no-task records keep the exact legacy bytes.\n- Same-id repair returns the persisted record and never adopts a new snapshot.\n- detached() hands out structuredClone copies at every exported returner (get, list, current, open, setAttemptPhase including its no-op path, presence, close, reconcile). The stored object is never exposed, and a hand-edited bad record never makes a read throw.\n\nclaimNextTask.ts:\n- Exported deriveAttemptPolicySnapshot(state, task) applies M01c's planSubmissionSnapshot to the task snapshot, the live settings and planRevision (absent means 0; null throws, no ??). A stored verified-local task snapshot is a floor rollback cannot lower.\n- openClaimAttempt adopts an own-seat resume BEFORE deriving: the original id, generation and snapshot stand, and nothing is backfilled. Otherwise it derives and passes the snapshot to both openAttempt calls, so a successor gets a fresh identity.\n- Claim args are never read. The response shape and input schema are unchanged.\n- Compensation is unchanged: a derive or persist failure hands the fresh seat back.\n\nschema.ts: comments only.\n\nTests: 49 new (S1-S7, C1-C7). 18 single mutation probes all go red.\n\nSCOPE +1 FILE: claimNextTask.test.ts. Its byte-for-byte attempt-JSON pin gained the derived snapshot as its last key, because DoD 1 makes every claim record one. The plan's risk list missed this pin.\n\nTheoretical:\n- A resume with no open attempt and malformed state keeps its seat (pre-existing resume semantics).\n- structuredClone costs about 1us per snapshotted record.\n\nNo approval, trust or activation. Not t",
   "commits": [
@@ -210,16 +214,39 @@
       "treeId": "e8c135762bd15cdcbb5087f146ee526f58770065",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "e2c1e89be0ed4ac228c790aadae20fee9534419b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T15:07:21Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T15:15:47.171Z",
+      "treeId": "05cd75e39a47b959b75c344d63a4e1112694f8d9",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [
-    "2026-10-24-ai-code-quality-and-context.md"
+    "2026-10-24-ai-code-quality-and-context.md",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "packages/moe-daemon/src/util/claimEligibility.ts"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-07cd2c56@2026-10-24T14:38:03Z",
-    "at": "2026-10-24T14:57:11.210Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T15:07:21Z",
+    "at": "2026-10-24T15:15:47.171Z"
   },
   "completedAt": "2026-10-24T15:14:24.661Z",
   "reviewCompletedAt": "2026-10-24T15:14:24.661Z",
