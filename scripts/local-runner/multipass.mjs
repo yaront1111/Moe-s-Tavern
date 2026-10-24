@@ -21,7 +21,7 @@ export function providerError(code) {
   return Object.assign(new Error(MESSAGES[known]), { code: known });
 }
 
-function classifyFailure(error) {
+export function classifyFailure(error) {
   if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'PROVIDER_OUTPUT_LIMIT';
   if (error?.killed || error?.code === 'ETIMEDOUT') return 'PROVIDER_TIMEOUT';
   if (error?.code === 'ENOENT') return 'PROVIDER_NOT_FOUND';
