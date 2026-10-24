@@ -28,7 +28,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:05.514Z",
-  "updatedAt": "2026-10-24T22:04:41.001Z",
+  "updatedAt": "2026-10-24T22:05:33.057Z",
   "dependsOn": [
     "task-deba1a56a8104786ae25b84c58c363b4"
   ],
@@ -82,7 +82,8 @@
     ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
     ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
     ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
-    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
+    ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json"
   ],
   "completionSummary": "CQ-R07 provides pinned guest bootstrap readiness only. executionReady is always false, with no isolation or verified-local claim.\n\n- **DoD 1:** the source sha256 comes only from the installed manifest pin (verifySourceImage/hashFile; waitForGuestReady refuses any caller-minted or mismatched sourceImage). The provider-converted Multipass image_hash is recorded separately as ledger image {sourceSha256, providerImageHash}. recordImage is a set-once CAS on an 'owned' record: the same identity is a no-op, a different one gives IMAGE_IDENTITY_CHANGED, and the bytes are never overwritten. Old R06 records without an image stay valid.\n- **DoD 2:** bounded deterministic polls (ceil(maxWaitMs/pollMs)). Starting/Restarting waits; Running alone is never ready. cloud-init must be exit 0 with done/done, errors [] and recoverable {}; error, degraded, disabled or unparsable gives BOOTSTRAP_FAILED, and exhausted polls give BOOTSTRAP_TIMEOUT. All boundary probes then run once.\n- **DoD 3:**\n  - Mounts: info.mounts must be empty, and no 9p/virtiofs/nfs/cifs/smb/vboxsf/drvfs/fuse/fuseblk/fuse.* in /proc/self/mountinfo; unparsable means unknown.\n  - Layout: root:root dirs without group/other write; the supervisor exactly 500:-r-x------ with a matching sha256; the credential exactly 400.\n  - Per job identity: locked passwd, no groups, no sudo, no authorized_keys. Exit-1-only denials (Multipass's own 2/3 give PROBE_UNKNOWN) for reading the credential, user-data.txt(.i), cloud-config.txt, obj.pkl, instance-data-sensitive.json and /dev/sr0, and for writing the supervisor and its dir. A whoami positive control guards against sudo failures.\n  - Resources: cpu/memory/disk upper bounds; missing values give RESOURCES_UNKNOWN.\n- **DoD 4:** fresh DoD command exit 0, 139/139, 0 skipped (G19 and R06's real-process test ran). The bundle test passes 7/7, and a clean snapshot run passes 139/139.\n\nFiles:\n- new: scripts/local-runner/guest-bootstrap.mjs, scripts/local-runner/guest-readiness.mjs;\n- changed: ",
   "commits": [
@@ -122,6 +123,22 @@
       "treeId": "c5565daad4f14c0e08347e9e4fe8be0ce77a56ec",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "e98af8ac7c5c581c0418e006aa31aa032d419aa2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-24T22:02:49Z",
+      "paths": [
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-24T22:05:33.057Z",
+      "treeId": "1becf9ca6fe8c4835ea3bf830a0a51d9f1bf4990",
+      "status": "PLANNING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -133,8 +150,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-b0c1741e@2026-10-24T21:58:24Z",
-    "at": "2026-10-24T22:03:36.512Z"
+    "sessionId": "worker-07cd2c56@2026-10-24T22:02:49Z",
+    "at": "2026-10-24T22:05:33.057Z"
   },
   "reviewCompletedAt": "2026-10-24T22:02:45.781Z",
   "rejectionDetails": {
