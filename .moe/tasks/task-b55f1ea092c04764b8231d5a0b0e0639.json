@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,16 +107,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.326Z",
-  "updatedAt": "2026-10-24T14:13:02.794Z",
+  "updatedAt": "2026-10-24T14:19:08.558Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:53:44.996Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T14:19:08.558Z",
+    "wallClockMs": 5123562
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -159,7 +162,44 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts",
+    "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts",
+    ".moe/tasks/task-6694591cea5d43908eb3399b44ca883a.json",
+    ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json"
+  ],
+  "completionSummary": "Adds 2 new files, both test-only benchmark scaffolding with no production change: packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts (exports MAINTENANCE_WORKLOADS, validated and frozen against the landed M03a contract at import) and maintenanceWorkloads.test.ts.\n\n**Five cases**, each a reduced or adapted ESM overlay of source at commit 35cf53c. Each source.note states exactly what was dropped or changed.\n1. truncation-helper-reuse (memorySettings + getPendingQuestions): reuse the helper.\n2. branch-policy-message (branchPolicy): message names the policy kind.\n3. usage-unknown-format (prompt-cache-usage.mjs): input fields stay unknown, never 0.\n4. affected-file-caller (affectedFiles): new caller of the normalizer and pathKey, with an explicit platform argument.\n5. cached-ref-caller (cachedPlanPaths): lookup accepts {branch, remote}; glob is not evidence; read-only recipe kept.\n\n**Controls** run the unchanged held-out node:test rubric through node --test TAP:\n- The original fails an EXACT pinned set that includes intended-change criteria.\n- The corrected variant passes every criterion id.\n- The plausible-wrong variant fails an exact set that includes the named one.\n\nVariants are test-only patches on fresh snapshots. Leakage, unset-root, determinism/reset and source-sha256 checks are included, plus an ASCII-only source guard and pinned digestWorkload values.\n\n**Gate** (fresh git-archive copy, Linux node_modules, lockfile equal to HEAD's):\n- vitest 22/22, exit 0, run 3 times;\n- tsc exit 0, and the test file typechecks;\n- 0 temp dirs left.\n\n**Extra checks:**\n- Windows-native node 24.16: 22/22.\n- CRLF-converted copy: 22/22 (digests stable).\n- Two mutants killed.\n- forbiddenPatterns: 0 hits.\n\nThe dataset file is over 300 lines because the plan puts all fixtures in two files. Possible TAP forgery by a hostile candidate is a note for the M04 runner, not a bug here.",
+  "commits": [
+    {
+      "sha": "063599f0ab77c0fbe34c5b6cd1f71a230be6de87",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T13:51:06Z",
+      "paths": [
+        ".moe/tasks/task-6694591cea5d43908eb3399b44ca883a.json",
+        ".moe/tasks/task-b55f1ea092c04764b8231d5a0b0e0639.json",
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts",
+        "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T14:13:57.639Z",
+      "treeId": "dcfbe263c18afd375a06196c4c22b825eca9f06f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.test.ts",
     "packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts"
   ],
-  "completionSummary": "Adds 2 new files, both test-only benchmark scaffolding with no production change: packages/moe-daemon/src/benchmarks/maintenanceWorkloads.ts (exports MAINTENANCE_WORKLOADS, validated and frozen against the landed M03a contract at import) and maintenanceWorkloads.test.ts.\n\n**Five cases**, each a reduced or adapted ESM overlay of source at commit 35cf53c. Each source.note states exactly what was dropped or changed.\n1. truncation-helper-reuse (memorySettings + getPendingQuestions): reuse the helper.\n2. branch-policy-message (branchPolicy): message names the policy kind.\n3. usage-unknown-format (prompt-cache-usage.mjs): input fields stay unknown, never 0.\n4. affected-file-caller (affectedFiles): new caller of the normalizer and pathKey, with an explicit platform argument.\n5. cached-ref-caller (cachedPlanPaths): lookup accepts {branch, remote}; glob is not evidence; read-only recipe kept.\n\n**Controls** run the unchanged held-out node:test rubric through node --test TAP:\n- The original fails an EXACT pinned set that includes intended-change criteria.\n- The corrected variant passes every criterion id.\n- The plausible-wrong variant fails an exact set that includes the named one.\n\nVariants are test-only patches on fresh snapshots. Leakage, unset-root, determinism/reset and source-sha256 checks are included, plus an ASCII-only source guard and pinned digestWorkload values.\n\n**Gate** (fresh git-archive copy, Linux node_modules, lockfile equal to HEAD's):\n- vitest 22/22, exit 0, run 3 times;\n- tsc exit 0, and the test file typechecks;\n- 0 temp dirs left.\n\n**Extra checks:**\n- Windows-native node 24.16: 22/22.\n- CRLF-converted copy: 22/22 (digests stable).\n- Two mutants killed.\n- forbiddenPatterns: 0 hits.\n\nThe dataset file is over 300 lines because the plan puts all fixtures in two files. Possible TAP forgery by a hostile candidate is a note for the M04 runner, not a bug here."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-24T13:51:06Z",
+    "at": "2026-10-24T14:13:57.639Z"
+  },
+  "completedAt": "2026-10-24T14:19:08.558Z",
+  "reviewCompletedAt": "2026-10-24T14:19:08.558Z",
+  "reviewSummary": "APPROVED. Completion 063599f (tree dcfbe263 = recorded) is on moe/work-2026-10-24: 2 owned benchmark files + 2 wrapper board records. The owned files match the working tree.\n\nGate, in a FRESH git-archive copy of 063599f (Linux node_modules with lockfile = commit's, Linux PATH):\n- `cd packages/moe-daemon && npx vitest run src/benchmarks/maintenanceWorkloads.test.ts`: exit 0, 22/22, x2\n- `npx tsc --noEmit --incremental false`: exit 0\n- 0 leftover moe-workload-* dirs\n\nDoD 1: 5 pinned maintenance ids validate against the landed M03a contract. Each has the frozen commit, provenance, intended behavior, pinned digests and a held-out node:test rubric.\nDoD 2: controls pin EXACT failed sets for original and wrong; corrected passes every criterion. Variants are test-only.\nDoD 3: coverage tags present (reusable-helper, changed-requirements, changed-caller, recipe-mismatch). Determinism/reset, source-sha256 and ASCII guards present.\nDoD 4: met.\n\nFixtures match the git show 35cf53c sources, and each note discloses its adaptations.\n\nIndependent probes, 6/6 killed:\n- compat regressions (normalizeUsage, origin default, surrogate backoff, remediation text, pathKey) are each caught by the matching *-unchanged criterion;\n- forged candidate TAP does not pass a failing original.\n\nNo forbidden patterns, no non-ASCII, no importer outside benchmarks, no production change.\n\nNon-blocking:\n1. 1309 LOC (858+451), over the 400 default. Not cited: the plan mandates these 2 frozen-data files (M03a precedent).\n2. The case-5 note omits one change: the config-miss message splits on ' ' instead of /\\s+/.\n3. The leakage test checks only whole-file containment. Separation was confirmed by reading the dataset.",
+  "requiredCheckAtDone": null
 }
