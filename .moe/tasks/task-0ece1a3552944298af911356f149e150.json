@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -126,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:57.338Z",
-  "updatedAt": "2026-10-24T16:04:54.086Z",
+  "updatedAt": "2026-10-24T16:10:54.833Z",
   "dependsOn": [
     "task-bb9034eaeed44adcbc1d05c71c2eda5b",
     "task-cfa74f1b01df4647b57a923bdd961b2a"
@@ -135,13 +135,16 @@
     "firstClaimAt": "2026-10-24T12:39:07.805Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T16:10:54.833Z",
+    "wallClockMs": 12707028
   },
   "contextFetchedBy": [
     "architect-da8841dc",
     "governor-187cc44e",
     "architect-26ba32c3",
-    "worker-4e006165"
+    "worker-4e006165",
+    "qa-b0c1741e"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
@@ -247,5 +250,9 @@
     "reportedAt": "2026-10-24T16:04:08.246Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M04 producer slice (SPIDR split, comment-0a4bd229): the baseline outcome record contract, report builder and CLI. No agents or workloads were run; those are M04b/M04c.\n\nFiles:\n- scripts/baseline-record.mjs (new, 190 lines): readBaselineRecord, readExpectedManifest and the constants. Exact keys at every level, so prompts, tool arguments, secrets and prices cannot ride along. Errors name the field path, are capped at 200 chars and never echo values. null stays null; output is a detached, deep-frozen copy.\n- scripts/baseline-report.mjs (187 lines): re-exports the contract and adds buildBaselineReport and formatBaselineReport.\n- scripts/analyze-baseline.mjs (new, 60 lines): read-only CLI, `--records DIR [--project DIR] [--expected FILE] [--json]`.\n- scripts/tests/usage-report.test.mjs: append-only CRLF section, 9 tests.\n\nBehavior:\n- Acceptance comes only from the held-out assessment: accepted needs ran, exit 0, and every criterion pass (non-empty); any fail is rejected; everything else is not-assessed. Moe status and QA counts are labelled recordOnly, and tokens never change acceptance (swap-tested).\n- Capped, failed, aborted and missing runs all stay as rows with partial counters. Duplicates (n=1), workloads absent from the manifest, and caseDigest or corpusVersion mismatches are refused.\n- Usage joins wholeTasks on run.usageTaskId, with explicit unknown reasons. Summary totals add observed values only, and an overflowed total becomes unknown. observedTokensPerAcceptedChange is null with no accepted changes, and complete is false whenever any usage is unknown or codex coverage is unconfirmed.\n- inputs record corpus versions, digests, commits, caps, repetitions, platform/node/cli versions and per-role cli/model/effort. limitations cover n=1, non-completed counts, unknown usage/retrieval/latency, codex coverage, mixed commits/caps/corpus versions, record-only status and tokens not being cost.\n- Output is deterministic; unknown values render as 'unknown', never 0.\n\nVer"
+  "completionSummary": "CQ-M04 producer slice (SPIDR split, comment-0a4bd229): the baseline outcome record contract, report builder and CLI. No agents or workloads were run; those are M04b/M04c.\n\nFiles:\n- scripts/baseline-record.mjs (new, 190 lines): readBaselineRecord, readExpectedManifest and the constants. Exact keys at every level, so prompts, tool arguments, secrets and prices cannot ride along. Errors name the field path, are capped at 200 chars and never echo values. null stays null; output is a detached, deep-frozen copy.\n- scripts/baseline-report.mjs (187 lines): re-exports the contract and adds buildBaselineReport and formatBaselineReport.\n- scripts/analyze-baseline.mjs (new, 60 lines): read-only CLI, `--records DIR [--project DIR] [--expected FILE] [--json]`.\n- scripts/tests/usage-report.test.mjs: append-only CRLF section, 9 tests.\n\nBehavior:\n- Acceptance comes only from the held-out assessment: accepted needs ran, exit 0, and every criterion pass (non-empty); any fail is rejected; everything else is not-assessed. Moe status and QA counts are labelled recordOnly, and tokens never change acceptance (swap-tested).\n- Capped, failed, aborted and missing runs all stay as rows with partial counters. Duplicates (n=1), workloads absent from the manifest, and caseDigest or corpusVersion mismatches are refused.\n- Usage joins wholeTasks on run.usageTaskId, with explicit unknown reasons. Summary totals add observed values only, and an overflowed total becomes unknown. observedTokensPerAcceptedChange is null with no accepted changes, and complete is false whenever any usage is unknown or codex coverage is unconfirmed.\n- inputs record corpus versions, digests, commits, caps, repetitions, platform/node/cli versions and per-role cli/model/effort. limitations cover n=1, non-completed counts, unknown usage/retrieval/latency, codex coverage, mixed commits/caps/corpus versions, record-only status and tokens not being cost.\n- Output is deterministic; unknown values render as 'unknown', never 0.\n\nVer",
+  "completedAt": "2026-10-24T16:10:54.833Z",
+  "reviewCompletedAt": "2026-10-24T16:10:54.833Z",
+  "reviewSummary": "APPROVED. Reviewed 07fefe2 (completion) and a649b04 (checkpoint), both on moe/work-2026-10-24. The 4 owned scripts in the tree are byte-identical to 07fefe2; usage-report.mjs is unchanged.\n\nGate re-run by QA: the exact DoD command, Linux PATH, node 24.21.0: exit 0, 54/54, 0 skipped. Only the python3 attribution engine runs; PowerShell is not exercised.\n\nSize: 437 runtime + 397 test = 834 LOC, over 400 with no waiver rail. Not rejected: this is the plan-mandated slice already split by SPIDR, and CQ-M precedent (M02, M03) approved the same. The test file is append-only with CRLF kept.\n\nDoD:\n1) Rows keep commit, corpus version, digests, cap and roles (cli/model/effort/launches). Unknown stays null, and markdown shows 'unknown'.\n2) Acceptance comes only from the assessment: DONE+QA approval with a failing criterion is rejected, and the token swap leaves verdicts unchanged.\n3) inputs and limitations are complete, exactly asserted and deterministic.\n4) Gate green (above).\n\nProbes:\n- An empty records dir with a manifest gives a missing row, exit 0.\n- A __proto__ key and a symlinked record are both refused with bounded errors, exit 1.\n- No forbidden patterns; rails held.\n\nNon-blocking for M04b/c:\n(a) The summary detects overflow only when unknownRecords is 0; overflowFields would be exact. Theoretical, needs over 9e15 tokens.\n(b) cliVersion, platform and node version appear only in the aggregate inputs; mixed values are not flagged as a limitation.",
+  "requiredCheckAtDone": null
 }
