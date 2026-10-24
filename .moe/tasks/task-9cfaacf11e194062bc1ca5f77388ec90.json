@@ -1,0 +1,38 @@
+{
+  "id": "task-9cfaacf11e194062bc1ca5f77388ec90",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M04b] Baseline workload run driver",
+  "description": "Objective: drive ONE frozen CQ-M03 workload through the ORIGINAL Moe workflow and emit one outcome record in the CQ-M04 baseline record contract (task-0ece1a3552944298af911356f149e150, scripts/baseline-report.mjs). Use the human-approved baseline configuration from comment-700a6a5111ad4a57a3340a2dac0ab586 on task-0ece1a3552944298af911356f149e150:\n- today's defaults: no settings.models pins; claude seats on claude-opus-5-5; plan-routing launch hints apply;\n- one run per workload;\n- a 60-minute wall-clock cap per workload; a capped run is recorded as capped with partial counters, never dropped or silently retried.\nSplit from CQ-M04 by size (SPIDR interface seam): M04 owns the record contract and report builder; this task owns producing records; CQ-M04c executes the 20 real runs.\n\nDeliverable: packages/moe-daemon/src/benchmarks/baselineRun.ts plus its vitest file. The driver is TypeScript because the M03 corpus/materializer is. It provides a CLI entry runnable with tsx. For one workload id the driver:\n1. creates the coding snapshot with the landed M03a materializer (fresh temp dir only);\n2. makes it a throwaway Moe project: git init plus one initial commit inside that temp dir, daemon init with TURBO approval, effective settings recorded;\n3. creates the task from the workload intendedBehavior, with DoD items derived from rubric criterion DESCRIPTIONS only (assessment code stays held out);\n4. launches the existing wrapper seats (architect, worker, qa) with today's defaults;\n5. enforces the cap by terminating the whole process tree, then stops the daemon;\n6. reads the task record (status, QA approvals/rejections, reopenCount) and logs/moe-usage receipts as record-only data;\n7. runs the held-out assessment from a separate M03a assessment snapshot with MOE_WORKLOAD_CANDIDATE_ROOT pointing at the final project tree;\n8. writes the outcome record: actual per-role model/effort, Moe commit under test, cap, timings, status (completed/capped/failed/aborted), per-criterion assessment, and null for every unobserved counter.\nTests use a fake agent CLI only (no paid model calls).\n\nNOT in scope: executing the 20 real workloads (CQ-M04c); the aggregate report (CQ-M04); new profiles or verified-local; VM/isolation claims; edits to moe-agent.{sh,ps1}, daemon tools, the M03 corpus or the M03a contract (read-only use).\n\nVerification: cd packages/moe-daemon && npx vitest run src/benchmarks/baselineRun.test.ts (fresh, exit 0, in the synchronized native-Linux copy with unchanged lockfiles), plus npx tsc --noEmit for the source.",
+  "definitionOfDone": [
+    "Fake-CLI vitest cases show a completed run writes an outcome record accepted by the CQ-M04 validator in scripts/baseline-report.mjs, carrying actual per-role model/effort, the Moe commit under test, the 60-minute cap and null for every unobserved counter.",
+    "A run exceeding the cap (short test cap) has its whole process tree terminated and is recorded as capped with partial counters, never retried or dropped.",
+    "The held-out assessment runs against the final project tree from a separate assessment snapshot; coding inputs never contain assessment files; assessment pass/fail/not-run is recorded separately from the Moe task status.",
+    "All writes stay inside newly created temp directories (user-tree sentinel unchanged); the only Git writes are inside the throwaway project; wrapper/daemon failures are recorded as failed/aborted with bounded diagnostics.",
+    "Fresh `cd packages/moe-daemon && npx vitest run src/benchmarks/baselineRun.test.ts` exits 0 with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No paid model calls in tests: a fake agent CLI only.",
+    "The driver's only Git writes are git init plus an initial commit inside its own throwaway temp project; never touch the user checkout, its .moe or its refs.",
+    "Read-only use of moe-agent.{sh,ps1}, daemon tools, the M03 corpus and the M03a contract; do not enable verified-local or claim isolation."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0ece1a3552944298af911356f149e150",
+  "dependsOn": [
+    "task-0ece1a3552944298af911356f149e150",
+    "task-cfa74f1b01df4647b57a923bdd961b2a"
+  ],
+  "priority": "HIGH",
+  "order": 41,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T13:13:36.465Z",
+  "updatedAt": "2026-10-24T13:13:36.465Z"
+}

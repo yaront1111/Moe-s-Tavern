@@ -1,0 +1,38 @@
+{
+  "id": "task-80dfde45cbd04e72a460c1ee867ae62c",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01d] Attempt policy snapshot capture",
+  "description": "Objective: Bind each real execution attempt to a durable detached policy configuration identity without rewriting historical attempts.\n\nDeliverable: Have openAttempt derive policy data from daemon task/project state, never a new caller-controlled MCP snapshot argument. New claims capture the effective configuration; strict task requirements cannot weaken after project rollback. Repair/resume keeps the original attempt identity and snapshot unchanged, while a successor generation records a fresh configuration identity. Preserve the existing pure attempt-store legacy behavior for historical/no-task records. Return detached snapshot copies without exposing mutable stored policy objects, and preserve persist-before-publish plus claim compensation on failure.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/state/attemptStore.ts (openAttempt/repairExisting/getAttempt/listAttempts/currentAttempt); packages/moe-daemon/src/state/attemptStore.test.ts; packages/moe-daemon/src/tools/claimNextTask.ts (openClaimAttempt/handBackUnrecordedClaim); packages/moe-daemon/src/tools/claimNextTask.contract.test.ts.\n\nNOT in scope: Session/context receipts, stale-attempt fencing expansion, QA candidate binding, trusted runner evidence, approving the captured revision, or profile activation. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "Real open/claim tests persist the derived configuration snapshot and reload it unchanged after daemon restart.",
+    "Same-id repair and own-seat resume retain original generation/snapshot despite project changes; a legitimate successor gets a new generation and configuration record.",
+    "Returned/opened/listed snapshot objects cannot mutate stored snapshot state through aliasing.",
+    "Injected/forged policy inputs are not adopted; strict policy cannot downgrade through a resumed/replaced attempt or current project rollback.",
+    "Failed attempt persistence leaves no published attempt and existing claim compensation remains correct; pre-snapshot historical/no-task store behavior stays compatible.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-0f7df75fa8e44a75bf8547e53f48d5d5"
+  ],
+  "priority": "HIGH",
+  "order": 216.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:36.722Z",
+  "updatedAt": "2026-10-24T13:11:48.993Z"
+}

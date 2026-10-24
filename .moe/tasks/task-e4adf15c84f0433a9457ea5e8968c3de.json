@@ -1,0 +1,37 @@
+{
+  "id": "task-e4adf15c84f0433a9457ea5e8968c3de",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M04c] Frozen 20-workload baseline execution",
+  "description": "Objective: run every one of the 20 frozen CQ-M03 workloads once (n=1) through the CQ-M04b driver (task-9cfaacf11e194062bc1ca5f77388ec90), then publish the baseline outcome report built by CQ-M04 (task-0ece1a3552944298af911356f149e150). Use the human-approved configuration from comment-700a6a5111ad4a57a3340a2dac0ab586 on task-0ece1a3552944298af911356f149e150:\n- today's model/effort defaults;\n- one run per workload;\n- a 60-minute wall-clock cap per workload;\n- capped runs are recorded with their partial counters;\n- missing counters stay unknown.\nThis is the execution slice split from CQ-M04 by size.\n\nDeliverable:\n- 20 outcome records, 5 per category, that pass the CQ-M04 validator;\n- their usage receipts, archived (allowlisted fields only; no prompts, tool arguments, secrets or prices);\n- the generated report as JSON plus markdown, committed under one documented results path, e.g. docs/baselines/cq-m04-<date>/.\nThe report must regenerate byte-identically from the archived inputs with the CQ-M04 CLI.\n\nOperational note: this needs a signed-in claude CLI and real paid usage, and can take up to about 20 hours of wall-clock time (20 x 60-minute cap). When promoting this BACKLOG row, a human decides when and where it runs (operator-run, or agent-run in the background with checkpoints).\n\nNOT in scope:\n- changing workloads, rubrics, the driver or report code;\n- reruns beyond n=1 (an infrastructure failure is recorded, never silently retried);\n- new-profile or verified-local runs;\n- any savings, quality-improvement or statistical-significance claim.\n\nVerification: node scripts/analyze-baseline.mjs --records <archived records dir> --project <archived usage dir> --expected <frozen manifest> --json must reproduce the committed report JSON byte-for-byte (exit 0), and node --test scripts/tests/usage-report.test.mjs must exit 0.",
+  "definitionOfDone": [
+    "Exactly 20 outcome records (every frozen workload id, 5 per category, n=1) validate with the CQ-M04 validator; capped/failed runs are present with partial counters, none dropped or silently retried.",
+    "The committed report JSON and markdown regenerate byte-identically from the archived records and receipts via `node scripts/analyze-baseline.mjs ... --json` (exit 0).",
+    "The report states reproducible inputs (corpus version and per-case digests, Moe commit, per-role model/effort, 60-minute cap) and limitations (n=1, unknown counters, platform coverage); acceptance comes only from held-out assessments, never from Moe task status or token metrics.",
+    "Archived records and receipts contain only allowlisted fields (no prompts, tool arguments, secrets or prices), checked by the CQ-M04 validator and the M02 receipt normalizer.",
+    "Fresh `node --test scripts/tests/usage-report.test.mjs` exits 0 with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Human-gated operational run: real paid usage and up to ~20 hours wall-clock. Do not start without an explicit human go-ahead recorded on this task.",
+    "No reruns beyond n=1; record infrastructure failures, never hide them. Report observed facts only: no savings or significance claims.",
+    "No direct .moe edits in the real project; no Git writes outside wrappers; do not enable verified-local or claim isolation."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-0ece1a3552944298af911356f149e150",
+  "dependsOn": [
+    "task-9cfaacf11e194062bc1ca5f77388ec90"
+  ],
+  "priority": "HIGH",
+  "order": 42,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T13:13:52.451Z",
+  "updatedAt": "2026-10-24T13:13:52.451Z"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "task-29c8274ebc4d4faea67009fa5dcd2df1",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01e] Profile readiness admission",
+  "description": "Objective: Apply one fail-closed effective-profile admission rule consistently to explicit claims, ranked work and waiters.\n\nDeliverable: Reuse resolveTaskExecutionProfile and assertExecutionProfileReady for explicit task claims, ranked candidate pools, own-seat resumes and wait_for_task matching. An unavailable strict task must not be assigned or have its existing attempt closed; explicit calls return a concrete refusal, and ranked/wait pools must not produce wake-claim-refuse spin. Read stored strict snapshots even when current project selection rolls back. Coordinate with the task-store progression backstop from M01c; no environment, missing-identity compatibility branch or direct project-file setting may silently launch strict work through native/legacy execution.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/delivery/executionProfile.ts; packages/moe-daemon/src/delivery/executionProfile.test.ts; packages/moe-daemon/src/tools/claimNextTask.ts; packages/moe-daemon/src/tools/waitForTask.ts; proposed new packages/moe-daemon/src/tools/executionProfileAdmission.test.ts.\n\nNOT in scope: Certifying/starting VMs, changing existing legacy assignment/finalizing/reconciliation semantics, implementing session receipts, approved revision proof, or weakening old held-out delivery tests. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "Explicit unavailable-profile claims fail with concrete readiness reasons before assignment, attempt closure/open, worker changes or other side effects.",
+    "Ranked claim and waiter integration tests agree on eligibility, preventing wake/refuse loops for unavailable strict work.",
+    "Own-seat resume and project rollback cannot bypass a stored strict profile; malformed profile/snapshot records fail closed.",
+    "Absent/legacy/observe task admission and existing finalizing/reconciliation holds remain compatible.",
+    "No environment/caller readiness label or native execution fallback can make verified-local available; cleanup/read-only diagnostics remain accessible.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-80dfde45cbd04e72a460c1ee867ae62c"
+  ],
+  "priority": "HIGH",
+  "order": 217.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:37.335Z",
+  "updatedAt": "2026-10-24T13:11:51.499Z"
+}

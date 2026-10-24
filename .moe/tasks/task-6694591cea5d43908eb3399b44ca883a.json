@@ -113,7 +113,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:35.680Z",
-  "updatedAt": "2026-10-24T13:08:20.217Z",
+  "updatedAt": "2026-10-24T13:09:40.167Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:25:22.985Z",
     "plannedStepCount": 5,
@@ -171,7 +171,12 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/delivery/executionProfile.ts",
     "packages/moe-daemon/src/delivery/policy.ts",
-    ".moe/tasks/task-6694591cea5d43908eb3399b44ca883a.json"
+    ".moe/tasks/task-6694591cea5d43908eb3399b44ca883a.json",
+    ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+    ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+    ".moe/tasks/task-3af616e365dc4f4790d052df97e92ed1.json",
+    ".moe/tasks/task-bb9034eaeed44adcbc1d05c71c2eda5b.json",
+    ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json"
   ],
   "completionSummary": "CQ-M01b in exactly 4 planned files. schema.ts (CRLF kept): ExecutionPolicySnapshot = V1|V2 (V2 adds captured deliveryPolicy), documented as configuration identity only (not approval/receipt/runner trust/readiness/check definition/destination/completion); optional executionPolicySnapshot on Task and ExecutionAttempt, unwritten and untrusted by any daemon path. executionProfile.ts stays a leaf (runtime import only util/errors): it now owns POLICIES/DELIVERY_POLICIES/DEFAULT_DELIVERY_POLICY (moved verbatim) and isDeliveryPolicy. The decoder reads version once and checks the exact enumerable key set per version. v2 deliveryPolicy is strict with no legacy default, and v1 never gains one. New readCapturedDeliveryPolicy takes no settings. policy.ts re-exports the same array, and resolveDeliveryPolicy behaves and words its errors exactly as before. New pure captureExecutionPolicySnapshot is validated through the single decoder and asserts no readiness. verified-local stays EXECUTION_PROFILE_NOT_READY under env flags. TDD: red 108 fail/31 pass, then green. The review found that a hidden (non-enumerable) required key plus an enumerable extra key bypassed the key check; fixed with 2 red-then-green tests. Six meaningful mutants killed. Focused (5 files): 403/403 pass. Full: 143 files, 2662 passed/9 skipped (baseline 2521/9 + 141 new). tsc clean. executionProfile.test.ts and acceptance.test.ts are byte-unchanged. No .moe/Git writes; peer dirty paths untouched. This does not certify activation, approval or isolation.",
   "commits": [
@@ -193,6 +198,26 @@
       "treeId": "92f8734f071ebefecacb1d5894f7ebf915d218dd",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "055bb7130161ab09a69df6d55c250127a2c49657",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T13:02:44Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+        ".moe/tasks/task-3af616e365dc4f4790d052df97e92ed1.json",
+        ".moe/tasks/task-6694591cea5d43908eb3399b44ca883a.json",
+        ".moe/tasks/task-bb9034eaeed44adcbc1d05c71c2eda5b.json",
+        ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T13:09:40.167Z",
+      "treeId": "456a00c0dc07fc3d0b8f3d5e2502569616595402",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -201,9 +226,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-24T12:44:09Z",
-    "at": "2026-10-24T12:58:04.620Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T13:02:44Z",
+    "at": "2026-10-24T13:09:40.167Z"
   },
   "completedAt": "2026-10-24T13:08:20.217Z",
   "reviewCompletedAt": "2026-10-24T13:08:20.217Z",

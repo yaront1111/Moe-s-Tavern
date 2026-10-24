@@ -1,0 +1,38 @@
+{
+  "id": "task-5a082cb43e2346fcbff480fb1c383b58",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M01f] Effective task delivery policy",
+  "description": "Objective: Make existing shared delivery-policy consumers respect protected strict configuration snapshots without changing historical legacy/observe semantics.\n\nDeliverable: Introduce one effective task-policy selection path shared by evaluateDeliveryEvidence and qa_approve. Fix qaApprove's separate live-project legacy branch so it cannot skip evidence/readiness evaluation for a stored strict task after rollback. Legacy/observe tasks continue the old live deliveryPolicy and required-check rules. Unavailable strict configuration stays fail-closed in QA, dependency readiness and serving projections; no attestation or missing-policy fallback relabels it verified. Preserve immutable historical configuration and current requiredCheckAtDone behavior; actual revision/candidate-bound check definitions and local delivery certification remain later rollout work.\n\nExisting implementation surfaces / proposed focused tests (maximum five files): packages/moe-daemon/src/delivery/policy.ts (evaluateDeliveryEvidence/requiredCheckCommand/resolveDeliveryPolicy); packages/moe-daemon/src/tools/qaApprove.ts; proposed new packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts. The new focused suite exercises real dependencyShortfall and deliveryProjection consumers; no old held-out acceptance file edits.\n\nNOT in scope: Changing legacy delivery acceptance, treating ARCHIVED/deleted legacy dependencies differently, enabling verified-local, certifying existing runner-observed strings, new check/delivery semantics, or altering old held-out delivery assertions. Verification (fresh, exit 0): cd packages/moe-daemon && npm test -- --maxWorkers=4. Run in a synchronized isolated copy with native Linux dependencies and Linux-only PATH; preserve the original Windows node_modules and unchanged package-lock.json. Each slice owns its behavior tests, one final verification/adversarial review, and no production activation. This breakdown defines deliverables, not per-task implementation steps.",
+  "definitionOfDone": [
+    "New focused integration tests show qa_approve cannot bypass stored strict policy when current project deliveryPolicy is legacy or profile selection is rolled back.",
+    "evaluateDeliveryEvidence, real dependencyShortfall and deliveryProjection agree that unavailable/malformed strict policy is not satisfied or verified.",
+    "Absent/legacy/observe matrices retain existing live policy semantics across local-branch, remote-push, merged-pull-request, manual-artifact and legacy modes.",
+    "Existing requiredCheckCommand/requiredCheckAtDone behavior and attestation labeling remain unchanged outside strict configuration; no incomplete policy snapshot substitutes for future check-definition/destination proof.",
+    "Old held-out delivery acceptance tests remain unchanged; snapshot-read failures and rejected QA operations write no approval/completion evidence.",
+    "Fresh `cd packages/moe-daemon && npm test -- --maxWorkers=4` exits 0 in the synchronized native-Linux copy, with actual pass/skip counts and output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Do not enable verified-local or claim approval, runner trust, hardware/isolation certification, or verified completion from a configuration snapshot.",
+    "Do not edit packages/moe-daemon/src/delivery/acceptance.test.ts or weaken existing held-out delivery assertions; add focused tests for new behavior.",
+    "No direct .moe edits or Git writes; wrappers own landing. Keep each implementation plan within five source/test files and normal sizing limits."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-ad95cb270e9e46df8672eb094d0c1e74",
+  "dependsOn": [
+    "task-29c8274ebc4d4faea67009fa5dcd2df1"
+  ],
+  "priority": "HIGH",
+  "order": 218.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T00:01:38.100Z",
+  "updatedAt": "2026-10-24T13:11:53.141Z"
+}
