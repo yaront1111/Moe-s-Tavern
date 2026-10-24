@@ -19,6 +19,11 @@ import { qaApproveTool } from '../tools/qaApprove.js';
 import { listReviewsForTask } from '../state/reviewStore.js';
 import { MoeError } from '../util/errors.js';
 import * as policy from './policy.js';
+import {
+  dependencyShortfall, describeUnmetDependency, isDependencySatisfied, runDependencyUnblock, unmetDependsOn,
+} from '../state/dependencyUnblock.js';
+import { deliveryProjection } from '../state/deliveryProjection.js';
+import { recordCheckRun } from '../state/checkRunStore.js';
 
 type Row = Record<string, unknown>;
 
@@ -286,5 +291,221 @@ describe('CQ-M01f Q5: resolveTaskDeliveryPolicy', () => {
     const before = JSON.stringify({ settings, task });
     expect(policy.resolveTaskDeliveryPolicy(settings, task as never)).toBe('remote-push');
     expect(JSON.stringify({ settings, task })).toBe(before);
+  });
+});
+
+// --- E: the consumers agree ---------------------------------------------------
+
+/** DONE task-P with complete evidence (current candidate cand-P, passing gate run), and task-D waiting on it. */
+const prereq = (snapshot: unknown, extra: Row = {}): Row => ({
+  id: 'task-P', status: 'DONE', order: 1, planRevision: 1, requiredCheckAtDone: GATE,
+  ...(snapshot === undefined ? {} : { executionPolicySnapshot: snapshot }), ...extra,
+});
+const WAITER: Row = {
+  id: 'task-D', status: 'BLOCKED', order: 2, assignedWorkerId: null, blockedFromStatus: 'WORKING',
+  blockedOnTaskIds: ['task-P'], blockedAt: STARTED, blockedReason: 'waiting on task-P',
+};
+const seedDep = (settings: Row, snapshot: unknown, extra: Row = {}, checks: Row[] = [passingRun('check-P', 'cand-P')]): Promise<void> =>
+  seed(settings, [prereq(snapshot, extra), WAITER], [candidate('cand-P', 'task-P')], checks);
+const taskP = () => h.state.getTask('task-P')!;
+const unblock = (): Promise<string[]> => h.state.mutex.runExclusive(() => runDependencyUnblock(h.state, 'task-P'));
+const CHECK = 'required-check:node gate.cjs';
+
+/**
+ * Every consumer of a DONE task-P whose policy cannot be applied withholds it,
+ * read-only (E5): no write, and the stored snapshot and file bytes are unchanged.
+ */
+async function expectConsumersWithhold(check: (err: MoeError) => void): Promise<void> {
+  const file = path.join(h.moePath, 'tasks', 'task-P.json');
+  const bytes = fs.readFileSync(file, 'utf8');
+  const stored = structuredClone(taskP().executionPolicySnapshot);
+  const writes = vi.spyOn(h.state, 'writeEntity');
+  check(thrown(() => policy.evaluateDeliveryEvidence(h.state, taskP())));
+  check(thrown(() => dependencyShortfall(h.state, 'task-P')));
+  expect(isDependencySatisfied(h.state, 'task-P')).toBe(false);
+  expect(unmetDependsOn(h.state, { dependsOn: ['task-P'] })).toEqual(['task-P']);
+  const described = describeUnmetDependency(h.state, 'task-P');
+  expect(described.startsWith('task-P [DONE')).toBe(true);
+  expect(described).toContain('could not be judged');
+  const projection = deliveryProjection(h.state, taskP())!;
+  expect(projection.currentCandidate?.id).toBe('cand-P');
+  expect(projection.latestCheckRun).toEqual({ command: GATE, exitCode: 0, source: 'runner-observed' });
+  expect('requiredCheckSatisfied' in projection).toBe(false);
+  expect(writes.mock.calls.length).toBe(0);
+  expect(await unblock()).toEqual([]);
+  expect(h.state.getTask('task-D')!.status).toBe('BLOCKED');
+  expect(taskP().executionPolicySnapshot).toEqual(stored);
+  expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+}
+
+describe('CQ-M01f E: evaluate, the dependency gate and the projection agree', () => {
+  it.each(STRICT_SOURCES)('E1 %s: a DONE prerequisite is withheld by every consumer', async (_label, settings, snapshot, extra) => {
+    await seedDep(settings, snapshot, extra);
+    await expectConsumersWithhold(expectNotReady);
+  });
+
+  it("E1 control: observeV2('legacy') under live observe/local-branch with the same evidence satisfies", async () => {
+    await seedDep(LIVE_OBSERVE, observeV2('legacy'));
+    expect(policy.evaluateDeliveryEvidence(h.state, taskP())).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+    expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: true, missingEvidence: [] });
+    expect(deliveryProjection(h.state, taskP())!.requiredCheckSatisfied).toBe(true);
+    expect(await unblock()).toEqual(['task-D']);
+    expect(h.state.getTask('task-D')!.status).toBe('WORKING');
+  });
+
+  it.each(STRICT_SOURCES)('E2 %s in REVIEW: evaluation throws NOT_READY and the projection omits the verdict', async (_label, settings, snapshot, extra) => {
+    await seedDep(settings, snapshot, { ...extra, status: 'REVIEW', requiredCheckAtDone: undefined });
+    expectNotReady(thrown(() => policy.evaluateDeliveryEvidence(h.state, taskP())));
+    const projection = deliveryProjection(h.state, taskP())!;
+    expect(projection.currentCandidate?.id).toBe('cand-P');
+    expect('requiredCheckSatisfied' in projection).toBe(false);
+  });
+
+  it.each<[string, Row, unknown, string]>([
+    ['a null snapshot', LIVE_OBSERVE, null, 'executionPolicySnapshot'],
+    ['an extra ready key', LIVE_OBSERVE, { ...STRICT_V2, ready: true }, 'executionPolicySnapshot'],
+    ['v2 verified-local without deliveryPolicy', LIVE_OBSERVE, { version: 2, profile: 'verified-local', planRevision: 1 }, 'executionPolicySnapshot'],
+    ['an upper-case live executionProfile', { executionProfile: 'VERIFIED-LOCAL', deliveryPolicy: 'local-branch' }, observeV2('legacy'), 'executionProfile'],
+  ])('E3 malformed configuration (%s) is INVALID_INPUT and withheld by every consumer', async (_label, settings, snapshot, field) => {
+    await seedDep(settings, snapshot);
+    await expectConsumersWithhold((err) => expectInvalid(err, field));
+  });
+
+  it('E4 compatibility: an ARCHIVED strict prerequisite still satisfies (the existing rule)', async () => {
+    await seedDep(LIVE_LEGACY, STRICT_V2, { status: 'ARCHIVED' });
+    expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: true, missingEvidence: [] });
+    expect(await unblock()).toEqual(['task-D']);
+  });
+});
+
+// --- L: legacy and observe keep the live rules ----------------------------------
+
+const L_SNAPSHOTS: Array<[string, unknown]> = [
+  ['absent', undefined],
+  ['LEGACY_V1', LEGACY_V1],
+  ['OBSERVE_V1', OBSERVE_V1],
+  ["legacyV2('manual-artifact')", legacyV2('manual-artifact')],
+  ["observeV2('remote-push')", observeV2('remote-push')],
+];
+const LEGACY_RESULT = { policy: 'legacy', satisfied: true, missingEvidence: [] };
+const owing = (live: string, landing: string[]): Row => ({ policy: live, satisfied: false, missingEvidence: [...landing, CHECK] });
+
+describe('CQ-M01f L: legacy and observe tasks keep the live delivery rules', () => {
+  it.each<[string, string | undefined, Row]>([
+    ['absent', undefined, LEGACY_RESULT],
+    ['legacy', 'legacy', LEGACY_RESULT],
+    ['local-branch', 'local-branch', owing('local-branch', [])],
+    ['remote-push', 'remote-push', owing('remote-push', ['pushed-completion-commit'])],
+    ['merged-pull-request', 'merged-pull-request', owing('merged-pull-request', ['merged-pull-request'])],
+    ['manual-artifact', 'manual-artifact', owing('manual-artifact', ['manual-artifact'])],
+  ])('L1 live deliveryPolicy %s: every live profile and legacy/observe snapshot gets the snapshot-less result', async (_label, deliveryPolicy, expected) => {
+    // An unpushed completion commit this round, the gate owed and no candidate, so no passing run.
+    await seed({}, [reviewTask(undefined, { commits: [completion(false)] })]);
+    const evaluate = (executionProfile: string | undefined, snapshot: unknown) => {
+      h.state.project!.settings = {
+        ...GATED, ...(deliveryPolicy ? { deliveryPolicy } : {}), ...(executionProfile ? { executionProfile } : {}),
+      } as never;
+      const task = { ...h.state.getTask('task-1')!, ...(snapshot === undefined ? {} : { executionPolicySnapshot: snapshot }) };
+      return policy.evaluateDeliveryEvidence(h.state, task as never);
+    };
+    const twin = evaluate(undefined, undefined);
+    expect(twin).toEqual(expected);
+    for (const executionProfile of [undefined, 'legacy', 'observe']) {
+      for (const [label, snapshot] of L_SNAPSHOTS) {
+        expect(evaluate(executionProfile, snapshot), `${executionProfile}/${label}`).toEqual(twin);
+      }
+    }
+  });
+
+  describe.each<[string, unknown]>([
+    ['absent', undefined],
+    ["legacyV2('manual-artifact')", legacyV2('manual-artifact')],
+    ['OBSERVE_V1', OBSERVE_V1],
+  ])('L2 qa_approve under a %s snapshot (no gate, no candidate: landing evidence only)', (_label, snapshot) => {
+    const seedL2 = (deliveryPolicy: string | undefined, commits: Row[]): Promise<void> =>
+      seed({ qualityGate: undefined, ...(deliveryPolicy ? { deliveryPolicy } : {}) }, [reviewTask(snapshot, { commits })]);
+    const approveL2 = (extra: Row = {}): Promise<Row> => approve({ candidateId: undefined, ...extra });
+
+    it('the live default reaches DONE with the NO-COMPLETION-COMMIT warning and no deliveryPolicy key', async () => {
+      await seedL2(undefined, []);
+      const result = await approveL2();
+      expect(result.status).toBe('DONE');
+      expect(String(result.warning).startsWith('NO-COMPLETION-COMMIT: task task-1')).toBe(true);
+      expect('deliveryPolicy' in result).toBe(false);
+    });
+
+    it.each<[string, Row[], string[]]>([
+      ['local-branch', [], ['completion-commit']],
+      ['remote-push', [completion(false)], ['pushed-completion-commit']],
+      ['merged-pull-request', [], ['merged-pull-request']],
+      ['manual-artifact', [], ['manual-artifact']],
+    ])('live %s without its evidence is refused DELIVERY_EVIDENCE_MISSING before any write', async (live, commits, missingEvidence) => {
+      await seedL2(live, commits);
+      const err = await refusedWithoutWrites(() => approveL2(), 'DELIVERY_EVIDENCE_MISSING');
+      expect(err.context).toEqual({ taskId: 'task-1', deliveryPolicy: live, missingEvidence });
+    });
+
+    it.each<[string, Row[]]>([
+      ['local-branch', [completion(false)]],
+      ['remote-push', [completion(true)]],
+    ])('live %s with its landing evidence reaches DONE', async (live, commits) => {
+      await seedL2(live, commits);
+      const result = await approveL2();
+      expect({ status: result.status, deliveryPolicy: result.deliveryPolicy }).toEqual({ status: 'DONE', deliveryPolicy: live });
+      expect(h.state.getTask('task-1')!.deliveryEvidence).toBeUndefined();
+    });
+
+    it.each<[string, string, string]>([
+      ['merged-pull-request', 'mergedPullRequest', 'https://example.test/pr/7'],
+      ['manual-artifact', 'manualArtifact', 'docs/handbook.md'],
+    ])('live %s with its attestation reaches DONE labelled NOT verified delivery', async (live, field, reference) => {
+      await seedL2(live, []);
+      const result = await approveL2({ [field]: reference });
+      expect(result.status).toBe('DONE');
+      expect(h.state.getTask('task-1')!.deliveryEvidence).toEqual({
+        kind: live, reference, verifiedDelivery: false, recordedBy: 'qa-1', recordedAt: expect.any(String),
+      });
+      expect(String(result.message)).toContain(`(evidence: ${live} attested by qa-1 — NOT verified delivery)`);
+    });
+
+    it('manualArtifact under live local-branch keeps the existing INVALID_INPUT', async () => {
+      await seedL2('local-branch', [completion(false)]);
+      const err = await refusedWithoutWrites(() => approveL2({ manualArtifact: 'docs/handbook.md' }), 'INVALID_INPUT');
+      expect(err.message).toContain('is accepted only under deliveryPolicy manual-artifact (this project uses local-branch)');
+    });
+  });
+
+  const L3_CASES: Array<[string, Row, Row[], string | null]> = [
+    ['a padded everyTask gate', {}, [], GATE],
+    ['autoCommit false', { autoCommit: false }, [], null],
+    ['an epic-final scope with a higher-order sibling', { qualityGateScope: undefined }, [{ id: 'task-2', status: 'PLANNING', order: 5 }], null],
+  ];
+  it.each(L3_CASES.flatMap(([label, settings, siblings, expected]) => [
+    [`${label} (observeV2('local-branch'))`, settings, siblings, expected, observeV2('local-branch')],
+    [`${label} (snapshot-less twin)`, settings, siblings, expected, undefined],
+  ] as Array<[string, Row, Row[], string | null, unknown]>))('L3 requiredCheckAtDone for %s is the live rule', async (_label, settings, siblings, expected, snapshot) => {
+    await seed(
+      { ...LIVE_LEGACY, qualityGate: `  ${GATE}  `, ...settings },
+      [reviewTask(snapshot), ...siblings], [candidate('cand-1', 'task-1')], [passingRun('check-1', 'cand-1')],
+    );
+    expect((await approve()).status).toBe('DONE');
+    expect(h.state.getTask('task-1')!.requiredCheckAtDone).toBe(expected);
+  });
+
+  it("L4 a DONE legacyV2('local-branch') prerequisite under live legacy satisfies with no projection verdict", async () => {
+    await seedDep(LIVE_LEGACY, legacyV2('local-branch'), {}, []);
+    expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: true, missingEvidence: [] });
+    expect('requiredCheckSatisfied' in deliveryProjection(h.state, taskP())!).toBe(false);
+  });
+
+  it('L4 under live observe/local-branch the check is owed until a runner-observed pass is recorded', async () => {
+    await seedDep(LIVE_OBSERVE, legacyV2('local-branch'), {}, []);
+    expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: false, missingEvidence: [CHECK] });
+    expect(deliveryProjection(h.state, taskP())!.requiredCheckSatisfied).toBe(false);
+    await recordCheckRun(h.state, {
+      candidateId: 'cand-P', treeSha: TREE, command: GATE, exitCode: 0, outputTail: 'gate ok', runnerId: 'runner-1', source: 'runner-observed',
+    });
+    expect(dependencyShortfall(h.state, 'task-P')).toEqual({ satisfied: true, missingEvidence: [] });
+    expect(deliveryProjection(h.state, taskP())!.requiredCheckSatisfied).toBe(true);
   });
 });

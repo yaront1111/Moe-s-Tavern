@@ -20,11 +20,17 @@
 //     until DONE; qa_approve then binds it to task.requiredCheckAtDone, so a
 //     later settings edit or epic reshape cannot change what a DONE task owes.
 //
+// Which policy applies is per task (resolveTaskDeliveryPolicy): legacy and
+// observe tasks keep the live settings.deliveryPolicy, and a strict task is
+// refused until verified-local is certified.
+//
 // Fail closed: an unreadable record or failed lookup reports the evidence missing.
-// The one throw is an unrecognised deliveryPolicy, because reading it as the
-// default would report unverified work as delivered. Recorded, not re-run: the
-// daemon never runs the gate or checks records against git, so a record that
-// misreports still counts.
+// Evaluation throws, rather than answers, when the task's policy cannot be
+// applied: an unrecognised deliveryPolicy, a malformed execution-policy snapshot
+// or executionProfile setting, or a strict task while verified-local is not
+// ready. Reading any of those as the default would report unverified work as
+// delivered. Recorded, not re-run: the daemon never runs the gate or checks
+// records against git, so a record that misreports still counts.
 //
 // resolveDeliveryPolicy stays the single settings.deliveryPolicy authority. The
 // vocabulary (DELIVERY_POLICIES, DEFAULT_DELIVERY_POLICY, isDeliveryPolicy) lives
@@ -41,9 +47,11 @@ import { listCheckRunsForCandidate } from '../state/checkRunStore.js';
 import {
   DEFAULT_DELIVERY_POLICY,
   DELIVERY_POLICIES,
+  assertExecutionProfileReady,
   isDeliveryPolicy,
   readExecutionPolicySnapshot,
   resolveExecutionProfile,
+  resolveTaskExecutionProfile,
 } from './executionProfile.js';
 
 export { DEFAULT_DELIVERY_POLICY, DELIVERY_POLICIES };
@@ -99,6 +107,25 @@ export function resolveDeliveryPolicy(settings: { deliveryPolicy?: unknown } | n
   if (raw === undefined || raw === null) return DEFAULT_DELIVERY_POLICY;
   if (isDeliveryPolicy(raw)) return raw;
   throw invalidInput('deliveryPolicy', `must be one of ${DELIVERY_POLICIES.join(', ')} (got ${renderGot(raw)})`);
+}
+
+/**
+ * The delivery policy that applies to `task`: the one selection qa_approve and
+ * evaluateDeliveryEvidence share. Strictness is decided exactly as the CQ-M01c
+ * store backstop and CQ-M01e claim admission decide it: the live profile,
+ * floored by a stored verified-local snapshot (stale revision or not). A strict
+ * task throws EXECUTION_PROFILE_NOT_READY before any policy is read, so neither
+ * the live policy, an attestation nor an absent captured policy can stand in for
+ * the proof it owes. Legacy and observe tasks get the LIVE resolveDeliveryPolicy;
+ * a captured deliveryPolicy is identity only and never consulted. A malformed
+ * snapshot or setting throws INVALID_INPUT. Pure: reads only.
+ */
+export function resolveTaskDeliveryPolicy(
+  settings: { executionProfile?: unknown; deliveryPolicy?: unknown } | null | undefined,
+  task: Pick<Task, 'executionPolicySnapshot'>,
+): DeliveryPolicy {
+  assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot));
+  return resolveDeliveryPolicy(settings);
 }
 
 /**
@@ -251,13 +278,18 @@ function checkShortfall(state: StateManager, task: Task): string[] {
 }
 
 /**
- * Whether `task` satisfies the project's delivery policy, and exactly which
- * evidence is missing. A plain predicate over any task: pass `attestations` only
- * when judging an approval that supplies them. Throws only for an unrecognised
- * deliveryPolicy.
+ * Whether `task` satisfies its delivery policy (resolveTaskDeliveryPolicy), and
+ * exactly which evidence is missing. A plain predicate over any task: pass
+ * `attestations` only when judging an approval that supplies them. Throws rather
+ * than answers when the task's policy cannot be applied: an unrecognised
+ * deliveryPolicy, a malformed snapshot or setting, or a strict task while
+ * verified-local is not ready. Every consumer reads that throw as not satisfied:
+ * isDependencySatisfied withholds, describeUnmetDependency names it unjudgeable,
+ * deliveryProjection omits requiredCheckSatisfied, and qa_approve refuses before
+ * any write.
  */
 export function evaluateDeliveryEvidence(state: StateManager, task: Task, attestations: DeliveryAttestations = {}): DeliveryEvidenceResult {
-  const policy = resolveDeliveryPolicy(state.project?.settings);
+  const policy = resolveTaskDeliveryPolicy(state.project?.settings, task);
   if (policy === 'legacy') return { policy, satisfied: true, missingEvidence: [] };
   const landing = LANDING_JUDGED.has(task.status) ? [] : landingShortfall(policy, task, attestations);
   const missingEvidence = [...landing, ...checkShortfall(state, task)];

@@ -13,7 +13,7 @@ import {
   evaluateDeliveryEvidence,
   readDeliveryAttestations,
   requiredCheckCommand,
-  resolveDeliveryPolicy,
+  resolveTaskDeliveryPolicy,
 } from '../delivery/policy.js';
 
 /** Upper bound on the approval summary — mirrors qa_reject's reason cap. */
@@ -121,20 +121,24 @@ export function qaApproveTool(_state: StateManager): ToolDefinition {
       // exactly as it did before this gate existed: adoption is incremental.
       const binding = resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_approve');
 
-      // THE DELIVERY EVIDENCE GATE (settings.deliveryPolicy, delivery/policy.ts).
-      // Same position as the gates above: after the read, ownership, summary and
-      // candidate guards, before the Review write, the updateTask, the
-      // touchWorker and every chat side effect, so a refusal moves not one byte.
-      // An unrecognised policy is refused as invalid input, never read as the
-      // default. Under the default policy nothing is required, and the soft gate
-      // below stays the whole commit gate, exactly as it was before the setting.
+      // THE DELIVERY EVIDENCE GATE (delivery/policy.ts). Same position as the
+      // gates above: after the read, ownership, summary and candidate guards,
+      // before the Review write, the updateTask, the touchWorker and every chat
+      // side effect, so a refusal moves not one byte. The policy is the TASK's
+      // (resolveTaskDeliveryPolicy, the selection evaluateDeliveryEvidence uses),
+      // never the bare live setting: a stored verified-local snapshot is refused
+      // EXECUTION_PROFILE_NOT_READY even after a rollback to legacy, and a
+      // malformed snapshot or setting INVALID_INPUT, both before any attestation
+      // is read. That must happen here: CQ-M01c's store backstop refuses DONE
+      // only inside updateTask, after recordReview has persisted an 'approve'
+      // Review. An unrecognised policy is refused as invalid input, never read as
+      // the default. Under the default policy evaluation is satisfied at once, and
+      // the soft gate below stays the whole commit gate, exactly as before.
       const autoCommitOn = state.project?.settings?.autoCommit !== false;
-      const deliveryPolicy = resolveDeliveryPolicy(state.project?.settings);
+      const deliveryPolicy = resolveTaskDeliveryPolicy(state.project?.settings, task);
       const attestations = readDeliveryAttestations(params, deliveryPolicy);
-      if (deliveryPolicy !== 'legacy') {
-        const evidence = evaluateDeliveryEvidence(state, task, attestations);
-        if (!evidence.satisfied) throw deliveryEvidenceRefusal(task.id, evidence, autoCommitOn);
-      }
+      const evidence = evaluateDeliveryEvidence(state, task, attestations);
+      if (!evidence.satisfied) throw deliveryEvidenceRefusal(task.id, evidence, autoCommitOn);
 
       // Soft commit gate. A completion commit counts only when recorded at or
       // after the start of the CURRENT work round, so a stale attempt-#1 commit
