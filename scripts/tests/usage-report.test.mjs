@@ -793,10 +793,25 @@ test('analyze-baseline CLI prints the report read-only and fails closed with bou
     /^analyze-baseline: maintenance-a\.json: run\.status: must be one of completed, capped, failed, aborted\n$/);
   bad('defect-b.json', '[]', /^analyze-baseline: defect-b\.json: record: must be a plain object\n$/);
   bad('big.json', ' '.repeat(1024 * 1024 + 1), /^analyze-baseline: big\.json: exceeds 1048576 bytes\n$/);
-  bad('defect-x.json', JSON.stringify(outcome('defect-x')), /defect-x.*not in the expected manifest/, ['--expected', expectedFile]);
+  bad('defect-x.json', JSON.stringify(outcome('defect-x')), /^analyze-baseline: defect-x\.json: workload defect-x is not in the expected manifest\n$/, ['--expected', expectedFile]);
   const badExpected = path.join(root, 'bad-expected.json');
   writeFileSync(badExpected, JSON.stringify({ ...expected, workloads: [] }));
   fails(['--records', records, '--expected', badExpected], /^analyze-baseline: bad-expected\.json: expected\.workloads: /);
   mkdirSync(path.join(records, 'zz-directory.json'));
   fails(['--records', records], /^analyze-baseline: zz-directory\.json: is not a regular file/);
+});
+
+test('an overflowed workload total stays unknown in the baseline summary instead of being skipped', () => {
+  const task = (taskId, total, providers = ['claude']) => ({ taskId, records: 1, launches: 1, providers, coverageScope: 'observed-log-records-only',
+    usage: Object.fromEntries(fields.map(field => [field, field === 'totalTokens' ? metric(total, 0) : metric(null, 1)])) });
+  const records = [outcome('maintenance-a'), outcome('defect-b')];
+  const build = (a, b, providers) => baseline.buildBaselineReport({ records, usageByWorkload: {
+    'maintenance-a': { wholeTasks: [task('task-maintenance-a', a)] }, 'defect-b': { wholeTasks: [task('task-defect-b', b, providers)] } } });
+  for (const report of [build(10, null), build(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)]) {
+    assert.deepEqual(report.summary.usage.totals.totalTokens, metric(null, 0));
+    assert.deepEqual(report.summary.efficiency, { observedTokens: null, acceptedChanges: 2, observedTokensPerAcceptedChange: null, complete: false });
+    assert.match(baseline.formatBaselineReport(report), /Observed total tokens: unknown;/);
+  }
+  assert.deepEqual(build(10, 5).summary.efficiency, { observedTokens: 15, acceptedChanges: 2, observedTokensPerAcceptedChange: 7.5, complete: true });
+  assert.deepEqual(build(10, 5, ['codex']).summary.efficiency, { observedTokens: 15, acceptedChanges: 2, observedTokensPerAcceptedChange: 7.5, complete: false });
 });

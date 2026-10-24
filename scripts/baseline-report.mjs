@@ -1,175 +1,187 @@
-// CQ-M04 baseline outcome record contract and report builder.
-//
-// One strict record per frozen workload run (n=1): workload identity, the run
-// (Moe commit, timestamps, wall-clock cap, status, per-role cli/model/effort),
-// the Moe outcome, the held-out assessment, latency, retrieval and notes. Every
-// key is required and no other key is allowed at any level, so prompts, tool
-// arguments, secrets and prices cannot ride along. null means unknown and is
-// never coerced to 0.
+// CQ-M04 baseline outcome report builder over the strict per-workload record
+// contract in baseline-record.mjs (re-exported here).
 //
 // Acceptance comes ONLY from the held-out assessment. The Moe task status, QA
 // approvals, rejections and reopen counts are record-only, and token totals
-// never change acceptance.
+// never change acceptance. Unknown usage, latency and retrieval stay null in
+// JSON and 'unknown' in markdown, never 0; capped, failed, aborted and missing
+// runs are always reported as rows.
+import { BASELINE_CATEGORIES as CATEGORIES, BASELINE_RECORD_VERSION, BASELINE_ROLES, BASELINE_STATUSES, fail, freeze,
+  readBaselineRecord, readExpectedManifest } from './baseline-record.mjs';
 
-export const BASELINE_RECORD_VERSION = 1;
-export const BASELINE_STATUSES = Object.freeze(['completed', 'capped', 'failed', 'aborted']);
-export const BASELINE_ROLES = Object.freeze(['architect', 'worker', 'qa']);
-export const ASSESSMENT_RESULTS = Object.freeze(['pass', 'fail', 'not-run']);
+export { ASSESSMENT_RESULTS, BASELINE_CATEGORIES, BASELINE_RECORD_VERSION, BASELINE_ROLES, BASELINE_STATUSES, readBaselineRecord,
+  readExpectedManifest } from './baseline-record.mjs';
 
-const CATEGORIES = ['maintenance', 'defect', 'refactor', 'non-routine'];
-const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const DIGEST = /^sha256:[0-9a-f]{64}$/;
-const CONTROL = /[\x00-\x1f\x7f]/;
+const USAGE_FIELDS = ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'uncachedInputTokens', 'outputTokens', 'reasoningTokens', 'totalTokens'];
+const RECORD_ONLY = 'Moe task status, QA approvals, rejections and reopen counts are record-only; acceptance comes only from the held-out assessment.';
+const NOT_COST = 'Token observations are not monetary cost or quota.';
+// Locale-independent order with null last, so output bytes never depend on the host.
+const order = (a, b) => a === b ? 0 : a === null ? 1 : b === null ? -1 : a < b ? -1 : 1;
+const distinct = values => [...new Set(values)].sort(order);
+const nulls = keys => Object.fromEntries(keys.map(key => [key, null]));
+const metric = (observedTokens, unknownRecords) => ({ observedTokens, unknownRecords });
+const unknownUsage = (taskId, reason) => ({ status: 'unknown', reason, taskId, records: null, launches: null, providers: [],
+  totals: Object.fromEntries(USAGE_FIELDS.map(field => [field, metric(null, null)])), coverageScope: null, codexStreamCoverage: null });
 
-// Messages name the field path and the rule, never the offending value; an
-// unexpected key name is sanitized and cut to 40 characters.
-const fail = (at, reason) => { throw new Error(`${at}: ${reason}`.slice(0, 200)); };
-const child = (at, key) => {
-  const name = String(key).replace(/[^A-Za-z0-9_-]/g, '?').slice(0, 40);
-  return at ? `${at}.${name}` : name;
-};
-
-function plain(value, at, keys) {
-  const proto = value !== null && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
-  if (Array.isArray(value) || (proto !== Object.prototype && proto !== null)) fail(at || 'record', 'must be a plain object');
-  for (const key of Object.keys(value)) if (!keys.includes(key)) fail(child(at, key), 'is not an allowed key');
-  for (const key of keys) if (!Object.hasOwn(value, key)) fail(child(at, key), 'is required');
-  return value;
+// Joins the workload's own usage project on run.usageTaskId; anything else is unknown, never 0.
+function usageOf(record, usageByWorkload) {
+  const taskId = record.run.usageTaskId;
+  if (taskId === null) return unknownUsage(null, 'no-usage-task-id');
+  if (!usageByWorkload || !Object.hasOwn(usageByWorkload, record.workload.id)) return unknownUsage(taskId, 'no-usage-project');
+  const task = usageByWorkload[record.workload.id].wholeTasks.find(entry => entry.taskId === taskId);
+  if (!task) return unknownUsage(taskId, 'task-not-in-usage-project');
+  return { status: 'observed', reason: null, taskId, records: task.records, launches: task.launches, providers: [...task.providers],
+    totals: Object.fromEntries(USAGE_FIELDS.map(field => [field, metric(task.usage[field].observedTokens, task.usage[field].unknownRecords)])),
+    coverageScope: task.coverageScope, codexStreamCoverage: task.providers.includes('codex') ? 'unconfirmed' : 'not-observed' };
 }
 
-function text(value, at, max, nullable = false) {
-  if (value === null && nullable) return null;
-  if (typeof value !== 'string' || !value.trim() || value.length > max || CONTROL.test(value)) {
-    fail(at, `must be a non-blank single-line string of at most ${max} characters${nullable ? ' or null' : ''}`);
-  }
-  return value;
+// Held-out assessment only: Moe status, QA counts and tokens are never read here.
+function acceptanceOf(assessment) {
+  if (!assessment?.ran) return 'not-assessed';
+  if (assessment.criteria.some(entry => entry.result === 'fail')) return 'rejected';
+  const passed = assessment.exitCode === 0 && assessment.criteria.length > 0 && assessment.criteria.every(entry => entry.result === 'pass');
+  return passed ? 'accepted' : 'not-assessed';
 }
 
-function int(value, at, min, nullable = false) {
-  if (value === null && nullable) return null;
-  if (!Number.isSafeInteger(value) || value < min) fail(at, `must be a safe integer >= ${min}${nullable ? ' or null' : ''}`);
-  return value;
+function rowOf(workload, record, usage) {
+  const run = record?.run;
+  const outcome = record?.moeOutcome;
+  return { id: workload.id, category: workload.category, caseDigest: workload.caseDigest, snapshotDigest: record?.workload.snapshotDigest ?? null,
+    corpusVersion: workload.corpusVersion, moeCommit: run?.moeCommit ?? null, wallClockCapMs: run?.wallClockCapMs ?? null, roles: run?.roles ?? [],
+    status: run?.status ?? 'missing', capped: run?.status === 'capped', wallClockMs: run?.wallClockMs ?? null, failureReason: run?.failureReason ?? null,
+    acceptance: acceptanceOf(record?.assessment), assessment: record?.assessment ?? null,
+    moeOutcome: { recordOnly: true, finalStatus: outcome?.finalStatus ?? null, qaApprovals: outcome?.qaApprovals ?? null },
+    repair: { qaRejections: outcome?.qaRejections ?? null, reopenCount: outcome?.reopenCount ?? null, repairAttempts: outcome?.repairAttempts ?? null },
+    planning: { plannerSessions: outcome?.plannerSessions ?? null },
+    retrieval: record?.retrieval ?? nulls(['sourceRetrievals', 'retrievedBytes']),
+    latency: record?.latency ?? nulls(['firstCodeChangeMs', 'endToEndMs']), usage };
 }
 
-const counter = (value, at) => int(value, at, 0, true);
-
-function oneOf(value, at, allowed) {
-  if (!allowed.includes(value)) fail(at, `must be one of ${allowed.join(', ')}`);
-  return value;
-}
-
-function pattern(value, at, regex, rule, max = Infinity) {
-  if (typeof value !== 'string' || value.length > max || !regex.test(value)) fail(at, rule);
-  return value;
-}
-
-function list(value, at, min, max) {
-  if (!Array.isArray(value) || value.length < min || value.length > max) fail(at, `must be an array of ${min}-${max} entries`);
-  return value;
-}
-
-function timestamp(value, at) {
-  if (typeof value !== 'string' || value.length > 32 || Number.isNaN(Date.parse(value)) || new Date(value).toISOString() !== value) {
-    fail(at, 'must be an ISO-8601 UTC timestamp in Date#toISOString form');
-  }
-  return value;
-}
-
-function unique(entries, key, at) {
-  const seen = new Set();
-  entries.forEach((entry, index) => {
-    if (seen.has(entry[key])) fail(`${at}[${index}].${key}`, 'is a duplicate');
-    seen.add(entry[key]);
+function readRecords(records, manifest) {
+  if (!Array.isArray(records)) fail('records', 'must be an array');
+  const wanted = new Map(manifest?.workloads.map(entry => [entry.id, entry]));
+  const byId = new Map();
+  records.forEach((raw, index) => {
+    const at = `records[${index}]`;
+    let record;
+    try { record = readBaselineRecord(raw); } catch (error) { fail(at, error.message); }
+    const { id, caseDigest, corpusVersion } = record.workload;
+    if (byId.has(id)) fail(at, `workload ${id} has more than one record; the baseline is n=1 per workload`);
+    if (manifest && !wanted.has(id)) fail(at, `workload ${id} is not in the expected manifest`);
+    if (manifest && wanted.get(id).caseDigest !== caseDigest) fail(at, `workload ${id} caseDigest differs from the expected manifest`);
+    if (manifest && manifest.corpusVersion !== corpusVersion) fail(at, `workload ${id} corpusVersion differs from the expected manifest`);
+    byId.set(id, record);
   });
+  return byId;
 }
 
-function workloadId(value, at, category) {
-  const rule = `must be kebab-case, at most 80 characters, prefixed "${category}-"`;
-  pattern(value, at, KEBAB, rule, 80);
-  if (!value.startsWith(`${category}-`)) fail(at, rule);
-  return value;
+function summaryOf(rows) {
+  const tally = list => Object.fromEntries([['accepted', 'accepted'], ['rejected', 'rejected'], ['notAssessed', 'not-assessed']]
+    .map(([key, value]) => [key, list.filter(row => row.acceptance === value).length]));
+  const observed = rows.filter(row => row.usage.status === 'observed');
+  const totals = Object.fromEntries(USAGE_FIELDS.map(field => {
+    const metrics = observed.map(row => row.usage.totals[field]);
+    const values = metrics.map(entry => entry.observedTokens).filter(value => value !== null);
+    const sum = values.reduce((total, value) => total + value, 0);
+    // A row whose own total overflowed (null with no unknown records) makes the field unknown, never silently skipped.
+    const overflowed = metrics.some(entry => entry.observedTokens === null && entry.unknownRecords === 0);
+    return [field, metric(values.length && !overflowed && Number.isSafeInteger(sum) ? sum : null, metrics.reduce((total, entry) => total + entry.unknownRecords, 0))];
+  }));
+  const usage = { unknownWorkloads: rows.length - observed.length,
+    codexStreamUnconfirmed: observed.filter(row => row.usage.codexStreamCoverage === 'unconfirmed').length, totals };
+  const acceptance = tally(rows);
+  const observedTokens = totals.totalTokens.observedTokens;
+  return { workloads: rows.length,
+    byStatus: Object.fromEntries([...BASELINE_STATUSES, 'missing'].map(status => [status, rows.filter(row => row.status === status).length])),
+    acceptance, byCategory: Object.fromEntries(CATEGORIES.map(category => {
+      const list = rows.filter(row => row.category === category);
+      return [category, { workloads: list.length, ...tally(list) }];
+    })),
+    usage, efficiency: { observedTokens, acceptedChanges: acceptance.accepted,
+      observedTokensPerAcceptedChange: acceptance.accepted && observedTokens !== null ? observedTokens / acceptance.accepted : null,
+      complete: !usage.unknownWorkloads && !usage.codexStreamUnconfirmed && observedTokens !== null && totals.totalTokens.unknownRecords === 0 } };
 }
 
-function readWorkload(raw, at) {
-  const value = plain(raw, at, ['id', 'category', 'caseDigest', 'snapshotDigest', 'corpusVersion']);
-  const category = oneOf(value.category, `${at}.category`, CATEGORIES);
-  return { id: workloadId(value.id, `${at}.id`, category), category,
-    caseDigest: pattern(value.caseDigest, `${at}.caseDigest`, DIGEST, 'must be "sha256:" followed by 64 lowercase hex characters'),
-    snapshotDigest: pattern(value.snapshotDigest, `${at}.snapshotDigest`, DIGEST, 'must be "sha256:" followed by 64 lowercase hex characters'),
-    corpusVersion: int(value.corpusVersion, `${at}.corpusVersion`, 1) };
+function inputsOf(records, manifest) {
+  const runs = records.map(record => record.run);
+  const roles = new Map(runs.flatMap(run => run.roles).map(({ role, cli, model, effort }) => [JSON.stringify([role, cli, model, effort]), { role, cli, model, effort }]));
+  const rank = (a, b) => BASELINE_ROLES.indexOf(a.role) - BASELINE_ROLES.indexOf(b.role) || order(a.cli, b.cli) || order(a.model, b.model) || order(a.effort, b.effort);
+  const of = key => distinct(runs.map(run => run[key]));
+  return { recordVersion: BASELINE_RECORD_VERSION, expected: manifest && { corpusVersion: manifest.corpusVersion, workloads: manifest.workloads.length },
+    corpusVersions: distinct(records.map(record => record.workload.corpusVersion)), moeCommits: of('moeCommit'), wallClockCapsMs: of('wallClockCapMs'),
+    repetitionsPlanned: of('repetitionsPlanned'), platforms: of('platform'), nodeVersions: of('nodeVersion'), cliVersions: of('cliVersion'),
+    roles: [...roles.values()].sort(rank),
+    workloads: records.map(({ workload }) => ({ id: workload.id, caseDigest: workload.caseDigest, snapshotDigest: workload.snapshotDigest })) };
 }
 
-function readRole(raw, at) {
-  const value = plain(raw, at, ['role', 'cli', 'model', 'effort', 'launches']);
-  return { role: oneOf(value.role, `${at}.role`, BASELINE_ROLES), cli: text(value.cli, `${at}.cli`, 64),
-    model: text(value.model, `${at}.model`, 128, true), effort: text(value.effort, `${at}.effort`, 32, true),
-    launches: counter(value.launches, `${at}.launches`) };
+function limitationsOf(rows, summary, inputs) {
+  const { byStatus, acceptance, usage } = summary;
+  const unknownIn = group => rows.filter(row => Object.values(row[group]).includes(null)).length;
+  const [retrieval, latency] = [unknownIn('retrieval'), unknownIn('latency')];
+  const mixed = (values, what, suffix = '') => values.length > 1 && `Runs used ${values.length} different ${what}${suffix}.`;
+  return ['One run per workload (n=1): no variability or confidence estimate is possible.',
+    `Runs not completed: ${byStatus.capped} capped, ${byStatus.failed} failed, ${byStatus.aborted} aborted, ${byStatus.missing} missing; every run is reported as a row and capped runs keep partial counters.`,
+    acceptance.notAssessed > 0 && `${acceptance.notAssessed} workload(s) were not assessed; they count as neither accepted nor rejected.`,
+    usage.unknownWorkloads > 0 && `Usage is unknown for ${usage.unknownWorkloads} workload(s); observed totals exclude them and are not zero.`,
+    'Usage covers observed log records only; participation that was not logged is missing, not zero.',
+    usage.codexStreamUnconfirmed > 0 && `Codex usage stream coverage is unconfirmed for ${usage.codexStreamUnconfirmed} workload(s); completed turns do not prove the stream closed.`,
+    retrieval > 0 && `Retrieval counters are unknown for ${retrieval} workload(s).`,
+    latency > 0 && `Latency counters are unknown for ${latency} workload(s).`,
+    mixed(inputs.moeCommits, 'Moe commits', '; they are not matched on the commit under test'),
+    mixed(inputs.wallClockCapsMs, 'wall-clock caps'), mixed(inputs.corpusVersions, 'corpus versions'),
+    RECORD_ONLY, NOT_COST].filter(Boolean);
 }
 
-function readRun(raw, at) {
-  const value = plain(raw, at, ['moeCommit', 'startedAt', 'endedAt', 'wallClockMs', 'wallClockCapMs', 'status', 'repetition',
-    'repetitionsPlanned', 'platform', 'nodeVersion', 'cliVersion', 'roles', 'usageTaskId', 'failureReason']);
-  const run = {
-    moeCommit: pattern(value.moeCommit, `${at}.moeCommit`, /^[0-9a-f]{40}$/, 'must be 40 lowercase hex characters'),
-    startedAt: timestamp(value.startedAt, `${at}.startedAt`), endedAt: timestamp(value.endedAt, `${at}.endedAt`),
-    wallClockMs: int(value.wallClockMs, `${at}.wallClockMs`, 0), wallClockCapMs: int(value.wallClockCapMs, `${at}.wallClockCapMs`, 1),
-    status: oneOf(value.status, `${at}.status`, BASELINE_STATUSES),
-    repetition: int(value.repetition, `${at}.repetition`, 1), repetitionsPlanned: int(value.repetitionsPlanned, `${at}.repetitionsPlanned`, 1),
-    platform: text(value.platform, `${at}.platform`, 64), nodeVersion: text(value.nodeVersion, `${at}.nodeVersion`, 64),
-    cliVersion: text(value.cliVersion, `${at}.cliVersion`, 128, true),
-    roles: list(value.roles, `${at}.roles`, 1, 3).map((role, index) => readRole(role, `${at}.roles[${index}]`)),
-    usageTaskId: value.usageTaskId === null ? null
-      : pattern(value.usageTaskId, `${at}.usageTaskId`, /^[A-Za-z0-9._-]{1,128}$/, 'must match [A-Za-z0-9._-]{1,128} or be null'),
-    failureReason: text(value.failureReason, `${at}.failureReason`, 500, true),
-  };
-  if (Date.parse(run.endedAt) < Date.parse(run.startedAt)) fail(`${at}.endedAt`, 'must not be before startedAt');
-  if (run.repetition > run.repetitionsPlanned) fail(`${at}.repetition`, 'must not exceed repetitionsPlanned');
-  if (run.status === 'capped' && run.wallClockMs < run.wallClockCapMs) fail(`${at}.wallClockMs`, 'must reach wallClockCapMs when status is capped');
-  if (run.status === 'completed' && run.wallClockMs > run.wallClockCapMs) fail(`${at}.wallClockMs`, 'must not exceed wallClockCapMs when status is completed');
-  unique(run.roles, 'role', `${at}.roles`);
-  return run;
-}
-
-function readAssessment(raw, at) {
-  const value = plain(raw, at, ['ran', 'exitCode', 'criteria', 'reason']);
-  if (typeof value.ran !== 'boolean') fail(`${at}.ran`, 'must be a boolean');
-  if (value.exitCode !== null && !Number.isSafeInteger(value.exitCode)) fail(`${at}.exitCode`, 'must be a safe integer or null');
-  const criteria = list(value.criteria, `${at}.criteria`, 0, 32).map((entry, index) => {
-    const where = `${at}.criteria[${index}]`;
-    const criterion = plain(entry, where, ['id', 'result']);
-    return { id: pattern(criterion.id, `${where}.id`, KEBAB, 'must be kebab-case, at most 64 characters', 64),
-      result: oneOf(criterion.result, `${where}.result`, ASSESSMENT_RESULTS) };
+// Builds the n=1 baseline report: one row per record, plus a 'missing' row for every
+// manifest workload without one. Rows follow the manifest, else workload id order.
+export function buildBaselineReport({ records, usageByWorkload = null, expected = null }) {
+  const manifest = expected == null ? null : readExpectedManifest(expected);
+  const byId = readRecords(records, manifest);
+  const ids = manifest ? manifest.workloads.map(entry => entry.id) : [...byId.keys()].sort(order);
+  const rows = ids.map(id => {
+    const record = byId.get(id);
+    if (record) return rowOf(record.workload, record, usageOf(record, usageByWorkload));
+    const entry = manifest.workloads.find(workload => workload.id === id);
+    return rowOf({ ...entry, corpusVersion: manifest.corpusVersion }, null, unknownUsage(null, 'no-record'));
   });
-  unique(criteria, 'id', `${at}.criteria`);
-  const assessment = { ran: value.ran, exitCode: value.exitCode, criteria, reason: text(value.reason, `${at}.reason`, 500, true) };
-  if (!assessment.ran) {
-    if (assessment.exitCode !== null) fail(`${at}.exitCode`, 'must be null when the assessment did not run');
-    criteria.forEach((entry, index) => { if (entry.result !== 'not-run') fail(`${at}.criteria[${index}].result`, 'must be not-run when the assessment did not run'); });
-    if (assessment.reason === null) fail(`${at}.reason`, 'must explain why the assessment did not run');
-  }
-  return assessment;
+  const summary = summaryOf(rows);
+  const inputs = inputsOf(ids.filter(id => byId.has(id)).map(id => byId.get(id)), manifest);
+  return freeze({ version: 1, inputs, rows, summary, limitations: limitationsOf(rows, summary, inputs) });
 }
 
-const counters = (value, at, keys) => Object.fromEntries(keys.map(key => [key, counter(value[key], `${at}.${key}`)]));
-const counterGroup = (raw, at, keys) => counters(plain(raw, at, keys), at, keys);
+const shown = value => value ?? 'unknown';
+const cell = value => String(shown(value)).replace(/\|/g, '\\|');
+const tokensShown = entry => `${shown(entry.observedTokens)}${entry.unknownRecords ? ` (+${entry.unknownRecords} unknown records)` : ''}`;
+const verdicts = entry => `accepted ${entry.accepted}, rejected ${entry.rejected}, not assessed ${entry.notAssessed}`;
 
-const freeze = value => {
-  if (value !== null && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
-  return value;
-};
+function rowLine(row) {
+  const criteria = row.assessment && `${row.assessment.criteria.filter(entry => entry.result === 'pass').length}/${row.assessment.criteria.length}`;
+  return `| ${[row.id, row.category, row.status, row.acceptance, criteria, row.moeOutcome.finalStatus, row.repair.qaRejections, row.repair.reopenCount,
+    row.repair.repairAttempts, row.planning.plannerSessions, row.retrieval.sourceRetrievals, row.latency.endToEndMs, row.latency.firstCodeChangeMs,
+    tokensShown(row.usage.totals.totalTokens)].map(cell).join(' | ')} |`;
+}
 
-// Validates one record and returns a detached, deep-frozen copy.
-export function readBaselineRecord(raw) {
-  const value = plain(raw, '', ['version', 'workload', 'run', 'moeOutcome', 'assessment', 'latency', 'retrieval', 'notes']);
-  if (value.version !== BASELINE_RECORD_VERSION) fail('version', `must be ${BASELINE_RECORD_VERSION}`);
-  const workload = readWorkload(value.workload, 'workload');
-  const run = readRun(value.run, 'run');
-  const outcome = plain(value.moeOutcome, 'moeOutcome', ['finalStatus', 'qaApprovals', 'qaRejections', 'reopenCount', 'plannerSessions', 'repairAttempts']);
-  const moeOutcome = { finalStatus: text(outcome.finalStatus, 'moeOutcome.finalStatus', 32, true),
-    ...counters(outcome, 'moeOutcome', ['qaApprovals', 'qaRejections', 'reopenCount', 'plannerSessions', 'repairAttempts']) };
-  return freeze({ version: BASELINE_RECORD_VERSION, workload, run, moeOutcome,
-    assessment: readAssessment(value.assessment, 'assessment'),
-    latency: counterGroup(value.latency, 'latency', ['firstCodeChangeMs', 'endToEndMs']),
-    retrieval: counterGroup(value.retrieval, 'retrieval', ['sourceRetrievals', 'retrievedBytes']),
-    notes: list(value.notes, 'notes', 0, 10).map((note, index) => text(note, `notes[${index}]`, 300)) });
+function summaryLines({ workloads, byStatus, acceptance, byCategory, usage: { totals, unknownWorkloads }, efficiency }) {
+  return [`- Workloads: ${workloads}; ${Object.entries(byStatus).map(([status, count]) => `${status} ${count}`).join(', ')}`,
+    `- Acceptance (held-out assessment): ${verdicts(acceptance)}`,
+    ...Object.entries(byCategory).map(([category, entry]) => `- ${category}: ${entry.workloads} workload(s); ${verdicts(entry)}`),
+    `- Observed total tokens: ${tokensShown(totals.totalTokens)}; workloads with unknown usage: ${unknownWorkloads}`,
+    `- Observed input ${tokensShown(totals.inputTokens)}; cache read ${tokensShown(totals.cacheReadTokens)}; cache write ${tokensShown(totals.cacheWriteTokens)}; uncached input ${tokensShown(totals.uncachedInputTokens)}; output ${tokensShown(totals.outputTokens)}; reasoning (subset of output) ${tokensShown(totals.reasoningTokens)}`,
+    `- Observed tokens per accepted change: ${shown(efficiency.observedTokensPerAcceptedChange)}${efficiency.complete ? '' : ' (incomplete usage coverage)'}`];
+}
+
+export function formatBaselineReport(report) {
+  const { inputs } = report;
+  const listed = values => values.map(shown).join(', ') || 'none';
+  const expected = inputs.expected ? `corpus version ${inputs.expected.corpusVersion}, ${inputs.expected.workloads} workload(s)` : 'none';
+  return ['# Baseline outcome report', '', 'Acceptance = held-out assessment only; Moe task status is record-only.', NOT_COST, '',
+    '## Inputs', `- Record version: ${inputs.recordVersion}`, `- Expected manifest: ${expected}`, `- Corpus versions: ${listed(inputs.corpusVersions)}`,
+    `- Moe commits: ${listed(inputs.moeCommits)}`, `- Wall-clock caps (ms): ${listed(inputs.wallClockCapsMs)}`,
+    `- Repetitions planned: ${listed(inputs.repetitionsPlanned)}`, `- Platforms: ${listed(inputs.platforms)}`,
+    `- Node versions: ${listed(inputs.nodeVersions)}`, `- CLI versions: ${listed(inputs.cliVersions)}`,
+    '- Roles:', ...inputs.roles.map(entry => `  - ${entry.role} ${entry.cli} model=${shown(entry.model)} effort=${shown(entry.effort)}`),
+    '- Workloads:', ...inputs.workloads.map(entry => `  - ${entry.id}: case ${entry.caseDigest}, snapshot ${entry.snapshotDigest}`), '',
+    '## Workloads', '| Workload | Category | Status | Acceptance | Criteria passed | Moe status (record-only) | QA rejections | Reopens | Repair attempts | Planner sessions | Source retrievals | End-to-end ms | First code change ms | Observed total tokens |',
+    `|${' --- |'.repeat(14)}`, ...report.rows.map(rowLine), '',
+    '## Summary', ...summaryLines(report.summary), '', '## Limitations', ...report.limitations.map(entry => `- ${entry}`)].join('\n');
 }
