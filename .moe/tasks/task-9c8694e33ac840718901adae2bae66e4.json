@@ -89,7 +89,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,16 +102,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T13:40:22.574Z",
-  "updatedAt": "2026-10-24T16:10:34.593Z",
+  "updatedAt": "2026-10-24T16:17:31.956Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T15:55:13.074Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T16:17:31.956Z",
+    "wallClockMs": 1338882
   },
   "contextFetchedBy": [
     "architect-bb003851",
-    "worker-3617ccf7"
+    "worker-3617ccf7",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -215,5 +218,9 @@
     "packages/moe-daemon/src/accounts/registry.ts",
     "packages/moe-daemon/src/index.ts",
     "packages/moe-daemon/src/tools/initProject.ts"
-  ]
+  ],
+  "completedAt": "2026-10-24T16:17:31.956Z",
+  "reviewCompletedAt": "2026-10-24T16:17:31.956Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 882822b (on moe/work-2026-10-24, pushed); the 5 source/test files in the working tree are byte-identical to it. ~230 net LOC source+test (plus board-state .moe JSON), under the 400 cap.\n\nRe-ran the plan's exact wrapper in a fresh native-Linux snapshot of 882822b (MOE_* scrubbed, Linux-only PATH): tsc --noEmit exit 0; vitest 153 files, 3422 passed, 9 skipped; exit 0. Matches the worker's evidence.\n\nDoD1: escapeJsonForFile (numeric-built regex for U+061C, U+200B-200F, U+2028-202E, U+2060-206F, U+FEFF) runs after JSON.stringify in atomicWriteJson and atomicWriteJsonAsync, which cover the StateManager/persistence/chatStore task, epic and worker records. It also covers the direct writers: accounts writeJsonAtomic (newline and 0600 kept), writeDaemonInfo, writeGlobalConfig, initProject, acquireLock, and tools/initProject project.json and channel records. I audited every non-test writeFileSync/appendFile callsite. The unescaped ones left are JSONL/activity logs, claudeHook settings, static assets and test fixtures, all out of scope per the plan.\n\nDoD2/3: the StateManager round-trip test writes a note and completionSummary with U+202E, asserts the file holds no raw char but has the escape, and that JSON.parse and a fresh state.load return identical values. The sync/async matrix covers every target code point, keys, nested values, arrays, concurrent and large writes, and non-target neighbors.\n\nMy own mutation probe: dropping the escape from atomicWriteJsonAsync turned 3 tests red. A numeric scan found zero raw target chars in the 5 changed files and 2 .moe records. No tests deleted or weakened.\n\nNot claimed: historical records (e.g. task-44b44cca) keep raw chars until their next write, per plan; no daemon restart or runtime rollout tested.",
+  "requiredCheckAtDone": null
 }
