@@ -418,3 +418,385 @@ test('each isolated delivery-record defect is incomplete, never a recorded deliv
       candidateId: 'cand-R1', attemptId: 'attempt-R1', deliveryReceiptId: receiptId, landedRevision: receiptId && hex }] }, name);
   }
 });
+
+// CQ-M04 baseline outcome report. Acceptance comes only from the held-out
+// assessment; Moe status, QA counts and tokens are record-only. Unknown stays null.
+import * as baseline from '../baseline-report.mjs';
+import { buildUsageReport } from '../usage-report.mjs';
+import { statSync } from 'node:fs';
+
+const baselineCli = fileURLToPath(new URL('../analyze-baseline.mjs', import.meta.url));
+const digestOf = char => `sha256:${char.repeat(64)}`;
+const commitA = '35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71';
+const DROP = Symbol('drop');
+const categoryOf = id => ['maintenance', 'defect', 'refactor', 'non-routine'].find(category => id.startsWith(`${category}-`));
+function setAt(target, dotted, value) {
+  const keys = dotted.split('.');
+  const last = keys.pop();
+  const parent = keys.reduce((node, key) => node[key], target);
+  if (value === DROP) delete parent[last]; else parent[last] = value;
+}
+function outcome(id = 'maintenance-a', edits = {}) {
+  const value = {
+    version: 1,
+    workload: { id, category: categoryOf(id), caseDigest: digestOf('1'), snapshotDigest: digestOf('2'), corpusVersion: 1 },
+    run: { moeCommit: commitA, startedAt: '2026-10-24T10:00:00.000Z', endedAt: '2026-10-24T10:30:00.000Z',
+      wallClockMs: 1800000, wallClockCapMs: 3600000, status: 'completed', repetition: 1, repetitionsPlanned: 1,
+      platform: 'linux-x64', nodeVersion: 'v24.21.0', cliVersion: null,
+      roles: [{ role: 'architect', cli: 'claude', model: 'claude-opus-5-5', effort: 'max', launches: 1 },
+        { role: 'worker', cli: 'claude', model: 'claude-opus-5-5', effort: 'max', launches: 2 },
+        { role: 'qa', cli: 'claude', model: null, effort: null, launches: null }],
+      usageTaskId: `task-${id}`, failureReason: null },
+    moeOutcome: { finalStatus: 'DONE', qaApprovals: 1, qaRejections: 0, reopenCount: 0, plannerSessions: 1, repairAttempts: null },
+    assessment: { ran: true, exitCode: 0, criteria: [{ id: 'held-out-behavior', result: 'pass' }, { id: 'unchanged-callers', result: 'pass' }], reason: null },
+    latency: { firstCodeChangeMs: 600000, endToEndMs: 1800000 },
+    retrieval: { sourceRetrievals: null, retrievedBytes: null },
+    notes: ['fixture run'],
+  };
+  for (const [dotted, edit] of Object.entries(edits)) setAt(value, dotted, edit);
+  return value;
+}
+const notRun = reason => ({ 'assessment.ran': false, 'assessment.exitCode': null, 'assessment.reason': reason,
+  'assessment.criteria.0.result': 'not-run', 'assessment.criteria.1.result': 'not-run' });
+const usageRows = (id, input, output, extra = {}) =>
+  [row({ taskId: `task-${id}`, sessionId: `s-${id}`, eventId: `e-${id}`, launchId: `launch-${id}`, usage: tokens(input, output), ...extra })];
+function writeUsage(root, projects) {
+  for (const [id, rows] of Object.entries(projects)) {
+    const logs = path.join(root, id, 'logs/moe-usage');
+    mkdirSync(logs, { recursive: true });
+    writeFileSync(path.join(logs, 'a.jsonl'), rows.map(entry => JSON.stringify(entry)).join('\n'));
+  }
+  return Object.fromEntries(Object.keys(projects).map(id => [id, buildUsageReport(path.join(root, id))]));
+}
+function scratch(t, label) {
+  const root = mkdtempSync(path.join(tmpdir(), `moe baseline ${label} `));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+const metric = (observedTokens, unknownRecords) => ({ observedTokens, unknownRecords });
+const observedUsage = (id, input, output, unknownRecords = 0, records = 1) => ({ status: 'observed', reason: null, taskId: `task-${id}`,
+  records, launches: records, providers: ['claude'], totals: { inputTokens: metric(input, unknownRecords),
+    cacheReadTokens: metric(null, records), cacheWriteTokens: metric(null, records), uncachedInputTokens: metric(null, records),
+    outputTokens: metric(output, unknownRecords), reasoningTokens: metric(null, records), totalTokens: metric(input + output, unknownRecords) },
+  coverageScope: 'observed-log-records-only', codexStreamCoverage: 'not-observed' });
+const unknownUsage = (taskId, reason) => ({ status: 'unknown', reason, taskId, records: null, launches: null, providers: [],
+  totals: Object.fromEntries(fields.map(field => [field, metric(null, null)])), coverageScope: null, codexStreamCoverage: null });
+const manifestOf = ids => ({ corpusVersion: 1, workloads: ids.map(id => ({ id, category: categoryOf(id), caseDigest: digestOf('1') })) });
+const RECORD_ONLY = 'Moe task status, QA approvals, rejections and reopen counts are record-only; acceptance comes only from the held-out assessment.';
+
+test('baseline record contract returns a detached deep-frozen copy and keeps unknown counters null', () => {
+  assert.equal(baseline.BASELINE_RECORD_VERSION, 1);
+  assert.deepEqual(baseline.BASELINE_STATUSES, ['completed', 'capped', 'failed', 'aborted']);
+  assert.deepEqual(baseline.BASELINE_ROLES, ['architect', 'worker', 'qa']);
+  assert.deepEqual(baseline.ASSESSMENT_RESULTS, ['pass', 'fail', 'not-run']);
+  const raw = outcome('maintenance-a', { 'run.status': 'capped', 'run.wallClockMs': 3600000, 'run.endedAt': '2026-10-24T11:00:00.000Z',
+    'moeOutcome.qaApprovals': null, 'latency.endToEndMs': null, ...notRun('capped before assessment') });
+  const read = baseline.readBaselineRecord(raw);
+  assert.deepEqual(read, raw);
+  assert.notEqual(read, raw);
+  assert.notEqual(read.run.roles[2], raw.run.roles[2]);
+  for (const node of [read, read.workload, read.run, read.run.roles, read.run.roles[2], read.assessment.criteria[0], read.notes]) assert.ok(Object.isFrozen(node));
+  assert.deepEqual([read.moeOutcome.qaApprovals, read.moeOutcome.repairAttempts, read.latency.endToEndMs, read.retrieval.sourceRetrievals,
+    read.run.roles[2].launches, read.run.cliVersion], [null, null, null, null, null, null]);
+  raw.run.status = 'failed';
+  assert.equal(read.run.status, 'capped');
+  assert.equal(baseline.readBaselineRecord(Object.assign(Object.create(null), outcome())).workload.id, 'maintenance-a');
+  assert.equal(baseline.readBaselineRecord(outcome('defect-a', { 'run.wallClockMs': 3600000, 'assessment.criteria': [], 'notes': [] })).run.wallClockMs, 3600000);
+  assert.equal(baseline.readBaselineRecord(outcome('refactor-a', { 'run.status': 'failed', 'run.wallClockMs': 3600001, 'run.roles': [outcome().run.roles[1]] })).run.roles.length, 1);
+});
+
+test('baseline record contract rejects every malformed field, naming its path without echoing content', () => {
+  const long = 'S'.repeat(501);
+  const cases = [
+    [{ version: 2 }, /^version: /],
+    [{ notes: DROP }, /^notes: is required/],
+    [{ prompt: 'SECRET prompt' }, /^prompt: is not an allowed key/],
+    [{ 'run.toolArguments': { command: 'SECRET' } }, /^run\.toolArguments: is not an allowed key/],
+    [{ 'run.roles.0.costUSD': 1 }, /^run\.roles\[0\]\.costUSD: is not an allowed key/],
+    [{ 'assessment.criteria.0.prompt': 'SECRET' }, /^assessment\.criteria\[0\]\.prompt: is not an allowed key/],
+    [{ 'workload.snapshotDigest': DROP }, /^workload\.snapshotDigest: is required/],
+    [{ ['k'.repeat(100)]: 1 }, /^k{40}: is not an allowed key/],
+    [{ 'workload.category': 'feature' }, /^workload\.category: must be one of/],
+    [{ 'workload.id': 'defect-a' }, /^workload\.id: /],
+    [{ 'workload.id': 'maintenance_Bad' }, /^workload\.id: /],
+    [{ 'workload.id': `maintenance-${'a'.repeat(69)}` }, /^workload\.id: /],
+    [{ 'workload.caseDigest': 'sha256:ABC' }, /^workload\.caseDigest: /],
+    [{ 'workload.snapshotDigest': 'f'.repeat(64) }, /^workload\.snapshotDigest: /],
+    [{ 'workload.corpusVersion': 0 }, /^workload\.corpusVersion: /],
+    [{ 'run.moeCommit': 'abc123' }, /^run\.moeCommit: /],
+    [{ 'run.moeCommit': 'A'.repeat(40) }, /^run\.moeCommit: /],
+    [{ 'run.startedAt': '2026-10-24' }, /^run\.startedAt: /],
+    [{ 'run.endedAt': 'SECRET not a date' }, /^run\.endedAt: /],
+    [{ 'run.endedAt': '2026-10-24T09:59:59.999Z' }, /^run\.endedAt: must not be before startedAt/],
+    [{ 'run.wallClockCapMs': 0 }, /^run\.wallClockCapMs: /],
+    [{ 'moeOutcome.qaRejections': -1 }, /^moeOutcome\.qaRejections: /],
+    [{ 'latency.endToEndMs': 1.5 }, /^latency\.endToEndMs: /],
+    [{ 'retrieval.retrievedBytes': 2 ** 53 }, /^retrieval\.retrievedBytes: /],
+    [{ 'moeOutcome.reopenCount': '0' }, /^moeOutcome\.reopenCount: /],
+    [{ 'run.status': 'timeout' }, /^run\.status: must be one of completed, capped, failed, aborted/],
+    [{ 'run.roles.0.role': 'governor' }, /^run\.roles\[0\]\.role: must be one of/],
+    [{ 'assessment.criteria.0.result': 'skipped' }, /^assessment\.criteria\[0\]\.result: must be one of/],
+    [{ 'run.roles.1.role': 'architect' }, /^run\.roles\[1\]\.role: is a duplicate/],
+    [{ 'assessment.criteria.1.id': 'held-out-behavior' }, /^assessment\.criteria\[1\]\.id: is a duplicate/],
+    [{ 'assessment.criteria.0.id': 'Held Out' }, /^assessment\.criteria\[0\]\.id: /],
+    [{ 'run.status': 'capped' }, /^run\.wallClockMs: .*capped/],
+    [{ 'run.wallClockMs': 3600001 }, /^run\.wallClockMs: .*completed/],
+    [{ 'run.repetition': 2 }, /^run\.repetition: /],
+    [{ 'run.repetitionsPlanned': 0 }, /^run\.repetitionsPlanned: /],
+    [{ 'run.roles': [] }, /^run\.roles: /],
+    [{ 'run.usageTaskId': 'task/../x' }, /^run\.usageTaskId: /],
+    [{ 'run.cliVersion': long }, /^run\.cliVersion: /],
+    [{ 'run.platform': 'linux\nx64' }, /^run\.platform: /],
+    [{ 'run.platform': '   ' }, /^run\.platform: /],
+    [{ 'run.roles.0.model': '' }, /^run\.roles\[0\]\.model: /],
+    [{ 'run.failureReason': long }, /^run\.failureReason: /],
+    [{ 'assessment.ran': 'yes' }, /^assessment\.ran: /],
+    [{ 'assessment.exitCode': 1.5 }, /^assessment\.exitCode: /],
+    [{ 'assessment.ran': false }, /^assessment\.exitCode: /],
+    [{ ...notRun('x'), 'assessment.criteria.1.result': 'pass' }, /^assessment\.criteria\[1\]\.result: /],
+    [{ ...notRun(null) }, /^assessment\.reason: /],
+    [{ 'assessment.criteria': Array.from({ length: 33 }, (_, i) => ({ id: `c-${i}`, result: 'pass' })) }, /^assessment\.criteria: /],
+    [{ notes: Array.from({ length: 11 }, () => 'n') }, /^notes: /],
+    [{ 'notes.0': 'S'.repeat(301) }, /^notes\[0\]: /],
+    [{ run: new Map() }, /^run: must be a plain object/],
+    [{ 'run.roles.0': [] }, /^run\.roles\[0\]: must be a plain object/],
+    [{ 'moeOutcome.finalStatus': 'S'.repeat(33) }, /^moeOutcome\.finalStatus: /],
+  ];
+  for (const [edits, pattern] of cases) {
+    let message;
+    assert.throws(() => baseline.readBaselineRecord(outcome('maintenance-a', edits)), error => { message = error.message; return pattern.test(message); },
+      `${Object.keys(edits).join(',')} -> ${message}`);
+    assert.ok(message.length <= 200, message);
+    assert.doesNotMatch(message, /SECRET|S{41}|k{41}/);
+  }
+  for (const root of [null, [], 'record', 7, new (class Record {})()]) {
+    assert.throws(() => baseline.readBaselineRecord(root), { message: /^record: must be a plain object/ });
+  }
+});
+
+test('acceptance comes only from the held-out assessment, never from Moe status, QA approval or tokens', t => {
+  const records = [
+    outcome('maintenance-a', { 'assessment.criteria.1.result': 'fail', 'assessment.exitCode': 1 }),
+    outcome('maintenance-b', notRun('assessment not run')),
+    outcome('maintenance-c', { 'moeOutcome.finalStatus': 'WORKING', 'moeOutcome.qaApprovals': 0, 'moeOutcome.qaRejections': 3 }),
+    outcome('maintenance-d', { 'assessment.exitCode': 2 }),
+    outcome('maintenance-e', { 'assessment.criteria': [] }),
+    outcome('maintenance-f', { 'assessment.criteria.1.result': 'not-run' }),
+    outcome('maintenance-g', { 'assessment.exitCode': null }),
+  ];
+  const root = scratch(t, 'acceptance');
+  const huge = writeUsage(path.join(root, 'one'), { 'maintenance-a': usageRows('maintenance-a', 9000000, 1), 'maintenance-c': usageRows('maintenance-c', 0, 0) });
+  const swapped = writeUsage(path.join(root, 'two'), { 'maintenance-a': usageRows('maintenance-a', 0, 0), 'maintenance-c': usageRows('maintenance-c', 9000000, 1) });
+  const first = baseline.buildBaselineReport({ records, usageByWorkload: huge });
+  const second = baseline.buildBaselineReport({ records, usageByWorkload: swapped });
+  const verdicts = [['maintenance-a', 'rejected'], ['maintenance-b', 'not-assessed'], ['maintenance-c', 'accepted'],
+    ['maintenance-d', 'not-assessed'], ['maintenance-e', 'not-assessed'], ['maintenance-f', 'not-assessed'], ['maintenance-g', 'not-assessed']];
+  assert.deepEqual(first.rows.map(entry => [entry.id, entry.acceptance]), verdicts);
+  assert.deepEqual(second.rows.map(entry => [entry.id, entry.acceptance]), verdicts);
+  assert.deepEqual(first.rows.map(entry => entry.usage.totals.totalTokens.observedTokens).slice(0, 3), [9000001, null, 0]);
+  assert.deepEqual(second.rows.map(entry => entry.usage.totals.totalTokens.observedTokens).slice(0, 3), [0, null, 9000001]);
+  assert.deepEqual(first.summary.acceptance, { accepted: 1, rejected: 1, notAssessed: 5 });
+  assert.deepEqual(first.rows[0].moeOutcome, { recordOnly: true, finalStatus: 'DONE', qaApprovals: 1 });
+  assert.deepEqual(first.rows[2].repair, { qaRejections: 3, reopenCount: 0, repairAttempts: null });
+  assert.deepEqual(first.rows[2].planning, { plannerSessions: 1 });
+  assert.deepEqual(first.summary.efficiency, { observedTokens: 9000001, acceptedChanges: 1, observedTokensPerAcceptedChange: 9000001, complete: false });
+  assert.ok(first.limitations.includes(RECORD_ONLY));
+  assert.ok(first.limitations.includes('5 workload(s) were not assessed; they count as neither accepted nor rejected.'));
+});
+
+test('capped, failed, aborted and missing runs stay visible while duplicates and digest mismatches are refused', t => {
+  const ids = ['maintenance-a', 'defect-capped', 'refactor-failed', 'non-routine-aborted', 'non-routine-missing'];
+  const records = [
+    outcome('non-routine-aborted', { 'run.status': 'aborted', 'run.failureReason': 'operator stopped the run', ...notRun('run aborted') }),
+    outcome('refactor-failed', { 'run.status': 'failed', 'run.failureReason': 'agent CLI exited 1', 'assessment.exitCode': 1, 'assessment.criteria.1.result': 'fail' }),
+    outcome('defect-capped', { 'run.status': 'capped', 'run.wallClockMs': 3600000, 'run.endedAt': '2026-10-24T11:00:00.000Z',
+      'moeOutcome.finalStatus': 'WORKING', 'moeOutcome.qaApprovals': 0, 'latency.firstCodeChangeMs': 1200000, 'latency.endToEndMs': null, ...notRun('capped before delivery') }),
+    outcome('maintenance-a'),
+  ];
+  const usage = writeUsage(scratch(t, 'capped'), { 'defect-capped': usageRows('defect-capped', 2000, 300) });
+  const report = baseline.buildBaselineReport({ records, usageByWorkload: usage, expected: manifestOf(ids) });
+  assert.deepEqual(report.rows.map(entry => [entry.id, entry.status, entry.capped, entry.acceptance]), [
+    ['maintenance-a', 'completed', false, 'accepted'], ['defect-capped', 'capped', true, 'not-assessed'],
+    ['refactor-failed', 'failed', false, 'rejected'], ['non-routine-aborted', 'aborted', false, 'not-assessed'],
+    ['non-routine-missing', 'missing', false, 'not-assessed']]);
+  assert.deepEqual(report.summary.byStatus, { completed: 1, capped: 1, failed: 1, aborted: 1, missing: 1 });
+  assert.deepEqual(report.summary.byCategory, { maintenance: { workloads: 1, accepted: 1, rejected: 0, notAssessed: 0 },
+    defect: { workloads: 1, accepted: 0, rejected: 0, notAssessed: 1 }, refactor: { workloads: 1, accepted: 0, rejected: 1, notAssessed: 0 },
+    'non-routine': { workloads: 2, accepted: 0, rejected: 0, notAssessed: 2 } });
+  const capped = report.rows[1];
+  assert.deepEqual([capped.wallClockMs, capped.wallClockCapMs, capped.moeOutcome, capped.latency],
+    [3600000, 3600000, { recordOnly: true, finalStatus: 'WORKING', qaApprovals: 0 }, { firstCodeChangeMs: 1200000, endToEndMs: null }]);
+  assert.deepEqual(capped.usage, observedUsage('defect-capped', 2000, 300));
+  assert.equal(report.rows[2].failureReason, 'agent CLI exited 1');
+  assert.deepEqual(report.rows[4], { id: 'non-routine-missing', category: 'non-routine', caseDigest: digestOf('1'), snapshotDigest: null,
+    corpusVersion: 1, moeCommit: null, wallClockCapMs: null, roles: [], status: 'missing', capped: false, wallClockMs: null, failureReason: null,
+    acceptance: 'not-assessed', assessment: null, moeOutcome: { recordOnly: true, finalStatus: null, qaApprovals: null },
+    repair: { qaRejections: null, reopenCount: null, repairAttempts: null }, planning: { plannerSessions: null },
+    retrieval: { sourceRetrievals: null, retrievedBytes: null }, latency: { firstCodeChangeMs: null, endToEndMs: null },
+    usage: unknownUsage(null, 'no-record') });
+  assert.ok(report.limitations.includes('Runs not completed: 1 capped, 1 failed, 1 aborted, 1 missing; every run is reported as a row and capped runs keep partial counters.'));
+  const build = (list, expected = manifestOf(ids)) => () => baseline.buildBaselineReport({ records: list, expected });
+  assert.throws(build([outcome('maintenance-a'), outcome('maintenance-a')], null), /maintenance-a.*n=1/);
+  assert.throws(build([outcome('defect-extra')]), /defect-extra.*not in the expected manifest/);
+  assert.throws(build([outcome('maintenance-a', { 'workload.caseDigest': digestOf('9') })]), /maintenance-a.*caseDigest differs/);
+  assert.throws(build([outcome('maintenance-a', { 'workload.corpusVersion': 2 })]), /maintenance-a.*corpusVersion differs/);
+  assert.throws(build([outcome('maintenance-a', { 'run.status': 'timeout' })]), { message: /^records\[0\]: run\.status: / });
+  const manifest = manifestOf(['maintenance-a', 'defect-b']);
+  assert.throws(build([], { ...manifest, workloads: [manifest.workloads[0], manifest.workloads[0]] }), { message: /^expected\.workloads\[1\]\.id: is a duplicate/ });
+  assert.throws(build([], { ...manifest, workloads: [{ ...manifest.workloads[0], category: 'defect' }] }), { message: /^expected\.workloads\[0\]\.id: / });
+  assert.throws(build([], { ...manifest, workloads: [] }), { message: /^expected\.workloads: / });
+  assert.throws(build([], { ...manifest, note: 'x' }), { message: /^expected\.note: is not an allowed key/ });
+  assert.throws(build([], { ...manifest, workloads: [{ ...manifest.workloads[0], caseDigest: 'sha256:x' }] }), { message: /^expected\.workloads\[0\]\.caseDigest: / });
+  assert.throws(() => baseline.buildBaselineReport({ records: {} }), { message: /^records: must be an array/ });
+});
+
+test('usage joins each workload project by usageTaskId and never turns unknown usage into zero', t => {
+  const root = scratch(t, 'usage');
+  const crashed = row({ taskId: 'task-defect-b', launchId: 'launch-crash', sessionId: null, eventId: null, coverage: 'missing', outcome: 'unknown', usage: unknown });
+  const usage = writeUsage(root, { 'maintenance-a': usageRows('maintenance-a', 1000, 200),
+    'defect-b': [...usageRows('defect-b', 3000, 500), crashed], 'non-routine-d': usageRows('other-task', 50, 5) });
+  const records = [outcome('maintenance-a'), outcome('defect-b', { 'assessment.criteria.0.result': 'fail', 'assessment.exitCode': 1 }),
+    outcome('refactor-c'), outcome('non-routine-d'), outcome('refactor-e', { 'run.usageTaskId': null })];
+  const report = baseline.buildBaselineReport({ records, usageByWorkload: usage });
+  const usageOf = id => report.rows.find(entry => entry.id === id).usage;
+  assert.deepEqual(usageOf('maintenance-a'), observedUsage('maintenance-a', 1000, 200));
+  const defect = observedUsage('defect-b', 3000, 500, 1, 2);
+  assert.deepEqual(usageOf('defect-b'), defect);
+  assert.deepEqual(usageOf('refactor-c'), unknownUsage('task-refactor-c', 'no-usage-project'));
+  assert.deepEqual(usageOf('non-routine-d'), unknownUsage('task-non-routine-d', 'task-not-in-usage-project'));
+  assert.deepEqual(usageOf('refactor-e'), unknownUsage(null, 'no-usage-task-id'));
+  assert.deepEqual(report.summary.usage, { unknownWorkloads: 3, codexStreamUnconfirmed: 0, totals: {
+    inputTokens: metric(4000, 1), cacheReadTokens: metric(null, 3), cacheWriteTokens: metric(null, 3), uncachedInputTokens: metric(null, 3),
+    outputTokens: metric(700, 1), reasoningTokens: metric(null, 3), totalTokens: metric(4700, 1) } });
+  assert.deepEqual(report.summary.efficiency, { observedTokens: 4700, acceptedChanges: 4, observedTokensPerAcceptedChange: 1175, complete: false });
+  assert.ok(report.limitations.includes('Usage is unknown for 3 workload(s); observed totals exclude them and are not zero.'));
+  const clean = baseline.buildBaselineReport({ records: [records[0]], usageByWorkload: usage });
+  assert.deepEqual(clean.summary.efficiency, { observedTokens: 1200, acceptedChanges: 1, observedTokensPerAcceptedChange: 1200, complete: true });
+  const none = baseline.buildBaselineReport({ records: [records[1]], usageByWorkload: usage });
+  assert.deepEqual(none.summary.efficiency, { observedTokens: 3500, acceptedChanges: 0, observedTokensPerAcceptedChange: null, complete: false });
+  const blind = baseline.buildBaselineReport({ records: [records[2]] });
+  assert.deepEqual([blind.summary.usage.totals.totalTokens, blind.summary.efficiency],
+    [metric(null, 0), { observedTokens: null, acceptedChanges: 1, observedTokensPerAcceptedChange: null, complete: false }]);
+  const text = baseline.formatBaselineReport(blind);
+  assert.match(text, /Observed total tokens: unknown; workloads with unknown usage: 1/);
+  assert.match(text, /Observed tokens per accepted change: unknown/);
+  assert.match(text, /^\| refactor-c \| refactor \| completed \| accepted \|.* \| unknown \|$/m);
+});
+
+test('report lists reproducible inputs and every variability and coverage limitation', t => {
+  const usage = writeUsage(scratch(t, 'inputs'), { 'maintenance-a': [row({ provider: 'codex', scope: 'turn', taskId: 'task-maintenance-a',
+    sessionId: 'thread-a', eventId: 'turn-a', usage: tokens(100, 20) })] });
+  const records = [outcome('maintenance-a'), outcome('defect-b', { 'run.moeCommit': 'b'.repeat(40), 'run.wallClockCapMs': 1800000,
+    'workload.corpusVersion': 2, 'workload.snapshotDigest': digestOf('3'), 'run.cliVersion': '2.1.0',
+    'run.roles.1.model': 'claude-sonnet-5-5', 'run.roles.1.effort': 'high', 'latency.firstCodeChangeMs': null })];
+  const report = baseline.buildBaselineReport({ records, usageByWorkload: usage });
+  assert.deepEqual(report.inputs, { recordVersion: 1, expected: null, corpusVersions: [1, 2], moeCommits: [commitA, 'b'.repeat(40)],
+    wallClockCapsMs: [1800000, 3600000], repetitionsPlanned: [1], platforms: ['linux-x64'], nodeVersions: ['v24.21.0'], cliVersions: ['2.1.0', null],
+    roles: [{ role: 'architect', cli: 'claude', model: 'claude-opus-5-5', effort: 'max' }, { role: 'worker', cli: 'claude', model: 'claude-opus-5-5', effort: 'max' },
+      { role: 'worker', cli: 'claude', model: 'claude-sonnet-5-5', effort: 'high' }, { role: 'qa', cli: 'claude', model: null, effort: null }],
+    workloads: [{ id: 'defect-b', caseDigest: digestOf('1'), snapshotDigest: digestOf('3') }, { id: 'maintenance-a', caseDigest: digestOf('1'), snapshotDigest: digestOf('2') }] });
+  assert.deepEqual(report.limitations, [
+    'One run per workload (n=1): no variability or confidence estimate is possible.',
+    'Runs not completed: 0 capped, 0 failed, 0 aborted, 0 missing; every run is reported as a row and capped runs keep partial counters.',
+    'Usage is unknown for 1 workload(s); observed totals exclude them and are not zero.',
+    'Usage covers observed log records only; participation that was not logged is missing, not zero.',
+    'Codex usage stream coverage is unconfirmed for 1 workload(s); completed turns do not prove the stream closed.',
+    'Retrieval counters are unknown for 2 workload(s).',
+    'Latency counters are unknown for 1 workload(s).',
+    'Runs used 2 different Moe commits; they are not matched on the commit under test.',
+    'Runs used 2 different wall-clock caps.',
+    'Runs used 2 different corpus versions.',
+    RECORD_ONLY,
+    'Token observations are not monetary cost or quota.']);
+  assert.equal(report.summary.usage.codexStreamUnconfirmed, 1);
+  assert.equal(report.summary.efficiency.complete, false);
+  const text = baseline.formatBaselineReport(report);
+  for (const line of ['Acceptance = held-out assessment only; Moe task status is record-only.', 'Token observations are not monetary cost or quota.',
+    '## Inputs', '## Workloads', '## Summary', '## Limitations', '- CLI versions: 2.1.0, unknown', '- Corpus versions: 1, 2',
+    `- Moe commits: ${commitA}, ${'b'.repeat(40)}`, '  - qa claude model=unknown effort=unknown',
+    `  - defect-b: case ${digestOf('1')}, snapshot ${digestOf('3')}`, '- Runs used 2 different corpus versions.']) {
+    assert.ok(text.split('\n').includes(line), line);
+  }
+  assert.match(text, /\| defect-b \| defect \| completed \| accepted \| 2\/2 \| DONE \| 0 \| 0 \| unknown \| 1 \| unknown \| 1800000 \| unknown \| unknown \|/);
+  assert.match(text, /\| maintenance-a \| maintenance \| completed \| accepted \| 2\/2 \| DONE \| 0 \| 0 \| unknown \| 1 \| unknown \| 1800000 \| 600000 \| 120 \|/);
+  assert.doesNotMatch(text, /null|undefined|NaN/);
+});
+
+test('baseline report is deterministic and follows manifest order, else workload id order', t => {
+  const usage = writeUsage(scratch(t, 'order'), { 'maintenance-a': usageRows('maintenance-a', 10, 1) });
+  const a = outcome('maintenance-a'), b = outcome('defect-b', { 'moeOutcome.finalStatus': 'A|B' });
+  const forward = baseline.buildBaselineReport({ records: [a, b], usageByWorkload: usage });
+  const backward = baseline.buildBaselineReport({ records: [b, a], usageByWorkload: usage });
+  assert.deepEqual(forward.rows.map(entry => entry.id), ['defect-b', 'maintenance-a']);
+  assert.equal(JSON.stringify(backward), JSON.stringify(forward));
+  assert.equal(baseline.formatBaselineReport(backward), baseline.formatBaselineReport(forward));
+  assert.deepEqual(JSON.parse(JSON.stringify(forward)), forward);
+  assert.match(baseline.formatBaselineReport(forward), /\| A\\\|B \|/);
+  const manifest = manifestOf(['maintenance-a', 'defect-b']);
+  const ordered = baseline.buildBaselineReport({ records: [b, a], usageByWorkload: usage, expected: manifest });
+  assert.deepEqual(ordered.rows.map(entry => entry.id), ['maintenance-a', 'defect-b']);
+  assert.equal(JSON.stringify(baseline.buildBaselineReport({ records: [a, b], usageByWorkload: usage, expected: manifest })), JSON.stringify(ordered));
+  assert.deepEqual(ordered.inputs.expected, { corpusVersion: 1, workloads: 2 });
+});
+
+test('analyze-baseline CLI prints the report read-only and fails closed with bounded file-and-field errors', t => {
+  const root = scratch(t, 'cli');
+  const records = path.join(root, 'records');
+  const projects = path.join(root, 'projects');
+  mkdirSync(records);
+  const a = outcome('maintenance-a');
+  const b = outcome('defect-b', { 'assessment.criteria.0.result': 'fail', 'assessment.exitCode': 1 });
+  for (const record of [a, b]) writeFileSync(path.join(records, `${record.workload.id}.json`), JSON.stringify(record));
+  writeFileSync(path.join(records, 'README.txt'), 'ignored');
+  const usage = writeUsage(projects, { 'maintenance-a': usageRows('maintenance-a', 1000, 200) });
+  const expected = manifestOf(['maintenance-a', 'defect-b']);
+  const expectedFile = path.join(root, 'expected.json');
+  writeFileSync(expectedFile, JSON.stringify(expected));
+  const tree = () => readdirSync(root, { recursive: true }).sort().map(name => {
+    const file = path.join(root, name);
+    return [name, statSync(file).isFile() ? readFileSync(file, 'base64') : 'directory'];
+  });
+  const before = tree();
+  const runBaseline = args => spawnSync(process.execPath, [baselineCli, ...args], { encoding: 'utf8' });
+  const report = baseline.buildBaselineReport({ records: [b, a], usageByWorkload: usage, expected });
+  const json = runBaseline(['--records', records, '--project', projects, '--expected', expectedFile, '--json']);
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout), JSON.parse(JSON.stringify(report)));
+  const text = runBaseline(['--records', records, '--project', projects, '--expected', expectedFile]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.equal(text.stdout, `${baseline.formatBaselineReport(report)}\n`);
+  const blind = runBaseline(['--records', records, '--json']);
+  assert.equal(blind.status, 0, blind.stderr);
+  assert.deepEqual(JSON.parse(blind.stdout).rows.map(entry => entry.usage.reason), ['no-usage-project', 'no-usage-project']);
+  assert.deepEqual(tree(), before, 'the CLI never writes');
+  const fails = (args, pattern) => {
+    const result = runBaseline(args);
+    assert.equal(result.status, 1, `${args.join(' ')}: ${result.stdout}`);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, pattern);
+    assert.doesNotMatch(result.stderr, /SECRET/);
+    assert.ok(result.stderr.length <= 320 && result.stderr.trim().split('\n').length === 1, result.stderr);
+  };
+  fails([], /^analyze-baseline: Usage: .*--records DIR/);
+  fails(['--records', records, '--bogus'], /Usage: /);
+  fails(['--records', records, '--json', '--json'], /Usage: /);
+  fails(['--records', path.join(root, 'nope')], /^analyze-baseline: --records: /);
+  fails(['--records', records, '--project', path.join(root, 'nope')], /^analyze-baseline: --project: /);
+  fails(['--records', records, '--expected', path.join(root, 'nope.json')], /^analyze-baseline: nope\.json: is unreadable/);
+  const bad = (name, body, pattern, args = []) => {
+    const directory = mkdtempSync(path.join(root, 'bad-'));
+    writeFileSync(path.join(directory, name), body);
+    fails(['--records', directory, ...args], pattern);
+  };
+  bad('zz-bad.json', '{"SECRET-CONTENT": broken', /^analyze-baseline: zz-bad\.json: is not valid JSON\n$/);
+  bad('maintenance-a.json', JSON.stringify(outcome('maintenance-a', { 'run.status': 'timeout', notes: ['SECRET-CONTENT'] })),
+    /^analyze-baseline: maintenance-a\.json: run\.status: must be one of completed, capped, failed, aborted\n$/);
+  bad('defect-b.json', '[]', /^analyze-baseline: defect-b\.json: record: must be a plain object\n$/);
+  bad('big.json', ' '.repeat(1024 * 1024 + 1), /^analyze-baseline: big\.json: exceeds 1048576 bytes\n$/);
+  bad('defect-x.json', JSON.stringify(outcome('defect-x')), /defect-x.*not in the expected manifest/, ['--expected', expectedFile]);
+  const badExpected = path.join(root, 'bad-expected.json');
+  writeFileSync(badExpected, JSON.stringify({ ...expected, workloads: [] }));
+  fails(['--records', records, '--expected', badExpected], /^analyze-baseline: bad-expected\.json: expected\.workloads: /);
+  mkdirSync(path.join(records, 'zz-directory.json'));
+  fails(['--records', records], /^analyze-baseline: zz-directory\.json: is not a regular file/);
+});

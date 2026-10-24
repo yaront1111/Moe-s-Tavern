@@ -17,21 +17,34 @@
     {
       "stepId": "step-1",
       "description": "Scope first: read comment-0a4bd229bce84033b94fc6e049af7834 on this task. This row is the PRODUCER slice of the baseline: the per-workload outcome record contract plus the report builder. The actual runs are CQ-M04b (driver, task-9cfaacf11e194062bc1ca5f77388ec90) and CQ-M04c (20-run execution, task-e4adf15c84f0433a9457ea5e8968c3de); run no agents or workloads here. The human configuration in comment-700a6a5111ad4a57a3340a2dac0ab586 (today's defaults, n=1, 60-minute cap, capped runs keep partial counters, missing counters unknown) must be representable in the contract.\nTDD red (load test-driven-development). Append a clearly separated baseline section to scripts/tests/usage-report.test.mjs. That file is CRLF in index and working tree: keep CRLF, append without reformatting, and leave every existing test byte-identical. The DoD command only runs the four usage test files, so the new tests must live here. Import `* as baseline from '../baseline-report.mjs'` and spawn `../analyze-baseline.mjs`. Reuse the file's receipt()/row() helpers to write per-workload usage projects (`<root>/<workloadId>/logs/moe-usage/*.jsonl`). Cases, each with exact-value assertions:\n1 record contract: readBaselineRecord accepts an exact valid record and returns a NEW frozen copy. It rejects, naming the field, missing/extra keys at every level (e.g. a 'prompt' or 'toolArguments' key), a wrong version, a bad category or id prefix, malformed digests, a non-40-hex moeCommit, invalid or reversed timestamps, negative/fractional/unsafe counters, unknown status/role/result values, duplicate roles or criteria, 'capped' with wallClockMs < wallClockCapMs, and 'completed' beyond the cap. null is preserved for every unknown counter and never becomes 0.\n2 acceptance comes ONLY from the held-out assessment. A record with moeOutcome.finalStatus 'DONE' and qaApprovals 1 but a failing criterion is 'rejected'. DONE with the assessment not run is 'not-assessed'. exit 0 with every criterion pass is 'accepted'. A non-zero exit without a failing criterion is 'not-assessed'. Token totals never change acceptance (swap huge/zero usage between two records and the acceptance is identical).\n3 capped/failed/aborted runs stay in the report with partial counters and are counted in summary.byStatus; expected workloads without a record appear as status 'missing' rows; duplicate records for one workload (n=1) and a record whose caseDigest differs from the expected manifest are refused.\n4 usage join: a row joins its workload's usage project via run.usageTaskId and buildUsageReport wholeTasks, carrying observed totals, unknownRecords and coverageScope. A missing project or task gives usage status 'unknown' with null totals (never 0). Summary totals add observed values only, count unknown workloads, and observedTokensPerAcceptedChange is null when nothing was accepted and flagged incomplete when any usage is unknown.\n5 reproducible inputs and limitations: report.inputs lists the corpus versions, per-case digests, Moe commits, caps, repetitions, platform/node/cli versions and per-role cli/model/effort (null shown as 'unknown' in markdown). limitations include n=1 (no variability estimate), counts of capped/failed/aborted/missing runs, retrieval unknown, latency unknown, codex stream coverage, mixed commits/caps/corpus versions when present, Moe status being record-only, and tokens not being cost.\n6 determinism: rows follow manifest order (else id), and the same inputs give byte-identical JSON and markdown.\n7 CLI: `node scripts/analyze-baseline.mjs --records DIR --project DIR [--expected FILE] [--json]` prints the report; a malformed or invalid record file exits 1 with a bounded message naming the file and field, never its content; the inputs directories are byte-unchanged afterwards.\nRun `node --test scripts/tests/usage-report.test.mjs` and confirm the red is missing-module behavior, not typos.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/usage-report.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "note": "TDD red. Appended a 382-line CQ-M04 section (8 tests) to scripts/tests/usage-report.test.mjs in CRLF. The first 420 lines are byte-identical: prefix sha256 25cdc3b0… is unchanged, git diff shows only + lines, and there are 0 LF-only lines. Covers the record contract (53 rejection cases plus root non-objects), held-out-only acceptance with a token swap, capped/failed/aborted/missing rows, duplicate/digest/corpusVersion/manifest refusals, the usage join reasons (no-usage-task-id, no-usage-project, task-not-in-usage-project, no-record) with summary and efficiency, exact inputs and limitations, determinism and manifest order, and the read-only CLI with bounded errors. RED: `node --test scripts/tests/usage-report.test.mjs` fails with ERR_MODULE_NOT_FOUND for scripts/baseline-report.mjs (the module is missing; there is no syntax error). Note: analyze-usage.mjs is i/lf w/lf (the plan said CRLF) and is untouched. Other sessions' dirty paths are left alone.",
+      "startedAt": "2026-10-24T15:40:06.339Z",
+      "completedAt": "2026-10-24T15:48:27.494Z"
     },
     {
       "stepId": "step-2",
       "description": "Record contract in a new scripts/baseline-report.mjs (Node ESM, LF, node built-ins plus ./usage-report.mjs only). Module doc comment: the contract, the fact that the Moe task status is record-only, and that acceptance = held-out assessment only. Export BASELINE_RECORD_VERSION = 1; BASELINE_STATUSES ['completed','capped','failed','aborted']; BASELINE_ROLES ['architect','worker','qa']; ASSESSMENT_RESULTS ['pass','fail','not-run']; and readBaselineRecord(raw).\nThe exact record shape, all keys required:\n- version: 1;\n- workload: { id: category-prefixed kebab <= 80, category: maintenance|defect|refactor|non-routine, caseDigest and snapshotDigest: 'sha256:' + 64 lowercase hex, corpusVersion: positive safe int };\n- run: { moeCommit: 40 lowercase hex, startedAt/endedAt: ISO-8601 that round-trip through Date#toISOString, endedAt >= startedAt, wallClockMs and wallClockCapMs: safe ints (cap > 0), status, repetition and repetitionsPlanned: safe ints >= 1 with repetition <= planned, platform/nodeVersion: non-blank <= 64, cliVersion: string <= 128 or null, roles: 1-3 entries { role, cli: non-blank <= 64, model: string <= 128 or null, effort: string <= 32 or null, launches: int or null } unique by role, usageTaskId: an id matching /^[A-Za-z0-9._-]{1,128}$/ or null, failureReason: string <= 500 or null };\n- moeOutcome: { finalStatus: string <= 32 or null, qaApprovals, qaRejections, reopenCount, plannerSessions, repairAttempts: int or null };\n- assessment: { ran: boolean, exitCode: int or null, criteria: 0-32 entries { id: kebab <= 64, result } unique by id, reason: string <= 500 or null };\n- latency: { firstCodeChangeMs, endToEndMs: int or null };\n- retrieval: { sourceRetrievals, retrievedBytes: int or null };\n- notes: 0-10 strings <= 300.\nConsistency rules: 'capped' requires wallClockMs >= wallClockCapMs; 'completed' requires wallClockMs <= wallClockCapMs; ran false requires exitCode null, every criterion 'not-run' and a non-null reason. Error handling: plain objects only (prototype Object.prototype or null); every failure throws an Error whose message names the field path and reason, bounded to ~200 chars, and never echoes string contents beyond 40 chars. Returns a deep-frozen detached copy (counters stay null when unknown, never coerced). Make the contract cases green: `node --test scripts/tests/usage-report.test.mjs`.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/usage-report.test.mjs"
       ],
       "newFiles": [
         "scripts/baseline-report.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/baseline-report.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "note": "Added new scripts/baseline-report.mjs (LF, no imports yet). It exports BASELINE_RECORD_VERSION=1, BASELINE_STATUSES, BASELINE_ROLES, ASSESSMENT_RESULTS (frozen) and readBaselineRecord.\n- Strict exact keys at every level. Accepts plain objects only (Object.prototype or null prototype).\n- Error messages take the form `<field path>: <rule>`, capped at 200 chars, and never include the value. An unexpected key name is sanitized and cut to 40 chars.\n- Strings must be non-blank and single-line within their bounds. Counters are safe ints >= 0 or null.\n- Consistency rules: capped and completed vs the wall-clock cap, endedAt >= startedAt, repetition <= planned, unique roles and criterion ids, and the ran=false rules.\n- Returns a detached deep-frozen copy.\n\nTest fix in the appended section only: 8 anchored `assert.throws(fn, /^…/)` calls became `{ message: /^…/ }`, because a RegExp is matched against String(error) = \"Error: …\". Contract tests 2/2 green. The builder and CLI tests stay red until step 3.",
+      "startedAt": "2026-10-24T15:48:30.976Z",
+      "completedAt": "2026-10-24T15:49:43.655Z"
     },
     {
       "stepId": "step-3",
@@ -62,9 +75,9 @@
       ]
     }
   ],
-  "planRevision": 1,
+  "planRevision": 5,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-4e006165",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -95,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:57.338Z",
-  "updatedAt": "2026-10-24T13:16:31.121Z",
+  "updatedAt": "2026-10-24T15:49:43.655Z",
   "dependsOn": [
     "task-bb9034eaeed44adcbc1d05c71c2eda5b",
     "task-cfa74f1b01df4647b57a923bdd961b2a"
@@ -103,12 +116,14 @@
   "metrics": {
     "firstClaimAt": "2026-10-24T12:39:07.805Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-da8841dc",
     "governor-187cc44e",
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-4e006165"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
@@ -120,7 +135,10 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T13:16:31.039Z",
   "planningNotes": {
@@ -135,5 +153,6 @@
       "scripts/analyze-baseline.mjs"
     ]
   },
-  "planApprovedAt": "2026-10-24T13:16:31.120Z"
+  "planApprovedAt": "2026-10-24T13:16:31.120Z",
+  "workStartedAt": "2026-10-24T15:40:06.339Z"
 }

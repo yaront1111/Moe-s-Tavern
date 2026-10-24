@@ -123,7 +123,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:37.335Z",
-  "updatedAt": "2026-10-24T15:44:25.337Z",
+  "updatedAt": "2026-10-24T15:45:27.493Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:48:29.153Z",
     "plannedStepCount": 6,
@@ -180,7 +180,8 @@
     "packages/moe-daemon/src/tools/waitForTask.ts",
     ".moe/tasks/task-29c8274ebc4d4faea67009fa5dcd2df1.json",
     ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json",
-    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json"
+    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json"
   ],
   "completionSummary": "CQ-M01e: one fail-closed execution-profile admission rule for every claim path.\n\nutil/claimEligibility.ts:\n- New `executionAdmissionRefusal(state, task, workerId?) -> MoeError | null`.\n- Task level: assertExecutionProfileReady(resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)), the same rule as the M01c backstop, so a rollback cannot lower a stored verified-local floor.\n- Own-seat resume: also asserts the caller's own open attempt snapshot. Non-own leftovers are never read.\n- Returns EXECUTION_PROFILE_NOT_READY (missingCapabilities) or INVALID_INPUT naming the field. Never writes; no env var or caller label is read.\n\nclaimNextTask.ts:\n- Explicit taskId path throws the refusal after the reconciliation and foreign-finalizing refusals (precedence kept). That is before dependsOn, eviction/replaceExisting, the assignment write, attempt open/close and worker registration.\n- Not inside a workerId block, with no own-seat exemption.\n- The ranked pool SKIPS refused rows.\n\nwaitForTask.ts:\n- The same predicate on the own-task match and the eligible pool.\n- A held strict row parks through blockingHold rather than spinning.\n\nResponse shapes, input schema and M01d capture are unchanged.\n\nTests: new src/tools/executionProfileAdmission.test.ts, 39 cases: E1-E5, R1-R3, P1-P4, C1/C2, N1/N2. Before the change: 23 red / 16 green, and the 16 were compatibility cases.\n\nAll 10 mutation probes from the plan go red:\n- explicit drop: 20\n- workerId-gated: 7\n- after-assign: 20\n- ranked: 4\n- waiter pool: 3\n- own-waiter: 1\n- own-attempt: 1\n- non-own leftover: 1\n- swallow-malformed: 6\n- before-recon: 2\n\nGate: 152 files, 3284 passed / 9 skipped (M01d had 150 files and 3223/9). tsc exit 0.\n\nSize: production +72/-3. The test file is 452 lines of plan-mandated tables.\n\nUntouched: acceptance.test.ts, executionProfile.ts and its test, policy.ts, taskStore.ts, attemptStore.ts. No .moe or Git writes.\n\nThe working copies were LF, not CRLF as the plan said; LF was kept.\n\nTheoretical:\n- Und",
   "commits": [
@@ -204,6 +205,23 @@
       "treeId": "b32077807d6ae19d55b068382bad7e5fded2e603",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "f81a2c34618e54084e51c43a507c763568804d4d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T15:40:10Z",
+      "paths": [
+        ".moe/tasks/task-29c8274ebc4d4faea67009fa5dcd2df1.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T15:45:27.493Z",
+      "treeId": "47abeedb926d15a72adcb2ab23a1b1dd7c3ef37c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -214,9 +232,9 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-07cd2c56@2026-10-24T15:14:22Z",
-    "at": "2026-10-24T15:27:58.855Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T15:40:10Z",
+    "at": "2026-10-24T15:45:27.493Z"
   },
   "completedAt": "2026-10-24T15:44:25.337Z",
   "reviewCompletedAt": "2026-10-24T15:44:25.337Z",
