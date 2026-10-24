@@ -11,6 +11,7 @@ import {
   finalizingAttemptsByTask,
   foreignFinalizingAttempt,
   foreignFinalizingRefusal,
+  executionAdmissionRefusal,
   heldTaskRefusal,
   isClaimGatedByDependsOn
 } from '../util/claimEligibility.js';
@@ -437,6 +438,14 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           if (landing) {
             throw foreignFinalizingRefusal(landing);
           }
+          // Execution-profile admission (CQ-M01e): a row whose effective profile
+          // is not ready is refused with the concrete reason before the
+          // dependsOn gate, every eviction, the assignment write, any attempt
+          // open or close and worker registration. Not inside a workerId block,
+          // and no exemption for an own-seat resume: the predicate itself reads
+          // the caller's own open attempt (util/claimEligibility.ts).
+          const admission = executionAdmissionRefusal(state, requested, params.workerId);
+          if (admission) throw admission;
           // Re-claiming a task you already own is a resume, not a takeover.
           const ownedBySelf = Boolean(params.workerId) && requested.assignedWorkerId === params.workerId;
           // dependsOn gates WORKING-status claims: an explicit-taskId claim of
@@ -489,6 +498,11 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // here reads to the sh wrapper as a dead daemon ("claim_next_task
             // stopped answering").
             .filter((t) => !foreignFinalizingAttempt(finalizingByTask, t.id, params.workerId))
+            // Execution-profile admission — the SAME predicate as wait_for_task's
+            // matcher, and SKIPPED, never refused, for the finalizing hold's
+            // reason: a thrown refusal here reads to the sh wrapper as a dead
+            // daemon. Only an explicit-taskId claim names why.
+            .filter((t) => !executionAdmissionRefusal(state, t, params.workerId))
             .sort((a, b) => {
               // Priority first, the same order wait_for_task ranks by: a
               // higher-priority task outranks a lower one in any epic. Ranking

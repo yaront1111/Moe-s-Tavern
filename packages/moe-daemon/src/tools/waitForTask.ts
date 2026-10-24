@@ -6,6 +6,7 @@ import { AGENT_CLAIMABLE_STATUSES, assertAgentClaimableStatuses } from '../util/
 import { noTeamMembershipRefusal, resolveEffectiveTeam } from '../util/teamMembershipHeal.js';
 import {
   blockingHold,
+  executionAdmissionRefusal,
   finalizingAttemptsByTask,
   foreignFinalizingAttempt,
   heldTaskRefusal,
@@ -136,13 +137,17 @@ function findMatchingTask(
   // grant flips it back to WORKING. Not a spin risk: claiming an own-held
   // task is the sanctioned resume (ownedBySelf) in claim_next_task, and the
   // alreadyAssigned answer it may get instead still carries the task to act on.
+  // A held row the execution-profile admission refuses does NOT wake it: that
+  // resume is refused, so waking would only spin; blockingHold below parks the
+  // seat instead (CQ-M01e).
   if (workerId) {
     const own = Array.from(state.tasks.values()).find(
       (t) =>
         t.assignedWorkerId === workerId &&
         statuses.includes(t.status) &&
         (epicId ? t.epicId === epicId : true) &&
-        !(t.status === 'REVIEW' && t.needsHumanReview === true)
+        !(t.status === 'REVIEW' && t.needsHumanReview === true) &&
+        !executionAdmissionRefusal(state, t, workerId)
     );
     if (own) {
       return {
@@ -183,7 +188,14 @@ function findMatchingTask(
     .filter((t) => {
       finalizingByTask ??= finalizingAttemptsByTask(state);
       return !foreignFinalizingAttempt(finalizingByTask, t.id, workerId);
-    });
+    })
+    // Execution-profile admission — the SAME predicate as claim_next_task's
+    // ranked pool; a drift here re-creates the wake→claim→refuse spin. Last, so
+    // the cheap filters run first: it runs per candidate per waiter per task
+    // event, and builds an Error only for a strict or malformed row. It never
+    // throws: a malformed setting matches nothing, and only an explicit claim
+    // names the reason.
+    .filter((t) => !executionAdmissionRefusal(state, t, workerId));
   // Single-worker-per-epic-status (solo workers only): claim skips a
   // candidate when a live OTHER worker holds a different task in the same
   // epic+status — mirror that too. Effective membership, exactly as

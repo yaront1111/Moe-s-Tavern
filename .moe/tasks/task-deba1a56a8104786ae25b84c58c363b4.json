@@ -31,62 +31,103 @@
     {
       "stepId": "step-2",
       "description": "Provider adapter: create scripts/local-runner/lifecycle.mjs and reuse R02's classifier.\n\n**1. multipass.mjs.** In scripts/local-runner/multipass.mjs, add the `export` keyword to the existing `function classifyFailure`. Change NOTHING else; its header (\"Prerequisite probes only…\") stays true, because lifecycle commands live in lifecycle.mjs.\n\n**2. Header comment for lifecycle.mjs:**\n- owned-instance lifecycle only;\n- NOT readiness, bootstrap or isolation (R07+);\n- never claims executionReady;\n- the Multipass v1.17.0 facts it relies on, with source references:\n  - src/daemon/daemon.cpp require_existing_instances_reaction: NOT_FOUND `instance \"{}\" does not exist`;\n  - src/client/common/client_common.cpp: the `<cmd> failed: The following errors occurred:` prefix, and return_code_for, where NOT_FOUND gives CommandFail=2 and UNAVAILABLE gives DaemonFail=3;\n  - src/client/cli/formatter/json_formatter.cpp: info as {errors:[], info:{<name>:{state}}};\n  - format_utils.cpp: the ten state strings;\n  - delete.cpp: `--purge` is per-name with no prompt, while `--all` and the `purge` command are global and forbidden here.\n\n**3. Exports**\n- `OWNED_NAME_PREFIX = 'moe-vm-'`, `MAX_LAUNCH_TRIES = 3`, `QUERY_TIMEOUT_MS = 30_000`, `DELETE_TIMEOUT_MS = 120_000`.\n- `ownedInstanceName({ random = randomBytes } = {})`: 'moe-vm-' plus 10 random bytes as hex.\n- `isOwnedInstanceName(name)`: /^moe-vm-[0-9a-f]{20}$/.\n- `lifecycleError(code)`: a stable MESSAGES map like R02's.\n- `queryOwnedInstance(name, { executable = 'multipass', run = promisified execFile } = {})`.\n- `deleteOwnedInstance(name, { executable, run })`.\n\n**4. Input validation**, before any transport call:\n- the name must pass isOwnedInstanceName, otherwise LIFECYCLE_INPUT_INVALID;\n- the executable must be a non-blank string without control characters, otherwise PROVIDER_INPUT_INVALID via R02's providerError.\n\n**5. Calls.** Use exactly these execFile options: {encoding:'utf8', shell:false, windowsHide:true, timeout, maxBuffer:MAX_PROBE_BUFFER, killSignal:'SIGKILL'}.\n- **query:** argv ['info', name, '--format', 'json'].\n  - On resolve: parse stdout (bounded, string). It must be an object whose `errors` is an empty array and whose `info` has exactly ONE key, equal to name, whose `state` is one of the ten strings. Return {present:true, state}. Anything else throws LIFECYCLE_STATE_UNKNOWN.\n  - On reject: absent ONLY when error.code === 2 and the bounded stderr, split on /\\r?\\n/, has a line strictly equal to `instance \"${name}\" does not exist`; then return {present:false}. Otherwise throw providerError(classifyFailure(error)) when that code is NOT_FOUND, ACCESS_DENIED, TIMEOUT or OUTPUT_LIMIT, and LIFECYCLE_STATE_UNKNOWN for everything else.\n- **delete:** argv ['delete', '--purge', name] with DELETE_TIMEOUT_MS. Resolve gives undefined; any rejection becomes the sanitized code as above.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) raw stderr, stdout, paths and messages never reach a thrown error. Only stable code and message pairs do.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/multipass.mjs"
       ],
       "newFiles": [
         "scripts/local-runner/lifecycle.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/multipass.mjs",
+        "scripts/local-runner/lifecycle.mjs"
+      ],
+      "note": "Provider adapter is in place.\n\nmultipass.mjs:\n- Only change is the added `export` on classifyFailure; `git diff -U0` confirms a single line.\n\nNew scripts/local-runner/lifecycle.mjs:\n- Header comment with the v1.17.0 source facts and the residual name-squatting risk.\n- Exports OWNED_NAME_PREFIX, MAX_LAUNCH_TRIES, QUERY_TIMEOUT_MS, DELETE_TIMEOUT_MS, ownedInstanceName (10 random bytes, validated), isOwnedInstanceName, jobLeaseResourceId and lifecycleError.\n- queryOwnedInstance and deleteOwnedInstance share one validating invoker. It checks the name, then the provider record/run, then the executable, before any call. Calls use fixed argv, shell:false, windowsHide, SIGKILL and the 64 KiB bound.\n- Absence requires numeric exit 2 AND an exact not-found line for that same name (CRLF-safe).\n- Strict info JSON: errors must be [], there must be exactly one key equal to the name, and the state must be one of the ten.\n- Failures sanitize to providerError for NOT_FOUND, ACCESS_DENIED, TIMEOUT and OUTPUT_LIMIT, and to LIFECYCLE_STATE_UNKNOWN for anything else.\n\nThe module was written in one pass covering steps 2-5. Fresh run on the Linux-only PATH with env -i: 111/111 pass, 0 fail, 0 skipped, including all L1-L5 adapter tests.",
+      "startedAt": "2026-10-24T15:17:31.988Z",
+      "completedAt": "2026-10-24T15:24:05.875Z"
     },
     {
       "stepId": "step-3",
       "description": "Durable ledger in lifecycle.mjs: `createLedger(stateDir)`.\n\n**Location**\n- The caller supplies the state dir. It must be an absolute path string without control characters, otherwise LEDGER_INPUT_INVALID.\n- There is NO environment or default location. The protected runtime and activation choose it later, and it must never be inside .moe/ (daemon sole-writer) or the repository; say so in a comment.\n- Create it lazily with mkdir recursive, mode 0o700.\n\n**Record.** One file per owned instance, `<instance>.json`, holding EXACTLY {schemaVersion:1, provider:'multipass', instance, taskId, attemptId, generation, phase, launchTries, createdAt, updatedAt}.\n- The owner binds to the EXISTING daemon attempt identity: taskId /^task-[A-Za-z0-9]{1,64}$/, attemptId /^attempt-[A-Za-z0-9]{1,64}$/, generation a positive safe integer (the attempt fencing token).\n- phase is one of reserved, launching, owned, absent, failed, collision, deleted.\n- launchTries is an integer from 0 to MAX_LAUNCH_TRIES.\n- createdAt and updatedAt are ISO strings that round-trip through toISOString.\n- The job-lease resource id is the instance name itself. Export `jobLeaseResourceId(name)`, which validates the name and returns it, so leases stay the daemon's EXISTING resource leases. There is no new scheduler or lease store.\n\n**API**\n- `reserve(owner)`:\n  - validate the owner;\n  - name = ownedInstanceName();\n  - create `<name>.json` with flag 'wx' (exclusive; EEXIST throws LEDGER_CONFLICT), content, sync, close;\n  - return a copy.\n  A torn reserve file decodes as invalid and is never acted on. Nothing was launched yet, so this is safe.\n- `read(name)`:\n  - a bounded read of at most 4 KiB, then a strict decode;\n  - the basename must equal `${instance}.json`;\n  - failure throws LEDGER_RECORD_INVALID;\n  - returns a detached copy.\n- `list()`:\n  - readdir;\n  - ignore dot-files and non-.json files;\n  - return {records, invalid:[basename…]}, sorted by name for determinism.\n- `update(expected, changes)`:\n  - re-read the file;\n  - require that its phase AND launchTries still equal `expected`'s, otherwise LEDGER_CONFLICT with nothing written;\n  - merge only phase and launchTries;\n  - set updatedAt;\n  - write atomically: a temp file `.<instance>.<pid>.<8 hex>.tmp` in the same dir with 'wx' and 0o600, write, filehandle.sync(), close, rename over the target, then a best-effort directory fsync (errors ignored, because win32 and some filesystems refuse).\n  - On any failure, unlink the temp file (ignoring ENOENT) and throw LEDGER_WRITE_FAILED.\n- Losing the directory fsync can only revert a record to its previous phase. That direction is safe: a reverted 'reserved' record whose VM exists becomes a collision and is never deleted.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) every fs call sits in try/catch mapped to a LEDGER_* code. No absolute path or errno text appears in errors or reports.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs"
+      ],
+      "note": "Durable ledger is in place in lifecycle.mjs. The TDD skill is loaded; the RED evidence comes from step-1.\n\n**createLedger(stateDir, {random})**\n- stateDir must be an absolute string with no control characters, else LEDGER_INPUT_INVALID (sync throw).\n- It has no env or default location. A comment forbids putting it in .moe/ or the repository.\n- The dir is created lazily: mkdir recursive, 0o700.\n\n**Records**\n- Exact 10-key record. Owner validation is typeof string plus a regex, so an array taskId is refused, and generation must be a positive safe integer.\n- Strict decode:\n  - exact key set; schemaVersion 1; provider multipass;\n  - instance equals the filename and is an owned name;\n  - phase enum, launchTries 0..3, and the invariant launchTries===0 iff reserved/collision;\n  - ISO round-trip timestamps.\n\n**read and list**\n- read opens with O_NOFOLLOW|O_NONBLOCK where supported, requires a regular file of at most 4 KiB, and returns a detached copy.\n- list sorts by name, skips dot and non-.json entries, treats non-regular entries as invalid, and returns {} for a missing dir.\n\n**reserve**\n- Uses 'wx' with 0o600 and write+fsync. EEXIST gives LEDGER_CONFLICT with no unlink.\n- If a write fails after the exclusive create, the partial file is unlinked and the directory is fsynced.\n\n**update**\n- Shape check: keys only phase/launchTries.\n- Re-read, then CAS on phase+launchTries (LEDGER_CONFLICT).\n- Merge, revalidate (LEDGER_INPUT_INVALID), then write `.<name>.<pid>.<8hex>.tmp` with wx/0o600/fsync, rename, and a best-effort directory fsync.\n- Any failure unlinks the temp file and throws LEDGER_WRITE_FAILED.\n- Temp names use crypto randomBytes, never the injected name source.\n\nThe remaining ceiling (compare-then-rename is not a lock) is marked with a ponytail comment.\n\nTests: L6-L8 plus the 17-case strict-decode table are green within the fresh 111/111 run.",
+      "startedAt": "2026-10-24T15:24:10.974Z",
+      "completedAt": "2026-10-24T15:24:20.338Z"
     },
     {
       "stepId": "step-4",
       "description": "Provisioning with timeout reconciliation and bounded retry, in lifecycle.mjs:\n`provisionOwned({ ledger, name, owner, launch, provider = {}, sleep = timers/promises setTimeout, retryDelayMs = 5_000 })`.\n\n`launch(name)` is the platform launcher that R03-R05 will inject. It must settle and bound itself, as R02's adapter does. R06 never builds launch argv.\n\n**1. Load and fence.**\n- record = ledger.read(name). The owner's taskId, attemptId and generation must equal the record's, otherwise LIFECYCLE_NOT_OWNER with no writes or calls.\n- **owned:** return {instance, phase:'owned', launchTries, executionReady:false} with no calls.\n- **launching:** throw LIFECYCLE_STATE_UNKNOWN. A crash or concurrent run left the outcome unknown, so reconcileOwned must run first.\n- **failed, collision, deleted:** throw LIFECYCLE_RETRY_EXHAUSTED, LIFECYCLE_NAME_COLLISION or LIFECYCLE_PHASE_INVALID respectively.\n- **absent** with launchTries >= MAX: write failed, then throw LIFECYCLE_RETRY_EXHAUSTED.\n\n**2. Pre-launch absence check** (phase reserved only): queryOwnedInstance(name).\n- Present means the name was taken before we ever launched: a FOREIGN instance. Update to 'collision' and throw LIFECYCLE_NAME_COLLISION. It is never adopted, never deleted, and launch is never called.\n- Unknown means rethrow; the record stays reserved.\n\n**3. Loop.**\n- Update to {phase:'launching', launchTries: n+1}. This is durable BEFORE invoking launch.\n- Call `await launch(name)`.\n  - **Resolve:** update to 'owned' and return the owned result.\n  - **Reject** (timeout or any failure, including 'already exists'): FIRST query the SAME name.\n    - Present: update to 'owned' and return. Our own earlier launch created it, so this is no duplicate.\n    - Absent: update to 'absent'. If launchTries < MAX, `await sleep(retryDelayMs)` and loop with the SAME name; otherwise update to 'failed' and throw LIFECYCLE_RETRY_EXHAUSTED.\n    - Unknown: leave 'launching' and throw LIFECYCLE_STATE_UNKNOWN. No retry, so no duplicate creation.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) the launch rejection is never rethrown raw; only lifecycleError codes surface. A ledger write failure stops the flow before the next provider mutation.\n\nMake L9-L17 green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs"
+      ],
+      "note": "`provisionOwned` is implemented and `node --test` passes 111/111, which covers L9-L17.\n\n**Before any read or provider call**\n- launch and sleep must be functions, and retryDelayMs a non-negative safe integer (default 5000). Otherwise LIFECYCLE_INPUT_INVALID.\n\n**Fence**\n- taskId, attemptId and generation must match the ledger record, otherwise LIFECYCLE_NOT_OWNER. A missing owner fails the same way. Nothing is written and no provider call is made.\n\n**By phase**\n- owned: returns the owned result with executionReady:false and no calls.\n- launching, failed, collision, deleted: throw LIFECYCLE_STATE_UNKNOWN, LIFECYCLE_RETRY_EXHAUSTED, LIFECYCLE_NAME_COLLISION or LIFECYCLE_PHASE_INVALID respectively.\n- reserved only: a pre-launch info runs first.\n  - If the name is present, the record becomes 'collision' and the call throws. Launch is never called and nothing is deleted.\n  - If the info result is unknown, its sanitized error is rethrown and the record stays reserved.\n\n**Launch loop**\n- If launchTries is already at MAX, the record becomes 'failed' and the call throws LIFECYCLE_RETRY_EXHAUSTED. This is also how a restored absent/3 record ends, with zero calls.\n- Otherwise 'launching' with tries+1 is written durably before launch(name) runs.\n- Resolve: the record becomes 'owned'.\n- Reject (raw error discarded): the same name is queried first.\n  - present: becomes 'owned' (adopts our late VM, no duplicate);\n  - absent: becomes 'absent', then sleeps retryDelayMs only if tries < MAX;\n  - unknown: throws LIFECYCLE_STATE_UNKNOWN and the record stays 'launching'.\n- Every launch uses the same name, and any ledger write failure stops the flow before the next provider mutation.",
+      "startedAt": "2026-10-24T15:24:22.346Z",
+      "completedAt": "2026-10-24T15:24:30.231Z"
     },
     {
       "stepId": "step-5",
       "description": "Crash reconciliation and owned cleanup in lifecycle.mjs. Neither function ever launches, lists, stops, starts or uses global commands.\n\n**1. `reconcileOwned({ ledger, provider = {} })`** is restart recovery and is idempotent. For each VALID record from ledger.list():\n- **reserved, collision, deleted:** no provider call.\n- **launching, owned, absent, failed:** queryOwnedInstance(record.instance), the SAME owned name.\n  - Present: update to 'owned'. A 'failed' record whose VM appeared late is ours, because launchTries > 0 and absence was verified before the first launch.\n  - Absent: launching and owned become 'absent'; failed stays failed; absent stays.\n  - Unknown: unchanged, listed in `unknown`.\n- Return {reconciled:[{instance, from, to}], unknown:[instance], invalid:[basename]}.\n\n**2. `cleanupOwned({ ledger, provider = {}, attemptPhase, leaseHeld })`.**\n- `attemptPhase(attemptId)` resolves the EXISTING daemon attempt phase: running, finalizing, reconciling, closed, or null.\n- `leaseHeld(resourceId)` resolves true or false for the EXISTING daemon resource lease on jobLeaseResourceId(instance).\n- Wiring both to the daemon is activation work, out of scope.\n\nCandidates are valid records with launchTries > 0 in phase launching, owned, absent or failed. Records in reserved, collision or deleted, invalid records, and anything not in the ledger are never touched. For each candidate:\n- **Attempt guard:** the phase must be exactly 'closed'.\n  - running, finalizing or reconciling are preserved as 'attempt-active'.\n  - Anything else, including a thrown port, is preserved as 'attempt-unknown'.\n- **Lease guard:** leaseHeld must be exactly false.\n  - true is preserved as 'job-lease-held'.\n  - Anything else, including a thrown port, is preserved as 'lease-unknown'.\n- **Delete:** query the same name.\n  - Absent: update to 'deleted'.\n  - Present: deleteOwnedInstance (['delete', '--purge', name]; never --all and never the global `purge` command). Whether the delete resolves OR rejects, query the same name again:\n    - absent updates to 'deleted' (this also covers a concurrent sweep that deleted it first);\n    - still present, or unknown, keeps the phase and records {instance, code}, using the delete's sanitized code, else LIFECYCLE_STATE_UNKNOWN;\n    - a LEDGER_CONFLICT from a concurrent writer is recorded the same way and never retried blindly.\n- Per-record failures never abort the sweep.\n- Return {deleted:[instance], preserved:[{instance, reason}], errors:[{instance, code}], invalid:[basename]}.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) reports carry only instance names, phases, reasons, codes and basenames; never paths or stderr.\n\nMake L18-L22 green, then the whole section.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs"
+      ],
+      "note": "Implemented reconcileOwned and cleanupOwned. Neither ever builds launch, list, stop, start, purge or --all argv.\n\n**reconcileOwned**\n- Queries only launched-phase records (launching, owned, absent, failed), each by its own name.\n- Present: the record becomes owned.\n- Absent: launching and owned records become absent; failed and absent records stay as they are.\n- Unknown, or a ledger update failure: the record is listed under `unknown` and left unchanged.\n- It is idempotent: an unchanged phase is skipped with no write.\n\n**cleanupOwned**\n- Candidates are the launched-phase records only.\n- holdReason is checked first:\n  - attempt running, finalizing or reconciling → preserved as attempt-active;\n  - attempt not exactly 'closed', including a throwing port → attempt-unknown;\n  - lease true → job-lease-held;\n  - lease not exactly false, including a throwing port → lease-unknown.\n- The lease is only asked once the attempt is closed.\n- purgeOwned then queries the same name:\n  - absent → the record becomes deleted with no delete call;\n  - present → `delete --purge <name>`, then a re-query whether the delete resolved or rejected. Absent → deleted. Otherwise it throws the delete's sanitized error, else LIFECYCLE_STATE_UNKNOWN.\n- A LEDGER_CONFLICT from a concurrent writer is recorded, not retried.\n- Error codes in the report are restricted to codes this module or the provider mints; anything else becomes LIFECYCLE_STATE_UNKNOWN.\n- A failure on one record never aborts the sweep.\n\n**Verification**\nL18-L22 pass, including the real POSIX fake-multipass process test, which RAN rather than skipped. Whole file: 111/111.",
+      "startedAt": "2026-10-24T15:24:32.364Z",
+      "completedAt": "2026-10-24T15:24:39.816Z"
     },
     {
       "stepId": "step-6",
       "description": "The one verification gate. Use the Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and unset every MOE_* variable, so seat env cannot leak.\n\n**1. The DoD command, fresh, from the repository root:**\n```\nnode --test scripts/tests/local-runner.test.mjs\n```\nIt must exit 0 with 0 failed and 0 cancelled. Skips are expected only on win32, so on Linux the L22 real-process test must RUN, not skip. Record the pass, fail and skip counts.\n\n**2. Packaging regression.** The bundler copies the whole scripts/local-runner directory, so run:\n```\nnode --test scripts/tests/local-runner-bundle.test.mjs\n```\nIt must exit 0. lifecycle.mjs is copied as production code, and no test asset leaks.\n\n**3. Snapshot check.** Peers share this checkout, so repeat command 1 in a fresh tree:\n```\nD=$(mktemp -d)\ngit -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src/state/resourceStore.ts package.json | tar -x -C \"$D\"\n```\nOverlay the three changed files' working-tree bytes, then run it from $D. It must exit 0.\n\n**4. Byte checks.**\n- `git diff -U0 -- scripts/local-runner/multipass.mjs` shows ONLY the added `export` keyword.\n- The R02 test block in local-runner.test.mjs is byte-identical; only the appended section and new imports differ.\n- `git diff --check` is clean for the three files.\n\nKeep command 1's command, exit code and output tail for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs",
         "scripts/local-runner/multipass.mjs",
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "All step-6 gates pass. Every command ran under env -i with the Linux-only PATH (Node v24.21.0) and no MOE_* variables.\n\n1. DoD command: `node --test scripts/tests/local-runner.test.mjs` exited 0 with 111 tests: 111 pass, 0 fail, 0 cancelled, 0 skipped. The L22 real-process test ran.\n2. Bundle test: `node --test scripts/tests/local-runner-bundle.test.mjs` exited 0, 7/7 pass. The bundler copies the whole local-runner directory (its nested production.mjs probe proves the generic copy), and lifecycle.mjs matches no test exclusion pattern.\n3. Snapshot: I extracted `git archive HEAD` of scripts, resourceStore.ts and package.json into a mktemp dir and overlaid the three working-tree files. The DoD command there exited 0 with 111/111 pass.\n4. Byte checks:\n   - The multipass.mjs diff is only `function classifyFailure` → `export function classifyFailure`.\n   - `cmp -n <HEAD size>` shows the HEAD 274-line R02 test prefix is byte-identical; the diff is 620 insertions and 0 deletions.\n   - `git diff --check` is clean for all three files.\n   - lifecycle.mjs has no forbidden pattern.\n\nNote: lifecycle.mjs is 351 lines, above the 300-line guideline. The approved plan puts steps 2-5 in this single module. Every function is under 50 lines.\n\nLogs are in /tmp/cq-r06-gate{1,2,3}.log.",
+      "startedAt": "2026-10-24T15:24:43.354Z",
+      "completedAt": "2026-10-24T15:25:32.257Z"
     },
     {
       "stepId": "step-7",
       "description": "Exactly one adversarial self-review. Load adversarial-self-review and read the diff as an attacker.\n\n**Foreign VM safety (DoD 1).**\n- Can any path adopt or delete an instance that is not a valid ledger record with launchTries > 0, including a name collision found before launch, a lookalike 'moe-vm-' name, or a tampered or torn ledger file? Can a substring or prefix not-found match turn a foreign or unknown state into 'absent'?\n- Is the pre-launch check skipped on any route into launch?\n\n**Duplicate creation (DoD 2).**\n- Does every launch failure query the SAME name before a retry?\n- Can an unknown query lead to a retry?\n- Can retries exceed MAX across a crash and restart, given that launchTries is persisted BEFORE launch?\n\n**Cleanup (DoD 3).**\n- Any '--all', 'purge', 'list' or name outside the ledger?\n- Does an active, reconciling, unknown or throwing attempt or lease port ever lead to deletion?\n- Do a delete timeout and a re-query fail closed?\n\n**Concurrency.**\n- Two sweeps at once: the second sees not-found or LEDGER_CONFLICT and changes nothing wrongly.\n- A stale in-memory record cannot overwrite a newer phase.\n\n**Input and output.**\n- Huge, empty, non-string or control-character inputs and outputs.\n- No paths, stderr or secrets in errors or reports.\n\n**Cross-platform.**\n- win32 rename-over and the ignored directory fsync.\n- Real-process tests are skipped only on win32.\n- Temp files are cleaned up on every path.\n\n**Scope.**\n- No readiness or isolation claim (executionReady stays false; verified-local untouched).\n- No .moe edits and no Git writes.\n- No daemon or launcher changes.\n- No forbidden pattern from the global rails in new code.\n- Nothing deleted from the R02 tests.\n\nFix the findings and rerun the step-6 commands fresh. Use the fresh output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/lifecycle.mjs",
         "scripts/local-runner/multipass.mjs",
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/multipass.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "I ran one adversarial self-review across all plan sections plus the skill checklist. It found no real-risk defects, so no code changed. A fresh DoD rerun gave exit 0 and 111/111 passing with 0 skips. `git diff --check` is clean; the no-index rc=1 only means \"files differ\". There is no trailing whitespace and no CR.\n\nChecked and confirmed:\n- **Foreign VMs (DoD1).** Only valid ledger records with launchTries>0 in a launched phase are ever queried or deleted. Collision and reserved records never are, and lookalike or foreign names outside the ledger are never touched. Absence needs numeric exit 2 plus an exact per-name line. Tampered, torn, symlinked or FIFO record files decode invalid (O_NOFOLLOW|O_NONBLOCK plus a regular-file and 4 KiB check) and are skipped.\n- **Duplicates (DoD2).** Every launch failure re-queries the same name first. An unknown result throws without retrying. launchTries is persisted, validated to 3 at most, and written before launch, so a crash cannot exceed MAX: a crash leaves 'launching', which is refused until reconcile.\n- **Cleanup (DoD3).** No --all, purge or list is used. The attempt must be exactly 'closed' and the lease exactly false, otherwise the record is preserved. A delete timeout followed by an unknown re-query keeps the phase and reports the code.\n- **Concurrency.** A second sweep gets not-found then absent, or LEDGER_CONFLICT. A stale record fails the phase+launchTries CAS.\n- **Output.** Errors carry only a fixed message and code, and reports carry only names, phases, reasons, codes and basenames.\n\nTheoretical risks, noted rather than fixed:\n- (a) Compare-then-rename is not a lock. Two writers inside one read→rename window could both pass (ponytail comment in the code). The impact is benign: the fixed name means a second launch fails 'already exists' and is adopted; it never creates a duplicate.\n- (b) A 'absent'/'failed' record whose name a third party squats before our retry would be adopted. This needs the private 80-bit name; the header documents the residual risk, and the tests pin no pre-query on relaunch.\n- (c) If a 'launching' record of a closed attempt is cleaned while multipassd is still finishing creation, that late VM leaks, because deleted records are skipped. It is a fail-closed leak, never a foreign deletion; for the activation/R13 operators.\n- (d) The injected sleep or launch must be bounded (by R03-R05). A huge retryDelayMs is clamped by Node timers, and retries stay bounded.\n- (e) If the caller-chosen stateDir already exists with loose permissions, it is not chmodded. The protected runtime owns that choice.\n\nScope:\n- executionReady is always false and verified-local is untouched.\n- No .moe, daemon, launcher or Git writes.\n- No forbidden patterns.\n- R02 tests are byte-identical.\n- lifecycle.mjs is 351 lines, over the 300 guideline, because the plan puts steps 2-5 in one module; every function is 50 lines or fewer.",
+      "startedAt": "2026-10-24T15:25:34.445Z",
+      "completedAt": "2026-10-24T15:27:17.657Z"
     }
   ],
-  "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-4e006165",
+  "planRevision": 15,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,7 +139,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:02.133Z",
-  "updatedAt": "2026-10-24T15:14:43.043Z",
+  "updatedAt": "2026-10-24T15:27:40.507Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1"
   ],
@@ -106,7 +147,7 @@
     "firstClaimAt": "2026-10-24T14:47:42.422Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 1
+    "executedStepCount": 7
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
@@ -117,7 +158,13 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T15:02:41.345Z",
@@ -135,5 +182,55 @@
     ]
   },
   "planApprovedAt": "2026-10-24T15:02:41.436Z",
-  "workStartedAt": "2026-10-24T15:03:37.615Z"
+  "workStartedAt": "2026-10-24T15:03:37.615Z",
+  "commits": [
+    {
+      "sha": "4e76262b42c5242d5553d9e064650c2de57973ad",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-4e006165@2026-10-24T15:02:38Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+        ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
+        ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json"
+      ],
+      "recordedBy": "worker-4e006165",
+      "recordedAt": "2026-10-24T15:15:49.442Z",
+      "treeId": "dbdd993ab23db078a0b82fdd84072161fa00352d",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/multipass.mjs",
+    "scripts/local-runner/lifecycle.mjs"
+  ],
+  "unattributedPaths": [
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-4e006165@2026-10-24T15:02:38Z",
+    "at": "2026-10-24T15:15:49.442Z"
+  },
+  "declaredFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/lifecycle.mjs",
+    "scripts/local-runner/multipass.mjs"
+  ],
+  "reviewStartedAt": "2026-10-24T15:27:40.505Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ launcher failure text never reaches errors or ledger bytes (30.553316ms)\n✔ reconcileOwned resolves each crash phase by querying only its own owned name (123.06307ms)\n✔ cleanupOwned deletes only closed, unleased, launched records by exact name (149.525518ms)\n✔ a failed delete keeps the record unless a re-query proves absence, and the sweep continues (51.78414ms)\n✔ cleanup records unknown first queries and concurrent ledger writers without retrying (26.40737ms)\n✔ real provider process: owned query and purge use only per-name commands (140.364894ms)\nℹ tests 111\nℹ suites 0\nℹ pass 111\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11228.62928",
+    "reportedAt": "2026-10-24T15:27:40.505Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Delivered the CQ-R06 owned VM lifecycle in three files. scripts/local-runner/lifecycle.mjs is new; multipass.mjs only gains `export` on classifyFailure; local-runner.test.mjs gets 60 appended tests (L1-L22) with the 274-line R02 block byte-identical.\n\nOwnership: a random `moe-vm-<20hex>` name is durably reserved in a strict, caller-located ledger before launch. Each record carries the existing daemon attempt identity (taskId, attemptId, generation fence). The job-lease id is the name itself, so leases use existing daemon resource leases; there is no new store or scheduler.\n\nLedger: one strictly decoded JSON record per instance (exact keys, phase enum, 4 KiB cap, no symlinks or FIFOs). Updates are compare-and-swap (CAS) and atomic (temp file, fsync, rename, directory fsync).\n\nDoD1 (foreign VMs): a name present before launch becomes 'collision' and is never launched, adopted or deleted. Lookalike, invalid or out-of-ledger names are never touched. Absence requires exit 2 plus the exact v1.17.0 `instance \"<name>\" does not exist` line for that name.\n\nDoD2 (timeout reconciliation): every launch failure, including timeouts, queries the same name before any retry. Present means adopt, absent means bounded retry (at most 3, persisted before launch), unknown means stop with no retry.\n\nDoD3 (cleanup): it runs only `delete --purge <name>` on launched ledger records whose attempt is exactly closed and whose lease is exactly free. Active, reconciling, unknown or throwing ports are preserved. There is no --all, purge or list.\n\nErrors and reports are sanitized to stable codes. executionReady is always false; nothing touches verified-local, isolation, the daemon, launchers, .moe or Git.\n\nVerification, all on the Linux-only PATH under env -i:\n- the DoD command: 111/111 pass, 0 fail, 0 skipped, with the real-process test running;\n- a fresh git-archive snapshot: 111/111;\n- the bundle test: 7/7.\n`git diff --check` is clean. One adversarial review was done; its theoretical limits are in "
 }
