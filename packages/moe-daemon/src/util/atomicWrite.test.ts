@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { atomicWriteText } from './atomicWrite.js';
+import { atomicWriteJson, atomicWriteJsonAsync, atomicWriteText, atomicWriteTextAsync } from './atomicWrite.js';
+import { writeJsonAtomic } from '../accounts/registry.js';
+import { initProjectTool } from '../tools/initProject.js';
+import { ToolTestHarness } from '../tools/toolTestHarness.js';
+import { acquireLock, initProject, writeDaemonInfo } from '../index.js';
 
 describe('atomicWriteText — synchronous rename backoff (L3)', () => {
   let testDir: string;

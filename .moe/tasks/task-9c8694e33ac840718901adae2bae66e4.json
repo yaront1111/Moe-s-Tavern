@@ -9,10 +9,56 @@
     "A test proves a task note/summary containing U+202E is written without the raw character and reads back identical."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development). Extend this existing small real-filesystem suite with JSON-persistence describe blocks; keep existing rename-backoff tests unchanged. Use numeric code points only, with the exact target list built as: const cps=[0x061c,...Array.from({length:5},(_,i)=>0x200b+i),...Array.from({length:7},(_,i)=>0x2028+i),...Array.from({length:16},(_,i)=>0x2060+i),0xfeff]; const hidden=String.fromCodePoint(...cps); const slash=String.fromCharCode(92). For BOTH atomicWriteJson and atomicWriteJsonAsync, persist an object containing hidden inside nested values, arrays AND a property name. Assert for every cp: expect(raw.includes(String.fromCodePoint(cp))).toBe(false); expect(raw).toContain(slash+'u'+cp.toString(16).padStart(4,'0')); expect(JSON.parse(raw)).toEqual(input). Repeat writes to expose regex-state leakage. Include an already-literal slash+'u202e' string, quotes/backslashes/newlines, null, empty containers, ordinary Hebrew/Arabic/accented text and emoji plus non-target range neighbors; compare parsed values with JSON.parse(JSON.stringify(input)) and prove non-target Unicode is not ASCII-escaped indiscriminately. Verify atomicWriteText/atomicWriteTextAsync still write their input exactly to .txt targets. Circular and BigInt serialization must throw/reject while leaving an existing target unchanged and no temporary files behind.\nAdd a real StateManager task-record regression in this same persistence-focused test file using the existing ToolTestHarness (init/setupMoeFolder/createEpic/createTask/load, cleanup in finally): await h.state.updateTask(task.id,{implementationPlan:[{stepId:'step-1',description:'persist note',status:'COMPLETED',affectedFiles:[],note}],completionSummary:summary}); use prefix+String.fromCodePoint(0x202e)+suffix in both fields. Read .moe/tasks/<id>.json, assert no raw RLO and that the escape spelling exists; JSON.parse and a subsequent state.load must retain the exact note and completionSummary. This proves DoD 2/3 at the actual task persistence boundary without mutating the live board.\nAlso cover the bypass entrypoints from steps 2/3 here: accounts.writeJsonAtomic with the all-code-point nested object (including its trailing newline and POSIX 0600 mode); initProjectTool.handler with an RLO-bearing project name; exported index.initProject with the same name, and exported writeDaemonInfo with an RLO-bearing projectPath (do NOT start a daemon). Mock os.homedir to a temporary home and seed ~/.moe/config.json with an extra RLO-bearing value before index.initProject; verify that value survives escaped in config.json. All raw-file assertions must fail against the current implementation, not merely assert successful parsing. Tests restore mocks and recursively remove temp roots on every exit.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/atomicWrite.test.ts"
+      ],
+      "startedAt": "2026-10-24T16:02:41.650Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement the single value-preserving file-JSON escape boundary. In atomicWrite.ts define a module-private regex for EXACTLY U+061C, U+200B–U+200F, U+2028–U+202E, U+2060–U+206F, U+FEFF. To keep source/tool bytes unambiguous, an ASCII-only implementation is:\nconst fileJsonFormatChars = new RegExp('[' + [[0x061c],[0x200b,0x200f],[0x2028,0x202e],[0x2060,0x206f],[0xfeff]].map(range => range.map(cp => String.fromCharCode(cp)).join('-')).join('') + ']', 'g');\nexport function escapeJsonForFile(json: string): string { return json.replace(fileJsonFormatChars, ch => String.fromCharCode(92) + 'u' + ch.charCodeAt(0).toString(16).padStart(4, '0')); }\nApply escapeJsonForFile(JSON.stringify(obj,null,2)) in BOTH atomicWriteJson and atomicWriteJsonAsync, before invoking their existing raw-text siblings. Add a concise why-comment: prevent hidden-Unicode/Trojan Source warnings while preserving parsed values. Do not touch raw text helpers, retry/backoff, fsync, cleanup, object mutation or error propagation. In accounts/registry.ts import this stateless helper and wrap only the existing JSON.stringify(value,null,2), preserving the final newline, mode 0600, recursive directory mode 0700, rename retries and thrown errors. This utility has only Node fs/path dependencies and no daemon/service side effects, so accounts remains runnable as a standalone CLI. Do not change transport JSON serialization or canonical digest code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/atomicWrite.ts",
+        "packages/moe-daemon/src/accounts/registry.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Close the audited bypasses using the same escapeJsonForFile helper, changing serialized BYTES only. In index.ts wrap JSON.stringify at writeDaemonInfo (.moe/daemon.json), writeGlobalConfig (~/.moe/config.json), initProject (.moe/project.json), and acquireLock's JSON payload (retain its existing compact JSON.stringify call without pretty-printing). Preserve existing temp names, exclusive lock creation, rename ordering, existing error handling and fail-open global-config behavior; do not replace these IO implementations or alter lifecycle logic. Add writeDaemonInfo to the existing lifecycle-helper export list so the regression test calls the actual writer rather than matching source text or launching a live daemon. In tools/initProject.ts wrap both existing JSON.stringify calls for project.json and canonical channel records, preserving force-reinit project identity and channel deduplication. Do not touch HTTP/WS JSON, generated init/skill files, logs or .claude assets. All these are ordinary UTF-8 writes with path.join/Node APIs on Windows/macOS/Linux; no launcher changes or platform-specific shell code are needed. Do not directly edit any existing .moe record or add a migration. The user-approved scope includes both project and machine-level dynamic JSON records.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/tools/initProject.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "One final verification gate for this shared persistence change: run full daemon regression and typecheck (broader than normal mid-epic coverage because all record families share the writer). Exact evidence command from repository root:\ncd packages/moe-daemon && node --input-type=module -e \"import {spawnSync} from 'node:child_process'; import path from 'node:path'; const env={...process.env}; for(const k of Object.keys(env)) if(k.startsWith('MOE_')) delete env[k]; if(process.platform!=='win32') env.PATH=[path.dirname(process.execPath),'/usr/local/bin','/usr/bin','/bin'].join(':'); for(const args of [['node_modules/typescript/bin/tsc','--noEmit'],['node_modules/vitest/vitest.mjs','run']]) {const r=spawnSync(process.execPath,args,{env,stdio:'inherit'}); if(r.error) throw r.error; if(r.status!==0) process.exit(r.status??1);}\"\nBoth subprocesses must exit zero; retain fresh output as complete_task.verification {command,exitCode:0,outputTail}. This portable Node wrapper scrubs inherited MOE_* seat bindings and uses native-only PATH on POSIX so accounts subprocess tests do not inherit Windows executables. Use an isolated source snapshot with native Linux npm-ci dependencies when the shared node_modules belongs to Windows: preserve package-lock.json and source hashes, include root CLAUDE.md, scripts, docs and package files required by daemon contract tests, and do not install over shared Windows dependencies or hand-edit dist/generated files. On native Windows the same command uses process.execPath and preserves Windows PATH; no GNU env dependency. Do not treat unrelated shared-tree failures as evidence of success; attribute them and rerun against a stable snapshot containing this task's changes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Exactly one final adversarial self-review (load adversarial-self-review) scoped to this diff. Audit every target-range endpoint, property names/nested arrays, multiple writes and concurrent async calls, pre-existing literal escape text, null/empty/large inputs, surrogate pairs and valid non-target Unicode. Prove escaping happens after JSON.stringify and does not change values, transport bytes, digests, atomicity, error propagation or account permissions. Re-audit the dynamic filesystem JSON callsites to ensure startup/init/account bypasses use the helper; bundled static assets and JSONL/logs are not a hidden migration. Read the task-record round-trip assertions as an attacker: removal of either sync or async escaping or loss of a target range must make tests fail. Scan the five modified source/test files numerically for any raw target code point (including comments and test fixtures); the implementation and notes must contain none. Confirm no direct .moe changes, generated edits, unrelated dirty bytes or Git writes were introduced. If fixes are needed, rerun the SAME verification command before completion and report all modified paths. Hand off via complete_task for independent QA; do not claim runtime rollout/restart or trusted-runner certification.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/atomicWrite.ts",
+        "packages/moe-daemon/src/util/atomicWrite.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/tools/initProject.ts",
+        "packages/moe-daemon/src/accounts/registry.ts"
+      ]
+    }
+  ],
+  "planRevision": 2,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-3617ccf7",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,5 +70,35 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T13:40:22.574Z",
-  "updatedAt": "2026-10-24T15:44:57.646Z"
+  "updatedAt": "2026-10-24T16:02:41.650Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T15:55:13.074Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-bb003851",
+    "worker-3617ccf7"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T16:02:06.177Z",
+  "planningNotes": {
+    "approachesConsidered": "Escape only after JSON.stringify, including property names and nested values. Reject stripping/rejecting tool input, escaping in complete_step alone, recursively mutating objects, or patching historical .moe files. Keep raw text writers untouched because roles/scripts/copied assets are not JSON state records. Keep account writer permissions, trailing newline and standalone CLI operation; import only the stateless fs/path utility, never daemon state, tools or logger.",
+    "codebaseInsights": "# JSON file format-character escaping Implementation Plan\nGoal: eliminate the specified raw invisible characters from daemon-written JSON bytes without changing parsed values. Architecture: one ASCII-source, stateless post-JSON.stringify escaping helper; use it in both shared atomic JSON writers and the audited startup/init/account bypasses. Tech stack: TypeScript/Node ESM, Vitest. User explicitly confirmed inclusion of machine-level ~/.moe account/config JSON in the REPL. This is a focused bugfix, not CQ-M whole-system rollout. Reproduced with JSON.stringify({completionSummary:'note'+String.fromCodePoint(0x202e)}): serializedStillHasRawRLO=true, roundTrips=true. persistence.writeEntity delegates to atomicWriteJsonAsync; project normalization, pins and decisions also use the shared atomic JSON helpers. Other dynamic JSON writes are in index.ts, initProject.ts and accounts/registry.ts. No schema or wire-value changes.",
+    "risks": "All five owned files were clean, i/lf w/lf at planning; shared checkout has substantial unrelated dirt. Preserve peer bytes and EOLs, and leave all Git writes to wrappers on designated moe/work-2026-10-24 (no direct main push). All fixtures must use temp project/home directories, never live .moe or the operator's home. The tool layer may decode source-style Unicode escape text: use numeric code points in tool notes/tests and byte-scan source. Do not bulk-migrate historical records; they become escaped on next normal write. JSONL message/activity logs, daemon.lock filename semantics, static bundled JSON assets and .claude configuration are not new storage formats in this task; encode the lock's JSON payload too while preserving its compact form and O_EXCL semantics. Shared helper usage must not change JSON wire output, stable candidate digests or in-memory strings.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/atomicWrite.ts",
+      "packages/moe-daemon/src/util/atomicWrite.test.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/tools/initProject.ts",
+      "packages/moe-daemon/src/accounts/registry.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T16:02:06.278Z",
+  "workStartedAt": "2026-10-24T16:02:41.650Z"
 }
