@@ -815,3 +815,68 @@ test('an overflowed workload total stays unknown in the baseline summary instead
   assert.deepEqual(build(10, 5).summary.efficiency, { observedTokens: 15, acceptedChanges: 2, observedTokensPerAcceptedChange: 7.5, complete: true });
   assert.deepEqual(build(10, 5, ['codex']).summary.efficiency, { observedTokens: 15, acceptedChanges: 2, observedTokensPerAcceptedChange: 7.5, complete: false });
 });
+
+// CQ-M04c archived baseline: the committed n=1 execution under docs/baselines/cq-m04.
+import { normalizeUsageContext as m04cContext } from '../usage-receipt.mjs';
+import { normalizeUsage as m04cUsage } from '../prompt-cache-usage.mjs';
+
+const m04cDir = fileURLToPath(new URL('../../docs/baselines/cq-m04/', import.meta.url));
+const m04cRead = (...parts) => readFileSync(path.join(m04cDir, ...parts), 'utf8');
+const m04cManifest = baseline.readExpectedManifest(JSON.parse(m04cRead('expected.json')));
+const m04cArgs = ['--records', path.join(m04cDir, 'records'), '--project', path.join(m04cDir, 'usage'),
+  '--expected', path.join(m04cDir, 'expected.json')];
+
+test('CQ-M04c archived baseline: expected manifest and records cover exactly the 20 frozen ids', () => {
+  assert.equal(m04cManifest.workloads.length, 20);
+  for (const category of baseline.BASELINE_CATEGORIES) {
+    assert.equal(m04cManifest.workloads.filter(item => item.category === category).length, 5);
+  }
+  assert.deepEqual(readdirSync(path.join(m04cDir, 'records')).sort(),
+    m04cManifest.workloads.map(item => `${item.id}.json`).sort());
+  const counts = {};
+  for (const item of m04cManifest.workloads) {
+    const record = baseline.readBaselineRecord(JSON.parse(m04cRead('records', `${item.id}.json`)));
+    assert.equal(record.workload.id, item.id);
+    assert.equal(record.workload.category, item.category);
+    assert.equal(record.workload.caseDigest, item.caseDigest);
+    assert.equal(record.run.repetition, 1);
+    assert.equal(record.run.repetitionsPlanned, 1);
+    assert.equal(record.run.wallClockCapMs, 3600000);
+    counts[item.category] = (counts[item.category] ?? 0) + 1;
+  }
+  assert.deepEqual(counts, { maintenance: 5, defect: 5, refactor: 5, 'non-routine': 5 });
+});
+
+test('CQ-M04c archived baseline: usage receipts hold only allowlisted fields', () => {
+  const contextKeys = Object.keys(m04cContext({}));
+  const allowed = new Set(['version', 'timestamp', 'provider', ...contextKeys, 'sessionId', 'eventId',
+    'reportedModels', 'scope', 'turnIndex', 'coverage', 'outcome', 'usage']);
+  const usageKeys = new Set(Object.keys(m04cUsage('claude', undefined)));
+  assert.deepEqual(readdirSync(path.join(m04cDir, 'usage')).sort(), m04cManifest.workloads.map(item => item.id).sort());
+  for (const item of m04cManifest.workloads) {
+    const dir = path.join(m04cDir, 'usage', item.id, 'logs', 'moe-usage');
+    const files = readdirSync(dir);
+    assert.ok(files.length > 0);
+    for (const file of files) {
+      assert.ok(file.endsWith('.jsonl'), file);
+      const lines = readFileSync(path.join(dir, file), 'utf8').split('\n').filter(Boolean);
+      assert.ok(lines.length > 0);
+      for (const line of lines) {
+        const row = JSON.parse(line);
+        for (const key of Object.keys(row)) assert.ok(allowed.has(key), `${item.id}: ${key}`);
+        const normalized = m04cContext(row);
+        for (const key of contextKeys) assert.deepEqual(row[key], normalized[key], `${item.id}: ${key}`);
+        for (const key of Object.keys(row.usage)) assert.ok(usageKeys.has(key), `${item.id}: usage.${key}`);
+      }
+    }
+  }
+});
+
+test('CQ-M04c archived baseline: the CLI reproduces report.json and report.md byte-for-byte', () => {
+  const json = spawnSync(process.execPath, [baselineCli, ...m04cArgs, '--json'], { encoding: 'utf8' });
+  assert.equal(json.status, 0);
+  assert.equal(json.stdout, m04cRead('report.json'));
+  const markdown = spawnSync(process.execPath, [baselineCli, ...m04cArgs], { encoding: 'utf8' });
+  assert.equal(markdown.status, 0);
+  assert.equal(markdown.stdout, m04cRead('report.md'));
+});
