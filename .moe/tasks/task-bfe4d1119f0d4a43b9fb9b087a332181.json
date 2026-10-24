@@ -18,50 +18,84 @@
     {
       "stepId": "step-1",
       "description": "Prerequisites + harness (TDD red). Confirm CQ-M03a (task-44b44ccac62f4657890f98ff450738c8) is DONE/landed and READ the landed packages/moe-daemon/src/benchmarks/workloadSnapshot.ts; the planned names used here (validateWorkloads, digestFiles, digestWorkload, createCodingSnapshot, createAssessmentSnapshot, readSnapshotFiles, WORKLOAD_CANDIDATE_ROOT_ENV, FROZEN_STARTING_COMMIT, SOURCE_REPOSITORY) may differ, so adapt and NEVER edit the contract (if it blocks a fixture, stop and use moe.report_blocked / an explicit dependency update). Read the grounding sources AT THE FROZEN COMMIT, read-only, via `git show 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71:<path>`: packages/moe-daemon/src/util/{cachedPlanPaths,chatPayload,chatBacklog}.ts, src/state/attemptStore.ts (decodeStoredGeneration/nextGeneration), scripts/usage-report.mjs (CQ-M02 changed it after the freeze, so use the 35cf53c bytes) and the 'Track negative searches too' paragraph of docs/plans/2026-10-24-ai-code-quality-and-context.md. Create packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts (vitest, LF) importing `NON_ROUTINE_WORKLOADS` from './non-routineWorkloads.js' (red: not created yet) and the M03a API, following the shared corpus conventions:\n(a) dataset tests: validateWorkloads(NON_ROUTINE_WORKLOADS) succeeds; exactly the five pinned ids in order ['non-routine-cached-lookup-fingerprint','non-routine-stale-negative-export-index','non-routine-chat-pagination-remainder','non-routine-monotonic-attempt-generation','non-routine-cross-role-usage-rollup']; every category 'non-routine'; frozen startingCommit; source.paths limited to the grounding paths; honest 'reduced'/'adapted' notes (they say which parts are synthetic); coverage tags include stale-negative-context on case 2 and unknown-preservation on case 5; per-case digestWorkload literals (pinned in step 3).\n(b) one control harness: runAssessment(workload, candidateRoot) creates an assessment snapshot and runs `spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...each *.test.mjs], { cwd: assessmentRoot, env: { ...process.env, NODE_OPTIONS: '', [WORKLOAD_CANDIDATE_ROOT_ENV]: candidateRoot }, encoding: 'utf8', timeout: 60000 })`, then parses `ok`/`not ok N - <criterion-id>: ...` TAP lines. Error handling: a spawn error, signal or timeout counts as a failure with a bounded excerpt, never as a pass.\n(c) per-case controls (it.each over { id, corrected, wrong, wrongMustFail }), each variant in a FRESH coding snapshot: the original exits != 0 and fails at least one new-behavior criterion; the corrected variant exits 0 with EVERY criterion id ok; the plausible-wrong variant exits != 0 with wrongMustFail among its failures (not a crash).\n(d) requirement independence: each workload's intendedBehavior states the new behavior and its adversarial examples in prose, and nothing in initialFiles hints at the corrected implementation.\n(e) leakage: no initial file contains or equals any assessment or variant content, and no coding snapshot contains a *.test.mjs.\n(f) determinism and reset: matching digests, and a mutation followed by a new snapshot restores snapshotDigest.\n(g) source checkout untouched: sha256 of the dataset module and the grounding files is identical before and after the suite.\nDispose every handle; give the control tests a 120s timeout.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
+      ],
+      "note": "M03a is DONE and landed (35579c2). Read the landed workloadSnapshot.ts: names match the plan (validateWorkloads, digestFiles, digestWorkload, create*Snapshot, readSnapshotFiles, WORKLOAD_CANDIDATE_ROOT_ENV, FROZEN_STARTING_COMMIT, SOURCE_REPOSITORY, CORPUS_COVERAGE_TAGS), so the contract is unchanged. Grounding read via git show 35cf53c (cachedPlanPaths, chatPayload, chatBacklog, attemptStore, usage-report.mjs, and the negative-search paragraph of the plan doc).\n\nHarness written (M03b conventions):\n- dataset, provenance, coverage-tag, criterion-naming and digest tests;\n- requirement independence: intendedBehavior phrases plus solution markers absent from initialFiles;\n- leakage, fail-loud without a candidate root, exact-set controls, determinism/reset, an ASCII guard, and a source sha256 guard.\n\nRED confirmed in the isolated Linux copy: the suite fails to load ./non-routineWorkloads.js. No production edits. The shared tree's 1171 peer dirty paths were left alone.",
+      "startedAt": "2026-10-24T14:29:07.935Z",
+      "completedAt": "2026-10-24T14:39:24.950Z"
     },
     {
       "stepId": "step-2",
       "description": "Cases 1-2: create packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts exporting `NON_ROUTINE_WORKLOADS = validateWorkloads([...])` (workload objects only; variants live in the test file). Fixture code is bounded Node ESM .mjs adapted from the frozen source; every external effect (git, file reads, clock) is an INJECTED function, so no real git/network/CQ context or runner API is used. Assessments are self-contained node:test files that import the candidate via pathToFileURL(path.join(process.env[WORKLOAD_CANDIDATE_ROOT_ENV], ...)), fail loudly when it is unset, and name tests `<criterion-id>: ...`.\nCASE 1 'non-routine-cached-lookup-fingerprint' (tags cache-invalidation, source-fingerprint; source util/cachedPlanPaths.ts, reduced: cachedPlanRef plus rev-parse/ls-tree through an injected run(args)). initialFiles: src/cachedPlanPaths.mjs and src/pathLookupCache.mjs, whose createCachedPathLookup(run).lookup(branch, paths) memoizes FOUND paths by ref+path forever. intendedBehavior: every lookup resolves the ref to its commit once and serves a cached positive only when it was recorded at that same commit; otherwise re-query ls-tree. A resolution failure serves NO cached positives and caches nothing (fail closed). Misses are never cached. The cache is bounded to 256 entries, evicting the oldest. Criteria: serves-fresh-positive (same commit: ls-tree runs once across two lookups); invalidates-on-fingerprint-change (the ref advances to a commit without the path -> reported missing); fail-closed-on-resolution-error; no-negative-caching; bounded-cache. Corrected: commit-tagged entries. Plausible-wrong: correct invalidation, but on a rev-parse failure it falls back to cached positives -> wrongMustFail 'fail-closed-on-resolution-error'.\nCASE 2 'non-routine-stale-negative-export-index' (tags stale-negative-context, cache-invalidation; source util/cachedPlanPaths.ts miss semantics + the docs/plans negative-search paragraph, adapted; the export index itself is synthetic, as the note says). initialFiles: src/helperFinder.mjs, whose createHelperFinder(readSource).find(name, modules) scans module text for an exported function/const/named-export of exactly `name` and caches every result - INCLUDING 'not found' - keyed by name only, plus two small sample modules. intendedBehavior: a cached negative is reused only for the same namespace (the sorted module list) AND the same per-module content fingerprints (sha256 of the text); a cached positive is re-verified against the current text of its module; a readSource failure yields { status: 'unknown' } and is never cached; matching is exact (boundedTailX does not match boundedTail). Criteria: detects-new-export (a module gains the export after a cached negative -> found), scope-aware-negative (a negative for [a,b] is not reused for [a,b,c]), detects-removed-export, read-errors-not-cached, exact-export-matching. Corrected: fingerprinted entries. Plausible-wrong: fingerprints content but caches a read failure as 'not found' -> wrongMustFail 'read-errors-not-cached'.\nPin snapshotDigest/assessmentDigest via digestFiles. Run only `npx vitest run src/benchmarks/non-routineWorkloads.test.ts` in the isolated Linux copy; cases 1-2 controls green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
+      ],
+      "note": "Cases 1-2 written. Ids: non-routine-cached-lookup-fingerprint and non-routine-stale-negative-export-index. Fixture code is String.raw ESM; Git and readSource are injected fakes. Digests are computed by a throwaway tsx script in the isolated copy.\n\nCase 1:\n- Original fails: serves-fresh-positive, invalidates-on-fingerprint-change, fail-closed-on-resolution-error, bounded-cache.\n- Original passes the compatibility criteria no-negative-caching and literal-ref-only (literal-ref-only is added beyond the plan's 5 to guard cachedPlanRef).\n- Corrected: commit-tagged Map bounded at 256.\n- Wrong (serves cached positives when Git fails) fails exactly fail-closed-on-resolution-error.\n\nCase 2:\n- Original fails everything except exact-export-matching.\n- Added reverifies-cached-positive (an unchanged positive costs one read of its own module), so dropping the cache entirely is not accepted.\n- Corrected: namespace key plus SHA-256 fingerprints, with read errors returning unknown.\n- Wrong (an unreadable module is read as empty text) fails exactly read-errors-not-cached.\n\nFocused vitest in the isolated Linux copy: all case 1-2 tests green (controls about 320 ms each). Cases 3-5 come in step 3.",
+      "startedAt": "2026-10-24T14:39:25.856Z",
+      "completedAt": "2026-10-24T14:43:35.842Z"
     },
     {
       "stepId": "step-3",
       "description": "Cases 3-5 in the same two files, then freeze.\nCASE 3 'non-routine-chat-pagination-remainder' (tags bounded-context, cursor-safety, pagination; source util/chatPayload.ts + util/chatBacklog.ts, adapted). initialFiles: src/chatPayload.mjs (CHAT_MESSAGE_OVERHEAD_CHARS, chatMessageResponseCost, capChatMessagesToResponseBudget, truncateChatMessage(s) with a minimal truncateForBudget) and src/chatBacklog.mjs, whose readBacklog(messages, sinceId, maxContentChars) returns EVERY message after sinceId in one unbounded response. intendedBehavior: add readPage(messages, { sinceId, limit, maxContentChars, budget }) -> { messages, nextCursor, remaining }. A page respects both limit and the response budget (always at least one message); nextCursor is the id of the LAST DELIVERED message; remaining counts the unread messages after it; paging from nextCursor yields every message exactly once and in order, even when a single message is oversized; an unknown sinceId throws instead of silently restarting. Criteria: respects-limit-and-budget, cursor-is-last-delivered, pages-cover-all-exactly-once (loop until remaining 0, the concatenated ids equal the input ids), oversized-message-progress, rejects-unknown-cursor, truncation-flags-preserved. Corrected: limit, then budget cap, then cursor. Plausible-wrong: nextCursor = the last id of the limit window before the budget cap -> wrongMustFail 'pages-cover-all-exactly-once'.\nCASE 4 'non-routine-monotonic-attempt-generation' (tags monotonic-identity, history-gaps; source state/attemptStore.ts, adapted: the fixture starts from the superseded count-based allocation, and the note says so). initialFiles: src/attemptGenerations.mjs, whose nextGeneration(store, taskId) returns the number of the task's records + 1. intendedBehavior: allocate max(store.highWater[taskId], the maximum stored generation of the task's records) + 1, persist the new high-water mark in store.highWater, never reuse a value after records are deleted or gapped, and keep tasks independent. A malformed stored generation (0, -1, 1.5, '3', NaN, above MAX_SAFE_INTEGER) throws, naming the record, instead of being skipped. Exhaustion at Number.MAX_SAFE_INTEGER throws with code 'ATTEMPT_GENERATION_EXHAUSTED'. Criteria: uses-historical-maximum ([1,2,5] -> 6), survives-deleted-highest (records [1,2] with highWater 5 -> 6), per-task-independence, rejects-malformed-stored, exhaustion-fails-closed, persists-high-water (repeated allocations strictly increase). Corrected: high-water plus max. Plausible-wrong: max over current records only -> wrongMustFail 'survives-deleted-highest'.\nCASE 5 'non-routine-cross-role-usage-rollup' (tags usage-dedup, unknown-preservation, cross-role; source scripts/usage-report.mjs AT 35cf53c, reduced to the field list, the count/key helpers, identifiedGroups, mergeGroup and aggregate). initialFiles: scripts/usageRollup.mjs with those functions and per-provider/task aggregation only. intendedBehavior: add rollupByTask(rows) -> one entry per taskId across architect/worker/qa. It deduplicates by DURABLE provider identity (provider + session/event identity, exactly as identifiedGroups does) BEFORE summing, so a session reported by two roles or launches counts once. Rows without durable identity stay counted and visibly flagged (unidentifiedRecords), never dropped. Unknown counters stay unknown (excluded from observedTokens and counted in unknownRecords, never 0). Conflicting duplicates make that field unknown. The entry carries a per-role breakdown, and an overflow makes the total unknown. Criteria: dedupes-durable-identity, keeps-unidentified-visible, preserves-unknown-counters, conflicts-become-unknown, per-role-breakdown, overflow-unknown. Corrected: reuses identifiedGroups/mergeGroup, then groups by task. Plausible-wrong: deduplicates by launchId instead of provider session/event identity -> wrongMustFail 'dedupes-durable-identity'.\nFreeze: pin snapshotDigest/assessmentDigest per workload and the five digestWorkload literals. Make the whole file green with focused runs in the isolated Linux copy.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
+      ],
+      "note": "Cases 3-5 added: chat-pagination-remainder (readPage cursor at last delivered; wrong = cursor at end of limit batch -> fails cursor-is-last-delivered, pages-cover-all-exactly-once, oversized-message-progress), monotonic-attempt-generation (persisted highWater + strict decode + ATTEMPT_GENERATION_EXHAUSTED; wrong = frozen records-only max -> fails survives-deleted-highest, rejects-malformed-stored, exhaustion-fails-closed, persists-high-water), cross-role-usage-rollup (rollupByTask over identifiedGroups with byRole; wrong = merge per launch -> fails dedupes-durable-identity, per-role-breakdown). Originals fail every criterion except their compatibility criterion (payload-helpers-unchanged / per-task-independence / provider-rollup-unchanged). Snapshot/assessment digests recomputed; five digestWorkload values pinned. Focused vitest in an isolated Linux copy of HEAD + both owned files: 32/32 passed. ASCII-only, 0 CR, no forbidden substrings.",
+      "startedAt": "2026-10-24T14:43:36.719Z",
+      "completedAt": "2026-10-24T14:52:16.387Z"
     },
     {
       "stepId": "step-4",
       "description": "The one verification gate. Build a FRESH synchronized isolated copy (recipe in planningNotes; it must include the landed M03a contract), add the two owned files' working-tree bytes, and with Linux-only PATH run exactly: `cd <copy>/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/non-routineWorkloads.test.ts` (fresh exit 0; report actual pass/skip counts). Then run `npx tsc --noEmit --incremental false` with the same PATH (the dataset compiles into dist; vitest does not typecheck). Repeat the focused run once to show repeatability and confirm no `moe-workload-*` temp dirs remain. Never touch the original Windows node_modules or any package-lock.json, and confirm the tested files are byte-identical (sha256) to the working tree. Keep the command and output tail for complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
+      ],
+      "note": "Fresh isolated copy /tmp/moe-m03e-gate.WNHRvz = git archive HEAD f6b3d21 (M03a contract present and unchanged) + the two owned working-tree files, node_modules symlinked from the Linux test root (Windows node_modules and package-lock untouched). Exact command with Linux-only PATH: npx vitest run src/benchmarks/non-routineWorkloads.test.ts -> 1 file passed, 32 passed, 0 skipped, exit 0. npx tsc --noEmit --incremental false -> exit 0. Repeat focused run -> 32 passed, exit 0. Leftover /tmp/moe-workload-* dirs: 0. sha256 copy == working tree for both files (ts 79d65c95..., test cc3a3f36...). No file bytes changed in this step.",
+      "startedAt": "2026-10-24T14:52:16.946Z",
+      "completedAt": "2026-10-24T14:52:47.522Z"
     },
     {
       "stepId": "step-5",
       "description": "Exactly one adversarial self-review of the two-file diff (load adversarial-self-review). Challenge each case. Is the new behavior specified independently of any reference implementation, with adversarial examples, in intendedBehavior? Does the original fail a new-behavior criterion for the right reason? Does the corrected variant pass every criterion, and the wrong variant fail the named one rather than crash? Are the subtle invariants actually exercised - fail-closed resolution (1), read errors never cached plus exact matching (2), the cursor is the last DELIVERED message with exactly-once coverage (3), the high-water mark survives deletion and malformed values throw (4), dedupe by durable identity with unknowns kept visible (5)? Are all external effects injected, with no real git, fs-outside-snapshot, clock or network dependence? Are provenance notes honest (synthetic index in case 2, the superseded count allocation in case 4, the reduced usage-report from 35cf53c in case 5)? Are template-literal escapes and digests stable? Confirm: no production/daemon edit, no edit to workloadSnapshot.ts or sibling datasets, no dependence on forthcoming CQ context/runner APIs, no Git or .moe writes, no benchmark/VM/readiness claims, and no substring from the project's global forbiddenPatterns (project.globalRails) in either file, fixture strings included. Fix findings with tests; if any byte changed after step 4, rerun the step-4 commands fresh and use that output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts"
+      ],
+      "note": "One adversarial self-review of both untracked files (full read, not git diff). Finding fixed: case 3 provenance said only 'the default limits' were dropped, but MAX_CHAT_MESSAGE_BYTES/MAX_CHAT_LIMIT/MAX_CHAT_CONTENT_CHARS were dropped too -> reworded to 'the other limit constants' in the fixture header and source.note; snapshot digest recomputed and the case-3 digestWorkload pin updated (the pin caught the change before re-pinning). Verified against 35cf53c via git show: all 6 grounding paths exist; case-5 helpers (fields, count, key, metadataFields, metadata, identifiedGroups, mergeGroup, aggregate) diff verbatim apart from export keywords, rollupByProviderTask = grouped() minus taskRecord; case-3 helpers match chatPayload.ts minus types (truncateForBudget behaves identically to memorySettings.ts); case-4 frozen nextGeneration is strict max+1 with ATTEMPT_GENERATION_EXHAUSTED and has no high-water mark. Originals fail for missing behavior (cases 3/5: readPage/rollupByTask absent; 1/2/4: semantic); wrong variants fail on assertions, not crashes, with exact pinned sets. No clock/network/real git/fs outside snapshot in fixtures (only process.env read is the candidate-root PRELUDE). No edit to workloadSnapshot.ts, sibling datasets, production code, .moe or Git. ASCII-only, 0 CR, no forbidden substrings. Theoretical only: the source-checkout sha test watches attemptStore.ts, which a peer session is editing in the shared tree; a save during a shared-tree run could flake it (verification runs in an isolated copy). Bytes changed after step 4, so the step-4 gate was rerun fresh in /tmp/moe-m03e-gate.aA4XR3: vitest 32/32 exit 0, tsc exit 0, repeat 32/32 exit 0, 0 leftover moe-workload dirs, sha256 identical to working tree.",
+      "startedAt": "2026-10-24T14:52:48.271Z",
+      "completedAt": "2026-10-24T14:55:02.838Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -77,20 +111,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.514Z",
-  "updatedAt": "2026-10-24T13:09:03.972Z",
+  "updatedAt": "2026-10-24T14:55:37.965Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:06:48.019Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-4e006165"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T13:09:03.889Z",
   "planningNotes": {
@@ -108,5 +150,19 @@
       "scripts/usage-report.mjs"
     ]
   },
-  "planApprovedAt": "2026-10-24T13:09:03.972Z"
+  "planApprovedAt": "2026-10-24T13:09:03.972Z",
+  "workStartedAt": "2026-10-24T14:29:07.935Z",
+  "reviewStartedAt": "2026-10-24T14:55:37.962Z",
+  "verification": {
+    "command": "cd /tmp/moe-m03e-gate.aA4XR3/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/non-routineWorkloads.test.ts",
+    "exitCode": 0,
+    "outputTail": " RUN  v5.0.3 /tmp/moe-m03e-gate.aA4XR3/packages/moe-daemon\n\n Test Files  1 passed (1)\n      Tests  32 passed (32)\n   Start at  17:54:43\n   Duration  2.06s (tests 95%, transform 4%, import 1%)\n\n[fresh isolated copy = git archive HEAD f6b3d21 + both owned working-tree files (sha256 identical: ts 5455d602..., test 3f73810c...), Linux node_modules symlink; 0 skipped. Same copy: npx tsc --noEmit --incremental false exit 0; repeat vitest run 32 passed exit 0; 0 leftover /tmp/moe-workload-* dirs.]",
+    "reportedAt": "2026-10-24T14:55:37.962Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/non-routineWorkloads.test.ts",
+    "packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts"
+  ],
+  "completionSummary": "Froze the five CQ-M03 non-routine workloads on the landed M03a contract. packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts exports NON_ROUTINE_WORKLOADS = validateWorkloads([...]) and holds workload objects only. non-routineWorkloads.test.ts holds the harness and the test-only corrected and plausible-wrong variants. Cases (shared coverage tag in brackets): (1) cached-lookup-fingerprint [stale-positive-context]: commit-tagged positives, fail closed when resolution fails, bounded cache. (2) stale-negative-export-index [stale-negative-context]: namespace-scoped negatives keyed by a SHA-256 fingerprint; read errors are never cached. (3) chat-pagination-remainder [reusable-helper]: readPage, whose cursor is the last DELIVERED message, covering every message exactly once, rejecting unknown cursors and reusing the chatPayload budget helpers. (4) monotonic-attempt-generation [changed-requirements]: a persisted high-water mark that survives pruning, strict decoding, and ATTEMPT_GENERATION_EXHAUSTED. (5) cross-role-usage-rollup [reusable-helper, unknown-preservation]: rollupByTask deduplicates by durable identity before summing, keeps unidentified rows and unknown counters visible, and adds byRole. Each case carries provenance, checked against 35cf53c via git show, and pinned snapshot, assessment and workload digests. Each original fails every new-behavior criterion and passes one compatibility criterion. Each corrected variant passes all criteria with exit 0. Each wrong variant fails its named criterion, with the exact sets pinned. Leakage, determinism and reset, ASCII and source-unchanged tests are included. Gate in a fresh isolated copy: vitest 32/32, exit 0; tsc --noEmit exit 0; the repeat run is green. No production, contract, sibling, .moe or Git edits. Self-review: one fix, a more precise provenance note in case 3 (digest re-pinned and gate rerun). Known risk: the source-checkout sha test watches attemptStore.ts, which a peer is editing in the shared tree, so "
 }

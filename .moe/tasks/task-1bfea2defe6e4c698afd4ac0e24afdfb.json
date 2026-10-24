@@ -18,50 +18,84 @@
     {
       "stepId": "step-1",
       "description": "Prerequisites + harness (TDD red). Confirm CQ-M03a (task-44b44ccac62f4657890f98ff450738c8) is DONE/landed and READ the landed packages/moe-daemon/src/benchmarks/workloadSnapshot.ts; the planned names used here (validateWorkloads, digestFiles, digestWorkload, createCodingSnapshot, createAssessmentSnapshot, readSnapshotFiles, WORKLOAD_CANDIDATE_ROOT_ENV, FROZEN_STARTING_COMMIT, SOURCE_REPOSITORY) may differ, so adapt and NEVER edit the contract (if it blocks a fixture, stop and use moe.report_blocked / an explicit dependency update). Read the grounding sources AT THE FROZEN COMMIT, read-only, via `git show 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71:<path>`: scripts/prompt-cache-usage.mjs, packages/moe-daemon/src/util/{chatPayload,chatBacklog,affectedFiles,cachedPlanPaths,memorySettings}.ts, src/state/checkRunStore.ts (boundOutputTail) and src/delivery/executionProfile.ts (HEAD differs after CQ-M01b; use the 35cf53c bytes). Create packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts (vitest, LF) importing `REFACTOR_WORKLOADS` from './refactorWorkloads.js' (red: not created yet) and the M03a API, following the shared corpus conventions:\n(a) dataset tests: validateWorkloads(REFACTOR_WORKLOADS) succeeds; exactly the five pinned ids in order ['refactor-usage-counter-normalization','refactor-chat-budget-consolidation','refactor-shared-path-normalization','refactor-detached-snapshot-returns','refactor-utf8-bounded-tail']; every category 'refactor'; frozen startingCommit; source.paths limited to the grounding paths; honest 'reduced'/'adapted' notes; coverage tags include behavior-preservation on all five and reusable-helper on cases 1, 3 and 5; per-case digestWorkload literals (pinned in step 3).\n(b) one control harness: runAssessment(workload, candidateRoot) creates an assessment snapshot and runs `spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...each *.test.mjs], { cwd: assessmentRoot, env: { ...process.env, NODE_OPTIONS: '', [WORKLOAD_CANDIDATE_ROOT_ENV]: candidateRoot }, encoding: 'utf8', timeout: 60000 })`, then parses `ok`/`not ok N - <criterion-id>: ...` TAP lines. Error handling: a spawn error, signal or timeout counts as a failure with a bounded excerpt, never as a pass.\n(c) per-case controls (it.each over { id, corrected, wrong, wrongMustFail }), each variant in a FRESH coding snapshot. The refactor-specific rule is that the ORIGINAL passes every behavior-preservation criterion yet exits != 0 because it fails the structural/intent criterion (record both facts). The corrected variant exits 0 with EVERY criterion id ok. The plausible-wrong variant exits != 0 and fails wrongMustFail (a behavior-preservation criterion) while passing the structural one, which proves the rubric rejects rewrites that change behavior.\n(d) leakage: no initial file contains or equals any assessment or variant content, and no coding snapshot contains a *.test.mjs.\n(e) determinism and reset: matching digests, and a mutation followed by a new snapshot restores snapshotDigest.\n(f) source checkout untouched: sha256 of the dataset module and the grounding files is identical before and after the suite.\nDispose every handle; give the control tests a 120s timeout.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
+      ],
+      "note": "M03a is DONE and landed (35579c2); I read the landed workloadSnapshot.ts and changed none of it. The grounding sources were read at 35cf53c via git show. I created refactorWorkloads.test.ts, adapting the M03b harness. It covers:\n- dataset: pinned ids, provenance and shared tags;\n- a criterion-name check and pinned digests;\n- leakage, which also covers intendedBehavior;\n- a TAP control harness where a spawn error, signal or timeout counts as a fail;\n- refactor-rule controls: the original fails ONLY the intent criterion, corrected passes all, and the wrong variant fails an exact set that never includes the intent criterion;\n- determinism/reset, an ASCII-only source guard, and sha256 of the grounding and owned files.\n\nDeviation: the candidate() helper also lets a variant create a new flat src/*.mjs file, because case 3's extraction adds a module. GROUNDING adds tools/chatRead.ts (its real inline budget loop is the case-2 duplicate), util/errors.ts (invalidInput shape) and util/enforcement.ts (verification tail, the second case-5 caller). RED confirmed in an isolated Linux copy: the import of ./refactorWorkloads.js fails. The shared checkout's 1171 pre-existing dirty paths were left untouched.",
+      "startedAt": "2026-10-24T14:27:48.655Z",
+      "completedAt": "2026-10-24T14:35:06.816Z"
     },
     {
       "stepId": "step-2",
       "description": "Cases 1-2: create packages/moe-daemon/src/benchmarks/refactorWorkloads.ts exporting `REFACTOR_WORKLOADS = validateWorkloads([...])` (workload objects only; variants live in the test file). Fixture code is bounded Node ESM .mjs adapted from the frozen source; assessments are self-contained node:test files that import the candidate via pathToFileURL(path.join(process.env[WORKLOAD_CANDIDATE_ROOT_ENV], ...)), fail loudly when it is unset, and name tests `<criterion-id>: ...`. Behavior-preservation criteria are exact-output tables captured from the ORIGINAL fixture. Structural criteria are static source checks of the intent only (shared helper, single site), never of formatting or naming beyond the required import, so gratuitous rewrites earn nothing.\nCASE 1 'refactor-usage-counter-normalization' (tags reusable-helper, behavior-preservation, unknown-preservation; source scripts/prompt-cache-usage.mjs, reduced to count/counter/sum, normalizeUsage and formatUsage). The frozen formatUsage re-reads the raw provider counters, duplicating normalizeUsage. intendedBehavior: derive every number in formatUsage from normalizeUsage so counter normalization has one source, with byte-identical output. Criteria: format-output-preserved (exact strings for claude/codex complete usage, missing counters, codex cached>input -> usage=unknown, inconsistent reasoning, zero total -> hit=n/a, unsafe-integer sums); normalize-output-preserved (exact objects); single-counter-normalization (static: each raw counter field name - cache_read_input_tokens, cached_input_tokens, cache_creation_input_tokens - occurs at most once in the file, inside normalizeUsage, and formatUsage calls normalizeUsage). Corrected: the exact derivation (usage is known iff the normalized input, read and, for claude, write are all non-null). Plausible-wrong: also derives from normalizeUsage, but tests only inputTokens for the unknown branch, so codex cached>input prints numbers -> wrongMustFail 'format-output-preserved'.\nCASE 2 'refactor-chat-budget-consolidation' (tags behavior-preservation, cursor-safety; source util/chatPayload.ts + util/chatBacklog.ts, adapted). initialFiles: src/chatPayload.mjs (CHAT_MESSAGE_OVERHEAD_CHARS, chatMessageResponseCost, capChatMessagesToResponseBudget, truncateChatMessage(s) with a minimal truncateForBudget); src/chatBacklog.mjs (caps, then truncates); src/chatWaitDelivery.mjs (its own inline cost-accumulation loop duplicating the budget arithmetic, plus a cursor). intendedBehavior: consolidate per-message truncation and aggregate budgeting into ONE chatPayload helper, e.g. deliverChatPage(messages, maxContentChars, budget) -> { messages, dropped, cursor, truncated }, used by both callers. Preserve the at-least-one guarantee, exact cut points, truncation flags/lengths, and a cursor equal to the LAST DELIVERED id (null when nothing was delivered), so dropped messages stay unread. Criteria: page-output-preserved (exact views for fixed inputs through both callers); cursor-never-skips-omitted; oversized-first-message-delivered; single-budget-implementation (static: neither caller contains its own cost loop or calls chatMessageResponseCost; both import the consolidated helper). Corrected: the helper plus both callers using it. Plausible-wrong: the consolidated helper returns the last INPUT id as the cursor -> wrongMustFail 'cursor-never-skips-omitted'.\nPin snapshotDigest/assessmentDigest via digestFiles. Run only `npx vitest run src/benchmarks/refactorWorkloads.test.ts` in the isolated Linux copy; cases 1-2 controls green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
+      ],
+      "note": "Cases 1-2 are written. refactorWorkloads.ts exports REFACTOR_WORKLOADS = validateWorkloads([...]) and holds workload objects only.\n\nCase 1 (refactor-usage-counter-normalization): the fixture's formatUsage/normalizeUsage output equals the frozen script's on all 21 table inputs. I checked this by running both. Criteria:\n- format-output-preserved;\n- normalize-output-preserved;\n- single-counter-normalization: comment-stripped source, each raw counter field at most once (word-bounded), and normalizeUsage referenced at least twice.\n\nCase 2 (refactor-chat-budget-consolidation): chatPayload/chatBacklog/chatRead fixtures. The second caller is grounded in tools/chatRead.ts (its real inline cost loop) instead of the plan's hypothetical chatWaitDelivery.mjs, and that is disclosed in the note. Criteria:\n- page-output-preserved: cursor excluded, so only the cursor criterion owns the cursor;\n- cursor-never-skips-omitted;\n- oversized-first-message-delivered;\n- single-budget-implementation.\n\nControls are in the test file: corrected = exact derivation / deliverChatPage used by both callers. Wrong = an inputTokens-only unknown check, which fails exactly format-output-preserved, and an input-last cursor, which fails exactly cursor-never-skips-omitted.\n\nDigests were computed with tsx in a throwaway copy (/tmp/m03d-tools/digests.mts, outside the repo). Focused run in a fresh isolated Linux copy: both controls, both fails-loudly checks, both determinism tests, the ASCII guard and the sha guard pass (9 passed). The 10 failures are the expected case 3-5 and pinned-digest placeholders.",
+      "startedAt": "2026-10-24T14:35:07.933Z",
+      "completedAt": "2026-10-24T14:40:02.570Z"
     },
     {
       "stepId": "step-3",
       "description": "Cases 3-5 in the same two files, then freeze.\nCASE 3 'refactor-shared-path-normalization' (tags reusable-helper, behavior-preservation, windows-paths; source util/affectedFiles.ts + util/cachedPlanPaths.ts, adapted). initialFiles hold two callers, each with an IDENTICAL private copy of the normalization: src/planScope.mjs (normalizeScope(list): separators to '/', strip ./, reject traversal/absolute with the frozen messages, dedupe) and src/collisions.mjs (findCollisions(a, b, platform), which folds case only on win32/darwin; the platform argument keeps tests deterministic and the note says so). intendedBehavior: extract one shared module (e.g. src/affectedFiles.mjs exporting normalizeAffectedFile and pathKey(p, platform)) and make both callers use it with identical results. Criteria: plan-scope-preserved (exact table incl. backslashes, ./, Unicode, errors); collisions-preserved (win32/darwin fold 'Src/A.ts' with 'src/a.ts', linux does not); errors-preserved (exact messages); single-path-normalizer (static: the separator/traversal logic exists in one module; both callers import it and contain no backslash replace or toLowerCase). Corrected: the extraction. Plausible-wrong: a shared helper that ALWAYS folds case -> wrongMustFail 'collisions-preserved'.\nCASE 4 'refactor-detached-snapshot-returns' (tags behavior-preservation, detached-results; source delivery/executionProfile.ts AT 35cf53c, adapted: the fixture deliberately returns the validated INPUT object as the refactor target, and the note says so). initialFiles: src/errors.mjs (minimal invalidInput) and src/executionProfile.mjs (decodeProfile, readExecutionPolicySnapshot v1, resolveTaskExecutionProfile). intendedBehavior: return detached copies holding only the validated fields, with identical accept/reject behavior and messages. Criteria: returns-detached (result !== input; mutating either leaves the other intact; a frozen input yields a mutable copy); validation-preserved (exact table: an own extra key whose value is undefined is still rejected, as are class instances and inherited fields; null-prototype input is accepted; the safe-integer domain); messages-preserved; task-profile-unchanged. Corrected: decode fields, then build a fresh literal. Plausible-wrong: JSON-round-trips the input BEFORE validating (which silently drops the undefined-valued key) -> wrongMustFail 'validation-preserved'.\nCASE 5 'refactor-utf8-bounded-tail' (tags reusable-helper, behavior-preservation, utf8-boundary; source util/memorySettings.ts + state/checkRunStore.ts boundOutputTail, adapted). initialFiles: src/textBudget.mjs (truncateForBudget only), plus src/checkRunTail.mjs and src/verificationSummary.mjs, each with its own copy of the byte-tail algorithm (keep the last N UTF-8 bytes and skip leading continuation bytes). intendedBehavior: centralize one helper in src/textBudget.mjs (e.g. boundedUtf8Tail(text, maxBytes)) used by both callers, with byte-identical results. Criteria: tail-output-preserved (exact table: ASCII, CJK and emoji straddling the cut, exact fit, 0 bytes, empty); complete-characters (no U+FFFD introduced, the result re-encodes to the same bytes); byte-bound-respected; single-tail-helper (static: both callers import the helper and contain no Buffer slicing of their own). Corrected: the extraction. Plausible-wrong: a helper doing bytes.subarray(-max).toString('utf8') -> wrongMustFail 'complete-characters'.\nFreeze: pin snapshotDigest/assessmentDigest per workload and the five digestWorkload literals. Make the whole file green with focused runs in the isolated Linux copy.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
+      ],
+      "note": "Cases 3-5 added and the corpus frozen.\nCase 3: refactor-shared-path-normalization (intent single-path-normalizer; wrong variant pathKey always folds case -> fails collisions-preserved).\nCase 4: refactor-detached-snapshot-returns (intent returns-detached; wrong variant JSON deep copy -> fails validation-preserved).\nCase 5: refactor-utf8-bounded-tail (intent single-tail-helper; wrong variant raw byte cut -> fails byte-bound-respected, complete-characters and tail-output-preserved).\nsnapshotDigest/assessmentDigest are pinned per workload, and the five digestWorkload values are in PINNED_WORKLOAD_DIGESTS.\nFocused run in a fresh isolated Linux copy (HEAD archive + both owned files): 22/22 passed. No moe-workload-* temp dirs were left behind.\ntsc --noEmit is clean. The test file also typechecks via a temp tsconfig that sets types:[node] (TS 7 does not auto-load @types).\nBoth files are printable ASCII and contain no forbidden patterns.\nMutation probes (outside the repo): every case 3-5 behavior criterion catches at least one targeted mutation of the original.\nLine counts: the test file is about 520 lines and the dataset 1188, both over the 300-line guideline. The fixture/variant bytes must live in exactly these two owned files (siblings are the same: maintenance 858/451).",
+      "startedAt": "2026-10-24T14:40:03.579Z",
+      "completedAt": "2026-10-24T14:51:02.955Z"
     },
     {
       "stepId": "step-4",
       "description": "The one verification gate. Build a FRESH synchronized isolated copy (recipe in planningNotes; it must include the landed M03a contract), add the two owned files' working-tree bytes, and with Linux-only PATH run exactly: `cd <copy>/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/refactorWorkloads.test.ts` (fresh exit 0; report actual pass/skip counts). Then run `npx tsc --noEmit --incremental false` with the same PATH (the dataset compiles into dist; vitest does not typecheck). Repeat the focused run once to show repeatability and confirm no `moe-workload-*` temp dirs remain. Never touch the original Windows node_modules or any package-lock.json, and confirm the tested files are byte-identical (sha256) to the working tree. Keep the command and output tail for complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
+      ],
+      "note": "The verification gate passed. No bytes changed in this step; modifiedFiles lists the two owned files for attribution.\nSetup:\n- Fresh isolated copy /tmp/moe-m03d-test.wiM3ps (git archive HEAD, which includes the landed workloadSnapshot.ts) plus the two owned working-tree files, with Linux node_modules symlinked.\n- sha256 of the tested files equals the working tree: refactorWorkloads.ts ce748928..., refactorWorkloads.test.ts 54c1ea04....\n- package-lock.json sha matches the working tree. The Windows node_modules and the lockfile were not touched.\nResults (Linux-only PATH):\n- `npx vitest run src/benchmarks/refactorWorkloads.test.ts` -> exit 0, Test Files 1 passed, Tests 22 passed (22), 0 skipped.\n- `npx tsc --noEmit --incremental false` -> exit 0.\n- Repeat focused run -> exit 0, 22 passed (22).\n- No leftover moe-workload-* temp dirs.",
+      "startedAt": "2026-10-24T14:51:05.085Z",
+      "completedAt": "2026-10-24T14:51:26.071Z"
     },
     {
       "stepId": "step-5",
       "description": "Exactly one adversarial self-review of the two-file diff (load adversarial-self-review). Challenge each case. Does the original pass every behavior-preservation criterion and fail ONLY the structural/intent one (or detachment for case 4)? Does the corrected variant pass everything, and the wrong variant fail the named behavior criterion while passing the structural one? Are the behavior tables exact outputs of the original fixture (not re-derived from the corrected variant), and broad enough to catch real drift (unknown counters, cursor, platform folding, the undefined-key rejection, UTF-8 boundaries)? Can a static check be gamed by renaming or aliasing, or does it punish harmless formatting? Is a gratuitous rewrite rewarded anywhere? Is solution content leaking into initialFiles, intendedBehavior or the dataset module? Are the provenance notes honest (case 4's re-introduced aliasing return, the reduced files)? Are template-literal escapes and digests stable? Confirm: no production/daemon edit, no edit to workloadSnapshot.ts or sibling datasets, no Git or .moe writes, no benchmark/VM/readiness claims, and no substring from the project's global forbiddenPatterns (project.globalRails) in either file, fixture strings included. Fix findings with tests; if any byte changed after step 4, rerun the step-4 commands fresh and use that output for complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts",
         "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts",
+        "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts"
+      ],
+      "note": "Ran one adversarial self-review of both owned files. They are new and untracked, so I read the files instead of a git diff.\n\nFIXED (provenance):\n- Case 5 named the frozen function `normalizeVerification`; the actual function is `assertVerificationEvidence` in util/enforcement.ts. Corrected in the fixture header and the note.\n- The case 5 note now also discloses the simplified null/blank messages (frozen uses MISSING_REQUIRED and contract-suffixed text).\n- Cases 3, 4 and 5 notes now say the inlined errors put MoeError's codeName INVALID_INPUT in error.code; the frozen MoeError.code is numeric (-32602).\n\nVERIFIED BY EXECUTION:\n- Cross-check: the held-out assessments ran against shims over the actual frozen-commit TS (git archive 35cf53c8, loaded via tsx), with codeName mapped to code.\n  - Case 4: the frozen executionProfile.ts passes all 4 criteria.\n  - Case 3: frozen normalizeAffectedFiles/normalizeAffectedFile pass plan-scope, collisions and errors (the structural criterion fails only because the shim imports a different path).\n  - The notes' \"checked equal\" claims now rest on that run.\n- Mutation probes: every behavior criterion in cases 3-5 catches at least one targeted mutation of the original.\n- Every frozen symbol named in a note or header exists at the frozen commit.\n\nCONSIDERED, theoretical:\n- Static checks are substring-based on comment-stripped code. Case 5 'buffer' could flag an innocuous identifier such as outputBuffer in a caller. A determined candidate could also hide a copy under odd names, but the behavior criteria still guard semantics.\n- Namespace-import aliasing is accepted by importsAll.\n- The harness has a 60s spawn timeout and maxBuffer and clears NODE_OPTIONS; a signal or spawn error is never a pass.\n\nScope: no production, workloadSnapshot.ts, sibling-dataset, .moe or Git writes. Both files are printable ASCII with no forbidden patterns.\n\nDigests changed with the notes and the case 5 header. Re-pinned, and the step-4 gate re-run fresh on /tmp/moe-m03d-test.MdYu7m (sha256 equals the working tree):\n- vitest exit 0, 22/22 passed, twice.\n- tsc --noEmit exit 0; the test file typechecks with types:[node].\n- 0 leftover temp dirs.",
+      "startedAt": "2026-10-24T14:51:28.053Z",
+      "completedAt": "2026-10-24T14:54:58.724Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -77,20 +111,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.455Z",
-  "updatedAt": "2026-10-24T13:06:37.520Z",
+  "updatedAt": "2026-10-24T14:55:21.267Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:03:43.271Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-3617ccf7"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T13:06:37.422Z",
   "planningNotes": {
@@ -109,5 +151,19 @@
       "packages/moe-daemon/src/delivery/executionProfile.ts"
     ]
   },
-  "planApprovedAt": "2026-10-24T13:06:37.520Z"
+  "planApprovedAt": "2026-10-24T13:06:37.520Z",
+  "workStartedAt": "2026-10-24T14:27:48.655Z",
+  "reviewStartedAt": "2026-10-24T14:55:21.264Z",
+  "verification": {
+    "command": "cd <isolated copy>/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npx vitest run src/benchmarks/refactorWorkloads.test.ts",
+    "exitCode": 0,
+    "outputTail": "COPY=/tmp/moe-m03d-test.XfgCpA (git archive HEAD + working-tree refactorWorkloads.ts/.test.ts, cmp identical)\n RUN  v5.0.3 /tmp/moe-m03d-test.XfgCpA/packages/moe-daemon\n Test Files  1 passed (1)\n      Tests  22 passed (22)\n   Start at  17:55:06\n   Duration  2.12s (tests 94%, transform 4%, import 1%)\nexit=0\n(also this session after the final edits: npx tsc --noEmit --incremental false exit 0; the test file typechecks with types:[node]; a repeat focused run 22/22; 0 leftover moe-workload-* dirs)",
+    "reportedAt": "2026-10-24T14:55:21.264Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/refactorWorkloads.test.ts",
+    "packages/moe-daemon/src/benchmarks/refactorWorkloads.ts"
+  ],
+  "completionSummary": "Froze five refactor workloads in packages/moe-daemon/src/benchmarks/refactorWorkloads.ts (REFACTOR_WORKLOADS = validateWorkloads([...]) on the landed M03a contract), with category tests in refactorWorkloads.test.ts.\n\nThe five cases and their structural criteria:\n1. refactor-usage-counter-normalization: single-counter-normalization.\n2. refactor-chat-budget-consolidation: single-budget-implementation.\n3. refactor-shared-path-normalization: single-path-normalizer.\n4. refactor-detached-snapshot-returns: returns-detached.\n5. refactor-utf8-bounded-tail: single-tail-helper.\n\nThe executable controls run each case's unchanged held-out node:test assessment on a fresh coding snapshot:\n- The original fails ONLY the structural criterion.\n- The test-only corrected variant passes all criteria with exit 0.\n- The plausible-wrong variant keeps the structure but fails exactly the named behavior criteria:\n  - case 1: format-output-preserved\n  - case 2: cursor-never-skips-omitted\n  - case 3: collisions-preserved\n  - case 4: validation-preserved\n  - case 5: byte-bound-respected, complete-characters and tail-output-preserved\n\nThe tests also cover:\n- dataset validity\n- shared coverage tags\n- criterion naming\n- pinned per-case digests\n- held-out separation (no assessment or variant bytes in initialFiles or intendedBehavior; no *.test.mjs in the coding snapshot)\n- fail-loudly without MOE_WORKLOAD_CANDIDATE_ROOT\n- determinism and reset\n- an ASCII-only guard\n- sha256 guards over the grounding sources and the owned files\n\nProvenance was checked by running the assessments against the actual frozen-commit TypeScript, with MoeError's numeric code mapped to its codeName:\n- Case 3: the frozen normalizer passes all behavior criteria.\n- Case 4: the frozen module passes all four criteria.\n- The notes disclose every adaptation, including case 4's deliberately re-introduced aliasing return and case 5's reduced assertVerificationEvidence.\n\nMutation probes confirm every case 3-5 behavior criterion is non-v"
 }

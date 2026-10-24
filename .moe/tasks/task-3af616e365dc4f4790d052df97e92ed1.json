@@ -107,7 +107,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.397Z",
-  "updatedAt": "2026-10-24T14:44:28.779Z",
+  "updatedAt": "2026-10-24T14:45:21.467Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:00:09.616Z",
     "plannedStepCount": 5,
@@ -163,7 +163,8 @@
     "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts",
     "packages/moe-daemon/src/benchmarks/defectWorkloads.ts",
     ".moe/tasks/task-3af616e365dc4f4790d052df97e92ed1.json",
-    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json"
+    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
+    ".moe/tasks/task-0f7df75fa8e44a75bf8547e53f48d5d5.json"
   ],
   "completionSummary": "Delivered two new files, and nothing else changed: packages/moe-daemon/src/benchmarks/defectWorkloads.ts, which exports DEFECT_WORKLOADS = validateWorkloads([...]), and defectWorkloads.test.ts.\n\nThere are five frozen defect cases on the landed M03a contract, at commit 35cf53c, with pinned digests:\n1. **stale-positive-readiness-helper:** a stale note claims an isExecutionProfileReady env bypass.\n2. **stale-negative-integer-option:** a stale note says no normalizer exists; the fix must call normalizeIntegerOption.\n3. **changed-caller-chat-budget:** the caller now passes an options object; legacy positional calls must still work.\n4. **changed-requirements-delivery-policy:** strict decoding; observe never relaxes; verified-local is not ready.\n5. **recipe-mismatch-platform:** shape, then platform, then runtime selection, using only an injected exec spy.\n\nEach case ships one inert stale artifact under context/ or recipes/. It has a staleness header and synthetic provenance, and source.note discloses every deviation, including case 4's re-introduced lenient branch and case 5's synthetic selector.\n\nControls run the unchanged node:test rubric against fresh snapshots and pin the exact failed sets. In every case, the original fails intended-change criteria, the test-only corrected variant passes all of them (even with the stale artifact deleted), and the plausible-wrong variant fails its named criterion.\n\nSelf-review hardened case 2's reuse check: it now requires a call to normalizeIntegerOption and bans `\\bthrow\\b`. A probe confirmed that a gaming variant is now rejected.\n\nFresh isolated Linux copy:\n- vitest: 28/28, twice;\n- tsc: exit 0;\n- the test file typechecks;\n- a CRLF copy passes 28/28;\n- 0 leftover temp dirs.\n\nThere are no production, contract, sibling, Git or .moe edits, and no benchmark, VM or readiness claims.",
   "commits": [
@@ -184,18 +185,36 @@
       "treeId": "88f4dcd155f71532de12311fbe1e2b7e77ca76c7",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "f6b3d216c6531e654cf1ab7916015bce29d6d2d7",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T14:39:37Z",
+      "paths": [
+        ".moe/tasks/task-0f7df75fa8e44a75bf8547e53f48d5d5.json",
+        ".moe/tasks/task-3af616e365dc4f4790d052df97e92ed1.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T14:45:21.467Z",
+      "treeId": "84ebcd5414b3ccad63005c185c7cae17dfa8a945",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/benchmarks/defectWorkloads.test.ts",
     "packages/moe-daemon/src/benchmarks/defectWorkloads.ts"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md"
+  ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-24T14:14:33Z",
-    "at": "2026-10-24T14:33:29.972Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T14:39:37Z",
+    "at": "2026-10-24T14:45:21.467Z"
   },
   "completedAt": "2026-10-24T14:44:28.779Z",
   "reviewCompletedAt": "2026-10-24T14:44:28.779Z",
