@@ -158,8 +158,8 @@ export type ExecutionProfile = 'legacy' | 'observe' | 'verified-local';
  * NOT plan approval, a model receipt, runner trust, isolation readiness, a
  * required-check definition, a delivery destination or verified completion.
  * Decode it with readExecutionPolicySnapshot (delivery/executionProfile.ts);
- * task persistence is taskStore's; attempt capture and admission are later
- * rollout work.
+ * task persistence is taskStore's; attempt capture is the claim path's;
+ * admission is later rollout work.
  */
 export type ExecutionPolicySnapshot = ExecutionPolicySnapshotV1 | ExecutionPolicySnapshotV2;
 
@@ -1156,10 +1156,13 @@ export interface ExecutionAttempt {
   presenceKind?: AttemptPresenceKind;
   presenceAt?: string;
   /**
-   * Configuration identity (see ExecutionPolicySnapshot). Absent on every
-   * existing record; no daemon path writes or trusts it yet (capture and
-   * ownership guards are separate rollout work). Decode it with
-   * readExecutionPolicySnapshot and never read it as approval or readiness.
+   * Configuration identity (see ExecutionPolicySnapshot). Captured once by the
+   * claim path (tools/claimNextTask.ts deriveAttemptPolicySnapshot) when a NEW
+   * attempt opens; repair and own-seat resume keep the original, and a
+   * successor records a fresh identity. Never rewritten or backfilled, so it is
+   * absent on every record opened before capture existed. Readers get detached
+   * copies. Decode it with readExecutionPolicySnapshot and never read it as
+   * approval or readiness.
    */
   executionPolicySnapshot?: ExecutionPolicySnapshot;
 }

@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { Task, TaskCommit } from '../types/schema.js';
+import type { ExecutionPolicySnapshot, ExecutionProfile, Task, TaskCommit } from '../types/schema.js';
 import { invalidInput, invalidState, notFound } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { contextNextAction } from '../util/contextNextAction.js';
@@ -10,6 +10,12 @@ import { listCandidatesForTask } from '../state/candidateStore.js';
 import { contextStatus } from '../util/contextStatus.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
 import { routingInfo } from '../util/routing.js';
+import { currentAttempt } from '../state/attemptStore.js';
+import {
+  readExecutionPolicySnapshot,
+  resolveExecutionProfile,
+  resolveTaskExecutionProfile,
+} from '../delivery/executionProfile.js';
 
 /**
  * Sections dropped from a QA caller's default payload: no QA doc or skill reads
@@ -60,6 +66,69 @@ function taskLanded(task: Task, commits: TaskCommit[]): boolean {
   return commits.some((c) => c.kind === 'completion' && c.pushed === true)
     || task.status === 'REVIEW'
     || task.status === 'DONE';
+}
+
+/** get_context's `executionPolicy`; see executionPolicyContext. */
+interface ExecutionPolicyContext {
+  effectiveProfile: ExecutionProfile | null;
+  taskSnapshot: ExecutionPolicySnapshot | null;
+  attemptSnapshot: ExecutionPolicySnapshot | null;
+  unreadable?: string[];
+}
+
+/** Decode one record; a failure is named in `unreadable` and served as null, never echoed or thrown. */
+function decoded<T>(unreadable: string[], name: string, decode: () => T): T | null {
+  try {
+    return decode();
+  } catch {
+    unreadable.push(name);
+    return null;
+  }
+}
+
+/**
+ * The task's execution-profile configuration identity: the profile that governs
+ * it (the live setting floored by a stored verified-local snapshot, through the
+ * one rule the progression backstop, claim admission and delivery selection
+ * share), its plan-submission snapshot, and the snapshot of its open attempt
+ * (running, finalizing or reconciling; null with none). Configuration identity
+ * only: never approval, readiness, runner trust, delivery verification or
+ * completion. effectiveProfile names the governing profile, not its readiness:
+ * verified-local is unconditionally unavailable (assertExecutionProfileReady).
+ * Never writes. Snapshots are decoded into fresh primitive-only objects, so the
+ * response never aliases stored state.
+ *
+ * Undefined when the setting, the task snapshot and the open attempt's snapshot
+ * are all absent, so a project that never used profiles sees a byte-identical
+ * payload (the currentCandidate precedent).
+ *
+ * Error handling: each record is read on its own. One that does not decode is
+ * served as null and named in `unreadable` ('settings.executionProfile',
+ * 'taskSnapshot', 'attemptSnapshot'), so a hand-edited record never breaks the
+ * read and its raw value and error text are never served. effectiveProfile is
+ * null when the setting or the task snapshot is unreadable.
+ */
+function executionPolicyContext(state: StateManager, task: Task): ExecutionPolicyContext | undefined {
+  const settings = state.project?.settings;
+  const unreadable: string[] = [];
+  const liveProfile = decoded(unreadable, 'settings.executionProfile', () => resolveExecutionProfile(settings));
+  const taskSnapshot = decoded(unreadable, 'taskSnapshot', () => readExecutionPolicySnapshot(task.executionPolicySnapshot) ?? null);
+  // currentAttempt copies the stored snapshot, which overflows on a hand-edited one nested too deep: read it under the guard.
+  const attemptSnapshot = decoded(unreadable, 'attemptSnapshot',
+    () => readExecutionPolicySnapshot(currentAttempt(state, task.id)?.executionPolicySnapshot) ?? null);
+  if (
+    settings?.executionProfile === undefined
+    && task.executionPolicySnapshot === undefined
+    && attemptSnapshot === null
+    && unreadable.length === 0
+  ) return undefined;
+  const judged = liveProfile !== null && !unreadable.includes('taskSnapshot');
+  return {
+    effectiveProfile: judged ? resolveTaskExecutionProfile(settings, task.executionPolicySnapshot) : null,
+    taskSnapshot,
+    attemptSnapshot,
+    ...(unreadable.length > 0 ? { unreadable } : {}),
+  };
 }
 import { DEFAULT_CHAT_CONTEXT_CHARS, DEFAULT_CHAT_CONTEXT_LIMIT, truncateChatMessage } from '../util/chatPayload.js';
 import {
@@ -319,6 +388,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       // the field vanish exactly when a reviewer re-reads a reopened task.
       const taskCandidates = task ? listCandidatesForTask(state, task.id) : [];
       const currentCandidate = taskCandidates.length > 0 ? taskCandidates[taskCandidates.length - 1] : undefined;
+      const executionPolicy = task ? executionPolicyContext(state, task) : undefined;
       // Role trim applies only to the default view; view:"full" is never gated by role.
       const callerRole = params.view !== 'full' && task && callerWorkerId
         ? resolveWorkerRole(state, callerWorkerId) : undefined;
@@ -441,6 +511,8 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         // Omitted entirely (not null) when the task has no candidate, so a
         // project that has never recorded one sees a byte-identical payload.
         ...(currentCandidate ? { currentCandidate } : {}),
+        // Omitted entirely when no profile data exists (see executionPolicyContext).
+        ...(executionPolicy ? { executionPolicy } : {}),
         worker: assignedWorker
           ? {
               id: assignedWorker.id,

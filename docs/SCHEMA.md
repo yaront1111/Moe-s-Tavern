@@ -153,6 +153,14 @@ interface ProjectSettings {
   // mid-epic tasks stay lean. 'everyTask': every worker completion.
   qualityGateScope?: 'epicFinal' | 'everyTask';
 
+  // Which execution profile governs tasks (packages/moe-daemon/src/delivery/executionProfile.ts).
+  // Absent = 'legacy': today's behaviour. 'observe' changes no gate and never
+  // weakens deliveryPolicy. 'verified-local' is refused EXECUTION_PROFILE_NOT_READY
+  // until local isolation, trusted runner evidence and revision-bound delivery are
+  // certified. Any other value is refused as invalid input, never read as the
+  // default. See `executionPolicySnapshot` below.
+  executionProfile?: 'legacy' | 'observe' | 'verified-local';
+
   // What moe.qa_approve requires before DONE (packages/moe-daemon/src/delivery/policy.ts).
   // Absent or null = 'legacy': the soft NO-COMPLETION-COMMIT warning, approval
   // always lands. Strict values refuse approval with DELIVERY_EVIDENCE_MISSING
@@ -392,6 +400,11 @@ interface Task {
   // Monotonic version of the approval-relevant plan surface
   // (implementationPlan + definitionOfDone). Daemon-owned; see `planRevision` below.
   planRevision?: number;
+
+  // Configuration identity (executionProfile + deliveryPolicy) captured with the
+  // committed planRevision. Daemon-owned; never approval or readiness. See
+  // `executionPolicySnapshot` below.
+  executionPolicySnapshot?: ExecutionPolicySnapshot;
   
   // Status
   status: TaskStatus;
@@ -694,6 +707,24 @@ Atomicity and errors:
 - `moe.submit_plan` returns the committed value as `planRevision` in its success result (never a recomputed or later-cached number).
 
 **Scope note:** this section is the *producer*. The consumer side has since landed: an optional `expectedPlanRevision` on both `/ws` approval routes refuses a stale approval with `PLAN_REVISION_MISMATCH` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), and the JetBrains plan-review dialog and the VS Code plan-review panel each send the revision they actually rendered. It is still not a universal fence: omitting the token remains a legal legacy approval, the other board/detail approve entry points stay token-free, and SPEED/TURBO auto-approval is unchanged — so a stamped revision documents staleness everywhere but only *prevents* a stale approval on the paths that send it. Cross-client behaviour, reproduction steps and the exact boundaries are in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+
+### `executionPolicySnapshot`
+
+`Task.executionPolicySnapshot` records which `executionProfile` and `deliveryPolicy` were configured when the plan was submitted, and the `planRevision` it was submitted at. It is **configuration identity only**: never plan approval, readiness, runner trust, verified delivery or completion. The addition is additive, with no `schemaVersion` bump and no migration; a task without it was planned before it existed.
+
+```typescript
+type ExecutionPolicySnapshot =
+  | { version: 1; profile: 'legacy' | 'observe' | 'verified-local'; planRevision: number }
+  | { version: 2; profile: 'legacy' | 'observe' | 'verified-local'; planRevision: number;
+      deliveryPolicy: 'legacy' | 'local-branch' | 'remote-push' | 'merged-pull-request' | 'manual-artifact' };
+```
+
+- **Shapes.** A v1 snapshot has exactly the keys `version`, `profile` and `planRevision`; a v2 snapshot has exactly `version`, `profile`, `planRevision` and `deliveryPolicy`. `planRevision` is a non-negative safe integer. Decoding (`readExecutionPolicySnapshot`) is strict and returns a fresh primitive-only copy; any other key set, version, profile, revision or policy is malformed. A v2 `deliveryPolicy` is never defaulted, and a v1 snapshot never gains one. The daemon captures v2.
+- **Capture.** Only the `PLAN_SUBMITTED` write (`moe.submit_plan`) captures it, in the same fresh `Task` object and the same write as the `planRevision` it names, recording the live `executionProfile` and `deliveryPolicy`. A stored `verified-local` snapshot is a floor and is kept whole: only its `planRevision` advances, so a rollback cannot lower it. Approval, progress, metadata, status and replanning writes (`request_replan`, `amend_plan_step`, reopen) never refresh, backfill or erase it, so a snapshot from an earlier revision is kept until the next submission. A malformed stored snapshot or live setting refuses the submission with `INVALID_INPUT` before any write.
+- **Ownership.** Daemon-owned. `taskStore.updateTask` strips it from every caller update, MCP tools and the plugin `UPDATE_TASK` alike (whose denylist also drops it), and `create_task` never copies it.
+- **Consumers.** A task is strict when its effective profile is `verified-local`: the live `executionProfile`, floored by a stored `verified-local` snapshot of any version or revision (`resolveTaskExecutionProfile`). The progression backstop in `taskStore.updateTask`, claim admission (`util/claimEligibility.ts`, shared by `claim_next_task` and `wait_for_task`) and delivery-policy selection (`resolveTaskDeliveryPolicy`, used by `qa_approve` and the dependency gate) all use that one rule, and today each refuses a strict task with `-32003` / `EXECUTION_PROFILE_NOT_READY`. A malformed snapshot or setting fails closed with `INVALID_INPUT` only where it is judged; reads, metadata writes, releases and cleanup never fail on it (`moe.get_context` names it in `executionPolicy.unreadable`). Legacy and observe tasks keep the **live** `deliveryPolicy`; a captured one is identity only and is never consulted.
+- **Attempts.** A claim that opens an attempt records `ExecutionAttempt.executionPolicySnapshot` from the task's floor plus the live settings at the task's `planRevision` (`deriveAttemptPolicySnapshot`), never from claim arguments. An own-seat resume adopts the open attempt with its original snapshot (or none), and phase changes (restart parking, reattach) keep it; a successor attempt records a fresh one. It is never rewritten or backfilled.
+- **Serving.** `moe.get_context` serves both, decoded, as `executionPolicy` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)).
 
 ### Task subtypes
 
@@ -1071,6 +1102,7 @@ interface ExecutionAttempt {
   host?: string;              // A hint that narrows which process, never proof that it is alive
   presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'; // Latest moe.heartbeat self-report, not verified
   presenceAt?: string;        // When it was reported; never touches lastPhaseAt
+  executionPolicySnapshot?: ExecutionPolicySnapshot; // Captured at claim; absent on attempts opened before it existed
 }
 ```
 
