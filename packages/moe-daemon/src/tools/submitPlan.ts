@@ -2,7 +2,8 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Effort, ProjectSettings, TaskStatus } from '../types/schema.js';
 import { MAX_CRITIQUE_BLOCKS_DEFAULT } from '../types/schema.js';
-import { checkPlanRails } from '../util/rails.js';
+import { checkPlanRails, type RailsCheckResult } from '../util/rails.js';
+import { validateExecutionContract, MAX_CONTRACT_BEHAVIOR_CHARS, MAX_CONTRACT_LIST_ITEMS, MAX_CONTRACT_ITEM_CHARS } from '../state/validators.js';
 import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles, findMissingPaths, pathKey } from '../util/affectedFiles.js';
@@ -142,6 +143,35 @@ export function rearmSpeedModeApprovals(state: StateManager): void {
   }
 }
 
+/** Keep step and contract rail refusals identical, including the escape hatch. */
+function assertPlanRails(railsCheck: RailsCheckResult, taskId: string): void {
+  if (!railsCheck.ok) {
+    // Steer the agent toward the escape hatch when the rail is wrong for
+    // this task (rare but legitimate). The default path is still to fix
+    // the plan — propose_rail is only for when the rail itself is the
+    // bug, not when the plan skipped a required pattern.
+    const v = railsCheck.violation || {};
+    const message =
+      `Rail violation: ${JSON.stringify(v)}. ` +
+      `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
+      `Escape hatch: if this rail is genuinely wrong for task ${taskId} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
+      `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${taskId}", currentValue, proposedValue, reason, workerId } ` +
+      `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
+    throw new MoeError(
+      MoeErrorCode.CONSTRAINT_VIOLATION,
+      message,
+      {
+        violation: v,
+        suggestedAction: {
+          tool: 'moe.propose_rail',
+          reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
+        }
+      },
+      'CONSTRAINT_VIOLATION'
+    );
+  }
+}
+
 export function submitPlanTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.submit_plan',
@@ -170,6 +200,20 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             required: ['description'],
             additionalProperties: false
           }
+        },
+        executionContract: {
+          type: 'object', additionalProperties: false,
+          description: 'Optional execution intent: behavior <=2000 chars; lists <=50 items of <=1000 chars. File scope stays in steps. Resubmission replaces it (omitted = none, clears stored contract); changes advance planRevision.',
+          properties: {
+            intendedBehavior: { type: 'string', maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, description: 'Observable behavior or outcome.' },
+            acceptanceCriteria: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Behavior-level criteria; definitionOfDone stays human-owned.' },
+            invariants: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Properties that must remain true.' },
+            compatibility: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Legacy data, wire shapes and callers to preserve.' },
+            approvedScope: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Symbols, interfaces and producer-consumer surfaces; no second file list.' },
+            reuse: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Existing implementations reused, or why a new one is needed.' },
+            sourceAssumptions: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Source facts with path and symbol references.' },
+            checkRefs: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Required verification commands, exactly as run.' },
+          },
         },
         workerId: { type: 'string' },
         tier: {
@@ -218,6 +262,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           model?: unknown;
           codexModel?: unknown;
           acceptsAccountSwitch?: unknown;
+          executionContract?: unknown;
           steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[];
           planningNotes?: {
             approachesConsidered?: string;
@@ -288,6 +333,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           });
         }
 
+        const executionContract = validateExecutionContract(params.executionContract, 'executionContract');
+
         const epic = state.getEpic(task.epicId);
         const project = state.project;
         if (!project) throw notFound('Project', 'current');
@@ -299,30 +346,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           .join(' ');
 
         const railsCheck = checkPlanRails(planText, project.globalRails, epic, task);
-        if (!railsCheck.ok) {
-          // Steer the agent toward the escape hatch when the rail is wrong for
-          // this task (rare but legitimate). The default path is still to fix
-          // the plan — propose_rail is only for when the rail itself is the
-          // bug, not when the plan skipped a required pattern.
-          const v = railsCheck.violation || {};
-          const message =
-            `Rail violation: ${JSON.stringify(v)}. ` +
-            `Default action: revise the plan to satisfy this rail and resubmit moe.submit_plan. ` +
-            `Escape hatch: if this rail is genuinely wrong for task ${task.id} (e.g., a forbidden pattern that's a false positive, or a required phrase that doesn't fit), call ` +
-            `moe.propose_rail { proposalType: "ADD_RAIL" | "MODIFY_RAIL" | "REMOVE_RAIL", targetScope: "GLOBAL" | "EPIC" | "TASK", taskId: "${task.id}", currentValue, proposedValue, reason, workerId } ` +
-            `to request a human-approved rail change. Do NOT loop between resubmits if the rail is the real blocker — propose the change.`;
-          throw new MoeError(
-            MoeErrorCode.CONSTRAINT_VIOLATION,
-            message,
-            {
-              violation: v,
-              suggestedAction: {
-                tool: 'moe.propose_rail',
-                reason: 'Use this only if the rail itself is wrong for this task; otherwise fix the plan and resubmit.'
-              }
-            },
-            'CONSTRAINT_VIOLATION'
-          );
+        assertPlanRails(railsCheck, task.id);
+        if (executionContract !== undefined) {
+          const contractText = Object.values(executionContract).flat().join(' ');
+          assertPlanRails(checkPlanRails(contractText, { ...project.globalRails, requiredPatterns: [] }, epic, task), task.id);
         }
 
         // Plan-size gate: oversized tasks fail at coin-flip rates and grind QA —
@@ -464,6 +491,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           planSubmittedAt: new Date().toISOString(),
           metrics: updatedMetrics,
         };
+        // Replace semantics, without adding an own undefined key to legacy tasks.
+        if (executionContract !== undefined || task.executionContract !== undefined) {
+          updatePayload.executionContract = executionContract ?? null;
+        }
         if (params.planningNotes) {
           updatePayload.planningNotes = {
             approachesConsidered: params.planningNotes.approachesConsidered?.slice(0, 5000),

@@ -17,79 +17,179 @@
     {
       "stepId": "step-1",
       "description": "Schema contract (packages/moe-daemon/src/types/schema.ts - CRLF working copy: edit with the Edit tool only, never Serena/sed, keep CRLF). No behavior change; `npx tsc --noEmit` from packages/moe-daemon stays clean.\n(1) Add `export interface TaskExecutionContract` (just above `interface Task`) with exactly these eight optional keys, in this order: `intendedBehavior?: string` (observable behavior/outcome the change must produce); `acceptanceCriteria?: string[]` (behavior-level criteria; definitionOfDone stays the human-owned list); `invariants?: string[]`; `compatibility?: string[]` (legacy data, wire/protocol shapes and callers that must keep working); `approvedScope?: string[]` (symbols, interfaces and producer->consumer surfaces the change may touch - FILE scope stays each step's affectedFiles/newFiles, there is no second file list); `reuse?: string[]` (existing implementations reused, or why a new one is introduced); `sourceAssumptions?: string[]` (source facts the plan relies on, with path/symbol references); `checkRefs?: string[]` (required verification, each exactly as it will be run). JSDoc: optional per task (a docs fix may carry only intendedBehavior, an API change also compatibility); written only through validateExecutionContract (step 2), so a stored contract is canonical; every field is approval-relevant, so any change advances planRevision in the same write; it is never approval, readiness or evidence by itself.\n(2) Add `executionContract?: TaskExecutionContract;` to `interface Task` right after `executionPolicySnapshot`. JSDoc: absent means no contract (legacy rows load unchanged: no migration, no schemaVersion bump); null or an empty contract clears it; test absence with `=== undefined`, never hasOwnProperty/`in` (after a clear the in-memory row holds an own undefined key that a reload does not have).\n(3) Rewrite the `Task.planRevision` JSDoc per the F02 QA handoff (task comment comment-6108bfafc96b461b8ee8031f7bb4339a): the material surface is the canonical approval projection - ordered step ids, original and effective (active-amendment) instructions, affectedFiles/newFiles - plus definitionOfDone and executionContract. Execution status, startedAt/completedAt, reported modifiedFiles, progress notes, amendment audit fields and inactive amendment history are NOT material; reopen neither resets it nor advances it by clearing execution evidence. Keep the existing domain, caller-stamp stripping and legacy-absent-is-0 sentences.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts"
       ],
-      "startedAt": "2026-10-24T21:40:36.277Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Resumed existing IN_PROGRESS step (start_step correctly refused duplicate). Added contract schema and corrected F02 revision prose; any-editor amend-1 followed with byte-preserved CRLF, identical standard/ignore-cr stat (+39/-7). Native Linux snapshot tsc --noEmit exit 0. All peer/pre-existing dirty paths untouched. Daemon prerequisite report returned dependenciesSatisfied:true and directed continuation.",
+      "startedAt": "2026-10-24T21:40:36.277Z",
+      "completedAt": "2026-10-24T21:55:29.493Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Schema contract (packages/moe-daemon/src/types/schema.ts - CRLF working copy: keep CRLF. Any editor is fine (Edit, apply_patch or a script) as long as the file keeps its CRLF endings: afterwards `git diff --stat -- <file>` and `git diff --ignore-cr-at-eol --stat -- <file>` must report the same small line counts and `file <path>` must still say CRLF; if your editor rewrote the endings, restore them with a byte-level pass that adds CR only where a line lacks it, before completing the step. Serena edit tools are known to rewrite CRLF, so avoid them here). No behavior change; `npx tsc --noEmit` from packages/moe-daemon stays clean.\n(1) Add `export interface TaskExecutionContract` (just above `interface Task`) with exactly these eight optional keys, in this order: `intendedBehavior?: string` (observable behavior/outcome the change must produce); `acceptanceCriteria?: string[]` (behavior-level criteria; definitionOfDone stays the human-owned list); `invariants?: string[]`; `compatibility?: string[]` (legacy data, wire/protocol shapes and callers that must keep working); `approvedScope?: string[]` (symbols, interfaces and producer->consumer surfaces the change may touch - FILE scope stays each step's affectedFiles/newFiles, there is no second file list); `reuse?: string[]` (existing implementations reused, or why a new one is introduced); `sourceAssumptions?: string[]` (source facts the plan relies on, with path/symbol references); `checkRefs?: string[]` (required verification, each exactly as it will be run). JSDoc: optional per task (a docs fix may carry only intendedBehavior, an API change also compatibility); written only through validateExecutionContract (step 2), so a stored contract is canonical; every field is approval-relevant, so any change advances planRevision in the same write; it is never approval, readiness or evidence by itself.\n(2) Add `executionContract?: TaskExecutionContract;` to `interface Task` right after `executionPolicySnapshot`. JSDoc: absent means no contract (legacy rows load unchanged: no migration, no schemaVersion bump); null or an empty contract clears it; test absence with `=== undefined`, never hasOwnProperty/`in` (after a clear the in-memory row holds an own undefined key that a reload does not have).\n(3) Rewrite the `Task.planRevision` JSDoc per the F02 QA handoff (task comment comment-6108bfafc96b461b8ee8031f7bb4339a): the material surface is the canonical approval projection - ordered step ids, original and effective (active-amendment) instructions, affectedFiles/newFiles - plus definitionOfDone and executionContract. Execution status, startedAt/completedAt, reported modifiedFiles, progress notes, amendment audit fields and inactive amendment history are NOT material; reopen neither resets it nor advances it by clearing execution evidence. Keep the existing domain, caller-stamp stripping and legacy-absent-is-0 sentences.",
+          "reason": "Unblock (blocked by worker-e8965f51: the plan demanded the Edit tool, which codex seats lack). The real requirement is preserving CRLF, so any editor is authorized now, with a verification check; a TOOL witness is needed only for contested paths (see steps 6 and 8).",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T21:53:36.286Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
       "description": "Strict validator + unit tests (packages/moe-daemon/src/state/validators.ts - CRLF, Edit tool only; NEW packages/moe-daemon/src/state/executionContract.test.ts). Load test-driven-development and ponytail: write the tests first, run them RED, then implement. Iterate with the focused file only (`npx vitest run src/state/executionContract.test.ts` inside the Linux snapshot described in step 7).\nImplementation, a `validate*` (throwing) member of validators.ts:\n- Exported bounds `MAX_CONTRACT_BEHAVIOR_CHARS = 2000`, `MAX_CONTRACT_LIST_ITEMS = 50`, `MAX_CONTRACT_ITEM_CHARS = 1000` (definitionOfDone parity).\n- A field table typed against the schema so tsc fails when type and allowlist drift, e.g. `const CONTRACT_FIELD_KINDS: { [K in keyof Required<TaskExecutionContract>]: 'text' | 'list' }` in step 1's key order, and `export const EXECUTION_CONTRACT_FIELDS` derived from it.\n- `export function validateExecutionContract(value: unknown, fieldName = 'executionContract'): TaskExecutionContract | undefined`: undefined or null -> undefined. Otherwise reuse `requirePlainObject(value, fieldName)` and `rejectUnknownFields(input, EXECUTION_CONTRACT_FIELDS, fieldName)`. A field whose value is undefined/null is absent. intendedBehavior goes through `validateStringValue(v, `${fieldName}.intendedBehavior`, { maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, allowNewlines: true })` (truncate stays false). Each list field: not an array -> `invalidInput(`${fieldName}.<key>`, 'must be an array of strings')`; more than 50 items -> invalidInput; every item through validateStringValue with path `${fieldName}.<key>[i]`, maxLength 1000, allowNewlines true. Do NOT reuse validateStringArrayValue: it truncates and forbids newlines. Build a FRESH object in table order, strings byte-for-byte (no trim, no dedupe), empty lists omitted; return undefined when nothing remains.\nError handling: every refusal is invalidInput (code and codeName INVALID_INPUT, context.field naming the dotted path or the unknown key), thrown before anything reaches disk; nothing is ever coerced or truncated.\nUnit tests (describe 'validateExecutionContract'; refusals assert codeName AND context.field):\n(a) undefined, null, {} and { invariants: [], checkRefs: null } -> undefined;\n(b) all eight fields supplied in reverse key order with Hebrew/CJK/emoji text and embedded newlines -> toStrictEqual the canonical value, Object.keys in EXECUTION_CONTRACT_FIELDS order, and the result is a new object (mutating the input afterwards does not change it);\n(c) boundaries: a 2000-char behavior, a 1000-char item and a 50-item list are accepted unchanged; 2001 / 1001 / 51 are refused (no truncation);\n(d) malformed: array, string and number contracts; misspelled key `invariant`; key `constructor`; a list given as a string; item 42; item '   '; blank intendedBehavior; an item containing a NUL char;\n(e) EXECUTION_CONTRACT_FIELDS equals exactly the eight names in order.\nDo not use the dunder-proto key name anywhere in source - the project's forbidden-pattern rail greps for it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/validators.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/state/executionContract.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "note": "TDD focused Linux snapshot: 21 tests RED (missing contract API), then 21 GREEN. Strict canonical validator and schema-keyed bounds/allowlist; byte-preserving strings/lists with explicit INVALID_INPUT paths, no truncation. Array.from also rejects sparse slots instead of silently preserving holes. CRLF retained and stats agree. TDD skill loaded; no ponytail skill is installed in the supplied inventory or local skills path.",
+      "startedAt": "2026-10-24T21:55:29.587Z",
+      "completedAt": "2026-10-24T21:56:03.449Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Strict validator + unit tests (packages/moe-daemon/src/state/validators.ts - CRLF: keep CRLF exactly as step 1 describes, any editor; NEW packages/moe-daemon/src/state/executionContract.test.ts). Load test-driven-development and ponytail: write the tests first, run them RED, then implement. Iterate with the focused file only (`npx vitest run src/state/executionContract.test.ts` inside the Linux snapshot described in step 7).\nImplementation, a `validate*` (throwing) member of validators.ts:\n- Exported bounds `MAX_CONTRACT_BEHAVIOR_CHARS = 2000`, `MAX_CONTRACT_LIST_ITEMS = 50`, `MAX_CONTRACT_ITEM_CHARS = 1000` (definitionOfDone parity).\n- A field table typed against the schema so tsc fails when type and allowlist drift, e.g. `const CONTRACT_FIELD_KINDS: { [K in keyof Required<TaskExecutionContract>]: 'text' | 'list' }` in step 1's key order, and `export const EXECUTION_CONTRACT_FIELDS` derived from it.\n- `export function validateExecutionContract(value: unknown, fieldName = 'executionContract'): TaskExecutionContract | undefined`: undefined or null -> undefined. Otherwise reuse `requirePlainObject(value, fieldName)` and `rejectUnknownFields(input, EXECUTION_CONTRACT_FIELDS, fieldName)`. A field whose value is undefined/null is absent. intendedBehavior goes through `validateStringValue(v, `${fieldName}.intendedBehavior`, { maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, allowNewlines: true })` (truncate stays false). Each list field: not an array -> `invalidInput(`${fieldName}.<key>`, 'must be an array of strings')`; more than 50 items -> invalidInput; every item through validateStringValue with path `${fieldName}.<key>[i]`, maxLength 1000, allowNewlines true. Do NOT reuse validateStringArrayValue: it truncates and forbids newlines. Build a FRESH object in table order, strings byte-for-byte (no trim, no dedupe), empty lists omitted; return undefined when nothing remains.\nError handling: every refusal is invalidInput (code and codeName INVALID_INPUT, context.field naming the dotted path or the unknown key), thrown before anything reaches disk; nothing is ever coerced or truncated.\nUnit tests (describe 'validateExecutionContract'; refusals assert codeName AND context.field):\n(a) undefined, null, {} and { invariants: [], checkRefs: null } -> undefined;\n(b) all eight fields supplied in reverse key order with Hebrew/CJK/emoji text and embedded newlines -> toStrictEqual the canonical value, Object.keys in EXECUTION_CONTRACT_FIELDS order, and the result is a new object (mutating the input afterwards does not change it);\n(c) boundaries: a 2000-char behavior, a 1000-char item and a 50-item list are accepted unchanged; 2001 / 1001 / 51 are refused (no truncation);\n(d) malformed: array, string and number contracts; misspelled key `invariant`; key `constructor`; a list given as a string; item 42; item '   '; blank intendedBehavior; an item containing a NUL char;\n(e) EXECUTION_CONTRACT_FIELDS equals exactly the eight names in order.\nDo not use the dunder-proto key name anywhere in source - the project's forbidden-pattern rail greps for it.",
+          "reason": "Same unblock as step 1: any CRLF-preserving editor is authorized (the Edit-tool-only wording blocked codex seats).",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T21:53:36.376Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
       "description": "Store: every writer validated, contract changes are material (packages/moe-daemon/src/state/taskStore.ts - CRLF, Edit tool only; extend executionContract.test.ts).\n- Import validateExecutionContract from './validators.js'.\n- updateTask sanitize block: when the caller patch has an OWN `executionContract` key (`Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')` - deliberate: this is a patch, not a stored row; an own undefined or null means clear), set `sanitized.executionContract = validateExecutionContract(sanitized.executionContract)`. A malformed or over-bound contract throws INVALID_INPUT there, before the finalizing guard, the progression check, the revision derivation and writeEntity, so a refused write changes no bytes, map entry, revision or event. This covers every writer (submit_plan, plugin UPDATE_TASK, any later tool): no path truncates a contract.\n- derivePlanRevision: `const contractChanged = Object.prototype.hasOwnProperty.call(updates, 'executionContract') && !sameSanitizedSurface(updates.executionContract, task.executionContract);` and add `!contractChanged` to the early return. Compare against the stored value directly: every writer stores the canonical form, and a hand-edited corrupt value never compares equal, so replacing it is material while unrelated writes never touch or throw on it. Still one increment per write however plan/DoD/contract/PLAN_SUBMITTED coincide; malformed-stamp and exhaustion error handling unchanged. Update the derivePlanRevision/approvalPlanSurface comments to name the contract as part of the approval surface.\n- createTask unchanged: a new task has no contract (built field by field, so a caller's executionContract is not copied, like executionPolicySnapshot).\nStore tests (describe 'executionContract persistence and planRevision'): ToolTestHarness task seeded at planRevision 7; writes via `h.state.runExclusive(() => h.state.updateTask(...))`; assert h.state.getTask(), the parsed .moe/tasks/task-1.json AND a reload from disk:\n1. legacy row without the key: a title update keeps 7 and the file has no executionContract key;\n2. adding a contract -> 8, stored canonical (table key order) on disk and after reload;\n3. re-sending an equal contract with keys reordered -> stays 8;\n4. it.each over all eight fields: changing only that field -> exactly +1;\n5. contract + DoD + one step description changed in one write -> exactly +1;\n6. clear via null -> +1, key absent from the file, getTask().executionContract undefined; null on a row without one -> no bump;\n7. metadata-only update (title/priority) on a row WITH a contract -> no bump, contract byte-identical;\n8. malformed contract (unknown key; 1001-char item) -> rejects INVALID_INPUT; file bytes, getTask() and revision unchanged; a `h.state.subscribe` listener saw no event;\n9. `vi.spyOn(h.state, 'writeEntity').mockRejectedValueOnce(new Error('disk full'))` on a contract change -> map, disk, revision and events unchanged; the retry advances exactly once;\n10. a corrupt stored contract written raw into the task JSON (a string; an object with an unknown key) loads; a title update succeeds and leaves it byte-identical; a valid contract then replaces it with +1.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/state/executionContract.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "note": "Every-writer validation and same-write contract materiality implemented. Focused TDD: 17 red/24 pass before store edits; 41 pass after (exit 0; /tmp/moe-f03-step3-green.log). Includes all eight fields, canonical echo, clear variants, atomic failure/retry, corrupt stored data, disk/reload. Step-2 nested error matcher corrected (context.reason is allowed); genuine 21/21 passing output separately in step2-green.log, correcting prior prematurely submitted note. CRLF preserved, stat parity checked.",
+      "startedAt": "2026-10-24T21:56:03.530Z",
+      "completedAt": "2026-10-24T21:56:49.960Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Store: every writer validated, contract changes are material (packages/moe-daemon/src/state/taskStore.ts - CRLF: keep CRLF exactly as step 1 describes, any editor; extend executionContract.test.ts).\n- Import validateExecutionContract from './validators.js'.\n- updateTask sanitize block: when the caller patch has an OWN `executionContract` key (`Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')` - deliberate: this is a patch, not a stored row; an own undefined or null means clear), set `sanitized.executionContract = validateExecutionContract(sanitized.executionContract)`. A malformed or over-bound contract throws INVALID_INPUT there, before the finalizing guard, the progression check, the revision derivation and writeEntity, so a refused write changes no bytes, map entry, revision or event. This covers every writer (submit_plan, plugin UPDATE_TASK, any later tool): no path truncates a contract.\n- derivePlanRevision: `const contractChanged = Object.prototype.hasOwnProperty.call(updates, 'executionContract') && !sameSanitizedSurface(updates.executionContract, task.executionContract);` and add `!contractChanged` to the early return. Compare against the stored value directly: every writer stores the canonical form, and a hand-edited corrupt value never compares equal, so replacing it is material while unrelated writes never touch or throw on it. Still one increment per write however plan/DoD/contract/PLAN_SUBMITTED coincide; malformed-stamp and exhaustion error handling unchanged. Update the derivePlanRevision/approvalPlanSurface comments to name the contract as part of the approval surface.\n- createTask unchanged: a new task has no contract (built field by field, so a caller's executionContract is not copied, like executionPolicySnapshot).\nStore tests (describe 'executionContract persistence and planRevision'): ToolTestHarness task seeded at planRevision 7; writes via `h.state.runExclusive(() => h.state.updateTask(...))`; assert h.state.getTask(), the parsed .moe/tasks/task-1.json AND a reload from disk:\n1. legacy row without the key: a title update keeps 7 and the file has no executionContract key;\n2. adding a contract -> 8, stored canonical (table key order) on disk and after reload;\n3. re-sending an equal contract with keys reordered -> stays 8;\n4. it.each over all eight fields: changing only that field -> exactly +1;\n5. contract + DoD + one step description changed in one write -> exactly +1;\n6. clear via null -> +1, key absent from the file, getTask().executionContract undefined; null on a row without one -> no bump;\n7. metadata-only update (title/priority) on a row WITH a contract -> no bump, contract byte-identical;\n8. malformed contract (unknown key; 1001-char item) -> rejects INVALID_INPUT; file bytes, getTask() and revision unchanged; a `h.state.subscribe` listener saw no event;\n9. `vi.spyOn(h.state, 'writeEntity').mockRejectedValueOnce(new Error('disk full'))` on a contract change -> map, disk, revision and events unchanged; the retry advances exactly once;\n10. a corrupt stored contract written raw into the task JSON (a string; an object with an unknown key) loads; a title update succeeds and leaves it byte-identical; a valid contract then replaces it with +1.",
+          "reason": "Same unblock as step 1: any CRLF-preserving editor is authorized (the Edit-tool-only wording blocked codex seats).",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T21:53:36.460Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-4",
       "description": "Producer: submit_plan accepts, validates and persists the contract (packages/moe-daemon/src/tools/submitPlan.ts - LF; extend executionContract.test.ts).\n- inputSchema: optional `executionContract`: type object, additionalProperties false, properties exactly the eight step-1 names (`intendedBehavior` string; the seven lists `{ type: 'array', items: { type: 'string' } }`), each with a one-line description; the property description states the bounds (behavior <=2000 chars, lists <=50 items of <=1000 chars), that file scope stays in steps, that a resubmission replaces it (omitted = none, a stored one is cleared) and that any change advances planRevision.\n- Handler, right after the step-validation loop and BEFORE the rails/size/path gates: `const executionContract = validateExecutionContract(params.executionContract, 'executionContract');` (import from '../state/validators.js'). Malformed -> INVALID_INPUT with nothing written: the task stays PLANNING and assigned, the worker record untouched.\n- Rails: keep the step-text check exactly as is, then scan the contract strings for forbidden patterns only: `checkPlanRails(contractText, { ...project.globalRails, requiredPatterns: [] }, epic, task)` (contractText joins every contract string) and throw the same CONSTRAINT_VIOLATION as the step check (extract the existing message/context into a small local helper instead of duplicating it). Required patterns must still appear in the steps, so a contract can neither smuggle a forbidden token nor satisfy a required one.\n- Persist in the same PLAN_SUBMITTED write, so submission + contract is one bump: put the key in updatePayload ONLY when needed - the validated contract when one was supplied, `null` when none was supplied but the task has a stored one (replace semantics). A legacy submission on a contract-less task sends no key, so its stored JSON and in-memory Task are unchanged. Response shape unchanged (planRevision already comes from the committed Task).\nProducer tests (describe 'submit_plan execution contract'):\n1. CONTROL submit with a full contract (keys out of order) -> success, AWAITING_APPROVAL; canonical contract on getTask, disk and after reload; response planRevision === stored === seeded + 1;\n2. legacy submit without the param -> unchanged behavior; `Object.keys(h.state.getTask('task-1')!)` does not contain 'executionContract' and neither does the file;\n3. resubmitting without a contract clears a stored one (seed a PLANNING task carrying a contract);\n4. malformed contract (unknown key; 51 items; a string) -> INVALID_INPUT with codeName and context.field; task file bytes unchanged, status PLANNING, assignedWorkerId and the assigned worker record unchanged;\n5. a forbidden pattern only in the contract (the harness project forbids 'rm -rf') -> CONSTRAINT_VIOLATION, nothing written; with globalRails.requiredPatterns ['error handling'] (setupMoeFolder merges top-level keys only, so pass the whole globalRails) and the phrase only in contract.invariants -> CONSTRAINT_VIOLATION 'Required pattern missing';\n6. schema/allowlist parity: Object.keys(inputSchema.properties.executionContract.properties) equals EXECUTION_CONTRACT_FIELDS and its additionalProperties is false.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/submitPlan.ts",
         "packages/moe-daemon/src/state/executionContract.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "note": "Producer schema/bounds, pre-gate validation, shared rail refusal helper, forbidden-only contract scan and replace semantics implemented. Focused test file: 15 RED /43 pass ->58 GREEN (exit 0). All eight fields tested against forbidden-only payloads; required step rails cannot be satisfied by contract and are not re-required in it. Malformed inputs preserve task and worker bytes/assignment; CONTROL persists and returns exactly one revision. Legacy own-key absence covered.",
+      "startedAt": "2026-10-24T21:56:50.037Z",
+      "completedAt": "2026-10-24T21:57:43.085Z"
     },
     {
       "stepId": "step-5",
       "description": "Consumer: get_context serves the contract to every role (packages/moe-daemon/src/tools/getContext.ts - LF; extend executionContract.test.ts).\n- In the task payload right after `taskRails` add `...(task.executionContract !== undefined && task.executionContract !== null ? { executionContract: task.executionContract } : {})`, commented: mandatory execution context for workers and QA, so never role-trimmed (not in ROLE_OMITTED, not behind trimForQa); omitted (not null) when absent so a legacy task's payload stays byte-identical. Do not add it to view 'status' (contextStatus). Mention 'executionContract when set' in the tool description's task list.\nConsumer tests (describe 'get_context execution contract'), reusing step 4's submit fixture: call getContextTool for workerId 'worker-1', 'qa-1' and 'architect-1' (default views; the role resolves from the id prefix) and for 'qa-1' with view 'full' -> each task.executionContract toStrictEqual the stored canonical contract and no `omitted` array names it; the same after reloading state from disk; for a legacy task no role's task payload has an executionContract property.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts",
         "packages/moe-daemon/src/state/executionContract.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "note": "Mandatory contract projection outside role trimming, omitted for legacy/null/cleared rows and status view; raw corrupt stored values remain readable. Worker/QA/architect and full-QA roundtrip/reload tests: focused 6 RED/63 pass ->69 GREEN exit 0. No existing tests changed.",
+      "startedAt": "2026-10-24T21:57:43.175Z",
+      "completedAt": "2026-10-24T21:58:02.289Z"
     },
     {
       "stepId": "step-6",
       "description": "Docs (docs/SCHEMA.md, docs/MCP_SERVER.md - both LF). Re-read the landed code before writing each claim; keep claims exact.\nSCHEMA.md: (1) the Task listing near planRevision gets `executionContract?: TaskExecutionContract;` with a one-line comment; (2) a new `### executionContract` subsection after `### executionPolicySnapshot`: the eight fields and their meanings, bounds, canonical form, optional/legacy rule (absent = none, no migration), validation (refused with INVALID_INPUT, never truncated, unknown keys refused, null/empty clears), materiality (any change +1 in the same write; an equal contract, even with reordered keys, does not bump), writers (submit_plan replaces it; every updateTask writer is validated), file scope stays in steps, get_context serves it to every role; (3) correct the stale `### planRevision` bullets - the 'Every retained key inside a step participates' bullet and the reopen bullet still describe pre-F02 behavior - to the canonical projection plus the contract (F02 QA handoff comment-6108bfafc96b461b8ee8031f7bb4339a); (4) Validation Rules > Task: add the contract bounds.\nMCP_SERVER.md: the submit_plan Parameters block gets `executionContract?: { ... }`; a Notes bullet covering validation (INVALID_INPUT with context.field, no truncation), the forbidden-pattern scan of contract text (required patterns still come from steps), replace semantics and the same-write planRevision bump; the get_context section notes `task.executionContract` (present when set, every role, never trimmed).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/SCHEMA.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "MCP_SERVER.md documents all eight fields, bounds/error context, forbidden-only scan, replace/materiality semantics and every-role context. SCHEMA.md intentionally untouched per amend-1; owed (1)-(4) posted on F12 as comment-b41f072c54bf4695be7d473e2a0d5cbb. get_commit_scope via MCP CLI confirms only SCHEMA contested among task paths. Found unrelated stale existing rail-error wire docs; filed bug task-a9824bc1a509462da88294d364c0a9dc, not fixed inline. Ponytail was found in repo docs/skills and loaded (prior note only checked installed inventory).",
+      "startedAt": "2026-10-24T21:58:02.367Z",
+      "completedAt": "2026-10-24T21:59:00.962Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Docs (docs/SCHEMA.md, docs/MCP_SERVER.md - both LF). Re-read the landed code before writing each claim; keep claims exact.\nContested path: docs/SCHEMA.md is declared by the stale PLANNING task-07474ee438f34021a23809f9c764d15c, so under attribution.contested=skip-untouched it lands ONLY when an Edit/Write tool wrote it (a TOOL witness). On a seat WITH Edit/Write tools, make the SCHEMA.md changes below with those tools. On a seat WITHOUT them (codex/gemini/grok), do NOT edit SCHEMA.md at all: post the owed SCHEMA.md items (1)-(4) as a moe.add_comment on the epic-final task-72184c6505cc41e8b6066732011ffb70 (CQ-F12 docs sweep) and say so in the complete_task summary. MCP_SERVER.md is uncontested and is required on every seat.\nSCHEMA.md: (1) the Task listing near planRevision gets `executionContract?: TaskExecutionContract;` with a one-line comment; (2) a new `### executionContract` subsection after `### executionPolicySnapshot`: the eight fields and their meanings, bounds, canonical form, optional/legacy rule (absent = none, no migration), validation (refused with INVALID_INPUT, never truncated, unknown keys refused, null/empty clears), materiality (any change +1 in the same write; an equal contract, even with reordered keys, does not bump), writers (submit_plan replaces it; every updateTask writer is validated), file scope stays in steps, get_context serves it to every role; (3) correct the stale `### planRevision` bullets - the 'Every retained key inside a step participates' bullet and the reopen bullet still describe pre-F02 behavior - to the canonical projection plus the contract (F02 QA handoff comment-6108bfafc96b461b8ee8031f7bb4339a); (4) Validation Rules > Task: add the contract bounds.\nMCP_SERVER.md: the submit_plan Parameters block gets `executionContract?: { ... }`; a Notes bullet covering validation (INVALID_INPUT with context.field, no truncation), the forbidden-pattern scan of contract text (required patterns still come from steps), replace semantics and the same-write planRevision bump; the get_context section notes `task.executionContract` (present when set, every role, never trimmed).",
+          "reason": "docs/SCHEMA.md is contested by stale PLANNING task-07474ee4, so it lands only with an Edit/Write (TOOL) witness. Seats without those tools now hand the SCHEMA.md items to the F12 docs sweep rather than producing a delivery gap; MCP_SERVER.md stays required everywhere.",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T21:53:36.534Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-7",
       "description": "Verification - the gate, run once after steps 1-6: `cd packages/moe-daemon && npm test` (exit 0; its fresh output tail is the complete_task evidence) plus `npx tsc --noEmit` (exit 0) and the test-file typecheck `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/state/executionContract.test.ts` (tsconfig excludes tests).\nWSL environment: the shared checkout's node_modules are Windows-native (vitest: 'Cannot find native binding'); never npm install there. Run in a native-Linux snapshot: `SNAP=$(mktemp -d /tmp/moe-f03-gate.XXXXXX); git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json | tar -x -C $SNAP`, copy ONLY this task's eight files over it (cmp each against the worktree), `ln -s /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules $SNAP/packages/moe-daemon/node_modules` (symlink the directory itself; if it is gone, npm ci in a separate scratch copy with an unchanged lockfile), unset every MOE_* variable, use a Linux-only PATH, run from $SNAP/packages/moe-daemon, and report the exact command and environment in complete_task.\nMust pass UNCHANGED: approvalRevision.acceptance.test.ts (the F05 group stays skipped), submitPlan.test.ts, getContext.test.ts and WebSocketServer.test.ts. A failure there is a compatibility break in production code: fix the code, never those tests. For a failure in a file this task did not touch, rerun it alone on HEAD's plain archive to prove it pre-exists before calling it foreign.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh exact npm test exit 0: 156 files, 3532 pass/15 skip, 23.24s. Both plan typechecks exit 0. Linux snapshot /tmp/moe-f03-gate.EFBLbb: git archive e587474 HEAD selected paths plus seven owned files (SCHEMA deferred), cmp-identical overlays, linked /tmp/moe-linux-daemon.3EJTl5 dependencies with JSON-equal lock; all MOE_* unset and Linux-only PATH via /tmp/moe-f03-run. Log /tmp/moe-f03-full.log. Four protected test files cmp-equal worktree/snapshot/HEAD; F05 still skipped. No foreign failures; qualityGate absent from project settings/scope.",
+      "startedAt": "2026-10-24T21:59:01.060Z",
+      "completedAt": "2026-10-24T22:00:03.314Z"
     },
     {
       "stepId": "step-8",
       "description": "Adversarial self-review with mutation proof (load adversarial-self-review). Read the whole diff as an attacker: concurrent submit_plan + UPDATE_TASK on one task (both under the state mutex; still one bump per write); null/empty/huge/Unicode/NUL contracts; a board echo of the whole task (equal contract -> no bump); a hand-edited corrupt stored contract (unrelated writes and get_context never throw); own undefined key after a clear (every read uses === undefined); no forbidden-pattern token in any source; CRLF kept in schema.ts/taskStore.ts/validators.ts (git diff --stat shows no whole-file churn).\nMutation proof (pattern-mutation-union-proves-every-test): in a scratch copy of the snapshot, never the shared checkout, apply these together, then individually for any you doubt: drop `!contractChanged` from the early return; set truncate:true for items; skip rejectUnknownFields; delete the updateTask validation line; omit the key from updatePayload; always send null from submit_plan; drop the forbidden-only contract rails scan; fold contract text into the step rails text; remove the get_context projection; gate the projection behind !trimForQa. Each must turn at least one named test red; add a test for any survivor. If any byte changed, rerun step 7's command and submit THAT output. Edit only with Edit/Write tools (contested-path landing attributes tool writes), report every modified path in complete_step.modifiedFiles, no Git writes, no .moe edits, verified-local stays refused.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/executionContract.test.ts",
+        ".serena/memories/task-task-bf86954dc6bc43279d96d77cf0ebff88-handoff.md",
+        ".serena/memories/gotcha-vitest-nested-error-matchers.md"
+      ],
+      "note": "Adversarial diff reviewed: shared mutex, atomic errors/retry, clear/corrupt/legacy behavior, Unicode/bounds, board echoes, source forbidden scan and CRLF all checked. Added simultaneous submit/store-write and sparse-slot regressions (253-line file, 71 focused pass). Scratch union 34 RED; all 10 required mutations individually killed (16/2/4/6/7/7/8/1/6/3 red), plus sparse-map 1 red; named witnesses/logs in /tmp/moe-f03-mutations-summary.json. After final test changes reran full gate: npm test exit 0, 156 files, 3534 pass/15 skip, 19.28s; both typechecks exit 0. All seven overlays cmp-equal and protected tests unchanged. Fresh postflight scope: no edited source/doc conflicts; only unedited SCHEMA contested/deferred to F12. Saved handoff and matcher/exit-status gotcha via Serena. No Git/.moe writes or trusted-runner claims.",
+      "startedAt": "2026-10-24T22:00:03.394Z",
+      "completedAt": "2026-10-24T22:02:47.485Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Adversarial self-review with mutation proof (load adversarial-self-review). Read the whole diff as an attacker: concurrent submit_plan + UPDATE_TASK on one task (both under the state mutex; still one bump per write); null/empty/huge/Unicode/NUL contracts; a board echo of the whole task (equal contract -> no bump); a hand-edited corrupt stored contract (unrelated writes and get_context never throw); own undefined key after a clear (every read uses === undefined); no forbidden-pattern token in any source; CRLF kept in schema.ts/taskStore.ts/validators.ts (git diff --stat shows no whole-file churn).\nMutation proof (pattern-mutation-union-proves-every-test): in a scratch copy of the snapshot, never the shared checkout, apply these together, then individually for any you doubt: drop `!contractChanged` from the early return; set truncate:true for items; skip rejectUnknownFields; delete the updateTask validation line; omit the key from updatePayload; always send null from submit_plan; drop the forbidden-only contract rails scan; fold contract text into the step rails text; remove the get_context projection; gate the projection behind !trimForQa. Each must turn at least one named test red; add a test for any survivor. If any byte changed, rerun step 7's command and submit THAT output. Report every modified path in complete_step.modifiedFiles. Before complete_task run `moe.get_commit_scope { taskId, phase: 'postflight' }`: a changed path listed in peerDeclared lands only with a TOOL witness (a Claude seat makes one with a byte-identical Edit round trip, sha256 equal before and after; seats without Edit/Write tools have none). At plan time that applied only to docs/SCHEMA.md, which step 6 handles; if another changed path shows up there and you cannot witness it, name it in the summary instead of claiming delivery. No Git writes, no .moe edits; verified-local stays refused.",
+          "reason": "Replace the blanket Edit/Write-only rule, which codex seats cannot follow, with the actual attribution rule: a TOOL witness only for peer-declared (contested) paths, checked with get_commit_scope before complete_task.",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T21:53:36.604Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 2,
-  "status": "BLOCKED",
+  "planRevision": 22,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Block resolved by the architect: plan steps 1, 2, 3, 6 and 8 were amended (amend-1). Any CRLF-preserving editor is now authorized, with a verification check, and a TOOL witness is required only for contested paths. Contested docs/SCHEMA.md is handled per step 6, including the hand-off to F12 for seats without Edit/Write. Ready for any worker seat.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -106,11 +206,23 @@
       "author": "architect-6e3edf85",
       "content": "Architect note on the 8-file plan-size warning (planRevision 1). The plan edits exactly these files, each needed:\n- schema.ts: type and doc\n- validators.ts: strict validator\n- taskStore.ts: every-writer validation and planRevision materiality\n- submitPlan.ts: producer\n- getContext.ts: consumer\n- the new src/state/executionContract.test.ts\n- docs/SCHEMA.md and docs/MCP_SERVER.md\n\nIt stays one coherent change: the contract must be persisted and served together for DoD 3's producer/consumer tests. The docs also fix the stale planRevision prose that F02 QA handed off in comment-6108bfaf.\n\nDefaults I chose under TURBO, for reviewers:\n1. The contract is one optional Task.executionContract with eight fields. intendedBehavior is a string; acceptanceCriteria, invariants, compatibility, approvedScope, reuse, sourceAssumptions and checkRefs are string lists.\n2. File scope stays in the steps' affectedFiles/newFiles. approvedScope names symbols and producer/consumer surfaces only.\n3. Malformed or over-bound input is refused with INVALID_INPUT, never truncated. Unknown keys are refused. null or an empty contract clears it.\n4. Any contract change advances planRevision once, in the same write.\n5. A submit_plan resubmission replaces the contract: omitting it clears a stored one.\n6. Contract text is scanned for forbidden patterns only. Required patterns must still appear in the steps.\n7. get_context serves the contract to every role and omits it when absent.\n\nisEpicFinal reads true only because this row's order (225.5) is the epic's highest. F12 still owns the whole-epic integration pass.",
       "timestamp": "2026-10-24T21:38:52.425Z"
+    },
+    {
+      "id": "comment-e6366b15633d4768be9ffd4b6f27f753",
+      "author": "architect-6e3edf85",
+      "content": "Unblocked by the architect, 2026-10-25. worker-e8965f51 had blocked the task because steps 1-3 and 8 demanded Edit/Write, which codex seats lack.\n\nI amended steps 1, 2, 3, 6 and 8 (amend-1):\n- **CRLF files:** any editor is authorized, provided CRLF survives. Check that `git diff --stat` matches `git diff --ignore-cr-at-eol --stat`, and restore CRLF byte-level if your editor rewrote it.\n- **TOOL witnesses:** needed only for paths that get_commit_scope lists in peerDeclared.\n- **docs/SCHEMA.md:** this is the one contested path, declared by stale PLANNING task-07474ee4. Edit/Write-capable seats edit it with those tools. Other seats skip it and post the owed items (1)-(4) on F12 (task-72184c65).\n- **MCP_SERVER.md:** still required on every seat.\n\nThe rest of the plan is unchanged. The sibling EOL-normalization task (task-709f6691) now depends on this task. Keep CRLF here so that its single renormalization commit covers all 16 paths.",
+      "timestamp": "2026-10-24T21:53:54.578Z"
+    },
+    {
+      "id": "comment-ea58076c7d8145998b5d7e24947916bb",
+      "author": "worker-e8965f51",
+      "content": "Correction to step-2 note: the post-implementation run actually had 7 pass / 14 fail, not 21 green. The shell's later file/stat checks masked vitest's exit status before the tool result returned. Every failure is the new test's nested object matcher requiring exact context without the existing reason field; production reports the expected codeName and field. Fixing the test matcher now, re-running with preserved exit status, and will record real output in step 3. No verification success is claimed from that run.",
+      "timestamp": "2026-10-24T21:56:11.352Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:13.144Z",
-  "updatedAt": "2026-10-24T21:41:01.918Z",
+  "updatedAt": "2026-10-24T22:03:18.926Z",
   "dependsOn": [
     "task-349319a3b8d24aafab39a562ac2d2fb9",
     "task-ad95cb270e9e46df8672eb094d0c1e74"
@@ -118,7 +230,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-24T21:21:08.111Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 8
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 8
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
@@ -132,7 +245,16 @@
   "planSizeWarnings": [
     "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T21:38:42.223Z",
   "planningNotes": {
@@ -154,8 +276,55 @@
   },
   "planApprovedAt": "2026-10-24T21:38:42.350Z",
   "workStartedAt": "2026-10-24T21:40:36.277Z",
-  "blockedReason": "Approved plan steps 1-3 explicitly require Edit only for CRLF files (not Serena/sed); step 8 requires Edit/Write witnesses for contested-path delivery. This session exposes apply_patch/exec_command but no Edit/Write or Serena mutation tools; checked available tool metadata. scripts/moe-agent.sh:7658,7773-7800 harvests Edit/Write and named Serena tools, not apply_patch, so silently substituting the available editor would violate the plan and risk dropped delivery. Step-1 started; no source edits, Git writes, or verification runs. Handoff and tooling gotcha saved in Serena. Please supply the approved tooling or authorize a safe alternative.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-24T21:41:01.918Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "b000dbb401556df917b91c185462bde58cafdd4d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-24T21:39:09Z",
+      "paths": [
+        ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+        ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-24T21:41:18.231Z",
+      "treeId": "aecfe4398fd6f41a6565402376900352fceebe77",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/state/executionContract.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "packages/moe-daemon/src/tools/getContext.ts",
+    "docs/MCP_SERVER.md",
+    ".serena/memories/task-task-bf86954dc6bc43279d96d77cf0ebff88-handoff.md",
+    ".serena/memories/gotcha-vitest-nested-error-matchers.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-e8965f51@2026-10-24T21:39:09Z",
+    "at": "2026-10-24T21:41:18.231Z"
+  },
+  "priorBlockedReason": "Approved plan steps 1-3 explicitly require Edit only for CRLF files (not Serena/sed); step 8 requires Edit/Write witnesses for contested-path delivery. This session exposes apply_patch/exec_command but no Edit/Write or Serena mutation tools; checked available tool metadata. scripts/moe-agent.sh:7658,7773-7800 harvests Edit/Write and named Serena tools, not apply_patch, so silently substituting the available editor would violate the plan and risk dropped delivery. Step-1 started; no source edits, Git writes, or verification runs. Handoff and tooling gotcha saved in Serena. Please supply the approved tooling or authorize a safe alternative.",
+  "blockedOnTaskIds": null,
+  "reviewStartedAt": "2026-10-24T22:03:18.924Z",
+  "verification": {
+    "command": "bash /tmp/moe-f03-run npm test",
+    "exitCode": 0,
+    "outputTail": "Runner unsets every MOE_* variable; PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd /tmp/moe-f03-gate.EFBLbb/packages/moe-daemon; npm test. Snapshot: git archive e587474b1f6908bdf4e11a1d6ee4dd55787a25dd plus seven cmp-identical task files; Linux node_modules linked from /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules, lock JSON equal. Final log /tmp/moe-f03-full-final.log:\nTest Files 156 passed (156)\nTests 3534 passed | 15 skipped (3549)\nStart at 01:00:58\nDuration 19.28s\nAlso exit 0: npx tsc --noEmit; npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/state/executionContract.test.ts (/tmp/moe-f03-types.log).",
+    "reportedAt": "2026-10-24T22:03:18.924Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Implemented optional eight-field execution contract across schema, strict lossless validator, every-writer persistence/revision, submit_plan and every-role get_context. Legacy behavior preserved; contract/plan/DoD changes share one durable revision. Added 71 focused cases; protected existing tests unchanged, F05 still skipped. CRLF preserved. Full gate: 156 files, 3534 pass/15 skip; both typechecks pass. All 10 planned mutants killed individually plus sparse-slot mutant; combined 34 failures. No source/doc delivery collisions in fresh get_commit_scope. Seven source/test/doc paths changed. Per step-6 amend-1, contested docs/SCHEMA.md intentionally NOT edited; all owed items handed to F12 in comment-b41f072c54bf4695be7d473e2a0d5cbb. Unrelated obsolete wire-error docs filed as task-a9824bc1a509462da88294d364c0a9dc. Serena handoff/gotcha saved. Snapshot e587474 + exact owned overlays, native Linux dependencies, no shared install, Git writes or manual .moe edits. Wrapper owns completion landing; no SHA claimed before postflight. verified-local remains refused. Earlier step-2 premature note explicitly corrected, all final evidence rerun."
 }

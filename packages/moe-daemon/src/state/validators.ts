@@ -25,6 +25,7 @@ import type {
   StepStatus,
   Task,
   TaskComment,
+  TaskExecutionContract,
   TaskCommit,
   Team,
   TeamRole,
@@ -115,6 +116,43 @@ export function validateStringValue(
     throw invalidInput(fieldName, `must be ${options.maxLength} characters or fewer`);
   }
   return normalized;
+}
+
+export const MAX_CONTRACT_BEHAVIOR_CHARS = 2000;
+export const MAX_CONTRACT_LIST_ITEMS = 50;
+export const MAX_CONTRACT_ITEM_CHARS = 1000;
+
+const CONTRACT_FIELD_KINDS: { [K in keyof Required<TaskExecutionContract>]: 'text' | 'list' } = {
+  intendedBehavior: 'text', acceptanceCriteria: 'list', invariants: 'list',
+  compatibility: 'list', approvedScope: 'list', reuse: 'list',
+  sourceAssumptions: 'list', checkRefs: 'list',
+};
+export const EXECUTION_CONTRACT_FIELDS = Object.keys(CONTRACT_FIELD_KINDS) as (keyof TaskExecutionContract)[];
+
+/** Strict, lossless validation; build a detached canonical contract or clear it. */
+export function validateExecutionContract(value: unknown, fieldName = 'executionContract'): TaskExecutionContract | undefined {
+  if (value === undefined || value === null) return undefined;
+  const input = requirePlainObject(value, fieldName);
+  rejectUnknownFields(input, EXECUTION_CONTRACT_FIELDS, fieldName);
+  const contract: TaskExecutionContract = {};
+  for (const key of EXECUTION_CONTRACT_FIELDS) {
+    const item = input[key];
+    if (item === undefined || item === null) continue;
+    const field = `${fieldName}.${key}`;
+    if (key === 'intendedBehavior') {
+      contract[key] = validateStringValue(item, field, { maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, allowNewlines: true });
+      continue;
+    }
+    if (!Array.isArray(item)) throw invalidInput(field, 'must be an array of strings');
+    if (item.length > MAX_CONTRACT_LIST_ITEMS) {
+      throw invalidInput(field, `must contain ${MAX_CONTRACT_LIST_ITEMS} items or fewer`);
+    }
+    const items = Array.from(item, (text, index) => validateStringValue(text, `${field}[${index}]`, {
+      maxLength: MAX_CONTRACT_ITEM_CHARS, allowNewlines: true,
+    }));
+    if (items.length) contract[key] = items;
+  }
+  return Object.keys(contract).length ? contract : undefined;
 }
 
 export function validateBooleanValue(value: unknown, fieldName: string): boolean {

@@ -37,6 +37,7 @@ import { cancelSpeedModeTimeout } from '../tools/submitPlan.js';
 import { cleanupStaleWaiters } from '../tools/waitForTask.js';
 import {
   MAX_COMMENTS_PER_TASK,
+  validateExecutionContract,
   sanitizeImplementationPlan,
   sanitizeStringIdArray,
   trimComments,
@@ -101,7 +102,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * Compare only the instructions and scope that approval authorizes. Sanitizing
  * both sides preserves the existing input bounds; execution evidence and
- * amendment audit/history fields never enter this projection.
+ * amendment audit/history fields never enter this projection. DoD and the
+ * execution contract are compared separately as part of the approval surface.
  */
 function approvalPlanSurface(plan: unknown) {
   return sanitizeImplementationPlan(plan).map(step => ({
@@ -114,7 +116,7 @@ function approvalPlanSurface(plan: unknown) {
 }
 
 /**
- * Structural comparison of canonical plan/DoD surfaces. Array order remains
+ * Structural comparison of canonical plan/DoD/contract surfaces. Array order remains
  * significant; object key insertion order is not a material change.
  */
 function sameSanitizedSurface(a: unknown, b: unknown): boolean {
@@ -135,9 +137,9 @@ function sameSanitizedSurface(a: unknown, b: unknown): boolean {
 
 /**
  * The revision to stamp into this write. Bumps once for a plan submission and
- * once for any write that changes the canonical approval surface/DoD — a write
- * that does both still advances by one. `undefined` for either field means the
- * caller did not supply it, so it cannot be a change.
+ * once for any write that changes the canonical approval surface/DoD/contract.
+ * Combined changes still advance by one. Undefined plan/DoD means unsupplied;
+ * an own contract key (even undefined) explicitly replaces or clears it.
  *
  * Error handling: a malformed stored stamp (INVALID_INPUT, via the decode
  * above) and an exhausted counter (STATE_CONFLICT / PLAN_REVISION_EXHAUSTED)
@@ -155,7 +157,10 @@ function derivePlanRevision(
   const dodChanged =
     updates.definitionOfDone !== undefined &&
     !sameSanitizedSurface(updates.definitionOfDone, sanitizeStringArray(task.definitionOfDone, 50, 1000));
-  if (event !== 'PLAN_SUBMITTED' && !planChanged && !dodChanged) {
+  const contractChanged =
+    Object.prototype.hasOwnProperty.call(updates, 'executionContract') &&
+    !sameSanitizedSurface(updates.executionContract, task.executionContract);
+  if (event !== 'PLAN_SUBMITTED' && !planChanged && !dodChanged && !contractChanged) {
     return current;
   }
   if (current >= MAX_PLAN_REVISION) {
@@ -417,6 +422,9 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // board echo of the whole row) may forge, reset, null or erase it. Deleting
   // the key also keeps an own-key undefined out of the merged row.
   delete (sanitized as Record<string, unknown>).executionPolicySnapshot;
+  if (Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')) {
+    sanitized.executionContract = validateExecutionContract(sanitized.executionContract);
+  }
   if (sanitized.title !== undefined) {
     sanitized.title = sanitizeString(sanitized.title, 'title', 500);
   }

@@ -142,7 +142,7 @@ import {
 export function getContextTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_context',
-    description: 'Read the working context for one task: project settings and global/epic/task rails, the epic, the task (plan and steps, definitionOfDone, recent comments, verification, commits), its assigned worker, recent chat, planningNotes and a nextAction hint. Read-only. Fetch it after claiming and before planning, implementing or reviewing. Includes `routing` (the model catalog, efforts and tier defaults the architect picks from at submit_plan). Trimmed per role by default (a QA caller does not get task.epicSiblings, planningNotes or routing; a worker does not get routing; the response lists what was left out in `omitted`). That default is the complete read for the role: pass view:"full" only if you need a left-out section (any role may). view:"status" is a lighter delivery poll that does not count as having read the context.',
+    description: 'Read the working context for one task: project settings and global/epic/task rails, the epic, the task (plan and steps, definitionOfDone, executionContract when set, recent comments, verification, commits), its assigned worker, recent chat, planningNotes and a nextAction hint. Read-only. Fetch it after claiming and before planning, implementing or reviewing. Includes `routing` (the model catalog, efforts and tier defaults the architect picks from at submit_plan). Trimmed per role by default (a QA caller does not get task.epicSiblings, planningNotes or routing; a worker does not get routing; the response lists what was left out in `omitted`). That default is the complete read for the role: pass view:"full" only if you need a left-out section (any role may). view:"status" is a lighter delivery poll that does not count as having read the context.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -418,6 +418,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               description: task.description,
               definitionOfDone: task.definitionOfDone,
               taskRails: task.taskRails,
+              // Mandatory execution context for workers and QA; never role-trimmed.
+              ...(task.executionContract !== undefined && task.executionContract !== null
+                ? { executionContract: task.executionContract } : {}),
               status: task.status,
               priority: task.priority,
               assignedWorkerId: task.assignedWorkerId,

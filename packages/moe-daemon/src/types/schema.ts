@@ -720,6 +720,30 @@ export interface TaskDeliveryEvidence {
   recordedAt: string; // ISO
 }
 
+/**
+ * Optional execution intent, canonicalized by validateExecutionContract. A docs
+ * fix may supply only intendedBehavior; an API change may also need compatibility.
+ * Every field is approval-relevant: changes advance planRevision in the same write.
+ * This contract alone is never approval, readiness or verification evidence.
+ */
+export interface TaskExecutionContract {
+  /** Observable behavior or outcome the change must produce. */
+  intendedBehavior?: string;
+  /** Behavior-level criteria; definitionOfDone remains human-owned. */
+  acceptanceCriteria?: string[];
+  invariants?: string[];
+  /** Legacy data, wire shapes and callers that must keep working. */
+  compatibility?: string[];
+  /** Symbols/interfaces/producer-consumer surfaces; file scope stays in steps. */
+  approvedScope?: string[];
+  /** Existing implementations reused, or why a new one is introduced. */
+  reuse?: string[];
+  /** Source facts with path/symbol references. */
+  sourceAssumptions?: string[];
+  /** Required verification commands, exactly as they will be run. */
+  checkRefs?: string[];
+}
+
 export interface Task {
   id: string;
   epicId: string;
@@ -729,13 +753,14 @@ export interface Task {
   taskRails: string[];
   implementationPlan: ImplementationStep[];
   /**
-   * Monotonic version of the approval-relevant plan surface
-   * (`implementationPlan` + `definitionOfDone`), owned exclusively by the
-   * daemon: `createTask` stamps 0, and `taskStore.updateTask` derives the next
-   * value inside the SAME task write that persists the surface — every
-   * successful `moe.submit_plan` (even a byte-identical resubmission) plus any
-   * write that actually changes the sanitized steps or DoD, whoever the writer
-   * is. Metadata-only writes keep it; reopen never resets it.
+   * Monotonic version of the canonical approval projection: ordered step ids,
+   * original/effective (active-amendment) instructions, affectedFiles/newFiles,
+   * definitionOfDone and executionContract. Owned exclusively by the daemon:
+   * createTask stamps 0; updateTask derives it in the SAME durable task write.
+   * Every PLAN_SUBMITTED advances once, as does a material change by any writer.
+   * Execution status, startedAt/completedAt, reported modifiedFiles, progress
+   * notes, amendment audit fields and inactive amendment history are not material.
+   * Reopen neither resets it nor advances it by clearing execution evidence.
    *
    * A caller-supplied value is stripped, so it can be neither forged nor reset.
    * Optional because records written before this field exist: an absent stamp
@@ -758,6 +783,13 @@ export interface Task {
    * readExecutionPolicySnapshot and never read it as approval or readiness.
    */
   executionPolicySnapshot?: ExecutionPolicySnapshot;
+  /**
+   * Absent means no contract: legacy rows load unchanged, with no migration or
+   * schemaVersion bump. Null or an empty contract clears it. Test absence with
+   * === undefined, not key ownership: a clear leaves an own undefined key in
+   * memory that is omitted on disk and after reload.
+   */
+  executionContract?: TaskExecutionContract;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;

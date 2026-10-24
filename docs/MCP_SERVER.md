@@ -181,6 +181,11 @@ rm -f .claude/hooks/moe-require-claim.sh .claude/hooks/moe-require-claim.ps1
 
 Get current project/epic/task context and rails.
 
+`task.executionContract` is present when set, for every role (including worker
+and QA), and is never role-trimmed. Legacy tasks and cleared contracts omit the
+property rather than returning null. The lightweight `view: "status"` does not
+include execution instructions or the contract.
+
 **Parameters:**
 ```typescript
 {
@@ -288,6 +293,16 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
   taskId: string,
   workerId?: string,    // Optional; auto-injected by moe-proxy from MOE_WORKER_ID
   steps: { description: string; affectedFiles?: string[]; newFiles?: string[] }[],
+  executionContract?: {
+    intendedBehavior?: string,       // observable outcome; <=2000 chars
+    acceptanceCriteria?: string[],   // behavioral criteria; DoD stays human-owned
+    invariants?: string[],
+    compatibility?: string[],        // legacy data, wire shapes and callers
+    approvedScope?: string[],        // symbols/interfaces/producer-consumer surfaces
+    reuse?: string[],                // existing implementations reused, or rationale
+    sourceAssumptions?: string[],    // source facts with path/symbol references
+    checkRefs?: string[]             // verification commands exactly as run
+  },                                // each list: <=50 strings, each <=1000 chars
   tier?: 'light' | 'standard' | 'heavy',  // launch tier for the worker/QA sessions; omit = plan-size tier
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max',  // only allowed levels are used (default high/xhigh/max;
                                            // low/medium only for a docs/tests-only plan); omit = default
@@ -303,6 +318,7 @@ Submit an implementation plan. Sets task status to `AWAITING_APPROVAL`.
 `newFiles` declares the paths a step will **create**. Same normalization and 50-entry cap as `affectedFiles`; the key is omitted from the persisted step when empty.
 
 **Notes:**
+- **Execution contract:** optional and strictly validated by `submit_plan` and every `updateTask` writer. Malformed or oversized values and unknown keys are refused with `INVALID_INPUT` (the daemon error's `context.field` names the field); nothing is truncated or coerced. Supplied strings retain whitespace, Unicode, newlines and duplicates; blank strings and NUL are refused. Empty lists and null/undefined fields are omitted from the canonical eight-field object; a null or empty contract clears it. Resubmission replaces the contract: omitting it clears a stored one, while legacy contract-less tasks gain no property. Contract text is scanned for **forbidden patterns only**; required patterns must still appear in the steps. File scope stays in each step's `affectedFiles`/`newFiles`. Contract changes advance the existing `planRevision` once in the same durable write (submission plus contract is still one increment); an equal contract, including reordered object keys, does not add a material change. The contract itself is never approval, readiness or verification evidence.
 - **Enforced rails:** Only `forbiddenPatterns` and global `requiredPatterns` are strictly enforced.
 - **Guidance rails:** `epicRails` and `taskRails` are provided as guidance to AI agents but are NOT enforced in plan text. This allows agents to address the intent of rails without requiring verbatim quoting. Humans verify compliance during plan approval.
 - On violation, returns JSON-RPC error with `message: "RAIL_VIOLATION"` and `error.data` set to the violation string.
