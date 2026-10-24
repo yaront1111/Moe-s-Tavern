@@ -105,7 +105,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,16 +121,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:38.100Z",
-  "updatedAt": "2026-10-24T16:01:13.476Z",
+  "updatedAt": "2026-10-24T16:06:39.290Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:55:54.173Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T16:06:39.290Z",
+    "wallClockMs": 7845117
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -179,22 +182,44 @@
       "treeId": "8db65fc2ff08e296da2bd655c8edb0a390bdb285",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "475e743c5c7dc3628eb8abb8f0e8f34f8e6949cd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T15:51:46Z",
+      "paths": [
+        ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+        ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json",
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T16:01:42.766Z",
+      "treeId": "3301ddec240f10928ec3e444bf42313a2d9f6d48",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
     "packages/moe-daemon/src/delivery/policy.ts",
-    "packages/moe-daemon/src/tools/qaApprove.ts"
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    ".moe/tasks/task-5a082cb43e2346fcbff480fb1c383b58.json",
+    ".moe/tasks/task-deba1a56a8104786ae25b84c58c363b4.json"
   ],
   "touchedFiles": [
-    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+    "packages/moe-daemon/src/delivery/policy.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c1d9de02@2026-10-24T15:44:34Z",
-    "at": "2026-10-24T15:51:15.064Z"
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-24T15:51:46Z",
+    "at": "2026-10-24T16:01:42.766Z"
   },
   "reviewStartedAt": "2026-10-24T16:01:13.474Z",
   "verification": {
@@ -204,5 +229,9 @@
     "reportedAt": "2026-10-24T16:01:13.474Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-M01f adds one per-task delivery-policy selection, shared by qa_approve, the dependency gate and the board projection.\n\n**delivery/policy.ts**\n- New `resolveTaskDeliveryPolicy(settings, task)`. It applies the M01c/M01e strictness pair: `assertExecutionProfileReady(resolveTaskExecutionProfile(settings, snapshot))`. It then returns the LIVE resolveDeliveryPolicy.\n- A strict task throws EXECUTION_PROFILE_NOT_READY before any policy, attestation or captured policy is read. Strict means a stored verified-local snapshot (any version, stale or not) or a live verified-local setting.\n- A malformed snapshot or setting gives INVALID_INPUT.\n- There is no captured-policy branch and no ranking.\n- evaluateDeliveryEvidence uses it. isDependencySatisfied, describeUnmetDependency and deliveryProjection already treat a throw as not satisfied, so those files are unedited.\n\n**tools/qaApprove.ts**\n- The gate is now: selector, then attestations, then an unconditional evaluate, still before recordReview.\n- The separate `deliveryPolicy !== 'legacy'` branch is removed. Without this change, a strict task under a live legacy policy wrote an 'approve' Review before the M01c updateTask backstop refused DONE.\n\n**Tests**\n- New delivery/executionPolicyIntegration.test.ts, 114 tests:\n  - Q: strict refusals with no writes, attestations, env, malformed input, and the selector;\n  - E: real dependencyShortfall, isDependencySatisfied, unmetDependsOn, describeUnmetDependency, runDependencyUnblock and deliveryProjection agree, read-only, with E4 ARCHIVED compatibility;\n  - L: the legacy/observe matrices across all six policies, qa_approve landing and attestation labels, and requiredCheckAtDone.\n- Red before the change: 66 failed. All 8 plan mutation probes go red (18, 1, 22, 26, 38, 47, 21, 38).\n\n**Gate:** 153 files, 3407 passed / 9 skipped; CQ-M01e reported 152 files and 3284/9. tsc exit 0.\n\n**Untouched:** acceptance.test.ts, executionProfile.ts and its test, deliveryProjection.ts, dependencyUnblock.ts,"
+  "completionSummary": "CQ-M01f adds one per-task delivery-policy selection, shared by qa_approve, the dependency gate and the board projection.\n\n**delivery/policy.ts**\n- New `resolveTaskDeliveryPolicy(settings, task)`. It applies the M01c/M01e strictness pair: `assertExecutionProfileReady(resolveTaskExecutionProfile(settings, snapshot))`. It then returns the LIVE resolveDeliveryPolicy.\n- A strict task throws EXECUTION_PROFILE_NOT_READY before any policy, attestation or captured policy is read. Strict means a stored verified-local snapshot (any version, stale or not) or a live verified-local setting.\n- A malformed snapshot or setting gives INVALID_INPUT.\n- There is no captured-policy branch and no ranking.\n- evaluateDeliveryEvidence uses it. isDependencySatisfied, describeUnmetDependency and deliveryProjection already treat a throw as not satisfied, so those files are unedited.\n\n**tools/qaApprove.ts**\n- The gate is now: selector, then attestations, then an unconditional evaluate, still before recordReview.\n- The separate `deliveryPolicy !== 'legacy'` branch is removed. Without this change, a strict task under a live legacy policy wrote an 'approve' Review before the M01c updateTask backstop refused DONE.\n\n**Tests**\n- New delivery/executionPolicyIntegration.test.ts, 114 tests:\n  - Q: strict refusals with no writes, attestations, env, malformed input, and the selector;\n  - E: real dependencyShortfall, isDependencySatisfied, unmetDependsOn, describeUnmetDependency, runDependencyUnblock and deliveryProjection agree, read-only, with E4 ARCHIVED compatibility;\n  - L: the legacy/observe matrices across all six policies, qa_approve landing and attestation labels, and requiredCheckAtDone.\n- Red before the change: 66 failed. All 8 plan mutation probes go red (18, 1, 22, 26, 38, 47, 21, 38).\n\n**Gate:** 153 files, 3407 passed / 9 skipped; CQ-M01e reported 152 files and 3284/9. tsc exit 0.\n\n**Untouched:** acceptance.test.ts, executionProfile.ts and its test, deliveryProjection.ts, dependencyUnblock.ts,",
+  "completedAt": "2026-10-24T16:06:39.290Z",
+  "reviewCompletedAt": "2026-10-24T16:06:39.290Z",
+  "reviewSummary": "Reviewed recorded completion 475e743 and checkpoint f8e6996 (on moe/work-2026-10-24), not the dirty tree. Diff: policy.ts +40/-7, qaApprove.ts +17/-13, new test file +511.\n\nGate in a fresh isolated Linux copy (git archive 475e743, lockfile JSON-equal, Linux node_modules, env -i, Linux PATH):\n- npm test --maxWorkers=4: exit 0, 153 files, 3407 passed / 9 skipped. Matches the worker.\n- tsc --noEmit: exit 0.\n\nMy 5 mutation probes on the new file (114 tests) were all killed:\n- legacy skip restored: 22 red\n- readiness assert dropped: 59\n- evaluate on live policy: 18\n- no snapshot floor: 47\n- decode errors swallowed: 21\n\nDoD:\n1. Q1-Q3: 7 strict sources refused NOT_READY with zero writes, events or Review.\n2. E1-E3: all 7 consumers withhold, read-only; controls satisfy.\n3. L1: 6x3x5 matrix equals its snapshot-less twin; L2 qa_approve matrix.\n4. L3 requiredCheckAtDone unchanged; no captured-policy branch.\n5. acceptance.test.ts untouched; no existing test edited.\n6. Gate reproduced.\n\nRails: verified-local refused; no forbidden substrings; LF; no .moe edits.\n\nSize: ~57 prod + 511 plan-mandated tests, reviewed in full (CQ-M01c/d/e precedent).\n\nNon-blocking: the commit carried peer record deba1a56 (wrapper behaviour). Worker follow-ups for CQ-M01 (task-ad95cb27): wording, stale docs, qa_approve description, log noise. The selector runs twice in qa_approve (cheap).",
+  "requiredCheckAtDone": null
 }
