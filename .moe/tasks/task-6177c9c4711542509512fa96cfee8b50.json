@@ -40,7 +40,7 @@
     }
   ],
   "planRevision": 5,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -53,16 +53,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-19T13:17:13.570Z",
-  "updatedAt": "2026-10-24T22:52:16.190Z",
+  "updatedAt": "2026-10-24T23:56:55.614Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T22:49:43.760Z",
     "plannedStepCount": 2,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 2,
+    "doneAt": "2026-10-24T23:56:55.614Z",
+    "wallClockMs": 4031854
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
-    "worker-9cda703c"
+    "worker-9cda703c",
+    "qa-b0c1741e"
   ],
   "tier": "light",
   "effort": "medium",
@@ -125,5 +128,9 @@
     "kind": "completion",
     "sessionId": "worker-9cda703c@2026-10-24T22:50:35Z",
     "at": "2026-10-24T22:52:16.189Z"
-  }
+  },
+  "completedAt": "2026-10-24T23:56:55.614Z",
+  "reviewCompletedAt": "2026-10-24T23:56:55.614Z",
+  "reviewSummary": "Reviewed completion commit a9989be6 (recorded in task.commits, kind=completion, pushed; `git branch --contains` shows it on moe/work-2026-10-24). Source diff is 7 net changed lines across 2 test files (numstat 1/1 deliveryProjection.test.ts, 6/4 qaApprove.test.ts), plus the task's own .moe/tasks JSON. Only the it() title, the comment block and one it.each case label changed. The `padded` fixture, the `{ command: `  ${GATE} ` }` input and every assertion are byte-identical. Files are LF with no CRs, and `git diff --check` is clean.\n\nDoD 1: the stale 'PowerShell wrapper records it verbatim' title and comment, and the 'padded as the ps1 wrapper records it' label, are gone. A grep for `verbatim|ps1 wrapper|PowerShell wrapper` in both files returns nothing. The new wording names real sources: pre-fix records, an older bundled wrapper, and direct record_check_run callers. I confirmed the claims it makes. moe-agent.ps1 now trims the qualityGate (`$qg.Trim()` at line 2319, the line number has drifted from the cited 2036). checkRunStore.ts requireCommand is documented as \"Kept verbatim: never trimmed\". f1399a3 is the task-8fc35d31 completion.\n\nDoD 2: I re-ran `npx vitest run src/tools/qaApprove.test.ts src/state/deliveryProjection.test.ts` myself from a git-archive scratch export of a9989be6 with Linux-native node_modules. Result: 2 files passed, 190 of 190 tests. I ran the same command on the parent a9989be6~1: also 2 files, 190 of 190. The test count is unchanged.\n\nI did not run `npm run build` in the shared checkout (prebuild regenerates initFiles.ts). The scratch directories are removed. The epic's \"new test fails on old behaviour\" rail does not apply because there is no behaviour change; the worker stated this. There were no scope or rail violations, and nothing was deleted or weakened. The two target files are clean in the working tree. No complexity findings.",
+  "requiredCheckAtDone": null
 }
