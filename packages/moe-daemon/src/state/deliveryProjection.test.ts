@@ -229,7 +229,7 @@ describe('deliveryProjection', () => {
       ['a runner-observed pass of another command', { command: 'node lint.cjs' }, false],
       ['a runner-observed failure of the gate', { exitCode: 1 }, false],
       ['a runner-observed pass of the gate', {}, true],
-      ['a runner-observed pass of the gate, padded as the ps1 wrapper records it', { command: `  ${GATE} ` }, true],
+      ['a runner-observed pass of the gate, padded as a pre-fix or direct record_check_run report carries it', { command: `  ${GATE} ` }, true],
     ])('serves %s with its source and the policy verdict', (_, run, satisfied) => {
       strict();
       expect(latest(run)).toStrictEqual(served(run, satisfied));

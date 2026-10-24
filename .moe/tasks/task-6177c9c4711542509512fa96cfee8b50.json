@@ -8,14 +8,44 @@
     "Only test titles, case labels and comments change. Fixtures, inputs and assertions are byte-identical, and `npx vitest run src/tools/qaApprove.test.ts src/state/deliveryProjection.test.ts` (in packages/moe-daemon) passes with the same test count as before the change"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Labels and comments only. Do not change behaviour, error handling or any fixture.\n\nFirst record the baseline: `cd packages/moe-daemon && npx vitest run src/tools/qaApprove.test.ts src/state/deliveryProjection.test.ts`. Note the passed-test count.\n\n1. packages/moe-daemon/src/tools/qaApprove.test.ts:1451, test title. Replace the stale reason with a real source of a padded record, e.g. 'accepts a pass recorded with a padded qualityGate, as an older wrapper or a direct record_check_run caller can record it'.\n2. Its comment at 1452-1454 should say:\n   - a hand-edited project.json can pad the gate;\n   - both wrappers now trim it before running and recording (task-8fc35d31, f1399a3);\n   - a padded record can still come from runs recorded before that fix, from an older wrapper an IDE plugin still bundles, or from a direct moe.record_check_run call (state/checkRunStore.ts keeps `command` as sent);\n   - no shell sees the padding, so the run is the gate the policy requires.\n3. packages/moe-daemon/src/state/deliveryProjection.test.ts:232, case label. For example: 'a runner-observed pass of the gate, padded as a pre-fix or direct record_check_run report carries it'.\n\nKeep the `padded` value, the `{ command: ... }` inputs and every assertion byte-identical. Both files are LF; keep it that way.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "note": "Recorded baseline of 190 passing tests from an exported scratch tree because the shared checkout's Windows node_modules fails on Linux. Edited only the requested title/comment/case label; fixtures, inputs and assertions are untouched. Shared checkout contains 467 foreign/pre-existing dirty paths, left unchanged.",
+      "startedAt": "2026-10-24T22:51:06.119Z",
+      "completedAt": "2026-10-24T22:51:32.843Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification and self-check.\n- NAMED COMMAND (complete_task evidence): `cd packages/moe-daemon && npx vitest run src/tools/qaApprove.test.ts src/state/deliveryProjection.test.ts`. It must pass with the SAME test count as the step-1 baseline. Run it where node_modules matches the OS.\n- Do NOT run `npm run build` in the shared checkout: its prebuild regenerates src/generated/initFiles.ts from peers' uncommitted docs/roles edits.\n- `git diff` on the two files must show only the title, label and comment lines. `grep -n 'verbatim\\|ps1 wrapper\\|PowerShell wrapper'` must find nothing stale in them.\n- The epic rail asks for a test that fails on the old behaviour. It does not apply here, because no behaviour changes; say so in the completion summary.\n- No Git writes; no .moe edits.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.test.ts",
+        "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+      ],
+      "note": "Adversarial review: the only diff is test title/case-label/comment prose; padded fixture values, inputs, and assertions remain unchanged, so no state/concurrency/side-effect concerns apply. Stale wrapper wording grep is clean and git diff --check passes. Required verification in Linux-compatible scratch export passed 190 tests (baseline also 190); no behavior change, so epic new-regression-test rail does not apply. Shared checkout foreign dirty paths were not touched.",
+      "startedAt": "2026-10-24T22:51:34.501Z",
+      "completedAt": "2026-10-24T22:51:52.680Z"
+    }
+  ],
+  "planRevision": 5,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human asked to move backlog tasks by order. No prerequisites; LOW priority keeps it behind every HIGH task in the planning queue.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "LOW",
@@ -23,5 +53,50 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-19T13:17:13.570Z",
-  "updatedAt": "2026-09-19T13:17:13.570Z"
+  "updatedAt": "2026-10-24T22:51:59.880Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-24T22:49:43.760Z",
+    "plannedStepCount": 2,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85",
+    "worker-9cda703c"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T22:50:25.821Z",
+  "planningNotes": {
+    "approachesConsidered": "This is a labels-only fix, so the skeleton is just two phases: edit, then verify with the same test count. No self-review mutation step: no logic changes, and rewording a title cannot change a test's verdict.",
+    "codebaseInsights": "The lines match the task as filed: qaApprove.test.ts title at 1451 with the comment at 1452-1454, and deliveryProjection.test.ts label at 232. Both files are LF and clean in git.",
+    "risks": "A title change renames the vitest case, so any external filter on the old name would stop matching; none is known. Keep the npm run build trap in mind.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaApprove.test.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T22:50:25.901Z",
+  "workStartedAt": "2026-10-24T22:51:06.119Z",
+  "reviewStartedAt": "2026-10-24T22:51:59.878Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx vitest run src/tools/qaApprove.test.ts src/state/deliveryProjection.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\nTests  190 passed (190)\nDuration  4.09s",
+    "reportedAt": "2026-10-24T22:51:59.878Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/qaApprove.test.ts",
+    "packages/moe-daemon/src/state/deliveryProjection.test.ts"
+  ],
+  "completionSummary": "Reworded the two stale test descriptions to identify pre-fix/older-wrapper/direct record_check_run sources for padded commands, and clarified that both current wrappers trim qualityGate. Only test labels/comments changed; no behavior change, so the epic's behavior-regression test rail is inapplicable. Targeted Vitest baseline and final were both 190 passed across 2 files; verification ran in a Linux-compatible scratch export because shared checkout dependencies are Windows-oriented."
 }
