@@ -13,9 +13,74 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Producer check first. No edits until it passes.\nCQ-V01 was split (SPIDR, QA's 400-line cap). This task is the FINAL slice and proves all three DoD items end to end. It builds on:\n- CQ-V01a, task-80f76f99cca64dc1909765af71977e46: `TaskExecutionContract.requiredChecks: ProtectedCheckDefinition[] {id, command, configs?, scripts?, assertionRoots?}`, plus definitionDigest() and protectedPaths() in packages/moe-daemon/src/delivery/requiredChecks.ts.\n- CQ-V01b, task-db57e0148a9d47839c4159aab8a8c16d: the daemon-owned `Task.requiredCheckSnapshot {version 1, revision, definitionDigest, entries[{path, oid}]}`, measured by submit_plan, plus readRequiredCheckSnapshot(task), which returns the snapshot only while its digest matches the current contract.\n\n1. Read the LANDED code: delivery/requiredChecks.ts exports and the types in types/schema.ts. Where a name or shape differs from this plan, follow the landed code and say so in complete_step's note.\n2. Contest check: call `moe.get_commit_scope { taskId, phase: 'preflight' }`. state/candidateStore.ts is declared by the seatless task-07474ee438f34021a23809f9c764d15c.\n   - If task-c2cb5cf717794c169bda13934e4ee877 (the idle-peer landing exception) is DONE, any editor works.\n   - Otherwise edit candidateStore.ts only with Edit/Write. A seat without those tools must call moe.report_blocked { blockedOnTaskIds: ['task-07474ee438f34021a23809f9c764d15c'], reason: 'needs an Edit/Write seat for contested candidateStore.ts' }.\n3. Line endings: keep each file's current EOL. task-709f6691 renormalizes the CRLF daemon files before V01a. Verify that `git diff --stat` matches `git diff --ignore-cr-at-eol --stat`.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Producer check first. No edits until it passes.\n\nCQ-V01 was split by SPIDR to stay under QA's 400-line cap. This task is the FINAL slice, and it proves all three DoD items end to end. It builds on two producers:\n- CQ-V01a, task-72efb0b663ec4b3da35a685ebb30ed34. It supersedes the archived task-80f76f99. It adds `TaskExecutionContract.requiredChecks: ProtectedCheckDefinition[] {id, command, configs?, scripts?, assertionRoots?}`, plus definitionDigest() and protectedPaths() in packages/moe-daemon/src/delivery/requiredChecks.ts.\n- CQ-V01b, task-db57e0148a9d47839c4159aab8a8c16d. It adds the daemon-owned `Task.requiredCheckSnapshot {version 1, revision, definitionDigest, entries[{path, oid}]}`, measured by submit_plan, plus readRequiredCheckSnapshot(task). That function returns the snapshot only while its digest matches the current contract.\n\n1. Read the LANDED code: the exports of delivery/requiredChecks.ts and the types in types/schema.ts. Where a name or shape differs from this plan, follow the landed code and say so in complete_step's note.\n2. Contest check: call `moe.get_commit_scope { taskId, phase: 'preflight' }`. state/candidateStore.ts is declared by the seatless task-07474ee438f34021a23809f9c764d15c.\n   - If task-c2cb5cf717794c169bda13934e4ee877 (the idle-peer landing exception) is DONE, any editor works.\n   - Otherwise edit candidateStore.ts only with Edit/Write. A seat without those tools must call moe.report_blocked { blockedOnTaskIds: ['task-07474ee438f34021a23809f9c764d15c'], reason: 'needs an Edit/Write seat for contested candidateStore.ts' }.\n3. Line endings: keep each file's current EOL. task-709f6691 renormalizes the CRLF daemon files before V01a runs. Check that `git diff --stat` matches `git diff --ignore-cr-at-eol --stat`.",
+          "reason": "CQ-V01a was re-created as task-72efb0b663ec4b3da35a685ebb30ed34 with a corrected DoD. The old id task-80f76f99 was archived before any work. Producer names are unchanged.",
+          "amendedBy": "architect-6e3edf85",
+          "amendedAt": "2026-10-24T22:43:16.910Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Candidates carry runner-measured protected entries. Load test-driven-development and write the tests first.\n\n- types/schema.ts: `Candidate.protectedEntries?: readonly { path: string; oid: string }[]`. JSDoc: the runner's `git ls-tree -r` entries for the task's protected paths in the candidate tree. Reported, never verified by the daemon (V03 authenticates runners later).\n- state/candidateStore.ts validateCandidateParams accepts an optional protectedEntries. Refuse rather than coerce, with INVALID_INPUT naming the field (e.g. protectedEntries[3].oid):\n  - an array of at most 2000 entries;\n  - each entry has exactly {path, oid};\n  - path equals its normalizeAffectedFile form;\n  - oid is lowercase 40-hex;\n  - entries are strictly ascending by path, with no duplicates.\n  An absent field keeps today's record byte-for-byte; no empty key is written.\n- Immutability: replayOrRefuse compares protectedEntries deeply (canonical JSON). A same-id record whose entries differ gives CANDIDATE_IMMUTABLE; a byte-identical re-record stays idempotent.\n- tools/recordCandidate.ts inputSchema declares protectedEntries (items: object {path, oid}, additionalProperties false), with that description.\n- Tests: accept a valid list, refuse each invalid shape, immutability with entries, and absent entries unchanged. Put them in the existing candidateStore and recordCandidate test files or in step 5's file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The shared delivery predicate enforces protected required checks (packages/moe-daemon/src/delivery/policy.ts). It is the one completion and dependency predicate; there is no parallel one.\n\n1. Vocabulary, built only here:\n   - EVIDENCE_TOKENS.protectedChecksUnapproved = 'protected-checks-unapproved';\n   - EVIDENCE_TOKENS.protectedChecksUnmeasured = 'protected-checks-unmeasured';\n   - PROTECTED_CHECK_CHANGED_PREFIX = 'protected-check-changed:', with protectedCheckChangedToken(path).\n2. protectedCheckShortfall(state, task):\n   - No executionContract.requiredChecks -> [] (unchanged).\n   - snapshot = readRequiredCheckSnapshot(task). null -> [protectedChecksUnapproved] (DoD 2: the required acceptance overlay comes ONLY from the approved snapshot, never from candidate data or live settings).\n   - current candidate = the last of listCandidatesForTask, the same rule hasPassingCheck uses. If there is none, or it has no protectedEntries -> protectedChecksUnmeasured.\n   - Otherwise compare the candidate's entries with snapshot.entries, restricted to paths equal to a protectedPaths() entry or under one followed by '/'. A changed oid, a removed path, or an ADDED path (a candidate-added test under an assertion root, DoD 3) each gives protectedCheckChangedToken(path).\n     - Tokens are sorted by path. At most 10, then one 'protected-check-changed:+<n> more'.\n     - The path stays held until a new approval revision re-measures it (DoD 1: submit_plan with requiredCheckRevision = the candidate tree).\n   - Then, for every APPROVED definition: requiredCheckToken(def.command) unless a CheckRun exists on the current candidate, on its own treeSha, with run.command.trim() === def.command, exitCode 0, source runner-observed. Factor the shared match out of hasPassingCheck, so a candidate-added test command never satisfies a protected one (DoD 3).\n   - Error handling: wrap the lookups like hasPassingCheck. A throw is logged and reported as protectedChecksUnmeasured plus the definitions' required-check tokens. Fail closed.\n3. evaluateDeliveryEvidence appends protectedCheckShortfall after checkShortfall, de-duplicated in first-seen order: the same command owed by qualityGate appears once.\n4. legacy still returns early, unchanged. Update the module header comment on what the check requirement now covers.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Consumers read the same verdict.\n- state/deliveryProjection.ts:\n  - checkOwed is also true when the task's contract has requiredChecks.\n  - requiredCheckSatisfiedFor returns false when any missing token starts with 'protected-check' (both the plural protected-checks-* tokens and the protected-check-changed: prefix), alongside the existing required-check rule.\n  This way JetBrains/VS Code never show a satisfied check while protected checks drifted. The client display wording stays as it is; the CQ-V12 sweep owns the docs.\n- tools/getContext.ts (next to executionContract, ~422): serve `requiredCheckSnapshot: readRequiredCheckSnapshot(task)` to every role, only when it is non-null. This is the overlay source a runner loads: the protected files at `revision`. A stale or forged snapshot is never served.\n- Error handling: a malformed stored snapshot is omitted, never thrown into get_context.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/deliveryProjection.ts",
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "DoD-level tests in a new file, packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts.\nUse ToolTestHarness with settings.deliveryPolicy 'local-branch': non-legacy and evaluated today, with no verified-local needed. Seed the snapshot through V01b's submit_plan path on a temporary git repo if its helper is exported; otherwise seed the daemon-owned field directly in harness state, with definitionDigest(defs) computed by the landed helper. Assert exact missingEvidence arrays with toEqual.\n(a) Match: candidate entries equal to the snapshot, plus a passing runner-observed run of each approved command on the candidate tree -> no protected token.\n(b) DoD 1:\n  - a changed oid gives protected-check-changed:<path>;\n  - a removed file gives its token;\n  - after a NEW approval revision whose snapshot equals the candidate's entries, the tokens clear.\n(c) DoD 3:\n  - a test file added under an assertion root gives its token;\n  - a passing run of a different, candidate-added command leaves required-check:<approved command> missing.\n(d) DoD 2:\n  - the contract's requiredChecks changed through updateTask without resubmission (digest mismatch) gives protected-checks-unapproved;\n  - get_context serves requiredCheckSnapshot to worker and QA only while it is valid.\n(e) A candidate without protectedEntries gives protected-checks-unmeasured.\n(f) A legacy deliveryPolicy, and a task without requiredChecks, are unchanged: no protected tokens, and deliveryProjection omits or keeps today's values.\n(g) Shared predicate: a dependent of a drifted task is withheld by the dependency gate, and deliveryProjection.requiredCheckSatisfied is false on drift and true on a match.\nRun `cd packages/moe-daemon && npx vitest run src/delivery/requiredChecks.delivery.test.ts` while iterating.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification gate (run once, fresh).\nThis changes a shared wire shape (Candidate, the delivery tokens, get_context), so run the full suite:\n- NAMED COMMAND: `cd packages/moe-daemon && npm test`, plus `npx tsc --noEmit`.\n- Run them where node_modules matches the OS, per the epic note: on Linux use a separate native dependency install with unchanged lockfile and source hashes, and never overwrite the Windows node_modules. Use a Linux-only PATH, with MOE_* unset.\n- Supply the npm test output to complete_task.\nA failure outside this task's files must be shown to fail on a clean `git archive HEAD` snapshot before you call it pre-existing.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task.\n\nAttack:\n- Can a candidate change, delete or add a file under a protected path and still pass?\n- Can a run of another command, or on another tree, or a reported (not runner-observed) run, satisfy an approved definition?\n- Does a stale or forged snapshot ever count, or get served?\n- Do null, empty or huge inputs (2000 entries, 20 definitions) behave?\n- What about two record_candidate calls racing? Immutability holds under the mutex.\n- Is legacy untouched?\n- Path matching must be exact and case-sensitive, like git paths, with prefix matching only on '/'. 'tests' must not cover 'tests-old/x'.\n\nMutation proof, each in a scratch copy, each must turn a step 5 case red:\n(1) skip the entry comparison -> (b) red;\n(2) ignore ADDED entries -> (c) red;\n(3) accept any passing command -> (c) red;\n(4) take definitions without the readRequiredCheckSnapshot validity check -> (d) red;\n(5) treat missing protectedEntries as a match -> (e) red;\n(6) apply under legacy -> (f) red;\n(7) prefix-match without the '/' boundary -> add a case and make it red.\nAdd a test case for any survivor. If any byte changed, rerun step 6's named command and submit THAT output.\n\nWrap-up: report modifiedFiles, i.e. the six source/test files plus the new test file. No Git writes; no .moe edits; verified-local stays refused.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 2,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,19 +93,46 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:52.496Z",
-  "updatedAt": "2026-10-24T22:12:31.931Z",
+  "updatedAt": "2026-10-24T22:43:16.910Z",
   "dependsOn": [
-    "task-bf86954dc6bc43279d96d77cf0ebff88"
+    "task-bf86954dc6bc43279d96d77cf0ebff88",
+    "task-db57e0148a9d47839c4159aab8a8c16d"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-24T21:24:28.979Z"
+    "firstClaimAt": "2026-10-24T21:24:28.979Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 7
   },
   "contextFetchedBy": [
-    "architect-473624b4"
+    "architect-473624b4",
+    "architect-6e3edf85"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
-  "blockedAt": null
+  "blockedAt": null,
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T22:40:43.141Z",
+  "planningNotes": {
+    "approachesConsidered": "Split by SPIDR into V01a (shape), V01b (daemon-measured snapshot) and V01 (this final slice). The full feature is about 900 lines, and QA rejects anything over 400 net. V01 keeps its human-owned DoD and proves it end to end.\n\nRejected:\n- Daemon git reads of candidate trees. record_candidate's documented contract is 'never checked against git', and isolated VM runners' trees need not exist in the host repo. The runner reports protectedEntries instead, and V03 authenticates it.\n- Per-file raw-bytes hashing. It would disagree with git's EOL normalization (the b62c9fc7 lesson). Git object ids on both sides compare exactly.\n- A second completion predicate. The epic demands one shared predicate, so tokens flow through evaluateDeliveryEvidence.\n- Overlay execution, i.e. running checks with protected files restored. That is V04 (frozen focused check dispatch). V01 only names the overlay source and enforces it in the predicate.",
+    "codebaseInsights": "delivery/policy.ts: evaluateDeliveryEvidence. legacy returns early; checkShortfall and hasPassingCheck pick the current candidate as the last by createdAt then id, and use runner-observed exit-0 runs on the candidate tree. Its tokens are consumed by qa_approve, the dependency gate and deliveryProjection.\n\nstate/candidateStore.ts: validateCandidateParams refuses rather than coerces; replayOrRefuse compares the RECORDED_FIELDS scalars, so arrays need a deep compare. tools/recordCandidate.ts: inputSchema has additionalProperties false.\n\nstate/deliveryProjection.ts: checkOwed and requiredCheckSatisfiedFor (~66-82). tools/getContext.ts: executionContract projection at ~422.\n\nThe settings.deliveryPolicy 'local-branch' path is evaluated today without verified-local, which makes tests possible. Strict execution-profile tasks throw until verified-local is certified.",
+    "risks": "- V01a and V01b are unlanded at plan time. Step 1 makes the worker follow the landed names.\n- candidateStore.ts is contested by the stale task-07474ee4 until c2cb5cf7 lands, so edit it with Edit/Write.\n- Under a non-legacy deliveryPolicy, a task with requiredChecks now blocks QA approval and dependents until its protected checks pass. That is intended; legacy projects are unaffected.\n- Token-list growth is capped at 10 changed paths plus a summary.\n- The client projections now read false for protected drift. JetBrains/VS Code wording and the docs are held for CQ-V12.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/tools/getContext.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T22:40:43.251Z"
 }

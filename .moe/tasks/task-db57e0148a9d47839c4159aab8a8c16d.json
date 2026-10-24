@@ -1,0 +1,44 @@
+{
+  "id": "task-db57e0148a9d47839c4159aab8a8c16d",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V01b] Daemon-measured approved check snapshot",
+  "description": "Objective: bind the approved protected check definitions (CQ-V01a executionContract.requiredChecks, task-80f76f99cca64dc1909765af71977e46) to the exact content identity of their protected files at an approved snapshot. The daemon records this identity itself, so CQ-V01 (task-bde8654052f648f9b209174c3708322b) can load the required acceptance overlay from it.\n\nDeliverable: a producer contract. CQ-V01 consumes these exact names.\n- types/schema.ts:\n  - `RequiredCheckSnapshot = { version: 1; revision: string; definitionDigest: string; entries: { path: string; oid: string }[] }`.\n    - revision: the resolved 40-hex tree id that was measured.\n    - definitionDigest: CQ-V01a's definitionDigest of the measured requiredChecks.\n    - entries: every blob under every protected path at revision, sorted by path, with lowercase 40-hex oids.\n  - `Task.requiredCheckSnapshot?: RequiredCheckSnapshot`, daemon-owned.\n- delivery/requiredChecks.ts gains:\n  - measureRequiredCheckSnapshot(projectRoot, defs, revision = 'HEAD', run?): read-only and bounded the way util/cachedPlanPaths.ts findCachedPlanPaths is. Export and reuse its masked runGit, toplevel check and time budget. It runs `git rev-parse --verify <rev>^{tree}` and then `git ls-tree -r -z <tree> -- <literal pathspecs>`, parsed strictly, with at most 2000 entries.\n  - readRequiredCheckSnapshot(task): returns the stored snapshot only when it is well-formed and its definitionDigest equals the definitionDigest of the task's CURRENT executionContract.requiredChecks; otherwise null (fail closed).\n- tools/submitPlan.ts, when the validated contract has requiredChecks:\n  - measures outside the state mutex, as the cached-path lookup does, then revalidates under the lock;\n  - accepts an optional `requiredCheckRevision` (a 40-hex commit or tree id; default HEAD), so an architect can approve a candidate's tree as the new snapshot;\n  - writes the snapshot in the same PLAN_SUBMITTED write as the plan, and clears it when the resubmitted contract has none.\n  - Refusals: a configs or scripts path with no entry at the revision, more than 2000 entries, an unresolvable revision, or any git failure refuses with INVALID_INPUT and writes nothing.\n  - An assertion root with no files is recorded as covering nothing.\n- state/taskStore.ts: updateTask strips a caller-supplied requiredCheckSnapshot from every writer, as it does executionPolicySnapshot. Only submit_plan's PLAN_SUBMITTED path sets or clears it, through a daemon-internal parameter that no MCP tool or plugin message can reach.\n\nNOT in scope:\n- candidate protected entries, the delivery predicate and get_context (CQ-V01);\n- checking candidate shas against git automatically;\n- SHA-256 object ids (task-07474ee4);\n- running checks;\n- docs, held for CQ-V12;\n- verified-local.\nPlans without requiredChecks behave exactly as today and run no Git command.\n\nVerification (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "submit_plan with requiredChecks persists requiredCheckSnapshot (resolved tree, definitionDigest, sorted blob entries) in the same write as planRevision. requiredCheckRevision measures the named commit or tree, and a resubmission without requiredChecks clears the field. Proven against a real temporary git repository in vitest.",
+    "Each of these refuses submit_plan with INVALID_INPUT and leaves the task unchanged: a configs or scripts path absent at the revision, more than 2000 entries, an unresolvable revision, a git failure. An empty assertion root records no entries. Proven by vitest cases.",
+    "updateTask never lets a caller set, alter or clear requiredCheckSnapshot. readRequiredCheckSnapshot returns null for a stale snapshot (digest mismatch with the current contract) or a malformed one. Proven by vitest cases.",
+    "Plans without requiredChecks write no requiredCheckSnapshot key and run no git command, asserted with an injected runner.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "The daemon's only new Git reads are this bounded, read-only measurement inside submit_plan: no fetch, checkout, writes, hooks or network, with config masked as in util/cachedPlanPaths.ts."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-72efb0b663ec4b3da35a685ebb30ed34"
+  ],
+  "priority": "HIGH",
+  "order": 227.4,
+  "comments": [
+    {
+      "id": "comment-483d74af6f30466889b440c39f31ea59",
+      "author": "architect-6e3edf85",
+      "content": "CQ-V01a is now task-72efb0b663ec4b3da35a685ebb30ed34. The id task-80f76f99 in this description was archived before any work. The producer names are unchanged: TaskExecutionContract.requiredChecks, definitionDigest and protectedPaths in delivery/requiredChecks.ts. Note: every PLAN_SUBMITTED advances planRevision.",
+      "timestamp": "2026-10-24T22:43:01.056Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T22:38:58.620Z",
+  "updatedAt": "2026-10-24T22:43:01.056Z"
+}

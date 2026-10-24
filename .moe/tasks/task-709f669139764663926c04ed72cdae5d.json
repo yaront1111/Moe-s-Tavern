@@ -17,32 +17,63 @@
     {
       "stepId": "step-1",
       "description": "Pre-flight gate. READ-ONLY: no file edits and no Git writes (only the wrapper lands). Any live-tree change before step 3 could be swept into a checkpoint commit and break the one-dedicated-commit rail.\nThe 16 paths (named in every step; affectedFiles lists only .gitattributes because the plan-size gate rejects more than 10 distinct files and the task rail forbids splitting - step 3 attributes the 16 with moe.declare_files): .github/workflows/ci.yml, moe-jetbrains/build.gradle.kts, moe-jetbrains/gradlew.bat, moe-vscode/scripts/bundle-assets.mjs, packages/moe-daemon/src/server/WebSocketServer.ts, packages/moe-daemon/src/state/taskStore.ts, packages/moe-daemon/src/state/validators.test.ts, packages/moe-daemon/src/state/validators.ts, packages/moe-daemon/src/tools/submitPlan.test.ts, packages/moe-daemon/src/types/schema.ts, scripts/tests/onboarding.mjs, scripts/tests/usage-receipt.test.mjs, scripts/tests/usage-report.test.mjs, scripts/usage-receipt.mjs, scripts/usage-report.mjs, scripts/usage-session.mjs.\nAll checks must pass, else stop:\n(a) `git ls-files --eol | grep '^i/crlf'` lists a subset of the 16 (a path that is already LF in HEAD is skipped and named in the summary). Any CRLF path outside the 16 -> moe.report_blocked with the list and needsFrom 'architect' (the rail fixes the set).\n(b) `git status --porcelain -- .gitattributes <the 16>` shows nothing except moe-jetbrains/gradlew.bat, and `git diff --ignore-cr-at-eol --quiet -- moe-jetbrains/gradlew.bat` exits 0 (its known EOL-only dirt: a CRLF blob under its own `text eol=crlf` rule). Any other dirt is someone's uncommitted work -> report_blocked naming the owner from (c).\n(c) `moe.get_commit_scope { taskId, phase: 'postflight' }`: for every peerDeclared entry on .gitattributes or one of the 16, look up that task. If it has an assigned seat (in flight), OR your CLI has no Edit/Write tool (codex/gemini/grok seats have an always-empty TOOL tier, and a contested path lands only with a TOOL witness), call `moe.report_blocked { blockedOnTaskIds: [those ids], reason }` and end the session; it auto-clears when they reach DONE. A peer without an assigned seat is fine for a Claude seat: step 3 gives those paths TOOL witnesses.\nKnown holders are already wired as dependsOn: CQ-M01 (done), CQ-F03 task-bf86954d (schema.ts, taskStore.ts, validators.ts) and CQ-M04c task-e4adf15c (usage-report.test.mjs).\nError handling: any git or tool error here is a stop, never a guess.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Read-only preflight passed: exactly the 16 planned i/crlf paths; only gradlew.bat dirty and ignore-cr-at-eol diff exits 0. get_commit_scope via documented moe-call MCP helper: none of the 17 scope paths peer-declared; asserted/declared empty. Required sibling entries all landed=true. Pre-existing unrelated dirty paths untouched. No live edits or Git writes.",
+      "startedAt": "2026-10-24T22:18:40.087Z",
+      "completedAt": "2026-10-24T22:19:18.005Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification gate on a SNAPSHOT of the result. Still no live-tree edits. Build it: `SNAP=$(mktemp -d /tmp/moe-eol-gate.XXXXXX); git archive HEAD | tar -x -C $SNAP`. In $SNAP, prepend the line `* text=auto eol=lf` to .gitattributes and convert the 15 text=auto paths (the 16 minus moe-jetbrains/gradlew.bat, which stays CRLF on disk) with step 3's byte-level converter (replace b'\\r\\n' with b'\\n', nothing else). Then run each suite and record its command, exit code and output tail:\n1. `cd packages/moe-daemon && npm test` is THE named verification command for complete_task. Run it from $SNAP/packages/moe-daemon with node_modules symlinked to the native Linux install (`ln -s /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules $SNAP/packages/moe-daemon/node_modules`; if that is gone, npm ci in a separate scratch copy with an unchanged lockfile), every MOE_* variable unset and a Linux-only PATH. The shared checkout's node_modules are Windows-native; never install there.\n2. `bash scripts/tests/postflight.sh` from $SNAP (the harness root is its own directory; set MOE_POSTFLIGHT_TIMEOUT_SEC=180 on a busy box).\n3. scripts/tests/postflight.ps1: copy $SNAP/scripts into a Windows-visible scratch dir (e.g. /mnt/d/moe-scratch/eol-<ts>/scripts) and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\eol-<ts>\\scripts\\tests\\postflight.ps1'` (Windows PowerShell 5.1 lives in /mnt/c/Windows/System32/WindowsPowerShell/v1.0/; pipe its output through `tr -d '\\0'`). If no PowerShell can run it, say so plainly in the summary; never report a pass you did not run.\n4. Parity: `bash scripts/tests/parity-check.sh`, and scripts/tests/parity-check.ps1 through the same powershell.exe route.\n5. Cheap extras on the converted scripts: `node --check` on each converted .mjs, and `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-report.test.mjs`.\n6. BOM: `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints `ef bb bf`.\nRun the long harnesses in the background, in parallel. If a suite fails, rerun it on a plain `git archive HEAD` snapshot: red there too means pre-existing (prove it and report it); red only on the result means stop and report_blocked with the evidence. Never edit tests or sources (rail: no content edits).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "All gates freshly passed on exact proposed-result archive /tmp/moe-eol-gate.aqvmxq0x at 60f69fd8017154502ca59b7edf81033b8a79fa5a. cd packages/moe-daemon && npm test exit 0: 156 files, 3534 passed/15 skipped; native Linux deps, identical lockfile, MOE_* unset/Linux PATH. bash scripts/tests/postflight.sh exit 0 (504s); Windows PS5.1 postflight.ps1 exit 0 (733s), both commit-scope counts 34; parity-check.sh/.ps1 each exit 0; node --check seven converted mjs exit 0; node --test usage-receipt.test.mjs usage-report.test.mjs exit 0, 51/51; BOM ef bb bf. First complete gate at 47769e1 also passed; repeated all after unrelated peer landing for freshness. No live edits. First-line contract check fails old HEAD (exit 1), passes proposed result (exit 0). New tests forbidden by no-content-edits rail. Immediate recheck: source revision unchanged, all 17 bytes equal HEAD, no peerDeclared intersections. Results /tmp/moe-eol-run.json.",
+      "startedAt": "2026-10-24T22:19:18.088Z",
+      "completedAt": "2026-10-24T22:44:40.485Z"
     },
     {
       "stepId": "step-3",
       "description": "Apply to the live tree. Do this LAST and in one sitting, then go straight to step 4 and complete_task: the wrapper lands at session exit, so the window in which a peer's landing could sweep these bytes stays at minutes.\n(a) .gitattributes: insert `* text=auto eol=lf` as the new first line with your editing tool. Every existing line stays byte-identical after it (`git diff -- .gitattributes` = exactly one added line at the top).\n(b) Convert the 15 text=auto paths (the 16 minus gradlew.bat) with ONE deterministic script, e.g. `python3 -I`. For each path it reads `git cat-file blob HEAD:<path>` and the working file as bytes, and REFUSES (non-zero exit, nothing written) unless they are byte-identical, so no peer's bytes can ride in. It then writes `data.replace(b'\\r\\n', b'\\n')` and reports any lone CR it kept. The result equals what `git add --renormalize` stores under the new attribute.\nDo NOT run git add, --renormalize or any other Git write. With the CRLF blob still in the index, the wrapper's `git add` would keep CRLF (git's safer-autocrlf rule), and moe_temp_index_build's hash-object comparison would drop the path as MOE_ATTR_CONCURRENT. An LF working copy makes both sides agree.\n(c) moe-jetbrains/gradlew.bat: no edit. It stays CRLF on disk, and its `text eol=crlf` rule makes the wrapper store an LF blob.\n(d) TOOL witnesses: Claude seats only, and only for paths that step 1 found peer-declared by a task without a seat. After the conversion, Read the file's first lines, then do an Edit round trip (append a marker to line 1, then remove it). `sha256sum` before and after must match; on gradlew.bat this also proves CRLF survived.\n(e) `moe.declare_files { taskId, paths: [.gitattributes plus every one of the 16 that changed], note }`. This is required for gradlew.bat, whose EOL-only dirt predates the session and is otherwise MOE_ATTR_PREEXISTING and never committed; it is harmless for the rest. Report the same paths in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".gitattributes"
-      ]
+      ],
+      "modifiedFiles": [
+        ".gitattributes",
+        ".github/workflows/ci.yml",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-jetbrains/gradlew.bat",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/usage-receipt.test.mjs",
+        "scripts/tests/usage-report.test.mjs",
+        "scripts/usage-receipt.mjs",
+        "scripts/usage-report.mjs",
+        "scripts/usage-session.mjs"
+      ],
+      "note": "Prepended exact default attribute via apply_patch, retaining every prior attribute byte. Python -I converter prevalidated all HEAD/worktree bytes before any conversion, then replaced CRLF only in the 15 text=auto paths; every retained loneCR count=0. gradlew.bat not edited and stays CRLF; declared alongside all normalization paths for wrapper delivery. No Git writes, installs, tests/source content edits, or other live path writes. No contested scope, so Claude-only TOOL round trips not applicable on this Codex seat. Reused stdlib byte replacement, no repo helper or dependency added (ponytail). All 17 declared and attributed for one dedicated completion commit; wrapper owns landing.",
+      "startedAt": "2026-10-24T22:44:40.602Z",
+      "completedAt": "2026-10-24T22:44:55.427Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review, read-only proofs, then complete_task immediately (load adversarial-self-review).\nProofs on the live tree, all read-only:\n- `head -n1 .gitattributes` is exactly `* text=auto eol=lf`, and the rest is unchanged.\n- `git ls-files --eol -- <15 paths>` shows `w/lf attr/text=auto eol=lf` (the i/ column stays crlf until the wrapper lands and refreshes the index); gradlew.bat shows `w/crlf attr/text eol=crlf`.\n- `git diff --ignore-cr-at-eol --stat -- .gitattributes <the 16>` lists only .gitattributes (1 insertion).\n- Each converted path `cmp`s equal to its CR-stripped HEAD blob. `git hash-object --stdin-paths` (read-only, no -w) over the 16 equals `git hash-object --stdin` of each CR-stripped HEAD blob, so the landing stores LF blobs with identical content.\n- `moe.get_commit_scope { taskId, phase: 'postflight' }`: your asserted/declared paths are exactly the changed set, and nothing else of yours is dirty. Re-check peerDeclared against step 1.\nAttack the result: could a peer byte ride in (cmp guard), a lone CR be lost, the BOM change, an extra path land, or a checkpoint have carried part of it (none should exist, since nothing was edited before step 3)? If anything changed after step 2, rerun step 2 first.\nThen complete_task with verification = step 2's daemon command, exit 0 and its output tail. The summary lists every suite result and the proofs above, plus these QA notes:\n(1) The completion commit also carries the wrapper's .moe BOARD records (commitBoardState). Check DoD 3 as `git diff --ignore-cr-at-eol --stat <sha>^ <sha> -- . ':(exclude).moe'` = only .gitattributes, plus `git diff --stat <sha>^ <sha> -- <the 16>` showing EOL-only rewrites.\n(2) DoD 2's `git ls-files --eol | grep '^i/crlf'` depends on the wrapper's shared-index refresh. If the landing printed MOE_COMMIT_INDEX_REFRESH_FAILED, use `git cat-file blob <sha>:<path> | grep -c $'\\r$'` = 0 for each path instead.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial read-only review passed: target byte equality against HEAD guard prevents peer-byte capture; deterministic CRLF replacement lost no lone CR; BOM ef bb bf; attributes remainder byte-identical; scoped ignore-cr-at-eol stat only .gitattributes +1; all 16 hash-object --stdin-paths hashes equal normalized HEAD blob hashes; live owned bytes equal exact verified snapshot at 60f69fd. Fifteen paths w/lf/new auto attr, gradlew.bat w/crlf/explicit crlf attr; index remains i/crlf until wrapper lands. Final scope asserted=declared=17 exact paths, no peer collisions, no unattributed. No checkpoint/code write before step3. Extra nonrequired whole-foreign-moe-agent.ps1==HEAD diagnostic failed on legitimate peer dirt; removed only that /tmp assumption and reran required BOM/owned-byte/hash checks successfully; foreign script untouched. All named suites exit0 (daemon 3534 pass/15 skip; usage51; both postflight/parity; seven syntax checks). Handoff/gotcha saved. QA must exclude wrapper BOARD .moe records for neutral stat and use completion-blob CR counts if index refresh fails; no landed-SHA claim before wrapper postflight.",
+      "startedAt": "2026-10-24T22:44:55.504Z",
+      "completedAt": "2026-10-24T22:46:10.342Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 9,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -63,24 +94,37 @@
       "author": "architect-6e3edf85",
       "content": "Architect notes for the worker and QA (planRevision 1).\n\n1. **affectedFiles lists only .gitattributes, on purpose.** The honest file count is 17. submit_plan hard-rejects plans over 10 distinct files, and this task's rail forbids splitting the work. All 16 renormalized paths are named in every step. The worker attributes them with moe.declare_files, plus Edit round trips for any contested path.\n\n2. **Why the working copies are converted to LF instead of running `git add --renormalize`.** Agents never write Git. The wrapper lands from a temp index seeded from HEAD, so a renormalized shared index would never reach the commit. With the CRLF blob still in that index, git keeps CRLF on add (safer-autocrlf) while hash-object normalizes to LF, and the wrapper would drop each path as MOE_ATTR_CONCURRENT. That is the sibling task-b62c9fc7 defect. A byte-level CRLF→LF working copy makes the landing store exactly the blobs that --renormalize would.\n\n3. **Dependencies added.** I added dependsOn CQ-F03 (task-bf86954d: schema.ts, taskStore.ts, validators.ts) and CQ-M04c (task-e4adf15c: usage-report.test.mjs). Both are live holders of these paths.\n\n4. **DoD 3 as written vs. the commit.** The completion commit will also carry the wrapper's .moe BOARD records (commitBoardState default). Check DoD 3 on the non-.moe paths: `git diff --ignore-cr-at-eol --stat <sha>^ <sha> -- . ':(exclude).moe'` should show only .gitattributes.\n\n5. **DoD 2 depends on the shared-index refresh.** DoD 2's `git ls-files --eol` reads the shared index, which the wrapper refreshes after landing. If the landing printed MOE_COMMIT_INDEX_REFRESH_FAILED, verify each path with `git cat-file blob <sha>:<path> | grep -c $'\\r$'` = 0.",
       "timestamp": "2026-10-24T21:50:34.170Z"
+    },
+    {
+      "id": "comment-55764ee251dd43f3b850b304b32cff07",
+      "author": "worker-e8965f51",
+      "content": "Step 1 read-only gate passed: all 16 i/crlf paths, only gradlew.bat EOL dirt, no scope intersections in get_commit_scope. Step 2 first snapshot 47769e1: all suites exit 0 (daemon 156 files/3534 pass/15 skip; usage 51/51; seven mjs syntax; both parity; both postflight including Windows PS5.1). During verification, peer e5b63b8 landed 3 unrelated account-switch files. Strict revision guard refused live apply (zero repository files edited); re-running the complete step-2 gate on new HEAD to honor freshness. Scratch logs /tmp/moe-eol-gate.kmpzpll4; first run manifest /tmp/moe-eol-first-run.json.",
+      "timestamp": "2026-10-24T22:32:05.614Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T15:37:07.825Z",
-  "updatedAt": "2026-10-24T21:50:34.171Z",
+  "updatedAt": "2026-10-24T22:46:20.800Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T21:39:26.761Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-6e3edf85"
+    "architect-6e3edf85",
+    "worker-e8965f51"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T21:50:21.774Z",
   "planningNotes": {
@@ -110,5 +154,53 @@
       "scripts/usage-session.mjs"
     ]
   },
-  "planApprovedAt": "2026-10-24T21:50:21.866Z"
+  "planApprovedAt": "2026-10-24T21:50:21.866Z",
+  "workStartedAt": "2026-10-24T22:18:40.087Z",
+  "declaredFiles": [
+    ".gitattributes",
+    ".github/workflows/ci.yml",
+    "moe-jetbrains/build.gradle.kts",
+    "moe-jetbrains/gradlew.bat",
+    "moe-vscode/scripts/bundle-assets.mjs",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "scripts/tests/onboarding.mjs",
+    "scripts/tests/usage-receipt.test.mjs",
+    "scripts/tests/usage-report.test.mjs",
+    "scripts/usage-receipt.mjs",
+    "scripts/usage-report.mjs",
+    "scripts/usage-session.mjs"
+  ],
+  "reviewStartedAt": "2026-10-24T22:46:20.798Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": " Test Files  156 passed (156)\n      Tests  3534 passed | 15 skipped (3549)\n   Start at  01:32:09\n   Duration  20.86s (tests 88%, import 6%, transform 6%)\n",
+    "reportedAt": "2026-10-24T22:46:20.798Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    ".gitattributes",
+    ".github/workflows/ci.yml",
+    "moe-jetbrains/build.gradle.kts",
+    "moe-jetbrains/gradlew.bat",
+    "moe-vscode/scripts/bundle-assets.mjs",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/tools/submitPlan.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "scripts/tests/onboarding.mjs",
+    "scripts/tests/usage-receipt.test.mjs",
+    "scripts/tests/usage-report.test.mjs",
+    "scripts/usage-receipt.mjs",
+    "scripts/usage-report.mjs",
+    "scripts/usage-session.mjs"
+  ],
+  "completionSummary": "Prepended * text=auto eol=lf; every previous attribute byte unchanged. Guarded CRLF-only conversion of all 15 auto-text files; gradlew.bat untouched CRLF on disk, declared to normalize its stored blob. Exactly17 paths declared/attributed; no peer collisions, Git writes, content edits or shared installs. Wrapper owns ONE completion landing after exit; no SHA claimed yet.\nFresh snapshot60f69fd: daemon npm test exit0 (156 files,3534 pass/15 skip); bash postflight exit0; Windows PS5.1 postflight exit0 (both34 commit-scope scenarios); both parity checks exit0; seven mjs syntax checks exit0; usage tests51/51; BOM ef bb bf. Repeated entire gate after unrelated peer landing. Logs /tmp/moe-eol-gate.aqvmxq0x; manifest /tmp/moe-eol-run.json.\nFinal proofs: owned bytes exactly verified snapshot; all16 normalized blob hashes match HEAD CRLF-stripped content;15 w/lf, bat w/crlf; ignore-cr-at-eol stat only .gitattributes +1. No lone CR lost. Adversarial review and exact final scope passed; handoff/gotcha saved. Foreign wrapper-script dirt left untouched.\nQA: after wrapper landing check one dedicated commit; neutral stat excludes BOARD .moe records: git diff --ignore-cr-at-eol --stat <sha>^ <sha> -- . ':(exclude).moe' = only .gitattributes. Raw stat over16 shows EOL rewrites. i/crlf remains until wrapper shared-index refresh; if MOE_COMMIT_INDEX_REFRESH_FAILED verify each completion blob has zero CR-at-line-end via cat-file instead. gradlew.bat checkout remains CRLF."
 }

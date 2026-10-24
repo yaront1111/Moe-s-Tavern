@@ -1,0 +1,30 @@
+{
+  "id": "task-c532d223459b4ef4b5bab2ba0eb4005e",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: wrapper attribution snapshot fingerprints a symlink by its target's content, not the link text git commits",
+  "description": "The snapshot hash (scripts/moe-agent.sh ~2729 `hash-object --stdin-paths`, ps1 ~2460) follows symlinks, while `git add` stores the link text. So retargeting a link to a file with the same content reads as unchanged, and editing a link's target reads as the link changing. (Before task-b62c9fc7, every symlink candidate also dropped as MOE_ATTR_CONCURRENT.) Repro: `ln -s a l; git hash-object l` gives the hash of a's content, not of the string \"a\". Fix: hash symlinks by their readlink text (e.g. `printf %s \"$(readlink p)\" | git hash-object --stdin`) in both twins.",
+  "definitionOfDone": [
+    "Both wrapper twins fingerprint a symlink by its link text in the baseline snapshot and the temp-index re-hash",
+    "Postflight cases in bash and ps1 cover a symlink retarget (lands) and an unchanged symlink (stays PREEXISTING)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b62c9fc7524a482aa6948ebe38ac3318"
+  ],
+  "priority": "LOW",
+  "order": 233,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T22:39:38.780Z",
+  "updatedAt": "2026-10-24T22:39:38.780Z"
+}
