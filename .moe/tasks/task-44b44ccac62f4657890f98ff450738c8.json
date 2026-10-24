@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,14 +103,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:35:25.734Z",
-  "updatedAt": "2026-10-24T13:40:29.496Z",
+  "updatedAt": "2026-10-24T13:50:46.462Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:44:49.901Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-24T13:50:46.462Z",
+    "wallClockMs": 3956561
   },
   "contextFetchedBy": [
     "worker-c1d9de02",
@@ -160,7 +162,9 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts",
-    "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts"
+    "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts",
+    ".moe/tasks/task-44b44ccac62f4657890f98ff450738c8.json",
+    ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json"
   ],
   "completionSummary": "Round-1 QA reject fixed. Touches only the two benchmark files: +73/-11 lines against 19dfa68.\n\n**Issue 1 (Trojan Source)**\n- FORBIDDEN_CHAR is now ASCII escapes: [\\\\<>:\"|?*\\u0000-\\u001f\\u007f-\\u009f؜​-‏‪-‮⁠-⁯﻿].\n- A script built the line from code points and first proved the old raw characters encoded exactly 200B-200F, 202A-202E, 2060-206F and FEFF. The original ranges are kept.\n- Deliberate additions, made while the shared contract can still change: U+061C ALM (QA-optional; the last missing Bidi_Control) and C1 controls U+0080-009F (Unicode controls like the C0 set already forbidden).\n- A comment explains why the class must stay escaped.\n- The acceptance git grep finds nothing, and od shows ASCII only.\n\nRelated same-class fix: a private quoted() helper now quotes every echoed key, path or id in validation and readSnapshotFiles messages as printable ASCII. A rejected RLO path or a candidate-planted file name can no longer reorder or hide log text.\n\nUnchanged: exports, the digest framing and the pinned digests.\n\n**Issue 2 (tests)** 151 tests, previously 141.\n- Rows for U+200F, U+202E, U+2066, a leading U+FEFF, U+061C and U+009B, each rejected in every placement.\n- A BMP sweep with an independent oracle that pins the exact forbidden set.\n- An ASCII-quoting test and an RLO-named junction read-back test.\n- An archive-safe source guard: no literal C0/C1 (except tab/CR/LF), Cf or U+2028/9 in either file.\n- RED was confirmed first: 6 failed. The 4 QA-named rows already passed, because runtime behavior was correct.\n- Mutation runs caught 7 of 7 escape typos, including widening.\n\n**Issue 3 (gate)** Fresh git-archive copy with sha256-identical files, Linux node_modules and PATH:\n- vitest exit 0, 151/151, twice;\n- tsc exit 0;\n- 0 leftover dirs.\n\nGotcha: the Edit tool decoded some \\u escapes into literal characters. They were repaired with a script and recorded in the gotcha-invisible-unicode-in-source memory. No production, daemon, MCP or .moe change.",
   "commits": [
@@ -208,6 +212,24 @@
       "treeId": "943f9c2a8d5a0349d270eea165cb4dab35f33b8b",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "35579c2e0551d058e007f45d7b7d148d645ad974",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T13:21:19Z",
+      "paths": [
+        ".moe/tasks/task-44b44ccac62f4657890f98ff450738c8.json",
+        ".moe/tasks/task-9c8694e33ac840718901adae2bae66e4.json",
+        "packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts",
+        "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T13:41:48.305Z",
+      "treeId": "adff50e3801d2d8b1f7f11e50427ef459fd164f5",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -217,11 +239,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-b0c1741e@2026-10-24T13:15:18Z",
-    "at": "2026-10-24T13:23:42.092Z"
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-24T13:21:19Z",
+    "at": "2026-10-24T13:41:48.305Z"
   },
-  "reviewCompletedAt": "2026-10-24T13:21:27.418Z",
+  "reviewCompletedAt": "2026-10-24T13:50:46.462Z",
   "rejectionDetails": {
     "failedDodItems": [
       "A strict local test-data contract validates portable safe unique paths, immutable full-commit/source provenance, separate coding/assessment inputs and stable content digests; rejects malformed/conflicting/missing data."
@@ -272,5 +294,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-24T13:50:46.462Z",
+  "reviewSummary": "APPROVED r2. Reviewed completion 35579c2 (tree adff50e3 = recorded; on moe/work-2026-10-24). Delta vs 19dfa68: +73/-11 LOC, only the 2 benchmark files + wrapper board records (round-1 size waiver not re-litigated).\n\nIssue 1 fixed: FORBIDDEN_CHAR (ts:115) is ASCII escapes, same ranges + U+061C + C1 U+0080-U+009F. The round-1 acceptance git grep at 35579c2 finds nothing. Bytes are printable ASCII + LF, except the visible DEVICE_NAME superscripts (ts:116). quoted() keeps echoed paths/keys ASCII.\n\nIssue 2 fixed: escaped rows for U+200F, U+202E, U+2066, U+FEFF, U+061C and U+009B in every placement, BMP sweep oracle, quoting tests, source guard, RLO-junction read-back.\n\nQA gate, in a FRESH git-archive copy of 35579c2 (no .git, files sha256-identical, Linux node_modules with lockfile == commit, Linux-only PATH):\n- `cd packages/moe-daemon && npx vitest run src/benchmarks/workloadSnapshot.test.ts`: exit 0, 151/151, x2\n- `npx tsc --noEmit --incremental false`: exit 0; test file typechecks via temp tsconfig: exit 0\n- 0 leftover temp dirs\n\nMutations in the copy: 8/8 killed (raw-byte reinsertion, 202E->202D, drop 061C, widen 200F->201F, C1 to 008F, drop FEFF, 206F->2065, quoted no-op).\n\nWindows-native node 24.16 copy: exit 0, 150 pass + 1 platform-gated skip, x2, 0 leftovers.\n\nFull module re-read: DoD 1-4 met. No forbidden patterns, no importer outside src/benchmarks, no production change.\n\nNon-blocking:\n1. This task's .moe JSON keeps literal bidi chars in completionSummary and the step-2 note (daemon-persisted, not hand-fixable). Fix is task-9c8694e33ac840718901adae2bae66e4 (BACKLOG in this epic; architect to triage).\n2. Optional hardening, needs an explicit contract-change dependency: paths still accept astral TAG U+E0000-E007F, U+00AD, U+180E, U+FFF9-FFFB and U+2028/9 (no traversal impact).\n3. Read-back TOCTOU vs a live candidate (accepted in r1).",
+  "requiredCheckAtDone": null
 }
