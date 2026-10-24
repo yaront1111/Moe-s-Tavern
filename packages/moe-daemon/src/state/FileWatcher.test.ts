@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { once } from 'node:events';
+import chokidar, { type FSWatcher } from 'chokidar';
 import { FileWatcher, type FileChangeEvent } from './FileWatcher.js';
 import { logger } from '../util/logger.js';
 
@@ -26,6 +28,18 @@ describe('FileWatcher', () => {
     }
     fs.rmSync(testDir, { recursive: true, force: true });
   });
+
+  async function startReady(): Promise<void> {
+    const watch = vi.spyOn(chokidar, 'watch');
+    try {
+      watcher.start();
+      expect(watch).toHaveBeenCalledOnce();
+      const nativeWatcher = watch.mock.results[0].value as FSWatcher;
+      if (!nativeWatcher.readyEmitted) await once(nativeWatcher, 'ready');
+    } finally {
+      watch.mockRestore();
+    }
+  }
 
   it('starts without error', () => {
     watcher = new FileWatcher(moePath, () => {});
@@ -88,7 +102,62 @@ describe('FileWatcher', () => {
 
     // Should be coalesced - we may get 1-2 events due to debouncing
     // but definitely not 3 separate events
+    expect(receivedEvents.length).toBeGreaterThanOrEqual(1);
     expect(receivedEvents.length).toBeLessThanOrEqual(2);
+  });
+
+  it.each(['project.json', path.join('tasks', 'lifecycle.json')])('delivers JSON add, change and unlink for %s', async (relative) => {
+    watcher = new FileWatcher(moePath, event => { receivedEvents.push(event); });
+    await startReady();
+    const file = path.join(moePath, relative);
+    const expected: FileChangeEvent[] = [];
+
+    fs.writeFileSync(file, '{"version":1}');
+    expected.push({ type: 'add', path: file });
+    await vi.waitFor(() => expect(receivedEvents).toEqual(expected), { timeout: 3000 });
+
+    fs.writeFileSync(file, '{"version":2}');
+    expected.push({ type: 'change', path: file });
+    await vi.waitFor(() => expect(receivedEvents).toEqual(expected), { timeout: 3000 });
+
+    fs.unlinkSync(file);
+    expected.push({ type: 'unlink', path: file });
+    await vi.waitFor(() => expect(receivedEvents).toEqual(expected), { timeout: 3000 });
+  });
+
+  it.each(['workers', 'proposals', 'channels', 'pins', 'decisions'])('watches JSON in %s when created after start', async (directory) => {
+    watcher = new FileWatcher(moePath, event => { receivedEvents.push(event); });
+    await startReady();
+    fs.mkdirSync(path.join(moePath, directory));
+    const file = path.join(moePath, directory, 'entity-late.json');
+    fs.writeFileSync(file, '{}');
+
+    await vi.waitFor(() => expect(receivedEvents).toEqual([{ type: 'add', path: file }]), { timeout: 3000 });
+  });
+
+  it('ignores non-JSON, nested and unrelated paths without hiding entity JSON', async () => {
+    watcher = new FileWatcher(moePath, event => { receivedEvents.push(event); });
+    await startReady();
+    const ignored = [
+      path.join(moePath, 'other.json'),
+      path.join(moePath, 'tasks', 'notes.txt'),
+      path.join(moePath, 'tasks', 'nested', 'task.json'),
+      path.join(moePath, 'tasks', 'directory.json', 'task.json'),
+      path.join(moePath, 'unrelated', 'task.json'),
+    ];
+    for (const file of ignored) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '{}');
+    }
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(receivedEvents).toEqual([]);
+    for (const file of ignored) fs.unlinkSync(file);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(receivedEvents).toEqual([]);
+
+    const file = path.join(moePath, 'tasks', 'allowed.json');
+    fs.writeFileSync(file, '{}');
+    await vi.waitFor(() => expect(receivedEvents).toEqual([{ type: 'add', path: file }]), { timeout: 3000 });
   });
 
   it('handles onChange errors gracefully', async () => {

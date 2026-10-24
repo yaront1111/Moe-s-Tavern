@@ -48,9 +48,7 @@ export class MetricsViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        _context: vscode.WebviewViewResolveContext,
-        _token: vscode.CancellationToken
+        webviewView: vscode.WebviewView
     ): void {
         this._view = webviewView;
         webviewView.webview.options = {

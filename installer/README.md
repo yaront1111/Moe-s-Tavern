@@ -3,7 +3,7 @@
 This folder contains assets and scripts for building a one-click Windows installer.
 
 ## Prereqs
-- Node.js 18+
+- Node.js 22.22+ (24 LTS recommended)
 - Gradle (or gradlew)
 - Inno Setup (ISCC)
 

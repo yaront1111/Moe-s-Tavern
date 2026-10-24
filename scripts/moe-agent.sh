@@ -2486,17 +2486,18 @@ post_flight() {
     # now lives in Serena (the agent writes a `task-<id>-handoff` note before it
     # stops). The post-flight chat message below remains the session-ended signal.
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-        local content
+        local content rpc_args
         content="$ROLE session ended: task=$PREFLIGHT_TASK_ID (CLI exit=$exit_code) commit=${LAND_SUMMARY_SHA:-none} kind=${LAND_SUMMARY_KIND:-none} paths=${LAND_SUMMARY_PATHS:-0} inferred=${LAND_SUMMARY_INFERRED:-0} unattributed=${LAND_SUMMARY_UNATTR:-0}"
         # Same suffix as the ps1 twin: a landing that did not commit carries
         # its outcome + code so governors can triage from the chat line alone.
         if [ -n "${LAND_SUMMARY_OUTCOME:-}" ] && [ "${LAND_SUMMARY_OUTCOME:-}" != "committed" ] && [ -n "${LAND_SUMMARY_CODE:-}" ]; then
             content="$content outcome=$LAND_SUMMARY_OUTCOME code=$LAND_SUMMARY_CODE"
         fi
-        if ! moe_rpc chat_send \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$content" 2>/dev/null)" \
-            > /dev/null 2>&1; then
+        # Bash 3.2 brace-expands Python dicts inside nested quoted arguments.
+        # Build the payload separately; keep serialization/RPC best-effort.
+        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$content" 2>/dev/null || true)
+        if ! moe_rpc chat_send "$rpc_args" > /dev/null 2>&1; then
             echo -e "${YELLOW}[WARN]${NC} post-flight chat_send failed" >&2
         fi
     fi
@@ -2511,13 +2512,12 @@ post_flight() {
 # Posts to #general via chat_send (the daemon broadcasts it to every connected
 # client) and always returns 0 so it never aborts the loop.
 announce_push_failure() {
-    local task_id="$1"
+    local task_id="$1" rpc_args
     local msg="PUSH FAILED for task $task_id -- branch sync failed; task delivery is not established by this push. Verify recorded task SHAs against the remote before review; existing local commits may still need pushing."
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-        moe_rpc chat_send \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
-            > /dev/null 2>&1 || true
+        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null || true)
+        moe_rpc chat_send "$rpc_args" > /dev/null 2>&1 || true
     fi
     return 0
 }
@@ -2529,16 +2529,15 @@ announce_push_failure() {
 # output to the task via add_comment so QA/humans can see WHY without digging
 # through wrapper logs. Always returns 0 so it never aborts the loop.
 announce_gate_failure() {
-    local task_id="$1"
+    local task_id="$1" rpc_args
     local gate_cmd="$2"
     local gate_rc="$3"
     local gate_out="$4"
     local msg="🚫 PUSH-BLOCKED: qualityGate failed for task $task_id: $gate_cmd (exit $gate_rc)"
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-        moe_rpc chat_send \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
-            > /dev/null 2>&1 || true
+        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null || true)
+        moe_rpc chat_send "$rpc_args" > /dev/null 2>&1 || true
     fi
     # Last ~50 lines only (and cap the bytes): add_comment rejects content over
     # 10k chars and a failing build's full output can be huge.
@@ -2547,10 +2546,9 @@ announce_gate_failure() {
     content="$msg
 
 $out_tail"
-    moe_rpc add_comment \
-        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-            "$task_id" "$WORKER_ID" "$content" 2>/dev/null)" \
-        > /dev/null 2>&1 || true
+    rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+        "$task_id" "$WORKER_ID" "$content" 2>/dev/null || true)
+    moe_rpc add_comment "$rpc_args" > /dev/null 2>&1 || true
     return 0
 }
 
@@ -4639,10 +4637,10 @@ rescue_ref_from_commit() {
     LAND_RESCUE_SHA="$sha"
     echo -e "${YELLOW}[rescue]${NC} MOE_RESCUE_REF task=$LAND_TASK_ID ref=$ref sha=$sha reason=$reason"
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-        moe_rpc chat_send \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "MOE_RESCUE_REF task=$LAND_TASK_ID ref=$ref sha=$sha reason=$reason" 2>/dev/null)" \
-            > /dev/null 2>&1 || true
+        local rpc_args
+        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$GENERAL_CHANNEL_ID" "$WORKER_ID" "MOE_RESCUE_REF task=$LAND_TASK_ID ref=$ref sha=$sha reason=$reason" 2>/dev/null || true)
+        moe_rpc chat_send "$rpc_args" > /dev/null 2>&1 || true
     fi
     # The rescued paths travel in the ledger entry (same as the ps1 twin), and
     # the MOE_RESCUE_REF line rides in `message` for the daemon's re-emission.
@@ -4661,13 +4659,13 @@ no_git_remote() {
 }
 
 announce_checkpoint_unpushed() { # $1 taskId, $2 branch
+    local rpc_args
     local msg="CHECKPOINT-UNPUSHED task=$1 -- checkpoint committed locally only on $2; push when the remote is reachable"
     echo -e "${YELLOW}[WARN]${NC} $msg"
     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-        moe_rpc chat_send \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
-            > /dev/null 2>&1 || true
+        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+            "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null || true)
+        moe_rpc chat_send "$rpc_args" > /dev/null 2>&1 || true
     fi
     return 0
 }
@@ -6099,15 +6097,13 @@ except Exception:
         #    iteration so routed mentions for THIS task surface in <routed_mentions>.
         if [ -n "$GENERAL_CHANNEL_ID" ]; then
             if [ "$IS_FIRST_ITERATION" = true ]; then
-                moe_rpc chat_join \
-                    "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null)" \
-                    > /dev/null 2>&1 || true
+                PREFLIGHT_JOIN_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null || true)
+                moe_rpc chat_join "$PREFLIGHT_JOIN_ARGS" > /dev/null 2>&1 || true
             fi
 
             # 2. Read unread #general messages
-            PREFLIGHT_GENERAL_UNREAD=$(moe_rpc chat_read \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null)" \
-                2>/dev/null || echo "")
+            PREFLIGHT_GENERAL_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" 2>/dev/null || true)
+            PREFLIGHT_GENERAL_UNREAD=$(moe_rpc chat_read "$PREFLIGHT_GENERAL_ARGS" 2>/dev/null || echo "")
         fi
 
         # 3. Check pending questions
@@ -6161,9 +6157,8 @@ except Exception:
         # This SHORT poll fits the proxy's 2s stdin-EOF grace; never use the
         # normal long-poll default here. Governors own their live chat waiter.
         if [ "$ROLE" != "governor" ]; then
-            PREFLIGHT_ROUTED_UNREAD=$(moe_rpc chat_wait \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'channels':[],'timeoutMs':1000}))" "$WORKER_ID" 2>/dev/null)" \
-                2>/dev/null || echo "")
+            PREFLIGHT_ROUTED_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'channels':[],'timeoutMs':1000}))" "$WORKER_ID" 2>/dev/null || true)
+            PREFLIGHT_ROUTED_UNREAD=$(moe_rpc chat_wait "$PREFLIGHT_ROUTED_ARGS" 2>/dev/null || echo "")
         fi
         # Does anything ALREADY unread tag this worker? moe.wait_for_task only
         # wakes on NEW messages, so entering the wait with an unanswered
@@ -6369,9 +6364,8 @@ except Exception:
                     # or human can release_task / investigate) and idle.
                     if [ "$RESUME_ESCALATED" = false ] && [ -n "$GENERAL_CHANNEL_ID" ]; then
                         ESCALATION_MSG="@governors $WORKER_ID: CLI session ended $((RESUME_ATTEMPTS - 1)) times in a row while still holding $RESUME_TASK_ID (${RESUME_TASK_STATUS:-?}); wrapper is pausing auto-resume. release_task to reassign, or investigate why sessions keep dying mid-task."
-                        moe_rpc chat_send \
-                            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ESCALATION_MSG" 2>/dev/null)" \
-                            > /dev/null 2>&1 || true
+                        RESUME_ESCALATION_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ESCALATION_MSG" 2>/dev/null || true)
+                        moe_rpc chat_send "$RESUME_ESCALATION_ARGS" > /dev/null 2>&1 || true
                         RESUME_ESCALATED=true
                     fi
                     echo -e "${RED}[resume]${NC} Auto-resume cap reached ($RESUME_MAX_ATTEMPTS) for $RESUME_TASK_ID -- escalated to #general; idling until released."
@@ -6450,9 +6444,8 @@ except Exception:
 
                 # 5. Fetch context for the claimed task
                 if [ -n "$PREFLIGHT_TASK_ID" ]; then
-                    PREFLIGHT_CONTEXT=$(moe_rpc get_context \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
-                        2>/dev/null || echo "")
+                    PREFLIGHT_CONTEXT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null || true)
+                    PREFLIGHT_CONTEXT=$(moe_rpc get_context "$PREFLIGHT_CONTEXT_ARGS" 2>/dev/null || echo "")
                     PREFLIGHT_PROGRESS_MARK="$(plan_progress_mark "$PREFLIGHT_CONTEXT" "$PREFLIGHT_TASK_ID")"
                     # alreadyAssigned carries no chatChannel -- recover it from
                     # the daemon context on the resume path.
@@ -6472,9 +6465,8 @@ except Exception:
 
                 # 6. Read task channel backlog
                 if [ -n "$PREFLIGHT_TASK_CHANNEL" ]; then
-                    PREFLIGHT_TASK_UNREAD=$(moe_rpc chat_read \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$PREFLIGHT_TASK_CHANNEL" "$WORKER_ID" 2>/dev/null)" \
-                        2>/dev/null || echo "")
+                    PREFLIGHT_TASK_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2]}))" "$PREFLIGHT_TASK_CHANNEL" "$WORKER_ID" 2>/dev/null || true)
+                    PREFLIGHT_TASK_UNREAD=$(moe_rpc chat_read "$PREFLIGHT_TASK_ARGS" 2>/dev/null || echo "")
                 fi
 
                 # 7. Cross-session memory lives in Serena now: the agent pulls prior
@@ -6534,9 +6526,8 @@ except Exception:
                 if [ -n "$GENERAL_CHANNEL_ID" ] && [ "$IS_FIRST_ITERATION" = true ]; then
                     ANNOUNCE_VERB="starting"
                     if [ "$PREFLIGHT_IS_RESUME" = true ]; then ANNOUNCE_VERB="resuming held task"; fi
-                    moe_rpc chat_send \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]+' online, '+sys.argv[4]+' '+sys.argv[5]+': '+sys.argv[6]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ROLE" "$ANNOUNCE_VERB" "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" 2>/dev/null)" \
-                        > /dev/null 2>&1 || true
+                    ANNOUNCE_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]+' online, '+sys.argv[4]+' '+sys.argv[5]+': '+sys.argv[6]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ROLE" "$ANNOUNCE_VERB" "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" 2>/dev/null || true)
+                    moe_rpc chat_send "$ANNOUNCE_ARGS" > /dev/null 2>&1 || true
                 fi
             elif [ "$HAS_NEXT" = "false" ]; then
                 PREFLIGHT_NO_TASK=true
@@ -7269,9 +7260,8 @@ $PROMPT_BODY"
                     echo -e "${RED}[ERROR]${NC} MOE_CLI_ARGV_REJECTED: the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the codex version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
                     if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
                         ARGV_MSG="@governors $WORKER_ID: MOE_CLI_ARGV_REJECTED - the installed codex ($CODEX_VERSION) rejects the wrapper's launch argv ($PROBE_LINE). Seat exiting and deregistering (the task returns to the queue); rebuild and reinstall the Moe plugin or pin codex before relaunching."
-                        moe_rpc chat_send \
-                            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ARGV_MSG" 2>/dev/null)" \
-                            > /dev/null 2>&1 || true
+                        ARGV_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ARGV_MSG" 2>/dev/null || true)
+                        moe_rpc chat_send "$ARGV_ARGS" > /dev/null 2>&1 || true
                     fi
                     stop_heartbeat_sidecar
                     exit 1
@@ -7970,16 +7960,14 @@ PYEOF
         echo -e "${YELLOW}[launch-failure]${NC} CLI exited $CLI_EXIT_FOR_LAUNCH after ${CLI_ELAPSED_SEC}s, before doing any work (streak $LAUNCH_FAIL_STREAK): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in ${LAUNCH_FAIL_BACKOFF_SEC}s."
         if [ "$LAUNCH_FAIL_STREAK" -eq 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
             LAUNCH_FAIL_MSG="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem. Wrapper is backing off up to ${LAUNCH_BACKOFF_MAX_SEC}s between relaunches and keeps its task; no release needed."
-            moe_rpc chat_send \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_FAIL_MSG" 2>/dev/null)" \
-                > /dev/null 2>&1 || true
+            LAUNCH_FAIL_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_FAIL_MSG" 2>/dev/null || true)
+            moe_rpc chat_send "$LAUNCH_FAIL_ARGS" > /dev/null 2>&1 || true
         fi
     else
         if [ "$LAUNCH_FAIL_STREAK" -ge 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
             LAUNCH_OK_MSG="$WORKER_ID: CLI launches again (ran ${CLI_ELAPSED_SEC}s, exit $CLI_EXIT_FOR_LAUNCH) after $LAUNCH_FAIL_STREAK launch failures."
-            moe_rpc chat_send \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_OK_MSG" 2>/dev/null)" \
-                > /dev/null 2>&1 || true
+            LAUNCH_OK_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_OK_MSG" 2>/dev/null || true)
+            moe_rpc chat_send "$LAUNCH_OK_ARGS" > /dev/null 2>&1 || true
         fi
         LAUNCH_FAIL_STREAK=0
         LAUNCH_FAIL_BACKOFF_SEC=0
@@ -8012,9 +8000,8 @@ PYEOF
         # get_context keys on the task id and cannot be paginated away.
         # Do NOT "fix" this by raising the limit: MAX_TASK_LIST_LIMIT is 500,
         # which only moves the same silent cliff further out.
-        POSTFLIGHT_CTX=$(moe_rpc get_context \
-            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
-            2>/dev/null || echo "")
+        POSTFLIGHT_CTX_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null || true)
+        POSTFLIGHT_CTX=$(moe_rpc get_context "$POSTFLIGHT_CTX_ARGS" 2>/dev/null || echo "")
         FINAL_STATUS=""
         FINAL_REOPEN_COUNT="0"
         IS_EPIC_FINAL="true"
@@ -8106,9 +8093,8 @@ except Exception:
         if [ "$DAEMON_IS_EPIC_FINAL" = "true" ] || [ "$DAEMON_IS_EPIC_FINAL" = "false" ]; then
             IS_EPIC_FINAL="$DAEMON_IS_EPIC_FINAL"
         elif [ -z "$STATUS_LOOKUP_ERROR" ] && [ -n "$TASK_EPIC_ID" ]; then
-            SIBLING_STATE=$(moe_rpc list_tasks \
-                "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'epicId':sys.argv[1],'limit':500}))" "$TASK_EPIC_ID" 2>/dev/null)" \
-                2>/dev/null || echo "")
+            SIBLING_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'epicId':sys.argv[1],'limit':500}))" "$TASK_EPIC_ID" 2>/dev/null || true)
+            SIBLING_STATE=$(moe_rpc list_tasks "$SIBLING_ARGS" 2>/dev/null || echo "")
             if [ -n "$SIBLING_STATE" ]; then
                 IS_EPIC_FINAL=$($PYTHON_CMD -c "
 import json, sys
@@ -8139,11 +8125,10 @@ except Exception:
         if [ -n "$STATUS_LOOKUP_ERROR" ]; then
             echo -e "${YELLOW}[WARN]${NC} post-flight status lookup failed for task $PREFLIGHT_TASK_ID: $STATUS_LOOKUP_ERROR. Cannot tell whether it reached REVIEW, so auto-commit+push is being skipped -- check the working tree and commit manually."
             if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-                moe_rpc chat_send \
-                    "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
-                        "$GENERAL_CHANNEL_ID" "$WORKER_ID" \
-                        "PUSH-BLOCKED: post-flight status lookup failed for task $PREFLIGHT_TASK_ID ($STATUS_LOOKUP_ERROR); auto-commit skipped and the work may be sitting uncommitted" 2>/dev/null)" \
-                    > /dev/null 2>&1 || true
+                STATUS_CHAT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                    "$GENERAL_CHANNEL_ID" "$WORKER_ID" \
+                    "PUSH-BLOCKED: post-flight status lookup failed for task $PREFLIGHT_TASK_ID ($STATUS_LOOKUP_ERROR); auto-commit skipped and the work may be sitting uncommitted" 2>/dev/null || true)
+                moe_rpc chat_send "$STATUS_CHAT_ARGS" > /dev/null 2>&1 || true
             fi
         fi
 
@@ -8362,9 +8347,8 @@ except Exception:
                 # -- a task this seat did not hold at pre-flight -- pages.
                 if [ -n "$GENERAL_CHANNEL_ID" ] && [ "$ADOPTED_BINDING" != retained ]; then
                     ADOPT_MSG="@governors ${WORKER_ID}: MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=$ADOPTED_TASK_ID binding=$ADOPTED_BINDING - no session baseline; refusing to land $ADOPTED_DIRTY unattributed shared dirty path(s). Shared dirty paths do not establish this session's ownership. Preserve them and identify their owners."
-                    moe_rpc chat_send \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ADOPT_MSG" 2>/dev/null)" \
-                        > /dev/null 2>&1 || true
+                    ADOPT_CHAT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$ADOPT_MSG" 2>/dev/null || true)
+                    moe_rpc chat_send "$ADOPT_CHAT_ARGS" > /dev/null 2>&1 || true
                 fi
             fi
         fi

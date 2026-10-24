@@ -21,7 +21,39 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const pwsh = process.platform === 'win32' ? 'pwsh.exe' : 'pwsh';
 const hasPwsh = spawnSync(pwsh, ['-NoProfile', '-Command', 'exit 0']).status === 0;
 
-for (const engine of ['bash', 'pwsh']) {
+test('bash: RPC JSON dictionaries are built before quoted argument substitution', () => {
+  const nested = sh.match(/"\$\(\$PYTHON_CMD -c "[^"\n]*json\.dumps\(\{/g) || [];
+  assert.equal(nested.length, 0,
+    'Bash 3.2 brace-expands dictionary literals inside nested quoted argument substitutions');
+});
+
+const engines = process.platform === 'win32'
+  ? [['bash', bash], ['powershell', 'powershell.exe'], ['pwsh', pwsh]]
+  : [['bash', bash], ['pwsh', pwsh]];
+for (const [engine, executable] of engines) {
+  if (engine === 'bash') {
+    test('bash: failed notice serialization and RPC stay best-effort', () => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe-push-notice-'));
+      const file = path.join(dir, 'failed-notice.sh');
+      const script = `set -euo pipefail
+PYTHON_CMD=false; GENERAL_CHANNEL_ID=general; WORKER_ID=worker-fixture
+YELLOW=; NC=
+moe_rpc() { return 74; }
+` + slice(sh, 'announce_push_failure() {', '# announce_gate_failure TASK_ID')
+        + slice(sh, 'announce_checkpoint_unpushed() {', '# ---- daemon ledger')
+        + '\nannounce_push_failure task-fixture\nannounce_checkpoint_unpushed task-fixture main\nprintf AFTER_FAILED_NOTICES\n';
+      try {
+        writeFileSync(file, script);
+        const result = spawnSync(executable, [file.replaceAll('\\', '/')], { encoding: 'utf8', timeout: 20000 });
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        assert.match(result.stdout, /AFTER_FAILED_NOTICES/);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(dir);
+      }
+    });
+  }
   for (const kind of ['completion', 'checkpoint']) {
     test(`${engine}: failed ${kind} branch push reports only what it knows`, { skip: engine === 'pwsh' && !hasPwsh }, () => {
       const dir = mkdtempSync(path.join(tmpdir(), 'moe-push-notice-'));
@@ -29,7 +61,7 @@ for (const engine of ['bash', 'pwsh']) {
       let script;
       if (engine === 'bash') {
         script = `set -euo pipefail
-PYTHON_CMD=python3; GENERAL_CHANNEL_ID=general; WORKER_ID=worker-fixture
+PYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}; GENERAL_CHANNEL_ID=general; WORKER_ID=worker-fixture
 MOE_TOP=/no-real-repo; LAND_BRANCH=main; LAND_TASK_ID=task-fixture; LAND_OUTCOME=nothing
 BLUE=; YELLOW=; GREEN=; NC=
 no_git_remote() { return 1; }
@@ -48,13 +80,15 @@ function Send-MoeGeneralChat([string]$Message) { [IO.File]::WriteAllText($env:NO
       }
       const noticeFile = path.join(dir, 'notice.json');
       try {
-        writeFileSync(file, script);
-        const result = spawnSync(engine === 'bash' ? bash : pwsh,
+        writeFileSync(file, engine === 'bash' ? script : '\ufeff' + script);
+        const result = spawnSync(executable,
           engine === 'bash' ? [file.replaceAll('\\', '/')] : ['-NoProfile', '-NonInteractive', '-File', file],
-          { encoding: 'utf8', timeout: 20000, env: { ...process.env, NOTICE_FILE: noticeFile } });
+          { encoding: 'utf8', timeout: 20000, env: { ...process.env, NOTICE_FILE: noticeFile.replaceAll('\\', '/') } });
         assert.ifError(result.error);
         assert.equal(result.status, 0, result.stdout + result.stderr);
-        const { content } = JSON.parse(readFileSync(noticeFile, 'utf8'));
+        const payload = readFileSync(noticeFile, 'utf8');
+        assert.notEqual(payload, '', 'failed-push RPC must receive a serialized JSON payload');
+        const { content } = JSON.parse(payload);
         if (kind === 'completion') {
           assert.match(content, /^PUSH FAILED for task task-fixture/);
           assert.match(content, /branch sync failed; task delivery is not established by this push/);
