@@ -1,0 +1,35 @@
+{
+  "id": "task-c2cb5cf717794c169bda13934e4ee877",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "bug: contested-untouched landing skip silently drops a task's own Bash-written edit even when the contesting peer is idle and the path was clean at pre-flight",
+  "description": "Observed 2026-10-24: CQ-M01 (task-ad95cb27) completion baeacbf left out docs/CONFIGURATION.md, which is its own step-4/5 modifiedFiles. task.commits[].contested = [{docs/CONFIGURATION.md, task-07474ee4}], and QA rejected the task for the delivery gap at 16:39Z. The worker wrote the row via Bash, with `python3 - <<EOF ... s.replace(old,new)` at 16:18:19Z and 16:21:12Z. So the session's TOOL set lacked the path, and `attribution.contested: skip-untouched` (moe-agent.sh ~3564-3568, plus its ps1 twin) skipped it.\n\nThe contest was a false positive:\n- The peer task-07474ee4 has been PLANNING and unassigned since 13:11Z, so no session could have written its bytes.\n- Its claim is ASSERTED history whose bytes are already in HEAD (9f2cce3b).\n- The path was clean at M01's pre-flight, so every dirty byte at exit came from M01's session.\n\nScale:\n- 93 contested skips across task.commits history, mostly on the landing task's own asserted paths. For example, task-ca478039's completion dropped 6 own wrapper/test files on 2026-09-21.\n- 07474ee4's month-old claims cover scripts/moe-agent.{sh,ps1}, postflight.*, parity-check.*, docs/CONFIGURATION.md and docs/SCHEMA.md.\n- This is the same family as archived task-d1441364 (Serena tools missing from TOOL). Adding witness sources cannot cover Bash.\n\nSuggested direction (the architect decides): treat a contested path as the session's own when both of these hold:\n- it was clean in the landing session's pre-flight snapshot;\n- the contesting peer task had no assignee active since that pre-flight (get_commit_scope already computes activity against `since`).\nKeep skipping when the peer was live, or when the path was dirty at pre-flight and is untouched. That is the real unlanded-peer-hunks case.",
+  "definitionOfDone": [
+    "Both wrappers (moe-agent.sh and moe-agent.ps1) commit a landing task's own asserted path with no TOOL witness (e.g. a Bash/python edit) when that path was clean at the session's pre-flight and its only contesting peer task had no assignee active since that pre-flight.",
+    "A contested path is still skipped when the contesting peer's assignee was active since pre-flight, or when the path was already dirty at pre-flight and untouched by this session (existing postflight contested cases stay green).",
+    "A completion landing that still skips one of its own asserted paths names the path and the contesting peer in its #general session-ended line, so it is visible before QA.",
+    "New cases in scripts/tests/postflight.sh and scripts/tests/postflight.ps1 fail on the old behaviour; fresh `bash scripts/tests/postflight.sh`, `bash scripts/tests/parity-check.sh` and the daemon tests for any daemon file touched exit 0, with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Until this fix lands, edit the wrapper and test files with the Edit/Write tools, not Bash heredocs or python: task-07474ee4 contests scripts/moe-agent.{sh,ps1} and scripts/tests/postflight.*, so an unwitnessed edit is silently left out of this task's own landing.",
+    "Keep moe-agent.sh and moe-agent.ps1 in parity; never weaken the live-peer or dirty-at-pre-flight skips."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor-filed delivery-path bug, released to planning like b62c9fc7 and 709f6691. It is serialized behind b62c9fc7 because both edit moe-agent.{sh,ps1} and postflight.*.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b62c9fc7524a482aa6948ebe38ac3318"
+  ],
+  "priority": "MEDIUM",
+  "order": 232,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T16:44:57.056Z",
+  "updatedAt": "2026-10-24T16:45:06.037Z"
+}
