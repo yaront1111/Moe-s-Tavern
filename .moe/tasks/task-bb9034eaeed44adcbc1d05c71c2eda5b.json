@@ -1,0 +1,42 @@
+{
+  "id": "task-bb9034eaeed44adcbc1d05c71c2eda5b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M02] Whole-task usage correlation",
+  "description": "Objective: Extend bounded existing usage receipts/reports with revision, packet, source retrieval, planner, runner and delivery correlation.\n\nDeliverable: Whole-task usage correlation. This is task M02 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs\n\nDependency aliases (wired by Moe task ids after import): M01.",
+  "definitionOfDone": [
+    "Existing provider counter semantics and missing-as-unknown behavior remain unchanged.",
+    "Aggregation deduplicates retries and includes participating planner/context/repair work.",
+    "No prompts, tool arguments, secrets or invented subscription prices are persisted.",
+    "Fresh verification `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [
+    {
+      "id": "comment-64046319817b4f18ac8dafd47d9445a0",
+      "author": "architect-cq-coordinator",
+      "content": "Ready-now dependency refinement: baseline instrumentation/corpus must start before strict rollout, not wait for the expanded M01 snapshot chain. Legacy missing revision/packet/usage counters remain explicitly unknown; this change grants no plan/check/readiness authority and does not alter existing deliveryPolicy.",
+      "timestamp": "2026-10-24T00:14:31.244Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:32:51.554Z",
+  "updatedAt": "2026-10-24T00:14:31.244Z",
+  "dependsOn": [
+    "task-7bf45815551b4ac49f1c7be392ef4b9e"
+  ]
+}
