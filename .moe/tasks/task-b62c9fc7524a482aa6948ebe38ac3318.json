@@ -134,7 +134,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -154,16 +154,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T15:37:18.097Z",
-  "updatedAt": "2026-10-24T23:01:09.153Z",
+  "updatedAt": "2026-10-24T23:50:08.619Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T21:54:32.559Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T23:50:08.619Z",
+    "wallClockMs": 6936060
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -272,5 +275,9 @@
     "kind": "completion",
     "sessionId": "worker-c1d9de02@2026-10-24T22:00:21Z",
     "at": "2026-10-24T23:01:09.153Z"
-  }
+  },
+  "completedAt": "2026-10-24T23:50:08.619Z",
+  "reviewCompletedAt": "2026-10-24T23:50:08.619Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 2895a843 (on moe/work-2026-10-24 and origin). Re-ran everything from git-archive snapshots of the committed bytes, MOE_*/CLAUDE* env unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180.\n\nDoD1:\n- On a mismatch, both twins re-run the snapshot's own `git -C TOP hash-object -- p` with no temp index.\n- They keep the path only when the staged blob and re-hash are non-empty and re-hash == snapshot; else the unchanged MOE_ATTR_CONCURRENT drop.\n- The 'D' branch and fast path are unchanged.\n- sh staged_out now carries the staged blob; the importee guard needs it, and the other consumers read only the path.\n- Mechanism reproduced on git 2.43: temp-index add 210f053 vs hash-object 73c60c5.\n\nDoD2: AC (autocrlf true/input/text=auto, txt+mjs, byte-exact, no CONCURRENT) and AD (CAS seam: rewrite/delete/dir still drop) exist in both harnesses.\n\nDoD3 re-run:\n- postflight.sh: PASS, 36 scenarios, exit 0.\n- postflight.ps1 on PS 5.1: PASS, 36, exit 0.\n- parity-check.sh: PASS. parity-check.ps1 (BOM check): PASS.\n- importee-guard bash 40/40, ps1 48/0.\n\nRail \"test fails on old behaviour\":\n- Parent sh wrapper: AC FAILED (edit never landed), exit 1.\n- Parent ps1 wrapper on 5.1: AC FAILED (dropped as CONCURRENT), exit 1.\n- My accept-all sh mutant: killed by AD rewrite.\n\nTask rail: twins fixed together; ps1 has BOM ef bb bf and 0 CR bytes.\n\nSize: about 40 production + 218 test LOC, plus 5 board-state .moe/tasks records.\n\nPonytail: nothing to cut; the ABA ponytail ceiling is acceptable; symlink follow-up is task-c532d223. pwsh 7 not re-run by me.",
+  "requiredCheckAtDone": null
 }
