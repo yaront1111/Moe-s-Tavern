@@ -1,0 +1,30 @@
+{
+  "id": "task-05e1f916f49c44eb97c08ca3f0e6e542",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-account-switch never rotates an interactive seat at a hard usage limit when another plugin swallows classic.StopFailure",
+  "description": "Observed 2026-10-24: architect-26ba32c3 is an interactive TUI on acct-2 (wrapper pid 201785, started 13:57Z) holding R01. At 15:49:09Z it hit \"You've hit your session limit · resets 9:30pm\". It should have run /exit so the wrapper could relaunch it on the next account. Instead it sat idle until claude's own auto-continue at the reset, 18:30Z, about 2h41m later.\n\nThe transcript (acct-2 projects/-mnt-d-projexts-moes/8edd9b5c-….jsonl) records the engine's notice: `moe-account-switch: its classic.StopFailure hook was skipped. \"cc-plugin-sec-default\" runs first and sent the event on past it.`\n\nscripts/mods/moe-account-switch/hooks/register.ts:109-118 is the mod's only hard-limit trigger. So any plugin ordered ahead of it that does not pass StopFailure on disables limit rotation for every interactive seat (architect and governor TUIs). Headless seats are unaffected, because their wrapper detects the failed run.\n\nSuggested direction (the architect decides): do not depend solely on StopFailure. Also check `$.session.usage()` rateLimits ≥100% where the mod already runs for the main loop (turn.complete), and leave() from there. Keep the existing StopFailure path. Confirm the engine's hook ordering, and whether turn.complete fires on a rate-limit stop, with the plugin-authoring skill.",
+  "definitionOfDone": [
+    "A main-loop turn that ends at a hard usage limit (any rate-limit window at 100% or more) schedules the seat's /exit even when classic.StopFailure never reaches the mod (e.g. an earlier plugin does not pass it on).",
+    "No exit is scheduled for a subagent turn, for a session without MOE_WORKER_ID and MOE_ACCOUNT_ID, or for a turn that ends with every window below 100%; the existing StopFailure and accountSwitch paths keep working.",
+    "hooks/register.test.ts covers the skipped-StopFailure case and the three no-exit cases, and fresh `claude plugin test scripts/mods/moe-account-switch` passes with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "Fail open, as the mod does today: an error in the new check must leave the turn and the session as they were."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 14,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T17:58:46.581Z",
+  "updatedAt": "2026-10-24T17:58:46.581Z"
+}
