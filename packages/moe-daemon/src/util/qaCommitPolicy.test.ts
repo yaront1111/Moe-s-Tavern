@@ -120,4 +120,33 @@ describe('QA empty-task.commits policy — the two documents agree', () => {
       }
     }
   });
+
+  // 2026-10-24, a project with settings.autoCommit false: worker.md said the
+  // wrapper commits modifiedFiles, so a worker left its bytes in the shared tree
+  // (session ended commit=none, task.commits []), and QA could not repair a clone
+  // delivery whose commit carried no Moe-Session trailer.
+  it('workers own commit, trailer and record_commit when the wrapper lands nothing', () => {
+    for (const name of ['worker.md', 'worker.reference.md']) {
+      const subjects = [lf(ROLE_DOCS[name]), ...(hasDocs ? [readDoc('roles', name)] : [])];
+      for (const text of subjects) {
+        expect(text, name).toContain('With `settings.autoCommit` on (the default)');
+        expect(text, name).toMatch(/with `settings\.autoCommit` false/i);
+        expect(text, name).toContain('Moe-Session: <value of $MOE_SESSION_ID>');
+        expect(text, name).toContain('git rev-parse <sha>^{tree}');
+        expect(text, name).toContain('complete_task');
+        expect(text, name).toContain('QA holds a REVIEW row whose `task.commits` is empty');
+      }
+    }
+    for (const text of [lf(ROLE_DOCS['worker.md']), ...(hasDocs ? [readDoc('roles', 'worker.md')] : [])]) {
+      expect(text).toContain("role: 'worker', sessionId: $MOE_SESSION_ID");
+      expect(text).not.toContain('— that list is what the wrapper commits');
+    }
+  });
+
+  it('QA neither waits for nor self-lands a row when autoCommit is false', () => {
+    for (const [label, text] of [...generatedSubjects(), ...(hasDocs ? diskSubjects() : [])]) {
+      expect(text, label).toContain('the wrapper commits, pushes and records nothing, so skip the wait and never self-land');
+      expect(text, label).toContain('hold a row whose `task.commits` is still empty');
+    }
+  });
 });

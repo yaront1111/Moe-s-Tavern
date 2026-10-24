@@ -247,3 +247,48 @@ for (const [ext, engine] of engines) {
     });
   }
 }
+
+// settings.autoCommit=false: the post-flight lands nothing, so the seat is told
+// before it trusts its role doc's landing rule (2026-10-24: a worker left its
+// bytes in the shared tree for a wrapper commit that never came, and QA could not
+// repair a clone delivery whose commit carried no Moe-Session trailer). Runs the
+// real pre-flight block and notice helper of each wrapper.
+const NOTICE_SID = 'worker-notice@2026-10-24T12:00:00Z';
+for (const [ext, engine] of engines) {
+  for (const [role, autoCommit] of [['worker', false], ['qa', false], ['worker', true]]) {
+    test(`${engine}: ${role} pre-flight notice with autoCommit=${autoCommit}`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe notice '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const source = read(ext);
+      let script;
+      if (ext === 'ps1') {
+        const helper = between(source, 'function Get-MoeAutoCommitOffNotice', '\n}\n') + '\n}';
+        const block = between(source, '    # -------- Pre-flight baseline (land-on-every-exit) --------', '    # -------- End pre-flight baseline --------');
+        script = `﻿$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n${helper}\nfunction Read-MoeCommitSettings { @{ autoCommit = $${autoCommit} } }\nfunction Get-MoeGitTop { @{ GitDir = 'unused' } }\nfunction Get-MoeBaselinePath { 'unused' }\nfunction Invoke-MoePreflightBaseline { @{ ContextText = "\`n\`nThis checkout is shared." } }\n$AutoClaim=$true\n$preflightOk=$true\n$preflightTaskId='task-notice'\n$Role='${role}'\n$moeSid='${NOTICE_SID}'\n$dynamicContext='# Pre-flight Complete'\n${block}\n[Console]::Write(([char]30).ToString() + $dynamicContext)`;
+      } else {
+        const helper = between(source, 'autocommit_off_notice() {', '\n}\n') + '\n}';
+        const block = between(source, '    # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------', '    # Compose final PROMPT');
+        script = `set -eu\n${helper}\npreflight_landing() { MOE_PREFLIGHT_NOTICE=''; [ "$CS_AUTO_COMMIT" = true ] || return 0; MOE_PREFLIGHT_NOTICE='This checkout is shared.'; }\nAUTO_CLAIM=true\nPREFLIGHT_OK=true\nPREFLIGHT_TASK_ID=task-notice\nPREFLIGHT_TASK_TITLE=notice\nCS_AUTO_COMMIT=${autoCommit}\nROLE=${role}\nMOE_SID='${NOTICE_SID}'\nMOE_PREFLIGHT_NOTICE=''\nDYNAMIC_CONTEXT='# Pre-flight Complete'\n${block}\nprintf '\\036%s' "$DYNAMIC_CONTEXT"`;
+      }
+      const file = path.join(dir, `notice.${ext}`);
+      writeFileSync(file, script);
+      const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
+        encoding: 'utf8', timeout: 20000,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const context = result.stdout.split('\x1e').at(-1);
+      if (autoCommit) {
+        assert.doesNotMatch(context, /autoCommit is false|Moe-Session:/);
+        assert.match(context, /This checkout is shared\./, 'the autoCommit=true pre-flight notice still reaches the seat');
+        return;
+      }
+      const notice = 'settings.autoCommit is false: this wrapper will not commit, push or record anything for task task-notice.'
+        + (role === 'worker'
+          ? ` Deliver your own commit with the trailer \`Moe-Session: ${NOTICE_SID}\`, and call moe.record_commit with sessionId=${NOTICE_SID} before complete_task.`
+          : '');
+      assert.ok(context.endsWith(`\n\n<system-reminder>\n${notice}\n</system-reminder>`), context);
+      assert.doesNotMatch(context, /This checkout is shared/);
+    });
+  }
+}

@@ -5649,6 +5649,21 @@ PYEOF
     return 0
 }
 
+# autocommit_off_notice ROLE TASKID SID -- the pre-flight notice for a claimed
+# task under settings.autoCommit=false. preflight_landing returns before any
+# notice then and the post-flight lands nothing, so without this the seat
+# follows its role doc's landing rule and waits on a wrapper commit that never
+# comes (2026-10-24: a row reached REVIEW with task.commits empty). SID is this
+# session's Moe-Session id, the value exported as MOE_SESSION_ID.
+# Twin: Get-MoeAutoCommitOffNotice.
+autocommit_off_notice() {
+    local notice="settings.autoCommit is false: this wrapper will not commit, push or record anything for task $2."
+    if [ "$1" = "worker" ]; then
+        notice="$notice Deliver your own commit with the trailer \`Moe-Session: $3\`, and call moe.record_commit with sessionId=$3 before complete_task."
+    fi
+    printf '%s' "$notice"
+}
+
 # ---- teardown ----------------------------------------------------------------
 # teardown_rescue -- from the EXIT trap (Ctrl+C / SIGTERM / set -e abort),
 # before deregister. If a task id + baseline exist and this session never
@@ -7036,7 +7051,8 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # Runs once the task id is known and before the CLI starts (fresh claim
     # and resume alike). Gated on settings.autoCommit and on $PROJECT being a
     # git repo (both inside preflight_landing). The notice it produces goes
-    # into the dynamic context so the model knows which dirt is not its own.
+    # into the dynamic context so the model knows which dirt is not its own;
+    # with autoCommit off the notice says the wrapper lands nothing instead.
     if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ]; then
         preflight_landing "$PREFLIGHT_TASK_ID" "$PREFLIGHT_TASK_TITLE" "${RESUME_TASK_STATUS:-}" launch || true
         # A recovery landing in there belongs to the PREVIOUS session; this
@@ -7047,6 +7063,9 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         MOE_LANDING_DONE=""
         LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
         LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+        if [ "$CS_AUTO_COMMIT" != "true" ]; then
+            MOE_PREFLIGHT_NOTICE="$(autocommit_off_notice "$ROLE" "$PREFLIGHT_TASK_ID" "$MOE_SID")"
+        fi
         if [ -n "$MOE_PREFLIGHT_NOTICE" ]; then
             DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 

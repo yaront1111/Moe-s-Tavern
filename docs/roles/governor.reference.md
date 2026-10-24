@@ -95,7 +95,7 @@ Do NOT loop between `propose_rail` and other actions on the same task — propos
 
 ## Commit evidence
 
-The wrapper — never the daemon — lands every session's files (completion commit on REVIEW, `wip(task-<id>)` checkpoint otherwise, `refs/moe/rescue/<task>/<ts>` on failure) and reports each attempt via `moe.record_commit`. Read the ledger before touching git:
+With `settings.autoCommit` on (the default), the wrapper — never the daemon — lands every session's files (completion commit on REVIEW, `wip(task-<id>)` checkpoint otherwise, `refs/moe/rescue/<task>/<ts>` on failure) and reports each attempt via `moe.record_commit`. With it off, the wrapper commits, pushes and records nothing: each worker delivers its own commit (with a `Moe-Session:` trailer) and records it via `moe.record_commit`. Read the ledger before touching git:
 
 - `moe.get_context { taskId }` → `commits` (sha, ref, kind, pushed), `landing.lastCompletion`, `lastCommitOutcome` (`committed` / `nothing` / `refused` / `failed` + `MOE_COMMIT_*` code), `unattributedPaths`, `epicSiblings[*].landed`.
 - `git log --grep 'Moe-Task: task-<id>' --format='%h %s'` — every wrapper commit carries `Moe-Task` / `Moe-Kind` / `Moe-Session` / `Moe-Status` trailers; `git for-each-ref refs/moe/rescue/task-<id>/` for rescues.

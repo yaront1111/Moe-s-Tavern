@@ -19,7 +19,7 @@ Before defining tasks, map files: which created, which modified, what each is re
 
 ## Bite-sized tasks
 
-Each step implements one concern together with the tests for what it changed. Inside the step the worker runs the red → green cycle (see `test-driven-development`); the plan names one verification command for the whole task. The agent wrapper commits — plans never contain `git add`/`git commit`.
+Each step implements one concern together with the tests for what it changed. Inside the step the worker runs the red → green cycle (see `test-driven-development`); the plan names one verification command for the whole task. The agent wrapper commits (with `settings.autoCommit` on; with it off, the worker delivers its own commit per its role doc) — plans never contain `git add`/`git commit`.
 
 ## Plan header (every plan)
 

@@ -74,6 +74,13 @@ for prompt in 'the wrapper will pick up the next task in a fresh session'   'INT
   require_both "claimed prompt contract" "$prompt"
 done
 
+# autoCommit=false pre-flight notice: the seat hears that the wrapper lands
+# nothing, and a worker how to deliver and record its own commit, in the same words.
+for prose in 'this wrapper will not commit, push or record anything for task' 'Deliver your own commit with the trailer' \
+  'call moe.record_commit with sessionId='; do
+  require_both "autoCommit-off notice" "$prose"
+done
+
 # Log prefixes.
 for log in '[attribution]' '[skip]' '[rescue]' '[branch]'; do
   require_both "log prefix" "$log"

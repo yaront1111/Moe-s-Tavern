@@ -4893,6 +4893,20 @@ function Invoke-MoePreflightBaseline([hashtable]$Git, [hashtable]$Settings, [str
     }
 }
 
+# The pre-flight notice for a claimed task under settings.autoCommit=false.
+# Invoke-MoePreflightBaseline never runs then and the post-flight lands
+# nothing, so without this the seat follows its role doc's landing rule and
+# waits on a wrapper commit that never comes (2026-10-24: a row reached REVIEW
+# with task.commits empty). $Sid is this session's Moe-Session id, the value
+# exported as MOE_SESSION_ID. Twin: moe-agent.sh autocommit_off_notice.
+function Get-MoeAutoCommitOffNotice([string]$Role, [string]$TaskId, [string]$Sid) {
+    $notice = "settings.autoCommit is false: this wrapper will not commit, push or record anything for task $TaskId."
+    if ($Role -eq 'worker') {
+        $notice += " Deliver your own commit with the trailer ``Moe-Session: $Sid``, and call moe.record_commit with sessionId=$Sid before complete_task."
+    }
+    return $notice
+}
+
 # Idle paths (BLOCKED hold, resume cap): land a lingering baseline for the held
 # task without launching a CLI.
 function Invoke-MoeIdleRecovery([string]$TaskId, [string]$Status) {
@@ -6055,6 +6069,10 @@ If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMess
             }
         } else {
             Write-Host "[info] settings.autoCommit=false — no baseline, no git activity this session." -ForegroundColor Cyan
+            # Tell the seat too: its role doc's landing rule assumes a wrapper commit.
+            if ($dynamicContext) {
+                $dynamicContext += "`n`n<system-reminder>`n$(Get-MoeAutoCommitOffNotice $Role $preflightTaskId $moeSid)`n</system-reminder>"
+            }
         }
     }
     # -------- End pre-flight baseline --------
