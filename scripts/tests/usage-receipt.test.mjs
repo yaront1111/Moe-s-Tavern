@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { formatUsage } from '../prompt-cache-usage.mjs';
+import { normalizeUsageContext } from '../usage-receipt.mjs';
 
 const helper = fileURLToPath(new URL('../prompt-cache.mjs', import.meta.url));
 const context = {
@@ -184,4 +185,139 @@ test('anonymous result events are not silently conflated', t => {
   const r = run(t, 'claude', [{ type: 'result', usage }, { type: 'result', usage }]);
   assert.equal(r.receipts.length, 2);
   assert.equal(r.receipts[0].eventId, null);
+});
+
+// CQ-M02: additive correlation contract. Session-correlation integration cases
+// live here so the existing usage-session.test.mjs stays untouched.
+const sessionHelper = fileURLToPath(new URL('../usage-session.mjs', import.meta.url));
+const correlation = { planRevision: 3, packetId: 'packet-1', sourceRetrievalId: 'retrieval-1',
+  plannerInvocationId: 'planner-1', runnerId: 'runner-1', candidateId: 'cand-1',
+  deliveryReceiptId: 'receipt-1', workKind: 'implementation' };
+const unknownCorrelation = Object.fromEntries(Object.keys(correlation).map(field => [field, null]));
+const unknownContext = Object.fromEntries([...Object.keys(context), ...Object.keys(correlation)].map(field => [field, null]));
+
+test('the shared context normalizer keeps an exact allowlist and rejects poisoned values', () => {
+  assert.deepEqual(normalizeUsageContext({ ...context, ...correlation, prompt: 'SECRET', nested: { a: 1 } }),
+    { ...context, ...correlation });
+  for (const raw of [null, [], 'text', 7]) assert.deepEqual(normalizeUsageContext(raw), unknownContext);
+  assert.equal(normalizeUsageContext({ planRevision: 0 }).planRevision, 0);
+  for (const planRevision of [-1, 1.5, '3', 2 ** 53, true, {}]) {
+    assert.equal(normalizeUsageContext({ planRevision }).planRevision, null, String(planRevision));
+  }
+  for (const field of ['packetId', 'sourceRetrievalId', 'plannerInvocationId', 'runnerId', 'candidateId', 'deliveryReceiptId']) {
+    for (const bad of ['', 'bad\nSECRET', 'x'.repeat(129), '../up', ' lead', 7, {}]) {
+      assert.equal(normalizeUsageContext({ [field]: bad })[field], null, `${field}=${JSON.stringify(bad)}`);
+    }
+  }
+  for (const kind of ['planning', 'context', 'implementation', 'repair', 'qa']) assert.equal(normalizeUsageContext({ workKind: kind }).workKind, kind);
+  for (const kind of ['review', 'Repair', 'error', null]) assert.equal(normalizeUsageContext({ workKind: kind }).workKind, null);
+});
+
+test('receipts persist bounded correlation but never arbitrary nested metadata', t => {
+  const r = run(t, 'claude', [{ type: 'result', uuid: 'event-c', session_id: 'session-c', usage }], {
+    MOE_USAGE_CONTEXT_JSON: JSON.stringify({ ...context, ...correlation, nested: { prompt: 'DO_NOT_STORE' },
+      toolArguments: ['SECRET'], costUSD: 9 }),
+  });
+  assert.equal(r.receipts.length, 1);
+  const receipt = r.receipts[0];
+  for (const [key, value] of Object.entries({ ...context, ...correlation })) assert.equal(receipt[key], value, key);
+  assert.equal(receipt.version, 1);
+  assert.equal(receipt.usage.totalTokens, 2080, 'provider counters are unchanged by correlation');
+  assert.doesNotMatch(JSON.stringify(receipt), /DO_NOT_STORE|SECRET|nested|toolArguments|costUSD/);
+});
+
+test('legacy and invalid correlation stays explicitly unknown, never zero or fabricated', t => {
+  const legacy = run(t, 'claude', [{ type: 'result', uuid: 'legacy', usage }]).receipts[0];
+  for (const [key, value] of Object.entries(context)) assert.equal(legacy[key], value, key);
+  for (const field of Object.keys(correlation)) assert.ok(Object.hasOwn(legacy, field) && legacy[field] === null, field);
+  const invalid = run(t, 'claude', [{ type: 'result', uuid: 'invalid', usage }], {
+    MOE_USAGE_CONTEXT_JSON: JSON.stringify({ ...context, planRevision: -2, packetId: 'bad\nSECRET', runnerId: {},
+      workKind: 'error', candidateId: 'x'.repeat(300) }),
+  }).receipts[0];
+  for (const field of Object.keys(correlation)) assert.equal(invalid[field], null, field);
+  assert.doesNotMatch(JSON.stringify(invalid), /SECRET/);
+});
+
+function moeProject(t, records = {}) {
+  const project = mkdtempSync(path.join(tmpdir(), 'moe usage 漢字 corr '));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  for (const [relative, body] of Object.entries(records)) {
+    const file = path.join(project, '.moe', relative);
+    mkdirSync(path.dirname(file), { recursive: true });
+    if (body === 'DIRECTORY') mkdirSync(file);
+    else writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body));
+  }
+  return project;
+}
+function prepare(project, supplied) {
+  const result = spawnSync(process.execPath, [sessionHelper, project], {
+    encoding: 'utf8', env: { ...process.env, MOE_USAGE_CONTEXT_JSON: JSON.stringify(supplied) },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!result.stderr.includes(project), 'no path leak');
+  assert.doesNotMatch(result.stdout + result.stderr, /SECRET|DO_NOT_COPY/);
+  return JSON.parse(result.stdout);
+}
+
+test('launch preparation snapshots canonical revision and runner from matching records only', t => {
+  const task = { id: 'task-123', planRevision: 4, title: 'DO_NOT_COPY title' };
+  const attempt = { id: 'attempt-789', taskId: 'task-123', workerId: 'worker-456', runnerId: 'runner-real',
+    workspace: '/DO_NOT_COPY/workspace' };
+  const project = moeProject(t, { 'tasks/task-123.json': task, 'attempts/attempt-789.json': attempt });
+  const files = ['tasks/task-123.json', 'attempts/attempt-789.json'].map(name => path.join(project, '.moe', name));
+  const before = files.map(file => readFileSync(file, 'utf8'));
+  // Caller-supplied revision/runner values are overrides the canonical snapshot ignores.
+  const supplied = { ...context, planRevision: 99, runnerId: 'forged-runner', packetId: 'packet-1', workKind: 'repair',
+    prompt: 'SECRET', nested: { a: 1 } };
+  const [first, second] = [prepare(project, supplied), prepare(project, supplied)];
+  assert.notEqual(first.file, second.file);
+  assert.notEqual(first.context.launchId, second.context.launchId);
+  assert.notEqual(first.context.launchId, context.launchId);
+  assert.deepEqual(first.context, { ...context, ...unknownCorrelation, launchId: first.context.launchId,
+    planRevision: 4, runnerId: 'runner-real', packetId: 'packet-1', workKind: 'repair' });
+  for (const prepared of [first, second]) {
+    assert.equal(path.dirname(prepared.file), path.join(project, 'logs', 'moe-usage'));
+    assert.equal(readFileSync(prepared.file, 'utf8'), '');
+    if (process.platform !== 'win32') assert.equal(statSync(prepared.file).mode & 0o777, 0o600);
+  }
+  assert.deepEqual(files.map(file => readFileSync(file, 'utf8')), before, 'canonical records are read-only');
+  // The prepared context is exactly what the stream receipt then persists.
+  const receipt = run(t, 'claude', [{ type: 'result', uuid: 'prepared', usage }], {
+    MOE_USAGE_CONTEXT_JSON: JSON.stringify(first.context) }).receipts[0];
+  assert.deepEqual([receipt.planRevision, receipt.runnerId, receipt.launchId, receipt.workKind],
+    [4, 'runner-real', first.context.launchId, 'repair']);
+});
+
+test('canonical snapshots fail open to unknown for mismatched, malformed, traversal and unreadable records', t => {
+  const ids = { taskId: 'task-1', workerId: 'worker-1', attemptId: 'attempt-1' };
+  const task = { id: 'task-1', planRevision: 2 };
+  const attempt = { id: 'attempt-1', taskId: 'task-1', workerId: 'worker-1', runnerId: 'runner-1' };
+  const sneaky = { taskId: 'x/../../planted', workerId: 'worker-1', attemptId: 'x/../../planted-attempt' };
+  const cases = [
+    ['matching control', { 'tasks/task-1.json': task, 'attempts/attempt-1.json': attempt }, ids, 2, 'runner-1'],
+    ['no records', {}, ids, null, null],
+    ['legacy task without revision', { 'tasks/task-1.json': { id: 'task-1' } }, ids, null, null],
+    ['task id mismatch', { 'tasks/task-1.json': { ...task, id: 'task-2' } }, ids, null, null],
+    ['negative revision', { 'tasks/task-1.json': { ...task, planRevision: -1 } }, ids, null, null],
+    ['string revision', { 'tasks/task-1.json': { ...task, planRevision: '2' } }, ids, null, null],
+    ['malformed task', { 'tasks/task-1.json': '{SECRET broken' }, ids, null, null],
+    ['array task', { 'tasks/task-1.json': '[]' }, ids, null, null],
+    ['oversized task', { 'tasks/task-1.json': JSON.stringify({ ...task, pad: 'x'.repeat(1_100_000) }) }, ids, null, null],
+    ['unreadable task', { 'tasks/task-1.json': 'DIRECTORY' }, ids, null, null],
+    ['attempt for another task', { 'attempts/attempt-1.json': { ...attempt, taskId: 'task-2' } }, ids, null, null],
+    ['attempt for another worker', { 'attempts/attempt-1.json': { ...attempt, workerId: 'worker-2' } }, ids, null, null],
+    ['attempt id mismatch', { 'attempts/attempt-1.json': { ...attempt, id: 'attempt-2' } }, ids, null, null],
+    ['worker unknown', { 'attempts/attempt-1.json': attempt }, { ...ids, workerId: null }, null, null],
+    ['invalid runner', { 'attempts/attempt-1.json': { ...attempt, runnerId: 'bad\nSECRET' } }, ids, null, null],
+    ['traversal ids', { 'planted.json': { id: sneaky.taskId, planRevision: 5 },
+      'planted-attempt.json': { id: sneaky.attemptId, taskId: sneaky.taskId, workerId: 'worker-1', runnerId: 'runner-planted' } },
+    sneaky, null, null],
+  ];
+  for (const [name, records, ids, revision, runner] of cases) {
+    const project = moeProject(t, records);
+    const prepared = prepare(project, { ...ids, role: 'worker', planRevision: 9, runnerId: 'forged' });
+    assert.deepEqual([prepared.context.planRevision, prepared.context.runnerId], [revision, runner], name);
+    assert.equal(prepared.context.taskId, ids.taskId, `${name}: existing identifier semantics unchanged`);
+    assert.equal(readFileSync(prepared.file, 'utf8'), '', name);
+  }
 });

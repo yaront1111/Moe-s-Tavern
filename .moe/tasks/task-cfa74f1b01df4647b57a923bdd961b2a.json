@@ -13,9 +13,57 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: after M03a-e dependencies are DONE/landed, read their actual workloadSnapshot contract/materializer and category exports before using them. Create matchedCorpus.test.ts asserting exactly twenty unique cases, five each maintenance/defect/refactor/non-routine, each rooted at full starting commit 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71 with explicit source/snapshot provenance, intended behavior and independent executable rubric. Pin concrete IDs and per-case/corpus digests from the landed datasets; require distinct task and starting contents, not cosmetic duplicates. Cover reusable-helper, stale-positive-context, stale-negative-context, changed-caller, changed-requirements and recipe-mismatch via actual fixture IDs and assertions. Reject duplicate/missing IDs, category imbalance, changed initial/assessment bytes or source provenance, malformed recipes and digest mismatches. Keep all category acceptance tests unchanged and do not author additional category cases here.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create matchedCorpus.ts as the frozen assembler over the real M03a-e exports, using the shared validator and canonical digest implementation instead of duplicating them. Introduce an explicit corpus version and committed literal freeze manifest: ordered twenty IDs, expected per-case digests and aggregate digest. Compare actual inputs to the freeze; never silently filter missing cases or recompute the expected baseline from changed data. Error handling must produce bounded actionable failures on malformed/missing/conflicting data or IO errors without dumping file contents/secrets. Keep original full startingCommit separate from fixture overlay bytes; label reduced/adapted snapshots honestly, never as exact full-repository archives. Export an immutable corpus for M04 without daemon startup, task/project mutation, model/network calls, prices or rollout controls. Preserve intended behavior/rubrics/recipes; coding inputs exclude held-out assessment/solution data. No production tool/schema or second revision authority.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/benchmarks/matchedCorpus.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Complete corpus integration tests using the actual M03a materializer, not a second reset implementation: for each of twenty cases create two independent fresh temp snapshots, mutate one candidate, create a reset snapshot, and assert frozen starting bytes/digests are restored while the other snapshot, fixture objects and a separate user-working-tree sentinel stay unchanged. Assert coding snapshots exclude assessment files and correction/negative-control sources; independent assessments remain separately available to the later evaluator. Cover repeated/concurrent creation, spaces/Unicode, case/path collisions, symlinks and partial-IO cleanup with error handling confined to owned temporary handles. Never accept arbitrary destinations, remove repository roots, follow symlink targets, perform Git writes or write .moe. Category tests already prove unsolved/corrected/plausibly-wrong variants against unchanged rubrics; compose them unchanged rather than copy solutions. Recipes remain platform-declared argv data, not shell-interpolated code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Create docs/matched-workload-corpus.md documenting the exact twenty IDs/categories, full base commit, source adaptations/representativeness limits, frozen digest encoding/version-update process and independent rubric boundary. Include a short example using the actual landed materialization/reset API and assembler for later M04, not invented helper names. Explain that matched arms use identical starting bytes and rubrics, reset creates only fresh owned temp snapshots, and assessments/solutions do not enter coding inputs. Use portable Node/path/temp examples for Windows/macOS/Linux, with no git checkout/reset/worktree recipe and no manual .moe edits. Missing future packet/revision/usage correlation is unknown, not zero overhead. Corpus validation is not baseline execution, model-quality evidence, VM isolation certification or rollout authorization. This narrow contract guide is needed by M04; M06 retains the epic-wide docs sweep.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "docs/matched-workload-corpus.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "One final verification gate: run exactly `cd packages/moe-daemon && npm test` fresh, require exit 0, and retain outputTail/test counts for complete_task. Existing Vitest src/**/*.test.ts discovery includes new tests without config/package edits. This full daemon command is required by M03 DoD, not a substitute for M06 system acceptance. In WSL use native Linux dependencies in a separate frozen source snapshot with unchanged package-lock/source hashes and Linux-only PATH; never overwrite Windows node_modules. Any scratch full-suite root must include docs, scripts, package scripts and root .gitignore because existing tests read them. Disclose unavailable platform runs, do not skip corpus cases, preserve all shared-tree/peer bytes and run no Git-write commands.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review (adversarial-self-review) of this three-file corpus assembly: could changed datasets redefine expected hashes, cosmetic copies satisfy twenty cases, unchanged/no-op solutions satisfy the intended-change criteria, stale-context/recipe cases be vacuous, or candidates see evaluator/solution data? Challenge digest encoding, immutable copies, malformed inputs, partial IO, parallel resets, symlink/path/case collisions and cleanup affecting user or peer files. Confirm no edits to producer modules/held-out tests, no daemon authority change, no production policy/verified-local activation and no benchmark/certification claims. If review fixes bytes/tests, rerun the same gate; complete_task reports fresh evidence and fixture provenance only.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,10 +79,48 @@
       "author": "architect-cq-coordinator",
       "content": "Ready-now dependency refinement: baseline instrumentation/corpus must start before strict rollout, not wait for the expanded M01 snapshot chain. Legacy missing revision/packet/usage counters remain explicitly unknown; this change grants no plan/check/readiness authority and does not alter existing deliveryPolicy.",
       "timestamp": "2026-10-24T00:14:31.735Z"
+    },
+    {
+      "id": "comment-9a17bffd4b1a405bb944a46436da3614",
+      "author": "architect-da8841dc",
+      "content": "Size triage/SPIDR-data split: twenty independently assessed executable workloads exceed one <=60-minute slice. Created BACKLOG M03a shared snapshot contract and M03b-e five-case category datasets with own tests, explicit producer dependencies and disjoint paths. This original M03 retains its original DoD and owns assembling/freezing exactly 20 from those dependencies, safe-reset integration and the mandated full daemon test command. No production or rollout change. Frozen starting source commit is 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71 (verified designated local branch HEAD); reduced/adapted source provenance must be labeled, not misrepresented as a whole-repository archive. Existing M06 remains the sole epic-wide integration/hardening gate. New category rows remain human-gated BACKLOG; no automatic status promotion.",
+      "timestamp": "2026-10-24T12:36:30.666Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:54.742Z",
-  "updatedAt": "2026-10-24T00:14:31.735Z",
-  "dependsOn": []
+  "updatedAt": "2026-10-24T12:38:42.615Z",
+  "dependsOn": [
+    "task-44b44ccac62f4657890f98ff450738c8",
+    "task-b55f1ea092c04764b8231d5a0b0e0639",
+    "task-3af616e365dc4f4790d052df97e92ed1",
+    "task-1bfea2defe6e4c698afd4ac0e24afdfb",
+    "task-bfe4d1119f0d4a43b9fb9b087a332181"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T12:32:09.083Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-da8841dc"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T12:38:42.516Z",
+  "planningNotes": {
+    "approachesConsidered": "SPIDR-data split: M03a strict workloadSnapshot contract/reset primitive; M03b-e five distinct fixtures/category with independent executable rubric controls; original M03 assembles/freezes all twenty. Twenty bespoke cases plus controls exceed <=60 minutes and 400 LOC in one row. Five new rows were created BACKLOG/human-gated; original dependsOn all five prevents early WORKING claims. Existing M06 remains sole epic-wide hardening task.",
+    "codebaseInsights": "Verified designated local branch HEAD equals 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71. No existing workload/corpus implementation found. Vitest include is src/**/*.test.ts; no config changes needed. M03a supplies the local benchmark-data API, so read actual exports once landed instead of assuming names. Producers own all category modules/tests and materializer. Coordinator comment explicitly lets baseline corpus precede strict profile chain; missing legacy correlation stays unknown. Complete original comments read; split comment and dependency edges added through Moe.",
+    "risks": "Frozen reduced/adapted sources must be labeled, never falsely presented as whole-repository snapshots or existing context API implementations. Independent executable assessments and red/corrected/wrong controls belong to category rows; parent must not weaken them. Expected freeze constants must not derive from changed fixtures at runtime. No evaluation leakage, source checkout writes, Git resets/writes, VM/model execution, price assumptions or readiness claims. Shared-tree foreign dirt and Windows dependencies require a complete frozen Linux test snapshot; do not modify source locks/dependencies. Required full daemon npm test remains the exact gate.",
+    "keyFiles": [
+      "packages/moe-daemon/src/benchmarks/matchedCorpus.ts",
+      "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts",
+      "docs/matched-workload-corpus.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T12:38:42.615Z"
 }

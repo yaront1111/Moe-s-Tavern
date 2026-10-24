@@ -13,10 +13,64 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write failing contract tests first (test-driven-development). Extend usage-receipt.test.mjs with writer and usage-session subprocess cases, and usage-report.test.mjs with end-to-end JSON/text report cases. Prove: valid bounded correlation survives; absent/invalid fields are null, not zero or fabricated IDs; launch preparation snapshots canonical planRevision and runnerId only from matching task/attempt records; original metadata and private unique launch files survive; malformed/mismatched/traversal metadata and unreadable records fail open without leaking paths/content. Report fixtures must cover architect planning, explicit context work, worker implementation and a genuinely separate repair launch, QA, both providers, duplicate imports/retries, resumed cumulative-session conflicts, anonymous Codex turns, mixed known/unknown fields, and delivery receipts joined through the correct candidate/attempt only. Assert exact token totals and unknown counts, not just row existence. Keep all existing assertions and provider-accounting semantics; new session-correlation integration cases live in usage-receipt.test.mjs so the existing usage-session.test.mjs remains untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-receipt.test.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/usage-receipt.test.mjs",
+        "scripts/tests/usage-report.test.mjs"
+      ],
+      "note": "RED contract tests added (all existing assertions kept; usage-session.test.mjs untouched). usage-receipt.test.mjs: shared normalizer allowlist/poison cases, writer persistence of bounded correlation, legacy/invalid->null, session prep canonical planRevision/runnerId snapshot (caller overrides ignored, records read-only, private 0600 unique launch files, end-to-end receipt), 16 fail-open cases (mismatch/malformed/oversize/dir/traversal). usage-report.test.mjs: whole-task rows across architect planning/context/implementation/codex repair/QA with exact totals (10100 +1 unknown), dedup of copies/retry launch, anonymous Codex turn, ambiguity without counter split, multi-task session stays unattributed, delivery joins (recorded/incomplete/not-recorded/unknown) with decoys, malformed/duplicate/unreadable delivery records, legacy receipts. Baseline before edits: 34/34 pass. RED now: receipt file fails to import normalizeUsageContext; 5 report tests fail on missing wholeTasks/ambiguousCorrelationGroups. Files exceed 300 lines (323/402) because the plan's fixed gate runs only these four test files. Workspace files were CRLF-only dirty vs LF HEAD; CRLF preserved. Shared tree has ~1167 foreign dirty paths, untouched.",
+      "startedAt": "2026-10-24T12:33:29.435Z",
+      "completedAt": "2026-10-24T12:41:35.357Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Extend the existing receipt/session path, not the launchers. In usage-receipt.mjs extract/export a small allowlist context normalizer reusable by usage-session.mjs and usage-report.mjs, retaining the existing <=16384-char input and bounded identifier validation. Add optional diagnostic fields planRevision (non-negative safe integer), packetId, sourceRetrievalId, plannerInvocationId, runnerId, candidateId and deliveryReceiptId (bounded identifiers), plus workKind from planning/context/implementation/repair/qa. Keep taskId/workerId/attemptId/launchId/role/model/effort/mode behavior and v1 receipts backward-compatible. Normalize missing or invalid additions to null and never persist arbitrary nested metadata. In usage-session.mjs sanitize returned context instead of spreading arbitrary input; retain fresh random launchId, exclusive mode-0600 receipt creation and fail-open generic warnings. Read only the exact .moe/tasks/<taskId>.json and .moe/attempts/<attemptId>.json, with a stricter filename-safe ID guard, bounded input reads, JSON/object/ID/ownership checks and local error handling. Capture task.planRevision only when its id matches and attempt.runnerId only when attempt.id/taskId/workerId all match; missing/invalid canonical values remain null rather than trusting a caller revision/runner override or defaulting legacy revision to 0. Optional packet/retrieval/planner/work-kind references are observations supplied by producers, not an invitation to invent producers or authorities; absent producers stay unknown. Never infer repair from an error outcome or apportion an interactive multi-task provider session. Keep provider normalizeUsage, dedup event/session identity, stdout and exit behavior unchanged. Inline-comment the additive metadata contract and snapshot timing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/usage-receipt.mjs",
+        "scripts/usage-session.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/usage-receipt.mjs",
+        "scripts/usage-session.mjs"
+      ],
+      "note": "usage-receipt.mjs: exported normalizeUsageContext (exact allowlist: existing 8 fields unchanged + planRevision non-negative safe int, packetId/sourceRetrievalId/plannerInvocationId/runnerId/candidateId/deliveryReceiptId bounded identifiers, workKind enum; invalid/absent -> null); readContext keeps the <=16384-char parse and delegates. Exported readMoeRecord(project, kind, id): strict filename-safe id guard /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/, regular file <=1 MiB, JSON object with record.id===id, any error -> null, no path in output. Receipt version stays 1; normalizeUsage/dedup/stdout/exit untouched. usage-session.mjs: malformed/non-object context still fails open with MOE_USAGE_REPORT_UNAVAILABLE (existing test); output context is the normalized allowlist (no spread) with fresh randomUUID launchId, exclusive 0600 file; planRevision from exact task record only, runnerId only when attempt id/taskId/workerId all match; caller overrides ignored; legacy missing revision null. Launchers untouched. Receipt+session tests 19/19 pass. Mutation check in /tmp scratch copy: 8/8 mutants killed (ownership x2, caller revision trust, loose id guard, size bound, id match, negative revision, raw spread). CRLF preserved.",
+      "startedAt": "2026-10-24T12:41:36.492Z",
+      "completedAt": "2026-10-24T12:42:59.314Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Extend usage-report.mjs without replacing legacy summary/providers/tasks/unattributed/taskRecord fields. Carry normalized bounded worker/attempt/launch and new correlation values through readReceipts, mergeGroup and aggregate; retain unique correlation tuples (including explicit nulls) so packet/revision/planner/runner associations are not manufactured by independently cross-joining ID lists. Deduplicate token observations using the existing provider session/event rules BEFORE any new grouping; extra metadata or retry launch IDs must not create billable records, and genuinely new repair/context/planner sessions must count. Conflicting task attribution remains unattributed; conflicting correlation observations must remain visibly ambiguous rather than select a latest value or invalidate otherwise valid provider counters. Add wholeTasks grouped solely by non-null taskId across all participating roles/providers, with provider list, existing observed-token/unknown-record accounting, bounded correlation tuples and an explicit observed-log-records-only coverage scope; do not promise whole-task participation completeness or split one cumulative session's tokens between phases/revisions. Add read-only delivery correlation to these whole-task rows by joining existing .moe/candidates/<id>.json taskId+attemptId to observed attempts and .moe/receipts/<id>.json candidateId; include only allowlisted candidate/attempt/receipt IDs and landedRevision with evidence:'record-only'. Missing, malformed, conflicting or mismatched joins produce unknown/incomplete metadata and bounded generic warnings, never inferred delivery success from DONE/commits. Do not copy target paths, pushResult, prompts, tool arguments, source text or prices. Expose whole-task totals and unknown/correlation limitations in formatUsageReport while retaining the existing record-only, unconfirmed-Codex-stream and no-subscription-cost disclaimers. Document this consumer contract in inline comments; the epic-final task owns the docs sweep.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/usage-report.mjs"
+      ],
+      "startedAt": "2026-10-24T12:43:00.498Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "One final verification gate: from repository root run exactly `node --test scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-attribution.test.mjs`. Require fresh exit 0 and preserve its outputTail for complete_task evidence. This is the mid-epic diagnostics slice, not a daemon schema/protocol migration or rollout certification; the epic-final task owns full-system regression. Use native Node and Python available to the existing attribution fixture; tests must use os.tmpdir/path APIs for spaces/Unicode and preserve POSIX permissions only where supported. On Windows the existing fixture exercises PowerShell 5.1/7 as well; Linux must not claim those platform runs. Freeze a source snapshot outside the shared checkout if concurrent peer edits make evidence unstable; never replace Windows node_modules, change lockfiles, or perform Git writes. Account for all actual edited paths and preserve pre-existing/peer bytes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review (adversarial-self-review), scoped to this task's five-file diff: challenge repeated and concurrent launches, retry metadata variants, conflicting/bridged session identities, one session spanning tasks/revisions, null/negative/huge values, poisoned IDs/path traversal, malformed/oversized/missing task/attempt/candidate/receipt files, wrong-task or wrong-attempt delivery joins, missing producer metadata, and accidental secret/price persistence. Confirm no second revision authority, no direct .moe writes, no Git-write commands, no change to deliveryPolicy/readiness/verified-local, and no optimistic complete whole-task/delivery claim. If review changes code/tests, rerun the same verification gate before complete_task. Report the five-file owned scope and fresh verification evidence; leave final delivery and QA judgments to their existing paths.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 6,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-07cd2c56",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -31,12 +85,52 @@
       "author": "architect-cq-coordinator",
       "content": "Ready-now dependency refinement: baseline instrumentation/corpus must start before strict rollout, not wait for the expanded M01 snapshot chain. Legacy missing revision/packet/usage counters remain explicitly unknown; this change grants no plan/check/readiness authority and does not alter existing deliveryPolicy.",
       "timestamp": "2026-10-24T00:14:31.244Z"
+    },
+    {
+      "id": "comment-02494c475b744fdfb1b464b214683e9f",
+      "author": "architect-cq-coordinator",
+      "content": "User clarification: token efficiency is a cross-cutting requirement on EVERY rollout task, not just context/cache tasks. Six epic rails now carry CQ-TOKEN-v1/safety/accounting. Measure whole-task tokens and cost per independently accepted change across architect, worker, QA, context-building and repair attempts, with cached/uncached/output counters kept distinct and missing data unknown. Do not confuse prompt-size reduction or caching with reduced active-context use; do not claim achieved savings before matched quality/repair/latency evidence. Keep instrumentation itself bounded and avoid logging full prompts/payloads or private reasoning.",
+      "timestamp": "2026-10-24T12:32:33.846Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:51.554Z",
-  "updatedAt": "2026-10-24T00:14:31.244Z",
+  "updatedAt": "2026-10-24T12:43:00.498Z",
   "dependsOn": [
     "task-7bf45815551b4ac49f1c7be392ef4b9e"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-24T12:26:33.591Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-da8841dc",
+    "worker-07cd2c56"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-24T12:31:45.440Z",
+  "planningNotes": {
+    "approachesConsidered": "Use the existing environment->usage-session->usage-receipt->usage-report pipeline and one shared allowlist normalizer. Rejected modifying both large launchers, creating an event/usage database, a new task revision, raw transcript storage, role-by-role token allocation, and trusting future context packet producers as already implemented. Delivery records are joined at report time because landing can occur after provider receipt emission.",
+    "codebaseInsights": "Explored current implementations and callers: usage-receipt readContext/createUsageReceiptWriter, usage-session CLI, usage-report readReceipts/supersedeInitial/identifiedGroups/mergeGroup/aggregate/taskRecords/buildUsageReport/formatUsageReport, both launcher usage preparation helpers, prompt-cache usage normalization, and Task/ExecutionAttempt/Candidate/DeliveryReceipt shapes in daemon schema. Both launchers already pass prepared context through the shared Node helper, so no launcher edit is needed. Current report loses attemptId/workerId and groups tasks by provider, which this task supplements rather than breaking. Task.planRevision is canonical, ExecutionAttempt.runnerId is available; packet/retrieval/planner record APIs do not yet exist in source. Coordinator comment explicitly permits baseline instrumentation before M01 snapshot chain and requires legacy missing correlation to stay unknown. Original task comments were complete (one comment).",
+    "risks": "Shared checkout is heavily dirty including all existing usage files; preserve foreign bytes and check delivered helpers, not just shared-tree green. Additive receipt metadata is diagnostic only, never trusted runner/approval/check evidence. Unknown counters and Codex unconfirmed stream coverage remain unknown. Metadata tuples must never multiply a deduplicated counter. New wholeTasks coverage concerns observed logs only, not proof all planner/context/repair participation was captured; interactive multi-task session ambiguity must not be hidden. Match canonical task/attempt identity before reading revision/runner. Later F06/C01/P-series tasks own actual packet/planner producer integration; M04 must not treat absent metadata as zero overhead. Delivery receipt->candidate->attempt joins must be validated and labeled record-only.",
+    "keyFiles": [
+      "scripts/usage-receipt.mjs",
+      "scripts/usage-session.mjs",
+      "scripts/usage-report.mjs",
+      "scripts/tests/usage-receipt.test.mjs",
+      "scripts/tests/usage-report.test.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-24T12:31:45.523Z",
+  "workStartedAt": "2026-10-24T12:33:29.435Z"
 }
