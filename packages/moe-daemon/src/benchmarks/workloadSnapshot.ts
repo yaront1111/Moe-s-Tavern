@@ -110,13 +110,17 @@ const FILES_DIGEST_TAG = 'moe-workload-files-v1\0';
 const WORKLOAD_DIGEST_TAG = 'moe-workload-v1\0';
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
-// Backslash, drive/stream colon, Windows-reserved, control, DEL and invisible format characters.
-const FORBIDDEN_CHAR = /[\\<>:"|?*\u0000-\u001f\u007f​-‏‪-‮⁠-⁯﻿]/;
+// Backslash, drive/stream colon, Windows-reserved, C0/DEL/C1 control, bidi-control (ALM, LRM/RLM, LRE-RLO,
+// LRI-PDI), zero-width and BOM characters. Keep them escaped: literal ones in source are Trojan Source.
+const FORBIDDEN_CHAR = /[\\<>:"|?*\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 const DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i;
 
 const utf8Length = (s: string): number => Buffer.byteLength(s, 'utf8');
 /** True when the string has no lone surrogates (Node 18 lacks String.prototype.isWellFormed). */
 const wellFormed = (s: string): boolean => Buffer.from(s, 'utf8').toString('utf8') === s;
+/** Quotes a value for an error message as printable ASCII, so hidden or bidi characters never reach logs raw. */
+const quoted = (s: string): string =>
+  JSON.stringify(s).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 /**
  * Case key for collision checks. Upper-then-lower also folds the NTFS upcase
  * aliases plain toLowerCase misses (dotless i -> I, long s -> S), so a name that
@@ -138,7 +142,7 @@ function readRecord<K extends string>(raw: unknown, field: string, keys: readonl
   if (!isPlainObject(raw)) throw invalidInput(field, 'must be a plain object');
   for (const key of Reflect.ownKeys(raw)) {
     if (typeof key === 'string' && (keys as readonly string[]).includes(key)) continue;
-    const shown = typeof key === 'symbol' ? 'a symbol key' : key.length <= 64 ? JSON.stringify(key) : 'an over-long key';
+    const shown = typeof key === 'symbol' ? 'a symbol key' : key.length <= 64 ? quoted(key) : 'an over-long key';
     throw invalidInput(field, `unknown key ${shown}`);
   }
   const out = {} as Record<K, unknown>;
@@ -184,7 +188,7 @@ function readUniqueKebabs(raw: unknown, field: string, max: number): readonly st
 function checkPortablePath(raw: unknown, field: string): string {
   if (typeof raw !== 'string' || raw === '') throw invalidInput(field, 'must be a non-empty relative path');
   if (utf8Length(raw) > LIMITS.pathBytes) throw invalidInput(field, `path exceeds ${LIMITS.pathBytes} UTF-8 bytes`);
-  const shown = JSON.stringify(raw);
+  const shown = quoted(raw);
   if (!wellFormed(raw) || raw.normalize('NFC') !== raw) throw invalidInput(field, `${shown} must be well-formed NFC text`);
   if (FORBIDDEN_CHAR.test(raw)) {
     throw invalidInput(field, `${shown} contains a backslash, colon, reserved, control or invisible character`);
@@ -228,7 +232,7 @@ function checkFiles(raw: unknown, field: string): Record<string, string> {
     total += utf8Length(content);
     if (total > LIMITS.mapBytes) throw invalidInput(field, `total content exceeds ${LIMITS.mapBytes} UTF-8 bytes`);
     const prior = folded.get(foldCase(file));
-    if (prior !== undefined) throw invalidInput(entry, `${JSON.stringify(file)} collides with ${JSON.stringify(prior)} ignoring case`);
+    if (prior !== undefined) throw invalidInput(entry, `${quoted(file)} collides with ${quoted(prior)} ignoring case`);
     folded.set(foldCase(file), file);
     files[file] = content;
   });
@@ -236,7 +240,7 @@ function checkFiles(raw: unknown, field: string): Record<string, string> {
     const segments = fold.split('/');
     for (let i = 1; i < segments.length; i += 1) {
       const asFile = folded.get(segments.slice(0, i).join('/'));
-      if (asFile !== undefined) throw invalidInput(field, `${JSON.stringify(asFile)} is both a file and a directory of ${JSON.stringify(file)}`);
+      if (asFile !== undefined) throw invalidInput(field, `${quoted(asFile)} is both a file and a directory of ${quoted(file)}`);
     }
   }
   return files;
@@ -304,7 +308,7 @@ function checkSeparation(initial: WorkloadFiles, assessment: WorkloadFiles, root
   const initialPaths = new Set(Object.keys(initial).map(foldCase));
   const initialContents = new Set(Object.values(initial));
   for (const [file, content] of Object.entries(assessment)) {
-    const shown = JSON.stringify(file);
+    const shown = quoted(file);
     if (initialPaths.has(foldCase(file))) {
       throw invalidInput(`${root}.initialFiles`, `held-out assessment path ${shown} also appears in the coding inputs`);
     }
@@ -325,10 +329,10 @@ function checkRubric(raw: unknown, field: string, assessment: WorkloadFiles): Wo
     const at = `${field}.criteria[${i}]`;
     const criterion = readRecord(item, at, ['id', 'description'] as const);
     const id = readKebab(criterion.id, `${at}.id`);
-    if (ids.has(id)) throw invalidInput(`${at}.id`, `duplicate criterion id ${JSON.stringify(id)}`);
+    if (ids.has(id)) throw invalidInput(`${at}.id`, `duplicate criterion id ${quoted(id)}`);
     ids.add(id);
     if (!tests.some((test) => mentionsToken(test, id))) {
-      throw invalidInput(`${at}.id`, `no *.test.mjs assessment file mentions ${JSON.stringify(id)}`);
+      throw invalidInput(`${at}.id`, `no *.test.mjs assessment file mentions ${quoted(id)}`);
     }
     const description = readText(criterion.description, `${at}.description`, LIMITS.descriptionLength);
     return Object.freeze({ id, description });
@@ -383,7 +387,7 @@ export function validateWorkloads(raw: unknown): readonly Workload[] {
   const snapshots = new Set<string>();
   const workloads = items.map((item, i) => {
     const w = checkWorkload(item, `workloads[${i}]`);
-    if (ids.has(w.id.toLowerCase())) throw invalidInput(`workloads[${i}].id`, `duplicate workload id ${JSON.stringify(w.id)}`);
+    if (ids.has(w.id.toLowerCase())) throw invalidInput(`workloads[${i}].id`, `duplicate workload id ${quoted(w.id)}`);
     if (snapshots.has(w.snapshotDigest)) throw invalidInput(`workloads[${i}].snapshotDigest`, 'duplicates an earlier coding snapshot');
     ids.add(w.id.toLowerCase());
     snapshots.add(w.snapshotDigest);
@@ -515,7 +519,7 @@ function disposeOwned(state: Ownership): Promise<void> {
 
 const describeEntry = (parts: readonly string[]): string => {
   const rel = parts.join('/');
-  return utf8Length(rel) <= LIMITS.pathBytes ? JSON.stringify(rel) : `an entry at depth ${parts.length}`;
+  return utf8Length(rel) <= LIMITS.pathBytes ? quoted(rel) : `an entry at depth ${parts.length}`;
 };
 
 /** Reads an owned snapshot back without following links; bounded in depth, entries and file size. */

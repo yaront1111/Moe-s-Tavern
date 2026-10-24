@@ -1,0 +1,28 @@
+{
+  "id": "task-9c8694e33ac840718901adae2bae66e4",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: .moe task JSON persists raw bidi/format characters from tool text",
+  "description": "Repro: task-44b44ccac62f4657890f98ff450738c8. Its complete_step(step-2) note and complete_task summary were sent with backslash-u escapes, and the agent tool-call layer decoded the non-control ones. As a result, .moe/tasks/task-44b44ccac62f4657890f98ff450738c8.json now holds literal U+061C, U+200B-U+200F, U+202A-U+202E (incl. RLO), U+2060-U+206F and U+FEFF. Board commits stage that file, which triggers GitHub hidden-Unicode / Trojan Source warnings.\n\nFix idea: have the daemon's .moe JSON writer emit those code points (plus U+2028/U+2029) as JSON escapes. That is byte-safe and value-identical. Add a regression test.",
+  "definitionOfDone": [
+    "Every .moe JSON record the daemon writes encodes U+061C, U+200B-U+200F, U+2028-U+202E, U+2060-U+206F and U+FEFF as JSON escape sequences, so the file bytes contain none of those code points.",
+    "Parsed values are unchanged by the escaping (a round-trip test with a U+202E-bearing note/summary).",
+    "A test proves a task note/summary containing U+202E is written without the raw character and reads back identical."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 220.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-24T13:40:22.574Z",
+  "updatedAt": "2026-10-24T13:40:22.574Z"
+}

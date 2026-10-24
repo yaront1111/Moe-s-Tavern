@@ -415,6 +415,12 @@ describe('portable paths', () => {
     ['DEL char', 'a\u007fb'],
     ['NUL char', 'a\u0000b'],
     ['zero-width char', '.g\u200cit/config'],
+    ['right-to-left mark', 'a\u200fb.mjs'],
+    ['right-to-left override', 'src/doc\u202esjm.txt'],
+    ['left-to-right isolate', 'a\u2066b.mjs'],
+    ['leading byte order mark', '\ufeffindex.mjs'],
+    ['Arabic letter mark', 'a\u061cb.mjs'],
+    ['C1 control', 'a\u009bb.mjs'],
     ['CON device', 'CON'],
     ['aux device with extension', 'aux.txt'],
     ['nested LPT1 device', 'x/LPT1.js'],
@@ -439,6 +445,49 @@ describe('portable paths', () => {
     const direct = rejectionOf(() => ws.digestFiles({ [bad]: 'x' }));
     expect(direct.code).toBe('INVALID_INPUT');
     expect(direct.field.slice(0, 'workload.files'.length)).toBe('workload.files');
+  });
+
+  it('forbids exactly the documented characters across the BMP', () => {
+    // Independent oracle: the forbidden code point ranges, plus lone surrogates and anything NFC rewrites.
+    const forbidden: [number, number][] = [
+      [0x00, 0x1f], [0x22, 0x22], [0x2a, 0x2a], [0x3a, 0x3a], [0x3c, 0x3c], [0x3e, 0x3f], [0x5c, 0x5c], [0x7c, 0x7c],
+      [0x7f, 0x9f], [0x61c, 0x61c], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x206f], [0xfeff, 0xfeff],
+    ];
+    const mismatched: string[] = [];
+    for (let cp = 0; cp <= 0xffff; cp += 1) {
+      const name = `a${String.fromCharCode(cp)}b`;
+      const expected = forbidden.some(([lo, hi]) => cp >= lo && cp <= hi)
+        || (cp >= 0xd800 && cp <= 0xdfff) || name.normalize('NFC') !== name;
+      let rejected = false;
+      try {
+        ws.digestFiles({ [name]: 'x' });
+      } catch (err) {
+        if (!(err instanceof MoeError) || err.codeName !== 'INVALID_INPUT') throw err;
+        rejected = true;
+      }
+      if (rejected !== expected) mismatched.push(`U+${cp.toString(16).padStart(4, '0')}`);
+    }
+    expect(mismatched).toEqual([]);
+  });
+
+  it('quotes rejected paths and keys as printable ASCII', () => {
+    const bidiPath = rejectionOf(() => ws.digestFiles({ 'src/doc\u202esjm.txt': 'x' }));
+    expect(bidiPath.reason).toBe('"src/doc\\u202esjm.txt" contains a backslash, colon, reserved, control or invisible character');
+    const bidiKey = expectInvalid({ ...sample(), 'id\u2066x': 1 }, 'workload');
+    expect(bidiKey.reason).toBe('unknown key "id\\u2066x"');
+    const nfd = expectInvalid(edit((s) => { s.initialFiles['e\u0301.mjs'] = 'x\n'; }), 'workload.initialFiles');
+    expect(nfd.reason).toBe('"e\\u0301.mjs" must be well-formed NFC text');
+  });
+
+  it('keeps literal hidden characters out of the contract sources (Trojan Source)', () => {
+    // C0/C1 controls other than tab/LF/CR, line/paragraph separators and format characters (bidi controls, BOM).
+    const hidden = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029\p{Cf}]/gu;
+    for (const name of ['workloadSnapshot.ts', 'workloadSnapshot.test.ts']) {
+      const text = fs.readFileSync(new URL(`./${name}`, import.meta.url), 'utf8');
+      const hits = [...text.matchAll(hidden)]
+        .map((m) => `${name}:${text.slice(0, m.index).split('\n').length}:U+${(m[0].codePointAt(0) ?? 0).toString(16)}`);
+      expect(hits).toEqual([]);
+    }
   });
 
   it('accepts paths exactly at the length and depth bounds', () => {
@@ -691,6 +740,15 @@ describe('readSnapshotFiles refusals', () => {
     const forged = { kind: live.kind, workloadId: live.workloadId, root: live.root, digest: live.digest, dispose: live.dispose };
     await expect(ws.readSnapshotFiles(forged)).rejects.toThrow('[NOT_ALLOWED]');
     await expect(ws.readSnapshotFiles({ ...live, root: userTree })).rejects.toThrow('[NOT_ALLOWED]');
+    expectUserTreeIntact();
+  });
+
+  it('names a refused candidate entry as printable ASCII', async () => {
+    const h = await coding();
+    link(userTree, path.join(h.root, 'a\u202ekl'));
+    const refusal = await ws.readSnapshotFiles(h).then(() => null, (err: unknown) => err);
+    expect(refusal).toBeInstanceOf(MoeError);
+    expect((refusal as MoeError).context?.reason).toBe('"a\\u202ekl" is a link, junction or special file');
     expectUserTreeIntact();
   });
 
