@@ -21,6 +21,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { escapeJsonForFile } from '../util/atomicWrite.js';
 
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const MAX_ACCOUNTS = 32;
@@ -162,7 +163,7 @@ function sleepSync(ms: number): void {
 export function writeJsonAtomic(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  fs.writeFileSync(tmp, escapeJsonForFile(JSON.stringify(value, null, 2)) + '\n', { mode: 0o600 });
   for (let attempt = 1; ; attempt++) {
     try {
       fs.renameSync(tmp, file);

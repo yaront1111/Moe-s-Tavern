@@ -7,6 +7,7 @@ import { writeInitFiles } from '../generated/initFiles.js';
 import { writeSkillFiles } from '../generated/skillFiles.js';
 import { writeClaudeHook } from '../util/claudeHook.js';
 import { linkClaudeSkills } from '../util/claudeSkills.js';
+import { escapeJsonForFile } from '../util/atomicWrite.js';
 
 export function initProjectTool(_state: StateManager): ToolDefinition {
   return {
@@ -112,7 +113,7 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
 
       fs.writeFileSync(
         path.join(moePath, 'project.json'),
-        JSON.stringify(project, null, 2)
+        escapeJsonForFile(JSON.stringify(project, null, 2))
       );
 
       // Create empty activity.log
@@ -154,7 +155,7 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
         };
         fs.writeFileSync(
           path.join(moePath, 'channels', `${newChannelId}.json`),
-          JSON.stringify(channel, null, 2)
+          escapeJsonForFile(JSON.stringify(channel, null, 2))
         );
         fs.writeFileSync(path.join(moePath, 'messages', `${newChannelId}.jsonl`), '');
         existingChannelNames.add(channelName);

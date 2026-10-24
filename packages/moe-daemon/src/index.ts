@@ -24,6 +24,7 @@ import { VERSION } from './util/version.js';
 import { writeInitFiles } from './generated/initFiles.js';
 import { writeSkillFiles } from './generated/skillFiles.js';
 import { linkClaudeSkills } from './util/claudeSkills.js';
+import { escapeJsonForFile } from './util/atomicWrite.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
 import { startAccountWatch } from './state/accountStore.js';
 import os from 'os';
@@ -174,11 +175,11 @@ function acquireLock(projectPath: string): boolean {
     try {
       // O_EXCL ensures atomic creation - fails if file exists
       const fd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
-      fs.writeSync(fd, JSON.stringify({
+      fs.writeSync(fd, escapeJsonForFile(JSON.stringify({
         pid: process.pid,
         projectPath: canonicalProjectPath(projectPath),
         createdAt: new Date().toISOString(),
-      }));
+      })));
       fs.closeSync(fd);
       return true;
     } catch (err: any) {
@@ -416,7 +417,7 @@ function writeDaemonInfo(projectPath: string, info: DaemonInfo): void {
   const filePath = daemonInfoPath(projectPath);
   const tempPath = `${filePath}.tmp.${process.pid}`;
   // Atomic write: write to temp file, then rename
-  fs.writeFileSync(tempPath, JSON.stringify(info, null, 2));
+  fs.writeFileSync(tempPath, escapeJsonForFile(JSON.stringify(info, null, 2)));
   fs.renameSync(tempPath, filePath);
 }
 
@@ -483,7 +484,7 @@ function writeGlobalConfig(): void {
       updatedAt: new Date().toISOString()
     };
     const tempPath = `${configPath}.tmp.${process.pid}`;
-    fs.writeFileSync(tempPath, JSON.stringify(config, null, 2));
+    fs.writeFileSync(tempPath, escapeJsonForFile(JSON.stringify(config, null, 2)));
     fs.renameSync(tempPath, configPath);
     logger.debug({ installPath }, 'Wrote global config to ~/.moe/config.json');
   } catch (error) {
@@ -1020,7 +1021,7 @@ function initProject(projectPath: string, projectName?: string): InitResult {
 
   fs.writeFileSync(
     path.join(moePath, 'project.json'),
-    JSON.stringify(project, null, 2)
+    escapeJsonForFile(JSON.stringify(project, null, 2))
   );
 
   // Create empty activity.log
@@ -1095,6 +1096,7 @@ export {
   readDaemonInfo,
   removeDaemonInfo,
   cleanupStaleDaemonFiles,
+  writeDaemonInfo,
   readLockInfo,
   staleLockReason,
   removeStaleLock,
