@@ -119,7 +119,7 @@
       "completedAt": "2026-07-31T21:02:34.234Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,7 +132,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-31T17:47:13.901Z",
-  "updatedAt": "2026-07-31T21:05:45.996Z",
+  "updatedAt": "2026-10-24T15:18:59.972Z",
   "metrics": {
     "firstClaimAt": "2026-07-31T19:40:05.997Z",
     "plannedStepCount": 7,
@@ -248,5 +248,6 @@
     }
   ],
   "completedAt": "2026-07-31T21:05:45.996Z",
-  "reviewSummary": "APPROVED after reopen #1. The one rejection defect is repaired exactly as scoped; repair is docs-only — no code/test/generator/.gitattributes byte moved since my last full verification.\n\nFIX (docs/ARCHITECTURE.md daemon tree, +2/-1, nothing else): L84 narrowed to `src/util/ # shared helpers` (false \"+ generated initFiles/skillFiles\" clause gone); L83 adds `src/generated/ # prebuild output (initFiles/skillFiles)` so the real source dir is on the map. Comment column aligned to siblings; tree order and closing `└── src/types/schema.ts` intact.\n\nRE-RUN BY ME NOW:\n- `npx tsc --noEmit` (moe-daemon): exit 0 — my stated sufficient gate for a docs-only edit.\n- `npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts`: 2 files / 18 tests passed.\n- Widened sweep I demanded, `grep -rn \"src/util\" --include=*.md docs/ *.md`: exactly ONE hit, the corrected helpers line. Joined-form sweep over packages/ scripts/ docs/ .gitattributes (minus node_modules//dist/): EMPTY.\n- `git check-attr linguist-generated`: true on both src/generated/ paths, unspecified on both old paths.\n- `git diff --cached -M --stat`: both still true RENAMES, 1 ins/1 del each (only the mandatory ../util/atomicWrite.js import). src/generated/ holds exactly those 2 files. Code diff unchanged from last round (8 files, +19/-15). No .moe/tasks/*.json hand-edits.\n\nDoD: (1) generators emit to src/generated/ — last round a fresh `npm run prebuild` left `git status` UNCHANGED (byte-identical regen, no vendored drift); both mkdir recursively so a fresh clone builds. (2) importers updated / tsc clean — exit 0. (3) full vitest — last round 4 failed / 862 passed, SAME two failing FILES as baseline, zero NEW (pre-existing bash-spawn flake, passes in isolation). (4) .gitattributes marked by exact path, not glob.\n\nCarry-forward: a joined `<olddir>/<file>` grep cannot match ASCII doc trees, which spell directory and filenames on separate lines. Pair it with a bare-old-directory markdown sweep."
+  "reviewSummary": "APPROVED after reopen #1. The one rejection defect is repaired exactly as scoped; repair is docs-only — no code/test/generator/.gitattributes byte moved since my last full verification.\n\nFIX (docs/ARCHITECTURE.md daemon tree, +2/-1, nothing else): L84 narrowed to `src/util/ # shared helpers` (false \"+ generated initFiles/skillFiles\" clause gone); L83 adds `src/generated/ # prebuild output (initFiles/skillFiles)` so the real source dir is on the map. Comment column aligned to siblings; tree order and closing `└── src/types/schema.ts` intact.\n\nRE-RUN BY ME NOW:\n- `npx tsc --noEmit` (moe-daemon): exit 0 — my stated sufficient gate for a docs-only edit.\n- `npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts`: 2 files / 18 tests passed.\n- Widened sweep I demanded, `grep -rn \"src/util\" --include=*.md docs/ *.md`: exactly ONE hit, the corrected helpers line. Joined-form sweep over packages/ scripts/ docs/ .gitattributes (minus node_modules//dist/): EMPTY.\n- `git check-attr linguist-generated`: true on both src/generated/ paths, unspecified on both old paths.\n- `git diff --cached -M --stat`: both still true RENAMES, 1 ins/1 del each (only the mandatory ../util/atomicWrite.js import). src/generated/ holds exactly those 2 files. Code diff unchanged from last round (8 files, +19/-15). No .moe/tasks/*.json hand-edits.\n\nDoD: (1) generators emit to src/generated/ — last round a fresh `npm run prebuild` left `git status` UNCHANGED (byte-identical regen, no vendored drift); both mkdir recursively so a fresh clone builds. (2) importers updated / tsc clean — exit 0. (3) full vitest — last round 4 failed / 862 passed, SAME two failing FILES as baseline, zero NEW (pre-existing bash-spawn flake, passes in isolation). (4) .gitattributes marked by exact path, not glob.\n\nCarry-forward: a joined `<olddir>/<file>` grep cannot match ASCII doc trees, which spell directory and filenames on separate lines. Pair it with a bare-old-directory markdown sweep.",
+  "planRevision": 0
 }

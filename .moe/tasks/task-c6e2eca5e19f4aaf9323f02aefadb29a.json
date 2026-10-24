@@ -115,7 +115,7 @@
       "completedAt": "2026-09-11T12:57:12.591Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,7 +132,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:08.571Z",
-  "updatedAt": "2026-09-11T13:02:40.588Z",
+  "updatedAt": "2026-10-24T15:19:00.858Z",
   "metrics": {
     "firstClaimAt": "2026-09-11T09:37:28.204Z",
     "plannedStepCount": 6,
@@ -250,5 +250,6 @@
   },
   "completedAt": "2026-09-11T13:02:34.111Z",
   "reviewCompletedAt": "2026-09-11T13:02:34.111Z",
-  "reviewSummary": "APPROVED. Re-ran the exact task command in pwsh from repo root: tests 52/pass 52/fail 0, tsc clean, exit 0 - matches task.verification. 24 pre-existing tests unchanged+green, 28 new (summary says 29; off by one, cosmetic). Commit 7d3dda5 audited via git show: the 5 owned files + 2 board-state json only.\n\nRED REPRODUCED, not trusted: a 4-file scratch tree inside moe-vscode with board.js from 7d3dda5^ ran the new test file - 10 fail/18 pass, failing as assertion errors on the label (actual ['BLOCKED'] vs expected ['Dependency wait']), not module-resolution errors. Scratch deleted.\n\nDoD: (1) six optional fields typed; grep across moe-vscode/src outside types+panel finds no transport parser that could strip them. (2) board.js deletes exactly the 3 hardcoded-chip lines; cause chip + independent .chip-question attention chip, styles pre-existing at BoardViewProvider.ts:500/505; displayStatus, the status!=='BLOCKED' sub-chip guard and drag guards untouched - BLOCKED stays in Working, no new column. (3) initial markup escapes every daemon string via the existing escapeHtml, neutral fallback on a blank reason. (4) taskDetail.js writes only textContent on nodes it creates; touched-id set asserted exactly [blockerSection, commentsList, planContent, statusBadge] - unsaved title/description/DoD inputs survive. (5) tests run all three real surfaces in vm (production board.js, transpiled panel, real taskDetail.js) against a strict DOM whose innerHTML throws, plus a 10-row drift guard over all three rule copies; deepEqual on exact values for four labels, non-BLOCKED attention, resource-over-dependency precedence, 12 malformed shapes, hostile escaping, id order/duplicates, BLOCKED->WORKING clearing with attention persisting. (6) verified every CSS class the live renderer emits exists in the panel style block.\n\nNot rejected on: Moe-Contested trailer for types/moe.ts (task-34dba87e) - hunk inspected, only this task's six fields landed, inferred=0."
+  "reviewSummary": "APPROVED. Re-ran the exact task command in pwsh from repo root: tests 52/pass 52/fail 0, tsc clean, exit 0 - matches task.verification. 24 pre-existing tests unchanged+green, 28 new (summary says 29; off by one, cosmetic). Commit 7d3dda5 audited via git show: the 5 owned files + 2 board-state json only.\n\nRED REPRODUCED, not trusted: a 4-file scratch tree inside moe-vscode with board.js from 7d3dda5^ ran the new test file - 10 fail/18 pass, failing as assertion errors on the label (actual ['BLOCKED'] vs expected ['Dependency wait']), not module-resolution errors. Scratch deleted.\n\nDoD: (1) six optional fields typed; grep across moe-vscode/src outside types+panel finds no transport parser that could strip them. (2) board.js deletes exactly the 3 hardcoded-chip lines; cause chip + independent .chip-question attention chip, styles pre-existing at BoardViewProvider.ts:500/505; displayStatus, the status!=='BLOCKED' sub-chip guard and drag guards untouched - BLOCKED stays in Working, no new column. (3) initial markup escapes every daemon string via the existing escapeHtml, neutral fallback on a blank reason. (4) taskDetail.js writes only textContent on nodes it creates; touched-id set asserted exactly [blockerSection, commentsList, planContent, statusBadge] - unsaved title/description/DoD inputs survive. (5) tests run all three real surfaces in vm (production board.js, transpiled panel, real taskDetail.js) against a strict DOM whose innerHTML throws, plus a 10-row drift guard over all three rule copies; deepEqual on exact values for four labels, non-BLOCKED attention, resource-over-dependency precedence, 12 malformed shapes, hostile escaping, id order/duplicates, BLOCKED->WORKING clearing with attention persisting. (6) verified every CSS class the live renderer emits exists in the panel style block.\n\nNot rejected on: Moe-Contested trailer for types/moe.ts (task-34dba87e) - hunk inspected, only this task's six fields landed, inferred=0.",
+  "planRevision": 0
 }

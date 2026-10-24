@@ -84,7 +84,7 @@
       "completedAt": "2026-07-31T17:49:47.732Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-07-30T21:42:29.878Z",
-  "updatedAt": "2026-07-31T17:59:09.967Z",
+  "updatedAt": "2026-10-24T15:19:02.617Z",
   "metrics": {
     "firstClaimAt": "2026-07-30T22:22:55.327Z",
     "plannedStepCount": 5,
@@ -215,5 +215,6 @@
     }
   ],
   "completedAt": "2026-07-31T17:59:09.967Z",
-  "reviewSummary": "Re-verified after reopen #1. Ran myself: `npx vitest run src/tools/chatWait.test.ts` 18 passed; chatWait+tools together 199 passed (tools.test.ts unmodified, its 3 chat_wait cases green); full `npm test` 55 files / 863 tests passed; `npx tsc --noEmit` exit 0.\n\nDoD 1-3 tested: entry backfill on channel-filtered and broad-scope paths, 5-message two-channel burst oldest-first, wake returning quiet1+quiet2+trigger, sinceId re-delivering pre-cursor messages + empty-string rejection.\n\nDoD 4 (the blocker) fixed in the shared core: summarizeChatBurst(scanned, offBus, scope) at util/chatBacklog.ts:91-95 advances a cursor only for a message that is BOTH in the delivered slice AND scan-sourced for a scanned channel, so an off-bus trigger/buffered message can no longer jump a partially scanned channel's cursor over messages 51..N. Mutation-tested instead of trusting green: deleting `if (!scannedIds.has(message.id)) continue;` fails exactly 3 of 18 (off-bus unit guard, partial-channel wake path, partial-channel entry path); line restored, re-run green, tree clean. Both call sites pass the lists separately (chatWait.ts:214-218 wake, :250-253 entry); the drain-failure fallback delivers the trigger with an empty scan scope so no cursor moves.\n\nRails: blocking:true and the ActiveChatWaiter shape (resolve/unsubscribe/timer/channels, used by WS disconnect cleanup) untouched in the diff; wake writes go through state.detachFromMutexContext; no forbidden patterns; every new async path has error handling and still resolves rather than parking the blocking slot. docs/MCP_SERVER.md covers sinceId, hasMore, backfill-on-entry, full-burst-on-wake, delivered-only cursors. Scope matches the plan.\n\nNit (non-blocking, in memory): hasMore is true whenever a scan returns exactly PER_CHANNEL_SCAN_LIMIT even if nothing remains — one wasted call, never a lost message."
+  "reviewSummary": "Re-verified after reopen #1. Ran myself: `npx vitest run src/tools/chatWait.test.ts` 18 passed; chatWait+tools together 199 passed (tools.test.ts unmodified, its 3 chat_wait cases green); full `npm test` 55 files / 863 tests passed; `npx tsc --noEmit` exit 0.\n\nDoD 1-3 tested: entry backfill on channel-filtered and broad-scope paths, 5-message two-channel burst oldest-first, wake returning quiet1+quiet2+trigger, sinceId re-delivering pre-cursor messages + empty-string rejection.\n\nDoD 4 (the blocker) fixed in the shared core: summarizeChatBurst(scanned, offBus, scope) at util/chatBacklog.ts:91-95 advances a cursor only for a message that is BOTH in the delivered slice AND scan-sourced for a scanned channel, so an off-bus trigger/buffered message can no longer jump a partially scanned channel's cursor over messages 51..N. Mutation-tested instead of trusting green: deleting `if (!scannedIds.has(message.id)) continue;` fails exactly 3 of 18 (off-bus unit guard, partial-channel wake path, partial-channel entry path); line restored, re-run green, tree clean. Both call sites pass the lists separately (chatWait.ts:214-218 wake, :250-253 entry); the drain-failure fallback delivers the trigger with an empty scan scope so no cursor moves.\n\nRails: blocking:true and the ActiveChatWaiter shape (resolve/unsubscribe/timer/channels, used by WS disconnect cleanup) untouched in the diff; wake writes go through state.detachFromMutexContext; no forbidden patterns; every new async path has error handling and still resolves rather than parking the blocking slot. docs/MCP_SERVER.md covers sinceId, hasMore, backfill-on-entry, full-burst-on-wake, delivered-only cursors. Scope matches the plan.\n\nNit (non-blocking, in memory): hasMore is true whenever a scan returns exactly PER_CHANNEL_SCAN_LIMIT even if nothing remains — one wasted call, never a lost message.",
+  "planRevision": 0
 }

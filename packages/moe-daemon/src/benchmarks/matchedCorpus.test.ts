@@ -3,20 +3,29 @@
 // tests (M03b-e) keep owning the unsolved / corrected / plausibly-wrong controls; this file
 // pins the assembled twenty, the freeze manifest and the safe-reset composition. Every
 // expected id and digest below is a committed literal, never derived from the datasets.
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import * as defectModule from './defectWorkloads.js';
 import { DEFECT_WORKLOADS } from './defectWorkloads.js';
 import {
   assembleMatchedCorpus, CORPUS_FREEZE, digestCorpus, MATCHED_CORPUS, MATCHED_CORPUS_FIDELITY, MATCHED_CORPUS_VERSION,
   type CorpusFreeze,
 } from './matchedCorpus.js';
+import * as maintenanceModule from './maintenanceWorkloads.js';
 import { MAINTENANCE_WORKLOADS } from './maintenanceWorkloads.js';
+import * as nonRoutineModule from './non-routineWorkloads.js';
 import { NON_ROUTINE_WORKLOADS } from './non-routineWorkloads.js';
+import * as refactorModule from './refactorWorkloads.js';
 import { REFACTOR_WORKLOADS } from './refactorWorkloads.js';
-import { CORPUS_COVERAGE_TAGS, digestFiles, digestWorkload, type Workload } from './workloadSnapshot.js';
+import {
+  CORPUS_COVERAGE_TAGS, WORKLOAD_CANDIDATE_ROOT_ENV, createAssessmentSnapshot, createCodingSnapshot, digestFiles,
+  digestWorkload, readSnapshotFiles, type Workload, type WorkloadSnapshotHandle,
+} from './workloadSnapshot.js';
 
 const FROZEN_COMMIT = '35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71';
 const CATEGORIES = ['maintenance', 'defect', 'refactor', 'non-routine'] as const;
@@ -403,10 +412,237 @@ describe('assembly accepts only the frozen data', () => {
     ];
     for (const [pattern, freeze] of cases) expect(rejects(freshSets(), freeze)).toMatch(pattern);
     expect(failure(() => assembleMatchedCorpus(freshSets(), null as unknown as CorpusFreeze))).toMatch(/matchedCorpus\.freeze: must be a plain object/);
-    const reordered = variant((f) => { [f.cases[0], f.cases[1]] = [f.cases[1], f.cases[0]]; });
-    reordered.corpusDigest = digestCorpus(reordered.cases);
+    const reordered = variant((f) => {
+      [f.cases[0], f.cases[1]] = [f.cases[1], f.cases[0]];
+      f.corpusDigest = digestCorpus(f.cases);
+    });
     expect(rejects(freshSets(), reordered)).toMatch(
       /matchedCorpus\.freeze\.cases\[0\]: frozen id "maintenance-branch-policy-message" does not match "maintenance-truncation-helper-reuse" at this position/,
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// Safe reset, leakage and cleanup, composed over the real M03a materializer
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = path.resolve(HERE, '..', '..', '..', '..');
+const TAP_RESULT = /^\s*(not ok|ok) \d+ - ([a-z0-9]+(?:-[a-z0-9]+)*): /;
+const handles: WorkloadSnapshotHandle[] = [];
+const scratch: string[] = [];
+let userTree = '';
+let userTreeState = '';
+
+const tmpRoot = (): string => fs.realpathSync(os.tmpdir());
+const isInside = (parent: string, child: string): boolean => {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+const keep = async (made: Promise<WorkloadSnapshotHandle>): Promise<WorkloadSnapshotHandle> => {
+  const handle = await made;
+  handles.push(handle);
+  return handle;
+};
+const coding = (w: Workload): Promise<WorkloadSnapshotHandle> => keep(createCodingSnapshot(w));
+const assessment = (w: Workload): Promise<WorkloadSnapshotHandle> => keep(createAssessmentSnapshot(w));
+const rel2path = (root: string, rel: string): string => path.join(root, ...rel.split('/'));
+
+/** Path, mtime and content hash of everything under `dir`: any write, delete or touch changes it. */
+function treeState(dir: string): string {
+  const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : 1))
+    .flatMap((entry) => {
+      const full = path.join(d, entry.name);
+      const mtime = fs.lstatSync(full).mtimeMs;
+      if (entry.isDirectory()) return [`${full}/:${mtime}`, ...walk(full)];
+      return [`${full}:${mtime}:${crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex')}`];
+    });
+  return walk(dir).join('\n');
+}
+const expectUserTreeIntact = (): void => expect(treeState(userTree)).toBe(userTreeState);
+
+/** Runs the held-out assessment of `w` against `candidateRoot`; ids come from `ok` / `not ok` TAP lines. */
+async function assess(w: Workload, candidateRoot: string): Promise<{ status: number | null; passed: string[]; failed: string[] }> {
+  const held = await assessment(w);
+  const tests = Object.keys(w.assessmentFiles).filter((p) => p.endsWith('.test.mjs')).sort();
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', [WORKLOAD_CANDIDATE_ROOT_ENV]: candidateRoot };
+  const run = spawnSync(process.execPath, ['--test', '--test-reporter=tap', ...tests.map((p) => path.join(...p.split('/')))], {
+    cwd: held.root, env, encoding: 'utf8', timeout: 60_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+  });
+  const passed: string[] = [];
+  const failed: string[] = [];
+  for (const line of String(run.stdout ?? '').split(/\r?\n/)) {
+    const match = TAP_RESULT.exec(line);
+    if (match) (match[1] === 'ok' && !/#\s*(?:SKIP|TODO)\b/i.test(line) ? passed : failed).push(match[2]);
+  }
+  // A spawn error or a timeout kill is never a result: report it as a loud non-zero status.
+  const status = run.error === undefined && run.signal === null ? run.status : -1;
+  return { status, passed: passed.sort(), failed: failed.sort() };
+}
+
+beforeAll(() => {
+  userTree = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-mcorpus-user-'));
+  fs.mkdirSync(path.join(userTree, 'nested'));
+  fs.writeFileSync(path.join(userTree, 'keep.txt'), 'user bytes\n');
+  fs.writeFileSync(path.join(userTree, 'nested', 'keep.mjs'), 'export const keep = 1;\n');
+  userTreeState = treeState(userTree);
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const handle of handles.splice(0)) await handle.dispose().catch(() => undefined);
+  for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+afterAll(() => {
+  fs.rmSync(userTree, { recursive: true, force: true });
+});
+
+describe('safe reset of the frozen twenty', () => {
+  it('resets each case from the frozen bytes while siblings, fixtures and the user tree stay unchanged', async () => {
+    for (const { workload: w } of MATCHED_CORPUS.cases) {
+      const before = digestWorkload(w);
+      const [a, b] = await Promise.all([coding(w), coding(w)]);
+      expect(a.root, w.id).not.toBe(b.root);
+      for (const h of [a, b]) {
+        expect(path.dirname(h.root), w.id).toBe(tmpRoot());
+        expect(isInside(REPO_ROOT, h.root) || isInside(process.cwd(), h.root), w.id).toBe(false);
+      }
+      expect(await readSnapshotFiles(a), w.id).toEqual(w.initialFiles);
+      const [first, second] = Object.keys(w.initialFiles).sort();
+      fs.writeFileSync(rel2path(a.root, first), 'mutated\n');
+      fs.writeFileSync(path.join(a.root, 'added.mjs'), 'export {};\n');
+      if (second !== undefined) fs.rmSync(rel2path(a.root, second));
+      expect(digestFiles(await readSnapshotFiles(a)), w.id).not.toBe(w.snapshotDigest);
+
+      const reset = await coding(w);
+      expect([reset.root === a.root, reset.root === b.root], w.id).toEqual([false, false]);
+      const restored = await readSnapshotFiles(reset);
+      expect(restored, w.id).toEqual(w.initialFiles);
+      expect([digestFiles(restored), reset.digest], w.id).toEqual([w.snapshotDigest, w.snapshotDigest]);
+      expect(digestFiles(await readSnapshotFiles(b)), w.id).toBe(w.snapshotDigest);
+      expect([digestWorkload(w), digestFiles(w.initialFiles)], w.id).toEqual([before, w.snapshotDigest]);
+      expectUserTreeIntact();
+      await Promise.all([a, b, reset].map((h) => h.dispose()));
+      for (const h of [a, b, reset]) expect(fs.existsSync(h.root), w.id).toBe(false);
+    }
+  }, 120_000);
+
+  it('creates and disposes all forty owned snapshots concurrently, each with its own digest', async () => {
+    const made = await Promise.all(MATCHED_CORPUS.cases.flatMap(({ workload: w }) => [coding(w), assessment(w)]));
+    expect(new Set(made.map((h) => h.root)).size).toBe(40);
+    for (const [i, h] of made.entries()) {
+      const w = MATCHED_CORPUS.cases[i >> 1].workload;
+      expect([h.kind, h.workloadId, h.digest]).toEqual(i % 2 === 0 ? ['coding', w.id, w.snapshotDigest] : ['assessment', w.id, w.assessmentDigest]);
+      expect(digestFiles(await readSnapshotFiles(h)), h.root).toBe(h.digest);
+    }
+    await Promise.all(made.map((h) => h.dispose()));
+    for (const h of made) expect(fs.existsSync(h.root)).toBe(false);
+    expectUserTreeIntact();
+  }, 120_000);
+
+  it('keeps held-out assessments and correction sources out of every coding snapshot, available only separately', async () => {
+    for (const { workload: w } of MATCHED_CORPUS.cases) {
+      const [c, a] = [await coding(w), await assessment(w)];
+      expect(isInside(c.root, a.root) || isInside(a.root, c.root), w.id).toBe(false);
+      expect(await readSnapshotFiles(a), w.id).toEqual(w.assessmentFiles);
+      expect(a.digest, w.id).toBe(w.assessmentDigest);
+      const files = await readSnapshotFiles(c);
+      const held = Object.keys(w.assessmentFiles);
+      expect(Object.keys(files).filter((p) => p.endsWith('.test.mjs') || held.includes(p)), w.id).toEqual([]);
+      expect(Object.keys(files).filter((p) => /solution|corrected|variant|plausible|wrong|negative-control/i.test(p)), w.id).toEqual([]);
+      for (const [p, text] of Object.entries(files)) {
+        expect(text.includes('node:test'), `${w.id} ${p}`).toBe(false);
+        for (const heldText of Object.values(w.assessmentFiles)) expect(text.includes(heldText), `${w.id} ${p}`).toBe(false);
+        for (const { id } of w.rubric.criteria) expect(text.includes(`${id}: `), `${w.id} ${p} ${id}`).toBe(false);
+      }
+    }
+  }, 120_000);
+
+  it('keeps producer modules free of variants: each dataset module exports only its workload array', () => {
+    expect(Object.keys(maintenanceModule)).toEqual(['MAINTENANCE_WORKLOADS']);
+    expect(Object.keys(defectModule)).toEqual(['DEFECT_WORKLOADS']);
+    expect(Object.keys(refactorModule)).toEqual(['REFACTOR_WORKLOADS']);
+    expect(Object.keys(nonRoutineModule)).toEqual(['NON_ROUTINE_WORKLOADS']);
+  });
+
+  it('has no case-fold, normalization or file/directory path collisions and no path shared by coding and assessment', () => {
+    for (const { workload: w } of MATCHED_CORPUS.cases) {
+      for (const files of [w.initialFiles, w.assessmentFiles]) {
+        const keys = Object.keys(files);
+        expect(new Set(keys.map((k) => k.normalize('NFC').toLowerCase())).size, w.id).toBe(keys.length);
+        for (const k of keys) expect(keys.some((other) => other.startsWith(`${k}/`)), `${w.id} ${k}`).toBe(false);
+      }
+      expect(Object.keys(w.initialFiles).filter((k) => k in w.assessmentFiles), w.id).toEqual([]);
+    }
+  });
+});
+
+describe('unchanged rubrics over reset snapshots', () => {
+  it('fails every unmodified starting snapshot on a rubric criterion and never writes into the candidate or the assessment', async () => {
+    for (const { workload: w } of MATCHED_CORPUS.cases) {
+      const c = await coding(w);
+      const run = await assess(w, c.root);
+      const ids = w.rubric.criteria.map((criterion) => criterion.id);
+      expect(run.status, w.id).not.toBe(0);
+      expect(run.failed.length, w.id).toBeGreaterThan(0);
+      // Every rubric criterion was actually evaluated: a file-level crash or a wrong candidate root reports none.
+      expect([...run.failed, ...run.passed].sort(), w.id).toEqual([...ids].sort());
+      expect(await readSnapshotFiles(c), w.id).toEqual(w.initialFiles);
+    }
+    expectUserTreeIntact();
+  }, 300_000);
+
+  it('materializes and assesses under a temp root with spaces and non-ASCII characters', async () => {
+    const odd = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'moe-mcorpus-base-')), `a b ${String.fromCodePoint(0xe9, 0x4e2d)} dir`);
+    scratch.push(path.dirname(odd));
+    fs.mkdirSync(odd);
+    const keys = ['TMPDIR', 'TMP', 'TEMP'] as const;
+    const saved = keys.map((k) => process.env[k]);
+    for (const k of keys) process.env[k] = odd;
+    try {
+      for (const category of CATEGORIES) {
+        const w = DATASET_BY_CATEGORY[category][0];
+        const c = await coding(w);
+        expect(path.dirname(c.root), w.id).toBe(fs.realpathSync(odd));
+        const run = await assess(w, c.root);
+        expect([run.status === 0, run.failed.length > 0], w.id).toEqual([false, true]);
+        expect(await readSnapshotFiles(c), w.id).toEqual(w.initialFiles);
+      }
+    } finally {
+      keys.forEach((k, i) => { if (saved[i] === undefined) delete process.env[k]; else process.env[k] = saved[i]; });
+    }
+  }, 120_000);
+});
+
+describe('cleanup ownership over the corpus', () => {
+  it('refuses to read a snapshot that holds a link and disposes it without following the link', async () => {
+    for (const category of CATEGORIES) {
+      const h = await coding(DATASET_BY_CATEGORY[category][0]);
+      fs.symlinkSync(userTree, path.join(h.root, 'escape'), 'junction');
+      await expect(readSnapshotFiles(h), category).rejects.toThrow('[NOT_ALLOWED]');
+      await h.dispose();
+      expect(fs.existsSync(h.root), category).toBe(false);
+      expectUserTreeIntact();
+    }
+  });
+
+  it('removes the fresh root and keeps the IO error code when a write fails part-way, for every case', async () => {
+    const realWrite = fs.promises.writeFile;
+    for (const { workload: w } of MATCHED_CORPUS.cases) {
+      for (const [make, files] of [[createCodingSnapshot, w.initialFiles], [createAssessmentSnapshot, w.assessmentFiles]] as const) {
+        const failAt = Math.min(2, Object.keys(files).length);
+        const mkdtemp = vi.spyOn(fs.promises, 'mkdtemp');
+        let calls = 0;
+        vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof realWrite>) => {
+          calls += 1;
+          if (calls === failAt) throw Object.assign(new Error('simulated full disk'), { code: 'ENOSPC' });
+          return realWrite(...args);
+        });
+        await expect(make(w), w.id).rejects.toMatchObject({ code: 'ENOSPC' });
+        const created = await (mkdtemp.mock.results[0].value as Promise<string>);
+        vi.restoreAllMocks();
+        expect([calls, fs.existsSync(created)], w.id).toEqual([failAt, false]);
+      }
+    }
+    expectUserTreeIntact();
+  }, 120_000);
 });

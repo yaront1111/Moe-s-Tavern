@@ -112,7 +112,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,7 +128,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:36.722Z",
-  "updatedAt": "2026-10-24T15:15:47.171Z",
+  "updatedAt": "2026-10-24T15:19:09.627Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:40:15.349Z",
     "plannedStepCount": 6,
@@ -251,5 +251,8 @@
   "completedAt": "2026-10-24T15:14:24.661Z",
   "reviewCompletedAt": "2026-10-24T15:14:24.661Z",
   "reviewSummary": "Reviewed the recorded completion 71c7dbe (on moe/work-2026-10-24), not the dirty tree.\nGate: fresh git archive of HEAD 3324b3b (owned files cmp-equal to 71c7dbe), lockfile JSON-equal, Linux node_modules, MOE_* unset, Linux-only PATH.\n- `npm test -- --maxWorkers=4`: exit 0, 150 files, 3223 passed / 9 skipped.\n- tsc --noEmit: exit 0.\n- Strict standalone tsc of both new test files: exit 0.\nMy 5 mutation probes were all caught:\n- derive-before-resume: C2 red;\n- no-detach: 14 red;\n- key-always: 12 red;\n- no-floor: 4 red;\n- store-raw-input: 6 red.\nDoD:\n1. C1 and S6: the derived snapshot is persisted and reloads unchanged after restart.\n2. C2 and C4: resume keeps the generation and snapshot, and a historical attempt gets no backfill. S4: repair never adopts. C3: a successor gets generation 2 with a fresh identity, and generation 1 bytes are unchanged.\n3. S1 and S5: every exported returner is detached via structuredClone.\n4. C5: forged args are ignored and the schema and response shape are unchanged. C6: a verified-local task floor survives a legacy rollback, and a null planRevision throws.\n5. S7: a write failure publishes nothing. C7: the seat is handed back. S3: a no-param record keeps the exact legacy key set.\n6. Re-ran green as above.\nLive .moe check: settings are absent (legacy), no task holds a snapshot, and no planRevision is null, so real claims derive legacy and do not fail.\nRails: no verified-local, approval or trust; acceptance.test.ts, executionProfile.ts, policy.ts and taskStore.ts untouched; no forbidden patterns.\nSize: production +89/-17, tests +498 (plan-mandated tables), reviewed in full per the M01c precedent. The +1 file (claimNextTask.test.ts) is a necessary strengthened byte pin.\nNon-blocking:\n- The schema.ts comment-only hunk (step 4) did NOT land in 71c7dbe and is still dirty in the shared tree. I preserved it and escalated in #governors. At HEAD its doc comments are stale. There is no behavior impact.",
-  "requiredCheckAtDone": null
+  "requiredCheckAtDone": null,
+  "declaredFiles": [
+    "packages/moe-daemon/src/types/schema.ts"
+  ]
 }

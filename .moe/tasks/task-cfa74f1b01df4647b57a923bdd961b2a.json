@@ -48,36 +48,54 @@
     {
       "stepId": "step-3",
       "description": "Complete corpus integration tests using the actual M03a materializer, not a second reset implementation: for each of twenty cases create two independent fresh temp snapshots, mutate one candidate, create a reset snapshot, and assert frozen starting bytes/digests are restored while the other snapshot, fixture objects and a separate user-working-tree sentinel stay unchanged. Assert coding snapshots exclude assessment files and correction/negative-control sources; independent assessments remain separately available to the later evaluator. Cover repeated/concurrent creation, spaces/Unicode, case/path collisions, symlinks and partial-IO cleanup with error handling confined to owned temporary handles. Never accept arbitrary destinations, remove repository roots, follow symlink targets, perform Git writes or write .moe. Category tests already prove unsolved/corrected/plausibly-wrong variants against unchanged rubrics; compose them unchanged rather than copy solutions. Recipes remain platform-declared argv data, not shell-interpolated code.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts"
+      ],
+      "note": "Appended integration tests to matchedCorpus.test.ts (31 tests total, was 22), composed over the REAL M03a materializer (createCodingSnapshot/createAssessmentSnapshot/readSnapshotFiles/dispose) with no second reset implementation. Per each of the 20 cases: two independent coding snapshots, mutate one (overwrite/add/delete), reset snapshot restores frozen bytes+digest, sibling snapshot, fixture object (digestWorkload before/after) and a temp user-tree sentinel (path+mtime+sha256) unchanged; roots under realpath(tmpdir), never inside repo root/cwd. Also: 40 concurrent creations/disposals with per-snapshot digests; coding snapshots exclude held-out assessment paths/contents, node:test, <criterionId>: titles and solution/variant-named paths; dataset modules export only their workload arrays (no variants); no case-fold/NFC/file-dir path collisions and no path shared by coding+assessment; the unmodified original fails the UNCHANGED rubric for every case and every rubric criterion is evaluated (passed U failed == rubric ids, so a load crash or wrong candidate root cannot satisfy it), without writing into either snapshot; TMPDIR/TEMP/TMP with spaces+non-ASCII (String.fromCodePoint, source stays ASCII); link/junction in a snapshot refused on read and removed without following on dispose; partial-IO ENOSPC removes the fresh root for coding+assessment of every case. Fixed a pre-existing type error in step-1 test (read-only corpusDigest assignment). Mutation probes in a scratch copy, all killed: wrong candidate root, coding snapshot also writing assessment files, discard() without rm, snapshot root inside cwd; one probe leftover temp dir removed. Gate in fresh Linux git-archive scratch copy: matchedCorpus.test.ts 31/31 (~3s), tsc --noEmit exit 0, test file typechecks via temp tsconfig exit 0, 0 leftover moe-workload dirs. ASCII-only. Shared tree has ~431 foreign dirty paths: untouched. No Git, no .moe writes.",
+      "startedAt": "2026-10-24T15:18:19.241Z",
+      "completedAt": "2026-10-24T15:21:45.884Z"
     },
     {
       "stepId": "step-4",
       "description": "Create docs/matched-workload-corpus.md documenting the exact twenty IDs/categories, full base commit, source adaptations/representativeness limits, frozen digest encoding/version-update process and independent rubric boundary. Include a short example using the actual landed materialization/reset API and assembler for later M04, not invented helper names. Explain that matched arms use identical starting bytes and rubrics, reset creates only fresh owned temp snapshots, and assessments/solutions do not enter coding inputs. Use portable Node/path/temp examples for Windows/macOS/Linux, with no git checkout/reset/worktree recipe and no manual .moe edits. Missing future packet/revision/usage correlation is unknown, not zero overhead. Corpus validation is not baseline execution, model-quality evidence, VM isolation certification or rollout authorization. This narrow contract guide is needed by M04; M06 retains the epic-wide docs sweep.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "docs/matched-workload-corpus.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/matched-workload-corpus.md"
+      ],
+      "note": "Created docs/matched-workload-corpus.md (134 lines, ASCII): exact twenty ids/categories/shared coverage tags/adaptation (table ids diff-checked against the test's pinned order), full base commit 35cf53c..., version 1, fidelity reduced-fixture-overlay, corpus digest, representativeness limits (reduced/adapted overlays, synthetic parts, shared grounding sources, the disclosed cosmetically-identical starting pair maintenance-usage-unknown-format / refactor-usage-counter-normalization), digest encoding + version-update process, independent rubric boundary, and a portable example using ONLY landed API (MATCHED_CORPUS, createCodingSnapshot/createAssessmentSnapshot/readSnapshotFiles/WORKLOAD_CANDIDATE_ROOT_ENV, dispose; reset = create again). The example was extracted and actually executed over all 20 cases in the scratch copy (each unmodified original exits 1, 0 leftover temp dirs). No git recipe, no .moe edits. States explicitly: not baseline execution/model-quality evidence, missing future correlation is unknown not zero, not VM isolation certification, verified-local untouched, no rollout authorization; M06 keeps the epic-wide docs sweep.",
+      "startedAt": "2026-10-24T15:21:47.840Z",
+      "completedAt": "2026-10-24T15:22:55.193Z"
     },
     {
       "stepId": "step-5",
       "description": "One final verification gate: run exactly `cd packages/moe-daemon && npm test` fresh, require exit 0, and retain outputTail/test counts for complete_task. Existing Vitest src/**/*.test.ts discovery includes new tests without config/package edits. This full daemon command is required by M03 DoD, not a substitute for M06 system acceptance. In WSL use native Linux dependencies in a separate frozen source snapshot with unchanged package-lock/source hashes and Linux-only PATH; never overwrite Windows node_modules. Any scratch full-suite root must include docs, scripts, package scripts and root .gitignore because existing tests read them. Disclose unavailable platform runs, do not skip corpus cases, preserve all shared-tree/peer bytes and run no Git-write commands.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full gate `cd packages/moe-daemon && npm test` (vitest run) run fresh in the foreground in /tmp/moe-m03-full: git-archive copy of HEAD a3f1aeb (packages/moe-daemon, scripts, docs, .gitignore, package.json, root CLAUDE.md) + my three owned files (matchedCorpus.ts, matchedCorpus.test.ts, docs/matched-workload-corpus.md, cmp-identical to the working tree), package.json/package-lock.json sha256-identical to the shared tree, Linux-native node_modules symlinked from the M03a-e precedent root (its lockfile differs from HEAD's; the copy carries HEAD's), Linux-only PATH (node v24.21.0). Result: Test Files 151 passed (151), Tests 3254 passed | 9 skipped (3263), exit 0, 21s; 0 leftover moe-workload temp dirs. First run had 1 failure that was a scratch-root gap, not a code failure (daemonGitDocs.test.ts reads root CLAUDE.md, which my copy omitted); root CLAUDE.md is clean vs HEAD, added it to the copy and reran green. No corpus case skipped. Unavailable: native Windows and macOS runs (not exposed here). Shared-tree peer/dirty bytes untouched; no Git-write commands; no .moe edits.",
+      "startedAt": "2026-10-24T15:23:06.200Z",
+      "completedAt": "2026-10-24T15:24:10.141Z"
     },
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review (adversarial-self-review) of this three-file corpus assembly: could changed datasets redefine expected hashes, cosmetic copies satisfy twenty cases, unchanged/no-op solutions satisfy the intended-change criteria, stale-context/recipe cases be vacuous, or candidates see evaluator/solution data? Challenge digest encoding, immutable copies, malformed inputs, partial IO, parallel resets, symlink/path/case collisions and cleanup affecting user or peer files. Confirm no edits to producer modules/held-out tests, no daemon authority change, no production policy/verified-local activation and no benchmark/certification claims. If review fixes bytes/tests, rerun the same gate; complete_task reports fresh evidence and fixture provenance only.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of the three owned files (matchedCorpus.ts 278 lines, matchedCorpus.test.ts 648, docs/matched-workload-corpus.md 134); no bytes changed in this step, so the step-5 gate (151 files / 3254 passed / 9 skipped, exit 0) stands. Checked: (1) Changed datasets redefining expected hashes: assembler compares against committed literals and never recomputes; the baseline is pinned independently in three places (category tests, CORPUS_FREEZE, matchedCorpus.test PINNED + an independent in-test corpus-digest recomputation), tests prove a rebased freeze changes the digest and is not the default. (2) Cosmetic copies satisfying twenty: distinctness over snapshot, assessment, intended behavior and comment/whitespace-squashed (starting+assessment) key; ONE disclosed real pair exists in landed producer data (maintenance-usage-unknown-format / refactor-usage-counter-normalization), pinned by a test, filed as LOW follow-up task-db4847bca0ee4132a2c64ee69578e651 for the architect. (3) No-op satisfying intended-change criteria: test runs each unmodified original through the UNCHANGED held-out rubric: exit non-zero, >=1 rubric criterion failed and every rubric criterion evaluated (so a load crash / wrong candidate root cannot pass); probe with a wrong root killed. (4) Vacuous stale/recipe cases: real inert stale artifacts asserted for five defect cases, defect recipe is argv data with no shell key; tag->fixture-id map pinned. (5) Candidates seeing evaluator/solution data: coding snapshots checked for held-out paths, whole-file held-out contents, node:test and '<criterionId>: ' titles and variant-named paths; dataset modules export only their arrays; probe where the coding snapshot also wrote assessments was killed by 5 tests. KNOWN LIMIT (theoretical, same as M03a-e precedent): leak detection is whole-file/title based, so a partial copied snippet of a held-out file would not be detected by the assembler. (6) Immutability/malformed input/partial IO/parallel/symlink/path-case/cleanup: deep-freeze test, 8 malformed-freeze and 9 malformed-input rejections with bounded printable-ASCII messages that never echo file bytes, ENOSPC mid-write removes the fresh root for all 40 snapshot kinds (probe without rm killed), 40 concurrent create/dispose, junction refused on read and removed without following, case-fold/NFC/file-dir collisions and coding/assessment path overlap checked; user-tree sentinel (path+mtime+sha256) and not-inside-repo/cwd roots asserted. Known limits: TMPDIR override test mutates process.env (restored in finally; vitest forks/threads isolate it per file); native Windows/macOS runs unavailable here. Confirmed: no producer module or held-out test edited (git diff vs HEAD empty for all 10), no daemon/production/schema/tool change, no verified-local activation, no benchmark or isolation claims; forbidden-pattern grep clean; sources ASCII-only. Shared-tree peer dirt (incl. types/schema.ts, 431 paths) untouched; no Git-write commands, no .moe edits.",
+      "startedAt": "2026-10-24T15:24:12.998Z",
+      "completedAt": "2026-10-24T15:25:01.250Z"
     }
   ],
-  "planRevision": 5,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c1d9de02",
+  "planRevision": 13,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -102,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:32:54.742Z",
-  "updatedAt": "2026-10-24T15:16:01.353Z",
+  "updatedAt": "2026-10-24T15:25:29.742Z",
   "dependsOn": [
     "task-44b44ccac62f4657890f98ff450738c8",
     "task-b55f1ea092c04764b8231d5a0b0e0639",
@@ -114,7 +132,7 @@
     "firstClaimAt": "2026-10-24T12:32:09.083Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-da8841dc",
@@ -126,7 +144,11 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T12:38:42.516Z",
@@ -141,5 +163,53 @@
     ]
   },
   "planApprovedAt": "2026-10-24T12:38:42.615Z",
-  "workStartedAt": "2026-10-24T15:07:22.434Z"
+  "workStartedAt": "2026-10-24T15:07:22.434Z",
+  "commits": [
+    {
+      "sha": "a3f1aeb93f39bb0d5bd223bfb425b0a718fa296c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-24T15:06:13Z",
+      "paths": [
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+        ".moe/tasks/task-cfa74f1b01df4647b57a923bdd961b2a.json",
+        "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts",
+        "packages/moe-daemon/src/benchmarks/matchedCorpus.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-24T15:16:54.166Z",
+      "treeId": "e9a26f6c68917080076bda3e5398e664941e2cab",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts",
+    "packages/moe-daemon/src/benchmarks/matchedCorpus.ts",
+    "docs/matched-workload-corpus.md"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/benchmarks/matchedCorpus.test.ts",
+    "packages/moe-daemon/src/benchmarks/matchedCorpus.ts"
+  ],
+  "unattributedPaths": [
+    "2026-10-24-ai-code-quality-and-context.md",
+    "packages/moe-daemon/src/types/schema.ts"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-c1d9de02@2026-10-24T15:06:13Z",
+    "at": "2026-10-24T15:16:54.166Z"
+  },
+  "reviewStartedAt": "2026-10-24T15:25:29.740Z",
+  "verification": {
+    "command": "cd /tmp/moe-m03-full/packages/moe-daemon && PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin npm test  # plan's command (cd packages/moe-daemon && npm test) in a FRESH git-archive copy of HEAD a3f1aeb (+ root CLAUDE.md) with the 3 owned files cmp-identical to the working tree, package.json/package-lock.json sha256-identical, Linux-native node_modules, Linux-only PATH",
+    "exitCode": 0,
+    "outputTail": "[2026-10-24 18:24:02.308 +0300] INFO: Daemon not running or daemon.json is stale\n[2026-10-24 18:24:02.310 +0300] WARN: Removed stale daemon lock\n    reason: \"lock owner unverifiable after timeout\"\n    context: \"acquireLock\"\n\n Test Files  151 passed (151)\n      Tests  3254 passed | 9 skipped (3263)\n   Start at  18:23:41\n   Duration  20.92s (tests 88%, transform 6%, import 5%)\n\nexit=0",
+    "reportedAt": "2026-10-24T15:25:29.740Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Froze the CQ-M03 matched corpus: exactly 20 cases (5 maintenance, defect, refactor, non-routine), all rooted at full commit 35cf53c8444ebe1ca27e68bfbe8c5ca4896bac71, assembled over the landed M03a-e exports. Three owned files, no producer/held-out-test/daemon/schema/.moe change.\n\n- matchedCorpus.ts (278 lines): pure assembler + committed CORPUS_FREEZE (ordered ids, per-case digests, corpus digest sha256:9d0e42e6...). Compares data with the literals, never recomputes the baseline. Bounded printable-ASCII errors; deeply frozen; exports MATCHED_CORPUS for M04.\n- matchedCorpus.test.ts (31 tests): pinned ids/digests, coverage tags via real fixture ids (reusable-helper, stale +/-, changed-caller, changed-requirements, recipe-mismatch), rejection tests (missing/imbalanced/duplicate/cosmetic/leaked/changed bytes/malformed freeze). Integration over the REAL M03a materializer, per case: two snapshots, mutate, reset restores frozen bytes/digest, sibling, fixture and user-tree sentinel unchanged; 40 concurrent creates/disposes; coding snapshots hold no held-out data; the unmodified original fails the UNCHANGED rubric with every criterion evaluated; TMPDIR with spaces/Unicode; junction not followed; ENOSPC partial-IO cleanup for all cases. 4 mutation probes in a scratch copy all killed.\n- docs/matched-workload-corpus.md: ids, digest encoding, update process, limits, executable example (run over all 20).\n\nGate: fresh `npm test` in a git-archive copy of HEAD: 151 files, 3254 passed | 9 skipped, exit 0; focused matchedCorpus 31/31; tsc exit 0.\n\nDisclosures: reduced/adapted overlays, not whole-repo archives. Real data finding: maintenance-usage-unknown-format and refactor-usage-counter-normalization start from cosmetically identical source (assessments/behavior/rubric differ); pinned by a test, follow-up LOW task-db4847bca0ee4132a2c64ee69578e651. Leak check is whole-file/title based. No Windows/macOS run available. Not baseline execution, model-quality evidence, isolation certificat"
 }

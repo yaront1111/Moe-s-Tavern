@@ -99,7 +99,7 @@
       "completedAt": "2026-09-12T19:19:26.743Z"
     }
   ],
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,7 +123,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-10T18:01:58.916Z",
-  "updatedAt": "2026-09-12T19:29:20.344Z",
+  "updatedAt": "2026-10-24T15:19:08.293Z",
   "contextFetchedBy": [
     "worker-de4739a8",
     "qa-813933f7",
@@ -519,5 +519,6 @@
     }
   ],
   "completedAt": "2026-09-12T19:28:18.991Z",
-  "reviewSummary": "Round 3 verified at HEAD 97071e0. It is the completion commit, recorded 19:21:32Z (after reviewStartedAt 19:20:41Z) and pushed. Paths: reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md and the task JSON. The worktree matches it.\n\nQA re-ran, in packages/moe-daemon:\n- `npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts`: exit 0, 45 passed | 3 skipped. Criterion 3 (\"reviewing candidate A cannot approve candidate B\") ran and passed; the 3 skips are sibling criteria.\n- `npm --prefix packages/moe-daemon test`: exit 0, 115 files, 1601 passed | 3 skipped.\n- `npx tsc --noEmit -p tsconfig.json`: exit 0.\n\nacceptance.test.ts differs from 7b33028~1 only by it.skip->it. qaApprove.ts, qaReject.ts, getContext.ts, StateManager.ts, schema.ts and MCP_SERVER.md are byte-identical to 9225483, so the round-2-verified gate, result literal and get_context are unchanged.\n\nRound-2 defect fixed: recordReview replays an identical same-id review (stored copy, createdAt kept, no write). It refuses any difference before writeEntity with -32002 REVIEW_IMMUTABLE and context {reviewId, differingFields}, mirroring candidateStore. SCHEMA.md and the JSDoc match.\n\nScratch mutation audit outside the repo; the baseline gave 45|3 first and last, equal to the repo. 14 of 14 mutations turn a named test red:\n- the round-2 store swapped back in (6 red)\n- reviews reload replaced by new Map\n- each candidateId inputSchema entry deleted\n- each workerId||'human' fallback removed\n- replay falls through to a write\n- replay returns the live object\n- summary or taskId dropped from the compared fields\n- context key renamed\n- codeName changed\n- same-id check moved after writeEntity\n\nOnly ||->?? (empty-string workerId) goes uncaught; it is not a DoD item.\n\nRails: no forbidden patterns, additive, no migration, no git in the daemon. Scratch torn down, no leak. Out of scope and already escalated: the set_task_status and /ws REVIEW->DONE bypass, and Review candidateId provenance."
+  "reviewSummary": "Round 3 verified at HEAD 97071e0. It is the completion commit, recorded 19:21:32Z (after reviewStartedAt 19:20:41Z) and pushed. Paths: reviewStore.ts, qaApprove.test.ts, docs/SCHEMA.md and the task JSON. The worktree matches it.\n\nQA re-ran, in packages/moe-daemon:\n- `npx vitest run src/tools/qaApprove.test.ts src/delivery/acceptance.test.ts`: exit 0, 45 passed | 3 skipped. Criterion 3 (\"reviewing candidate A cannot approve candidate B\") ran and passed; the 3 skips are sibling criteria.\n- `npm --prefix packages/moe-daemon test`: exit 0, 115 files, 1601 passed | 3 skipped.\n- `npx tsc --noEmit -p tsconfig.json`: exit 0.\n\nacceptance.test.ts differs from 7b33028~1 only by it.skip->it. qaApprove.ts, qaReject.ts, getContext.ts, StateManager.ts, schema.ts and MCP_SERVER.md are byte-identical to 9225483, so the round-2-verified gate, result literal and get_context are unchanged.\n\nRound-2 defect fixed: recordReview replays an identical same-id review (stored copy, createdAt kept, no write). It refuses any difference before writeEntity with -32002 REVIEW_IMMUTABLE and context {reviewId, differingFields}, mirroring candidateStore. SCHEMA.md and the JSDoc match.\n\nScratch mutation audit outside the repo; the baseline gave 45|3 first and last, equal to the repo. 14 of 14 mutations turn a named test red:\n- the round-2 store swapped back in (6 red)\n- reviews reload replaced by new Map\n- each candidateId inputSchema entry deleted\n- each workerId||'human' fallback removed\n- replay falls through to a write\n- replay returns the live object\n- summary or taskId dropped from the compared fields\n- context key renamed\n- codeName changed\n- same-id check moved after writeEntity\n\nOnly ||->?? (empty-string workerId) goes uncaught; it is not a DoD item.\n\nRails: no forbidden patterns, additive, no migration, no git in the daemon. Scratch torn down, no leak. Out of scope and already escalated: the set_task_status and /ws REVIEW->DONE bypass, and Review candidateId provenance.",
+  "planRevision": 0
 }
