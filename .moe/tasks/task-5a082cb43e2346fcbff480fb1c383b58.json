@@ -20,11 +20,17 @@
     {
       "stepId": "step-1",
       "description": "Preconditions, then TDD red, part 1. Load test-driven-development first.\n\n**Preconditions**\n- Confirm CQ-M01c (task-0f7df75f…), CQ-M01d (task-80dfde45…) and CQ-M01e (task-29c8274e…) are DONE and landed: get_context epicSiblings landing.merged, or `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`.\n- Read what they landed: taskStore's assertProgressionReady and util/claimEligibility's executionAdmissionRefusal. Both decide strictness as `resolveTaskExecutionProfile(settings, task.executionPolicySnapshot)` followed by `assertExecutionProfileReady`. This task reuses exactly that pair. If the landed rule differs, use the landed one and say so in the completion summary.\n- Read-only for this task: delivery/acceptance.test.ts, delivery/executionProfile.ts and its tests, state/deliveryProjection.ts, state/dependencyUnblock.ts, state/taskStore.ts, util/claimEligibility.ts, tools/claimNextTask.ts, and every existing test file. A red existing test means legacy behaviour changed: fix the code, never the test.\n\n**Create packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts (LF).**\n\nHeader comment: this file pins CQ-M01f.\n- One per-task policy selection is shared by qa_approve, the dependency gate and the board projection.\n- Legacy and observe are unchanged.\n- Strict and malformed configuration fail closed.\n\n**Helpers.** Mirror the 'moe.qa_approve — deliveryPolicy gate' and 'delivery policy — evaluateDeliveryEvidence' describes in tools/qaApprove.test.ts. Copy their HARNESS_SETTINGS shape, because setupMoeFolder replaces the whole settings object.\n- Import the module under test as `import * as policy from './policy.js'`, so a missing resolveTaskDeliveryPolicy export fails only its own cases.\n- `seed({settings, task, candidates, checks, siblings})`:\n  1. Write candidate and check records into .moe/<kind>/ before load (the writeFixtureRecord pattern).\n  2. Write the raw task JSON via h.createTask. This hand edit is the only way a verified-local snapshot or setting can exist, because update_settings and the M01c backstop refuse them.\n  3. Call state.load(), then mock postToRoleChannel.\n- Default fixture: a REVIEW task-1 with complete evidence:\n  - reviewStartedAt set;\n  - current candidate cand-1 on tree T;\n  - a runner-observed exit-0 run of GATE = 'node gate.cjs' on cand-1/T;\n  - one pushed completion commit recorded this round;\n  - settings qualityGate GATE, qualityGateScope 'everyTask', autoCommit true.\n- `approve(extra)`: the real qaApproveTool handler with `{taskId:'task-1', workerId:'qa-1', summary, candidateId:'cand-1', ...extra}`.\n- `refusedWithoutWrites(call, codeName)`:\n  - Before the call: snapshot the task file bytes and a structuredClone of the row; spy writeEntity, touchWorker and postSystemMessage; collect h.state.subscribe events.\n  - Require a MoeError with that codeName.\n  - Then require: zero writes, zero worker touches, zero system or role-channel posts, no events, identical file bytes, an equal row that is still REVIEW, an empty listReviewsForTask and no .moe/reviews directory.\n  - Return the error.\n- Snapshots:\n  - STRICT_V2 `{version:2, profile:'verified-local', planRevision:1, deliveryPolicy:'local-branch'}`\n  - STRICT_LEGACY: the same, with deliveryPolicy 'legacy'\n  - STRICT_V1 `{version:1, profile:'verified-local', planRevision:1}`\n  - legacyV2(p), observeV2(p), LEGACY_V1, OBSERVE_V1\n- MALFORMED table:\n  - null, [] and the string 'verified-local'\n  - version 3\n  - profile 'VERIFIED-LOCAL'\n  - STRICT_V2 plus ready:true\n  - v2 verified-local without deliveryPolicy\n  - planRevision '1'\n- NOT_READY: code -32003 and codeName EXECUTION_PROFILE_NOT_READY. Its context is `{executionProfile:'verified-local', missingCapabilities}`, where missingCapabilities is the leaf's five entries verbatim.\n\n**Group Q: qa_approve cannot bypass strict (DoD 1, 4, 5)**\n\nQ1. it.each over strict sources. Each must be refusedWithoutWrites(approve(), 'EXECUTION_PROFILE_NOT_READY') with the exact NOT_READY identity.\n- (a) STRICT_V2 under settings with no deliveryPolicy (rolled back to the default).\n- (b) STRICT_V2 on a task with planRevision 3 (a stale snapshot), under `{executionProfile:'legacy', deliveryPolicy:'legacy'}`.\n- (c) STRICT_V2 under `{executionProfile:'observe', deliveryPolicy:'local-branch'}`. The live policy's evidence is complete, so only strictness can refuse.\n- (d) STRICT_LEGACY under legacy. A captured legacy policy must not be read as legacy-satisfied.\n- (e) STRICT_V1 under legacy. There is no captured policy, and there must be no fallback to the live one.\n- (f) No snapshot, with settings executionProfile 'verified-local'.\n- (g) legacyV2('legacy') under executionProfile 'verified-local'.\n\nControl: the same fixture holding observeV2('local-branch') under (c)'s settings reaches DONE.\n\nQ2. Attestations never relabel.\n- STRICT_V2 with deliveryPolicy 'manual-artifact', under live manual-artifact plus manualArtifact: NOT_READY, and no deliveryEvidence is written.\n- The merged-pull-request twin, with mergedPullRequest: the same.\n- Precedence: STRICT_V2 under live legacy plus manualArtifact is NOT_READY. Its observe-snapshot twin gets the existing INVALID_INPUT ('is accepted only under deliveryPolicy manual-artifact').\n\nQ3. `vi.stubEnv('MOE_EXECUTION_PROFILE_READY', '1')` does not lift a Q1 refusal. Unstub afterwards.\n\nQ4. Malformed input.\n- it.each(MALFORMED) under legacy settings: refusedWithoutWrites INVALID_INPUT, with context.field starting 'executionPolicySnapshot'.\n- Settings executionProfile 'VERIFIED-LOCAL' with a legacyV2 snapshot: INVALID_INPUT with field 'executionProfile'.\n\nQ5. policy.resolveTaskDeliveryPolicy called directly.\n- It returns the LIVE deliveryPolicy, never the captured one, for each of absent, LEGACY_V1, OBSERVE_V1, legacyV2('manual-artifact') and observeV2('remote-push'), under absent, legacy and observe live profiles.\n- It throws the NOT_READY identity for every Q1 source.\n- It throws INVALID_INPUT for every MALFORMED row.\n- Object.freeze'd inputs are accepted and left unchanged.\n\n**Red run.** Run the file in the scratch copy (recipe in step 2). The Q strict rows must fail because the approval succeeds or writes, and Q5 because the export is missing. A typo or harness error is not a valid red.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts"
+      ],
+      "note": "Preconditions:\n- M01c, M01d and M01e are landed (epicSiblings merged:true).\n- taskStore.assertProgressionReady and claimEligibility.executionAdmissionRefusal both use resolveTaskExecutionProfile + assertExecutionProfileReady; reused as-is.\n\nNew executionPolicyIntegration.test.ts (LF) adds groups Q1-Q5.\n\nRed in isolated Linux copy /tmp/moe-m01f-test.*: lockfile JSON-equal, Linux node_modules symlinked, MOE_* unset, Linux PATH. 48 failed / 2 passed. The passes are the Q1 control and the Q2 observe twin.\n- Q1/Q3/Q4/Q2-strict: writeEntity called once, because an approve Review is written before the M01c backstop refuses DONE.\n- Q2 precedence: INVALID_INPUT instead of NOT_READY.\n- Q5: TypeError, resolveTaskDeliveryPolicy is not a function.\n\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-24T15:46:06.877Z",
+      "completedAt": "2026-10-24T15:50:36.697Z"
     },
     {
       "stepId": "step-2",
@@ -69,9 +75,9 @@
       ]
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-c1d9de02",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,20 +92,24 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:38.100Z",
-  "updatedAt": "2026-10-24T14:15:24.189Z",
+  "updatedAt": "2026-10-24T15:50:36.697Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:55:54.173Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-c1d9de02"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T14:15:24.104Z",
   "planningNotes": {
@@ -117,5 +127,6 @@
       "packages/moe-daemon/src/tools/qaApprove.test.ts"
     ]
   },
-  "planApprovedAt": "2026-10-24T14:15:24.189Z"
+  "planApprovedAt": "2026-10-24T14:15:24.189Z",
+  "workStartedAt": "2026-10-24T15:46:06.877Z"
 }
