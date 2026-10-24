@@ -95,7 +95,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,16 +111,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.455Z",
-  "updatedAt": "2026-10-24T14:56:50.548Z",
+  "updatedAt": "2026-10-24T15:06:05.393Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:03:43.271Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T15:06:05.393Z",
+    "wallClockMs": 7342122
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-3617ccf7"
+    "worker-3617ccf7",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -210,5 +213,9 @@
     "kind": "completion",
     "sessionId": "worker-3617ccf7@2026-10-24T14:26:19Z",
     "at": "2026-10-24T14:56:50.548Z"
-  }
+  },
+  "completedAt": "2026-10-24T15:06:05.393Z",
+  "reviewCompletedAt": "2026-10-24T15:06:05.393Z",
+  "reviewSummary": "Reviewed completion commit d0ad42a (on moe/work-2026-10-24). It adds only refactorWorkloads.ts (1192 lines) and refactorWorkloads.test.ts (526 lines): no production, contract, sibling or Git edits. Size is 1718 LOC, not cited, following the M03a-e precedent (the task mandates all fixture bytes in these two files).\nRe-ran in a fresh git-archive copy of d0ad42a with Linux node_modules and a Linux-only PATH:\n- focused vitest 22/22, exit 0;\n- tsc --noEmit exit 0;\n- vitest src/benchmarks 255/255;\n- 0 leftover moe-workload dirs.\nNo forbidden patterns. Not imported by production code.\nDoD 1-3:\n- 5 refactor ids validate against the landed M03a contract, with frozen commit, honest adapted notes and pinned digests.\n- Controls pin exact sets: the original fails only the intent criterion, corrected passes all, wrong fails the named behavior ids.\n- Leakage, determinism/reset and source sha256 guards are tested.\nProvenance: case 1's held-out assessment run against a shim over the FROZEN scripts/prompt-cache-usage.mjs fails only single-counter-normalization, which confirms the \"checked equal\" claim. capChatMessagesToResponseBudget and boundOutputTail match 35cf53c.\nQA probes: 23 throwaway mutations, deleted afterwards. 21 were killed by the expected criteria, including a gaming probe (import the helper but keep the loops), which was caught by the intent criterion.\nNon-blocking rubric gaps (2 survivors):\n- (a) Case 3: dropping the leading './' strip goes undetected. It only differs on './/x' (the original rejects it as absolute), and that input is not in the table.\n- (b) Case 4: a `{ ...raw }` return passes returns-detached even though it copies a symbol-keyed extra key. The criterion text says \"only the three fields\", but no row has a symbol key.\nBoth are worth a row if the corpus is ever re-pinned.",
+  "requiredCheckAtDone": null
 }

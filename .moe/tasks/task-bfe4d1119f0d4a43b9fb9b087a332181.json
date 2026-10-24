@@ -111,7 +111,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T12:36:30.514Z",
-  "updatedAt": "2026-10-24T15:00:17.897Z",
+  "updatedAt": "2026-10-24T15:00:52.303Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:06:48.019Z",
     "plannedStepCount": 5,
@@ -173,7 +173,8 @@
     ".moe/tasks/task-9cfaacf11e194062bc1ca5f77388ec90.json",
     ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
     ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json",
-    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
+    ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json"
   ],
   "completionSummary": "Froze the five CQ-M03 non-routine workloads on the landed M03a contract. packages/moe-daemon/src/benchmarks/non-routineWorkloads.ts exports NON_ROUTINE_WORKLOADS = validateWorkloads([...]) and holds workload objects only. non-routineWorkloads.test.ts holds the harness and the test-only corrected and plausible-wrong variants. Cases (shared coverage tag in brackets): (1) cached-lookup-fingerprint [stale-positive-context]: commit-tagged positives, fail closed when resolution fails, bounded cache. (2) stale-negative-export-index [stale-negative-context]: namespace-scoped negatives keyed by a SHA-256 fingerprint; read errors are never cached. (3) chat-pagination-remainder [reusable-helper]: readPage, whose cursor is the last DELIVERED message, covering every message exactly once, rejecting unknown cursors and reusing the chatPayload budget helpers. (4) monotonic-attempt-generation [changed-requirements]: a persisted high-water mark that survives pruning, strict decoding, and ATTEMPT_GENERATION_EXHAUSTED. (5) cross-role-usage-rollup [reusable-helper, unknown-preservation]: rollupByTask deduplicates by durable identity before summing, keeps unidentified rows and unknown counters visible, and adds byRole. Each case carries provenance, checked against 35cf53c via git show, and pinned snapshot, assessment and workload digests. Each original fails every new-behavior criterion and passes one compatibility criterion. Each corrected variant passes all criteria with exit 0. Each wrong variant fails its named criterion, with the exact sets pinned. Leakage, determinism and reset, ASCII and source-unchanged tests are included. Gate in a fresh isolated copy: vitest 32/32, exit 0; tsc --noEmit exit 0; the repeat run is green. No production, contract, sibling, .moe or Git edits. Self-review: one fix, a more precise provenance note in case 3 (digest re-pinned and gate rerun). Known risk: the source-checkout sha test watches attemptStore.ts, which a peer is editing in the shared tree, so ",
   "commits": [
@@ -200,6 +201,23 @@
       "treeId": "44fca8d31f5bdfdac9cfe13a7a415a60587db3cb",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5ddec9d9dbfa44f2ea908efe0792b9dc603d6c28",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-24T14:56:46Z",
+      "paths": [
+        ".moe/tasks/task-1bfea2defe6e4c698afd4ac0e24afdfb.json",
+        ".moe/tasks/task-80dfde45cbd04e72a460c1ee867ae62c.json",
+        ".moe/tasks/task-bfe4d1119f0d4a43b9fb9b087a332181.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-24T15:00:52.302Z",
+      "treeId": "d96c1a6dd487743430eca030eeda2cbaefc0c3ad",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -211,9 +229,9 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-4e006165@2026-10-24T14:26:20Z",
-    "at": "2026-10-24T14:56:19.217Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-24T14:56:46Z",
+    "at": "2026-10-24T15:00:52.302Z"
   },
   "completedAt": "2026-10-24T15:00:17.897Z",
   "reviewCompletedAt": "2026-10-24T15:00:17.897Z",
