@@ -184,7 +184,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -222,7 +222,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:13.144Z",
-  "updatedAt": "2026-10-24T22:03:41.809Z",
+  "updatedAt": "2026-10-24T22:12:31.854Z",
   "dependsOn": [
     "task-349319a3b8d24aafab39a562ac2d2fb9",
     "task-ad95cb270e9e46df8672eb094d0c1e74"
@@ -231,12 +231,15 @@
     "firstClaimAt": "2026-10-24T21:21:08.111Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-10-24T22:12:31.854Z",
+    "wallClockMs": 3083743
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
     "architect-473624b4",
-    "worker-e8965f51"
+    "worker-e8965f51",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -372,5 +375,9 @@
     "reportedAt": "2026-10-24T22:03:18.924Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Implemented optional eight-field execution contract across schema, strict lossless validator, every-writer persistence/revision, submit_plan and every-role get_context. Legacy behavior preserved; contract/plan/DoD changes share one durable revision. Added 71 focused cases; protected existing tests unchanged, F05 still skipped. CRLF preserved. Full gate: 156 files, 3534 pass/15 skip; both typechecks pass. All 10 planned mutants killed individually plus sparse-slot mutant; combined 34 failures. No source/doc delivery collisions in fresh get_commit_scope. Seven source/test/doc paths changed. Per step-6 amend-1, contested docs/SCHEMA.md intentionally NOT edited; all owed items handed to F12 in comment-b41f072c54bf4695be7d473e2a0d5cbb. Unrelated obsolete wire-error docs filed as task-a9824bc1a509462da88294d364c0a9dc. Serena handoff/gotcha saved. Snapshot e587474 + exact owned overlays, native Linux dependencies, no shared install, Git writes or manual .moe edits. Wrapper owns completion landing; no SHA claimed before postflight. verified-local remains refused. Earlier step-2 premature note explicitly corrected, all final evidence rerun."
+  "completionSummary": "Implemented optional eight-field execution contract across schema, strict lossless validator, every-writer persistence/revision, submit_plan and every-role get_context. Legacy behavior preserved; contract/plan/DoD changes share one durable revision. Added 71 focused cases; protected existing tests unchanged, F05 still skipped. CRLF preserved. Full gate: 156 files, 3534 pass/15 skip; both typechecks pass. All 10 planned mutants killed individually plus sparse-slot mutant; combined 34 failures. No source/doc delivery collisions in fresh get_commit_scope. Seven source/test/doc paths changed. Per step-6 amend-1, contested docs/SCHEMA.md intentionally NOT edited; all owed items handed to F12 in comment-b41f072c54bf4695be7d473e2a0d5cbb. Unrelated obsolete wire-error docs filed as task-a9824bc1a509462da88294d364c0a9dc. Serena handoff/gotcha saved. Snapshot e587474 + exact owned overlays, native Linux dependencies, no shared install, Git writes or manual .moe edits. Wrapper owns completion landing; no SHA claimed before postflight. verified-local remains refused. Earlier step-2 premature note explicitly corrected, all final evidence rerun.",
+  "completedAt": "2026-10-24T22:12:31.854Z",
+  "reviewCompletedAt": "2026-10-24T22:12:31.854Z",
+  "reviewSummary": "Reviewed completion commit 55159036 (on moe/work-2026-10-24; daemon/docs paths unchanged to HEAD). 7 source/test/doc paths, 381 net LOC (+board JSON), under 400. CRLF kept in schema/validators/taskStore (all lines CR in parent and commit; --stat equals --ignore-cr-at-eol). No forbidden tokens added. Protected tests untouched.\n\nRe-ran myself: fresh git archive of 55159036 (/tmp/moe-qa-f03.VlRUtS), linked Linux node_modules (lock JSON identical), MOE_* unset, Linux PATH. npm test exit 0: 156 files, 3534 pass, 15 skip. tsc --noEmit exit 0; test-file typecheck exit 0.\n\nMy own mutations (focused file 71/71 at baseline): drop !contractChanged 16 red; drop updateTask validation 6; drop get_context projection 6; always-null submit_plan 6; truncate items 2.\n\nDoD:\n(1) Legacy rows load with no own key and no get_context property; corrupt stored values survive unrelated writes.\n(2) Revision and contract go out in one writeEntity, +1 per write; an equal reordered contract does not bump; a failed write publishes nothing.\n(3) Strict validator (bounds 2000/50/1000, INVALID_INPUT with context.field, no truncation) runs on every updateTask writer before any write; schema/allowlist parity tested; producer and all-role consumer tests, with reload.\n(4) Verified as above.\n\nDocs: MCP_SERVER.md landed. SCHEMA.md deferred per approved step-6 amend-1; owed items are on F12 task-72184c65 (comment-b41f072c).\n\nNon-blocking: unknown-key context.field is the bare key (the plan allows this). Taste only: the seven list schemas in submitPlan could map from EXECUTION_CONTRACT_FIELDS.",
+  "requiredCheckAtDone": null
 }
