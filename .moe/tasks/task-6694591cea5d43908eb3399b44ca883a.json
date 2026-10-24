@@ -96,7 +96,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -113,16 +113,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:35.680Z",
-  "updatedAt": "2026-10-24T12:58:04.620Z",
+  "updatedAt": "2026-10-24T13:08:20.217Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T12:25:22.985Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-24T13:08:20.217Z",
+    "wallClockMs": 2577232
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -201,5 +204,9 @@
     "kind": "completion",
     "sessionId": "worker-c1d9de02@2026-10-24T12:44:09Z",
     "at": "2026-10-24T12:58:04.620Z"
-  }
+  },
+  "completedAt": "2026-10-24T13:08:20.217Z",
+  "reviewCompletedAt": "2026-10-24T13:08:20.217Z",
+  "reviewSummary": "APPROVED. Commit 77cca30 on moe/work-2026-10-24 (in task.commits). 4 owned files: +383/-27 (~356 net, under 400). executionProfile.test.ts and acceptance.test.ts unchanged since 35cf53c.\n\nRe-run in a fresh copy /tmp/moe-qa-m01b.2VuPda (git archive 77cca30, Linux node_modules with lockfile identical to 77cca30, Linux-only PATH, MOE_* unset): `npm test -- --maxWorkers=4` exit 0, 143 files, 2662 passed / 9 skipped, matching the worker's claim. `npx tsc --noEmit --incremental false` exit 0. Lockfile sha unchanged.\nThe first run inherited this seat's MOE_WORKER_ID=qa-…, and 4 getContext.test.ts cases failed from role trimming. That is environmental, not in this diff.\n\nDoD:\n(1) Exact v2 values are accepted for every profile x policy. Missing, null, unknown, non-enumerable, extra, inherited and wrong-version input all fail closed.\n(2) v1 compatibility holds. readCapturedDeliveryPolicy takes no settings, so v1 gets no deliveryPolicy.\n(3) No aliasing, tested on frozen and unfrozen inputs.\n(4) Same DELIVERY_POLICIES array. resolveDeliveryPolicy behavior and message are unchanged. The live policy ignores snapshots.\n(5) verified-local stays EXECUTION_PROFILE_NOT_READY under the env flags.\n(6) Reproduced.\n\nStatic: the leaf imports only util/errors, so there is no cycle and one POLICIES authority. Nothing reads the new Task/Attempt field yet. No max() ranking. schema.ts stays CRLF. No forbidden patterns.\nComplexity: nothing to cut. Persistence and wiring belong to M01c-f.",
+  "requiredCheckAtDone": null
 }
