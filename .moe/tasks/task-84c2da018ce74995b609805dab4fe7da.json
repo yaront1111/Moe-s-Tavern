@@ -17,8 +17,9 @@
     {
       "stepId": "step-1",
       "description": "GATE FIRST: make no edit before the human's rail decision is known.\nThis is a size-only reopen. QA found no failed DoD item in e587474 and offered two options:\n- (b) an explicit R07 size exception on the epic rail, which is the R06 precedent;\n- (a) a re-slice.\nThe architect filed (b) as rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (MODIFY_RAIL, EPIC).\n\n1. Read allRails.epic from moe.get_context.\n   - If the size-exception rail contains 'CQ-R07: the pinned guest bootstrap as landed in e587474', continue with step 2.\n   - Otherwise read the decision READ-ONLY from .moe/proposals/prop-d3ccceade25f4af19518ce0e930e4123.json (field status):\n     - PENDING: call moe.report_blocked { reason: 'awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a)' } with no blockedOnTaskIds, then end the session.\n     - REJECTED: call moe.request_replan { reason: 'R07 size exception rejected (prop-d3ccceade25f4af19518ce0e930e4123): re-slice R07 per QA option (a), the A/B/C/D1/D2 cut in rejectionDetails' }, then end the session.\n2. Confirm the landed bytes are untouched: `git diff --stat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` prints nothing. If a peer changed them, stop and report_blocked with the diff summary.\n\nThe four files are not contested: R03, R04 and R05 depend on this task, so their plan paths do not count against it. Any editor works.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-24T22:30:42.319Z"
     },
     {
       "stepId": "step-2",
@@ -42,8 +43,8 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 18,
-  "status": "WORKING",
+  "planRevision": 19,
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -56,7 +57,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:05.514Z",
-  "updatedAt": "2026-10-24T22:28:43.082Z",
+  "updatedAt": "2026-10-24T22:30:54.204Z",
   "dependsOn": [
     "task-deba1a56a8104786ae25b84c58c363b4"
   ],
@@ -290,5 +291,9 @@
       }
     ],
     "stepsCompleted": []
-  }
+  },
+  "blockedReason": "awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a). Gate evidence at 2026-10-24T22:30Z (worker-07cd2c56, read-only): the epic rail has no 'CQ-R07: the pinned guest bootstrap as landed in e587474' clause (grep count 0; the epic record has not changed since 16:37Z); the proposal status is PENDING with resolvedAt null; the four R07 files have an empty git diff against e587474, which is an ancestor of HEAD e5b63b8. This session made no source/test/docs/.moe edits and no Git writes.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-24T22:30:54.204Z"
 }
