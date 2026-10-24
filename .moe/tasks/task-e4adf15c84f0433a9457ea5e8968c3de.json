@@ -158,7 +158,7 @@
     }
   ],
   "planRevision": 35,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -211,14 +211,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T13:13:52.451Z",
-  "updatedAt": "2026-10-24T22:15:00.528Z",
+  "updatedAt": "2026-10-24T22:17:53.357Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T14:39:53.512Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 16,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-24T22:17:53.357Z",
+    "wallClockMs": 27479845
   },
   "contextFetchedBy": [
     "worker-e8965f51",
@@ -392,6 +394,22 @@
       "treeId": "4f962ffabd4074b5a3c5dd51cbd1fe2d64c2e5ce",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "400928ae0d72fb476a354bf1a7a024b377efb48e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e8965f51@2026-10-24T22:10:43Z",
+      "paths": [
+        ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+        ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
+      ],
+      "recordedBy": "worker-e8965f51",
+      "recordedAt": "2026-10-24T22:15:25.816Z",
+      "treeId": "25957d1ba69dbfe48647e97915efd395302f56ba",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -440,14 +458,16 @@
     "scripts/tests/usage-report.test.mjs",
     "docs/baselines/cq-m04/expected.json",
     "docs/baselines/cq-m04/report.json",
-    "docs/baselines/cq-m04/report.md"
+    "docs/baselines/cq-m04/report.md",
+    ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
+    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-e8965f51@2026-10-24T22:05:56Z",
-    "at": "2026-10-24T22:10:07.991Z"
+    "kind": "completion",
+    "sessionId": "worker-e8965f51@2026-10-24T22:10:43Z",
+    "at": "2026-10-24T22:15:25.816Z"
   },
   "priorBlockedReason": "Step-1 account precondition failed before paid usage: MOE_ACCOUNTS_FILE is unset and default /home/sysadmin/.moe/claude-accounts.json does not exist. Pinned build accounts check prints 'No Claude accounts' yet exits 0; that is not a usable-account pass. No workload started, no records, no batch process; no repo edits. Additionally accounts check is not generally read-only: cli.ts check() calls recordSignIn, so it must not silently probe/update the Windows live-fleet registry under the plan's read-only requirement. B=/var/tmp/moe-m04c-20261024 preserves pinned commit 6eb56809b4038945cfc09f95c3b9138f107dc62f, successful daemon/proxy tsc builds and accounts-check.log. Dependencies DONE+landed; human authorization confirmed. Claude version works; disk sufficient. Fake-CLI suite and remaining gates not run after this failed precondition.",
   "blockedOnTaskIds": null,
@@ -460,7 +480,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "QA delivery repair verified against committed checkpoint 476e92c9350aa08828012e1e42479ff7c4d19c74. All 44 archive files are now committed: 20 records, 20 usage JSONL files (100 receipt rows), expected manifest, JSON/markdown reports and README. Narrow .gitignore receipt exception and README Layout note landed; unrelated/raw logs remain ignored. All omitted files were explicitly declared in step 6. Fresh root and clean git-archive verification (NO overlay) both pass: byte-identical JSON regeneration; node --test scripts/tests/usage-report.test.mjs 34 pass, 0 fail, 0 skip, including markdown equality. Final post-review committed-snapshot run exit 0, 34/34. Snapshot /tmp/moe-m04c-committed.xnI2tG. Exactly 20 unique original roots/starts/records, n=1, all completed with passing held-out assessments; archived records and receipt data match originals. No workload reruns. Unknown counters preserved; UTC/Honolulu outputs identical. Scoped adversarial review found no further changes needed. Driver/report/workload/rubric code unchanged; original test prefix remains CRLF. No secrets, unsupported claims, .moe hand edits or manual Git writes. Prior batch evidence retained at /var/tmp/moe-m04c-20261024 until QA approval; no batch process survivors. Handoff and archive gotcha memories updated.",
-  "reviewCompletedAt": "2026-10-24T22:05:58.087Z",
+  "reviewCompletedAt": "2026-10-24T22:17:53.357Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The committed report JSON and markdown regenerate byte-identically from the archived records and receipts via `node scripts/analyze-baseline.mjs ... --json` (exit 0).",
@@ -571,5 +591,8 @@
     "docs/baselines/cq-m04/usage/non-routine-chat-pagination-remainder/logs/moe-usage/observed.jsonl",
     "docs/baselines/cq-m04/usage/non-routine-monotonic-attempt-generation/logs/moe-usage/observed.jsonl",
     "docs/baselines/cq-m04/usage/non-routine-cross-role-usage-rollup/logs/moe-usage/observed.jsonl"
-  ]
+  ],
+  "completedAt": "2026-10-24T22:17:53.357Z",
+  "reviewSummary": "Re-review after qa_reject #1. Repair landed in wrapper checkpoint 476e92c (.gitignore negation, README Layout line, 20 records, 20 receipts) plus completion 400928a, both on moe/work-2026-10-24. git ls-tree 400928a docs/baselines/cq-m04 = 44 files; HEAD identical for these paths.\n\nMy own run on committed bytes only, no overlay: git archive 400928a scripts docs package.json into empty /tmp/qa-m04c-r2.wSa9hA. analyze-baseline --json | cmp report.json -> 0/0; without --json | cmp report.md -> 0/0; TZ=Pacific/Honolulu -> 0/0; node --test scripts/tests/usage-report.test.mjs -> 34 pass/0 fail/0 skip, exit 0. The 3 CQ-M04c tests that failed on 3b69dcc now pass.\n\n.gitignore: one line `!docs/baselines/cq-m04/usage/*/logs/` after logs/. check-ignore --no-index: receipt not ignored. Still ignored: logs/x.txt, packages/moe-daemon/logs/a.jsonl, docs/baselines/other/usage/a/logs/b.jsonl, cq-m04 usage run.log, docs/logs/a.txt.\n\nSize: 3b69dcc..400928a = 42 files, +2009/-0, all archive data the prior rejection required, plus 1 README line. Not rejected on size; code change is 1 .gitignore line. Driver and the three report scripts are byte-unchanged vs pin 6eb5680. Archive secret scan: no hits.\n\nDoD: all 5 met. 20 records (5/category, n=1) validate; JSON and md regenerate byte-identically; README inputs/limits unchanged since the round-1 check; allowlist test passes; fresh test 34/0. Rails respected: no reruns, wrapper-only Git, no .moe edits, no isolation claims.",
+  "requiredCheckAtDone": null
 }
