@@ -107,7 +107,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,16 +123,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T00:01:37.335Z",
-  "updatedAt": "2026-10-24T15:27:58.855Z",
+  "updatedAt": "2026-10-24T15:44:25.337Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T13:48:29.153Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-24T15:44:25.337Z",
+    "wallClockMs": 6956184
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -214,5 +217,9 @@
     "kind": "completion",
     "sessionId": "worker-07cd2c56@2026-10-24T15:14:22Z",
     "at": "2026-10-24T15:27:58.855Z"
-  }
+  },
+  "completedAt": "2026-10-24T15:44:25.337Z",
+  "reviewCompletedAt": "2026-10-24T15:44:25.337Z",
+  "reviewSummary": "Approved CQ-M01e. Reviewed completion a20baef (on moe/work-2026-10-24) with --ignore-cr-at-eol.\n\nGate re-run in a fresh isolated Linux copy: git archive a20baef; lockfile JSON-equal, Linux node_modules symlinked; env -i, no MOE_*, Linux-only PATH.\n- `npm test -- --maxWorkers=4`: exit 0. 152/152 files, 3293 passed / 9 skipped; the gain over the worker's 3284 is CQ-M03's tests. New file 39/39.\n- `tsc --noEmit`: exit 0.\n\nMy mutation probes all went red: explicit throw dropped 20, waiter pool filter 3, own-attempt assert 1. Restored, baseline 39/39.\n\nDoD:\n1. Refusal comes after the reconciliation/finalizing checks and before dependsOn, eviction, assignment, attempt open and worker registration. Not workerId-gated. E1-E4 use a byte and event no-side-effects check.\n2. One predicate covers the ranked pool and both waiter arms. P1-P4 show waiter and claim agree, with no strict wake.\n3. R1/R2: rollback and own-attempt snapshots fail closed, and malformed records give INVALID_INPUT (E4).\n4. C1/E5/C2: legacy and observe behaviour is unchanged.\n5. N1: env and injected args do not admit. N2: get_context, list_tasks and both release paths work on strict rows.\n6. Evidence reproduced.\n\nRails: acceptance.test.ts, executionProfile.ts and its test, policy.ts, taskStore.ts and attemptStore.ts are untouched. No forbidden patterns, no CRLF flip, nothing enables verified-local.\n\nSize: production +72/-3. The 452-line plan-mandated test file is not counted, following CQ-M precedent.\n\nNon-blocking:\n- The commit also carried peers' board records (cfa74f1b, deba1a56); that is wrapper behaviour.\n- For CQ-M01 docs: get_next_task does not mirror the pool.\n- A held-strict seat gets alreadyAssigned, and the M01c backstop and resume cap bound it.\n- Malformed settings empty pools silently; surface that in doctor.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
