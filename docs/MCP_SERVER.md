@@ -2872,11 +2872,41 @@ Wrapper-only. Records one report for a leased account.
 
 The JetBrains/VS Code plugin talks to the daemon over `/ws` using typed JSON envelopes (`{ type, payload? }`). The full list lives in `packages/moe-daemon/src/server/WebSocketServer.ts`; the entries below cover this session's additions.
 
+### Optional client capability negotiation (v1)
+
+The first frame and `GET_STATE` reply remain the existing `STATE_SNAPSHOT`; no capabilities frame is unsolicited. A client may send:
+```typescript
+{ type: 'CLIENT_HELLO', payload: { protocolVersion: 1, capabilities: { planRevisions: true } } }
+```
+Only that socket receives:
+```typescript
+{ type: 'SERVER_CAPABILITIES', payload: {
+  protocolVersion: 1,
+  capabilities: {
+    executionProfiles: true, planRevisions: true, approvalRevisions: true,
+    executionContracts: true, deliveryReceipts: true, requiredChecks: true,
+    runnerStatus: false, modelReceipts: false, verifiedLocal: false
+  },
+  negotiatedCapabilities: {
+    executionProfiles: false, planRevisions: true, approvalRevisions: false,
+    executionContracts: false, deliveryReceipts: false, requiredChecks: false,
+    runnerStatus: false, modelReceipts: false, verifiedLocal: false
+  }
+} }
+```
+Both maps always contain exactly these nine keys. Negotiated values are **server support AND client literal `true`**; absent known keys mean false. Unknown optional envelope/payload/capability keys are ignored, not echoed. Known capability values must be booleans; payload and capabilities must be non-null, non-array objects. `protocolVersion` must be a safe integer. Invalid shapes/types give `ERROR` / `-32602` / `INVALID_INPUT`; an otherwise valid integer version other than 1 gives `-32003` / `UNSUPPORTED_CLIENT_PROTOCOL`.
+
+State belongs only to the connection: a failed first hello disables approval until a valid hello succeeds. A successful intersection is locked: canonically identical repeats re-ack (input key order and unknown keys do not matter); a different intersection gives `-32003` / `CLIENT_CAPABILITIES_LOCKED`. Malformed retries never erase an established agreement. Reconnect starts a fresh, unnegotiated connection.
+
+After any hello attempt, **both** approval routes below require successful negotiation with `planRevisions: true` (`-32003` / `UNSUPPORTED_CLIENT_CAPABILITY` otherwise), then a supplied `expectedPlanRevision` (`-32602` / `INVALID_INPUT` if omitted). Admission is serialized with the existing store CAS; the original supplied token still receives the existing malformed/stale/readiness checks. Other edits, MCP and automatic approval behavior are unchanged. No handshake preserves current legacy admission; eventual deletion remains the human-approved MODIFY_RAIL-gated CQ-F04b (`task-c619879ed9a643139c184fd5cb1ee888`), not this contract.
+
+Capabilities describe **wire support, not authentication, trusted evidence or readiness**. Client claims cannot enable managed runner status, model receipts or verified-local. `delivery.attemptPhase` is not managed VM runner status; verified-local stays unconditionally unavailable even for a fully capable client with a matching revision. Existing snapshot/reply/broadcast fields (including profile settings, policy snapshot, contract, revisions and delivery evidence) retain their shapes and are not filtered by capability claims. I02 (JetBrains first) and I04 (VS Code) consume this producer contract.
+
 ### Plan approval — `expectedPlanRevision` compare-and-swap
 
 **There is no `moe.approve_task` MCP tool, and none is being added.** Plan approval is a human-gated action that reaches the daemon *only* over `/ws`, through the two messages below. `moe.set_task_status` keeps its existing role/policy and is not an approval route.
 
-Both routes accept an **optional** `expectedPlanRevision`: the `planRevision` the approver actually reviewed. The daemon compares it to the task's current revision under the state mutex, **before** it cancels any pending SPEED timer and before it writes anything, so a refused approval leaves the task byte-identical (same status, `updatedAt`, `planApprovedAt` absence, assignment, activity log, pending auto-approval timer) and publishes nothing.
+Both routes accept `expectedPlanRevision`: the `planRevision` the approver actually reviewed. It is **optional only for unnegotiated legacy clients; negotiated clients must advertise revision support and supply it**. The daemon compares it to the task's current revision under the state mutex, **before** it cancels any pending SPEED timer and before it writes anything, so a refused approval leaves the task byte-identical (same status, `updatedAt`, `planApprovedAt` absence, assignment, activity log, pending auto-approval timer) and publishes nothing.
 
 **`APPROVE_TASK` request:**
 ```typescript
@@ -2892,7 +2922,7 @@ The token is **command metadata beside `taskId`/`updates`, never a task field.**
 
 **Token rules**
 
-- **Omitting the key** is the only token-free (legacy, unchecked) approval. JSON cannot carry `undefined`, so omission is the wire signal — an explicit `null` is a *malformed* token, not an omission.
+- **Omitting the key** permits token-free (legacy, unchecked) approval only without a hello attempt. JSON cannot carry `undefined`, so omission is the wire signal — an explicit `null` is a *malformed* token, not an omission.
 - A supplied token must be a **non-negative safe integer**. `null`, strings (`"3"`), booleans, fractional (`3.5`), negative, unsafe (`Number.MAX_SAFE_INTEGER + 1`), `NaN` and `Infinity` are all refused with `INVALID_INPUT` (`-32602`). There is no coercion and no fallback to the legacy path.
 - A **legacy task row with no stored `planRevision`** has effective revision `0`, so an explicit `0` matches it and approves.
 - Any **non-equal** revision is refused — a *newer* token is as stale-or-forged as an older one.
@@ -2914,15 +2944,15 @@ The token is **command metadata beside `taskId`/`updates`, never a task field.**
 
 A malformed token produces the same shape with `code: -32602` and `codeName: "INVALID_INPUT"`, and no revision numbers in `context`.
 
-**Execution profile.** `APPROVE_TASK`, and an `UPDATE_TASK` that moves a task upward, of a task whose effective execution profile is `verified-local` get the same `ERROR` frame with `code: -32003` and `codeName: "EXECUTION_PROFILE_NOT_READY"` (a malformed snapshot or setting: `-32602` / `INVALID_INPUT`). The check runs before a pending SPEED timer is cancelled and before any write, so the task is unchanged. `UPDATE_TASK` never carries `executionPolicySnapshot`: its denylist drops the key, and `taskStore.updateTask` strips it as well.
+**Execution profile.** After connection admission and token validation pass, `APPROVE_TASK`, and an `UPDATE_TASK` that moves a task upward, of a task whose effective execution profile is `verified-local` get the same `ERROR` frame with `code: -32003` and `codeName: "EXECUTION_PROFILE_NOT_READY"` (a malformed snapshot or setting: `-32602` / `INVALID_INPUT`). The check runs before a pending SPEED timer is cancelled and before any write, so the task is unchanged. `UPDATE_TASK` never carries `executionPolicySnapshot`: its denylist drops the key, and `taskStore.updateTask` strips it as well.
 
 **Durable authorization (`approvedPlanRevision`).** A token-checked approval on either route persists exactly the rendered token it was given as the task's `approvedPlanRevision`, in the same task write as `status: "WORKING"` and `planApprovedAt`. The store re-checks it against the revision that very write commits, so a delayed approval can never authorize a newer plan, DoD or execution contract. A refused or failed write publishes nothing and leaves a pending SPEED timer armed: the timer is cancelled only after the write lands.
 
 - A number means a revision-checked human approval; absent means an unchecked or legacy one. The daemon never writes `null`, and a stored `null` or non-integer reads exactly like absence. Nothing backfills it from `planApprovedAt`, `status` or event names.
 - A later material change (plan, DoD or contract) advances only `planRevision` and keeps the old number as history. The only current association is a non-negative safe integer equal to the current `planRevision`.
 - It is daemon-owned. The `UPDATE_TASK` denylist and `taskStore.updateTask` strip it from every caller update, and `CREATE_TASK` never copies it, so no client can forge, null or erase it.
-- Token-free approvals record no stamp, and an older number stays as history. That covers an omitted-token `APPROVE_TASK` or drag, the relaxed `moe.set_task_status` approval, and SPEED/TURBO auto-approval, which is not fenced yet (CQ-F05). Revision-less human approval stays accepted only until the human-approved deletion lands (CQ-F04b, `task-c619879ed9a643139c184fd5cb1ee888`).
-- Under an effective `verified-local` profile (the live setting, or a stored snapshot floor after a rollback), a `PLAN_APPROVED` write without a reviewed token is refused with `INVALID_INPUT` on `expectedPlanRevision`. The readiness check above runs first and still refuses every such approval with `EXECUTION_PROFILE_NOT_READY`.
+- Token-free approvals record no stamp, and an older number stays as history. That covers an unnegotiated omitted-token `APPROVE_TASK` or drag, the relaxed `moe.set_task_status` approval, and SPEED/TURBO auto-approval, which is not fenced yet (CQ-F05). Revision-less human approval stays accepted only until the human-approved deletion lands (CQ-F04b, `task-c619879ed9a643139c184fd5cb1ee888`).
+- Under an effective `verified-local` profile (the live setting, or a stored snapshot floor after a rollback), a `PLAN_APPROVED` write without a reviewed token is refused with `INVALID_INPUT` on `expectedPlanRevision`. Store readiness runs first and still refuses such writes with `EXECUTION_PROFILE_NOT_READY`; negotiated connection admission can refuse earlier as described above.
 - This records approval provenance only. Execution, claim and completion do not enforce it yet (CQ-F06–F08), and the legacy/observe delivery policy is unchanged.
 
 > **Two detail-key spellings — parse both.** `PLAN_REVISION_MISMATCH` carries `expectedPlanRevision` + `currentPlanRevision`. The *producer's* separate `PLAN_REVISION_EXHAUSTED` error (a required bump refused at `Number.MAX_SAFE_INTEGER`, see [`docs/SCHEMA.md`](SCHEMA.md)) carries `currentRevision` + `maxPlanRevision` — a different spelling for the same idea. It shipped first and downstream parsers already bind to it, so it was deliberately left alone rather than renamed. Only the mismatch pair crosses the `/ws` error-context allowlist; the exhaustion details stay daemon-side.

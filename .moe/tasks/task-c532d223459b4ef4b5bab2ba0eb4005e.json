@@ -8,9 +8,55 @@
     "Postflight cases in bash and ps1 cover a symlink retarget (lands) and an unchanged symlink (stays PREEXISTING)"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST, bash harness (scripts/tests/postflight.sh, LF). Load test-driven-development. Reuse make_scope_project, run_scope_wrapper, committed_paths, scope_fail, seed_crlf_file and .moe/record_commit.jsonl.\n(a) Symlink probe, computed ONCE just before scenario AD: scope_symlinks_ok=1 only if `: > \"$TMP_DIR/symlink-probe-target\" && ln -s symlink-probe-target \"$TMP_DIR/symlink-probe\" 2>/dev/null && [ -L \"$TMP_DIR/symlink-probe\" ]` (Git Bash without Windows symlink rights copies the target instead of linking). Under GITHUB_ACTIONS=true a failed probe is `scope_fail AE \"CI must be able to create symlinks\" /dev/null`. Skip lines must begin with '[scenario AD]' / '[scenario AE]': scripts/tests/postflight-safe.mjs fails CI on any output line starting with SKIP.\n(b) Scenario AD gets a 4th variant `link`, skipped with '[scenario AD] link variant skipped: this host cannot create symlinks' when the probe failed: scope_ad_hook='cp crlf.txt crlf-copy.txt && rm -f crlf.txt && ln -s crlf-copy.txt crlf.txt'. AD's assertions stay as they are (ours on top of peer-race, owned-a.txt in HEAD, HEAD:crlf.txt keeps the seed blob, the committed record_commit row reports crlf.txt MOE_ATTR_CONCURRENT). It is red today: on the CAS retry `git add` stages the 120000 link blob, and the mismatch re-hash `git hash-object -- crlf.txt` follows the link to the identical CRLF bytes and normalizes them back to the snapshot blob (measured: 73c60c5 == 73c60c5), so the swapped-in symlink lands. Update the AC/AD comment and AD's echo line to name the symlink swap.\n(c) New scenario AE after AD, skipped with '[scenario AE] skipped: this host cannot create symlinks' (and NOT counted) when the probe failed. Fixture: make_scope_project <dir> '[\"target.txt\"]'; commit same-a.txt and same-b.txt (both 'same\\n') and target.txt ('v1\\n'); then, BEFORE the wrapper runs so the pre-flight baseline holds them as foreign dirt: `ln -s same-a.txt retarget-link`, `ln -s target.txt stay-link`, `ln -s missing.txt dangling-link`. The session is a fake CLI like L2_CLI writing through $MOE_PROJECT_PATH: `ln -sfn same-b.txt \"$MOE_PROJECT_PATH/retarget-link\"` and `printf 'v2\\n' > \"$MOE_PROJECT_PATH/target.txt\"`. Assert: exit 0; committed_paths is exactly 'retarget-link target.txt '; `git ls-tree HEAD -- retarget-link` has mode 120000 and `git cat-file blob HEAD:retarget-link` is 'same-b.txt'; the output has '[skip] stay-link MOE_ATTR_PREEXISTING' and '[skip] dangling-link MOE_ATTR_PREEXISTING'; both are still '?? ' in git status.\n(d) Count guard: expect 37 when the probe passed, 36 when it failed; name AE in the message ('..., AC, AD, AE (needs symlinks)').\nRED proof without touching the live wrapper: in a scratch copy of scripts/, build scenario-subset harnesses by anchor (mem pattern-postflight-red-proof-via-temp-tree: [0, `FROZEN_SUITE=`) + [`# --- Completion-hook COMMIT SCOPE`, `  # Scenario A -- dirty peer.`) + the probe + seed_crlf_file + the scenario + `fi`), one for AD's link variant and one for AE, and run them against the current wrapper. Expected today: AE fails the committed set with [stay-link target.txt ] (retarget-link left MOE_ATTR_PREEXISTING, stay-link swept in as MEASURED, dangling-link dropped MOE_ATTR_CONCURRENT after its '?' snapshot); AD link fails 'HEAD must keep the seed blob'. Put both failure lines in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Bash twin fix (scripts/moe-agent.sh, LF) plus the one test that extracts moe_temp_index_build.\n1. New top-level function `moe_snapshot_hash P` above git_dirty_snapshot (~2683): prints the snapshot blob of TOP-relative P; prints nothing and returns non-zero on failure.\n - Not a symlink (`[ ! -L \"$MOE_TOP/$1\" ]`): today's `git -C \"$MOE_TOP\" hash-object -- \"$1\" 2>/dev/null`, unchanged.\n - A symlink: `idx=\"$(create_secure_temp)/link-$$.idx\"; rm -f \"$idx\"`, then `row=$(GIT_INDEX_FILE=\"$idx\" git -C \"$MOE_TOP\" update-index --add --info-only -- \"$1\" 2>/dev/null && GIT_INDEX_FILE=\"$idx\" git -C \"$MOE_TOP\" ls-files -s -- \":(literal)$1\" 2>/dev/null) || row=\"\"`, then `rm -f \"$idx\"`; print field 2 of '<mode> <blob> <stage>\\t<path>' (empty row: return 1). Never export GIT_INDEX_FILE.\n Measured at planning (git 2.43 Linux, Git for Windows 2.54): this records exactly what `git add` stores, the link text (dangling links, links to directories and spaced/Unicode names included; Windows backslashes become slashes) and writes no object.\n Comment the why (hash-object follows a link to its target's bytes: a retarget to identical bytes read as unchanged, an edit to the target as a change to the link, and a dangling link failed the whole --stdin-paths batch) and 'Twin: Get-MoeSnapshotBlob'.\n Error handling: every git call keeps the file's `|| VAR=\"\"` form (set -e must never abort the post-flight); a failed update-index or ls-files, or a link that vanished, yields an empty result, and the scratch index is removed on every path.\n2. git_dirty_snapshot: after the existing real-directory skip, a symlink is hashed on the spot with `h=$(moe_snapshot_hash \"$p\") || h=\"\"` and written as `${h:-?}<TAB>$xy<TAB>$p` (keeps the '?' always-changed convention); it never joins present_paths or the batch. Declare h local; regular files and D rows are unchanged; adjust the header comment.\n3. moe_temp_index_build: the mismatch re-hash becomes `rehash=$(moe_snapshot_hash \"$p\") || rehash=\"\"` (the snapshot's own function, as its comment already promises); an empty re-hash still means moved (MOE_ATTR_CONCURRENT). Keep the ponytail ABA note.\n4. scripts/tests/importee-guard-bash.test.mjs:169: also extract `${bashFunction('moe_snapshot_hash')}`. Otherwise the extracted moe_temp_index_build calls a missing command, drops b.mjs for the wrong reason, and the test still passes.\nThen rerun the step-1 subsets (both green now) and `node --test scripts/tests/importee-guard-bash.test.mjs`. Edit with the Edit tool only (see risks).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/importee-guard-bash.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "PowerShell twin fix (scripts/moe-agent.ps1: UTF-8 BOM + LF; afterwards `head -c3 | od -An -tx1` must be ef bb bf and the file must hold zero CR bytes).\n1. Two top-level functions beside Get-MoeDirtySnapshot (~2416); importee-guard.ps1 AST-loads every top-level function, so it needs no change.\n - `Test-MoeSymlink([string]$FullPath)`: $true only for a SymbolicLink (to a file, a directory or nothing). Check `[IO.File]::GetAttributes($FullPath) -band [IO.FileAttributes]::ReparsePoint` first (ordinary files never pay a Get-Item), then `(Get-Item -LiteralPath $FullPath -Force -ErrorAction Stop).LinkType -eq 'SymbolicLink'`. Junctions and other reparse points keep today's handling.\n - `Get-MoeSnapshotBlob([string]$Top, [string]$Path)`: '' on any failure. Not a symlink: Invoke-MoeGit hash-object -- $Path, first line trimmed, Rc 0 only. A symlink: `$idx = Join-Path ([IO.Path]::GetTempPath()) ('moe-link-' + [guid]::NewGuid().ToString('N'))` (must not exist beforehand: git rejects an empty index file); Invoke-MoeGit -IndexFile $idx update-index --add --info-only -- $Path, then ls-files -s -- \":(literal)$Path\", field 2 of the first line. Same why-comment as the sh twin; 'Twin: moe_snapshot_hash'. Measured on a real NT symlink on this host (core.symlinks=false, PS 5.1 and pwsh 7): update-index records 120000 with the blob of the forward-slash link text (9d5a2f4...), while PowerShell's .Target keeps backslashes (005b290...). Never hash .Target.\n Error handling: Test-MoeSymlink wraps its body in try/catch and returns $false (GetAttributes throws on a missing path, measured); Get-MoeSnapshotBlob returns '' on a non-zero Rc, empty output or an exception, and removes the scratch index in a finally block (`Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue`).\n2. Get-MoeDirtySnapshot: create $hashMap before the entry loop; test `Test-MoeSymlink $full` BEFORE the Test-Path checks (Test-Path follows links: today a dangling link is recorded as a deletion 'D' and a link to a directory is skipped as a directory). A symlink: $blob = '' and, when Get-MoeSnapshotBlob returns a blob, `$hashMap[(Get-MoePathKey $p)] = <blob>`; it never joins $toHash. The existing record loop then skips an unreadable one (this twin's convention).\n3. Build-MoeTempIndexTree (~3642): `$rehash = Get-MoeSnapshotBlob $Top $c.Path; $match = ($rehash -and $rehash -eq $c.Blob)`; an empty re-hash still means moved. Never pass $IndexFile.\nEdit with the Edit tool only.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "PowerShell harness twin of step 1 (scripts/tests/postflight.ps1, BOM + LF), with New-ScopeProject, Invoke-GateWrapper -Command, Assert-ScopeRun, Get-CommittedPaths, Get-HeadSubject, Get-RecordCommitLines and the crlf-hook.cjs / hook-peer.cmd pattern.\n- Make every link with node from one small .cjs the harness writes next to crlf-hook.cjs: `fs.symlinkSync(target, link, 'file')`, which keeps the exact relative link text on both engines. Modes: probe; seed (the three AE links); session (rm retarget-link and relink it to same-b.txt; write target.txt 'v2\\n'). The session fake is a .cmd running `node \"%~dp0<name>.cjs\" session \"%MOE_PROJECT_PATH%\"` (the ps1 claude launch does not cd into the project).\n- Probe once before AD in $tempRoot. A non-zero $LASTEXITCODE or an exception means no symlink support (the scope block already runs under ErrorActionPreference Continue). With $env:GITHUB_ACTIONS -eq 'true' that is `throw 'SCENARIO AE FAILED: CI must be able to create symlinks'`: CI windows-latest is admin and is the ONLY place the ps1 cases run. Otherwise Write-Host the same '[scenario AD] link variant skipped: ...' / '[scenario AE] skipped: ...' lines as sh.\n- AD: crlf-hook.cjs gains mode 'link' (copyFileSync to crlf-copy.txt before its rmSync, then symlinkSync('crlf-copy.txt', f, 'file')); variants rewrite, delete, dir, link; same assertions.\n- AE: the same fixture (write files with [IO.File]::WriteAllText, LF), CLI actions and assertions as step 1: Get-CommittedPaths 'retarget-link target.txt'; ls-tree mode 120000 and cat-file blob 'same-b.txt'; both '[skip] ... MOE_ATTR_PREEXISTING' lines; both '?? ' status lines.\n- Count guard 37 / 36, as in sh.\nThis host cannot make symlinks (measured 2026-10-25), so locally both new cases print their skip line. Run the full ps1 harness anyway: it proves the probe/skip path and every older scenario.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFICATION GATE, run once, fresh, after steps 1-4, from SNAPSHOTS of scripts/ (peers edit the live tree; a directory holding scripts/ is a complete harness root). It takes ~35-45 min: run it detached (setsid nohup runner script writing a .log and a .done file) and poll in calls under 9 minutes. This exact chain is the complete_task verification command:\nG=/mnt/d/moe-scratch/c532-gate; L=$(mktemp -d); rm -rf \"$G\" && mkdir -p \"$G\" && cp -R scripts \"$G/\" && cp -R scripts \"$L/\" && (cd \"$L\" && env -u CLAUDE_CONFIG_DIR -u MOE_ACCOUNT_ID -u MOE_ACCOUNT_SAMPLE_FILE -u MOE_PROJECT_PATH -u MOE_WORKER_ID MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && node --test scripts/tests/importee-guard-bash.test.mjs) && cd \"$G\" && for E in powershell.exe pwsh.exe; do WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=400 $E -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\c532-gate\\scripts\\tests\\postflight.ps1' && $E -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\c532-gate\\scripts\\tests\\parity-check.ps1' && $E -NoProfile -ExecutionPolicy Bypass -File 'D:\\moe-scratch\\c532-gate\\scripts\\tests\\importee-guard.ps1' || exit 1; done\nExpect: sh prints 'commit-scope scenarios run: 37' and 'PASS postflight.sh'; each ps1 engine prints the two skip lines, 'commit-scope scenarios run: 36' and 'PASS postflight.ps1'; parity PASS; importee guard green on all three engines.\nPlus the ps1 symlink-branch smoke this host CAN run, on both engines: AST-load the snapshot wrapper's functions (as importee-guard.ps1 does), `git init -q --bare` a scratch dir, set $env:GIT_DIR to it and $env:GIT_WORK_TREE to 'C:\\Program Files\\NVIDIA Corporation\\NvContainer\\plugins\\LocalSystem' (a real NT symlink there; read-only use). Then `Test-MoeSymlink (Join-Path $wt 'messagebus.conf')` must be True and `Get-MoeSnapshotBlob $wt 'messagebus.conf'` must print 9d5a2f405f8e78d59b94fda37c14e97e8db05d13 (measured at planning). Test-MoeSymlink on a regular file and on a missing path must be False. Include both outputs in the evidence; if that path is gone, say so.\nA failure in an untouched scenario: rerun a plain-HEAD snapshot to prove it pre-existing before calling it foreign. Never report a pass you did not run.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW with mutation proof (load adversarial-self-review), posted as a task comment, then complete_task.\nAttack:\n(1) Can a change made after the snapshot now land? Trace AD's four variants, a link retargeted after the snapshot, a link replaced by a file and vice versa, and a '?' snapshot.\n(2) Ordinary files must keep the single batched hash-object, with no extra git process and no Get-Item per file.\n(3) Both twins must apply the same symlink rule. The scratch index must never be the temp or shared index, must always be removed, and GIT_INDEX_FILE must never leak or be exported.\n(4) Link names with spaces or Unicode must survive Invoke-MoeGit and the sh quoting.\n(5) The BOM and LF endings must be intact.\n(6) No new strings that parity-check tracks.\nMutation proof in a scratch copy, never the live tree, using the step-1 subsets:\n- M1: snapshot fixed, re-hash back to `git hash-object`. AD link must go red.\n- M2: re-hash fixed, symlinks back in the --stdin-paths batch. AE must go red.\n- M3: the helper hashes a link with hash-object. AE must go red.\nps1 mutants cannot run on this host (it cannot create symlinks). Say so and cite the step-5 smoke. Add a case for any survivor.\nIf any byte changed after step 5, rerun step 5's chain and submit THAT output. complete_step.modifiedFiles lists the five files. No Git writes and no .moe edits.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -19,12 +65,42 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-b62c9fc7524a482aa6948ebe38ac3318"
+    "task-b62c9fc7524a482aa6948ebe38ac3318",
+    "task-5f3960df261a47b5b8b95afb7e67a4fa"
   ],
   "priority": "LOW",
   "order": 224.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:39:38.780Z",
-  "updatedAt": "2026-10-25T07:43:14.834Z"
+  "updatedAt": "2026-10-25T10:12:10.808Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T08:22:29.688Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-6e3edf85"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T10:12:10.705Z",
+  "planningNotes": {
+    "approachesConsidered": "(A) The task's suggestion, `printf %s \"$(readlink p)\" | git hash-object --stdin`. It is exact on Linux and macOS, but the ps1 twin has no safe byte pipe to git: PowerShell re-encodes native stdin and appends a newline. PowerShell's .Target also keeps Windows backslashes while git stores forward slashes (measured on a real NT symlink: 005b290 vs git's 9d5a2f4), so each twin would need its own normalization.\n(B) CHOSEN: `git update-index --add --info-only -- <p>` into a throwaway index, then `ls-files -s`. This is git's own add path (lstat, readlink, Git for Windows' slash normalization), so the blob is byte-identical to what `git add` stores on every platform. It writes no object and is the same code in both twins.\n(C) A hand-rolled SHA-1 of 'blob <len>\\0<text>' in .NET. Rejected: object-format-specific, and it duplicates git.\nTests: a separate CAS-seam scenario was folded into AD as a 4th variant (`link`), because AD's assertions are exactly the contract the re-hash must keep. AE is the only new scenario.",
+    "codebaseInsights": "- sh git_dirty_snapshot (~2693) batches `hash-object --stdin-paths`. Today a dangling link, or a link to a directory, fails the whole batch: every path is then re-hashed one by one and the link gets '?' (always changed).\n- ps1 Get-MoeDirtySnapshot (~2418) uses Test-Path, which follows links. A dangling link is recorded as deletion 'D'; a link to a directory is skipped as a directory.\n- The mismatch re-hash (sh moe_temp_index_build ~4064, ps1 Build-MoeTempIndexTree ~3642) came from b62c9fc7 for CRLF. It must be the snapshot's own hash function.\n- scripts/tests/importee-guard-bash.test.mjs:169 extracts moe_temp_index_build by name and runs it standalone. scripts/tests/importee-guard.ps1 AST-loads every top-level ps1 function.\n- CI runs postflight.sh on Linux, and postflight.ps1 on windows-latest (PS 5.1 + pwsh, as admin, so symlinks work), through scripts/tests/postflight-safe.mjs. That runner fails the run on any output line starting with 'SKIP'.\n- postflight.ps1's scope block runs under ErrorActionPreference Continue (~1539-3957).\n- Both wrappers print `[skip] <path> <code>`; scenario L asserts on that.\n- No doc describes the snapshot hashing, so no docs change.",
+    "risks": "- This host cannot create Windows symlinks (measured 2026-10-25).\n  - PS 5.1 New-Item SymbolicLink fails with 'Administrator privilege required', and Developer Mode is off.\n  - WSL `ln -s` on /mnt/d makes LX reparse points (0xA000001D) that Windows cannot read.\n  - So the ps1 AE and AD-link cases skip locally and run only in CI.\n  - The step-5 NVIDIA-symlink smoke is the local evidence for the ps1 branch. Never claim a ps1 symlink-case pass you did not run.\n- CONTESTED FILES.\n  - scripts/moe-agent.{sh,ps1} are ASSERTED by parked task-07474ee4's old checkpoint commits (9f2cce3). postflight.{sh,ps1} and moe-agent.* are PLANNED by parked 07474ee4 and BLOCKED c2cb5cf7.\n  - Under attribution.contested=skip-untouched, a contested path lands only with a TOOL witness. So make every edit with Claude's Edit/Write tools, in the session that lands it: no sed, heredoc or apply_patch writes.\n  - A seat without Edit/Write must not start editing. It should call report_blocked and ask for a Claude seat (c2cb5cf7 is the open bug).\n- task-5f3960df (WORKING) is editing postflight.sh's [accounts] fixture. This task dependsOn it, so start from its landed version.\n- The ps1 files are UTF-8 with a BOM and LF line endings. Edits must not drop the BOM or add CR bytes.\n- Runtimes: the sh harness takes ~10 min from a native-fs snapshot (~45 min from /mnt/d). Each ps1 engine takes ~12 min.\n- Out of scope; these ceilings stay unchanged:\n  - the ABA window in the re-hash;\n  - a file swapped for a symlink whose link text equals the file's old bytes has the same blob id, because mode is not compared;\n  - junctions keep today's handling.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/importee-guard-bash.test.mjs",
+      "scripts/tests/postflight-safe.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T10:12:10.808Z"
 }

@@ -28,7 +28,8 @@ import {
   filterTasksForMetrics,
 } from '../util/metrics.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
-import { MoeError } from '../util/errors.js';
+import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
+import { decodeClientHello, type CapabilityAgreement } from './clientCapabilities.js';
 import { applyAccountMessage, type AccountMessageType } from './accountMessages.js';
 
 /**
@@ -132,6 +133,7 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
 
 export type PluginMessage =
   | { type: 'PING' }
+  | { type: 'CLIENT_HELLO'; payload?: unknown }
   | { type: 'GET_STATE' }
   | { type: 'GET_ACTIVITY_LOG'; payload?: { limit?: number; offset?: number; maxPayloadChars?: number } }
   | { type: 'CREATE_TASK'; payload: Record<string, unknown> }
@@ -185,6 +187,8 @@ export type PluginMessage =
 export class MoeWebSocketServer {
   private wss: WSS;
   private pluginClients = new Set<WebSocket>();
+  // Absent = legacy; null = attempted but not yet successfully negotiated.
+  private clientCapabilities = new WeakMap<WebSocket, CapabilityAgreement | null>();
   private mcpClients = new Set<WebSocket>();
   private mcpWorkerMap = new Map<WebSocket, Set<string>>();
   // Ownership of parked wait_for_task / chat_wait waiters, keyed by workerId.
@@ -244,6 +248,29 @@ export class MoeWebSocketServer {
    */
   private async withMutex<T>(fn: () => Promise<T>): Promise<T> {
     return this.state.runExclusive(fn);
+  }
+
+  /** Called under the state mutex, in the same order as approval admission. */
+  private negotiateClient(ws: WebSocket, payload: unknown): void {
+    const previous = this.clientCapabilities.get(ws);
+    if (previous === undefined) this.clientCapabilities.set(ws, null);
+    const agreement = decodeClientHello(payload);
+    if (previous && JSON.stringify(previous.negotiatedCapabilities) !== JSON.stringify(agreement.negotiatedCapabilities)) {
+      throw new MoeError(MoeErrorCode.NOT_ALLOWED, 'Reconnect to change negotiated capabilities',
+        undefined, 'CLIENT_CAPABILITIES_LOCKED');
+    }
+    this.clientCapabilities.set(ws, agreement);
+    this.safeSend(ws, JSON.stringify({ type: 'SERVER_CAPABILITIES', payload: agreement }));
+  }
+
+  private assertApprovalCapabilities(ws: WebSocket, token: unknown): void {
+    const agreement = this.clientCapabilities.get(ws);
+    if (agreement === undefined) return;
+    if (!agreement?.negotiatedCapabilities.planRevisions) {
+      throw new MoeError(MoeErrorCode.NOT_ALLOWED, 'Plan approval requires negotiated planRevisions support',
+        undefined, 'UNSUPPORTED_CLIENT_CAPABILITY');
+    }
+    if (token === undefined) throw invalidInput('expectedPlanRevision', 'the reviewed revision is required after negotiation');
   }
 
   private onConnection(ws: WebSocket, req: IncomingMessage): void {
@@ -336,6 +363,9 @@ export class MoeWebSocketServer {
 
     try {
       switch (message.type) {
+        case 'CLIENT_HELLO':
+          await this.withMutex(async () => { this.negotiateClient(ws, message.payload); });
+          return;
         case 'PING':
           this.safeSend(ws, JSON.stringify({ type: 'PONG' }));
           return;
@@ -497,6 +527,7 @@ export class MoeWebSocketServer {
                   // serialized with the write. The rest of safeUpdates is still
                   // deliberately ignored on this route.
                   if (existing.status === 'AWAITING_APPROVAL' && newStatus === 'WORKING') {
+                    this.assertApprovalCapabilities(ws, approvalToken);
                     return this.state.approveTask(taskId, approvalToken);
                   }
                   // Reopen route (e.g. JetBrains drag DONE/REVIEW → WORKING):
@@ -620,9 +651,10 @@ export class MoeWebSocketServer {
           // status re-check and the write. Omitting the key is the only legacy
           // (unchecked) approval; an explicit null is a malformed token and
           // surfaces INVALID_INPUT from taskStore.
-          const task = await this.withMutex(() =>
-            this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision)
-          );
+          const task = await this.withMutex(async () => {
+            this.assertApprovalCapabilities(ws, message.payload.expectedPlanRevision);
+            return this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision);
+          });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
         }
@@ -1107,7 +1139,7 @@ export class MoeWebSocketServer {
         operation: message.type,
         ...(moeError && { code: moeError.code, codeName: moeError.codeName }),
         // Include IDs if available for debugging
-        ...(('payload' in message && message.payload && typeof message.payload === 'object') && {
+        ...(('payload' in message && message.payload !== null && typeof message.payload === 'object') && {
           context: {
             taskId: (message.payload as { taskId?: string }).taskId,
             epicId: (message.payload as { epicId?: string }).epicId,

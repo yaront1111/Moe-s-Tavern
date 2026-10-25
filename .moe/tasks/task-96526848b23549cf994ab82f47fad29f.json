@@ -13,10 +13,87 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (test-driven-development): extend the existing real /ws fixture/collector with table-driven negotiation and approval cases; do not modify or weaken the landed planApproval/executionPolicySnapshot/deliveryProjection acceptance suites. Pin the v1 messages/feature map defined in step 2; unknown optional envelope/payload/capability keys are ignored, malformed known values/containers/version refused, false server features cannot be client-enabled. Verify first connection frame and GET_STATE stay the legacy STATE_SNAPSHOT (no unsolicited extra frame), handshake is per-socket, failed negotiation cannot fall back to unchecked approval, repeated identical negotiation is idempotent, changed successful negotiation is refused without altering established capabilities, and reconnect resets session state. For EACH APPROVE_TASK and approval-drag route: unnegotiated legacy/observe omission remains accepted; negotiated missing planRevisions is refused even with current token; missing/null/string/negative/fractional/unsafe/stale tokens refuse; matching reviewed revision succeeds and persists approvedPlanRevision; stale/invalid refusal changes no task bytes/activity/timer and publishes no TASK_UPDATED. Pin verified-local still refuses a fully capable matching-token client. Assert JSON-decoded profile/snapshot/contract/current+approved revisions and existing delivery fields are equal through initial/GET_STATE snapshot, direct mutation reply and broadcast; seed evidence with existing store-test patterns, never production labels. Include an unknown optional task field in a raw temp fixture to prove serving does not strip forward-compatible data. Use real port 0, os.tmpdir/path.join and close every socket/server; fixtures alone may write their temporary .moe.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Tests-first: 68 new table-driven real /ws cases. RED in native snapshot /tmp/moe-i01-red.oPVsAs (HEAD 1f9c7d5 + owned test): 43 fail / 25 pass / 28 skipped; failures pin missing CLIENT_HELLO/admission rather than harness errors. Preserved protected acceptance files and all peer bytes. New fixture checks maps, known-invalid/unknown-optional fields, sockets/retries/reconnect, both routes and no-write/activity/timer/publication refusals, durable revision, closed verified-local, exact projected fields. Fixed collector timeout cleanup for reliable new multi-message cases. Roundtrip fixture intentionally sets LIVE deliveryPolicy (observe does not enforce captured policy). Queued/concurrent races to follow in step 3 per plan. No Git writes or shared dependency installation.",
+      "startedAt": "2026-10-25T09:59:59.108Z",
+      "completedAt": "2026-10-25T10:03:07.767Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add a small pure v1 wire-contract module (no framework or new dependency). Request: {type:'CLIENT_HELLO',payload:{protocolVersion:1,capabilities:{[key:string]:boolean}}}; reply: {type:'SERVER_CAPABILITIES',payload:{protocolVersion:1,capabilities:<server map>,negotiatedCapabilities:<intersection>}}. Both output maps contain exactly these known keys: executionProfiles, planRevisions, approvalRevisions, executionContracts, deliveryReceipts, requiredChecks = true on server; runnerStatus, modelReceipts, verifiedLocal = false. Negotiated values are server true AND client literal true; absent known keys mean false. Require a non-null non-array payload and capabilities object; known present capability values must be booleans, protocolVersion must be a safe integer equal to 1. Explicit error handling: invalid shape/type -> existing invalidInput/INVALID_INPUT; other integer version -> MoeError NOT_ALLOWED with codeName UNSUPPORTED_CLIENT_PROTOCOL. Ignore unknown optional keys and inspect only the fixed known-key list so untrusted keys are neither retained nor spread. Existing 2 MiB WS frame limit bounds input. Add concise type/comments explaining that support is not evidence/readiness and attemptPhase is not managed runnerStatus. Exercise these pure decoding branches in the test file from step 1.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/clientCapabilities.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/clientCapabilities.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Added 43-line pure fixed-key decoder and explicit typed agreement. Exact nine server booleans, intersection, safe-integer version handling, malformed-known validation, ignored unknowns, no input spreading/retention. Added direct pure decoder assertions over step-1 malformed matrix plus version/immutability. Native snapshot focused decoder test passes (1), supplemental npx tsc --noEmit exits 0; wire integration remains RED until step 3. No activation or peer edits.",
+      "startedAt": "2026-10-25T10:03:07.880Z",
+      "completedAt": "2026-10-25T10:04:26.978Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Integrate CLIENT_HELLO in PluginMessage/handlePluginMessage and return SERVER_CAPABILITIES only to the requesting socket using safeSend. Store negotiation locally in a WeakMap (or explicit lifecycle-cleaned map), never in Task/project/settings. An attempted hello without a successful result marks the socket non-legacy/read-only until a valid hello succeeds. Once successful, canonical identical repeats re-ack; different repeats fail NOT_ALLOWED/CLIENT_CAPABILITIES_LOCKED without changing the established result. Malformed repeats must not erase prior valid state. Serialize negotiation/admission consistently with withMutex. Add one shared connection-admission check called INSIDE the existing mutex immediately before BOTH state.approveTask calls: no hello -> existing behavior; attempted but unsuccessful hello or negotiated planRevisions !== true -> NOT_ALLOWED/UNSUPPORTED_CLIENT_CAPABILITY; supported negotiation with omitted expectedPlanRevision -> INVALID_INPUT. Otherwise pass the original token unchanged to state.approveTask for its existing validation, CAS, durable stamp and unconditional verified-local readiness refusal; never substitute a cached/current revision. Do not intercept non-approval UPDATE_TASK edits, alter automatic/MCP admission, change snapshots/projections, or widen the error-context allowlist. Client claims must never toggle server support/readiness. Complete tests from step 1, including independent simultaneous sockets and an approval queued behind a material revision edit; queued old tokens must still fail the store CAS with no write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ],
+      "note": "Integrated optional hello through state mutex, WeakMap absent/null/agreement states, canonical intersection locking, shared admission immediately before both approveTask calls. No snapshot/projection/store/client changes. Added queued material edit races for both routes, simultaneous approvals, and pipelined malformed-hello-before-approval ordering. Full WebSocketServer.test.ts: 101 passed (73 new), native source snapshot. Production and owned test-file strict typechecks both exit 0. Explicit boolean null check in existing error context guard resolves unknown-payload TS2698 without widening context keys. Existing 488 unrelated dirty paths preserved; no Git writes.",
+      "startedAt": "2026-10-25T10:04:27.089Z",
+      "completedAt": "2026-10-25T10:06:26.253Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Document the exact optional CLIENT_HELLO/SERVER_CAPABILITIES v1 shapes and nine feature keys in Plugin WebSocket Messages. Define server support vs negotiated intersection, unsupported runner/model/verified-local semantics, unknown-key compatibility, validation/error codes, per-connection retry/idempotence/locking and reconnect behavior. Update nearby approval token wording to distinguish unnegotiated legacy omission from negotiated mandatory revision support+token, with rendered-token guidance and unchanged store CAS. Explain capability admission is not authentication/certification, snapshots retain their existing fields, and verified-local stays closed. Link existing rail-gated CQ-F04b for eventual legacy deletion. This is the producer contract I02 JetBrains and I04 VS Code will consume; don't edit those clients or sweep unrelated docs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Documented exact v1 request/reply, nine-key map and sample intersection; unknown compatibility, validation and error codes; retry/lock/reconnect lifecycle; both approval routes and rendered-token CAS; wire support vs evidence/readiness; preserved snapshot fields and legacy omission with rail-gated F04b hand-forward. Qualified nearby token/profile wording for negotiated admission precedence. Scope only producer contract; no IDE/VM work. Loaded runtime-recommended ponytail skill from docs/skills (not present in host skill inventory). Docs checked against source and exact-map tests; full regression next.",
+      "startedAt": "2026-10-25T10:06:26.354Z",
+      "completedAt": "2026-10-25T10:07:28.270Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "One final verification gate (regression-check + verification-before-completion): from repository root run EXACTLY `cd packages/moe-daemon && npm test` freshly; exit 0 and captured output/counts/source identity are the complete_task verification evidence. Full daemon regression is mandatory for this wire-contract change, including the untouched planApproval/executionPolicySnapshot/deliveryProjection suites and new negotiation tests. Also typecheck with `npx tsc --noEmit` in the same package as a supplemental check within this single gate. On WSL use a fresh native-Linux source snapshot with the exact owned diff, unchanged source/lock hashes and separate native dependencies, Linux-only PATH and inherited MOE_* cleared; do not install into/replace the shared Windows node_modules. Windows/macOS use their native Node installation; test paths/sockets must remain OS-independent. Do not claim native IDE build/VM certification from daemon tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh exact command `cd packages/moe-daemon && npm test` exit 0: 161 files, 4036 passed / 15 skipped; npx tsc --noEmit exit 0. Source: /tmp/moe-i01-final.szrzNB = git archive c5026864c1fbdf8934a762bf05f1cadcce3ef22e + four byte-equal owned overlays; hashes in /tmp/moe-i01-gate-manifest.json, full output /tmp/moe-i01-full.log. Source/package/lock bytes unchanged; separate native dependencies match package+lock modulo CRLF only, Linux-only PATH, all inherited MOE_* cleared. Initial scratch preparation conservatively rejected native lock CRLF (so its npm invocation lacked dependencies, exit 127); rebuilt fresh and explicitly verified normalized dependency identity before this green run. Shared Windows node_modules untouched. Protected suites unchanged. No IDE or VM certification claim.",
+      "startedAt": "2026-10-25T10:07:28.451Z",
+      "completedAt": "2026-10-25T10:09:43.705Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final and only adversarial self-review (adversarial-self-review), scoped to this producer diff: try invalid/future hello, unknown fields, capability escalation, same-socket retry/downgrade, independent sockets/reconnect, both approval entry points, token hidden in updates, two concurrent approvals/material edit race, and null/huge revision inputs. Confirm all refusals leave disk/activity/timers/broadcasts unchanged; negotiated state cannot persist or mint trusted evidence; legacy clients and strict readiness remain as required; all output fields match docs. Inspect owned diff only for peer-byte preservation, unsafe context leaks, CRLF churn, needless abstractions and size. If fixes result, refresh the same gate's evidence after the final edits. Record cases/results and exact modified paths, then complete_task for QA; no Git writes, no approval polling, no whole-epic completion claim (I06 owns that).",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-25T10:09:43.803Z"
+    }
+  ],
+  "planRevision": 12,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-9cda703c",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -37,26 +114,65 @@
       "author": "architect-473624b4",
       "content": "Human instruction received during I01 planning: “we dont need legacy and legacy should be deleted” (answer to F04 revision-less approval clarification). This supersedes my earlier compatibility assumption but conflicts with current preserve-legacy epic rails. Asked one scope clarification: remove revision-less approvals only, or also legacy execution/delivery profiles throughout Moe? Audit history stays intact and verified-local stays unavailable either way. Need that explicit contract/rail reconciliation before finalizing I01's capability admission; no speculative protocol plan submitted. Investigation and proposed minimal files saved in Serena task handoff. F04 worker has a formal step amendment to request_replan; original submitted plan is not the latest acceptance contract.",
       "timestamp": "2026-10-25T08:06:10.081Z"
+    },
+    {
+      "id": "comment-7752996a81bc4f72b79a462bdd6d5376",
+      "author": "architect-473624b4",
+      "content": "Resolved scope for this plan: preserve no-handshake admission per reopenReason/current rails; v1 negotiated connections require advertised revision support + exact rendered token on both approval routes. No activation or legacy deletion. Reused CQ-F04b task-c619879ed9a643139c184fd5cb1ee888 as the separate MODIFY_RAIL-gated deletion follow-up and added I01 as dependency; no duplicate row. Cross-task overlap scan found only parked c2cb5cf7 on docs/MCP_SERVER.md; added I01 to that row's existing dependencies before submitting. Initial snapshot shape stays unchanged (deliveryProjection tests assert exact legacy frames); capabilities are returned only to CLIENT_HELLO. I06 remains whole-epic integration owner despite I01's reordered isEpicFinal flag. Full daemon regression still required here because this is shared wire protocol.",
+      "timestamp": "2026-10-25T09:58:06.853Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:18.748Z",
-  "updatedAt": "2026-10-25T09:07:33.084Z",
+  "updatedAt": "2026-10-25T10:09:43.803Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88",
     "task-ad95cb270e9e46df8672eb094d0c1e74",
     "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-25T07:58:14.777Z"
+    "firstClaimAt": "2026-10-25T07:58:14.777Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-473624b4"
+    "architect-473624b4",
+    "worker-9cda703c"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Concrete requirements conflict: the human now says legacy should be deleted, while current epic rails explicitly require preserving legacy policy/behavior. This determines I01's wire admission contract, not merely plan-approval preference. Scope question is whether deletion means revision-less approval compatibility only or all legacy execution/delivery profiles; preserve audit history and keep verified-local unavailable in either case. Source exploration is complete and saved in Serena; no implementation plan was submitted for the conflicting behavior. Reconcile the decision into the task/epic contract, then restore PLANNING.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T09:58:13.043Z",
+  "planningNotes": {
+    "approachesConsidered": "Optional /ws CLIENT_HELLO with a fixed v1 capability intersection is the smallest usable contract. Keep STATE_SNAPSHOT/GET_STATE and TASK_UPDATED shapes unchanged: existing task spread/servedTask already transports the fields and state/deliveryProjection.test.ts pins exact legacy frames. Reject mandatory handshake/global revision-less deletion under current rails; that belongs to existing rail-gated CQ-F04b, now dependent on I01. Do not add MCP approval, persisted client metadata, a revision authority, runner endpoints or IDE changes.",
+    "codebaseInsights": "Verified WebSocketServer.ts PluginMessage, onConnection, sendStateSnapshot, servedTask, broadcast and both approval routes. APPROVE_TASK and UPDATE_TASK(AWAITING_APPROVAL→WORKING) already call state.approveTask inside withMutex. taskStore.approveTask validates supplied tokens, does CAS, passes the revision privately to updateTask and cancels SPEED timers only after a successful write; F04 is DONE/landed. Raw task carries planRevision, approvedPlanRevision, executionPolicySnapshot and executionContract; deliveryProjection serves currentCandidate, latestCheckRun, requiredCheckSatisfied, deliveryReceipt and attemptPhase. No managed VM runner-status/model-receipt wire projection exists: advertise those unsupported, not inferred from attemptPhase. New names/protocol below are intentional additions. I06 owns whole-epic/client hardening; I01's isEpicFinal flag is an ordering artifact. Scope ~4 files, <=60 minutes, target <=400 changed lines using existing WS fixtures and table-driven tests.",
+    "risks": "Keep the nine feature names/booleans exact across code/tests/docs. Capability support means wire support, never trust or readiness. No successful or failed handshake may convert a connection back into unnegotiated legacy mode; reconnect intentionally starts fresh under current rails. Existing no-handshake error precedence and state/store approval semantics stay unchanged. New negotiated admission checks precede store validation; supported clients with supplied tokens still get existing malformed-token/CAS/readiness errors. Error frames use existing MoeError allowlist, not arbitrary context. No new global state, IO, dependencies, auth claims, Git writes or .moe edits. Prior dirty bytes remain untouched; parked docs-overlap row c2cb5cf7 now depends on I01. Native Linux/WSL verification must not overwrite shared Windows node_modules.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts",
+      "packages/moe-daemon/src/server/planApproval.test.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T09:58:13.144Z",
+  "workStartedAt": "2026-10-25T09:59:59.108Z"
 }
