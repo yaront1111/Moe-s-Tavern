@@ -114,7 +114,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -127,7 +127,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:36.619Z",
-  "updatedAt": "2026-10-25T11:16:56.516Z",
+  "updatedAt": "2026-10-25T11:23:54.371Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:55:13.064Z",
     "plannedStepCount": 6,
@@ -136,7 +136,8 @@
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-3617ccf7"
+    "worker-3617ccf7",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -230,5 +231,9 @@
     "kind": "completion",
     "sessionId": "worker-3617ccf7@2026-10-25T11:02:37Z",
     "at": "2026-10-25T11:16:56.515Z"
-  }
+  },
+  "blockedReason": "QA review complete on substance; the only open gate is size. Completion cb7b75f is on moe/work-2026-10-24: net 754 changed lines (184 source / 570 tests, 558 of them in the new approval-paths test file). That is over the 400-line QA cap, and no CQ-F rail waives it yet. The governor's per-task size-exception proposal prop-4de7f0e7 is PENDING a human decision. A rail must exist before QA can approve. Rejecting green, correct work now would only burn a reopen.\n\nEvidence:\n- Fresh `cd moe-vscode && npm test && npm run compile` exits 0: 134/134 pass, tsc clean. moe-vscode in the tree is identical to the commit.\n- DoD 1: board Next, drag and epic sweep go through moveMessage → approveTask with the card's rendered revision. Detail Approve and Next go through approveRendered(msg.expectedPlanRevision). PlanReviewPanel is unchanged and token-bound. The provider guard refuses a token-free AWAITING_APPROVAL→WORKING. A grep shows no other sender.\n- DoD 2: approveTask(taskId, number) has no legacy branch. An undefined or malformed token is logged, fires onError with context.taskId, and is toasted with 'Open Plan Review'; no frame is sent.\n- DoD 3: the token comes from the webview message or the seeded data-plan-revision, never from cache. Tests: 21 in approval-paths plus the refusal tests in plan-approval-client. 2 QA mutations were each caught.\n- DoD 4: re-run green.\n\nResume: proposal APPROVED → set_task_status REVIEW and QA approves. REJECTED → PLANNING, and the architect splits it.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-25T11:23:54.371Z"
 }
