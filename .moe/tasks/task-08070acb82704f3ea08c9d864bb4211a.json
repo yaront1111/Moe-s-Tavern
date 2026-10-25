@@ -114,12 +114,12 @@
     }
   ],
   "planRevision": 13,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "The human APPROVED size exception prop-4de7f0e7 at 21:58:21Z, and CQ-F epic rail #7 is now live (F04d keeps the landed cb7b75f, net 754). Size was the only open gate. QA already passed it on substance: moe-vscode npm test 134/134, tsc clean, 2 mutations caught. Returning it to REVIEW so QA can approve at cb7b75f.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -127,17 +127,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:36.619Z",
-  "updatedAt": "2026-10-25T11:24:34.160Z",
+  "updatedAt": "2026-10-25T22:16:00.521Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:55:13.064Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T22:16:00.521Z",
+    "wallClockMs": 40847457
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
     "worker-3617ccf7",
-    "qa-b0c1741e"
+    "qa-b0c1741e",
+    "qa-7c627d35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -249,8 +252,14 @@
     "sessionId": "qa-b0c1741e@2026-10-25T11:20:00Z",
     "at": "2026-10-25T11:24:34.160Z"
   },
-  "blockedReason": "QA review complete on substance; the only open gate is size. Completion cb7b75f is on moe/work-2026-10-24: net 754 changed lines (184 source / 570 tests, 558 of them in the new approval-paths test file). That is over the 400-line QA cap, and no CQ-F rail waives it yet. The governor's per-task size-exception proposal prop-4de7f0e7 is PENDING a human decision. A rail must exist before QA can approve. Rejecting green, correct work now would only burn a reopen.\n\nEvidence:\n- Fresh `cd moe-vscode && npm test && npm run compile` exits 0: 134/134 pass, tsc clean. moe-vscode in the tree is identical to the commit.\n- DoD 1: board Next, drag and epic sweep go through moveMessage → approveTask with the card's rendered revision. Detail Approve and Next go through approveRendered(msg.expectedPlanRevision). PlanReviewPanel is unchanged and token-bound. The provider guard refuses a token-free AWAITING_APPROVAL→WORKING. A grep shows no other sender.\n- DoD 2: approveTask(taskId, number) has no legacy branch. An undefined or malformed token is logged, fires onError with context.taskId, and is toasted with 'Open Plan Review'; no frame is sent.\n- DoD 3: the token comes from the webview message or the seeded data-plan-revision, never from cache. Tests: 21 in approval-paths plus the refusal tests in plan-approval-client. 2 QA mutations were each caught.\n- DoD 4: re-run green.\n\nResume: proposal APPROVED → set_task_status REVIEW and QA approves. REJECTED → PLANNING, and the architect splits it.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-25T11:23:54.371Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA review complete on substance; the only open gate is size. Completion cb7b75f is on moe/work-2026-10-24: net 754 changed lines (184 source / 570 tests, 558 of them in the new approval-paths test file). That is over the 400-line QA cap, and no CQ-F rail waives it yet. The governor's per-task size-exception proposal prop-4de7f0e7 is PENDING a human decision. A rail must exist before QA can approve. Rejecting green, correct work now would only burn a reopen.\n\nEvidence:\n- Fresh `cd moe-vscode && npm test && npm run compile` exits 0: 134/134 pass, tsc clean. moe-vscode in the tree is identical to the commit.\n- DoD 1: board Next, drag and epic sweep go through moveMessage → approveTask with the card's rendered revision. Detail Approve and Next go through approveRendered(msg.expectedPlanRevision). PlanReviewPanel is unchanged and token-bound. The provider guard refuses a token-free AWAITING_APPROVAL→WORKING. A grep shows no other sender.\n- DoD 2: approveTask(taskId, number) has no legacy branch. An undefined or malformed token is logged, fires onError with context.taskId, and is toasted with 'Open Plan Review'; no frame is sent.\n- DoD 3: the token comes from the webview message or the seeded data-plan-revision, never from cache. Tests: 21 in approval-paths plus the refusal tests in plan-approval-client. 2 QA mutations were each caught.\n- DoD 4: re-run green.\n\nResume: proposal APPROVED → set_task_status REVIEW and QA approves. REJECTED → PLANNING, and the architect splits it.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-25T22:16:00.521Z",
+  "reviewCompletedAt": "2026-10-25T22:16:00.521Z",
+  "reviewSummary": "Reviewed cb7b75f on moe/work-2026-10-24; moe-vscode in HEAD and the tree is identical to it. Fresh `cd moe-vscode && npm test && npm run compile`: exit 0, 134/134, tsc clean.\n\nSIZE: net 754 (184 src / 570 tests), waived by CQ-F rail #7 (prop-4de7f0e7), so reviewed on substance. The tests are proportionate: 21 tests driving the production board.js, taskDetail.js, panels, provider and real client.\n\nDoD1: board Next, drag and epic sweep use moveMessage → approveTask with the rendered rev (BLOCKED skip kept). Detail Approve and Next use approveRendered(msg token). PlanReview is unchanged. A grep shows no other APPROVE sender. The detail page cannot send UPDATE_TASK WORKING. The board drop fallback is covered by the provider guard.\n\nDoD2: no legacy branch. An undefined or malformed token is logged, fires onError {APPROVE_TASK, taskId} and is toasted; no frame is sent.\n\nDoD3: the token comes from the webview message or the seeded data-plan-revision, never from cache. Tests cover each path's frame and the refusal. The removed legacy tests are rail-cited (prop-5e7763ed).\n\nDoD4: green, as above.\n\nQA mutations in a scratch copy, each caught: legacy branch 5 fail, detail token dropped 4, guard removed 1, board absent→undefined 1, detail cached token 2. The copy was restored green, then deleted.\n\nNon-blocking: an open Plan Review also toasts the board's or detail's refusal. That is pre-existing behavior and out of scope.",
+  "requiredCheckAtDone": null
 }
