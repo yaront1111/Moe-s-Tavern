@@ -9,7 +9,7 @@
 // is ever called directly and no two direct calls are raced.
 // =============================================================================
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, Server } from 'http';
 import WebSocket from 'ws';
 import fs from 'fs';
@@ -17,13 +17,18 @@ import path from 'path';
 import os from 'os';
 import { MoeWebSocketServer } from './WebSocketServer.js';
 import { StateManager } from '../state/StateManager.js';
+import { updateTask as storeUpdateTask } from '../state/taskStore.js';
 import { McpAdapter } from './McpAdapter.js';
 import { MoeError } from '../util/errors.js';
 import { clearAllSpeedModeTimeouts, submitPlanTool } from '../tools/submitPlan.js';
+import * as speedMode from '../tools/submitPlan.js';
+import * as executionProfile from '../delivery/executionProfile.js';
 import { getTools } from '../tools/index.js';
+import type { Task } from '../types/schema.js';
 
 const STATE_CONFLICT_CODE = -32002;
 const INVALID_INPUT_CODE = -32602;
+const NOT_ALLOWED_CODE = -32003;
 
 describe('plan-approval revision compare-and-swap', () => {
   let testDir: string;
@@ -232,6 +237,7 @@ describe('plan-approval revision compare-and-swap', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     clearAllSpeedModeTimeouts();
     for (const client of openClients) {
       if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
@@ -359,6 +365,8 @@ describe('plan-approval revision compare-and-swap', () => {
       ['unsafe integer', Number.MAX_SAFE_INTEGER + 1],
       ['NaN', NaN],
       ['Infinity', Infinity],
+      ['array', [3]],
+      ['object', { planRevision: 3 }],
     ];
 
     for (const [label, value] of MALFORMED) {
@@ -376,6 +384,7 @@ describe('plan-approval revision compare-and-swap', () => {
         // Never a silent legacy approval.
         expect(state.getTask('task-1')?.status).toBe('AWAITING_APPROVAL');
         expect(state.getTask('task-1')?.planApprovedAt).toBeUndefined();
+        expect(state.getTask('task-1')).not.toHaveProperty('approvedPlanRevision');
       });
     }
   });
@@ -747,6 +756,304 @@ describe('plan-approval revision compare-and-swap', () => {
       const names = getTools(state).map((tool) => tool.name);
       expect(names.length).toBeGreaterThan(0);
       expect(names.filter((name) => name.includes('approve_task'))).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (L) CQ-F04 durable authorization: approvedPlanRevision is the reviewed
+  // revision a human approval persisted (number), an explicitly unchecked
+  // approval (null) or historical/unknown (absent). Only daemon paths write it.
+  // ---------------------------------------------------------------------------
+
+  // Owner CQ-F04: parked pending the replan requested 2026-10-25 after the human
+  // decision to delete revision-less legacy approval. RED against HEAD 759cc61
+  // (21 of 29 failed for the missing behavior). Re-enable, revising the
+  // token-free/null cases, under the replacement plan.
+  describe.skip('durable approval authorization', () => {
+    const HUMAN_ROUTES = ['APPROVE_TASK', 'UPDATE_TASK'];
+    const STRICT = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };
+    const APPROVED_AT = '2026-10-01T00:00:00.000Z';
+    const CHANGED_PLAN = [{ stepId: 'step-1', description: 'Changed instructions', status: 'PENDING' }];
+    const fileRow = (file: string) => JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+
+    async function boot(row: Record<string, unknown>, settings: Record<string, unknown> = {}): Promise<string> {
+      setupMoeFolder(settings);
+      createEpic();
+      const file = writeTask(row);
+      await start();
+      return file;
+    }
+
+    /** A human approval on either /ws route; an undefined token omits the key entirely. */
+    function approvalFrame(route: string, token?: unknown): string {
+      const cas = token === undefined ? {} : { expectedPlanRevision: token };
+      const payload = route === 'APPROVE_TASK'
+        ? { taskId: 'task-1', ...cas }
+        : { taskId: 'task-1', updates: { status: 'WORKING' }, ...cas };
+      return JSON.stringify({ type: route, payload });
+    }
+
+    /** What a restarted daemon loads from the same .moe folder. */
+    async function reloaded(): Promise<Task> {
+      const fresh = new StateManager({ projectPath: testDir });
+      await fresh.load();
+      return fresh.getTask('task-1')!;
+    }
+
+    async function armSpeedTimer(): Promise<string> {
+      const file = await boot({ status: 'PLANNING', planRevision: 0 }, { approvalMode: 'SPEED', speedModeDelayMs: 400 });
+      await submitPlanTool(state).handler({ taskId: 'task-1', steps: [{ description: 'Step 1' }] }, state);
+      expect(state.getTask('task-1')).toMatchObject({ status: 'AWAITING_APPROVAL', planRevision: 1 });
+      return file;
+    }
+
+    it.each(HUMAN_ROUTES)('%s persists WORKING, the unchanged revision, its stamp and planApprovedAt in one image', async (route) => {
+      const file = await boot({ planRevision: 4 });
+      const client = connectAndCollect();
+      await client.ready;
+      const writes = vi.spyOn(state, 'writeEntity');
+      const published: unknown[] = [];
+      const unsubscribe = state.subscribe((event) => {
+        if (event.type === 'TASK_UPDATED') published.push(event.payload);
+      });
+
+      client.ws.send(approvalFrame(route, 4));
+      const reply = (await client.nextOfType('TASK_UPDATED')).payload;
+      unsubscribe();
+
+      const persisted = fileRow(file);
+      const image = { status: 'WORKING', planRevision: 4, approvedPlanRevision: 4, planApprovedAt: persisted.planApprovedAt };
+      expect(typeof image.planApprovedAt).toBe('string');
+      const taskWrites = writes.mock.calls.filter(([kind]) => kind === 'tasks');
+      expect(taskWrites).toHaveLength(1);
+      expect(published).toHaveLength(1);
+      for (const seen of [persisted, taskWrites[0][2], reply, published[0], state.getTask('task-1'), await reloaded()]) {
+        expect(seen).toMatchObject(image);
+      }
+    });
+
+    it.each(HUMAN_ROUTES)('%s refuses the rendered token after a queued contract edit, changing nothing', async (route) => {
+      const file = await boot({ planRevision: 4, assignedWorkerId: 'architect-1' });
+      const client = connectAndCollect();
+      await client.ready;
+      const rendered = state.getTask('task-1')!.planRevision;
+      await state.runExclusive(() =>
+        state.updateTask('task-1', { executionContract: { intendedBehavior: 'Changed before the click' } })
+      );
+      await state.flushActivityLog();
+      const bytes = fs.readFileSync(file, 'utf-8');
+      const before = structuredClone(state.getTask('task-1'));
+      const activity = state.getActivityLog(500).length;
+      const published: string[] = [];
+      const unsubscribe = state.subscribe((event) => published.push(event.type));
+
+      client.ws.send(approvalFrame(route, rendered));
+      const refused = await client.nextOfType('ERROR');
+      unsubscribe();
+      await state.flushActivityLog();
+
+      expect(refused).toMatchObject({
+        operation: route,
+        code: STATE_CONFLICT_CODE,
+        codeName: 'PLAN_REVISION_MISMATCH',
+        context: { expectedPlanRevision: 4, currentPlanRevision: 5 },
+      });
+      expect(fs.readFileSync(file, 'utf-8')).toBe(bytes);
+      expect(state.getTask('task-1')).toEqual(before);
+      expect(published).toEqual([]);
+      expect(state.getActivityLog(500).length).toBe(activity);
+
+      // The latest rendered revision still approves, and is what gets stamped.
+      client.ws.send(approvalFrame(route, 5));
+      await client.nextOfType('TASK_UPDATED');
+      expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 5, approvedPlanRevision: 5 });
+    });
+
+    it.each<[string, Record<string, unknown>]>([
+      ['APPROVE_TASK', {}],
+      ['UPDATE_TASK', {}],
+      ['APPROVE_TASK', { executionProfile: 'observe' }],
+    ])('%s without a token (settings %j) records an explicitly unchecked null', async (route, settings) => {
+      const file = await boot({ planRevision: 7 }, settings);
+      const client = connectAndCollect();
+      await client.ready;
+
+      client.ws.send(approvalFrame(route));
+      await client.nextOfType('TASK_UPDATED');
+
+      expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 7, approvedPlanRevision: null });
+      expect((await reloaded()).approvedPlanRevision).toBeNull();
+    });
+
+    it('an explicit 0 on a legacy stamp-less row authorizes revision 0', async () => {
+      const file = await boot({ planRevision: undefined });
+
+      await approve('task-1', 0);
+
+      expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 0, approvedPlanRevision: 0 });
+    });
+
+    it('never infers a stamp from a historical planApprovedAt, on load or on a metadata update', async () => {
+      const file = await boot({ status: 'WORKING', planRevision: 3, planApprovedAt: APPROVED_AT });
+      expect(state.getTask('task-1')).not.toHaveProperty('approvedPlanRevision');
+
+      await state.runExclusive(() => state.updateTask('task-1', { title: 'Renamed', priority: 'HIGH' }));
+
+      for (const seen of [fileRow(file), state.getTask('task-1'), await reloaded()]) {
+        expect(seen).not.toHaveProperty('approvedPlanRevision');
+      }
+    });
+
+    it.each<[string, Record<string, unknown>, number]>([
+      ['a plan change', { implementationPlan: CHANGED_PLAN }, 5],
+      ['a DoD change', { definitionOfDone: ['Changed criterion'] }, 5],
+      ['a contract change', { executionContract: { intendedBehavior: 'Changed behavior' } }, 5],
+      ['all three in one write', { implementationPlan: CHANGED_PLAN, definitionOfDone: ['Changed'], executionContract: null }, 5],
+      ['a forged current stamp beside a DoD change', { approvedPlanRevision: 5, definitionOfDone: ['Changed'] }, 5],
+      ['step progress', { implementationPlan: [{ stepId: 'step-1', description: 'Step 1', status: 'IN_PROGRESS' }] }, 4],
+      ['an equal reordered contract', { executionContract: { invariants: ['No new tool'], intendedBehavior: 'Keep' } }, 4],
+      ['metadata', { title: 'Renamed', priority: 'HIGH' }, 4],
+      ['a nulled stamp', { approvedPlanRevision: null }, 4],
+      ['an erased stamp', { approvedPlanRevision: undefined }, 4],
+    ])('%s keeps the old stamp and planApprovedAt as history', async (_label, change, planRevision) => {
+      const file = await boot({
+        status: 'WORKING', planRevision: 4, approvedPlanRevision: 4, planApprovedAt: APPROVED_AT,
+        executionContract: { intendedBehavior: 'Keep', invariants: ['No new tool'] },
+      });
+
+      await state.runExclusive(() => state.updateTask('task-1', change as Partial<Task>));
+
+      for (const seen of [fileRow(file), state.getTask('task-1'), await reloaded()]) {
+        expect(seen).toMatchObject({ status: 'WORKING', planRevision, approvedPlanRevision: 4, planApprovedAt: APPROVED_AT });
+      }
+    });
+
+    it('a public PLAN_APPROVED write (relaxed set_task_status) records null and cannot mint a number', async () => {
+      const file = await boot({ planRevision: 4 });
+
+      await state.runExclusive(() => state.updateTask(
+        'task-1', { status: 'WORKING', planApprovedAt: APPROVED_AT, approvedPlanRevision: 4 } as Partial<Task>, 'PLAN_APPROVED'
+      ));
+
+      expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 4, approvedPlanRevision: null });
+    });
+
+    it.each<[string, Partial<Task>, number, string]>([
+      ['a stale internal revision', {}, 3, 'PLAN_REVISION_MISMATCH'],
+      ['an approval write that also changes the DoD', { definitionOfDone: ['Changed'] }, 4, 'PLAN_REVISION_MISMATCH'],
+      ['a malformed internal revision', {}, 4.5, 'INVALID_INPUT'],
+    ])('the store refuses %s before any write', async (_label, extra, approvedPlanRevision, codeName) => {
+      const file = await boot({ planRevision: 4 });
+      const bytes = fs.readFileSync(file, 'utf-8');
+
+      await expect(state.runExclusive(() => storeUpdateTask(
+        state, 'task-1', { status: 'WORKING', ...extra }, 'PLAN_APPROVED', undefined, { approvedPlanRevision }
+      ))).rejects.toMatchObject({ codeName });
+
+      expect(fs.readFileSync(file, 'utf-8')).toBe(bytes);
+    });
+
+    it('a failed primary task write publishes no approval and keeps the pending SPEED timer', async () => {
+      const file = await armSpeedTimer();
+      await state.flushActivityLog();
+      const bytes = fs.readFileSync(file, 'utf-8');
+      const before = structuredClone(state.getTask('task-1'));
+      const activity = state.getActivityLog(500).length;
+      const published: string[] = [];
+      const unsubscribe = state.subscribe((event) => published.push(event.type));
+      const cancel = vi.spyOn(speedMode, 'cancelSpeedModeTimeout');
+      vi.spyOn(state, 'writeEntity').mockRejectedValueOnce(new Error('injected task write failure'));
+
+      await expect(approve('task-1', 1)).rejects.toThrow('injected task write failure');
+      unsubscribe();
+      await state.flushActivityLog();
+
+      expect(fs.readFileSync(file, 'utf-8')).toBe(bytes);
+      expect(state.getTask('task-1')).toEqual(before);
+      expect(published).toEqual([]);
+      expect(state.getActivityLog(500).length).toBe(activity);
+      expect(cancel).not.toHaveBeenCalled();
+      // The timer that was never cancelled still fires.
+      await waitFor(() => state.getTask('task-1')?.status === 'WORKING');
+    });
+
+    it('a successful human approval cancels the SPEED timer only after its task write', async () => {
+      await armSpeedTimer();
+      const writes = vi.spyOn(state, 'writeEntity');
+      const cancel = vi.spyOn(speedMode, 'cancelSpeedModeTimeout');
+
+      await approve('task-1', 1);
+
+      expect(cancel).toHaveBeenCalledWith('task-1');
+      expect(cancel.mock.invocationCallOrder[0]).toBeGreaterThan(writes.mock.invocationCallOrder[0]);
+    });
+
+    it('two competing approvals of the same revision land exactly once', async () => {
+      await boot({ planRevision: 2 });
+      const clients = [connectAndCollect(), connectAndCollect()];
+      await Promise.all(clients.map((client) => client.ready));
+      const outcome = async (client: (typeof clients)[number]): Promise<unknown> => {
+        for (;;) {
+          const frame = JSON.parse(await client.nextMessage()) as Record<string, unknown>;
+          if (frame.type === 'TASK_UPDATED' || frame.type === 'ERROR') return frame.type;
+        }
+      };
+
+      for (const client of clients) client.ws.send(approvalFrame('APPROVE_TASK', 2));
+
+      expect((await Promise.all(clients.map(outcome))).sort()).toEqual(['ERROR', 'TASK_UPDATED']);
+      await state.flushActivityLog();
+      const approvals = state.getActivityLog(500).filter((e) => e.taskId === 'task-1' && e.event === 'PLAN_APPROVED');
+      expect(approvals).toHaveLength(1);
+      expect(state.getTask('task-1')).toMatchObject({ status: 'WORKING', approvedPlanRevision: 2 });
+    });
+
+    it('the /ws board can neither forge nor null the stamp, and CREATE_TASK never copies one', async () => {
+      const file = await boot({ status: 'WORKING', planRevision: 4, approvedPlanRevision: 3 });
+      const client = connectAndCollect();
+      await client.ready;
+      const forwarded = vi.spyOn(state, 'updateTask');
+
+      for (const forged of [4, null]) {
+        client.ws.send(JSON.stringify({
+          type: 'UPDATE_TASK',
+          payload: { taskId: 'task-1', updates: { title: `Renamed ${forged}`, approvedPlanRevision: forged } },
+        }));
+        await client.nextOfType('TASK_UPDATED');
+      }
+      client.ws.send(JSON.stringify({ type: 'CREATE_TASK', payload: { epicId: 'epic-1', title: 'New', approvedPlanRevision: 4 } }));
+      const created = (await client.nextOfType('TASK_CREATED')).payload as Task;
+
+      // The denylist itself is pinned: the store strip alone would hide its loss.
+      expect(forwarded).toHaveBeenCalledTimes(2);
+      for (const [, updates] of forwarded.mock.calls) expect(updates).not.toHaveProperty('approvedPlanRevision');
+      expect(fileRow(file)).toMatchObject({ title: 'Renamed null', planRevision: 4, approvedPlanRevision: 3 });
+      expect(created).not.toHaveProperty('approvedPlanRevision');
+      expect(fileRow(path.join(moePath, 'tasks', `${created.id}.json`))).not.toHaveProperty('approvedPlanRevision');
+    });
+
+    it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+      ['live verified-local settings', { executionProfile: 'verified-local' }, {}],
+      ['a stored verified-local floor under rolled-back settings', {}, { executionPolicySnapshot: STRICT }],
+    ])('%s: a token-free approval is NOT_READY today and INVALID_INPUT behind a stubbed gate', async (_label, settings, row) => {
+      const file = await boot({ planRevision: 1, ...row }, settings);
+      const bytes = fs.readFileSync(file, 'utf-8');
+      await expectRefusal('task-1', undefined, { code: NOT_ALLOWED_CODE, codeName: 'EXECUTION_PROFILE_NOT_READY' });
+
+      // Test-only stand-in for a future certified readiness gate; production
+      // readiness is untouched and verified-local stays unavailable.
+      vi.spyOn(executionProfile, 'assertExecutionProfileReady').mockImplementation(() => {});
+      const writes = vi.spyOn(state, 'writeEntity');
+      const err = await expectRefusal('task-1', undefined, { code: INVALID_INPUT_CODE, codeName: 'INVALID_INPUT' });
+      expect(err.context).toMatchObject({ field: 'expectedPlanRevision' });
+      await expect(state.runExclusive(() => state.updateTask('task-1', { status: 'WORKING' }, 'PLAN_APPROVED')))
+        .rejects.toMatchObject({ codeName: 'INVALID_INPUT' });
+      expect(writes).not.toHaveBeenCalled();
+      expect(fs.readFileSync(file, 'utf-8')).toBe(bytes);
+
+      // Control: behind the same stub the reviewed token is what authorizes.
+      await approve('task-1', 1);
+      expect(fileRow(file)).toMatchObject({ status: 'WORKING', approvedPlanRevision: 1 });
     });
   });
 });

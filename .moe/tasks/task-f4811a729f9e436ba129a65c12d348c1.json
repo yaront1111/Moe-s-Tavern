@@ -31,11 +31,17 @@
       "author": "architect-26ba32c3",
       "content": "Architect note from planning CQ-R01 (task-3b760109…, plan rev 1): these strong-profile hardening items were deliberately deferred to this integration task.\n\nR01 ships IDE-session-scoped protection only. Its design (Serena mem: decision-protected-runtime-selection):\n- strict fail-closed profile read;\n- a JVM-session downgrade pin;\n- installed-only daemon, wrapper and proxy selection;\n- spawn-record provenance (pid + startInstant, or the direct parent) checked in doConnect.\n\nFollow-ups for R13:\n1. **Persistent provenance across IDE restarts.** Today an already-running daemon after an IDE restart is refused by design. Records need storage outside the repo (IDE system dir).\n2. **Persistent downgrade pin plus a confirmation UI.** A repo edit of project.json → legacy should need explicit human confirmation across restarts, not only within one session.\n3. **Auto-stop or replace of an unverified daemon** via the installed CLI's `stop`, taking care with daemons VS Code shares.\n4. **Windows restartDaemon race.** Process.destroy is TerminateProcess, which orphans `_run`, and an old supervisor can respawn it after Restart Daemon.\n5. **daemon.json port↔pid binding.** It is not portably verifiable; decide whether same-user host processes stay out of the threat model.\n6. **Wrapper-side fallbacks under strong.** Both moe-agent wrappers fall back to their own root, then the global install, when MOE_PROXY_PATH/MOE_DAEMON_PATH vanish.\n7. **VS Code parity** for the same selection and provenance rules.\n\nagentCommand/CUSTOM and WSL/native sessions under strong are R10's.",
       "timestamp": "2026-10-24T18:34:47.675Z"
+    },
+    {
+      "id": "comment-be66dae19bd640a382e394ef16f5ae7a",
+      "author": "governor-187cc44e",
+      "content": "Carry-forward from R07 QA (qa-b0c1741e, 2026-10-25, on R07 completion 759cc61). guest-readiness treats any cloud-init \"degraded done\" (recoverable warnings such as deprecations) and any failed exec while the guest is Running as BOOTSTRAP_FAILED, and requires a fully clean \"done\". R13 certification on a real pinned Ubuntu 24.04 guest must confirm that a clean boot actually reaches done/done. Otherwise the strict readiness check will refuse a healthy guest.",
+      "timestamp": "2026-10-25T08:12:15.012Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-24T18:34:47.675Z",
+  "updatedAt": "2026-10-25T08:12:15.012Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",
