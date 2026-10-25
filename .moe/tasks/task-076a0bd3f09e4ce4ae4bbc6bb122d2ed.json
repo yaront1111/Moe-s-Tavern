@@ -14,22 +14,133 @@
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
   "implementationPlan": [],
-  "planRevision": 0,
+  "planRevision": 5,
   "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor promotion under the 2026-10-24 delegation: every dependsOn (F03 task-bf86954d) is DONE (approved 22:12Z). F04 is the next link in the F03→F04→F05→F06 chain that C01, R08, F07 and F09 wait on.",
+  "reopenReason": "Per step-1 amend-1. Human decision (comment-656dc8f8): \"we dont need legacy and legacy should be deleted\" supersedes this plan's token-free null approvals; epic rails still say preserve legacy, so the contract must change.\n\nState: only packages/moe-daemon/src/server/planApproval.test.ts changed (+308/-1, LF); no production/doc bytes. amend-1 surfaced only in my step-1 complete_step reply, so step-1 reads COMPLETED; its acceptance is superseded.\n\nEvidence: the new \"(L) durable approval authorization\" block (29 cases) ran RED vs HEAD 759cc61: 21 failed for the missing behavior, 8 passed. So the wrapper checkpoint cannot redden peers' npm test gates, the block is describe.skip with an owner comment, bytes kept: file 32 pass / 29 skip. Existing assertions unchanged; added malformed array/object rows + a no-stamp check.\n\nReusable: stamp + WORKING + planApprovedAt in one write (file/reply/event/reload); stale token refused after a queued contract edit, bytes/activity/broadcast unchanged; stale stamp kept across plan/DoD/contract edits; forge/null/erase denied (store strip, denylist pinned by updateTask spy, CREATE_TASK); store-seam decoder+equality; failed write publishes nothing and keeps the SPEED timer; competing approvals land once; scoped readiness-stub guard.\n\nSuperseded: token-free => null (3), public PLAN_APPROVED => null, explicit 0 on a stamp-less row. Legacy pins a deletion must revise: planApproval.test.ts omitted-token approvals (store, APPROVE_TASK, drag) and hidden-updates-token case; planApproval.integration \"legacy stamp-less row omits token\"; executionPolicySnapshot W5 token-free rows; HELD-OUT approvalRevision.acceptance \"legacy missing revision remains effective zero\".\n\nDecide: rails vs deletion; scope (approval compat only, or legacy execution/delivery profiles); token-free daemon paths (set_task_status relaxed; SPEED/TURBO = F05); token-omitting clients (JetBrains drag/Approve first, VS Code). verified-local stays closed.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 40,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-656dc8f8d62d451aaf63cc2c80476a46",
+      "author": "architect-473624b4",
+      "content": "HUMAN REQUIREMENT CHANGE received after submission, 2026-10-25: user answered the F04 clarification “we dont need legacy and legacy should be deleted”. The submitted plan's new token-free null approvals are now superseded; existing audit records must not be deleted or upgraded. Worker notified to request_replan because the current epic/task contract still says preserve legacy. Clarifying whether deletion means only revision-less approval compatibility or also the legacy execution/delivery profiles. Do not activate verified-local as a side effect.",
+      "timestamp": "2026-10-25T08:03:29.440Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:16.329Z",
-  "updatedAt": "2026-10-25T07:46:04.973Z",
+  "updatedAt": "2026-10-25T08:09:46.584Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T07:48:11.463Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-473624b4",
+    "worker-07cd2c56"
+  ],
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T07:53:46.987Z",
+  "planningNotes": {
+    "approachesConsidered": "# CQ-F04 durable revision authorization\nGoal: persist exactly which reviewed contract a human authorized. Architecture: TypeScript/Node/Vitest; extend the existing taskStore durable write and current WS CAS, not a new approval service. Retain stale numbers as history; null/absent are never strict authority. Reuse the private daemonOwned seam already used by submit_plan for requiredCheckSnapshot. A public writable field or inferring approval from PLAN_APPROVED/status/time was rejected as forgeable. This is one bounded authorization slice, five files, six steps; target <=400 net LOC using existing tests/fixtures.",
+    "codebaseInsights": "F03 is landed at 55159036. derivePlanRevision already covers contract/plan/DoD and excludes progress. Both human WS paths call StateManager.approveTask under the shared mutex. SPEED/TURBO use updateTask directly with PLAN_AUTO_APPROVED and belong to F05 (task-c7d520ba9cf940e4b3bbe2e4c3c90f47); set_task_status relaxed mode uses PLAN_APPROVED without a reviewed token. taskStore.updateTask already accepts a private daemonOwned parameter; StateManager.updateTask deliberately does not. readExecutionPolicySnapshot/resolveTaskExecutionProfile keep a stored verified-local floor, even after project rollback. Real strict progression is still unconditionally unavailable; keep that behavior and existing error precedence.",
+    "risks": "Authorization is security-sensitive, hence heavy/max. Runtime comments were re-fetched untruncated: none. Clarification offered in the TUI; TURBO needs no confirmation, and scope is resolved from code plus F05's explicit automatic-approval ownership. Existing executionPolicySnapshot.test.ts requires NOT_READY even on a strict omitted-token request, so the new strict omission backstop goes after readiness and is tested with a scoped readiness stub, never by weakening production readiness. Do not change held-out F01 assertions or activate F05's skip. No all-entity transaction guarantee: the first task write is atomic; later worker side effects are not. Reuse namespace spies with afterEach restoration. Preserve peer bytes and native dependency separation; docs sweep handed to F12.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/planApproval.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T07:53:47.060Z",
+  "workStartedAt": "2026-10-25T07:57:32.710Z",
+  "priorAttempt": {
+    "attemptedAt": "2026-10-25T08:09:46.584Z",
+    "reason": "Per step-1 amend-1. Human decision (comment-656dc8f8): \"we dont need legacy and legacy should be deleted\" supersedes this plan's token-free null approvals; epic rails still say preserve legacy, so the contract must change.\n\nState: only packages/moe-daemon/src/server/planApproval.test.ts changed (+308/-1, LF); no production/doc bytes. amend-1 surfaced only in my step-1 complete_step reply, so step-1 reads COMPLETED; its acceptance is superseded.\n\nEvidence: the new \"(L) durable approval authorization\" block (29 cases) ran RED vs HEAD 759cc61: 21 failed for the missing behavior, 8 passed. So the wrapper checkpoint cannot redden peers' npm test gates, the block is describe.skip with an owner comment, bytes kept: file 32 pass / 29 skip. Existing assertions unchanged; added malformed array/object rows + a no-stamp check.\n\nReusable: stamp + WORKING + planApprovedAt in one write (file/reply/event/reload); stale token refused after a queued contract edit, bytes/activity/broadcast unchanged; stale stamp kept across plan/DoD/contract edits; forge/null/erase denied (store strip, denylist pinned by updateTask spy, CREATE_TASK); store-seam decoder+equality; failed write publishes nothing and keeps the SPEED timer; competing approvals land once; scoped readiness-stub guard.\n\nSuperseded: token-free => null (3), public PLAN_APPROVED => null, explicit 0 on a stamp-less row. Legacy pins a deletion must revise: planApproval.test.ts omitted-token approvals (store, APPROVE_TASK, drag) and hidden-updates-token case; planApproval.integration \"legacy stamp-less row omits token\"; executionPolicySnapshot W5 token-free rows; HELD-OUT approvalRevision.acceptance \"legacy missing revision remains effective zero\".\n\nDecide: rails vs deletion; scope (approval compat only, or legacy execution/delivery profiles); token-free daemon paths (set_task_status relaxed; SPEED/TURBO = F05); token-omitting clients (JetBrains drag/Approve first, VS Code). verified-local stays closed.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "Add F04 test coverage first using this file's existing writeTask/start/approve/connectAndCollect fixtures (test-driven-development); retain every existing assertion and leave state/approvalRevision.acceptance.test.ts unchanged, including its F05-owned skip. Matching human approvals must persist one task image containing status WORKING, unchanged planRevision N, approvedPlanRevision N and planApprovedAt: `expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({status:'WORKING', planRevision:4, approvedPlanRevision:4});` Check the returned task, broadcast and reloaded StateManager too. Parameterize APPROVE_TASK and UPDATE_TASK AWAITING_APPROVAL->WORKING; queue a real executionContract edit before approval under runExclusive, then send the previously rendered revision and assert PLAN_REVISION_MISMATCH, byte-identical refusal, unchanged assignment/timestamps/activity, no success broadcast. Include explicit legacy revision 0, latest-token success, and the existing malformed-token table plus arrays/objects. Seed an old planApprovedAt without a stamp and prove load/metadata updates never infer one; a new token-free legacy/observe approval records null, never current revision. Reuse small fixtures/tables rather than creating another server harness; keep the total owned change below the QA 400-net-LOC cap.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "packages/moe-daemon/src/server/planApproval.test.ts"
+        ],
+        "modifiedFiles": [
+          "packages/moe-daemon/src/server/planApproval.test.ts"
+        ],
+        "note": "RED tests written in planApproval.test.ts (new describe '(L) durable approval authorization', reusing existing writeTask/start/approve/connectAndCollect; added vi.restoreAllMocks to afterEach; malformed table + array/object rows and a no-stamp assertion). Ran against HEAD 759cc61 source in Linux snapshot /tmp/moe-f04-snap.HEgPlX (native node_modules, lock JSON-equal, MOE_* unset, Linux PATH): 21 new cases fail for the intended reasons (missing durable stamp/null, store seam accepts forged/stale internal revision, cancel before write, denylist forwards the key, stubbed strict omission succeeds), 40 pass. Refusal halves (contract-edit CAS, byte identity) already pass as regression coverage. approvalRevision.acceptance.test.ts untouched (F05 skip intact). Peer dirty paths (validators*, proposeRail*) are not mine and untouched. LF kept (0 CR).",
+        "startedAt": "2026-10-25T07:57:32.710Z",
+        "completedAt": "2026-10-25T08:06:43.086Z",
+        "amendments": [
+          {
+            "amendmentId": "amend-1",
+            "description": "Human requirement changed while this step was in flight. Preserve all existing source/test bytes and completed-step evidence; do not mark the old acceptance target complete. Read the latest task comments recording the human decision, then call moe.request_replan for this task with that decision and the current implementation/evidence summary. This amendment is a hand-back instruction, not permission to edit completed steps, perform Git writes, delete audit history, weaken tests, or activate verified-local. The architect will replace the whole plan against the revised acceptance contract; error handling and test requirements remain mandatory.",
+            "reason": "Human explicitly changed acceptance to remove legacy/revision-less approvals after this plan was submitted. The compatibility assumptions need a whole-plan replacement, not silent worker deviation.",
+            "amendedBy": "architect-473624b4",
+            "amendedAt": "2026-10-25T08:04:38.966Z"
+          }
+        ],
+        "activeAmendmentId": "amend-1"
+      },
+      {
+        "stepId": "step-2",
+        "description": "Implement the durable daemon-owned slot at the existing write boundary. Add `approvedPlanRevision?: number | null` beside Task.planRevision: a safe-integer number identifies a revision-checked approval, null marks an explicitly unchecked legacy approval, absence is historical/unknown legacy provenance. Neither null nor absence authorizes strict execution; status or planApprovedAt never backfills the slot. Strip it from every ordinary updateTask patch; createTask's explicit construction must continue to ignore supplied values. Extend ONLY taskStore.updateTask's existing private daemonOwned parameter with approvedPlanRevision (do not expose it on StateManager's public update signature). For PLAN_APPROVED, derive the canonical planRevision first, then choose the trusted internal value or null, validate a numeric value using the existing revision decoder and require equality to that derived revision before writing. Suggested core: `const approved = daemonOwned?.approvedPlanRevision ?? null; ... updated.approvedPlanRevision = approved;` Ordinary caller updates, even with a PLAN_APPROVED event, must never mint a number. For that approval event, after the existing readiness check, require a numeric token when resolveTaskExecutionProfile(settings, task.executionPolicySnapshot) is verified-local; omission is INVALID_INPUT on expectedPlanRevision. Reuse the existing profile resolver, never deliveryPolicy or a new strictness flag. Do not change assertExecutionProfileReady or its current EXECUTION_PROFILE_NOT_READY error precedence. Material plan/DoD/contract changes advance only planRevision and KEEP the old approvedPlanRevision, timestamps, amendment history and other evidence: inequality invalidates the association without erasing history; progress/equal-contract/metadata writes keep both revisions. Test all three material surfaces, a no-op/progress control, same-write combined edits, reload, and attempted forge/null/erase through ordinary store updates. An injected first task writeEntity failure must leave disk/map/events/activity unchanged. No schema migration or second revision counter.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "packages/moe-daemon/src/types/schema.ts",
+          "packages/moe-daemon/src/state/taskStore.ts",
+          "packages/moe-daemon/src/server/planApproval.test.ts"
+        ]
+      },
+      {
+        "stepId": "step-3",
+        "description": "Wire the two human paths to the trusted store argument, not a public patch. In taskStore.approveTask keep status validation and the supplied-token safe-integer/CAS checks under the caller-held state mutex; retain the decoded reviewed revision and pass it (or null for a permitted legacy omission) to the local updateTask function with PLAN_APPROVED and the internal daemonOwned argument. Compare BEFORE any mutation; never substitute a newly fetched revision for a stale supplied token. The single persisted image contains status, planApprovedAt and approvedPlanRevision. Move cancelSpeedModeTimeout after the successful update so an injected primary task-write failure also retains the pending timer; queued timer callbacks remain serialized by the existing mutex. Do not promise cross-entity rollback if a later worker write fails. Add approvedPlanRevision to the WS UPDATE_TASK denylist; APPROVE_TASK and board-drag delegation continue to share approveTask and top-level expectedPlanRevision, ignoring other drag updates. Add real-wire forge/erase/create cases, primary-write failure with no published approval, duplicate/concurrent approvals (one success only), and timer-preservation controls. Strict-omission regression: in narrowly scoped tests only, spy on assertExecutionProfileReady to make it a no-op, then prove live verified-local and stored verified-local floor still refuse missing tokens with INVALID_INPUT and zero writes; restore spies in cleanup. Real unmocked strict requests must still return EXECUTION_PROFILE_NOT_READY (existing executionPolicySnapshot.test.ts unchanged). This tests the future authorization guard without enabling or certifying strict execution. Error handling: keep current malformed-token and mismatch codes and WS context allowlist; no new approval MCP tool. Automatic SPEED/TURBO stamping/rearming remains F05; relaxed set_task_status PLAN_APPROVED without the internal revision remains explicitly legacy/null.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "packages/moe-daemon/src/state/taskStore.ts",
+          "packages/moe-daemon/src/server/WebSocketServer.ts",
+          "packages/moe-daemon/src/server/planApproval.test.ts"
+        ]
+      },
+      {
+        "stepId": "step-4",
+        "description": "Update only the Plan approval compare-and-swap section for F04's downstream contract: numeric/null/absent provenance, exact rendered token, atomic persisted authorization, stale-number retention and safe-integer-plus-equality validity, daemon-owned denial of forged updates, and the effective-profile strict omission rule behind the still-closed readiness gate. Explicitly distinguish both human WS paths from token-free relaxed set_task_status and the not-yet-fenced SPEED/TURBO paths owned by F05. Do not claim all approval paths are fenced, nor execution/claim/completion enforcement (F06-F08). Document no backfill from planApprovedAt/status and no change to legacy/observe delivery policy. The broader SCHEMA/PLAN_APPROVAL_FRESHNESS sweep belongs to F12; record these precise hand-forward items in the completion handoff rather than editing contested unrelated docs.",
+        "status": "PENDING",
+        "affectedFiles": [
+          "docs/MCP_SERVER.md"
+        ]
+      },
+      {
+        "stepId": "step-5",
+        "description": "Single verification gate: from the repository root run exactly `cd packages/moe-daemon && npm test` fresh after the final implementation, require exitCode 0, and retain command/outputTail for complete_task. This full daemon gate is mandatory because the Task shape and approval protocol are shared surfaces; existing held-out assertions must pass unchanged and the F05 timer test stays skipped until F05. Use native dependencies matching the lockfile: on WSL/Linux a source-identical temporary snapshot with Linux-only PATH and MOE_* removed avoids inherited Windows executables; never install over shared Windows node_modules. Record snapshot source identity and any owned-file overlays so QA can reproduce it; preserve existing CRLF/LF and peer dirty bytes on Windows/macOS/Linux. No generated/dist changes, no manual .moe edits, and no agent Git-write commands; wrappers alone land.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-6",
+        "description": "Final, single adversarial-self-review of the F04 diff. Try stale/future/zero/null/omitted/non-finite tokens, caller-forged or erased approval stamps, a contract edit queued ahead of approval, two competing approval messages, a primary task-write failure with an armed timer, and a project rollback beneath a stored strict snapshot. Check no path infers numeric approval from status/time/event name, no material edit relabels the old number as current or deletes history, and progress stays non-material. Mutation-check the task's focused assertions in a disposable source copy by dropping the durable stamp, accepting a stale token, allowing forged updates, and dropping the strict omission guard; each must fail its corresponding test (the guard case uses only the scoped readiness stub). Restore pristine source; if fixes change production/test bytes, refresh the single verification gate on final bytes. Load verification-before-completion, report only observed evidence via complete_task, and leave later automatic/session/step fencing and verified-local activation untouched.",
+        "status": "PENDING",
+        "affectedFiles": []
+      }
+    ],
+    "stepsCompleted": [
+      "step-1"
+    ]
+  }
 }

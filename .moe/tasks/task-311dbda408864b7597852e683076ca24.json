@@ -1,0 +1,37 @@
+{
+  "id": "task-311dbda408864b7597852e683076ca24",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C02b] Snapshot manifest source adapter",
+  "description": "Objective: Let the C02 bounded repository source provider (packages/moe-daemon/src/context/repositorySource.ts) also serve from R09's validated source snapshot manifests (protected base plus actual overlay bytes), so an isolated session's context matches the snapshot it was given.\n\nContext: This is the dependent remainder of the original C02. On 2026-10-25 the operator re-sliced C02 to run now over immutable Git commit ids only; it reports uncommitted/overlay bytes as the explicit limitation 'committed-bytes-only'. This row carries C02's former dependencies: R09 (manifest format) and C01 (packet vocabulary, which adopts C02's types). Consume the LANDED R09 manifest format, C02 provider and C01 packet. Do not invent or redefine any of them, and keep C02's refusal and explicit-status semantics unchanged.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). Use original Moe source; daemon owns state, wrappers own host Git writes. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "A query against an R09-validated snapshot manifest serves base and overlay bytes with per-item provenance naming the manifest identity and the content hash derived from the served bytes, not from writer declarations.",
+    "Overlay paths that traverse outside the root, symlink escapes and .git/.moe/control paths are refused, consistent with R09's import validation and C02's refusal codes.",
+    "Missing, stale or unverifiable overlay entries remain explicit and never silently fall back to base, working-tree or other unvalidated bytes.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b23c65b0bb3548fc95d46973b9d589cb",
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-fef5ca575850416ea1052ee1a7b8e22e"
+  ],
+  "priority": "HIGH",
+  "order": 26,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T08:11:42.283Z",
+  "updatedAt": "2026-10-25T08:11:42.283Z"
+}
