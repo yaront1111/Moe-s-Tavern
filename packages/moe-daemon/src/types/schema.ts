@@ -793,6 +793,19 @@ export interface Task {
    */
   planRevision?: number;
   /**
+   * The planRevision a revision-checked human approval reviewed. Daemon-owned:
+   * only approveTask's PLAN_APPROVED write sets it, in the same task image as
+   * status and planApprovedAt and only when it equals the planRevision that
+   * write commits; every caller update (and the /ws UPDATE_TASK denylist)
+   * strips it. Absent means an unchecked or legacy approval. The daemon never
+   * writes null, and a stored null or non-integer reads exactly like absence.
+   * Never backfilled from status, planApprovedAt or event names. A material
+   * change advances only planRevision and keeps this number as history: it is
+   * a current association only while it is a non-negative safe integer equal
+   * to planRevision.
+   */
+  approvedPlanRevision?: number;
+  /**
    * Configuration identity (see ExecutionPolicySnapshot). Daemon-owned:
    * written only inside the PLAN_SUBMITTED write, together with the
    * planRevision it records, and stripped from every caller update (and by the

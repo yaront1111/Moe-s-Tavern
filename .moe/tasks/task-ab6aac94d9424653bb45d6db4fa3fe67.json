@@ -76,11 +76,23 @@
       "author": "architect-26ba32c3",
       "content": "Corrected acceptance list for the DoD field, replacing the 1000-cap version in comment-47c11f2a. It follows the human's \"Raise limit; preserve longer rails\". @governor-187cc44e please relay this to the human for pasting; the replan is planRevision 14.\n(1) EPIC ADD/MODIFY proposals over 10000 UTF-16 code units fail INVALID_INPUT before the proposal is persisted or published. Exactly 10000 is accepted losslessly.\n(2) The exact human-approved 1650-unit prop-d3ccceade text survives propose, approve/apply and reload as ONE byte-identical epic rail.\n(3) Direct epicRails updates, and approval of a pre-existing oversized (>10000) EPIC proposal, fail before any entity mutation. The proposal stays PENDING, all rail and proposal bytes are preserved, and nothing is ever truncated.\n(4) Accepted epic rails keep whitespace and Unicode exactly. GLOBAL/TASK long-rail behavior, REMOVE_RAIL and other validateStringArrayValue callers stay compatible.\n(5) Fresh `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task.\nNot in this task:\n- createEpic truncation (task-6b607b12);\n- recombining epic-fe5e32c3's three restored slices into one rail, which needs an operator daemon restart on the new build.",
       "timestamp": "2026-10-25T08:21:50.774Z"
+    },
+    {
+      "id": "comment-b7c55d0623094367ad196eea27fd933d",
+      "author": "architect-26ba32c3",
+      "content": "Delivery gap for QA (found by architect-26ba32c3 on 2026-10-25 while planning task-a9824bc1). The completion commit b35d46c does NOT contain docs/SCHEMA.md:\n- `git show --stat b35d46c` lists only the task json, validators.ts, validators.test.ts and proposeRail.test.ts.\n- Its trailer reads `Moe-Contested: docs/SCHEMA.md (task-07474ee438f34021a23809f9c764d15c)`.\n\nThe doc change itself is still dirty in the shared tree. `git diff -- docs/SCHEMA.md` shows exactly this task's two lines: the epicRails comment at ~330 and the 'Epic rail limits' paragraph at ~377, both 1000 -> 10000. So DoD item \"docs/SCHEMA.md documents the cap\" is not landed.\n\nCause: 07474ee4 (PLANNING, parked) ASSERTS docs/SCHEMA.md through its filesModified and checkpoint 9f2cce3. Under attribution.contested=skip-untouched, an unwitnessed path (edited through Bash rather than Edit/Write) is skipped (mem gotcha-contested-path-silently-skipped-from-landing). Dependencies cannot clear an asserted contest.\n\nSuggested route: qa_reject with a delivery-gap issue. The worker re-applies the two SCHEMA.md lines with the Edit tool (revert, then re-apply), so touchedFiles witnesses the path and the next completion landing includes it. No code change is needed.\n\nSeparately, I added this task to c2cb5cf7's dependsOn, because its plan also declares docs/SCHEMA.md and that removes its planned-path contest.",
+      "timestamp": "2026-10-25T08:40:32.649Z"
+    },
+    {
+      "id": "comment-6be98b93c1a749f5a300c312c4ee4337",
+      "author": "governor-187cc44e",
+      "content": "Delivery gap found after approval (flagged by architect-26ba32c3, verified by the governor). Completion b35d46c did not carry docs/SCHEMA.md; its trailer reads `Moe-Contested: docs/SCHEMA.md (task-07474ee4)`. HEAD still documents a 1000-char epic-rail cap while the code is 10000. The two corrected lines are uncommitted in the working tree. The follow-up task-333f14f4 (LOW, PLANNING, path declared) will land them through a tool-witnessed edit. Root cause: the stale 07474ee4 assertions (September checkpoint 9f2cce3) contest current paths. That is the same cause as M01's earlier CONFIGURATION.md gap and as c2cb5cf7's block.",
+      "timestamp": "2026-10-25T08:43:13.566Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T07:49:44.510Z",
-  "updatedAt": "2026-10-25T08:39:50.240Z",
+  "updatedAt": "2026-10-25T08:43:13.566Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T07:54:15.283Z",
     "plannedStepCount": 3,
@@ -268,6 +280,30 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "3e2dbdab4e30883a3452e1df1d71502987c850d3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T08:36:15Z",
+      "paths": [
+        ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-ab6aac94d9424653bb45d6db4fa3fe67.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T08:40:34.125Z",
+      "treeId": "f711d581feb2e20f8c181bcd8b245a6f5d8d9591",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -275,7 +311,10 @@
     "packages/moe-daemon/src/tools/proposeRail.test.ts",
     "packages/moe-daemon/src/state/validators.test.ts",
     "docs/SCHEMA.md",
-    ".moe/tasks/task-ab6aac94d9424653bb45d6db4fa3fe67.json"
+    ".moe/tasks/task-ab6aac94d9424653bb45d6db4fa3fe67.json",
+    ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+    ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/tools/proposeRail.test.ts",
@@ -286,9 +325,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-9cda703c@2026-10-25T08:21:48Z",
-    "at": "2026-10-25T08:28:55.743Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T08:36:15Z",
+    "at": "2026-10-25T08:40:34.125Z"
   },
   "declaredFiles": [
     "packages/moe-daemon/src/state/validators.test.ts"

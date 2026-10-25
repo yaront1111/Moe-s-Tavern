@@ -1,0 +1,31 @@
+{
+  "id": "task-7c2872e7052646b7a521cb7a8f01c546",
+  "epicId": "epic-3d096d59120542fc9fc9c7b91a713795",
+  "title": "chore: the postflight fake-proxy twins have diverged; reconcile them or pin their intentional differences",
+  "description": "Found 2026-10-25 by worker-9cda703c (task-e92b2cb3, step 1); see mem gotcha-postflight-fake-proxy-twins-diverged.\n\n**The divergence.** The fake-proxy JavaScript embedded in scripts/tests/postflight.sh (the `cat > \"$FAKE_PROXY\" <<'JS'` heredoc) and in scripts/tests/postflight.ps1 (the `Set-Content -Path $fakeProxy -Encoding UTF8 -Value @'` here-string) is NOT byte-identical. Measured at HEAD b35d46c, after normalizing UTF-8 BOM and CRLF:\n- cmp exit 1, first difference at byte 663, line 17;\n- lengths 32746 (sh) vs 31418 (ps1);\n- SHA-256 7c3afb75… (sh) vs caf7a0b0… (ps1).\n\nThe first difference is the ps1-only readTask/strList/declaredSets/csv helpers. Resume status, blocked task id/nextAction and get_commit_scope logic differ too. The integration squash 5e74fb8 already differed (28787 vs 27979), so peer edits are not the cause.\n\n**Why it matters:**\n- docs/DEVELOPMENT.md says both smoke tests \"verify the same contract through a fake proxy\".\n- task-e92b2cb3's rail assumed the twins are byte-identical \"as the surrounding cases already require\".\nNeither claim holds, nothing checks it, and differing fixtures can hide wrapper parity bugs.\n\n**Work:**\n1. Classify every difference: shared contract (harmonize it) or engine-specific (keep it, with a comment at the site saying why).\n2. Add an automated check that fails when the shared part drifts, for example a parity-check group that extracts both bodies and compares them.\n3. Preserve each platform's fixture requirements. Never copy one proxy wholesale over the other.\n\n**Serialization:** postflight.{sh,ps1} are also planned or edited by task-5f3960df, task-07474ee4 and task-c2cb5cf7. Whoever plans this row must set dependsOn against them, per the overlap rail.",
+  "definitionOfDone": [
+    "Every difference between the extracted sh and ps1 fake-proxy bodies is either removed or marked at its site as engine-specific, with the reason.",
+    "An automated check in both parity checkers (or one they share) fails when the shared fake-proxy part drifts, proven RED on a scratch copy with one injected difference.",
+    "MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh and postflight.ps1 (PS 5.1 and pwsh 7) pass from a HEAD snapshot, and parity-check.sh and parity-check.ps1 stay green.",
+    "docs/DEVELOPMENT.md's fake-proxy sentence matches the result."
+  ],
+  "taskRails": [
+    "Harness, parity-checker and docs changes only: scripts/moe-agent.sh and scripts/moe-agent.ps1 stay unchanged unless a harmonized fixture proves a wrapper wrong, which becomes its own bug row."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 233,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T08:43:34.952Z",
+  "updatedAt": "2026-10-25T08:43:34.952Z"
+}

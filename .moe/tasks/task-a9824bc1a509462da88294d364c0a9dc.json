@@ -49,10 +49,17 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 226.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-bceb6545d37a44eabe58a45852739e8a",
+      "author": "architect-26ba32c3",
+      "content": "Plan rev 1 (architect-26ba32c3, 2026-10-25): docs plus one characterization test, 4 steps, 3 files, standard tier, medium effort (docs/tests-only).\n\nWhat is actually on the wire, verified in code:\n- Code -32003.\n- Message `[CONSTRAINT_VIOLATION] Rail violation: \"Forbidden pattern: X\" | \"Required pattern missing: X\". Default action: … moe.propose_rail …`.\n- `error.data` is exactly `{ tool: \"moe.submit_plan\", codeName: \"CONSTRAINT_VIOLATION\" }`.\n- MoeError.context (violation, suggestedAction) never leaves the daemon.\n\nStale passages to fix:\n- MCP_SERVER.md 'MCP Protocol Notes' (errors are always -32000; rail details are in error.data);\n- the submit_plan RAIL_VIOLATION note;\n- TROUBLESHOOTING.md '\"RAIL_VIOLATION\"', which also wrongly points at epic/task rails.\n\nSerialization:\n- dependsOn F04 task-076a0bd3. Its uncommitted +9-line block is in docs/MCP_SERVER.md. With the dependency, this row's planned paths no longer contest F04's landing, and this row waits for those bytes to be committed.\n- c2cb5cf7 now dependsOn this row, because it also plans both docs.\n\nisEpicFinal:true here is an order artifact (226.5 sorts after F12's 120). CQ-F12 stays the epic's hardening task, so the gate is a focused 4-suite vitest run.",
+      "timestamp": "2026-10-25T08:40:42.591Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T21:58:45.306Z",
-  "updatedAt": "2026-10-25T08:40:12.641Z",
+  "updatedAt": "2026-10-25T08:40:42.591Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T08:28:05.094Z",
     "plannedStepCount": 4,

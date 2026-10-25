@@ -95,6 +95,29 @@ function decodeSuppliedPlanRevision(value: unknown, taskId: string): number {
   return value;
 }
 
+function planRevisionMismatch(taskId: string, supplied: number, current: number): MoeError {
+  return new MoeError(
+    MoeErrorCode.STATE_CONFLICT,
+    `Plan for task ${taskId} changed since it was reviewed (approved revision ${supplied}, current revision ${current}). ` +
+      'Re-open the plan, review the current revision and approve again.',
+    { taskId, expectedPlanRevision: supplied, currentPlanRevision: current },
+    'PLAN_REVISION_MISMATCH'
+  );
+}
+
+/**
+ * The approvedPlanRevision a PLAN_APPROVED write stamps: the reviewed revision,
+ * only if it equals the revision this same write commits, so a delayed
+ * approval can never authorize a newer plan, DoD or contract. Error handling:
+ * INVALID_INPUT for a malformed value, STATE_CONFLICT / PLAN_REVISION_MISMATCH
+ * for any other; both throw before any write.
+ */
+function checkedApprovalRevision(taskId: string, reviewed: unknown, planRevision: number): number {
+  const supplied = decodeSuppliedPlanRevision(reviewed, taskId);
+  if (supplied !== planRevision) throw planRevisionMismatch(taskId, supplied, planRevision);
+  return supplied;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -402,7 +425,7 @@ export function assertNoFinalizingAttempt(state: StateManager, taskId: string): 
 
 export async function updateTask(
   state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string,
-  daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot },
+  daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number },
 ): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
@@ -420,6 +443,9 @@ export async function updateTask(
   // any caller-supplied value (MCP tool, plugin UPDATE_TASK) so a client can
   // neither forge a newer stamp nor reset an older one.
   delete (sanitized as Record<string, unknown>).planRevision;
+  // The approval stamp is daemon-owned too: only the daemonOwned argument below
+  // writes it, so no caller may forge, null or erase it.
+  delete sanitized.approvedPlanRevision;
   // executionPolicySnapshot is daemon-owned as well: only the PLAN_SUBMITTED
   // capture below writes it, so no caller (MCP tool, plugin UPDATE_TASK, a
   // board echo of the whole row) may forge, reset, null or erase it. Deleting
@@ -516,6 +542,13 @@ export async function updateTask(
   }
   // Strict readiness, also before any write (and before the capture below).
   assertProgressionReady(state, task, normalizedUpdates, normalizedUpdates.status ?? task.status, event);
+  // A strict profile may not approve unchecked. Behind the readiness gate
+  // above, which still refuses every verified-local progression.
+  const reviewed = event === 'PLAN_APPROVED' ? daemonOwned?.approvedPlanRevision : undefined;
+  if (event === 'PLAN_APPROVED' && reviewed === undefined &&
+    resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local') {
+    throw invalidInput('expectedPlanRevision', `approval of task ${taskId} under verified-local must name the reviewed plan revision`);
+  }
 
   // Derive the plan revision from the sanitized surface, BEFORE any write, so a
   // malformed stored stamp or an exhausted counter refuses the whole update
@@ -530,12 +563,18 @@ export async function updateTask(
   const capture = event === 'PLAN_SUBMITTED'
     ? { executionPolicySnapshot: planSubmissionSnapshot(state.project?.settings, task.executionPolicySnapshot, planRevision) }
     : {};
+  // The reviewed revision rides in the same image as the approval it records.
+  // Without one the field is untouched: an older number stays as history.
+  const stamp = reviewed === undefined
+    ? {}
+    : { approvedPlanRevision: checkedApprovalRevision(taskId, reviewed, planRevision) };
 
   const updated: Task = {
     ...task,
     ...finalUpdates,
     planRevision,
     ...capture,
+    ...stamp,
     updatedAt: new Date().toISOString()
   };
   if (event === 'PLAN_SUBMITTED' && daemonOwned) {
@@ -688,29 +727,27 @@ export async function approveTask(
   // Compare-and-swap on the plan revision the approver actually reviewed.
   // ABSENCE is the only legacy opt-out (SPEED/TURBO auto-approval,
   // set_task_status relaxed mode, an old client) — a supplied token is always
-  // validated and compared. This whole block runs BEFORE cancelSpeedModeTimeout
-  // and before any write, so a refusal cancels no pending timer, mutates no
-  // bytes and publishes nothing.
+  // validated and compared. This whole block runs before any write, so a
+  // refusal cancels no pending timer, mutates no bytes and publishes nothing.
+  let reviewed: number | undefined;
   if (expectedPlanRevision !== undefined) {
-    const supplied = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
+    reviewed = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
     // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
     // stored stamp still fails closed as INVALID_INPUT.
     const current = decodeStoredPlanRevision(task);
-    if (supplied !== current) {
-      throw new MoeError(
-        MoeErrorCode.STATE_CONFLICT,
-        `Plan for task ${taskId} changed since it was reviewed (approved revision ${supplied}, current revision ${current}). ` +
-          'Re-open the plan, review the current revision and approve again.',
-        { taskId, expectedPlanRevision: supplied, currentPlanRevision: current },
-        'PLAN_REVISION_MISMATCH'
-      );
-    }
+    if (reviewed !== current) throw planRevisionMismatch(taskId, reviewed, current);
   }
-  // Readiness is checked here too, before cancelSpeedModeTimeout, so a refused
-  // approval cancels no pending timer either.
+  // Readiness is checked here too, before the write.
   assertProgressionReady(state, task, {}, 'WORKING', 'PLAN_APPROVED');
+  // The reviewed revision travels in the store's private argument, so this one
+  // write stamps it beside the approval; a token-free approval stamps nothing.
+  const updated = await updateTask(
+    state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED', undefined,
+    reviewed === undefined ? undefined : { approvedPlanRevision: reviewed }
+  );
+  // Only once the write has landed: a refused or failed approval keeps a pending
+  // SPEED timer, whose queued callback re-checks the status under the mutex.
   cancelSpeedModeTimeout(taskId);
-  const updated = await state.updateTask(taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED');
   return updated;
 }
 

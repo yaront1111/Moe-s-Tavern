@@ -125,6 +125,9 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   // Configuration identity, captured by taskStore.updateTask in the
   // PLAN_SUBMITTED write only: a board echo must not forge, reset or wipe it.
   'executionPolicySnapshot',
+  // The reviewed revision a checked approval stamped, written only by
+  // approveTask's PLAN_APPROVED write: a board echo must not forge, null or erase it.
+  'approvedPlanRevision',
 ]);
 
 export type PluginMessage =

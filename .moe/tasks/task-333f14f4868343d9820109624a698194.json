@@ -1,0 +1,34 @@
+{
+  "id": "task-333f14f4868343d9820109624a698194",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "docs: land ab6aac94's 10000-char epic rail lines in docs/SCHEMA.md (skipped as contested)",
+  "description": "Delivery gap left by DONE task-ab6aac94 (epic rail cap 1000→10000, QA-approved on completion b35d46c). Its completion omitted docs/SCHEMA.md: the commit trailer reads `Moe-Contested: docs/SCHEMA.md (task-07474ee438f34021a23809f9c764d15c)`, because the stale 07474ee4 still asserts SCHEMA.md from its September checkpoint 9f2cce3. HEAD therefore documents \"1000 chars each\" / \"at most 1000 UTF-16 code units\", while validators.ts MAX_EPIC_RAIL_CHARS is 10000. The correct two-line edit is already uncommitted in the working tree: the Epic interface comment at ~line 330 and the \"Epic rail limits\" paragraph at ~line 377 now say 10000.\n\nWhat to do: confirm the working-tree docs/SCHEMA.md differs from HEAD only by those two 1000→10000 lines. Then re-write the file through a TOOL-witnessed editing call in THIS session: Claude Edit/Write, or Serena replace_content. A Write of the identical content after Read is fine when the bytes are already final. Contested paths land only with a tool witness (scripts/moe-agent.sh ~3559-3569, policy skip-untouched). Bash/sed/heredoc writes and Codex apply_patch are not witnesses, and moe.declare_files does not override the contest. No other file changes.",
+  "definitionOfDone": [
+    "HEAD's docs/SCHEMA.md states the 10000 UTF-16 epic-rail cap in both places (Epic interface comment and the \"Epic rail limits\" paragraph), matching MAX_EPIC_RAIL_CHARS in packages/moe-daemon/src/state/validators.ts.",
+    "This task's landing commit carries docs/SCHEMA.md, and its diff against the previous HEAD is exactly those two lines (1000→10000).",
+    "No other source, test or doc file is changed by this task; verification `grep -n \"10000\" docs/SCHEMA.md` output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "Write docs/SCHEMA.md only through a TOOL-witnessed edit (Claude Edit/Write or Serena replace_content); never via Bash, sed, heredoc or Codex apply_patch, or the contested path is skipped again.",
+    "No Git-write commands; the wrapper lands the bytes."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 229.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T08:42:57.015Z",
+  "updatedAt": "2026-10-25T08:43:13.320Z",
+  "declaredFiles": [
+    "docs/SCHEMA.md"
+  ]
+}

@@ -761,15 +761,11 @@ describe('plan-approval revision compare-and-swap', () => {
 
   // ---------------------------------------------------------------------------
   // (L) CQ-F04 durable authorization: approvedPlanRevision is the reviewed
-  // revision a human approval persisted (number), an explicitly unchecked
-  // approval (null) or historical/unknown (absent). Only daemon paths write it.
+  // revision a human approval persisted (number); absent means unchecked or
+  // historical. Null is never written. Only daemon paths write it.
   // ---------------------------------------------------------------------------
 
-  // Owner CQ-F04: parked pending the replan requested 2026-10-25 after the human
-  // decision to delete revision-less legacy approval. RED against HEAD 759cc61
-  // (21 of 29 failed for the missing behavior). Re-enable, revising the
-  // token-free/null cases, under the replacement plan.
-  describe.skip('durable approval authorization', () => {
+  describe('durable approval authorization', () => {
     const HUMAN_ROUTES = ['APPROVE_TASK', 'UPDATE_TASK'];
     const STRICT = { version: 2, profile: 'verified-local', planRevision: 1, deliveryPolicy: 'local-branch' };
     const APPROVED_AT = '2026-10-01T00:00:00.000Z';
@@ -869,20 +865,26 @@ describe('plan-approval revision compare-and-swap', () => {
       expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 5, approvedPlanRevision: 5 });
     });
 
-    it.each<[string, Record<string, unknown>]>([
-      ['APPROVE_TASK', {}],
-      ['UPDATE_TASK', {}],
-      ['APPROVE_TASK', { executionProfile: 'observe' }],
-    ])('%s without a token (settings %j) records an explicitly unchecked null', async (route, settings) => {
-      const file = await boot({ planRevision: 7 }, settings);
+    it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+      ['APPROVE_TASK', {}, {}],
+      ['UPDATE_TASK', {}, {}],
+      ['APPROVE_TASK', { executionProfile: 'observe' }, {}],
+      // History: an older stamp stays untouched, and 3 !== 4 is no current association.
+      ['UPDATE_TASK', {}, { planRevision: 4, approvedPlanRevision: 3 }],
+    ])('%s without a token (settings %j) records no stamp over row %j', async (route, settings, row) => {
+      const file = await boot({ planRevision: 7, ...row }, settings);
       const client = connectAndCollect();
       await client.ready;
 
       client.ws.send(approvalFrame(route));
       await client.nextOfType('TASK_UPDATED');
 
-      expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 7, approvedPlanRevision: null });
-      expect((await reloaded()).approvedPlanRevision).toBeNull();
+      // Own keys only: an own null or undefined stamp would be a write too.
+      const stampOf = (seen: object) => Object.entries(seen).filter(([key]) => key === 'approvedPlanRevision');
+      for (const seen of [fileRow(file), state.getTask('task-1')!, await reloaded()]) {
+        expect(seen).toMatchObject({ status: 'WORKING', planRevision: row.planRevision ?? 7 });
+        expect(stampOf(seen)).toEqual(stampOf(row));
+      }
     });
 
     it('an explicit 0 on a legacy stamp-less row authorizes revision 0', async () => {
@@ -928,14 +930,17 @@ describe('plan-approval revision compare-and-swap', () => {
       }
     });
 
-    it('a public PLAN_APPROVED write (relaxed set_task_status) records null and cannot mint a number', async () => {
+    it('a public PLAN_APPROVED write (relaxed set_task_status) records no stamp and cannot mint a number', async () => {
       const file = await boot({ planRevision: 4 });
 
       await state.runExclusive(() => state.updateTask(
         'task-1', { status: 'WORKING', planApprovedAt: APPROVED_AT, approvedPlanRevision: 4 } as Partial<Task>, 'PLAN_APPROVED'
       ));
 
-      expect(fileRow(file)).toMatchObject({ status: 'WORKING', planRevision: 4, approvedPlanRevision: null });
+      for (const seen of [fileRow(file), state.getTask('task-1'), await reloaded()]) {
+        expect(seen).toMatchObject({ status: 'WORKING', planRevision: 4 });
+        expect(seen).not.toHaveProperty('approvedPlanRevision');
+      }
     });
 
     it.each<[string, Partial<Task>, number, string]>([
