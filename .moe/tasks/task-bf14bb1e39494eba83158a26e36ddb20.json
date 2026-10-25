@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:28.987Z",
-  "updatedAt": "2026-10-25T23:03:24.893Z",
+  "updatedAt": "2026-10-25T23:07:23.055Z",
   "dependsOn": [
     "task-3918d1190a3c4895ad5d924ad6d00f1d"
   ],
@@ -120,11 +120,14 @@
     "firstClaimAt": "2026-10-25T22:41:39.783Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-25T23:07:23.055Z",
+    "wallClockMs": 1543272
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -173,7 +176,63 @@
     "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/util/executionAuthorization.ts",
     "packages/moe-daemon/src/tools/completeStep.ts",
-    "packages/moe-daemon/src/tools/completeTask.ts"
+    "packages/moe-daemon/src/tools/completeTask.ts",
+    ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+    ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json",
+    ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json",
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
   ],
-  "completionSummary": "CQ-F08 delivered (plan rev 1, 5/5 steps), six files, +398/-16 (382 net).\n- complete_step/complete_task gain optional attemptId (max 128), generation (int >= 1) and sessionId, and call F07's assertExecutionAuthorized. It now returns StrictExecution {attempt, planRevision} under verified-local and null otherwise; start_step is unchanged.\n- complete_step: the guard runs after assertContextFetched. Under strict, recordStepCompletion appends {stepId, planRevision, completedAt} to the NEW ExecutionAttempt.stepCompletions BEFORE updateTask (fail-safe order). It is the only writer; readStepCompletions is the strict decoder.\n- complete_task: the guard runs after assertWorkerHoldsTask. Under strict, assertCompletionEvidenceEligible requires current-attempt evidence at the approved revision for every step, else STATE_CONFLICT EXECUTION_EVIDENCE_INELIGIBLE {taskId, attemptId, generation, planRevision, steps}. Every refusal precedes checkBranchPolicy, finalizing and updateTask. Old evidence stays on its attempt.\n- DoD:\n  1. Amending the in-progress step, or editing the DoD, is refused with PLAN_REVISION_NOT_APPROVED, even after re-serving.\n  2. A superseded or future attempt is refused ATTEMPT_SUPERSEDED on strict and legacy rows. Strict also refuses missing identity and a finalizing or foreign attempt.\n  3. Evidence that is superseded, from an earlier revision or missing is ineligible, and malformed evidence fails closed.\n  Legacy rows without identity are unchanged.\n- Tests: new completionAuthorization.test.ts, 31 tests; RED was 29 failed. 8/8 self-mutants killed. Gate: 165 files, 4179 passed | 14 skipped, exit 0; tsc exit 0.\n- For F12:\n  - the proxy identity table lacks complete_step/complete_task;\n  - pre-existing strict order: finalizing precedes the readiness backstop, so a retry gets ATTEMPT_NOT_RUNNING;\n  - legacy completion now fails closed on a malformed profile or snapshot, like start_step;\n  - missing strict identity reuses STEP_ENTRY_IDENTITY_REQUIRED."
+  "completionSummary": "CQ-F08 delivered (plan rev 1, 5/5 steps), six files, +398/-16 (382 net).\n- complete_step/complete_task gain optional attemptId (max 128), generation (int >= 1) and sessionId, and call F07's assertExecutionAuthorized. It now returns StrictExecution {attempt, planRevision} under verified-local and null otherwise; start_step is unchanged.\n- complete_step: the guard runs after assertContextFetched. Under strict, recordStepCompletion appends {stepId, planRevision, completedAt} to the NEW ExecutionAttempt.stepCompletions BEFORE updateTask (fail-safe order). It is the only writer; readStepCompletions is the strict decoder.\n- complete_task: the guard runs after assertWorkerHoldsTask. Under strict, assertCompletionEvidenceEligible requires current-attempt evidence at the approved revision for every step, else STATE_CONFLICT EXECUTION_EVIDENCE_INELIGIBLE {taskId, attemptId, generation, planRevision, steps}. Every refusal precedes checkBranchPolicy, finalizing and updateTask. Old evidence stays on its attempt.\n- DoD:\n  1. Amending the in-progress step, or editing the DoD, is refused with PLAN_REVISION_NOT_APPROVED, even after re-serving.\n  2. A superseded or future attempt is refused ATTEMPT_SUPERSEDED on strict and legacy rows. Strict also refuses missing identity and a finalizing or foreign attempt.\n  3. Evidence that is superseded, from an earlier revision or missing is ineligible, and malformed evidence fails closed.\n  Legacy rows without identity are unchanged.\n- Tests: new completionAuthorization.test.ts, 31 tests; RED was 29 failed. 8/8 self-mutants killed. Gate: 165 files, 4179 passed | 14 skipped, exit 0; tsc exit 0.\n- For F12:\n  - the proxy identity table lacks complete_step/complete_task;\n  - pre-existing strict order: finalizing precedes the readiness backstop, so a retry gets ATTEMPT_NOT_RUNNING;\n  - legacy completion now fails closed on a malformed profile or snapshot, like start_step;\n  - missing strict identity reuses STEP_ENTRY_IDENTITY_REQUIRED.",
+  "commits": [
+    {
+      "sha": "478c14c51c0a6346d9513e0edf6dff7ddffd00f0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-25T22:52:42Z",
+      "paths": [
+        ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+        ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json",
+        ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json",
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts",
+        "packages/moe-daemon/src/tools/completionAuthorization.test.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/executionAuthorization.ts"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-25T23:03:58.355Z",
+      "treeId": "1a277883586efbf40020a0fface0c7beb69601b5",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-bde8654052f648f9b209174c3708322b"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/completionAuthorization.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-25T22:52:42Z",
+    "at": "2026-10-25T23:03:58.355Z"
+  },
+  "completedAt": "2026-10-25T23:07:23.055Z",
+  "reviewCompletedAt": "2026-10-25T23:07:23.055Z",
+  "reviewSummary": "Reviewed commit 478c14c (on moe/work-2026-10-24). Source +398/-16 = 382 net (<=400). The contested schema.ts carries only the F08 hunk.\nGate re-run on a git archive of 478c14c (native node_modules, env -i): `cd packages/moe-daemon && npm test` exit 0, 165 files, 4179 passed | 14 skipped. tsc --noEmit exit 0. Matches task.verification.\nDoD:\n1. After amend_plan_step on the in-progress step, complete_step is refused PLAN_REVISION_NOT_APPROVED, even after re-serving. A DoD edit makes complete_task refuse with the attempt still running.\n2. A superseded or future attempt is refused ATTEMPT_SUPERSEDED at both tools, on strict and legacy rows. Strict missing identity, finalizing and foreign attempts are refused. refused() proves zero writes and identical bytes.\n3. Evidence is on the attempt; recordStepCompletion is the only writer. A successor attempt or a new revision gives EXECUTION_EVIDENCE_INELIGIBLE; the old record stays byte-identical. Malformed evidence is INVALID_INPUT.\n4. Verification was supplied.\nEvery guard runs before any write. All attempt writers spread ...existing. Legacy without identity is unchanged.\nSpot mutants: no eligibility check, 6 tests killed; revision ignored, 1 killed.\nNon-blocking: recordStepCompletion's phase and notAllowed checks are unreachable via the tools and have no store test; worth adding in F12.\nFor F12: the proxy table lacks complete_step/complete_task. A strict row needs request_replan after a qa_reject.",
+  "requiredCheckAtDone": null
 }

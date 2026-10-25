@@ -13,14 +13,43 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first, in scripts/tests/prompt-cache-launcher.test.mjs. Add them for the `sh` engine only (`if (ext !== 'sh') continue`); CQ-F11 (task-fdbc5935, serialized after this task) adds the ps1 twins. Reuse the file's between(), quote(), engines and the `PYTHON_CMD=python|python3` idiom, so the tests run on Linux and under Git Bash on Windows CI.\n\nT1, extending the existing \"claimed task context preserves the daemon's payload\" test (DoD1 + DoD2):\n- The scopedContext fixture gains:\n  - an F06 `servedContext` {taskId, planRevision, approvedPlanRevision, attemptId, generation, receiptStatus:'recorded', receiptId, packetId:'sha256:'+64 hex};\n  - a C01-style `packetManifest` (a future field).\n- In the sh branch, the moe_rpc mock also writes \"$2\" (the args JSON) to a file.\n- Assertions:\n  - with MOE_SESSION_ID exported (e.g. 'worker-context@2026-10-26T00:00:00Z'), the args deep-equal {taskId:'task-context', sessionId:<that value>};\n  - with it unset, under the slice's `set -eu`, the args are exactly {taskId:'task-context'};\n  - a fresh process always asks for the full default read: no view, delta or base-packet field;\n  - the injected <claimed_task_context> still deep-equals the whole fixture.\n\nT2, identity pin and refresh (DoD3). Slice moe_attempt_read and pin_attempt_identity from the real wrapper (between their definition lines). Build a temp project holding .moe/attempts/*.json records (taskId, workerId, generation, phase, id), and run four scenarios:\n- (a) A fresh claim CLAIM_RESULT {attemptId:'attempt-a', generation:2} against a running record. A child `env` sees MOE_ATTEMPT_ID=attempt-a and MOE_ATTEMPT_GENERATION=2, so both are exported.\n- (b) A resume. CLAIM_RESULT {alreadyAssigned:{...}} carries no attemptId, and the record is now attempt-b generation 3. The child sees attempt-b/3: the refresh.\n- (c) A stale or foreign pin: the claim names attempt-a while the record is attempt-b, or the record belongs to another worker. The function returns non-zero and the child sees BOTH blank, never a half pair or the previous iteration's values.\n- (d) A previous pair set before the call is cleared on failure.\n\nT3, codex override. Slice codex_moe_server_override with a temp .codex/config.toml holding [mcp_servers.moe] command/args and an [mcp_servers.moe.env] carrying MOE_PROJECT_PATH plus a stale `MOE_SESSION_ID = \"old\"`.\n- With MOE_SESSION_ID, MOE_ATTEMPT_ID, MOE_ATTEMPT_GENERATION and the runner pair exported, the printed override's env table ends EXACTLY `MOE_SESSION_ID=\"<sid>\",MOE_ATTEMPT_ID=\"attempt-a\",MOE_ATTEMPT_GENERATION=\"2\",MOE_WORKER_ID=\"w\",MOE_RUNNER_PROCESS_STARTED_AT=\"…\",MOE_RUNNER_HOST=\"…\"}}`. The stale config entry is dropped.\n- With blank attempt variables, those two keys are absent.\n\nT4, stable prefix and file transport. In the existing sh \"Codex task text never enters stable model instructions\" test, also export MOE_SESSION_ID and MOE_ATTEMPT_ID values. The stable seat instructions contain neither, and the private context file is still exactly DYNAMIC_CONTEXT.\n\nT5, unserved wrapper reads:\n- the wrapper source has the grok env lines `MOE_SESSION_ID = \"${MOE_SESSION_ID:-}\"`, `MOE_ATTEMPT_ID = \"${MOE_ATTEMPT_ID:-}\"` and `MOE_ATTEMPT_GENERATION = \"${MOE_ATTEMPT_GENERATION:-}\"`;\n- the post-flight and adoption get_context calls go through the new helper `moe_rpc_unserved`;\n- a sliced run of that helper, with a moe_rpc mock that prints \"${MOE_SESSION_ID-unset}\", prints an empty value, and the caller's MOE_SESSION_ID is unchanged afterwards.\n\nRun the file RED: `node --test scripts/tests/prompt-cache-launcher.test.mjs`. Budget: about 170 added test lines or fewer.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement in scripts/moe-agent.sh. Rebase on the landed bytes of task-5c71dff9 (hot-reload syntax check), which this task depends on. Keep every slice boundary the three verification tests use byte-identical, including:\n- '# 5. Fetch context for the claimed task' and '# 6. Read task channel backlog';\n- 'DYNAMIC_CONTEXT=\"# Pre-flight Complete' and '# JIT reminder:';\n- the AGENT_INSTRUCTIONS_PATH line and '# Build role-aware short prompt';\n- '# ---- branch safety' and '# ---- commit messages'.\nRun `bash -n scripts/moe-agent.sh` after every edit.\n\nChanges:\n1. pin_attempt_identity:\n   - `export MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION` and reset both to \"\" at entry.\n   - Read the tokens into locals and verify them with moe_attempt_read. Only on success assign BOTH: the pair moves together, so a failed or stale verification leaves both blank, never a half pair or an unverified one.\n   - Return codes and the existing WARN at the call site stay unchanged.\n2. The per-iteration reset (`MOE_ATTEMPT_ID=\"\"; MOE_ATTEMPT_GENERATION=\"\"` beside MOE_RUNNER_ID) exports the blank pair. A taskless or failed iteration then never hands the CLI the previous task's attempt; to the proxy, blank means unset.\n3. MOE_SESSION_ID stays exported per iteration as today. Add a one-line comment that moe-proxy (CQ-F09) stamps it, together with the attempt pair, onto get_context/start_step for the CLI.\n4. Pre-flight get_context args: add `sessionId` when ${MOE_SESSION_ID:-} is non-empty, so a pre-F09 proxy still records the receipt for the context this session is served. Use the existing python json.dumps builder, with `\"${MOE_SESSION_ID:-}\"` passed as an argv value (never interpolated into code), so the test's `set -eu` stays happy.\n5. New helper `moe_rpc_unserved() { MOE_SESSION_ID= moe_rpc \"$@\"; }` next to moe_rpc, used by the post-flight (POSTFLIGHT_CTX) and adoption (ADOPT_RESULT) get_context calls.\n   - Those wrapper reads were never served to the agent, so they must mint no served-context receipt (F06 note).\n   - view:\"status\" is not an option: post-flight parses task.isEpicFinal and epic.id, which the status view lacks.\n6. codex_moe_server_override: add MOE_SESSION_ID, MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION to the keys it filters out of the config file. Emit the non-empty ones, JSON-quoted, BEFORE MOE_WORKER_ID, so the runner identity stays contiguous after the workerId: postflight.sh scope Z5 pins `MOE_WORKER_ID=…,<runner identity>}}`. Codex hands the proxy only the env its table names.\n7. The grok writer's [mcp_servers.moe.env] gains the three literal `KEY = \"${KEY:-}\"` lines after MOE_RUNNER_HOST, with a comment. Grok expands them per process. Claude and gemini already inherit the seat env: a live claude-spawned proxy shows MOE_SESSION_ID/MOE_WORKER_ID in /proc/<pid>/environ.\n\nError handling: every identity path fails closed. A blank or unverified pair transports nothing, and the daemon then refuses strict execution, so there is no legacy bypass. No new failure mode reaches the wrapper loop. Touch no other wrapper behavior. moe-agent.ps1 is CQ-F11's.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate, run once and fresh, from the repo root: `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs`. Supply its command, exit code 0 and output tail to moe.complete_task.\n\nRequired regression checks on the shared launcher, all of which must pass. Report their results in the step note and the completion summary:\n- `bash -n scripts/moe-agent.sh`;\n- `bash scripts/tests/parity-check.sh`. It names no new env literal: F11 adds the pair to its lists once both wrappers export them;\n- `bash scripts/tests/postflight.sh`, the daemon-free wrapper harness. Widen MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box. It covers the codex/grok config needles and scope Z5.\n\nRun them with the seat's MOE_* identity unset (`env -u MOE_SESSION_ID -u MOE_ATTEMPT_ID -u MOE_ATTEMPT_GENERATION -u MOE_WORKER_ID …`), so the agent seat's own env cannot leak into the fixtures.\n\nError handling: any failure is a defect to fix (systematic-debugging), never a test to loosen. Live seats run the installed plugin copy of the wrapper, not this file, so editing it cannot hot-reload a running seat.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review: load adversarial-self-review and review `git diff -- scripts/moe-agent.sh scripts/tests/prompt-cache-launcher.test.mjs`. Check each of these:\n- Can a CLI ever receive half an attempt pair, a previous task's pair, or an unverified pair?\n- Every path:\n  - fresh claim;\n  - resume (alreadyAssigned);\n  - pin failure;\n  - taskless iteration;\n  - BLOCKED hold;\n  - hot reload. The sh hot reload execs the script and keeps env, so the per-iteration reset must still clear the pair.\n- Is MOE_SESSION_ID still exported before the pre-flight claim? Is it blank only inside the two unserved reads, and restored after them?\n- Is the codex override's TOML still valid with JSON-quoted values, and the order as pinned?\n- Can an identity value reach the stable instruction prefix or a commit message?\n- Is quoting safe? Values travel only as argv or env, never interpolated into python or JSON source.\n- Error handling: is every refusal fail-closed and logged as before?\n- Scope: only the two planned files changed; no ps1 edit, no .moe edits, no git writes; no forbidden-pattern tokens; net LOC 400 or less (`git diff --numstat`).\n\nFix any finding with a focused test. If anything changed, re-run the step-3 gate and its regression checks fresh.\n\nThe completion summary lists, for CQ-F11 to mirror:\n- the exact env contract;\n- the codex key order;\n- the grok lines;\n- the moe_rpc_unserved sites;\n- the sh-only tests F11 must extend to the ps1 engines;\n- the parity-check literals to add once both wrappers export the pair.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promote under the standing delegation. Both dependencies are DONE: CQ-F09 task-3c547751 (QA approved on the first pass; landed 4ea8783) and task-35584de2. The task rails contain no human-approval gate. Plan against F09's landed proxy attempt-identity transport in packages/moe-proxy/src/index.ts and utils.ts. This is the Bash twin of CQ-F11 task-fdbc5935, promoted together. If both plans touch the launchers or the parity tests, serialize them with dependsOn. While task-5c71dff9 (the wrapper hot-reload syntax check, which edits both moe-agent.sh and moe-agent.ps1) is not DONE, dependsOn it too.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -35,9 +64,40 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:37.708Z",
-  "updatedAt": "2026-10-25T22:40:53.944Z",
+  "updatedAt": "2026-10-25T23:05:06.276Z",
   "dependsOn": [
     "task-3c54775146c946208dd90a94e2e9caac",
-    "task-35584de27bb24c38a3cf508aeba5550c"
-  ]
+    "task-35584de27bb24c38a3cf508aeba5550c",
+    "task-5c71dff9ff2a488d8f75ec375c4f99f8"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T22:59:16.924Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T23:05:06.186Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Move post-flight and adoption to view:\"status\" (the F06 note): rejected. Post-flight parses task.isEpicFinal and epic.id, which contextStatus lacks. Blanking MOE_SESSION_ID for those one-shot reads keeps the payload and mints no receipt.\n2. Export the attempt pair only at the iteration reset: rejected. pin_attempt_identity must export and verify on its own, so it is unit-testable and can never leave half a pair.\n3. Pass identity through prompt text: rejected. It would churn the stable prompt prefix and could be substituted by the CLI. Env plus the F09 proxy is the transport, and the context file stays the context transport.\n4. Append the new codex keys after the runner identity: rejected, because it breaks postflight.sh Z5's contiguous pin. Emitting them before MOE_WORKER_ID keeps that test untouched.\n5. Add parity-check literals now: rejected. ps1 lacks them until F11, so parity would fail.\n6. Depend on the F09 proxy alone for sessionId: rejected. An older installed proxy would then record no receipt, so the explicit pre-flight arg keeps it independent of the proxy version.",
+    "codebaseInsights": "- The F09 proxy (landed 4ea8783) stamps MOE_SESSION_ID onto get_context/start_step, and the attempt pair onto start_step only. Blank means unset. A half or malformed pair gives EXECUTION_IDENTITY_INVALID, and a substitution gives EXECUTION_IDENTITY_SUBSTITUTED.\n- The bash wrapper already exports MOE_SESSION_ID per iteration (~6119, before the claim). MOE_ATTEMPT_ID/GENERATION are unexported shell variables, pinned at ~6498 before the pre-flight get_context (~6526).\n- Post-flight get_context is at ~8087 and adoption at ~8392. codex_moe_server_override is at ~1163, computed per launch (~7220), so os.environ is current. The grok env table is at ~1340.\n- Live seats run the installed plugin's copy of moe-agent.sh, so repo edits never hot-reload them.\n- The verification tests slice real wrapper code by boundary strings. Changing those strings breaks the tests.",
+    "risks": "- task-5c71dff9 (hot-reload syntax check) edits moe-agent.sh, postflight.sh and parity-check, and is still WORKING, so it is now a dependsOn. Rebase on its landed bytes.\n- CQ-F11 shares prompt-cache-launcher.test.mjs and is serialized after this task (dependsOn set).\n- Windows CI runs the sh engine under Git Bash: use the file's PYTHON_CMD idiom and the shellPath conversions.\n- `set -eu` slices: use ${VAR:-} for every new variable read.\n- Never spell the project's forbidden-pattern tokens. Include no Git-write commands.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/agent-runtime.test.mjs",
+      "scripts/tests/resume-progress.test.mjs",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/parity-check.sh",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T23:05:06.276Z"
 }
