@@ -1,0 +1,39 @@
+{
+  "id": "task-5c71dff9ff2a488d8f75ec375c4f99f8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: wrapper hot-reload exec's the on-disk script without a syntax check, so a half-edited moe-agent.sh kills every seat that reloads",
+  "description": "scripts/moe-agent.sh:6043-6065 (the \"wrapper source changed on disk; restarting to load it\" block) checks only the sha256 of $MOE_WRAPPER_PATH. When it changes, the wrapper deregisters the seat (reason wrapper_restart) and runs `exec \"$MOE_WRAPPER_PATH\" \"${MOE_WRAPPER_ARGV[@]}\"`. No `bash -n` runs first. The fallback line \"wrapper relaunch failed; continuing on current bytes\" is reached only if exec itself fails, never when the new script fails to parse. The ps1 supervisor has the equivalent hot-reload path.\n\nSeats launched with the project path run the shared checkout's own copy (observed 2026-10-25: 70+ processes on /mnt/d/projexts/moes/scripts/moe-agent.sh). So whenever a task edits the wrapper in place (c532d223 was doing so at 10:52Z, +42/-9 dirty), every wrapper that reaches its loop top re-execs the in-progress bytes. If those bytes are mid-edit and unparseable, the seat dies after it has already deregistered.\n\nExpected: before re-exec, validate the new bytes (`bash -n` for sh; [System.Management.Automation.Language.Parser]::ParseFile with zero errors for ps1). On failure, log a loud MOE_WRAPPER_RELOAD_REFUSED-style line, stay on the current bytes without deregistering, and retry on a later iteration only when the hash changes again. Keep both launchers in parity (parity-check lists the new code), and add a postflight arm with an unparseable wrapper copy.",
+  "definitionOfDone": [
+    "When the on-disk wrapper changes to bytes that fail `bash -n` (sh) or ParseFile (ps1), the running wrapper does not deregister or exec, logs a refusal line naming the reason, and keeps serving on its current bytes; a later change to parseable bytes reloads normally.",
+    "Both postflight harnesses gain an arm with an unparseable wrapper copy that proves the seat survives and stays registered, plus the existing [hot reload] arm stays green.",
+    "`bash scripts/tests/parity-check.sh` (and the ps1 twin) pass with any new code/banner registered in both checkers.",
+    "Fresh `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` and the ps1 twin exit 0, with output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 18,
+  "comments": [
+    {
+      "id": "comment-272264ee7dce47108476cd41186976fc",
+      "author": "governor-187cc44e",
+      "content": "Governor notes for the planner/worker:\n(1) Serialized behind c532d223 (dependsOn), which is editing scripts/moe-agent.{sh,ps1} and postflight.{sh,ps1} in the shared tree right now.\n(2) scripts/moe-agent.{sh,ps1}, scripts/tests/postflight.{sh,ps1} and parity-check.{sh,ps1} are contested by stale task-07474ee4 until it's ARCHIVED or DONE. A landing needs this session's Claude Edit/Write TOOL witness (moe-agent.sh:3567), so a Codex/gemini/grok seat must report_blocked rather than edit.\n(3) Ironically, this fix itself hot-reloads the fleet. Keep each Edit to the wrappers self-contained and `bash -n` / ParseFile-clean, so the reload this change triggers can't land on half-applied bytes.",
+      "timestamp": "2026-10-25T10:53:51.365Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:53:40.118Z",
+  "updatedAt": "2026-10-25T10:53:51.365Z",
+  "dependsOn": [
+    "task-c532d223459b4ef4b5bab2ba0eb4005e"
+  ]
+}

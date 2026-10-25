@@ -31,11 +31,17 @@
       "author": "architect-26ba32c3",
       "content": "Split on 2026-10-25 (architect-26ba32c3). The full bridge measured at about 650 net LOC: a host codec and scoping module, a guest supervisor in Python (the guest has python3 but no Node), a host session, and tests. That is far over the 400-net-LOC QA limit, and no rail waives it. Following this epic's M01 and C02 pattern, this row keeps its full DoD and becomes the final slice, depending on:\n- CQ-R08a task-f981d059 (PLANNING): scripts/local-runner/guest-bridge.mjs, which is the frame protocol, guest frame schema, per-role request scoping and fixed bridgeArgv. Tests go in the new scripts/tests/local-runner-bridge.test.mjs, registered in CI.\n- CQ-R08b task-502c00a5 (BACKLOG): scripts/local-runner/guest-supervisor.py, a stdlib-only supervisor that is the sole writer of its stdout. It relays child output only as base64 output frames and reports exit only from its own waitpid.\n- CQ-R08c task-10e201f9 (BACKLOG): the agent request ingress, a Unix socket that admits only the moe-agent peer uid, assigns its own ids, and routes each response back to the requester only.\n\nWhat remains for this row, to plan once the three slices land:\n- The host bridge session: run bridgeArgv through the R06 invoker style with an injected spawn, require hello first, pump frames, and pass each request through scopeRequest and an injected forward. Bound in-flight requests and time them out, deliver output and observations to callbacks, and fail closed by killing the child on any violation.\n- A loopback-only daemon guard: refuse to open when `.moe/daemon.json` records a non-loopback bindHost. That is WSL agent mode's 0.0.0.0, which a Multipass guest could reach through its gateway.\n- An end-to-end test between the JS session and the real Python supervisor that proves DoD 1-3.\nVerification: `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bridge.test.mjs`. It is a superset of the DoD command, so local-runner.test.mjs, which R04 and R05 also edit, is never touched.",
       "timestamp": "2026-10-25T10:33:54.671Z"
+    },
+    {
+      "id": "comment-647799a90cec4f4b95c09d28ec8bf758",
+      "author": "worker-c1d9de02",
+      "content": "Handoff from CQ-R08a (task-f981d0597b26401a974c0fcd8829107e, guest-bridge.mjs). This is a requirement for the CQ-R08 forwarding path, not a defect in R08a.\n\n1. Deeply nested args. parseGuestFrame and scopeRequest enforce exact keys and allowlists but no nesting depth. A guest frame within 256 KiB can carry about 100k levels of nesting in an allowed arg value, and JSON.parse accepts it. Re-serializing such a value can throw RangeError (stack overflow). encodeFrame already catches that and returns BRIDGE_FRAME_INVALID, but the CQ-R08 forwarding must catch JSON.stringify/send errors too, or bound the depth before forwarding, so a guest cannot crash the host session or the daemon.\n2. Duplicate JSON keys. JS JSON.parse keeps the last occurrence of a duplicate key, and Python json does too by default. The R08b/c supervisor should not rely on first-wins.\n3. Lost frames on error. Any decoder error poisons it, and any frames already decoded in the same push are discarded. The session should treat a throw as teardown.",
+      "timestamp": "2026-10-25T10:53:07.434Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:10.214Z",
-  "updatedAt": "2026-10-25T10:34:01.910Z",
+  "updatedAt": "2026-10-25T10:53:07.434Z",
   "dependsOn": [
     "task-84c2da018ce74995b609805dab4fe7da",
     "task-b03c0c7744e84955a7a069255a124ef7",
