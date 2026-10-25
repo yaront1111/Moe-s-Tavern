@@ -17,39 +17,60 @@
     {
       "stepId": "step-1",
       "description": "GATE FIRST: make no edit before the human's rail decision is known.\nThis is a size-only reopen. QA found no failed DoD item in e587474 and offered two options:\n- (b) an explicit R07 size exception on the epic rail, which is the R06 precedent;\n- (a) a re-slice.\nThe architect filed (b) as rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (MODIFY_RAIL, EPIC).\n\n1. Read allRails.epic from moe.get_context.\n   - If the size-exception rail contains 'CQ-R07: the pinned guest bootstrap as landed in e587474', continue with step 2.\n   - Otherwise read the decision READ-ONLY from .moe/proposals/prop-d3ccceade25f4af19518ce0e930e4123.json (field status):\n     - PENDING: call moe.report_blocked { reason: 'awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a)' } with no blockedOnTaskIds, then end the session.\n     - REJECTED: call moe.request_replan { reason: 'R07 size exception rejected (prop-d3ccceade25f4af19518ce0e930e4123): re-slice R07 per QA option (a), the A/B/C/D1/D2 cut in rejectionDetails' }, then end the session.\n2. Confirm the landed bytes are untouched: `git diff --stat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` prints nothing. If a peer changed them, stop and report_blocked with the diff summary.\n\nThe four files are not contested: R03, R04 and R05 depend on this task, so their plan paths do not count against it. Any editor works.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-24T22:30:42.319Z"
+      "note": "Resumed persisted IN_PROGRESS step (start_step refused expected PENDING; no account switch). Gate phrase is present in fresh allRails.epic; proposal prop-d3ccceade25f4af19518ce0e930e4123 is APPROVED by HUMAN at 2026-10-25T07:43:43.055Z. git diff --stat e587474 -- the four R07 paths is empty on moe/work-2026-10-24 HEAD 21ea64b. R06 prerequisite is DONE and landed per epicSiblings. No edits/Git writes; shared pre-existing/peer dirty paths untouched. Separate out-of-scope bug filed as task-ab6aac94d9424653bb45d6db4fa3fe67: applied rail is silently cut at 1000 chars, losing the approved tail; governors asked to restore approved clause through Moe. Full approved proposal explicitly permits the planned combined-cloud-config QA fix; all its constraints retained.",
+      "startedAt": "2026-10-24T22:30:42.319Z",
+      "completedAt": "2026-10-25T07:49:59.718Z"
     },
     {
       "stepId": "step-2",
       "description": "QA's carried-forward hardening note, test first. These are the only bytes this task adds on top of e587474.\n\n1. RED, in scripts/tests/local-runner.test.mjs (LF):\n   - In the DENIALS table (~914-924), right after the readInstanceData row, add `['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED']`.\n   - EXPECTED_PROBES (~937), the healthy answers (~982) and the exposure loop (~1346) all derive from DENIALS. So the probe is asserted in the frozen argv table and as an exit-0 exposure without further test code.\n   - Run `node --test scripts/tests/local-runner.test.mjs` and record the failure: the source does not run the probe yet.\n2. GREEN, in scripts/local-runner/guest-readiness.mjs:\n   - Add the identical row at the same index of DENIED (~34-44).\n   - Extend the comment above DENIED with cloud-init's combined config: the internal_files docs describe it as a root-readable, unredacted merged config with user-data overrides applied, so it can carry the write_files credential. Its mode on the pinned image is R13 real-guest certification.\n   - Error handling stays as it is: deny() treats only exit 1 as a denial, exit 0 is CREDENTIAL_EXPOSED and any other code is PROBE_UNKNOWN. A missing file reads as denied, because `test -r` exits 1.\n   - Run again and confirm it passes.\n\nNo other source or test change. The rail allows growth only by fixes QA requires.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs",
         "scripts/local-runner/guest-readiness.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/local-runner/guest-readiness.mjs"
+      ],
+      "note": "TDD completed under env -i HOME/Linux-only PATH, Node v24.21.0. Added DENIALS row first: named suite exit 1, 135/139 pass, 4 expected failures; exposure assertion readCombinedConfig:moe-agent exit 0 incorrectly returned bootstrapReady:true (red log /tmp/cq-r07-worker-e8965f51-red.log). Added matching DENIED row and accurate comment, leaving deny() unchanged. First green run exposed a plan omission: the frozen-table test also hard-codes 14 probes/identity, not all counts derive from DENIALS. Minimal in-scope QA-fix adjustment changed 14 to 15; no assertion removed. Final step-2 run exit 0, 139/139, 0 skipped; real-provider-process test ran (/tmp/cq-r07-worker-e8965f51-green-fixed.log). Comment verified against https://docs.cloud-init.io/en/latest/development/internal_files.html; no pinned-image mode/isolation claim. Only these two project files edited; no Git writes/manual .moe edits.",
+      "startedAt": "2026-10-25T07:50:06.895Z",
+      "completedAt": "2026-10-25T07:52:00.638Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification. Run each command once, fresh.\n\n1. NAMED COMMAND (DoD 4, the complete_task evidence): `node --test scripts/tests/local-runner.test.mjs` from the repo root, on Linux/WSL with a Linux Node 24.\n   - Use `env -i HOME=\"$HOME\" PATH=<Linux node bin + /usr/local/bin:/usr/bin:/bin>`, with no MOE_* vars.\n   - It must exit 0 with 0 failed and 0 skipped: 139 tests on Linux, and the real-provider-process test must run.\n2. `node --test scripts/tests/local-runner-bundle.test.mjs` exits 0.\n3. `git diff --check` is clean.\n4. Prove the growth: `git diff --numstat e587474 -- scripts/local-runner/guest-bootstrap.mjs scripts/local-runner/guest-readiness.mjs scripts/local-runner/lifecycle.mjs scripts/tests/local-runner.test.mjs` lists only guest-readiness.mjs (the row plus its comment lines) and local-runner.test.mjs (one row).\n\nA failure outside these files must be reproduced on a clean `git archive HEAD scripts` snapshot before you call it pre-existing.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh required `node --test scripts/tests/local-runner.test.mjs`: exit 0, 139/139 pass, 0 failed/skipped/cancelled, real provider readiness fixture executed (15449.795375 ms). Linux Node v24.21.0; env -i with only HOME and /home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin PATH, no MOE_* vars. Log /tmp/cq-r07-worker-e8965f51-verification.log. Bundle command exit 0, 7/7; git diff --check exit 0. Exact growth vs e587474: guest-readiness +4/-1 (row/comment), tests +2/-1 (row plus necessary 14→15 probe-count correction noted in step 2); guest-bootstrap/lifecycle unchanged. All nine direct/fixture input SHA256s unchanged across gate (/tmp/cq-r07-worker-e8965f51-inputs.sha256). No edits in this step. Governor confirmed the independent rail-truncation bug and instructed continuing under full approved proposal while an exact-clause restoration awaits human approval.",
+      "startedAt": "2026-10-25T07:52:22.951Z",
+      "completedAt": "2026-10-25T07:53:06.297Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task. QA ran no independent mutation probes on R07, so this evidence is part of the deliverable.\n\nScratch tree: build it read-only with `git archive HEAD scripts | tar -x -C <scratch>`, overlay this session's two files, and run the named command there. Never mutate the live tree.\n\nEach mutation must turn the command red:\n(1) remove the new DENIED row;\n(2) make deny() treat exit 2 as a denial;\n(3) accept a Multipass 'Running' guest as ready without the cloud-init wait;\n(4) accept cloud-init 'degraded done' (exit 2) as done;\n(5) make recordImage overwrite a different stored image instead of answering IMAGE_IDENTITY_CHANGED;\n(6) make waitForGuestReady accept a caller sourceImage whose sha256 differs from the manifest pin.\n\nFor any survivor, add the smallest test that kills it. That counts as a QA-required fix inside the rail; say so.\n\nIn complete_step's note, list each mutation with the test name that went red, so QA can re-run them.\n\nAlso attack:\n- Is the new probe's argv fixed, with no caller data?\n- Is the comment accurate, claiming no mode?\n- executionReady stays false, and nothing claims verified-local.\n\nIf any byte changed after step 3, rerun step 3's named command and submit that output.\n\nmodifiedFiles: scripts/local-runner/guest-readiness.mjs, scripts/tests/local-runner.test.mjs. No Git writes; no .moe edits.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        ".serena/memories/gotcha-cloud-init-credential-copies.md",
+        ".serena/memories/task-task-84c2da018ce74995b609805dab4fe7da-handoff.md"
+      ],
+      "note": "Scoped adversarial diff review completed (concurrency, invalid inputs/injection, environment/TOCTOU, error side effects, cold review). Fixed argv/path only, no caller-controlled command data; frozen independent expectations cover both identities. Only exit 1 denies; 0 exposes; 2/3/126 unknown. No new state/concurrency operations; failures preserve ledger and sanitize diagnostics. Comment is sourced, not a pinned-image mode assertion. Existing point-in-time/non-locking CAS/per-call timeout residuals unchanged; executionReady:false and verified-local unavailable.\nScratch: /tmp/cq-r07-worker-e8965f51-mutations.xswap205; harness /tmp/cq-r07-worker-e8965f51-mutations.py. Read-only git archive 21ea64b scripts plus resourceStore.ts (L1 read-only fixture; required expansion of archive inputs), overlay only the two session files. Baseline full named command exit 0, 139/139. Each mutation ran the same full command separately, exit 1, 139 tests/zero skips; six killed, no survivors or new tests:\n1 remove DENIED row (4 failures): `the supervisor and credential must be root-only files under root-owned unwritable directories` (also frozen argv test).\n2 allow exit-2 denial (2 failures): `the supervisor and credential must be root-only files under root-owned unwritable directories`.\n3 Running without cloud-init wait (4 failures): `a Running guest whose cloud-init never finishes is not ready and times out after bounded polls`.\n4 allow degraded-done exit 2 (1 failure): `cloud-init error, degradation, disablement or a stopped guest fails bootstrap without boundary probes`.\n5 overwrite image identity (1 failure): `the source checksum and provider image identity are recorded separately and never overwritten`.\n6 accept caller SHA mismatch (1 failure): `a malformed source image or supervisor digest is refused before any provider call`.\nsummary.json, each .patch/.log preserve exact mutations and assertion evidence (not syntax failures). All nine live input hashes still equal step 3 and snapshot; no production/test byte changed after verification. Final scoped diff check clean. Required Serena handoff/gotcha updated; metadata paths listed in addition to cumulative source/test paths for complete attribution. Temporary evidence stays outside project; no Git/manual .moe writes. Independent rail truncation bug task-ab6aac94d9424653bb45d6db4fa3fe67 and pending restoration prop-307362ea handed to QA/governor; governor confirmed continue under full HUMAN-approved prop-d3ccceade.",
+      "startedAt": "2026-10-25T07:53:28.311Z",
+      "completedAt": "2026-10-25T07:58:22.521Z"
     }
   ],
-  "planRevision": 19,
-  "status": "BLOCKED",
+  "planRevision": 26,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Size-only QA reject (qa-b0c1741e, 2026-10-24T22:02Z). QA directed: no code edits, request_replan. Verified: e587474 numstat = guest-bootstrap.mjs +113, guest-readiness.mjs +253, lifecycle.mjs +39/-9, local-runner.test.mjs +717 = 1131 changed lines vs the 400 net-LOC cap; epic rail grants size exceptions only to R02/R06. Working-tree bytes of those 4 files == e587474 (git diff empty). No DoD item failed (QA fresh run exit 0, 139/139).\n\nNeed one of:\n(a) Re-slice R07 into <=400-LOC tasks reusing landed e587474 bytes. QA's cut: A guest-bootstrap.mjs+G1-G4 (~230); B lifecycle image/recordImage CAS+tests (~150); C readGuestInfo/runGuestProbe/probe table+G5/G6+fakeGuest (~250); D1 waitForGuestReady inputs/fence/cloud-init wait+G7-G9,G15-G16; D2 boundary eval/recording+G10-G14,G17,G19.\n(b) Human adds an explicit R07 epic-rail size exception naming the exact e587474 slice (4 files, +1122/-9), as done for R06 (cf7de94); a size-only reopen then reuses the bytes with fresh focused verification.\n\nWorker recommendation: (b). The bytes are already landed and passed QA's substantive read-through; under (a) every slice's diff is already on the branch, so slices become reviews of landed line ranges, not new delivery.\n\nCarry forward QA's non-blocking hardening note to whichever plan owns the probe table (slice C/D2, or the only growth under (b)): cloud-init docs (development/internal_files) list /run/cloud-init/combined-cloud-config.json as a root-readable UNREDACTED merged config with user-data overrides applied, so it likely carries the write_files b64 credential. Add the same exit-1-only deny probe (sudo -n -u <id> test -r /run/cloud-init/combined-cloud-config.json) plus a G11 row. Its octal mode is undocumented; real-guest stat stays R13 certification.\n\nThis session: no source/test/docs edits, no Git writes, no .moe edits.",
+  "reopenReason": "The human APPROVED prop-d3ccceade (CQ-R07 size exception) at 2026-10-25T07:43:43Z. Per this task's blockedReason, restored to WORKING. The next worker runs the verification-only steps against the landed e587474 bytes, and QA confirms the rail covers them.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -57,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:05.514Z",
-  "updatedAt": "2026-10-24T22:31:38.428Z",
+  "updatedAt": "2026-10-25T07:58:57.724Z",
   "dependsOn": [
     "task-deba1a56a8104786ae25b84c58c363b4"
   ],
@@ -65,20 +86,26 @@
     "firstClaimAt": "2026-10-24T15:03:07.413Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 7,
+    "executedStepCount": 11,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "worker-07cd2c56",
     "qa-b0c1741e",
-    "architect-6e3edf85"
+    "architect-6e3edf85",
+    "worker-e8965f51"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T22:28:42.981Z",
   "planningNotes": {
@@ -94,28 +121,21 @@
   },
   "planApprovedAt": "2026-10-24T22:28:43.082Z",
   "workStartedAt": "2026-10-24T21:35:20.520Z",
-  "reviewStartedAt": "2026-10-24T21:57:34.924Z",
+  "reviewStartedAt": "2026-10-25T07:58:57.708Z",
   "verification": {
     "command": "node --test scripts/tests/local-runner.test.mjs",
     "exitCode": 0,
-    "outputTail": "✔ readiness is refused before any provider call unless the caller owns an owned record (98.783009ms)\n✔ every boundary failure is collected once, without diagnostics, and executionReady stays false (33.621315ms)\n✔ records carrying a valid image still reconcile and clean up, keeping the image (10.584615ms)\n✔ ledger refuses a record with a short source checksum and never acts on it (6.440743ms)\n✔ ledger refuses a record with an extra image key and never acts on it (6.862086ms)\n✔ ledger refuses a record with a missing provider hash and never acts on it (6.828935ms)\n✔ ledger refuses a record with an uppercase provider hash and never acts on it (6.22395ms)\n✔ ledger refuses a record with a numeric checksum and never acts on it (5.815495ms)\n✔ ledger refuses a record with a null image and never acts on it (5.692867ms)\n✔ ledger refuses a record with a string image and never acts on it (5.82562ms)\n✔ real provider process: readiness uses only info and the fixed exec probes (1466.450999ms)\nℹ tests 139\nℹ suites 0\nℹ pass 139\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 13856.036739\n(env -i HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin, Node v24.21.0, no MOE_* vars, repo root. Also: local-runner-bundle.test.mjs exit 0 7/7; git-archive snapshot + 4 overlaid files exit 0 139/139.)",
-    "reportedAt": "2026-10-24T21:57:34.924Z",
+    "outputTail": "✔ ledger refuses a record with a short source checksum and never acts on it (11.090735ms)\n✔ ledger refuses a record with an extra image key and never acts on it (9.921775ms)\n✔ ledger refuses a record with a missing provider hash and never acts on it (10.242604ms)\n✔ ledger refuses a record with an uppercase provider hash and never acts on it (10.366423ms)\n✔ ledger refuses a record with a numeric checksum and never acts on it (9.558397ms)\n✔ ledger refuses a record with a null image and never acts on it (10.650629ms)\n✔ ledger refuses a record with a string image and never acts on it (11.267661ms)\n✔ real provider process: readiness uses only info and the fixed exec probes (1467.225452ms)\nℹ tests 139\nℹ suites 0\nℹ pass 139\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 15449.795375\nLinux/WSL Node v24.21.0, repository root, env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin; no MOE_* variables. All nine verification inputs unchanged after run.",
+    "reportedAt": "2026-10-25T07:58:57.708Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/guest-bootstrap.mjs",
-    "scripts/local-runner/lifecycle.mjs",
     "scripts/local-runner/guest-readiness.mjs",
-    ".moe/tasks/task-709f669139764663926c04ed72cdae5d.json",
-    ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
-    ".moe/tasks/task-ad95cb270e9e46df8672eb094d0c1e74.json",
-    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
-    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
-    ".moe/tasks/task-bf86954dc6bc43279d96d77cf0ebff88.json",
-    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json"
+    ".serena/memories/gotcha-cloud-init-credential-copies.md",
+    ".serena/memories/task-task-84c2da018ce74995b609805dab4fe7da-handoff.md"
   ],
-  "completionSummary": "CQ-R07 provides pinned guest bootstrap readiness only. executionReady is always false, with no isolation or verified-local claim.\n\n- **DoD 1:** the source sha256 comes only from the installed manifest pin (verifySourceImage/hashFile; waitForGuestReady refuses any caller-minted or mismatched sourceImage). The provider-converted Multipass image_hash is recorded separately as ledger image {sourceSha256, providerImageHash}. recordImage is a set-once CAS on an 'owned' record: the same identity is a no-op, a different one gives IMAGE_IDENTITY_CHANGED, and the bytes are never overwritten. Old R06 records without an image stay valid.\n- **DoD 2:** bounded deterministic polls (ceil(maxWaitMs/pollMs)). Starting/Restarting waits; Running alone is never ready. cloud-init must be exit 0 with done/done, errors [] and recoverable {}; error, degraded, disabled or unparsable gives BOOTSTRAP_FAILED, and exhausted polls give BOOTSTRAP_TIMEOUT. All boundary probes then run once.\n- **DoD 3:**\n  - Mounts: info.mounts must be empty, and no 9p/virtiofs/nfs/cifs/smb/vboxsf/drvfs/fuse/fuseblk/fuse.* in /proc/self/mountinfo; unparsable means unknown.\n  - Layout: root:root dirs without group/other write; the supervisor exactly 500:-r-x------ with a matching sha256; the credential exactly 400.\n  - Per job identity: locked passwd, no groups, no sudo, no authorized_keys. Exit-1-only denials (Multipass's own 2/3 give PROBE_UNKNOWN) for reading the credential, user-data.txt(.i), cloud-config.txt, obj.pkl, instance-data-sensitive.json and /dev/sr0, and for writing the supervisor and its dir. A whoami positive control guards against sudo failures.\n  - Resources: cpu/memory/disk upper bounds; missing values give RESOURCES_UNKNOWN.\n- **DoD 4:** fresh DoD command exit 0, 139/139, 0 skipped (G19 and R06's real-process test ran). The bundle test passes 7/7, and a clean snapshot run passes 139/139.\n\nFiles:\n- new: scripts/local-runner/guest-bootstrap.mjs, scripts/local-runner/guest-readiness.mjs;\n- changed: ",
+  "completionSummary": "Reused landed e587474 after HUMAN approval of size-exception prop-d3ccceade25f4af19518ce0e930e4123. Added only QA's combined-cloud-config credential-copy denial probe and sourced comment, plus independent test row and necessary fixed probe-count correction 14→15. Growth: guest-readiness.mjs +4/-1, local-runner.test.mjs +2/-1; guest-bootstrap/lifecycle unchanged. Required Serena handoff/gotcha updated and paths reported. No Git writes or manual .moe edits; wrapper owns landing.\nDoD preserved: source SHA and provider-converted identity remain separate/set-once; Running alone is not ready; cloud-init and boundary/resource checks fail closed. Both identities now deny-read /run/cloud-init/combined-cloud-config.json: only exit 1 counts as denied. executionReady remains false; no live-VM/isolation/verified-local certification claimed.\nFresh named Linux Node 24.21.0 command: exit 0, 139/139, zero failed/skipped/cancelled; real-process tests ran. Bundle 7/7; diff --check clean. Test-first RED demonstrated exposed combined config incorrectly ready; GREEN corrected it. Archive snapshot 139/139 and six independent mutations killed (remove probe, exit-2 denial, Running-only, degraded done, overwrite image, caller SHA). Nine live/snapshot input hashes match and remain unchanged after the gate.\nEvidence: /tmp/cq-r07-worker-e8965f51-verification.log, -bundle.log, -inputs.sha256; /tmp/cq-r07-worker-e8965f51-mutations.xswap205/{summary.json,*.patch,*.log}; full test names in step 4.\nOut-of-scope rail persistence truncates approved text at 1000 chars: filed task-ab6aac94d9424653bb45d6db4fa3fe67. Governor confirmed continuation under full approved proposal, including count correction; restoration prop-307362ea pending human click. QA should use full approved text, not missing truncated clauses.",
   "commits": [
     {
       "sha": "e587474b1f6908bdf4e11a1d6ee4dd55787a25dd",
@@ -309,8 +329,10 @@
     ],
     "stepsCompleted": []
   },
-  "blockedReason": "awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a). Gate evidence at 2026-10-24T22:30Z (worker-07cd2c56, read-only): the epic rail has no 'CQ-R07: the pinned guest bootstrap as landed in e587474' clause (grep count 0; the epic record has not changed since 16:37Z); the proposal status is PENDING with resolvedAt null; the four R07 files have an empty git diff against e587474, which is an ancestor of HEAD e5b63b8. This session made no source/test/docs/.moe edits and no Git writes.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-24T22:30:54.204Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "awaiting the human decision on rail proposal prop-d3ccceade25f4af19518ce0e930e4123 (CQ-R07 size exception, QA option b); governor: set_task_status WORKING once it is approved; if it is rejected, set PLANNING so the architect re-slices R07 per QA option (a). Gate evidence at 2026-10-24T22:30Z (worker-07cd2c56, read-only): the epic rail has no 'CQ-R07: the pinned guest bootstrap as landed in e587474' clause (grep count 0; the epic record has not changed since 16:37Z); the proposal status is PENDING with resolvedAt null; the four R07 files have an empty git diff against e587474, which is an ancestor of HEAD e5b63b8. This session made no source/test/docs/.moe edits and no Git writes.",
+  "blockedOnTaskIds": null
 }

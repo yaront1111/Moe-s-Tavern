@@ -30,7 +30,9 @@ const SHARED_FS = new Set(['9p', 'virtiofs', 'nfs', 'nfs4', 'cifs', 'smb3', 'smb
 const REPORTED = /^(?:PROVIDER|LEDGER|LIFECYCLE|IMAGE)_[A-Z_]+$/;
 // [kind, test flag, path, failure when the identity CAN]: the credential and cloud-init's copies of it
 // (raw and processed user-data, the merged cloud-config, the pickled datasource, the unredacted instance
-// data, the NoCloud seed device), then the supervisor.
+// data, the combined config, the NoCloud seed device), then the supervisor. cloud-init's internal_files
+// docs describe combined-cloud-config.json as root-readable and unredacted with user-data overrides;
+// it can carry the write_files credential. Its mode on the pinned image needs R13 real-guest certification.
 const DENIED = [
   ['readCredential', '-r', GUEST_LAYOUT.credential, 'CREDENTIAL_EXPOSED'],
   ['readUserData', '-r', '/var/lib/cloud/instance/user-data.txt', 'CREDENTIAL_EXPOSED'],
@@ -38,6 +40,7 @@ const DENIED = [
   ['readCloudConfig', '-r', '/var/lib/cloud/instance/cloud-config.txt', 'CREDENTIAL_EXPOSED'],
   ['readCachedObject', '-r', '/var/lib/cloud/instance/obj.pkl', 'CREDENTIAL_EXPOSED'],
   ['readInstanceData', '-r', '/run/cloud-init/instance-data-sensitive.json', 'CREDENTIAL_EXPOSED'],
+  ['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED'],
   ['readSeed', '-r', '/dev/sr0', 'CREDENTIAL_EXPOSED'],
   ['writeSupervisor', '-w', GUEST_LAYOUT.supervisor, 'SUPERVISOR_WRITABLE'],
   ['writeSupervisorDir', '-w', GUEST_LAYOUT.supervisorDirs[1], 'SUPERVISOR_WRITABLE'],

@@ -918,6 +918,7 @@ const DENIALS = [
   ['readCloudConfig', '-r', '/var/lib/cloud/instance/cloud-config.txt', 'CREDENTIAL_EXPOSED'],
   ['readCachedObject', '-r', '/var/lib/cloud/instance/obj.pkl', 'CREDENTIAL_EXPOSED'],
   ['readInstanceData', '-r', '/run/cloud-init/instance-data-sensitive.json', 'CREDENTIAL_EXPOSED'],
+  ['readCombinedConfig', '-r', '/run/cloud-init/combined-cloud-config.json', 'CREDENTIAL_EXPOSED'],
   ['readSeed', '-r', '/dev/sr0', 'CREDENTIAL_EXPOSED'],
   ['writeSupervisor', '-w', '/opt/moe/bin/moe-supervisor', 'SUPERVISOR_WRITABLE'],
   ['writeSupervisorDir', '-w', '/opt/moe/bin', 'SUPERVISOR_WRITABLE'],
@@ -1194,7 +1195,7 @@ test('readGuestInfo runs bounded info on the owned name and parses the v1.17.0 d
 test('runGuestProbe executes only the frozen fixed-argv table without host-directory mapping', async () => {
   assert.deepEqual(Object.keys(GUEST_PROBES), Object.keys(EXPECTED_PROBES));
   assert.deepEqual(GUEST_PROBES, EXPECTED_PROBES);
-  assert.equal(Object.keys(GUEST_PROBES).length, 4 + 14 * IDENTITIES.length);
+  assert.equal(Object.keys(GUEST_PROBES).length, 4 + 15 * IDENTITIES.length);
   assert.equal(Object.isFrozen(GUEST_PROBES), true);
   for (const argv of Object.values(GUEST_PROBES)) {
     assert.equal(Object.isFrozen(argv), true);
