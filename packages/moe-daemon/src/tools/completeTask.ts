@@ -4,6 +4,7 @@ import { MoeError, MoeErrorCode, notFound, invalidState } from '../util/errors.j
 import { assertWorkerHoldsTask, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
 import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
 import { currentAttempt, setAttemptPhase } from '../state/attemptStore.js';
+import { assertCompletionEvidenceEligible, assertExecutionAuthorized } from '../util/executionAuthorization.js';
 import type { ExecutionAttempt } from '../types/schema.js';
 
 /**
@@ -125,7 +126,7 @@ async function checkBranchPolicy(
 export function completeTaskTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.complete_task',
-    description: 'Mark a task as complete (move to REVIEW). Requires verification evidence from a fresh run of the plan\'s verification command.',
+    description: 'Mark a task as complete (move to REVIEW). Requires verification evidence from a fresh run of the plan\'s verification command. Under verified-local it also needs workerId, attemptId, generation and the sessionId that read moe.get_context, the current plan revision approved, and step evidence for every step from this attempt at that revision; refusals: STEP_ENTRY_IDENTITY_REQUIRED, ATTEMPT_SUPERSEDED, ATTEMPT_NOT_RUNNING, PLAN_REVISION_NOT_APPROVED, CONTEXT_RECEIPT_STALE, EXECUTION_EVIDENCE_INELIGIBLE.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,7 +145,10 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         prLink: { type: 'string', description: 'Optional pull/merge request URL recorded on the task' },
         summary: { type: 'string', description: 'What was delivered — persisted as task.completionSummary (capped at 2000 chars) and surfaced to QA and dependent tasks via get_context.' },
         currentBranch: { type: 'string', description: 'Branch the worker is on; enables the consolidationBranch policy check' },
-        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' }
+        workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy)' },
+        attemptId: { type: 'string', maxLength: 128, description: 'The attemptId moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        generation: { type: 'integer', minimum: 1, description: 'The generation moe.claim_next_task returned. Optional under legacy/observe (a presented one is fenced); required under verified-local.' },
+        sessionId: { type: 'string', description: 'The sessionId this session passed to moe.get_context. Optional under legacy/observe; required under verified-local.' }
       },
       required: ['taskId', 'verification'],
       additionalProperties: false
@@ -157,6 +161,9 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         summary?: string;
         currentBranch?: string;
         workerId?: string;
+        attemptId?: unknown;
+        generation?: unknown;
+        sessionId?: unknown;
       };
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
@@ -165,8 +172,11 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         throw invalidState('Task', task.status, 'WORKING');
       }
       assertWorkerHoldsTask(task, params.workerId, 'moe.complete_task');
+      const { attemptId, generation, sessionId } = params;
+      const strict = assertExecutionAuthorized(state, task, params.workerId, { attemptId, generation, sessionId }, 'moe.complete_task');
       assertAllStepsCompleted(task);
       const verification = assertVerificationEvidence(params.verification);
+      if (strict) assertCompletionEvidenceEligible(task, strict, 'moe.complete_task');
       // Runs with the other assertions, BEFORE updateTask: a rejection must
       // leave the task untouched in WORKING rather than half-completed.
       const branchPolicy = await checkBranchPolicy(state, task.id, params.currentBranch);

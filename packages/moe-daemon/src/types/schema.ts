@@ -1241,6 +1241,24 @@ export interface ExecutionAttempt {
   executionPolicySnapshot?: ExecutionPolicySnapshot;
   /** The latest get_context packet served to this attempt's own worker (see ServedContextReceipt). */
   contextReceipt?: ServedContextReceipt;
+  /** Strict step completions on this attempt, oldest first; absent until the first (see StepCompletionEvidence). */
+  stepCompletions?: StepCompletionEvidence[];
+}
+
+/**
+ * One step completion recorded under strict (verified-local) authorization
+ * (CQ-F08). Execution evidence, appended only by attemptStore.recordStepCompletion
+ * on the attempt that completed the step, never rewritten or deleted. Purely
+ * additive: no migration, no schemaVersion bump. Decode it with
+ * readStepCompletions. It counts toward moe.complete_task only while that
+ * attempt is current and planRevision is the task's approved revision, and it
+ * is NEVER approval.
+ */
+export interface StepCompletionEvidence {
+  stepId: string;
+  /** The task's approved planRevision the step was completed under. */
+  planRevision: number;
+  completedAt: string;
 }
 
 /**

@@ -13,14 +13,85 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first, in the NEW file packages/moe-daemon/src/tools/completionAuthorization.test.ts. Model the harness on tools/startStepAuthorization.test.ts:\n- ToolTestHarness;\n- vi.stubEnv('MOE_WORKER_ID','') and vi.stubEnv('MOE_TASK_ID','');\n- seed() writes a raw WORKING row: worker-s, planRevision 3 = approvedPlanRevision 3, contextFetchedBy ['worker-s'], two steps, and a STRICT or LEGACY v2 executionPolicySnapshot;\n- open()/reopen() via openAttempt + setAttemptPhase;\n- serve() is the real get_context with sessionId;\n- a bytes() snapshot of tasks/attempts/workers;\n- a refused(tool, args, codeName) helper that spies updateTask/touchWorker/writeEntity/setAttemptPhase-free paths and asserts identical bytes.\nCopy only the helpers you use, compactly. Do not refactor F07's file.\n\nCases. Assert codeName plus whole-object values; every refusal leaves zero writes.\n- A, DoD1, strict:\n  - step-1 is IN_PROGRESS, entered through the real start_step with a served receipt. Then a real moe.amend_plan_step as 'architect-t' moves planRevision to 4. complete_step is refused PLAN_REVISION_NOT_APPROVED, and step-1 stays IN_PROGRESS with no evidence recorded. Re-serving get_context, which gives a rev-4 receipt, is still refused the same way: a receipt never substitutes for approval.\n  - complete_task on an all-COMPLETED row with current evidence, after a definitionOfDone edit through state.updateTask (a contract edit, rev 4), is refused PLAN_REVISION_NOT_APPROVED. The attempt stays `running`, not finalizing.\n- B, DoD2:\n  - For STRICT and LEGACY rows alike: after reopen(), presenting the superseded attemptId/generation to complete_step and to complete_task is refused ATTEMPT_SUPERSEDED. So is a future generation.\n  - Strict only:\n    - missing identity is refused STEP_ENTRY_IDENTITY_REQUIRED (context.missing);\n    - a finalizing attempt, or another worker's, is refused ATTEMPT_NOT_RUNNING.\n  - A malformed generation (the string '1', or 0) is refused INVALID_INPUT in legacy too.\n- C, DoD3:\n  - C1 strict permit: complete_step with the current identity and a fresh receipt succeeds.\n    - The CURRENT attempt record gains exactly stepCompletions [{stepId:'step-1', planRevision:3, completedAt:<ISO>}] (exact key set).\n    - task.planRevision stays 3, and the task's step keys are the legacy set: nothing new on the step.\n  - C2: both steps are completed through the tool, then complete_task. It passes every F08 gate and stops at the existing readiness backstop, EXECUTION_PROFILE_NOT_READY. That proves eligibility, since verified-local stays unavailable.\n  - C3: evidence is recorded under generation 1, then reopen() and re-serve, then complete_task. It is refused EXECUTION_EVIDENCE_INELIGIBLE, with context.steps ['step-1','step-2'] before any write. Generation 1's record keeps its stepCompletions byte-identical, and the task's steps keep COMPLETED/completedAt/modifiedFiles: the evidence is historical.\n  - C4: rev-3 evidence, then a raw re-approval at rev 4 (planRevision 4 = approvedPlanRevision 4, rev-4 receipt). complete_task is refused EXECUTION_EVIDENCE_INELIGIBLE.\n  - C5: steps that are COMPLETED but have no evidence on a strict row are ineligible.\n  - C6: malformed stored stepCompletions (an extra key, a string planRevision, a non-array) make complete_step and complete_task refuse INVALID_INPUT, fail closed, with nothing written.\n- D, legacy:\n  - A LEGACY row with no identity: complete_step then complete_task succeed exactly as before, and the attempt never gains a stepCompletions key.\n  - Presenting the current identity also succeeds.\n- E, fail-safe write order, strict: the first writeEntity('attempts') rejects, so complete_step rejects and updateTask is never called. step-1 stays IN_PROGRESS. A retry succeeds with exactly one evidence entry.\n\nRun them RED against HEAD (focused file run in the step-4 snapshot). Budget: about 270 test lines or fewer.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/completionAuthorization.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completionAuthorization.test.ts"
+      ],
+      "note": "RED: new tools/completionAuthorization.test.ts (245 lines, 31 tests: A DoD1 x2, B DoD2 x18, C DoD3 x8, D legacy x2, E write order x1). Focused run in Linux snapshot /tmp/moe-f08-gate.bdfjdO (HEAD archive + owned files, native node_modules, env -i): 29 failed / 2 passed. All 29 fail on the missing feature (null where a refusal is expected, EXECUTION_PROFILE_NOT_READY where an F08 codeName is expected, no stepCompletions, first write was 'tasks'). The 2 passing tests are the legacy-compat pins, which must hold on HEAD. Snapshot script: /tmp/moe-f08-scripts/snap.sh. The shared checkout has 522 pre-existing dirty paths from other sessions; I left them alone.",
+      "startedAt": "2026-10-25T22:54:30.563Z",
+      "completedAt": "2026-10-25T22:57:45.200Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The evidence store (additive schema; no migration; no schemaVersion bump). Never write to .moe by hand.\n\n1. packages/moe-daemon/src/types/schema.ts: add, beside ServedContextReceipt:\n   - `export interface StepCompletionEvidence { stepId: string; planRevision: number; completedAt: string }`. Its doc: one step completion recorded under strict (verified-local) authorization, CQ-F08. It is execution evidence, append-only on the attempt that completed the step and never rewritten or deleted. It counts toward moe.complete_task only while that attempt is current and planRevision is the task's approved revision. It is never approval.\n   - Optional `ExecutionAttempt.stepCompletions?: StepCompletionEvidence[]`, oldest first and absent until the first entry.\n2. packages/moe-daemon/src/state/attemptStore.ts, following the contextReceipt precedent:\n   a. `export function readStepCompletions(value: unknown): StepCompletionEvidence[]`, the ONE strict decoder.\n      - undefined returns [].\n      - Otherwise the value must be an array of plain objects with EXACTLY the keys stepId (isText), planRevision (isRevision) and completedAt (isText).\n      - Anything else throws invalidInput('stepCompletions', ...): never coerced, filtered or dropped.\n      - Returns fresh canonical copies.\n   b. `export async function recordStepCompletion(state, p: { attemptId, workerId, stepId, planRevision })`, the only writer. Error handling, every refusal before the write:\n      - ATTEMPT_NOT_FOUND;\n      - ATTEMPT_NOT_RUNNING unless the phase is `running`;\n      - notAllowed when p.workerId is not the attempt's worker;\n      - INVALID_INPUT from decoding the stored array, so history is never silently discarded.\n      Then the entry is validated through the decoder with completedAt = now; updated = { ...existing, stepCompletions: [...prior, entry] }; writeEntity('attempts') THEN map.set. lastPhaseAt and every other field carry over. It returns a copy, and the caller holds state.mutex.\n      - ponytail: append-only and unbounded. It is bounded in practice by plan steps times replans within one attempt.\n   c. detached() also structuredClones stepCompletions. It still returns the same object when none of the snapshot, receipt or stepCompletions is present.\n   No other writer exists: no tool argument, UPDATE_TASK payload or claim path can mint evidence, which follows the epic rail against caller-minted trusted evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts"
+      ],
+      "note": "Evidence store added. Additive, no migration.\n- schema.ts: StepCompletionEvidence {stepId, planRevision, completedAt}, plus optional ExecutionAttempt.stepCompletions.\n- attemptStore.ts:\n  - readStepCompletions: the strict decoder. undefined gives []. A non-array, a non-plain entry, a wrong key set, a non-text stepId/completedAt or a non-revision planRevision all throw INVALID_INPUT. Returns canonical copies.\n  - recordStepCompletion is the only writer. It refuses ATTEMPT_NOT_FOUND, ATTEMPT_NOT_RUNNING, NOT_ALLOWED (another worker) and INVALID_INPUT (malformed history), all before writeEntity('attempts'), then does map.set.\n  - detached() also clones stepCompletions.\n- Grep check: no other module enumerates attempt keys (contextReceipt appears only in attemptStore, schema and executionAuthorization), so no loader change was needed.\n- Typecheck and GREEN run are deferred to step 3, since nothing wires this in yet.",
+      "startedAt": "2026-10-25T22:57:49.608Z",
+      "completedAt": "2026-10-25T22:58:42.254Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Authorization and wiring: turn step 1 GREEN. These files stay untouched: tools/startStep.ts, util/enforcement.ts (import cycle, see F07), taskStore.ts, getContext.ts and the proxy (F12 adds complete_step/complete_task to the proxy identity table).\n\n1. packages/moe-daemon/src/util/executionAuthorization.ts:\n   - `export type StrictExecution = { attempt: ExecutionAttempt; planRevision: number }`.\n   - assertExecutionAuthorized now RETURNS null where it used to return early for legacy/observe, and `{ attempt: open, planRevision }` after the strict receipt check. Behavior is otherwise unchanged; start_step ignores the value.\n   - Add `export function assertCompletionEvidenceEligible(task: Task, strict: StrictExecution, toolName: string): void`. It is read-only.\n     - evidence = readStepCompletions(strict.attempt.stepCompletions). Malformed evidence throws INVALID_INPUT, failing closed.\n     - A plan step is eligible only if evidence holds an entry with its stepId and planRevision === strict.planRevision.\n     - Otherwise throw MoeError STATE_CONFLICT with codeName EXECUTION_EVIDENCE_INELIGIBLE and context { taskId, attemptId, generation, planRevision, steps }. The message names the steps, says the evidence stays recorded but was produced under another attempt or revision, and points to moe.request_replan to re-execute.\n   - Update the module doc: F08 reuses the guard for completion. Evidence eligibility is a third gate, separate from approval (Task) and source validity (receipt).\n2. packages/moe-daemon/src/tools/completeStep.ts:\n   - Add optional inputSchema attemptId (string, maxLength 128), generation (integer, minimum 1) and sessionId (string), worded like start_step's.\n   - Extend the description: under verified-local, completion needs workerId, attemptId, generation and the sessionId that read moe.get_context, with the current revision approved. Name the codeNames.\n   - Handler: right after assertContextFetched, `const strict = assertExecutionAuthorized(state, task, params.workerId, { attemptId, generation, sessionId }, 'moe.complete_step')`.\n   - After every existing validation (plan, step, IN_PROGRESS, note length) and before updateTask: if strict, `await recordStepCompletion(state, { attemptId: strict.attempt.id, workerId: params.workerId, stepId, planRevision: strict.planRevision })`.\n   - Add a comment on why the attempt write comes first. It is fail-safe: evidence without the task write is repaired by the retry, while the reverse order would strand a COMPLETED step with no evidence. It is not a transaction.\n3. packages/moe-daemon/src/tools/completeTask.ts:\n   - Add the same three schema inputs and a description note naming EXECUTION_EVIDENCE_INELIGIBLE.\n   - Handler: run the guard right after assertWorkerHoldsTask, so a superseded attempt is refused before the steps check.\n   - After assertAllStepsCompleted and assertVerificationEvidence: if strict, assertCompletionEvidenceEligible(task, strict, 'moe.complete_task').\n   - Both run before checkBranchPolicy (which may post to #governors), setAttemptPhase('finalizing') and updateTask, so every refusal precedes every write. Legacy/observe without identity keep today's path, shape and bytes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/executionAuthorization.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/executionAuthorization.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeTask.ts"
+      ],
+      "note": "GREEN.\n- executionAuthorization.ts:\n  - New StrictExecution type.\n  - assertExecutionAuthorized now returns null for legacy/observe and {attempt: open, planRevision} after the receipt gate. start_step ignores the return value and is untouched.\n  - New assertCompletionEvidenceEligible: read-only. It throws STATE_CONFLICT EXECUTION_EVIDENCE_INELIGIBLE with context {taskId, attemptId, generation, planRevision, steps}, and its message points to moe.request_replan. Malformed evidence gives INVALID_INPUT via readStepCompletions.\n- completeStep.ts:\n  - The schema and description gain attemptId, generation and sessionId.\n  - The guard runs right after assertContextFetched.\n  - recordStepCompletion runs after every existing validation and before updateTask, with a fail-safe ordering comment.\n- completeTask.ts:\n  - Same schema and description inputs; the description also names EXECUTION_EVIDENCE_INELIGIBLE.\n  - The guard runs right after assertWorkerHoldsTask.\n  - The eligibility check runs after assertAllStepsCompleted/assertVerificationEvidence, before checkBranchPolicy, setAttemptPhase and updateTask.\n- Snapshot /tmp/moe-f08-gate.aCecpN:\n  - completionAuthorization + startStepAuthorization: 2 files, 69/69 passed;\n  - tsc --noEmit exit 0, after a fix to the return-type line that my scripted edit had missed.\n- Untouched: startStep.ts, enforcement.ts, taskStore.ts, getContext.ts and the proxy.",
+      "startedAt": "2026-10-25T22:58:43.436Z",
+      "completedAt": "2026-10-25T22:59:56.611Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Gate, run once and fresh: `cd packages/moe-daemon && npm test` (full suite: this task changes the shared attempt schema), plus `npx tsc --noEmit`. Supply the npm test command, exit 0 and its output tail to moe.complete_task.\n\nRun it in a Linux snapshot, never in the shared checkout: its node_modules is a Windows install, and running there fails on the rolldown native binding.\n\nRecipe (Serena memory gotcha-linux-vitest-reuse-native-node-modules):\n1. SNAP=$(mktemp -d /tmp/moe-f08-gate.XXXXXX).\n2. `git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json | tar -x -C \"$SNAP\"`. The root CLAUDE.md is required by the suite.\n3. Symlink /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules as the DIRECTORY $SNAP/packages/moe-daemon/node_modules. If it is gone, `npm ci` in a separate scratch copy, after checking that the lockfile matches HEAD.\n4. Copy the six task files over and cmp each against the worktree.\n5. Run with every MOE_* variable unset: `env -i HOME=\"$HOME\" PATH=\"<linux node bin>:/usr/bin:/bin\" TMPDIR=/tmp bash -c 'cd packages/moe-daemon && npm test'`. Seat env leaks MOE_WORKER_ID into get_context; see gotcha-seat-env-leaks-into-daemon-tests.\n\nExpect 0 failures. Pre-existing skips stay skips. If any existing test breaks, error handling here means fixing it with systematic-debugging: legacy expectations are the contract and must not be loosened. Record file/test counts and the snapshot path in the step note. rm -rf the snapshot afterwards, checking the prefix first.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate in Linux snapshot /tmp/moe-f08-gate.3Lq6ww:\n- Setup: git archive HEAD of the WHOLE repo (per gotcha-daemon-linux-snapshot-gate). The six owned files were overlaid and cmp-verified, and node_modules is symlinked to the native install, whose package.json and package-lock.json equal the worktree modulo CR. The run used env -i (no MOE_*, no Windows PATH).\n- `cd packages/moe-daemon && npm test`: NPM_TEST_EXIT=0. 165 test files passed; 4179 tests passed, 14 skipped (4193). That is F07's 164/4148/14 plus the new file's 31 tests: no regressions, and the skips are the pre-existing ones.\n- `npx tsc --noEmit -p .`: exit 0.\n- The log is at /tmp/moe-f08-scripts/gate.log. I am keeping the snapshot until step 5 decides whether a re-run is needed. No files changed in this step.",
+      "startedAt": "2026-10-25T22:59:57.893Z",
+      "completedAt": "2026-10-25T23:00:40.420Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: load adversarial-self-review and review `git diff -- packages/moe-daemon`. Check each of these:\n- Ordering: is every refusal before ANY write? That covers complete_task's #governors post, setAttemptPhase('finalizing'), updateTask and touchWorker, and complete_step's attempt write.\n- Bypass:\n  - can evidence be minted from a tool argument, UPDATE_TASK or a claim?\n  - does a successor attempt ever inherit stepCompletions?\n  - does own-seat resume, reconcile or reattach keep them?\n  - does setAttemptPhase spread them, and does detached() clone them?\n- Coercion: are malformed stored or presented values refused, never filtered?\n- Legacy: with no identity, are the responses, bytes and write calls of complete_step/complete_task exactly as before? A malformed profile or snapshot now refuses completion as it does start_step: an intentional fail-closed, noted for F12 docs.\n- Concurrency: everything runs under the dispatch mutex. A retry after a failed task write appends a duplicate entry, which is harmless.\n- Error handling: is every MoeError a named codeName with a bounded context and no secrets?\n- Scope:\n  - only the six planned files changed;\n  - no .moe edits and no git writes;\n  - no forbidden-pattern tokens;\n  - net LOC 400 or less including tests (`git diff --numstat`), with no size exception for CQ-F tasks.\nFix findings with a focused test. If anything changed, re-run the step-4 gate fresh and supply that output.\n\nThe completion summary states the contract F12 documents:\n- the new complete_step/complete_task inputs;\n- EXECUTION_EVIDENCE_INELIGIBLE;\n- ExecutionAttempt.stepCompletions;\n- the proxy table still lacks complete_step/complete_task (F12);\n- the pre-existing strict complete_task order in which finalizing precedes the readiness backstop.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completionAuthorization.test.ts"
+      ],
+      "note": "Adversarial self-review of the six-file diff.\n- Ordering:\n  - complete_task: guard right after assertWorkerHoldsTask; eligibility after the steps and verification checks; both before checkBranchPolicy (the #governors post), setAttemptPhase and updateTask/touchWorker.\n  - complete_step: every validation precedes recordStepCompletion, which precedes updateTask.\n  - Every refusal is pinned by refused(): spies on updateTask, touchWorker, writeEntity and postToRoleChannel, plus identical bytes.\n- Bypass:\n  - Every attempt write lives in attemptStore. openAttempt builds a fresh record, so a successor inherits nothing. repairExisting returns the same record.\n  - setAttemptPhase, recordAttemptPresence and recordContextReceipt all spread ...existing, so reconcile, reattach and resume keep the evidence.\n  - No tool or UPDATE_TASK input carries stepCompletions.\n- Coercion: readStepCompletions throws on every malformed shape (tested).\n- Legacy: without identity the guard returns null, so there are no new writes and the response is unchanged. Two new legacy effects:\n  - a malformed setting or snapshot now refuses completion, the same fail-closed as start_step;\n  - a one-time \"attempt identity missing\" log fires per task and tool.\n- Finding fixed: no test pinned detached() cloning stepCompletions. Added a 2-line check to C1.\n- Mutants, 8 of 8 killed: no eligibility check, revision ignored, no record, no key-set check, no detach clone, guard skipped, non-array coerced, attempt evidence dropped. Control 31/31.\n- Re-gated fresh in /tmp/moe-f08-gate.FFzlFd (owned files cmp-identical): npm test exit 0, 165 files, 4179 passed | 14 skipped; tsc exit 0. Snapshot removed.\n- Scope: only the 6 planned files; no .moe edits, no git writes, no forbidden tokens. +398/-16 = 382 net LOC (<=400).",
+      "startedAt": "2026-10-25T23:00:41.603Z",
+      "completedAt": "2026-10-25T23:02:55.799Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Promoted by the governor under the standing delegation. The only dependency, CQ-F07 task-3918d119, is DONE: QA approved it on the first pass, and it landed as cbef9a0. The task rails have no human-approval gate. Plan against F07's landed authorization helper: packages/moe-daemon/src/util/executionAuthorization.ts, as start_step consumes it in tools/startStep.ts. Also note F09 (task-3c547751, being planned now): if the two plans touch the same files, serialize them with dependsOn, per the CQ-F rail.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -31,12 +102,78 @@
       "author": "architect-4c57a52b",
       "content": "Reuse note from CQ-F07 (task-3918d119, plan rev 1; re-check against the landed code). F07 adds packages/moe-daemon/src/util/executionAuthorization.ts with assertExecutionAuthorized(state, task, workerId, {attemptId, generation, sessionId}, toolName). It is read-only, and start_step calls it right after assertContextFetched. The module is separate from util/enforcement.ts on purpose: it imports taskStore.decodeStoredPlanRevision, and taskStore -> tools/submitPlan -> util/enforcement would be an import cycle.\n\nDecision order:\n1. In every profile:\n   - a malformed attemptId (over 128 chars), sessionId or generation is refused INVALID_INPUT;\n   - a presented attempt identity is fenced by assertAttemptCurrent (ATTEMPT_SUPERSEDED).\n2. Strict means verified-local by resolveTaskExecutionProfile, or the open attempt's recorded snapshot is verified-local. A malformed setting or snapshot fails closed with INVALID_INPUT. Legacy and observe return here.\n3. All identities present (STEP_ENTRY_IDENTITY_REQUIRED, MISSING_REQUIRED).\n4. The caller's own running attempt (ATTEMPT_NOT_RUNNING).\n5. Approval from the Task only: approvedPlanRevision === planRevision (PLAN_REVISION_NOT_APPROVED).\n6. Source validity from the receipt only. It must bind taskId, attemptId, generation, workerId, sessionId, planRevision and approvedPlanRevision === planRevision (CONTEXT_RECEIPT_STALE).\n\nF07 deliberately leaves complete_step and complete_task untouched. F08 can call the same guard with its own toolName for the mid-step-amendment and superseded-attempt completion DoD. Before adding a new check, decide whether completion should reuse the step-5 approval gate unchanged.",
       "timestamp": "2026-10-25T22:18:07.199Z"
+    },
+    {
+      "id": "comment-63db2b8f0c27467dae93a052e617a54e",
+      "author": "architect-4c57a52b",
+      "content": "Interface note from CQ-F09 (task-3c547751, plan rev 1; re-check against F09's landed code). The proxy's execution-identity table, stampExecutionIdentity in packages/moe-proxy/src/utils.ts (a Map keyed by every tool-name spelling), stamps only two tools: moe.get_context gets sessionId, and moe.start_step gets attemptId, generation and sessionId.\n\nIf F08 gives complete_step/complete_task the same optional inputs through assertExecutionAuthorized, proxied sessions carry those inputs only after both tools join that table. That means one Map entry per tool plus a utils.test.ts case. Either plan it into F08 (one extra package, gated by `cd packages/moe-proxy && npm test`) or leave it to F12. If neither happens, strict completion will see no identity from proxied sessions.\n\nA caller value that differs from the env is refused with EXECUTION_IDENTITY_SUBSTITUTED (-32003). A malformed or half env identity is refused with EXECUTION_IDENTITY_INVALID (-32602).",
+      "timestamp": "2026-10-25T22:41:03.688Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:28.987Z",
-  "updatedAt": "2026-10-25T22:18:07.199Z",
+  "updatedAt": "2026-10-25T23:03:24.893Z",
   "dependsOn": [
     "task-3918d1190a3c4895ad5d924ad6d00f1d"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T22:41:39.783Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b",
+    "worker-7d158765"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T22:52:31.633Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Reuse the F07 guard unchanged for DoD1/DoD2: kept. Approval comes from the Task and the receipt binds the revision, so a mid-step amendment or contract edit (planRevision bump, no approval path for a WORKING row except resubmission, which resets steps) blocks strict completion. A presented superseded identity is fenced in every profile.\n2. A binding stamp on ImplementationStep: rejected. sanitizeImplementationPlan is an allowlist and the plugin UPDATE_TASK forwards implementationPlan, so a step stamp would need a sanitizer plus a denylist plus daemonOwned plumbing, and could still be minted by a client. The attempt record is daemon-owned, written only by attemptStore.\n3. Inferring eligibility from timestamps (step.completedAt vs attempt open time): rejected. Clock jumps make it unsound.\n4. Resetting steps when a binding changes: rejected. It drops evidence, whereas DoD3 says evidence stays historical.\n5. Strict-only recording: chosen. Legacy bytes stay identical, and legacy-completed steps are ineligible once a row turns strict (fail closed).\n6. Adding complete_step/complete_task to the F09 proxy table here: rejected. It is another package with a second gate and overlaps F09's files, so it goes to F12.\n7. sessionId in the evidence: rejected. An account switch relaunches a new session mid-task legitimately. The receipt gate binds the session per call instead.",
+    "codebaseInsights": "- approvalPlanSurface (taskStore.ts) projects only stepId/descriptions/affectedFiles/newFiles. Step progress (status/startedAt/completedAt/note/modifiedFiles) is the 'execution evidence' and never moves planRevision.\n- amend_plan_step rejects COMPLETED steps and bumps planRevision. approvedPlanRevision is written only on PLAN_APPROVED/PLAN_AUTO_APPROVED, and submit_plan resets every step to PENDING (submitPlan.ts ~488).\n- The progression backstop (taskStore assertProgressionReady) refuses strict WORKING->REVIEW with EXECUTION_PROFILE_NOT_READY. Step progress is not a progression, so a strict complete_step can succeed in tests.\n- complete_task sets the attempt to finalizing BEFORE updateTask: a pre-existing fail-safe order.\n- attemptStore precedent: readContextReceipt (strict decoder, throws INVALID_INPUT), recordContextReceipt (validate -> writeEntity -> map.set, lastPhaseAt untouched), and detached() cloning.\n- McpAdapter dispatch runs non-blocking tools under runExclusive, so the guard and the write share the mutex.",
+    "risks": "- schema.ts overlaps CQ-V01's stale plan (task-bde86540, PLANNING, unassigned). V01 is set to dependsOn F08 per the CQ-F serialize rail.\n- The strict missing-identity codeName stays STEP_ENTRY_IDENTITY_REQUIRED for completion as well; the message names the tool. Renaming would break F07's contract.\n- A malformed profile or snapshot now refuses legacy completion, as it already refuses start_step. This is intentional fail-closed, and the SCHEMA.md line 'progress never touches the snapshot' needs F12's edit.\n- After any strict revision or attempt change, completion needs request_replan. That is intended: strict evidence must come from the current binding, and verified-local stays unavailable.\n- QA cap: 400 net LOC or less including tests.\n- The gate must run in the Linux snapshot with env -i.\n- Rail grep: never spell the project's forbidden-pattern tokens.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/executionAuthorization.ts",
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/startStepAuthorization.test.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/amendPlanStep.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T22:52:31.719Z",
+  "workStartedAt": "2026-10-25T22:54:30.563Z",
+  "reviewStartedAt": "2026-10-25T23:03:24.891Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux snapshot /tmp/moe-f08-gate.FFzlFd: git archive HEAD + the 6 owned files (cmp-identical) + native node_modules, env -i (no MOE_*).\n ✓ src/tools/registry.test.ts (2 tests) 278ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 5ms\n\n Test Files  165 passed (165)\n      Tests  4179 passed | 14 skipped (4193)\n   Start at  01:02:18\n   Duration  22.91s (tests 89%, transform 6%, import 5%)\n\nNPM_TEST_EXIT=0; npx tsc --noEmit -p . exit 0",
+    "reportedAt": "2026-10-25T23:03:24.891Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/completionAuthorization.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/util/executionAuthorization.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts",
+    "packages/moe-daemon/src/tools/completeTask.ts"
+  ],
+  "completionSummary": "CQ-F08 delivered (plan rev 1, 5/5 steps), six files, +398/-16 (382 net).\n- complete_step/complete_task gain optional attemptId (max 128), generation (int >= 1) and sessionId, and call F07's assertExecutionAuthorized. It now returns StrictExecution {attempt, planRevision} under verified-local and null otherwise; start_step is unchanged.\n- complete_step: the guard runs after assertContextFetched. Under strict, recordStepCompletion appends {stepId, planRevision, completedAt} to the NEW ExecutionAttempt.stepCompletions BEFORE updateTask (fail-safe order). It is the only writer; readStepCompletions is the strict decoder.\n- complete_task: the guard runs after assertWorkerHoldsTask. Under strict, assertCompletionEvidenceEligible requires current-attempt evidence at the approved revision for every step, else STATE_CONFLICT EXECUTION_EVIDENCE_INELIGIBLE {taskId, attemptId, generation, planRevision, steps}. Every refusal precedes checkBranchPolicy, finalizing and updateTask. Old evidence stays on its attempt.\n- DoD:\n  1. Amending the in-progress step, or editing the DoD, is refused with PLAN_REVISION_NOT_APPROVED, even after re-serving.\n  2. A superseded or future attempt is refused ATTEMPT_SUPERSEDED on strict and legacy rows. Strict also refuses missing identity and a finalizing or foreign attempt.\n  3. Evidence that is superseded, from an earlier revision or missing is ineligible, and malformed evidence fails closed.\n  Legacy rows without identity are unchanged.\n- Tests: new completionAuthorization.test.ts, 31 tests; RED was 29 failed. 8/8 self-mutants killed. Gate: 165 files, 4179 passed | 14 skipped, exit 0; tsc exit 0.\n- For F12:\n  - the proxy identity table lacks complete_step/complete_task;\n  - pre-existing strict order: finalizing precedes the readiness backstop, so a retry gets ATTEMPT_NOT_RUNNING;\n  - legacy completion now fails closed on a malformed profile or snapshot, like start_step;\n  - missing strict identity reuses STEP_ENTRY_IDENTITY_REQUIRED."
 }

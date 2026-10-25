@@ -25,10 +25,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 110,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d397180323be4404b9fbc97999fe9c92",
+      "author": "architect-4c57a52b",
+      "content": "Docs and integration hand-forward from CQ-C01 (task-fef5ca57, plan rev 1). Verify against what landed before writing anything.\n\nDefault and full get_context task reads gain `packetManifest`:\n- `version`.\n- `provenance`: task {id, planRevision}, epic, project, and candidate (when one exists).\n- `sections`: entries {path, mandatory, status (C02's served|truncated|omitted|missing), reason, count}.\n  - MANDATORY_SECTIONS are never role-trimmed or truncated.\n  - Omissions are explicit: role-trim, compacted comments/chat, capped commits/siblings/rejections.\n- `complete`.\n- `limitations`, sorted. 'no-repository-source' stays until C10 serves C02's provider.\n- `budget`: {limitChars, mandatoryChars, status within|overflow, requirement expand|restructure}.\n\nThere is also a new optional `packetBudgetChars` input (1000..250000, default 100000), refused when invalid, never clamped.\n\nThe manifest sits inside F06's packetId digest and never grants approval.\n\nFor C11, document all of this in docs/MCP_SERVER.md (get_context) and docs/SCHEMA.md. C06 (deltas) and C10 (targeted guidance) build on these section paths and codes.",
+      "timestamp": "2026-10-25T22:58:57.335Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:51.453Z",
-  "updatedAt": "2026-10-25T08:11:52.074Z",
+  "updatedAt": "2026-10-25T22:58:57.335Z",
   "dependsOn": [
     "task-34632f08a9a549a28bcf2b9f6946244b",
     "task-fef5ca575850416ea1052ee1a7b8e22e",

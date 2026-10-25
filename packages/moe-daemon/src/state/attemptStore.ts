@@ -40,7 +40,8 @@
 // An attempt may carry a configuration identity (executionPolicySnapshot),
 // captured once at open, never rewritten, and returned only as detached copies.
 // recordContextReceipt writes the latest served get_context receipt onto a
-// running attempt through the same write-then-publish path.
+// running attempt through the same write-then-publish path, and
+// recordStepCompletion appends strict step-completion evidence the same way.
 
 import type { StateManager } from './StateManager.js';
 import type {
@@ -49,6 +50,7 @@ import type {
   ExecutionAttemptPhase,
   ExecutionPolicySnapshot,
   ServedContextReceipt,
+  StepCompletionEvidence,
   Task,
 } from '../types/schema.js';
 // The leaf, and the only policy import allowed here: delivery/policy.ts and
@@ -112,16 +114,17 @@ function decodeStoredGeneration(attempt: ExecutionAttempt): number {
  * What every exported function hands out: the stored snapshot object never
  * leaves the store, so no caller can rewrite an attempt's identity through an
  * alias. A copy of the raw value, deliberately not validated, so one hand-edited
- * record can never make a read throw. The context receipt is copied the same
- * way. A record with neither is returned as it always was.
+ * record can never make a read throw. The context receipt and step completions
+ * are copied the same way. A record with none of them is returned as it always was.
  */
 function detached(attempt: ExecutionAttempt): ExecutionAttempt {
-  const { executionPolicySnapshot: snapshot, contextReceipt: receipt } = attempt;
-  if (snapshot === undefined && receipt === undefined) return attempt;
+  const { executionPolicySnapshot: snapshot, contextReceipt: receipt, stepCompletions: steps } = attempt;
+  if (snapshot === undefined && receipt === undefined && steps === undefined) return attempt;
   return {
     ...attempt,
     ...(snapshot !== undefined ? { executionPolicySnapshot: structuredClone(snapshot) } : {}),
     ...(receipt !== undefined ? { contextReceipt: structuredClone(receipt) } : {}),
+    ...(steps !== undefined ? { stepCompletions: structuredClone(steps) } : {}),
   };
 }
 
@@ -456,6 +459,60 @@ export async function recordContextReceipt(
   await state.writeEntity('attempts', id, updated);
   state.attempts.set(id, updated);
   return { ...contextReceipt };
+}
+
+const STEP_COMPLETION_KEYS = ['stepId', 'planRevision', 'completedAt'] as const;
+
+/**
+ * The ONE definition of valid stored step-completion evidence (CQ-F08). Absent
+ * is []. Strict: an array of plain objects with exactly stepId, planRevision
+ * and completedAt; anything else throws INVALID_INPUT, never coerced, filtered
+ * or dropped. Returns fresh canonical copies.
+ */
+export function readStepCompletions(value: unknown): StepCompletionEvidence[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw invalidInput('stepCompletions', 'must be an array');
+  return value.map((entry: unknown, i) => {
+    const proto = entry !== null && typeof entry === 'object' ? Object.getPrototypeOf(entry) : undefined;
+    const e = entry as Record<string, unknown>;
+    const own = proto === Object.prototype || proto === null ? Object.keys(e) : [];
+    if (own.length !== STEP_COMPLETION_KEYS.length || !STEP_COMPLETION_KEYS.every((k) => own.includes(k))
+      || !isText(e.stepId) || !isRevision(e.planRevision) || !isText(e.completedAt)) {
+      throw invalidInput(`stepCompletions[${i}]`, `must be a plain object with exactly ${STEP_COMPLETION_KEYS.join(', ')}`);
+    }
+    return { stepId: e.stepId as string, planRevision: e.planRevision, completedAt: e.completedAt as string };
+  });
+}
+
+/**
+ * Append one strict step completion to a RUNNING attempt of the caller's own.
+ * The only writer of stepCompletions: no tool argument, UPDATE_TASK payload or
+ * claim path can mint evidence. Every refusal, a malformed stored history
+ * included, precedes the write; every other field, lastPhaseAt included, is
+ * carried over. Write-then-publish. Caller must hold state.mutex.
+ * ponytail: append-only and unbounded; bounded in practice by plan steps times
+ * replans within one attempt.
+ */
+export async function recordStepCompletion(
+  state: StateManager,
+  p: { attemptId: string; workerId: string; stepId: string; planRevision: number }
+): Promise<StepCompletionEvidence[]> {
+  const id = requireNonBlank('attemptId', p.attemptId);
+  const existing = state.attempts.get(id);
+  if (!existing) throw new MoeError(MoeErrorCode.NOT_FOUND, `Attempt not found: ${id}`, { attemptId: id }, 'ATTEMPT_NOT_FOUND');
+  if (existing.phase !== 'running') {
+    throw conflict(`Attempt ${id} is ${existing.phase}; a step completion is recorded only on a running attempt`,
+      { attemptId: id, taskId: existing.taskId, phase: existing.phase }, 'ATTEMPT_NOT_RUNNING');
+  }
+  if (p.workerId !== existing.workerId) throw notAllowed('recordStepCompletion', `attempt ${id} belongs to another worker`);
+  const stepCompletions = readStepCompletions([
+    ...readStepCompletions(existing.stepCompletions),
+    { stepId: p.stepId, planRevision: p.planRevision, completedAt: new Date().toISOString() },
+  ]);
+  const updated: ExecutionAttempt = { ...existing, stepCompletions };
+  await state.writeEntity('attempts', id, updated);
+  state.attempts.set(id, updated);
+  return structuredClone(stepCompletions);
 }
 
 /**

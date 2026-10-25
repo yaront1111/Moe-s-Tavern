@@ -95,7 +95,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:33.419Z",
-  "updatedAt": "2026-10-25T22:56:10.675Z",
+  "updatedAt": "2026-10-25T22:57:01.727Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7"
   ],
@@ -157,7 +157,9 @@
     "packages/moe-proxy/src/index.test.ts",
     "packages/moe-proxy/vitest.config.ts",
     ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
-    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json"
+    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
   ],
   "completionSummary": "CQ-F09 delivered (plan rev 1, 4/4 steps). The proxy carries the session's execution identity, and a caller can never substitute its own. 5 files, +373/-3 (net 370).\nEnv contract (CQ-F10/F11 build on it). A blank value counts as absent.\n- MOE_SESSION_ID: at most 255 chars, no NUL/CR/LF, sent verbatim.\n- MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION: both or neither. attemptId must match [A-Za-z0-9_-]{1,128}. generation must match ^[1-9][0-9]*$ and be a safe integer, and is sent as a JSON number. Values are never trimmed or loosely parsed.\nStamping covers ONLY get_context (sessionId) and start_step (attemptId, generation, sessionId), under every spelling (moe.x, moe_x, x). A Map is used, so names like constructor/toString do nothing.\ncodeNames (error.data {tool, codeName}):\n- EXECUTION_IDENTITY_SUBSTITUTED -32003: a presented field !== the env value. '7' vs 7, null, another attempt id, or a trailing space are all refused, never coerced.\n- EXECUTION_IDENTITY_INVALID -32602: a carried env group is malformed or partial, or an unexpected error occurred (fails closed). A broken attempt group never blocks get_context.\nWith no carried group it is the legacy proxy: the raw line is forwarded byte-for-byte and the daemon decides.\nindex.ts:\n- The fence runs last in the stdin handler, so it checks exactly what gets forwarded.\n- JSON-RPC batches are fenced per element, so a batch cannot bypass it. Any refusal drops the whole frame, untracked and never queued: ONE id-aware error, or an array of errors prefixed `batch refused: `.\n- No value is echoed, and stderr gets the codeName only.\nvitest.config.ts: test.env blanks 9 MOE_* vars, so a seat's env cannot leak into spawned proxies. Green under hostile exports, 84/84.\nTests:\n- utils.test.ts: 10 new tests. RED first, then 7/7 mutants killed.\n- index.test.ts: 3 new e2e tests. They cover alias-style stamping with the get_context servedContext reply byte-identical on stdout; substitution with framing (the daemon sees only ids 11 and 13); and t",
   "commits": [
@@ -181,6 +183,23 @@
       "treeId": "c03d6acc485e7a8dadb37219be0f54cccde85daf",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "db7c93a86a0fbf25275ef8fe90b66dc8342ba60d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-25T22:52:30Z",
+      "paths": [
+        ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-25T22:57:01.727Z",
+      "treeId": "a00ad059502e635a4bc9e71da0e91feb30dc0e80",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -189,9 +208,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-25T22:41:04Z",
-    "at": "2026-10-25T22:52:10.772Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-25T22:52:30Z",
+    "at": "2026-10-25T22:57:01.727Z"
   },
   "completedAt": "2026-10-25T22:56:10.675Z",
   "reviewCompletedAt": "2026-10-25T22:56:10.675Z",
