@@ -207,9 +207,13 @@ ls .moe/tasks/
 
 **Solution:** Register the worker first using `moe.claim_next_task`.
 
-#### "RAIL_VIOLATION"
+#### "[CONSTRAINT_VIOLATION] Rail violation: …" (moe.submit_plan)
 
-**Solution:** Ensure plan includes all required rail phrases. Check epic and task rails.
+**Solution:**
+- Forbidden pattern: reword the step description, path or contract text that contains it (case-insensitive substring).
+- Required pattern missing: add the global phrase to the step text. Contract text does not count.
+- Epic and task rails are guidance and never produce this refusal.
+- A rail that is genuinely wrong for the task goes to `moe.propose_rail`, as the message spells out. Never loop on resubmits.
 
 ---
 
