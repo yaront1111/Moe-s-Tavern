@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,7 +107,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:22.608Z",
-  "updatedAt": "2026-10-25T11:11:16.042Z",
+  "updatedAt": "2026-10-25T11:18:47.894Z",
   "dependsOn": [
     "task-c7d520ba9cf940e4b3bbe2e4c3c90f47"
   ],
@@ -115,13 +115,16 @@
     "architect-bb003851",
     "architect-6e3edf85",
     "worker-9cda703c",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-25T10:19:12.947Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-25T11:18:47.894Z",
+    "wallClockMs": 3574947
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -243,5 +246,9 @@
     "packages/moe-daemon/src/tools/getContextReceipt.test.ts",
     "packages/moe-daemon/src/state/attemptStore.ts",
     "packages/moe-daemon/src/tools/getContext.ts"
-  ]
+  ],
+  "completedAt": "2026-10-25T11:18:47.894Z",
+  "reviewCompletedAt": "2026-10-25T11:18:47.894Z",
+  "reviewSummary": "Reviewed completion 9a2c257, which is on moe/work-2026-10-24 (branch --contains OK; HEAD blobs of the 4 source files equal 9a2c257).\nRe-ran on a git archive of HEAD 7df01ed with native Linux node_modules, env -i, no MOE_*:\n- `cd packages/moe-daemon && npm test`: 163 files, 4110 passed | 14 skipped, exit 0.\n- `tsc --noEmit`: exit 0.\nSize: 398 net (+406/-8).\nDoD1: the status early return comes before servedContextIdentity. A test asserts no servedContext, identical attempt bytes and no 'attempts' write. Default and full reads persist a receipt that survives load().\nDoD2: binding fields come from the STORED attempt. sessionId is caller-only, with no env fallback. Refusals (ATTEMPT_NOT_FOUND, ATTEMPT_NOT_RUNNING, NOT_ALLOWED) happen before any write. A receipt needs the caller to be both the attempt's worker and the task's assignee. All tested.\nDoD3: ids are served only after recordContextReceipt resolves. A writeEntity failure (legacy and verified-local) and a validation failure give record-failed, null ids and no stored receipt. get_context is non-blocking, so it runs under runExclusive.\nDoD4: verification is present, exit 0, and is the plan command.\nAlso checked:\n- A malformed sessionId is refused in all views before contextFetchedBy is stamped.\n- The strict key-set decoder works as planned.\n- detached() returns the same object when a record has neither a snapshot nor a receipt.\n- No forbidden patterns.\nPonytail pass: no findings.\nNon-blocking notes:\n- identity.generation is served raw.\n- No tool-level test covers a task without approvedPlanRevision; the decoder-level test covers it.\n- Docs are deferred to F12.",
+  "requiredCheckAtDone": null
 }
