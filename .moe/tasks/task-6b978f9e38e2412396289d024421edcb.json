@@ -1,0 +1,128 @@
+{
+  "id": "task-6b978f9e38e2412396289d024421edcb",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F04c] JetBrains approvals send the rendered plan revision",
+  "description": "Objective: CQ-F04b (task-c619879ed9a643139c184fd5cb1ee888) will make the daemon refuse an omitted expectedPlanRevision on every human approval route. Before it does, make every JetBrains approval action send the plan revision the human was shown, so no JetBrains approval silently breaks (JetBrains is the primary IDE). Today only PlanReviewDialog sends it, through PlanReviewApprovalState and service.approveTask(taskId, token). These paths omit it:\n- ApproveTaskAction.actionPerformed: approves the first AWAITING_APPROVAL task without showing any plan.\n- MoeToolWindowPanel handleNext: Next on an AWAITING_APPROVAL task.\n- MoeToolWindowPanel onDrop: dragging AWAITING_APPROVAL to WORKING.\n- MoeToolWindowPanel onEpicDrop: the epic-header sweep calls updateTaskStatus(WORKING) for an AWAITING_APPROVAL task, which is a token-free UPDATE_TASK approval.\n- TaskDetailDialog: the Approve button.\n\nDeliverable:\n- Each path passes the revision of the task snapshot it rendered, mapped through PlanReviewApprovalState.tokenOf. LegacyMissing sends an explicit 0, which the daemon still accepts for a stamp-less row. Malformed sends nothing and shows an actionable notification that points to Plan Review.\n- ApproveTaskAction opens PlanReviewDialog for the first awaiting task instead of approving a plan nobody was shown.\n- The epic-header drop never moves an AWAITING_APPROVAL task with updateTaskStatus. It approves the task through approveTask with its rendered token, or skips it with a notice.\n- MoeProjectService.approveTask and MoeCommandSender.approveTask take a required (non-null) expectedPlanRevision, so no future caller can omit it.\n- Headless JUnit tests in the style of PlanApprovalContractTest and PlanReviewApprovalStateTest.\n\nNot in scope: the daemon refusal (CQ-F04b), VS Code (CQ-F04d), CLIENT_HELLO capability negotiation (CQ-I02), and any daemon file.\n\nRun Gradle the way this box requires: take the `jetbrains-gradle` resource lease first, and use gradlew.bat from Windows with an absolute cd and --rerun. See Serena convention-jetbrains-gradle-lease, gotcha-jetbrains-gradle-gate-from-powershell and gotcha-gradle-jetbrains-shared-box.\n\nVerification command (fresh, exit 0 required): cd moe-jetbrains && ./gradlew test",
+  "definitionOfDone": [
+    "Every JetBrains approval path (ApproveTaskAction, tool-window Next and drag, epic-header drop, TaskDetailDialog Approve, PlanReviewDialog) sends APPROVE_TASK with expectedPlanRevision equal to the revision of the task snapshot it rendered. None sends a token-free approval or a token-free UPDATE_TASK AWAITING_APPROVAL->WORKING.",
+    "A stamp-less task (tokenOf LegacyMissing) sends an explicit 0. A malformed revision sends nothing and shows an actionable notification that names Plan Review.",
+    "MoeProjectService.approveTask and MoeCommandSender.approveTask require a non-null expectedPlanRevision. ApproveTaskAction opens Plan Review instead of approving a plan that was never shown.",
+    "Headless JUnit tests cover the token mapping and the APPROVE_TASK payload, including the stamp-less and malformed cases.",
+    "Fresh verification `cd moe-jetbrains && ./gradlew test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "PURE APPROVAL DECISION, TESTS FIRST. Create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt and moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt (JUnit 4, headless, in the style of PlanReviewApprovalStateTest). Write the tests first and watch them fail.\n\nAdd `object BoardApproval` with a pure `fun decide(task: Task?): PlanReviewApprovalState.Decision`. It takes no Swing, IntelliJ or service types, so headless JUnit can drive it, like the existing state machine. Reuse that machine's types and message keys and invent none:\n- task == null gives Blocked(TASK_MISSING_KEY).\n- A status other than AWAITING_APPROVAL gives Blocked(STATUS_CHANGED_KEY). Reuse a companion status constant if one exists.\n- Otherwise map PlanReviewApprovalState.tokenOf(task.planRevision):\n  - Present(n) gives Send(task.id, n).\n  - LegacyMissing gives Send(task.id, 0). An explicit 0 is what the daemon accepts for a stamp-less row; the parser folds an absent field into 0.\n  - Malformed (null or out of range) gives Blocked(REVISION_UNUSABLE_KEY).\n\nThe decision always quotes the revision of the snapshot passed in. Callers pass the snapshot they rendered, never a fresher one; say this in the KDoc, like the state machine's first invariant.\n\nTests:\n- Present 7 sends 7.\n- Absent/legacy (planRevision 0) sends an explicit 0.\n- null and MAX_SAFE_PLAN_REVISION + 1 are Blocked with REVISION_UNUSABLE_KEY.\n- WORKING and PLANNING are Blocked with STATUS_CHANGED_KEY, and null is Blocked with TASK_MISSING_KEY.\n- Two snapshots of the same task with revisions 3 and 4 each send their own value.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt"
+      ],
+      "startedAt": "2026-10-25T10:57:13.770Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "ACTIONABLE REFUSAL AND UI GLUE.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/services/MoeNotificationService.kt, add `fun notifyApprovalBlocked(task: Task?, message: String)`. Follow the existing pattern: assertEdt, then a WARNING on the 'Moe Notifications' group. While the task is still AWAITING_APPROVAL, attach an action that opens PlanReviewDialog(project, task, service), labelled with the Plan Review wording. That action is what makes the refusal actionable.\n\nIn BoardApproval.kt, add `fun approveRendered(project: Project, service: MoeProjectService, task: Task?)`, which must run on the EDT, as every caller does:\n- On Send, call service.approveTask(id, revision).\n- On Blocked(key), call notifyApprovalBlocked(task, MoeBundle.message(key)).\nError handling: a false return from approveTask means the command never left the process. MoeCommandSender.onDisconnected already notifies once (pinned by 'disconnected approval notifies once and sends nothing'), so add no second notification. approveRendered never throws: decide() never yields an out-of-range Send, so approveTask's require() cannot fire.\n\nReuse the existing bundle keys only; no MoeBundle.properties change is needed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeNotificationService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "REQUIRE THE TOKEN IN THE COMMAND LAYER.\n- In moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt: `fun approveTask(taskId: String, expectedPlanRevision: Long): Boolean`. The parameter is non-null with no default. Keep the require() range check: anything outside 0..MAX_SAFE_PLAN_REVISION throws and nothing is sent. expectedPlanRevision is always in the payload. Rewrite the KDoc: there is no legacy token-free payload any more, citing the CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25).\n- In moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt, make the same signature change.\n- In moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt:\n  - Replace 'legacy one-argument approval sends the exact old payload' and 'an explicitly null revision is omitted rather than sent as a null token' with one test: every APPROVE_TASK packet carries expectedPlanRevision, and an explicit 0 travels as 0. Give it a comment citing the rail.\n  - Rewrite 'the facade keeps the legacy payload and an explicit zero' to cover only the explicit zero.\n  - Give the remaining one-argument calls a token, for example the transport-failure and disconnected tests. Each must keep proving what it proved before.\n  - No other assertion may weaken.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "ROUTE EVERY APPROVAL CALL SITE.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt:\n- handleNext(task): for AWAITING_APPROVAL, call BoardApproval.approveRendered(project, service, task). The task is the TaskDetailDialog snapshot it rendered.\n- onDrop: for currentTask AWAITING_APPROVAL with newStatus WORKING, call BoardApproval.approveRendered(project, service, currentTask). currentTask comes from the rendered board list.\n- onEpicDrop: when an epic header lands on WORKING, each AWAITING_APPROVAL task goes through BoardApproval.approveRendered(project, service, task) instead of updateTaskStatus. Every other task keeps updateTaskStatus, and BLOCKED is still skipped.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt, the Approve action calls BoardApproval.approveRendered(project, service, task) and then closes.\n\nIn moe-jetbrains/src/main/kotlin/com/moe/actions/ApproveTaskAction.kt, open PlanReviewDialog(project, awaitingTask, service).show() for the first AWAITING_APPROVAL task instead of approving a plan nobody was shown. update() keeps its enablement rule.\n\nPlanReviewDialog is unchanged; it already sends the captured token.\n\nAfterwards, `grep -rn \"approveTask(\" moe-jetbrains/src/main` must show only BoardApproval and PlanReviewDialog as callers outside the service layer. The non-null parameter makes any missed caller a compile error.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/actions/ApproveTaskAction.kt"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, ONCE. JetBrains is the primary IDE, so run the full plugin unit suite.\n\nTake the shared lease first: moe.acquire_resource { resourceId: 'jetbrains-gradle' }. If the lease is busy, report_blocked with that resourceId. Release it on success AND failure.\n\nRun the Gradle test task from Windows. Java is not on the WSL PATH, so follow Serena gotcha-jetbrains-gradle-gate-from-powershell and gotcha-gradle-jetbrains-shared-box: an absolute `cd /d D:\\projexts\\moes\\moe-jetbrains`, then `.\\gradlew.bat test --rerun`. --rerun matters, because an up-to-date task prints BUILD SUCCESSFUL without running anything. This is the named DoD command `cd moe-jetbrains && ./gradlew test` on this box.\n\nIt must exit 0. Its output, including the test counts from the rerun, is the complete_task evidence. Also confirm that no file outside moe-jetbrains changed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW (load adversarial-self-review), over this task's diff. Check each of the following.\n- Can any JetBrains gesture still approve without a token? Cover drag, Next, epic drop, the TaskDetailDialog button, the action and Plan Review.\n- Does any path quote a fresher revision than the one it rendered? For example, reading service.getState() at click time instead of the rendered snapshot.\n- Is LegacyMissing sent as an explicit 0, and is Malformed never sent?\n- Do the notification and Plan Review action run on the EDT? Can a double drop send two approvals? The daemon CAS makes the second refused, and nothing should crash.\n- Does the epic drop still skip BLOCKED rows and leave other transitions unchanged?\n- Was no test assertion weakened beyond the rail-cited legacy removals?\n- Does the diff stay free of the project's globalRails forbidden patterns?\nFix anything you find. If any byte changed, re-run step 5's command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt"
+      ]
+    }
+  ],
+  "planRevision": 2,
+  "status": "BLOCKED",
+  "assignedWorkerId": "worker-9cda703c",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 230.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:47:26.762Z",
+  "updatedAt": "2026-10-25T10:58:29.947Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:52:24.382Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 9
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3",
+    "worker-9cda703c",
+    "governor-187cc44e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T10:54:58.166Z",
+  "planningNotes": {
+    "approachesConsidered": "Option 1, chosen: a pure decide(task) plus thin EDT glue in one new BoardApproval object, reusing PlanReviewApprovalState.tokenOf, Decision and its bundle keys. One rule then serves every board gesture, and headless JUnit can test it.\nOption 2, rejected: driving each gesture through a full PlanReviewApprovalState. That machine models a dialog lifecycle (render, pending, finished), which board gestures do not have.\nOption 3, rejected: reading the latest cached state at click time. MoeCommandSender's and MoeDaemonClient's own docs forbid it, because the newest revision is not the reviewed one.\nOption 4, rejected: bulk epic-drop approvals skipping AWAITING tasks. Each card's rendered token keeps the existing gesture working and safe.",
+    "codebaseInsights": "PlanReviewApprovalState is deliberately Swing-free. tokenOf: null or out of range is Malformed, 0 is LegacyMissing (the parser folds an absent field into 0), anything else is Present. The bundle already has the planReview.* messages for revisionUnusable, statusChanged, taskMissing and notConnected. MoeNotificationService centralizes balloons on the 'Moe Notifications' group and asserts the EDT. MoeToolWindowPanel's onOpen already routes AWAITING_APPROVAL cards to PlanReviewDialog, while drag, Next and epic drop bypass it. MoeCommandSender.approveTask returns false and calls onDisconnected() when the socket is gone.",
+    "risks": "- Gradle runs only from Windows on this box, under the jetbrains-gradle lease, and needs --rerun; see the cited Serena memories.\n- Kotlin's non-null parameter breaks compilation of any missed caller. That is intended.\n- Removing the legacy one-argument tests is a rail-authorized deletion: cite prop-5e7763ed in the replacement test.\n- Keep the IntelliJ notification code out of decide() so it stays headless-testable.\n- Never name a global forbidden pattern in code or tests.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T10:54:58.288Z",
+  "workStartedAt": "2026-10-25T10:57:13.770Z",
+  "blockedReason": "Step 1 requires observed RED/GREEN headless JUnit before implementation. jetbrains-gradle acquisition returned granted:false, queue position 1; another worker holds the shared regression lease. No source/test edits and no checks run. Parking before introducing failing tests into the peer's shared verification tree; resume step 1 when the lease is granted.",
+  "blockedResourceId": "jetbrains-gradle",
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-25T10:58:29.947Z"
+}

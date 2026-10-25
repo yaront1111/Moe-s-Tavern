@@ -13,9 +13,63 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "CLIENT API REQUIRES THE TOKEN, TESTS FIRST.\n\nIn moe-vscode/src/services/MoeDaemonClient.ts, change the signature to `approveTask(taskId: string, expectedPlanRevision: number): boolean` and delete the token-free legacyPayload branch. Undefined now takes the same local refusal as a malformed token: no frame is sent, the method logs, and it returns false. That refusal fires _onError with { operation: 'APPROVE_TASK', message, context: { taskId } }. taskId is already in the DaemonErrorContext allowlist, so a subscriber can tell which approval was refused. Rewrite the doc comment: there is no token-free approval any more, citing CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25). It still never reads cached state to manufacture a token.\n\nIn moe-vscode/tests/plan-approval-client.test.cjs:\n- Replace 'a legacy one-argument approval omits the property entirely' and 'an explicit undefined token behaves exactly like an omitted argument' with one test: an omitted or undefined token is refused locally. No frame is sent, and onError fires once with operation APPROVE_TASK and context.taskId. Cite the rail in a comment.\n- Keep 'an omitted token is never inferred from the cached revision of that task', with its outcome now being a refusal.\n- Leave every other test unchanged.\nRun the file and see it fail before the code change.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "TASK DETAIL PANEL SENDS ITS RENDERED REVISION.\n\nIn moe-vscode/src/panels/PlanReviewPanel.ts, export the existing isPlanRevision and seedRevisionAttribute helpers unchanged. Do not duplicate this security-relevant mapping: an absent planRevision seeds '0', and a malformed one or a non-awaiting task seeds nothing.\n\nIn moe-vscode/src/panels/TaskDetailPanel.ts:\n- Add seedRevisionAttribute(task) to the existing #initial-data div, beside data-task-status.\n- Handle 'approve', and 'next' from AWAITING_APPROVAL, with this.client.approveTask(this.taskId, msg.expectedPlanRevision). The value comes from the webview message, never from this.client's cached state.\n- Error handling: subscribe once (disposables) to this.client.onError. For an APPROVE_TASK event whose context.taskId is this.taskId while this panel's own approval is pending, show vscode.window.showWarningMessage with the refusal and an 'Open Plan Review' action that calls PlanReviewPanel.createOrShow. This covers the local refusal and the daemon refusals: a stale PLAN_REVISION_MISMATCH and, after CQ-F04b, an omission. Clear the pending flag when the task leaves AWAITING_APPROVAL or the error arrives.\n- Keep the existing 'Not connected' message for a false return that fired no APPROVE_TASK error.\n\nIn moe-vscode/media/taskDetail.js, read data-plan-revision next to data-task-status. Post { type:'approve', expectedPlanRevision } and { type:'next', currentStatus, expectedPlanRevision }, sending a number, or undefined when the attribute is absent so the host refuses visibly. Refresh the value wherever currentTaskStatus is refreshed (around line 309), so it always matches what the panel shows.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/media/taskDetail.js"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "BOARD SENDS RENDERED REVISIONS.\n\nIn moe-vscode/media/board.js, add one small pure helper, renderedPlanRevision(task). It returns task.planRevision when that is a non-negative safe integer, 0 when the field is absent (the legacy row, as the daemon reads it), and undefined otherwise. task is the card's entry in currentState, which is what the board rendered.\n- navTask 'next' on AWAITING_APPROVAL posts { type:'approveTask', taskId, expectedPlanRevision: renderedPlanRevision(task) }.\n- In onDrop, a single card that is AWAITING_APPROVAL and dropped on WORKING posts approveTask with its rendered revision instead of updateTaskStatus.\n- In the epic-header sweep, each AWAITING_APPROVAL task moving to WORKING does the same. BLOCKED is still skipped, and other tasks keep updateTaskStatus.\n\nIn moe-vscode/src/providers/BoardViewProvider.ts:\n- 'approveTask' calls daemonClient.approveTask(message.taskId, message.expectedPlanRevision).\n- 'updateTaskStatus' gets a defensive guard: if the host's task is AWAITING_APPROVAL and message.status is WORKING, send nothing and show the actionable warning with 'Open Plan Review'. This guard only blocks; it never manufactures a token.\n- Track board-initiated approvals in a pending Set<string> of taskIds. Subscribe once to daemonClient.onError and warn, with 'Open Plan Review', only for APPROVE_TASK events whose context.taskId is in that set. That way PlanReviewPanel's own refusals, which it already shows inline, never double-toast. Remove the id on the error, or when the task leaves AWAITING_APPROVAL in onStateChanged, so the set stays bounded.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "PATH TESTS. Create moe-vscode/tests/approval-paths.test.cjs using the plan-review.test.cjs harness style: transpile the production TS with typescript.transpileModule, run media scripts under vm with minimal DOM and vscode stubs, and drive the PRODUCTION files, never copies. Prove each of the following.\n- board.js:\n  - navTask next, a single-card drop of an AWAITING_APPROVAL card on WORKING, and the epic sweep each post approveTask carrying the card's rendered revision. They never post updateTaskStatus to WORKING for an AWAITING card.\n  - An absent revision posts 0 and a malformed one posts undefined.\n  - If driving these handlers headless is impractical, keep the decision in one pure function in board.js and test that, with a short note explaining why.\n- taskDetail.js posts the data-plan-revision value it rendered.\n- BoardViewProvider and TaskDetailPanel:\n  - They forward the message's token even when the fake client's cached task carries a different revision.\n  - The updateTaskStatus guard sends nothing for AWAITING to WORKING.\n  - onError warns only for their own pending taskIds.\n  - A local undefined-token refusal is visible: a warning is shown and no frame is sent.\n\nRegister nothing extra: npm test already runs tests/*.test.cjs.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/approval-paths.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY, ONCE. From the repo root run fresh: cd moe-vscode && npm test && npm run compile. It must exit 0; its output is the complete_task evidence. Then confirm three things:\n- No file outside moe-vscode changed.\n- `grep -rn \"approveTask(\" moe-vscode/src` shows every caller passing a token.\n- No media script posts updateTaskStatus with WORKING for an AWAITING_APPROVAL task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/tests/approval-paths.test.cjs"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW (load adversarial-self-review), over this task's diff. Check each of the following.\n- Can any VS Code gesture approve token-free? Cover board next, drag and epic sweep, detail Approve and Next, and Plan Review.\n- Does any token come from cached host state at click time instead of the rendered webview value?\n- Does an absent revision send 0 while a malformed one never sends?\n- Can the pending set grow without bound, or can a refusal toast twice (board or detail, plus Plan Review)?\n- Do disposables unsubscribe onError when a panel closes?\n- Was no existing test assertion weakened beyond the rail-cited legacy removals?\n- Does the diff stay free of the project's globalRails forbidden patterns? Board HTML stays built the way it is today, with no new raw markup sinks.\nFix anything you find. If any byte changed, re-run step 5's command and submit that fresh output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,5 +82,37 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:36.619Z",
-  "updatedAt": "2026-10-25T10:47:36.619Z"
+  "updatedAt": "2026-10-25T10:58:08.162Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:55:13.064Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 8
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T10:58:08.036Z",
+  "planningNotes": {
+    "approachesConsidered": "Option 1, chosen: carry the rendered revision in each webview message, from the detail panel's data attribute and the board's currentState card, and have the host forward it. This follows MoeDaemonClient's documented rule that the token must be the reviewed revision, never the cached newest.\nOption 2, rejected: the host reading this.client.currentState at click time. That manufactures a token nobody reviewed.\nOption 3, rejected: duplicating the absent/malformed mapping in TaskDetailPanel. Instead, export PlanReviewPanel's seedRevisionAttribute and isPlanRevision. board.js runs in the webview and cannot import TypeScript, so it gets one small mirror helper with the same semantics.\nThe daemon-refusal toast is in scope because CQ-F04b's DoD needs every VS Code approval refusal to be actionable. Today only PlanReviewPanel subscribes to onError, so board and detail refusals would be silent once they carry tokens and can go stale.",
+    "codebaseInsights": "Only PlanReviewPanel subscribes to client.onError. JetBrains, by contrast, shows every daemon ERROR in MoeToolWindowPanel.onError. The onError event's context allowlist is { taskId, expectedPlanRevision, currentPlanRevision }, so correlating by taskId works. The tests transpile the production TypeScript and run it under vm (plan-approval-client.test.cjs, plan-review.test.cjs); npm test runs tests/*.test.cjs. board.js's onDrop handles both the epic sweep and single cards; navTask handles the card arrows.",
+    "risks": "- A double toast if pending tracking is not per panel.\n- An unbounded pending set if ids are never cleared, so clear on error AND on leaving AWAITING_APPROVAL.\n- board.js is a large DOM script and may be hard to load headless. The fallback is a pure helper in the same file, tested directly.\n- Removing the legacy one-argument tests is a rail-authorized deletion: cite prop-5e7763ed.\n- Never name a global forbidden pattern in code or tests.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/panels/PlanReviewPanel.ts",
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/media/board.js",
+      "moe-vscode/src/providers/BoardViewProvider.ts",
+      "moe-vscode/tests/plan-review.test.cjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T10:58:08.161Z"
 }
