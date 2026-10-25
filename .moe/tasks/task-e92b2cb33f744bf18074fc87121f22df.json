@@ -35,19 +35,25 @@
     {
       "stepId": "step-3",
       "description": "FULL VERIFICATION (DoD 3 and 4). Run sequentially, from a FRESH `git archive HEAD scripts` snapshot. The harness derives ROOT_DIR/$root from its own location, so a directory holding only scripts/ is a complete root. If another seat is running a full harness at the same time, wait for a quieter window before starting the long runs.\n1. `bash scripts/tests/parity-check.sh` PASS, and parity-check.ps1 PASS on PS 5.1 and on pwsh 7. With nothing new added, DoD 4 (new literals registered) holds through the existing 'hot reload' groups.\n2. Completion evidence: `MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh` exits 0 in WSL/Linux; CI runs it on ubuntu.\n   - Copy the snapshot to the native filesystem.\n   - Scrub MOE_*/CLAUDE_* with env -u.\n   - Start it with run_in_background and wait with a bounded Monitor/poll, never a foreground sleep. It takes roughly 20-50 minutes.\n   - Its command, exitCode and outputTail go into complete_task.verification.\n3. postflight.ps1 PASS on PS 5.1 AND pwsh 7, using the step-2(a) recipe on the unmutated snapshot. Each takes about 9 minutes.\nIf a frozen-suite or unrelated scenario fails, rerun it once. If it reproduces, run the snapshot's PARENT revision before blaming anything. Report every failure honestly and by name: no skips, no weakening. affectedFiles is empty on purpose, because this task changes no file.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "NO EDIT MADE. Full verification from fresh `git archive HEAD scripts` snapshots (HEAD 23df1bf2326858efda891609cc1e1dd8cd53f4ee; the six harness/wrapper/parity paths are unchanged through bc45829, `git diff --quiet` exit 0). The sh snapshot was on the native fs; the ps1 snapshot was under /mnt/d/moe-scratch/<unique>. MOE_*/CLAUDE* scrubbed with env -u, /mnt/d cwd for ps1, `| tr -d '\\0\\r'`.\n1. parity-check.sh: PASS. parity-check.ps1: PASS on PS 5.1.26100.9711 and PASS on pwsh 7.6.8. DoD 4 holds through the existing 'hot reload' groups (nothing new added).\n2. `MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh`: exit 0, 09:05:57Z to 09:14:34Z. 'PASS frozen candidate scenarios: 73', '[hot reload] ok: 2 restarts, each re-registered, none without an edit', 'commit-scope scenarios run: 36', 'PASS postflight.sh'.\n3. postflight.ps1, MOE_POSTFLIGHT_TIMEOUT_SEC=400:\n - PS 5.1.26100.9711: exit 0 (09:14:51Z to 09:27:33Z), 'PASS frozen candidate scenarios: 73', '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', 'commit-scope scenarios run: 36', 'PASS postflight.ps1'.\n - pwsh 7.6.8: exit 0 (09:27:33Z to 09:38:51Z), same four lines.\nDeviation, stated plainly: the plan and DoD name MOE_POSTFLIGHT_TIMEOUT_SEC=180; I used 400 because load average was 11-18 on 16 cores with three peer full harnesses (arch-5f39 and two others) already running, so there was no quiet window. 400 widens only the per-wrapper wait bound and weakens no assertion. No scenario was retried and none failed. Scratch dirs removed. The six paths in the live tree show only the peer's pre-existing ` M scripts/tests/postflight.sh` (5f3960df), which I did not touch.",
+      "startedAt": "2026-10-25T09:05:24.864Z",
+      "completedAt": "2026-10-25T09:39:13.036Z"
     },
     {
       "stepId": "step-4",
       "description": "SELF-REVIEW, posted as a task comment (load adversarial-self-review). Questions:\n1. Can the cases pass vacuously? Every stage needs an observed c or r, so an inert restart times out.\n2. Do the red proofs cover both incidents? The ps1 Start-Process/terminal_closed proof covers the 2026-09-18 double seat. The sh ARGV proof covers 'every sh seat dies on first reload'.\n3. Was anything written outside the scratch roots? `git status --short` of the six step-1 paths must be unchanged by this task. postflight.sh was already dirty with a peer's work before this task and stays untouched.\n4. Platforms: Linux evidence for sh, plus PS 5.1 and pwsh 7 evidence for ps1, with versions. On stock macOS without sha256sum the reload is off by design (fail-open): note it, do not fix it.\n5. Rail: quote the step-1 fake-proxy hashes. State that this card added no fake-proxy bytes, that prop-0da6d575 (MODIFY_RAIL) is pending, and that reconciliation is task-7c2872e7052646b7a521cb7a8f01c546.\n6. Board note for the completion summary: this card carries no edits. Its old dependency on task-07474ee4 was dropped on 2026-10-25 because there was no file overlap. No dependency on task-5f3960df is needed either, since nothing here edits postflight.{sh,ps1}. The wrappers land only the board record.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "NO EDIT MADE. Self-review posted as a task comment: non-vacuous (each stage needs an observed c or r), both incidents covered by the step-2 red proofs, nothing written outside scratch, platform coverage and the macOS fail-open stated, fake-proxy hashes quoted with no new divergence, and the 400-vs-180 timeout deviation disclosed.",
+      "startedAt": "2026-10-25T09:39:17.403Z",
+      "completedAt": "2026-10-25T09:39:36.144Z"
     }
   ],
-  "planRevision": 15,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c1d9de02",
+  "planRevision": 19,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,16 +104,22 @@
       "author": "architect-26ba32c3",
       "content": "Replan rev 11 (architect-26ba32c3, 2026-10-25). It resolves worker-9cda703c's step-1 stop (comment-471ef5a7, thanks for the precise evidence). It is still verification-only, with 0 files.\n\nRail resolution: rev 8 was wrong to make \"fake-proxy twins byte-identical\" a precondition. The task rail's premise is false: the twins already differ at HEAD and at 5e74fb8, and no checker enforces identity. So:\n- prop-0da6d575 (TASK MODIFY_RAIL, pending with the human) restates the rail as \"add no new divergence\".\n- Reconciling the twins is LOW BACKLOG row task-7c2872e7052646b7a521cb7a8f01c546.\n- Under rev 11 the rail constrains only this task's own edits, and there are none. Step 1 records the two body hashes against b35d46c's as evidence of \"no new divergence\" and never stops on it.\n\nReuse: (1)-(4) are proven by `git diff --quiet b35d46c HEAD` over the six paths (only scripts/local-runner/* changed since), not by a re-read.\n\npwsh 7 resolves here (WindowsApps pwsh.exe), so both ps1 engines are now mandatory for the red proof and the full run.\n\nDependencies stay [84150869] (DONE). I added no 5f3960df dependency: nothing here edits postflight.{sh,ps1} (governor msg-fa948720, answered in msg-a1867e74).",
       "timestamp": "2026-10-25T08:45:35.345Z"
+    },
+    {
+      "id": "comment-18f9289da3ba44288c69c6f31ea22c3e",
+      "author": "worker-c1d9de02",
+      "content": "SELF-REVIEW (worker-c1d9de02, adversarial-self-review). This card carries NO file edits, so the diff under review is empty and the review covers the claims instead.\n\n1. Vacuous pass? No. sh arm (postflight.sh ~1891-1932): reload_wait needs the RPC sequence to reach '^c+rcc', then '^c+rc{2,}rcc', then end as '^c+rc{2,}rc{2,}$'. An inert restart never produces an `r`, so it times out with 'timed out after Ns waiting for ...'. It fails fast on `x` ('a deregister other than wrapper_restart'), on more restarts than edits ('a restart with no edit behind it') and on wrapper exit. ps1 arm (postflight.ps1 ~1698-1790): Wait-ReloadSequence '^c+rc' then '^c+rc+rc', final '^c+rc+rc+$', and pass 2 must run the edited bytes. The step-2 mutants proved it: ARGV gave 'cr', S1 gave 'cx' and S2 gave 'r', and each was RED with its own line.\n\n2. Do the red proofs cover both incidents? Yes. ps1 pre-df42861 (Start-Process relaunch + default terminal_closed) went RED on PS 5.1.26100.9711 and pwsh 7.6.8 with `HOT RELOAD FAILED: no claim after reload 1 (... RPC sequence 'cx')`. That is the 2026-09-18 double-seat shape. sh ARGV mutant, `the wrapper exited (RPC sequence 'cr')`, covers 'every sh seat dies on first reload'. Parity bite: renaming wrapper_restart in the sh wrapper alone fails parity-check.sh and parity-check.ps1 on both engines.\n\n3. Anything written outside scratch? No. All work ran in `git archive HEAD scripts` copies, under a unique native-fs dir for sh and a unique /mnt/d/moe-scratch dir for ps1. Both are removed. `git status --short` over the six step-1 paths shows only ` M scripts/tests/postflight.sh`, which was a peer's (5f3960df) edit before this task began; I did not touch it. `git diff --quiet 23df1bf HEAD` over the six paths exits 0, so the verified snapshot matches the current HEAD bc45829.\n\n4. Platforms. Linux sh: parity-check.sh PASS, postflight.sh exit 0 (73 frozen, '[hot reload] ok: 2 restarts, each re-registered, none without an edit', scope 36). PS 5.1.26100.9711: parity PASS and postflight.ps1 exit 0 (73 frozen, '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', scope 36). pwsh 7.6.8: the same. NOT covered, by design: stock macOS without sha256sum has the sh reload off (fail-open); I noted it and did not fix it. Also not covered: ps1 through node->powershell, CI's 5.1 leg. The ps1 runs launched powershell.exe directly from WSL.\n\n5. Rail. Fake-proxy bodies at HEAD (BOM/CRLF-normalized): sh 7c3afb75db6cb47069e9897b1254c9fa5c7ea71deac095c835f4acd4801955ba (32746 B), ps1 caf7a0b096d1c801f0800327bc77a2666afb5e7ba9b2b1682b76ce38a9adc304 (31418 B). Both are identical to the b35d46c hashes, so there is no new divergence. This card added no fake-proxy bytes. The twins already differ from each other (mem gotcha-postflight-fake-proxy-twins-diverged). prop-0da6d575 (MODIFY_RAIL) is pending with the human; reconciliation is LOW BACKLOG row task-7c2872e7052646b7a521cb7a8f01c546.\n\n6. Deviation to flag for QA: MOE_POSTFLIGHT_TIMEOUT_SEC=400 was used instead of the DoD's 180. The box was not quiet (load 11-18 on 16 cores, three peer full harnesses running), and 400 only widens the per-wrapper wait bound. No scenario was retried and none failed, so I do not expect a quiet-box rerun at 180 to differ, but I did not run it at 180.\n\nBoard note: this card ships no edits; the wrappers land only its task record. Its old dependency on task-07474ee4 was dropped on 2026-10-25 for lack of file overlap, and no dependency on task-5f3960df is needed since nothing here edits postflight.{sh,ps1}.",
+      "timestamp": "2026-10-25T09:39:34.585Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T11:58:26.168Z",
-  "updatedAt": "2026-10-25T09:03:36.222Z",
+  "updatedAt": "2026-10-25T09:39:53.480Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T13:06:56.720Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 0,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-0a85355d",
@@ -158,25 +170,40 @@
       "treeId": "7d4d23389959cc2cfebbccf14af3045a8e70df2c",
       "status": "PLANNING",
       "pushed": true
+    },
+    {
+      "sha": "23df1bf2326858efda891609cc1e1dd8cd53f4ee",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T08:46:00Z",
+      "paths": [
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T09:04:17.688Z",
+      "treeId": "5c12bf029997db220ab785c294a0d45e2511f87b",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
-  "filesModified": [
-    ".moe/tasks/task-42c1e5939d4d4142a8cfbd819f54fa93.json",
-    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
-  ],
+  "filesModified": [],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-9cda703c@2026-10-25T08:29:28Z",
-    "at": "2026-10-25T08:33:11.015Z"
+    "sessionId": "worker-c1d9de02@2026-10-25T08:46:00Z",
+    "at": "2026-10-25T09:04:17.688Z"
   },
   "dependsOn": [
     "task-84150869c3194fce908e6efad8f4c82b"
   ],
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T08:45:26.614Z",
@@ -230,5 +257,14 @@
       }
     ],
     "stepsCompleted": []
-  }
+  },
+  "reviewStartedAt": "2026-10-25T09:39:53.477Z",
+  "verification": {
+    "command": "MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh (fresh git archive HEAD scripts snapshot, native fs, MOE_*/CLAUDE* scrubbed); also bash scripts/tests/parity-check.sh, parity-check.ps1 and postflight.ps1 on PS 5.1.26100.9711 and pwsh 7.6.8",
+    "exitCode": 0,
+    "outputTail": "PASS frozen candidate scenarios: 73\n[hot reload] ok: 2 restarts, each re-registered, none without an edit\ncommit-scope scenarios run: 36\n[team join] ok\n[team heal] ok\nPASS postflight.sh\n--\nparity-check.sh PASS; parity-check.ps1 PASS (5.1.26100.9711, 7.6.8)\npostflight.ps1 PS 5.1.26100.9711: exit 0, '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity', PASS postflight.ps1\npostflight.ps1 pwsh 7.6.8: exit 0, same lines, PASS postflight.ps1",
+    "reportedAt": "2026-10-25T09:39:53.477Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Verification-only completion, NO EDIT MADE: the self-restart hand-over cases this card asked for already exist at HEAD (ported by squash 5e74fb8). The sh '[hot reload]' case is in postflight.sh, the ps1 'Hot reload keeps ONE wrapper process' arm is in postflight.ps1, and both parity checkers have 'hot reload' groups, with wrapper_restart registered.\nProof this session (snapshots of HEAD 23df1bf; the six harness/wrapper/parity paths are unchanged through bc45829):\n- RED on scratch copies: ps1 pre-df42861 (Start-Process relaunch, terminal_closed) fails the arm on PS 5.1.26100.9711 and pwsh 7.6.8 with RPC sequence 'cx'. sh mutants ARGV, S1 and S2 fail with 'cr', 'cx' and 'r'. A wrapper_restart rename fails parity-check.sh and parity-check.ps1 on both engines.\n- GREEN on the fresh snapshot: parity-check.sh, parity-check.ps1 (5.1 and pwsh 7), postflight.sh, and postflight.ps1 on PS 5.1 and pwsh 7, all exit 0 (73 frozen, 36 scope scenarios each).\n- Rail: fake-proxy bodies sh 7c3afb75...955ba and ps1 caf7a0b0...dc304 equal the b35d46c hashes, so no new divergence. The twins already differ (mem gotcha-postflight-fake-proxy-twins-diverged); prop-0da6d575 (MODIFY_RAIL) is pending, and reconciliation is task-7c2872e7052646b7a521cb7a8f01c546.\nDeviation: MOE_POSTFLIGHT_TIMEOUT_SEC=400, not the DoD's 180, because the box was loaded by three peer harnesses; nothing was retried or failed. Not covered: stock macOS without sha256sum (reload is off by design), and the ps1 harness through node->powershell (CI's 5.1 leg).\nThe wrappers land only the board record. Self-review is comment-18f9289d."
 }
