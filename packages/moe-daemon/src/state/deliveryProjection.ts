@@ -5,7 +5,9 @@ import { listCandidatesForTask, SHA_RE, REVISION_RE } from './candidateStore.js'
 import { listCheckRunsForCandidate } from './checkRunStore.js';
 import { getDeliveryReceiptForCandidate } from './receiptStore.js';
 import { currentAttempt, getAttempt } from './attemptStore.js';
-import { evaluateDeliveryEvidence, EVIDENCE_TOKENS, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand } from '../delivery/policy.js';
+import {
+  evaluateDeliveryEvidence, EVIDENCE_TOKENS, PROTECTED_CHECK_CHANGED_PREFIX, REQUIRED_CHECK_TOKEN_PREFIX, requiredCheckCommand,
+} from '../delivery/policy.js';
 import { logger } from '../util/logger.js';
 
 export interface TaskDelivery {
@@ -13,8 +15,8 @@ export interface TaskDelivery {
   /** The LAST run reported on the current candidate, counted or not. A stored source that is not a CheckRunSource is omitted. */
   latestCheckRun?: Pick<CheckRun, 'command' | 'exitCode'> & Partial<Pick<CheckRun, 'source'>>;
   /**
-   * delivery/policy.ts on the required check: false while it reports the check
-   * missing, true once an owed check is satisfied. Absent under the legacy policy,
+   * delivery/policy.ts on the required check and protected required checks: false
+   * while it reports either missing or drifted, true once every owed check is satisfied. Absent under the legacy policy,
    * when no check is owed, or when the policy cannot be read.
    */
   requiredCheckSatisfied?: boolean;
@@ -63,8 +65,13 @@ function checkFor(state: StateManager, task: Task, candidate: Candidate): TaskDe
   });
 }
 
-/** Whether a check is owed, decided as policy.ts checkShortfall decides it: a DONE task's snapshot, else the live rule. */
+/**
+ * Whether a check is owed, decided as policy.ts decides it: declared protected
+ * requiredChecks, else a DONE task's gate snapshot, else the live gate rule.
+ */
 function checkOwed(state: StateManager, task: Task): boolean {
+  const declared: unknown = (task.executionContract as { requiredChecks?: unknown } | null | undefined)?.requiredChecks;
+  if (Array.isArray(declared) && declared.length > 0) return true;
   const snapshot: unknown = task.requiredCheckAtDone;
   if ((task.status === 'DONE' || task.status === 'ARCHIVED') && snapshot !== undefined) {
     return typeof snapshot === 'string' && snapshot.trim() !== '';
@@ -77,7 +84,9 @@ function requiredCheckSatisfiedFor(state: StateManager, task: Task): boolean | u
   return readEvidence(task.id, 'required-check', () => {
     const { policy, missingEvidence } = evaluateDeliveryEvidence(state, task);
     if (policy === 'legacy') return undefined;
-    if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck)) return false;
+    if (missingEvidence.some(t => t.startsWith(REQUIRED_CHECK_TOKEN_PREFIX) || t === EVIDENCE_TOKENS.unreadableRequiredCheck
+      || t.startsWith(PROTECTED_CHECK_CHANGED_PREFIX) || t === EVIDENCE_TOKENS.protectedChecksUnapproved
+      || t === EVIDENCE_TOKENS.protectedChecksUnmeasured)) return false;
     return checkOwed(state, task) ? true : undefined;
   });
 }

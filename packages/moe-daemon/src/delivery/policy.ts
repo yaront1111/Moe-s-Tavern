@@ -19,6 +19,13 @@
 //     immutable, so it is judged in every status. WHICH check is owed is live
 //     until DONE; qa_approve then binds it to task.requiredCheckAtDone, so a
 //     later settings edit or epic reshape cannot change what a DONE task owes.
+//   - PROTECTED REQUIRED CHECKS apply to a task whose executionContract declares
+//     requiredChecks, in every status. Definitions and protected file identity
+//     come only from the approved snapshot (readRequiredCheckSnapshot, bound to
+//     the current definitions): the current candidate's runner-reported
+//     protectedEntries must equal it (a changed, removed or added protected file
+//     is held until a new approval revision re-measures it), and each approved
+//     command needs its own passing run, matched exactly as the gate's.
 //
 // Which policy applies is per task (resolveTaskDeliveryPolicy): legacy and
 // observe tasks keep the live settings.deliveryPolicy, and a strict task is
@@ -39,11 +46,15 @@
 // import this module.
 
 import type { StateManager } from '../state/StateManager.js';
-import type { DeliveryPolicy, ExecutionPolicySnapshotV2, Task, TaskCommit, TaskDeliveryEvidence } from '../types/schema.js';
+import type {
+  Candidate, DeliveryPolicy, ExecutionPolicySnapshotV2, ProtectedCheckDefinition, Task, TaskCommit, TaskDeliveryEvidence,
+} from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { listCandidatesForTask, renderGot } from '../state/candidateStore.js';
 import { listCheckRunsForCandidate } from '../state/checkRunStore.js';
+import { validateExecutionContract } from '../state/validators.js';
+import { protectedPaths, readRequiredCheckSnapshot } from './requiredChecks.js';
 import {
   DEFAULT_DELIVERY_POLICY,
   DELIVERY_POLICIES,
@@ -66,9 +77,21 @@ export const EVIDENCE_TOKENS = {
   manualArtifact: 'manual-artifact',
   /** A DONE task's requiredCheckAtDone is neither a command nor null, so the check it owes cannot be read. */
   unreadableRequiredCheck: 'unreadable-required-check',
+  /** The task has protected required checks but no snapshot bound to its current definitions. */
+  protectedChecksUnapproved: 'protected-checks-unapproved',
+  /** The current candidate reports no readable protectedEntries, so drift cannot be judged. */
+  protectedChecksUnmeasured: 'protected-checks-unmeasured',
 } as const;
 
 export const REQUIRED_CHECK_TOKEN_PREFIX = 'required-check:';
+export const PROTECTED_CHECK_CHANGED_PREFIX = 'protected-check-changed:';
+/** Changed-path tokens beyond this are summarised as `protected-check-changed:+<n> more`. */
+const MAX_CHANGED_TOKENS = 10;
+
+/** `protected-check-changed:<path>`: a protected path whose blob differs from, is missing from, or was added to the approved snapshot. */
+export function protectedCheckChangedToken(path: string): string {
+  return `${PROTECTED_CHECK_CHANGED_PREFIX}${path}`;
+}
 
 /** `required-check:<command>`, the command exactly as the wrapper runs it (the trimmed qualityGate). */
 export function requiredCheckToken(command: string): string {
@@ -219,15 +242,81 @@ export function requiredCheckCommand(state: StateManager, task: Task): string | 
 function hasPassingCheck(state: StateManager, taskId: string, command: string): boolean {
   try {
     const candidates = listCandidatesForTask(state, taskId);
-    const current = candidates[candidates.length - 1];
-    if (!current || typeof current.treeSha !== 'string' || current.treeSha === '') return false;
-    return listCheckRunsForCandidate(state, current.id).some((run) =>
-      run.candidateId === current.id && run.treeSha === current.treeSha &&
-      typeof run.command === 'string' && run.command.trim() === command &&
-      run.exitCode === 0 && run.source === 'runner-observed');
+    return passedOn(state, candidates[candidates.length - 1], command);
   } catch (err) {
     logger.warn({ err, taskId }, 'Delivery policy: check evidence unreadable; reporting it missing');
     return false;
+  }
+}
+
+/** The one passing-run match, shared by the quality gate and protected required checks. May throw. */
+function passedOn(state: StateManager, current: Candidate | undefined, command: string): boolean {
+  if (!current || typeof current.treeSha !== 'string' || current.treeSha === '') return false;
+  return listCheckRunsForCandidate(state, current.id).some((run) =>
+    run.candidateId === current.id && run.treeSha === current.treeSha &&
+    typeof run.command === 'string' && run.command.trim() === command &&
+    run.exitCode === 0 && run.source === 'runner-observed');
+}
+
+/** True for a path that is, or lies under, one of the protected paths. Exact and case-sensitive, like git. */
+function underProtected(roots: readonly string[], file: string): boolean {
+  return roots.some((root) => file === root || file.startsWith(`${root}/`));
+}
+
+/**
+ * Changed-path tokens: every protected path whose candidate oid differs from the
+ * approved snapshot, that the candidate lacks, or that the candidate ADDED (a new
+ * test under an assertion root). Null when the candidate's entries are unreadable.
+ */
+function protectedDrift(roots: readonly string[], approved: readonly { path: string; oid: string }[], reported: unknown): string[] | null {
+  if (!Array.isArray(reported)) return null;
+  const candidate = new Map<string, string>();
+  for (const entry of reported as unknown[]) {
+    const { path, oid } = (entry ?? {}) as { path?: unknown; oid?: unknown };
+    if (typeof path !== 'string' || typeof oid !== 'string' || candidate.has(path)) return null;
+    if (underProtected(roots, path)) candidate.set(path, oid);
+  }
+  const approvedMap = new Map(approved.map((e) => [e.path, e.oid]));
+  const paths = [...new Set([...approvedMap.keys(), ...candidate.keys()])]
+    .filter((p) => approvedMap.get(p) !== candidate.get(p))
+    .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  const tokens = paths.slice(0, MAX_CHANGED_TOKENS).map(protectedCheckChangedToken);
+  if (paths.length > MAX_CHANGED_TOKENS) tokens.push(protectedCheckChangedToken(`+${paths.length - MAX_CHANGED_TOKENS} more`));
+  return tokens;
+}
+
+/**
+ * Protected required checks (executionContract.requiredChecks). The definitions and
+ * the files they protect come ONLY from the approved snapshot (readRequiredCheckSnapshot),
+ * never from candidate data or live settings. The current candidate's runner-reported
+ * protectedEntries must equal the snapshot, and each approved command needs its own
+ * passing run on that candidate's tree: another command never stands in for it.
+ */
+function protectedCheckShortfall(state: StateManager, task: Task): string[] {
+  // Only a declared requiredChecks is judged: other contract damage keeps today's verdict.
+  if ((task.executionContract as { requiredChecks?: unknown } | null | undefined)?.requiredChecks === undefined) return [];
+  let defs: readonly ProtectedCheckDefinition[];
+  try {
+    defs = validateExecutionContract(task.executionContract)?.requiredChecks ?? [];
+  } catch (err) {
+    logger.warn({ err, taskId: task.id }, 'Delivery policy: requiredChecks unreadable; reporting them unapproved');
+    return [EVIDENCE_TOKENS.protectedChecksUnapproved];
+  }
+  if (defs.length === 0) return [];
+  const snapshot = readRequiredCheckSnapshot(task);
+  if (!snapshot) return [EVIDENCE_TOKENS.protectedChecksUnapproved];
+  // Trimmed like qualityGate: the validator keeps padding no shell would see.
+  const owed = (passed: (command: string) => boolean) =>
+    [...new Set(defs.map((d) => d.command.trim()))].filter((c) => !passed(c)).map(requiredCheckToken);
+  try {
+    const candidates = listCandidatesForTask(state, task.id);
+    const current = candidates[candidates.length - 1];
+    const roots = protectedPaths(defs).map((p) => p.path);
+    const drift = current ? protectedDrift(roots, snapshot.entries, current.protectedEntries) : null;
+    return [...(drift ?? [EVIDENCE_TOKENS.protectedChecksUnmeasured]), ...owed((c) => passedOn(state, current, c))];
+  } catch (err) {
+    logger.warn({ err, taskId: task.id }, 'Delivery policy: protected check evidence unreadable; reporting it missing');
+    return [EVIDENCE_TOKENS.protectedChecksUnmeasured, ...owed(() => false)];
   }
 }
 
@@ -292,7 +381,8 @@ export function evaluateDeliveryEvidence(state: StateManager, task: Task, attest
   const policy = resolveTaskDeliveryPolicy(state.project?.settings, task);
   if (policy === 'legacy') return { policy, satisfied: true, missingEvidence: [] };
   const landing = LANDING_JUDGED.has(task.status) ? [] : landingShortfall(policy, task, attestations);
-  const missingEvidence = [...landing, ...checkShortfall(state, task)];
+  // First-seen order: a command both qualityGate and a protected check owe appears once.
+  const missingEvidence = [...new Set([...landing, ...checkShortfall(state, task), ...protectedCheckShortfall(state, task)])];
   return { policy, satisfied: missingEvidence.length === 0, missingEvidence };
 }
 
@@ -349,6 +439,8 @@ const TOKEN_REASONS = new Map<string, string>([
   [EVIDENCE_TOKENS.mergedPullRequest, 'no merged pull request was attested; pass mergedPullRequest naming it'],
   [EVIDENCE_TOKENS.manualArtifact, 'no manual artifact was attested; pass manualArtifact naming the deliverable you checked'],
   [EVIDENCE_TOKENS.unreadableRequiredCheck, 'task.requiredCheckAtDone is neither a command nor null, so the check owed at DONE cannot be judged'],
+  [EVIDENCE_TOKENS.protectedChecksUnapproved, 'executionContract.requiredChecks has no approved snapshot bound to its current definitions; moe.submit_plan measures one'],
+  [EVIDENCE_TOKENS.protectedChecksUnmeasured, 'the current candidate reports no readable protectedEntries, so its protected check files cannot be compared with the approved snapshot'],
 ]);
 
 /** A readable reason for one missing-evidence token. */
@@ -356,6 +448,9 @@ export function describeMissingEvidence(token: string): string {
   if (token.startsWith(REQUIRED_CHECK_TOKEN_PREFIX)) {
     const command = token.slice(REQUIRED_CHECK_TOKEN_PREFIX.length);
     return `no runner-observed exit-0 run of "${command}" is recorded for the current candidate's tree`;
+  }
+  if (token.startsWith(PROTECTED_CHECK_CHANGED_PREFIX)) {
+    return 'a protected check file differs from the approved snapshot (changed, removed or added); only a new approval revision that re-measures it accepts the change';
   }
   return TOKEN_REASONS.get(token) ?? 'unrecognised evidence token';
 }

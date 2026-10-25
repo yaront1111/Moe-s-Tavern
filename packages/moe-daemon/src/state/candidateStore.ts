@@ -16,9 +16,9 @@
 // nothing changes, so it is not a mutation. Readers hand out copies, so no
 // caller can edit a stored candidate in memory either.
 //
-// Never checked against git: baseRevision and treeSha are recorded exactly as
-// the runner reported them and validated for shape only — never observed, never
-// verified.
+// Never checked against git: baseRevision, treeSha and protectedEntries are
+// recorded exactly as the runner reported them and validated for shape only —
+// never observed, never verified.
 //
 // Follows the resourceStore / attemptStore pattern: stateless functions taking
 // the state handle first; every mutation assumes THE CALLER HOLDS state.mutex
@@ -36,6 +36,7 @@ import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/e
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { getAttempt } from './attemptStore.js';
+import { normalizeAffectedFile } from '../util/affectedFiles.js';
 
 // SHA_RE and REVISION_RE are SHA-1 only BY RULE: a 64-hex (sha256) object id is
 // refused. The wrappers refuse a sha256 repository at their git probe
@@ -67,6 +68,8 @@ export interface RecordCandidateParams {
   baseRevision: string;
   treeSha: string;
   deliveryTarget: string;
+  /** Optional runner-measured ls-tree entries of the protected check paths; see Candidate. */
+  protectedEntries?: Candidate['protectedEntries'];
 }
 
 export interface RecordCandidateResult {
@@ -138,6 +141,41 @@ function readOptionalId(value: unknown): string | undefined {
   return validateEntityId(value, 'id');
 }
 
+/** The bound delivery/requiredChecks.ts puts on an approved snapshot's entries. */
+const MAX_PROTECTED_ENTRIES = 2000;
+const BLOB_OID_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * Absent stays absent. Otherwise exact {path, oid} entries: a normalized path, a
+ * lowercase 40-hex oid, strictly ascending by UTF-8 bytes (the snapshot's order).
+ */
+function readProtectedEntries(value: unknown): Candidate['protectedEntries'] {
+  const field = 'protectedEntries';
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw invalidInput(field, `must be an array (got ${renderGot(value)})`);
+  if (value.length > MAX_PROTECTED_ENTRIES) {
+    throw invalidInput(field, `must have at most ${MAX_PROTECTED_ENTRIES} entries (got ${value.length})`);
+  }
+  let previous: string | undefined;
+  return value.map((entry: unknown, i) => {
+    const at = `${field}[${i}]`;
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).length !== 2
+        || !Object.hasOwn(entry, 'path') || !Object.hasOwn(entry, 'oid')) {
+      throw invalidInput(at, `must be an object with exactly path and oid (got ${renderGot(entry)})`);
+    }
+    const { path: raw, oid } = entry as { path: unknown; oid: unknown };
+    const path = normalizeAffectedFile(raw, `${at}.path`);
+    if (path !== raw) throw invalidInput(`${at}.path`, 'must already be normalized');
+    if (hasControlChar(path)) throw invalidInput(`${at}.path`, 'must not contain control characters');
+    if (typeof oid !== 'string' || !BLOB_OID_RE.test(oid)) throw invalidInput(`${at}.oid`, 'must be a lowercase 40-hex object id');
+    if (previous !== undefined && Buffer.compare(Buffer.from(previous), Buffer.from(path)) >= 0) {
+      throw invalidInput(`${at}.path`, 'must sort strictly after the previous entry (UTF-8 bytes, no duplicates)');
+    }
+    previous = path;
+    return { path, oid };
+  });
+}
+
 /**
  * Validate a candidate's caller-supplied fields, refusing rather than coercing.
  * Exported so the record_candidate tool refuses malformed input BEFORE its
@@ -149,6 +187,7 @@ export function validateCandidateParams(raw: unknown): RecordCandidateParams {
   }
   const fields = raw as RawCandidateParams;
   const id = readOptionalId(fields.id);
+  const protectedEntries = readProtectedEntries(fields.protectedEntries);
   return {
     ...(id !== undefined ? { id } : {}),
     attemptId: requireEntityRef('attemptId', fields.attemptId),
@@ -156,10 +195,14 @@ export function validateCandidateParams(raw: unknown): RecordCandidateParams {
     baseRevision: requireSha('baseRevision', fields.baseRevision),
     treeSha: requireSha('treeSha', fields.treeSha),
     deliveryTarget: requireDeliveryTarget(fields.deliveryTarget),
+    ...(protectedEntries !== undefined ? { protectedEntries } : {}),
   };
 }
 
-const copy = (candidate: Candidate): Candidate => ({ ...candidate });
+const copy = (candidate: Candidate): Candidate => ({
+  ...candidate,
+  ...(Array.isArray(candidate.protectedEntries) ? { protectedEntries: candidate.protectedEntries.map((e) => ({ ...e })) } : {}),
+});
 
 /** createdAt, then id: a tie on the clock can never reorder the output. */
 function byCreatedAtThenId(a: Candidate, b: Candidate): number {
@@ -210,7 +253,11 @@ export function caseVariantId(ids: Iterable<string>, id: string): string | undef
  * different candidate and needs its own id.
  */
 function replayOrRefuse(stored: Candidate, incoming: RecordCandidateParams): Candidate {
-  const differingFields = RECORDED_FIELDS.filter((field) => stored[field] !== incoming[field]);
+  const differingFields: string[] = RECORDED_FIELDS.filter((field) => stored[field] !== incoming[field]);
+  // Canonical JSON: both sides are {path, oid} lists, and absent never equals [].
+  if (JSON.stringify(stored.protectedEntries ?? null) !== JSON.stringify(incoming.protectedEntries ?? null)) {
+    differingFields.push('protectedEntries');
+  }
   if (differingFields.length === 0) return copy(stored);
   throw new MoeError(
     MoeErrorCode.STATE_CONFLICT,
@@ -278,6 +325,7 @@ export async function recordCandidate(
     baseRevision: input.baseRevision,
     treeSha: input.treeSha,
     deliveryTarget: input.deliveryTarget,
+    ...(input.protectedEntries !== undefined ? { protectedEntries: input.protectedEntries } : {}),
     createdAt: new Date().toISOString(),
   };
   // writeEntity validates the id against path traversal, creates

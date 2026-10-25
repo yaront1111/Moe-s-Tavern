@@ -11,6 +11,7 @@ import { contextStatus } from '../util/contextStatus.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
 import { routingInfo } from '../util/routing.js';
 import { currentAttempt } from '../state/attemptStore.js';
+import { readRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 import {
   readExecutionPolicySnapshot,
   resolveExecutionProfile,
@@ -389,6 +390,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const taskCandidates = task ? listCandidatesForTask(state, task.id) : [];
       const currentCandidate = taskCandidates.length > 0 ? taskCandidates[taskCandidates.length - 1] : undefined;
       const executionPolicy = task ? executionPolicyContext(state, task) : undefined;
+      // The approved protected-check overlay; readRequiredCheckSnapshot never throws
+      // and answers null for a stale, forged or malformed snapshot, which is omitted.
+      const requiredCheckSnapshot = task ? readRequiredCheckSnapshot(task) : null;
       // Role trim applies only to the default view; view:"full" is never gated by role.
       const callerRole = params.view !== 'full' && task && callerWorkerId
         ? resolveWorkerRole(state, callerWorkerId) : undefined;
@@ -421,6 +425,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               // Mandatory execution context for workers and QA; never role-trimmed.
               ...(task.executionContract !== undefined && task.executionContract !== null
                 ? { executionContract: task.executionContract } : {}),
+              ...(requiredCheckSnapshot ? { requiredCheckSnapshot } : {}),
               status: task.status,
               priority: task.priority,
               assignedWorkerId: task.assignedWorkerId,

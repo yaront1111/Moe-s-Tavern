@@ -1259,6 +1259,12 @@ export interface Candidate {
   readonly treeSha: string;
   /** Where the runner intends to deliver the bytes, e.g. `refs/heads/wave1-pilot`. */
   readonly deliveryTarget: string;
+  /**
+   * The runner's `git ls-tree -r` entries for the task's protected check paths in
+   * this tree, strictly ascending by path (UTF-8 bytes). Reported, never verified
+   * by the daemon (V03 authenticates runners). Absent means not measured.
+   */
+  readonly protectedEntries?: readonly { readonly path: string; readonly oid: string }[];
   /** Daemon clock when the candidate was first recorded. */
   readonly createdAt: string;
 }
