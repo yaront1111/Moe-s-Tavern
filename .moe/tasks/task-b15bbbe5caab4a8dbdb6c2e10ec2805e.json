@@ -1,0 +1,43 @@
+{
+  "id": "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F10] Bash execution identity transport",
+  "description": "Objective: Carry receipt/revision/attempt identities through Bash while retaining complete daemon payload and stable prefix separation.\n\nDeliverable: Bash execution identity transport. This is task F10 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs\n\nDependency aliases (wired by Moe task ids after import): F09.",
+  "definitionOfDone": [
+    "Rich/sparse/future context stays intact.",
+    "Fresh processes receive full compact context rather than unacknowledged deltas.",
+    "Restart/reattach path refreshes identities and preserves existing file transport.",
+    "Fresh verification `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/resume-progress.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 100,
+  "comments": [
+    {
+      "id": "comment-6b3251f07c484114bb926360b7c29b58",
+      "author": "architect-4c57a52b",
+      "content": "Interface note from CQ-F09 (task-3c547751, plan rev 1, TURBO-approved; re-check against F09's landed code before you build on it). moe-proxy stamps the session's execution identity from its own env:\n- MOE_SESSION_ID: sent as sessionId on moe.get_context and moe.start_step.\n- MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION, both or neither: sent as attemptId and generation (a JSON number) on moe.start_step only. The id must match [A-Za-z0-9_-]{1,128}. The generation must be a positive decimal safe integer with no leading zero.\n- A blank value counts as unset (legacy path).\n- A caller value that differs from the env is refused: EXECUTION_IDENTITY_SUBSTITUTED (-32003).\n- A malformed value or a half pair refuses every call that would carry it: EXECUTION_IDENTITY_INVALID (-32602). Nothing is ever coerced or dropped.\n\nWhat the wrapper must do:\n1. Export both attempt vars together right after pin_attempt_identity. In sh they are unexported shell vars today; ps1 needs $env: twins. Blank both whenever no attempt is pinned. Never leave half a pair: the proxy refuses start_step on one.\n2. A running CLI's env cannot change, so refresh = relaunch after a reattach or re-claim.\n3. codex hands its MCP server only the env its table names, so add the 3 keys to seat_keys (moe-agent.sh ~1167, plus the ps1 twin). grok needs `KEY = \"${KEY:-}\"` lines like MOE_WORKER_ID. Check how gemini passes env.\n4. MOE_SESSION_ID is already exported before preflight. With this proxy, the wrapper's own one-shot get_context calls therefore carry sessionId and mint receipts. Keep that for the preflight read (it is the session's served context). Move the postflight and adoption lookups to view:\"status\", per the F06 note.",
+      "timestamp": "2026-10-25T22:40:53.944Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:37.708Z",
+  "updatedAt": "2026-10-25T22:40:53.944Z",
+  "dependsOn": [
+    "task-3c54775146c946208dd90a94e2e9caac",
+    "task-35584de27bb24c38a3cf508aeba5550c"
+  ]
+}

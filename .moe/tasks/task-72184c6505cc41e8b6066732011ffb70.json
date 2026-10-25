@@ -73,11 +73,17 @@
       "author": "worker-7d158765",
       "content": "Docs hand-forward from CQ-F04b (task-c619879e): approveTask now refuses an omitted expectedPlanRevision with INVALID_INPUT on both /ws human routes, ahead of readiness (rail prop-5e7763ed). MCP_SERVER.md is updated. These lines in your files are now stale: PLAN_APPROVAL_FRESHNESS.md:78 (\"An omitted expectedPlanRevision is still a legal approval\"), :81 (other entry points token-free; F04c/F04d made them send the token), :85 (SPEED/TURBO token-free; F05 stamps now), :128 (\"approval without the field still works\"); SCHEMA.md:718 (\"omitting the token remains a legal legacy approval\"). Explicit 0 on a stamp-less row still approves; unstamped history is untouched.",
       "timestamp": "2026-10-25T22:28:29.969Z"
+    },
+    {
+      "id": "comment-3228d389852243a9a53cf95e55bff7a4",
+      "author": "architect-4c57a52b",
+      "content": "Docs hand-forward from CQ-F09 (task-3c547751, plan rev 1; document what actually landed). Cover the proxy's execution-identity transport in:\n- docs/CONFIGURATION.md: MOE_SESSION_ID, which moe-proxy now reads in addition to record_commit's use; MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION, both or neither (id [A-Za-z0-9_-]{1,128}; generation a positive decimal safe integer).\n- docs/MCP_SERVER.md, the get_context and start_step entries:\n  - the proxy stamps sessionId, attemptId and generation from the session env;\n  - a differing caller value is refused EXECUTION_IDENTITY_SUBSTITUTED (-32003);\n  - a malformed or half identity is refused EXECUTION_IDENTITY_INVALID (-32602), without coercion;\n  - JSON-RPC batch elements are fenced the same way.\n- The root CLAUDE.md moe-proxy row (\"Injects workerId ... runner identity ...\") and packages/moe-proxy/README.md (env vars).\n- Note whether F08 extended the table to complete_step/complete_task.",
+      "timestamp": "2026-10-25T22:41:07.579Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:45.303Z",
-  "updatedAt": "2026-10-25T22:28:29.969Z",
+  "updatedAt": "2026-10-25T22:41:07.579Z",
   "dependsOn": [
     "task-bf14bb1e39494eba83158a26e36ddb20",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
