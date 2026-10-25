@@ -95,7 +95,7 @@
     }
   ],
   "planRevision": 23,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -135,14 +135,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:18:07.718Z",
-  "updatedAt": "2026-10-25T23:16:11.437Z",
+  "updatedAt": "2026-10-25T23:23:30.956Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:01:48.266Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-25T23:23:30.955Z",
+    "wallClockMs": 48102689
   },
   "contextFetchedBy": [
     "qa-7c627d35",
@@ -253,6 +255,25 @@
       "treeId": "e37e35cd8e4e8bdf5567abf9353122d9d25e89d1",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "9e62b27c14d3d167dd53267e0a5af4e4867f793f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-25T23:04:30Z",
+      "paths": [
+        ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+        ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json",
+        ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-25T23:16:45.548Z",
+      "treeId": "1fb29091b53d63b1e3f2e3938102a2328c28559c",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -262,14 +283,18 @@
     "packages/moe-daemon/src/server/planApproval.test.ts",
     "packages/moe-daemon/src/server/planApproval.integration.test.ts",
     "packages/moe-daemon/src/server/WebSocketServer.test.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json",
+    ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-7c627d35@2026-10-25T22:37:06Z",
-    "at": "2026-10-25T22:44:07.248Z"
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-25T23:04:30Z",
+    "at": "2026-10-25T23:16:45.548Z"
   },
   "workStartedAt": "2026-10-25T22:19:46.711Z",
   "declaredFiles": [
@@ -294,9 +319,10 @@
     "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
     "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
     "packages/moe-daemon/src/state/taskStore.ts",
-    "packages/moe-daemon/src/server/WebSocketServer.ts"
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "scripts/tests/onboarding.mjs"
   ],
-  "reviewCompletedAt": "2026-10-25T22:42:41.363Z",
+  "reviewCompletedAt": "2026-10-25T23:23:30.955Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Every changed legacy-pin or held-out test cites the human-approved MODIFY_RAIL; no supported JetBrains/VS Code approval action loses approval without an actionable refusal."
@@ -337,5 +363,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-25T23:23:30.955Z",
+  "reviewSummary": "APPROVED reopen 1: the onboarding.mjs defect is fixed.\n\nDelivery: completion 9e62b27 (this round) is on moe/work-2026-10-24, and the docs hunk is in checkpoint 42c2fa4. Owned paths are clean against HEAD. Task range +167/-95 (net 72); fix +4/-1.\n\nQA re-run on a Linux git archive of 9e62b27 (native deps with lock equal, env -i, MOE_* unset):\n- Daemon npm test: EXIT 0, 165 files, 4179 passed / 14 skipped. tsc: 0.\n- Daemon build and proxy tsc, then onboarding.mjs: EXIT 0 with the PASS line.\n- Pre-fix smoke: EXIT 1, \"Timed out: board approval\" (daemon logs INVALID_INPUT).\n- Pre-task taskStore.ts fails 21 of 460 focused tests.\nLogs: /tmp/moe-qa-f04b-r2q/.\n\nDoD:\n1. The guard throws INVALID_INPUT before decode, compare, readiness, the write and the SPEED cancel. It has only 2 callers, APPROVE_TASK and the drag, and the drag writes nothing before it. Tests assert unchanged bytes, status and stamp, no publish, no PLAN_APPROVED activity and no peer TASK_UPDATED, on both routes, on unnegotiated sockets and on strict rows.\n2. No backfill: the stamp comes only from a decoded token. The explicit-0 pins are unchanged and green, and the held-out file is untouched.\n3. Every flipped pin cites prop-5e7763ed, including onboarding.mjs.\n   - JetBrains: approveTask(Long) is called only from BoardApproval and PlanReviewDialog, and Next, drop, epic drop and the detail Approve all use BoardApproval.\n   - VS Code: approveTask refuses undefined via onError, and a token-free board drag gets showApprovalRefusal.\n   - Grep: no other /ws approval sender in scripts/ (the claude-plugin sends AGENT_TOOL_EVENT only).\n4. Green, as above. No client code changed.\n\nNon-blocking:\n- VS Code types/moe.ts:438 still types the token as optional; the runtime guard covers it.\n- A JetBrains drop of an unknown task is refused by the daemon, not approved (task-aa79a8eb).\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
