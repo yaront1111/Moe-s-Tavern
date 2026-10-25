@@ -61,7 +61,7 @@
     }
   ],
   "planRevision": 18,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,14 +81,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:28:10.463Z",
-  "updatedAt": "2026-10-25T10:33:45.003Z",
+  "updatedAt": "2026-10-25T10:45:40.290Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T07:48:06.707Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-25T10:45:40.290Z",
+    "wallClockMs": 10653583
   },
   "contextFetchedBy": [
     "worker-e8965f51",
@@ -284,7 +286,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "Re-land only, no code change, per the QA rejection (delivery gap) and the reopenReason. This session is a real Claude CLI (parent argv is claude). It made a witnessed Claude Edit round trip on scripts/tests/postflight.sh:1590, changing the comment word 'spelling' to 'wording' and back with two Edit calls. Final bytes are identical: sha256 d608e18b29ee0659c4d133e323dec2b7d62170808fdbfbd0d6545c2b97adce24. git diff HEAD is still +21/-5: -ef folder identity, the fail-closed alias self-check, the cygpath-gated CRLF .cmd shim, and the win32-only native() for the interactive realpath. All six account scenarios are retained. The wrapper should now land scripts/tests/postflight.sh; QA should check `git show --numstat <completion sha>`.\nFresh verification (bash /tmp/moe-5f39-evidence/c1d9-verify.sh, exit 0):\n- sha256sum -c OK and bash -n OK.\n- The plan's accounts-only anchor harness passes on Linux/WSL (seat account vars stripped) and on native Git Bash: [accounts] ok on both.\nThe historical full gate on these exact bytes passed (full-gate.exit=0; [accounts] ok at L75/L269, PASS postflight.sh at L194/L521); per QA it was not re-run. The adversarial review found no issues. No edits to the lease helper, wrappers, mods or postflight.ps1, and no real account or model access. No git writes; foreign dirt untouched. Serena handoff and gotcha memories updated.",
-  "reviewCompletedAt": "2026-10-25T10:11:28.251Z",
+  "reviewCompletedAt": "2026-10-25T10:45:40.290Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The fake account CLI recognizes the same account folder in Windows and POSIX forms without reading any real Claude config directory.",
@@ -333,5 +335,8 @@
   "blockedOnTaskIds": null,
   "touchedFiles": [
     "scripts/tests/postflight.sh"
-  ]
+  ],
+  "completedAt": "2026-10-25T10:45:40.290Z",
+  "reviewSummary": "The re-land closes reject #1's delivery gap. Completion commit 56023de is on moe/work-2026-10-24 (pushed). `git show --numstat` lists scripts/tests/postflight.sh +21/-5 plus 6 board JSONs. The Moe-Contested trailer is present, but the numstat proves the path landed.\n\nByte identity: the 56023de blob, the HEAD blob and the worktree file all hash to sha256 d608e18b…, which equals verified-bytes.sha256, the bytes the historical full gate ran (full-gate.exit=0; log has [accounts] ok at L75/L269, PASS postflight.sh at L194/L521, frozen 73 at L74/L268).\n\nFresh QA re-run: task.verification (c1d9-verify.sh, scratch path renamed to qa-5f39-b0c1) exited 0.\n- sha256sum -c OK and bash -n OK.\n- Accounts-only anchor harness: [accounts] ok + PASS-accounts-only on Linux/WSL (seat account vars stripped) and on native Git Bash via bash.exe.\n\nDoD:\n1. `-ef` folder identity is computed once into acct1 and used by both branches. It is false for an unset or empty dir and for a missing path. The fail-closed alias self-check (cygpath -w on Windows, /./ on Linux) has red proofs in selfcheck-red.log and always-true-red.log. It never reads inside a config dir.\n2. All six account scenarios pass natively. The cygpath-gated CRLF .cmd shim fixes signout/other (native-red showed probes []). The win32-only native() fixes the interactive realpath.\n3. The WSL half is green. Only fake CLIs are used; there is no real account or model access.\n\nRetained coverage: the only removed `-` assertion line is replaced in place by its native()-wrapped equivalent; nothing is weakened. No changes to moe-account-lease.mjs, moe-agent.*, scripts/mods or postflight.ps1. Diff size is 26 changed lines, so no size concern.",
+  "requiredCheckAtDone": null
 }
