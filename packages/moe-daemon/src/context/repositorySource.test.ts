@@ -127,7 +127,7 @@ function fixture(files: Record<string, string | Buffer> = { 'src/a.ts': 'hello\n
     git(['update-ref', 'refs/heads/fixture', commit]); return { commit, tree };
   };
   const oids = Object.fromEntries(Object.entries(files).map(([name, content]) => [name, put(name, content)]));
-  return { root, put, save, link, oids, ...save() };
+  return { root, git, put, save, link, oids, ...save() };
 }
 const options = { limits: { timeBudgetMs: 10000 } };
 const raw = (text: string): GitHeadResult => ({ stdout: Buffer.from(text), truncated: false, exitCode: 0, stderr: '' });
@@ -220,6 +220,14 @@ describe('immutable repository reads', () => {
 });
 
 describe('literal searches and aggregate bounds', () => {
+  it('pins match output when local grep.column is enabled', async () => {
+    const f = fixture({ 'src/a.ts': 'first\n  hello\n' });
+    f.git(['config', '--local', 'grep.column', 'true']);
+    const result = await source.readRepositorySource(f.root, f.commit, [search()], options);
+    expect(result.items[0]).toEqual({ id: 's', purpose: 'caller', op: 'search', status: 'served',
+      matches: [{ path: 'src/a.ts', line: 2, text: '  hello' }], bytes: Buffer.byteLength('src/a.ts  hello') });
+    expect(result.complete).toBe(true);
+  });
   it('serves exact committed matches with spaces, lines, and literal-only limitations', async () => {
     const f = fixture({ 'dir/a space.ts': 'first\nhello world\n', 'other': 'no' });
     const result = await source.readRepositorySource(f.root, f.commit, [search()], options);
@@ -288,15 +296,17 @@ describe('literal searches and aggregate bounds', () => {
     Buffer.from(`${commit}:a\0` + '0\0hello\n'), Buffer.from(`${commit}:a\0` + 'oops\0hello\n'),
     Buffer.concat([Buffer.from(`${commit}:a\0` + '1\0hello'), Buffer.from([255, 10])]),
     Buffer.from(`${commit}:a\0` + '1\0unterminated'),
+    Buffer.from(`${commit}:a\0` + '1\0' + '3\0  hello\n'),
   ])('marks undecodable or unrepresentable records explicitly %#', async stdout => {
     const f = fixture();
     const result = await source.readRepositorySource(f.root, commit, [search()], { run: fakeRun(f.root), head: async () => ({ ...raw(''), stdout }) });
     expect(result.items[0]).toMatchObject({ status: 'truncated', reason: 'undecodable-match', matches: [] });
   });
   it('does not interpret literal or pathspec metacharacters as options', async () => {
-    const f = fixture({ 'literal[1].ts': '-hello\n', 'else': 'hello' });
+    const f = fixture({ 'literal[1].ts': '-hello\n', 'literal1.ts': '-hello\n', 'else': 'hello' });
     const result = await source.readRepositorySource(f.root, f.commit, [{ ...search(['literal[1].ts']), literal: '-hello' }], options);
     expect(result.items[0]).toMatchObject({ status: 'served', matches: [{ path: 'literal[1].ts', line: 1, text: '-hello' }] });
+    expect(result.items[0].matches).toHaveLength(1);
   });
   it('does not turn grep failure into an empty success', async () => {
     const f = fixture();

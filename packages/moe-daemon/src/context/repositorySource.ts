@@ -212,7 +212,7 @@ function decodeMatch(commit: string, name: Buffer, line: Buffer, text: Buffer): 
     const number = decoder.decode(line);
     if (!fullPath.startsWith(`${commit}:`) || !/^[0-9]+$/.test(number) || !Number.isSafeInteger(Number(number)) || Number(number) < 1) return;
     const path = fullPath.slice(commit.length + 1);
-    if (!normalizedPath(path)) return;
+    if (!normalizedPath(path) || text.includes(0)) return;
     return { path, line: Number(number), text: decoder.decode(text) };
   } catch { return undefined; }
 }
@@ -235,7 +235,7 @@ function parseMatches(commit: string, bytes: Buffer, truncated: boolean, maxMatc
 }
 async function searchTree(git: ProjectGit, commit: string, query: SourceQuery & { op: 'search' }, limits: SourceLimits): Promise<SourceItem> {
   try {
-    const output = await git.head('grep', ['--literal-pathspecs', 'grep', '-F', '-z', '-n', '-I', '--no-color', '--full-name',
+    const output = await git.head('grep', ['--literal-pathspecs', 'grep', '-F', '-z', '-n', '-I', '--no-color', '--no-column', '--full-name',
       '-e', query.literal, commit, '--', ...query.paths ?? []], limits.maxSearchBytes);
     if (!output.truncated && output.exitCode === 1) return { ...item(query, 'served'), matches: [] };
     if (!output.truncated && output.exitCode !== 0) return item(query, 'unavailable', `git grep: ${output.stderr}`);
