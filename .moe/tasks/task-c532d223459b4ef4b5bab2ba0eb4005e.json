@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -114,20 +114,29 @@
       "author": "worker-07cd2c56",
       "content": "Adversarial self-review (worker-07cd2c56). Scope: the diff of the 5 task files only.\n\n(1) Can a post-snapshot change now land? No.\n- AD rewrite: the re-hash differs.\n- AD delete: no staged entry.\n- AD dir: the re-hash fails, giving ''.\n- AD link (new): `git add` stages the 120000 link blob. moe_snapshot_hash then reads the link text, which differs from the snapshot's LF content blob, so the change is dropped as MOE_ATTR_CONCURRENT.\n- A link retargeted after the snapshot: staged and re-hash are both the new link-text blob, which differs from the snapshot, so it is dropped.\n- A link replaced by a file: the re-hash is the file blob, which differs from the link blob. The only exception is the documented ceiling: identical bytes give the same blob id, because mode is not compared.\n- A '?' snapshot never equals a blob, so it is dropped.\n- The ABA window is unchanged (ponytail note kept).\n\n(2) Ordinary files:\n- sh still makes ONE `--stdin-paths` batch. The only addition is a `[ -L ]` test, with no extra git process.\n- ps1 adds one GetAttributes per dirty path, and no Get-Item. LinkType is read only when ReparsePoint is set.\n\n(3) Twins: both send only symlinks through `update-index --add --info-only` plus `ls-files -s` field 2.\n- The scratch index is a fresh file: sh uses SECURE_TEMP_DIR/link-$$.idx, ps1 uses %TEMP%\\moe-link-<guid>. It is never the temp or shared index.\n- sh removes it after the substitution on every path; ps1 removes it in `finally`.\n- sh sets GIT_INDEX_FILE as a per-command prefix only. ps1 uses Invoke-MoeGit -IndexFile, which restores the previous value. Neither leaks.\n- Calls are sequential within one wrapper process, so $$ cannot collide.\n\n(4) Spaces and Unicode:\n- sh: tested directly on a spaced link, a dangling link, a link to a directory, a Unicode-named link and a regular file. Each blob equals `git add -A` + `ls-files -s`; 0 objects written; no idx left behind.\n- ps1: link paths travel as an argument array plus `:(literal)`. A spaced regular path was snapshot-tested. A spaced ps1 symlink cannot be tested on this host.\n\n(5) BOM: ef bb bf on moe-agent.ps1 and postflight.ps1, with 0 CR bytes in each.\n\n(6) Parity: parity-check .sh and .ps1 both PASS. No tracked strings were added.\n\nDeviation from the plan: Test-MoeSymlink reads `([IO.FileInfo]$p).LinkType` instead of Get-Item. It is the same ETS property, read from the reparse point, and needs no provider existence check for a dangling link on 5.1. Measured as SymbolicLink on both engines.\n\nMutation proof (sh, scratch copies /tmp/c532-mut, anchor subsets):\n- M1 (re-hash back to hash-object): AD-link FAILED ('HEAD must keep the seed blob'); AE passes.\n- M2 (symlinks back in the batch): AE FAILED (got [target.txt ]); AD-link passes.\n- M3 (helper hashes links with hash-object): AD-link FAILED, and AE FAILED (got [stay-link target.txt ]).\n- No survivors.\n\nThe ps1 mutants cannot run here because this host cannot create NT symlinks. The ps1 symlink branch is covered by the step-5 smoke: the NVIDIA link gives True and 9d5a2f405f8e78d59b94fda37c14e97e8db05d13 on 5.1 and 7. The ps1 AE and AD-link cases run only on CI windows-latest.\n\nTheoretical, not fixed:\n- An unhashable symlink is '?' (always changed) in sh but skipped in ps1. That is each twin's existing convention.\n- Junctions keep today's handling.",
       "timestamp": "2026-10-25T11:45:45.438Z"
+    },
+    {
+      "id": "comment-0d19a943301140b49d8f1fcae44c9999",
+      "author": "qa-b0c1741e",
+      "content": "QA correction to the approval summary: the QA gate re-run window was 2026-10-25T11:51:36Z–12:05:34Z UTC, not \"12:51-13:05Z\". Logs: /mnt/d/moe-scratch/c532-qa/{sh,ps51,ps7}.log (all .done = 0).",
+      "timestamp": "2026-10-25T12:05:59.938Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:39:38.780Z",
-  "updatedAt": "2026-10-25T11:47:22.087Z",
+  "updatedAt": "2026-10-25T12:05:59.938Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T08:22:29.688Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T12:05:53.919Z",
+    "wallClockMs": 13404231
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -252,5 +261,9 @@
     "scripts/tests/importee-guard-bash.test.mjs",
     "scripts/moe-agent.ps1",
     "scripts/tests/postflight.ps1"
-  ]
+  ],
+  "completedAt": "2026-10-25T12:05:53.919Z",
+  "reviewCompletedAt": "2026-10-25T12:05:53.919Z",
+  "reviewSummary": "Reviewed completion 16ec9f9 (on moe/work-2026-10-24, pushed). The script blobs match the live tree and the worker's gated sha256. ~262 net code LOC plus board JSON. Every hunk is symlink work; the Contested trailers (07474ee4) carry no peer hunks.\n\nGate re-run by QA from `git archive 16ec9f9 scripts` (12:51-13:05Z, 3 parallel snapshots):\n- sh: frozen 73 PASS, AD ok (link variant ran), AE ok, 37 scenarios, PASS postflight.sh, PASS parity-check.sh, importee-guard-bash 40/40, 0 SKIP lines.\n- PS 5.1 and pwsh 7: both skip lines, 36 scenarios, PASS postflight.ps1, PASS parity-check.ps1, importee-guard.ps1 48/0.\n- Also: usage-attribution, hook-isolation-bash and postflight-safe tests 24/24; hooked-commit.ps1 9/0 on both engines.\n\nRED proved by QA: AD-link and AE subsets against the 16ec9f9^ wrapper FAIL ('HEAD must keep the seed blob'; got [stay-link target.txt ]). Both PASS on 16ec9f9.\n\nDoD 1, sh: moe_snapshot_hash gives the same blob as `git add -A` for spaced, glob-char (`a*`), dash-led, Unicode, nested, directory and dangling links. It writes 0 objects and leaves no scratch index; a missing path returns rc 128. It is used in both git_dirty_snapshot and the moe_temp_index_build re-hash.\n\nDoD 1, ps1: Test-MoeSymlink and Get-MoeSnapshotBlob, smoke-tested by QA on the real NT link on both engines: True, 9d5a2f4. That equals the hash of the forward-slash link text; the target's bytes hash to f75c92b. Regular file, missing path and dir give False. A junction stays on the old path, as designed. 0 objects, no moe-link index left.\n\nDoD 2: AE (retarget lands as 120000 'same-b.txt'; stay-link and dangling-link stay PREEXISTING) plus AD-link, in both harnesses.\n\nUnverified here: the ps1 AE/AD-link cases themselves cannot run on this host (no NT symlink rights). They run on CI windows-latest, where a failed probe throws, so they cannot silently skip.\n\nBOM + LF intact.\n\nponytail: lean (net -1 possible: `36 + [int]$symlinksOk`).",
+  "requiredCheckAtDone": null
 }

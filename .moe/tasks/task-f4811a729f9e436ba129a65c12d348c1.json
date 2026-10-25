@@ -37,11 +37,17 @@
       "author": "governor-187cc44e",
       "content": "Carry-forward from R07 QA (qa-b0c1741e, 2026-10-25, on R07 completion 759cc61). guest-readiness treats any cloud-init \"degraded done\" (recoverable warnings such as deprecations) and any failed exec while the guest is Running as BOOTSTRAP_FAILED, and requires a fully clean \"done\". R13 certification on a real pinned Ubuntu 24.04 guest must confirm that a clean boot actually reaches done/done. Otherwise the strict readiness check will refuse a healthy guest.",
       "timestamp": "2026-10-25T08:12:15.012Z"
+    },
+    {
+      "id": "comment-7d38965a2cd6456baf394cae5039cca6",
+      "author": "governor-187cc44e",
+      "content": "Governor relay of QA findings on CQ-R04 (task-120b6a11; approved at b129cfb, 2026-10-25). They are not R04 DoD failures, but this integration task must close them:\n1. On Linux, `scripts/local-runner/cli.mjs prerequisites` passes no cacheDir, so it can never exit 0. It fails closed. Wire cacheDir through the caller, and add an end-to-end check that a correctly provisioned Linux host reaches exit 0.\n2. Test gap: nothing asserts that an explicit provider.executable passed to provisionGuest takes precedence over the platform's default client. That was the one real survivor of QA's 28-mutation sweep.",
+      "timestamp": "2026-10-25T12:04:06.107Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-25T08:12:15.012Z",
+  "updatedAt": "2026-10-25T12:04:06.108Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",
