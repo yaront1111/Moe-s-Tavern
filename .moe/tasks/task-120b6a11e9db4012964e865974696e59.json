@@ -113,7 +113,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:55.825Z",
-  "updatedAt": "2026-10-25T11:02:02.974Z",
+  "updatedAt": "2026-10-25T11:14:37.031Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -144,11 +144,14 @@
     "firstClaimAt": "2026-10-24T15:20:30.851Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T11:14:37.031Z",
+    "wallClockMs": 71646180
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-3617ccf7"
+    "worker-3617ccf7",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -230,5 +233,9 @@
     "kind": "completion",
     "sessionId": "worker-3617ccf7@2026-10-25T10:39:35Z",
     "at": "2026-10-25T11:02:02.974Z"
-  }
+  },
+  "completedAt": "2026-10-25T11:14:37.031Z",
+  "reviewCompletedAt": "2026-10-25T11:14:37.031Z",
+  "reviewSummary": "APPROVED CQ-R04, reviewing completion commit b129cfb (on moe/work-2026-10-24; no later edit to the 4 source paths).\n\nSize: +388/-6 = 394 changed source lines, under 400. platform-linux +126, cli +7/-3, provision +3/-1, tests +252/-2.\n\nRe-ran:\n- DoD `node --test scripts/tests/local-runner.test.mjs`, Linux Node 24.21.0, env -i:\n  - fresh git-archive snapshot: exit 0, 181/181, 0 skip, real-process tests ran;\n  - repo root: 181/181.\n- Windows Node 24.16: exit 0, 171 pass, 10 win32 skips.\n- Bundle test: 7/7.\n- diff --check clean; no forbidden patterns; no sudo, snap or `multipass set` is executed.\n\nDoD:\n1. Snap client pinned to /snap/bin/multipass. One row multipass/1.17.0/canonical**/notes '-'. All 6 multipassd plugs connected; I checked them against upstream v1.17.0 snapcraft.yaml (strict; all-home is home read:all).\n2. The pinned image launches with exact R03 argv via the snap client; no `set`; R07 readiness sees zero mounts.\n3. KVM, CPU, memory, disk (+2 GiB, exact boundaries) and the home-only cache location each block when false or unknown, with zero download, ledger or VM commands.\n4. Fresh output supplied.\n\nMy mutation sweep: 25/28 killed.\n- Two survivors are equivalent.\n- One is a test gap: provisionGuest's explicit provider.executable precedence is untested.\n\nThe R03 test edit (sunos stub, all OSes) is stronger. executionReady stays false; no isolation claim.\n\nNon-blocking: on Linux the CLI `prerequisites` passes no cacheDir, so it can never exit 0 (fails closed; caller-integration scope). The cache check is lexical. R13 should confirm 'held' notes on real hardware.",
+  "requiredCheckAtDone": null
 }
