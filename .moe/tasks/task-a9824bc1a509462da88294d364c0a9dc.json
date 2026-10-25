@@ -56,7 +56,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -76,16 +76,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T21:58:45.306Z",
-  "updatedAt": "2026-10-25T09:02:46.848Z",
+  "updatedAt": "2026-10-25T09:17:07.681Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T08:28:05.094Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-25T09:17:07.681Z",
+    "wallClockMs": 2942587
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "dependsOn": [
     "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
@@ -168,5 +171,9 @@
     "kind": "completion",
     "sessionId": "worker-07cd2c56@2026-10-25T09:00:26Z",
     "at": "2026-10-25T09:02:46.848Z"
-  }
+  },
+  "completedAt": "2026-10-25T09:17:07.681Z",
+  "reviewCompletedAt": "2026-10-25T09:17:07.681Z",
+  "reviewSummary": "APPROVED. DoD (one item: submit_plan rail refusal docs match handler + McpAdapter serialization) met.\n\nCommits: completion 4d1ba59 on moe/work-2026-10-24 (test + TROUBLESHOOTING.md). The MCP_SERVER.md edits were swept into peer checkpoint 27192ed (git show confirmed; bytes on branch; shared-tree status of all 4 files clean). Owned diff ~58 LOC, 3 planned files, no production code changed.\n\nDocs vs code checked: McpAdapter.ts:311-325 sends MoeError code/message with data exactly {tool, codeName} (context only logged); other exceptions -32000 + {tool}; unknown tool -32601. errors.ts codes and '[codeName] text' format match. submitPlan.ts assertPlanRails message 'Rail violation: <JSON>. Default action: ... moe.propose_rail', CONSTRAINT_VIOLATION; rails run before plan-size and existence gates; contract scan forbidden-only; planText includes affectedFiles+newFiles. Plan-size refusal shares -32003, doc says tell apart by 'Rail violation:' prefix. grep RAIL_VIOLATION across repo (md/ts/kt/sh/ps1, excl node_modules): empty. TROUBLESHOOTING no longer points at epic/task rails.\n\nRe-ran gate on native-Linux git-archive snapshot of HEAD 0814323 (task files cmp-identical, MOE_* scrubbed): npx vitest run submitPlan.test.ts McpAdapter.test.ts rails.test.ts executionContract.test.ts -> 4 files, 206 passed. New describe 'rail refusal on the MCP wire' ran 3 rows with strict toStrictEqual on error shape, anchored message prefix, no-write byte compare. My own mutant in scratch copy (adapter spreads toolError.context into data) turned all 3 red; shared tree untouched.\n\nNot verified: CQ-F12 owns epic full regression (isEpicFinal here is an order artifact). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
