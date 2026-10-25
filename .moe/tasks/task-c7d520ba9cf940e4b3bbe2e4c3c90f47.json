@@ -13,10 +13,71 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Store gate: accept the bound revision on automatic approvals. Write this step's tests first in the new file packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts and confirm they fail against the current store (RED).\n\npackages/moe-daemon/src/state/taskStore.ts, updateTask: take the private daemonOwned.approvedPlanRevision when event is 'PLAN_APPROVED' or 'PLAN_AUTO_APPROVED', and for no other event. The stamp still goes through checkedApprovalRevision against the revision this same write commits, inside the same `updated` image and writeEntity as status WORKING and planApprovedAt. Keep F04's strict omission guard (INVALID_INPUT on expectedPlanRevision under verified-local) PLAN_APPROVED-only, still behind assertProgressionReady, so NOT_READY precedence is unchanged. Export the existing decodeStoredPlanRevision unchanged: steps 2 and 3 use it. Update the approveTask comment that still lists SPEED/TURBO among the token-free legacy paths.\n\npackages/moe-daemon/src/types/schema.ts: rewrite only the approvedPlanRevision doc comment. A number is the revision an approval was bound to: either a token-checked human approval (approveTask, PLAN_APPROVED), or a SPEED/TURBO automatic approval of the revision its plan submission committed (PLAN_AUTO_APPROVED). Absent means an unchecked or legacy approval: an omitted-token human approval or a relaxed moe.set_task_status. Keep the rest (daemon-owned, null never written, never backfilled, history semantics). Edit schema.ts with the Edit/Write tool: BLOCKED peer CQ-V01 (task-bde86540) lists it in filesModified, so the wrapper lands it only with an Edit/Write witness. A seat without Edit/Write leaves schema.ts untouched and posts the new comment text on F12 (task-72184c65) instead.\n\nScope of DoD 3 ('all real approval paths'): every path that has an intended revision. That means token-checked human approvals (F04, unchanged) plus the SPEED timer, the restart re-arm and TURBO (this task). Relaxed set_task_status and omitted-token human approvals have no intended revision and stay unstamped; F04's tests pin that, and deleting revision-less human approval is F04b (task-c619879e), gated on a human MODIFY_RAIL.\n\nTests (ToolTestHarness; mirror planApproval.test.ts 'the store refuses %s before any write'): call the store's updateTask directly under runExclusive with event 'PLAN_AUTO_APPROVED' on an AWAITING_APPROVAL row at planRevision 4.\n- daemonOwned {approvedPlanRevision: 4}: exactly one 'tasks' writeEntity and one TASK_UPDATED, and the disk bytes, map, published payload and a reloaded StateManager all show {status 'WORKING', planRevision 4, approvedPlanRevision 4, planApprovedAt}.\n- it.each refusals: 3 -> PLAN_REVISION_MISMATCH; 4.5 -> INVALID_INPUT; 4 plus a DoD change in the same write -> PLAN_REVISION_MISMATCH. Each leaves bytes, map entry, activity count and published events unchanged. Error handling: every refusal throws before any write.\n- it.each over non-approval writes (no event, and 'TASK_UPDATED') of a title change carrying daemonOwned {approvedPlanRevision: 4}: no own approvedPlanRevision key is written.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts"
+      ],
+      "note": "Store gate: updateTask reads daemonOwned.approvedPlanRevision on PLAN_APPROVED || PLAN_AUTO_APPROVED only; still checkedApprovalRevision in the same image. Strict omission guard is still PLAN_APPROVED-only, after assertProgressionReady. decodeStoredPlanRevision is exported unchanged. approveTask and checkedApprovalRevision comments updated. schema.ts: only the approvedPlanRevision doc comment changed, via the Edit tool. New test file, store-gate block: RED 4/6 before impl (stamp plus 3 refusals); the 2 non-approval-ignore guards pass both ways. After impl, focused 4 suites (new + planApproval + acceptance + taskExecutionPolicy) 335 passed / 1 skipped (F05 held-out, unskipped in step 2). Tests run on a HEAD archive plus owned-file overlay, with Linux node_modules from /tmp/moe-linux-daemon.3EJTl5 (lock equal modulo CRLF) and a Linux-only PATH. Peer dirty paths (WebSocketServer.ts/.test.ts, clientCapabilities.ts, .moe/*) are untouched.",
+      "startedAt": "2026-10-25T10:06:27.760Z",
+      "completedAt": "2026-10-25T10:09:26.731Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Bind SPEED timers and TURBO approval to the submitted revision. Enable the held-out group and write this step's tests first; confirm RED.\n\npackages/moe-daemon/src/state/approvalRevision.acceptance.test.ts: change ONLY `describe.skip('CQ-F05: delayed approval is bound to the submitted revision'` to `describe(`. Keep its comments and assertions byte-identical: it is F01's held-out contract, and F12 requires it to pass unchanged.\n\npackages/moe-daemon/src/tools/submitPlan.ts:\n- After the PLAN_SUBMITTED write, `const revision = decodeStoredPlanRevision(submitted)`: the revision that write committed. Never re-read it from the cache.\n- TURBO: replace `state.updateTask(...)` with the module-local `updateTask(state, task.id, { status: 'WORKING', planApprovedAt }, 'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision })`. Keep the event, status, message and nextAction. A refusal propagates like any failed TURBO approval write today; it is unreachable under the held mutex, so add no fallback path.\n- SPEED: call `armSpeedModeApproval(state, task.id, delayMs, revision)`. armSpeedModeApproval gains a `revision: number` parameter that its closure captures. Inside the existing runExclusive section, keep the AWAITING_APPROVAL re-check first, then call the module-local updateTask with PLAN_AUTO_APPROVED and daemonOwned {approvedPlanRevision: revision}.\n- Error handling: inside the section, catch only a MoeError whose codeName is 'PLAN_REVISION_MISMATCH'. That is a WITHHELD approval, not a failure: no task write and no activity. Instead, `await state.postSystemMessage(taskId, ...)` in a try/catch (it must never throw), naming the armed revision and the error's context.currentPlanRevision, and telling the human to approve the current revision from the board or reject and resubmit. Any other error keeps today's failure path (the TASK_BLOCKED activity with reason 'SPEED mode auto-approval failed'). Factor that path into one small local helper, which step 3 reuses.\n- Keep detachFromMutexContext and the finally map cleanup. Add no automatic re-arm for a newer revision: only a resubmission arms a timer.\n\nTests in the new file (SPEED speedModeDelayMs 50):\n- Setup: `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })` after state.load. Settle = advanceTimersByTimeAsync, then `await h.state.runExclusive(async () => {})`. afterEach: clearAllSpeedModeTimeouts, useRealTimers, restoreAllMocks.\n- (1) TURBO: submit returns status 'WORKING'. The persisted row, the map and the approval TASK_UPDATED payload all carry approvedPlanRevision === planRevision === result.planRevision, beside WORKING and planApprovedAt (the approval's single tasks write carries all three). The activity event is still PLAN_AUTO_APPROVED.\n- (2) SPEED: after the delay, the row is WORKING with approvedPlanRevision equal to the submitted revision.\n- (3) Withheld: change the DoD while the timer is pending, then settle.\n  - The task file bytes equal the bytes right after the DoD change.\n  - The activity count and TASK_UPDATED publications are unchanged, and there is no 'SPEED mode auto-approval failed' activity.\n  - postSystemMessage (spy installed after the submission) was called once, naming both revisions.\n  - approveTask with the current revision still approves and stamps it, so the row is not wedged.\n- (4) Replaced plan: an older timer already QUEUED behind the mutex cannot approve the replacement.\n  - `const held = h.state.runExclusive(async () => { await gate; await h.state.rejectTask(...); await submitPlanTool(h.state).handler(<identical steps>); })`. runExclusive takes the lock synchronously.\n  - Then, OUTSIDE any section, `await vi.advanceTimersByTimeAsync(50)`: the old callback fires and queues. Open the gate, await held, settle.\n  - Expect AWAITING_APPROVAL at the new revision, with no planApprovedAt and no stamp. The new timer's own delay then approves it with the new revision.\n  - Resubmit IDENTICAL steps: the fence is the revision (every PLAN_SUBMITTED bumps it), not the plan content.\n- (5) Cancelled plan: the same queued setup, but with rejectTask only. The old callback leaves the row PLANNING and unapproved.\n- (6) Failure path kept: inject a rejection of the approval's tasks writeEntity (status WORKING) and pass other writes through. The result is a 'SPEED mode auto-approval failed' activity, and the row stays AWAITING_APPROVAL with no stamp.\n- TRAP: never advance fake timers inside a runExclusive section. sinon runs the callback in the caller's AsyncLocalStorage context, so its runExclusive re-enters instead of queuing.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+        "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+        "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts"
+      ],
+      "note": "submitPlan.ts: `const revision = decodeStoredPlanRevision(submitted)` runs right after the PLAN_SUBMITTED write. TURBO now calls the module-local updateTask with PLAN_AUTO_APPROVED and daemonOwned {approvedPlanRevision: revision}. armSpeedModeApproval(state, taskId, delayMs, revision) captures the revision; the AWAITING_APPROVAL re-check still comes first, then the local updateTask with the stamp. Only a MoeError with codeName PLAN_REVISION_MISMATCH is caught, as withheld: no write and no task activity, plus an awaited postSystemMessage (in try/catch) naming both revisions. Every other error rethrows to the outer catch, which calls the new recordSpeedApprovalFailure helper (same TASK_BLOCKED / 'SPEED mode auto-approval failed' payload; the redundant cast is dropped). detachFromMutexContext and the finally map cleanup are unchanged. rearmSpeedModeApprovals temporarily binds decodeStoredPlanRevision(task); step 3 replaces this with snapshot binding plus a per-row try/catch. Acceptance test: only `describe.skip(` became `describe(` (1 line). New tests: TURBO single-write stamp, SPEED stamp, withheld, queued old timer vs identical resubmission, queued old timer vs cancel, injected write-failure path. RED before impl: 4 new + held-out; cancel and failure-path are guard tests and pass both ways. After: 5 focused suites 437/437; tsc --noEmit exit 0.",
+      "startedAt": "2026-10-25T10:09:55.161Z",
+      "completedAt": "2026-10-25T10:12:13.740Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Restart re-arm keeps the submitted revision. Write the tests first; confirm RED.\n\npackages/moe-daemon/src/tools/submitPlan.ts rearmSpeedModeApprovals: for each AWAITING_APPROVAL row without a live timer, take the bound revision from `readExecutionPolicySnapshot(task.executionPolicySnapshot)?.planRevision` (import it from ../delivery/executionProfile.js). That is the canonical planRevision captured in the same PLAN_SUBMITTED write as the plan, so a plan, DoD or contract change made before the restart is never auto-approved. A row with no snapshot (submitted before snapshots existed) binds to decodeStoredPlanRevision(task), which keeps today's legacy behavior. Add no new field and no new revision counter.\n\nError handling: decode inside a per-row try/catch. A malformed snapshot or stored revision records step 2's failure activity for that row and leaves it unarmed for a human. rearmSpeedModeApprovals must never throw, because src/index.ts calls it unguarded at daemon start. The remaining-delay math and the already-armed skip are unchanged.\n\nTests in the new file. A simulated restart is `clearAllSpeedModeTimeouts()`, then `const fresh = new StateManager({ projectPath: h.testDir }); await fresh.load(); rearmSpeedModeApprovals(fresh)`, then settle on fresh and `await fresh.flushActivityLog()` before cleanup.\n- (a) Submitted and unchanged: it approves after the remaining delay, with approvedPlanRevision equal to the submitted revision.\n- (b) DoD changed after submission and before the restart: the row stays AWAITING_APPROVAL with unchanged bytes and no stamp. Without this step it approves the newer revision, so this is RED.\n- (c) A legacy row with no executionPolicySnapshot, planRevision 7 and a planSubmittedAt older than the delay approves with stamp 7.\n- (d) it.each over a malformed snapshot ({version: 9}) and a malformed planRevision on a snapshot-less row, each beside a healthy row:\n  - `expect(() => rearmSpeedModeApprovals(fresh)).not.toThrow()`;\n  - the bad row stays AWAITING_APPROVAL with unchanged bytes and one failure activity;\n  - the healthy row approves.\n  The rows load in readdir order, which varies by platform. The not.toThrow assertion kills the mutant without the try/catch in either order.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts"
+      ],
+      "startedAt": "2026-10-25T10:12:21.865Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single verification gate, run fresh once after steps 1-3. From the repository root run exactly `cd packages/moe-daemon && npm test`. It must exit 0; keep the command, exitCode and outputTail for complete_task. It is the full daemon suite, because the shared Task contract and the automatic-approval semantics change.\n\nAlso run `cd packages/moe-daemon && npx tsc --noEmit`, because vitest does not type-check.\n\nA pre-existing, non-held-out test that fails ONLY because an auto-approved row now carries approvedPlanRevision may be updated to expect the stamp; say why in the test. Two test sets must pass unchanged:\n- approvalRevision.acceptance.test.ts, apart from step 2's unskip;\n- F04's 'durable approval authorization' block in planApproval.test.ts.\n\nKeep the whole owned diff (production plus tests) under 400 net changed lines; QA rejects larger diffs as oversized, and F04 landed at 374. Under WSL, use a native Linux node_modules copy with an unchanged lockfile and a Linux-only PATH, and never overwrite the Windows node_modules.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "One adversarial self-review of the F05 diff only (load adversarial-self-review). Write one mutant per clause, and confirm each focused-suite survivor on the FULL suite before calling it unpinned (mem gotcha-mutation-or-chain-clauses). The mutants:\n- the event gate's PLAN_APPROVED clause alone, and its PLAN_AUTO_APPROVED clause alone;\n- the gate widened to any event;\n- SPEED stamping the fire-time revision instead of the armed one;\n- the catch widened beyond PLAN_REVISION_MISMATCH;\n- the AWAITING_APPROVAL re-check removed;\n- re-arm binding the current revision instead of the snapshot's;\n- re-arm without the legacy fallback;\n- re-arm without the per-row try/catch;\n- TURBO without the stamp.\n\nAlso check:\n- two timers for one task, and an identical resubmission (ABA);\n- absent, malformed and unsafe revisions;\n- a restart with and without a snapshot;\n- the strict guard and NOT_READY precedence are untouched;\n- relaxed set_task_status and omitted-token human approvals still stamp nothing (F04's tests).\n\nDocs are handed to F12: the architect's comment on task-72184c65 lists MCP_SERVER.md, PLAN_APPROVAL_FRESHNESS.md and SCHEMA.md. Add a follow-up comment there only if the implementation deviates from it. No Git writes: the wrapper lands the work.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 6,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-07cd2c56",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -28,11 +89,47 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:18.737Z",
-  "updatedAt": "2026-10-25T09:02:08.780Z",
+  "updatedAt": "2026-10-25T10:12:21.865Z",
   "dependsOn": [
     "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
   ],
   "contextFetchedBy": [
-    "architect-473624b4"
-  ]
+    "architect-473624b4",
+    "architect-26ba32c3",
+    "worker-07cd2c56"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T09:43:07.526Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T10:03:44.504Z",
+  "planningNotes": {
+    "approachesConsidered": "1. One fence, not two: the SPEED callback relies on the store's checkedApprovalRevision (it already reads legacy-absent as 0 and fails closed on malformed) and catches only PLAN_REVISION_MISMATCH as 'withheld'. A separate callback pre-check would duplicate the decode and hide the store layer from mutation testing.\n2. Durable intended revision for re-arm: read executionPolicySnapshot.planRevision, which the PLAN_SUBMITTED write already captures beside the plan. A new field would be a second revision record (epic rail: no second revision authority); this is provenance, not approval.\n3. After a withheld approval, no auto re-arm for the newer revision: nobody submitted it for automatic approval, so it falls back to the human gate (APPROVE_TASK with the token) or a resubmission. A #general system message explains the stall.\n4. Legacy snapshot-less rows on re-arm bind to the current revision, which is today's behaviour; the epic rails preserve legacy.\n5. Relaxed set_task_status and omitted-token human approvals stay unstamped. They have no intended revision, F04 pins them, and F04b owns deleting revision-less human approval (needs a human MODIFY_RAIL).\n6. Extending F04's strict omission guard to PLAN_AUTO_APPROVED is unnecessary, since every automatic approval now carries a revision.\n7. Docs (MCP_SERVER.md, PLAN_APPROVAL_FRESHNESS.md, SCHEMA.md) go to F12. That keeps F05 at 5 files and away from task-c2cb5cf7's planned MCP_SERVER.md contest; the architect posted the hand-forward on task-72184c65.\n8. TURBO gets no fallback: under the held mutex, the submission and the approval write cannot interleave, so the stamp plus the store re-check is enough.",
+    "codebaseInsights": "- approveTask has only two production callers: the WS APPROVE_TASK message and the UPDATE_TASK drag. SPEED/TURBO write PLAN_AUTO_APPROVED through updateTask directly (mem gotcha-daemon-approval-paths), so F04's PLAN_APPROVED-only stamp gate never reached them.\n- The only stamp seam is the private daemonOwned argument of taskStore.updateTask. StateManager.updateTask omits it and is a pure delegate, which is why submitPlan.ts already imports the module-local updateTask for the submission write.\n- executionPolicySnapshot is written only inside the PLAN_SUBMITTED write, via planSubmissionSnapshot(settings, stored, planRevision), and is stripped from every caller update.\n- AsyncMutex.acquire sets `locked` synchronously, so `const held = state.runExclusive(...)` holds the lock before the next statement. A detached timer callback that fires then queues behind it.\n- rearmSpeedModeApprovals has no tests, and src/index.ts calls it unguarded at startup.\n- derivePlanRevision bumps on every PLAN_SUBMITTED, even an identical one, so a resubmission can't recreate the old revision (no ABA).\n- tsconfig excludes *.test.ts, so tsc never type-checks tests.\n- postSystemMessage posts to #general and never throws.",
+    "risks": "- Fake timers do not carry AsyncLocalStorage context. Advance them only outside a runExclusive section, or the callback re-enters the lock instead of queuing.\n- Callbacks do real fs I/O. Settle with `await h.state.runExclusive(async () => {})`, and await the withheld postSystemMessage inside the section; otherwise ENOENT appears after cleanup (mem gotcha-vitest-fake-timers-order-and-real-io).\n- rearm must never throw, or a malformed row blocks daemon start.\n- schema.ts is ASSERTED by BLOCKED CQ-V01, so edit it only with Edit/Write.\n- Tests over several rows must not depend on readdir order.\n- QA counts the net diff including tests: stay under 400 lines (it.each, shared helpers).\n- The catch must not swallow other errors: test (6) pins the failure path.\n- Do not edit held-out assertions.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+      "packages/moe-daemon/src/server/planApproval.test.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T10:03:44.612Z",
+  "workStartedAt": "2026-10-25T10:06:27.760Z"
 }

@@ -63,7 +63,7 @@ const MAX_PLAN_REVISION = Number.MAX_SAFE_INTEGER;
  * non-negative safe-integer domain fails CLOSED (no coercion, no reset): a
  * corrupted stamp must not silently pass an approval-freshness comparison.
  */
-function decodeStoredPlanRevision(task: Task): number {
+export function decodeStoredPlanRevision(task: Task): number {
   const stored = task.planRevision;
   if (stored === undefined) return 0;
   if (typeof stored !== 'number' || !Number.isSafeInteger(stored) || stored < 0) {
@@ -106,9 +106,10 @@ function planRevisionMismatch(taskId: string, supplied: number, current: number)
 }
 
 /**
- * The approvedPlanRevision a PLAN_APPROVED write stamps: the reviewed revision,
- * only if it equals the revision this same write commits, so a delayed
- * approval can never authorize a newer plan, DoD or contract. Error handling:
+ * The approvedPlanRevision an approval write stamps: the revision a human
+ * reviewed (PLAN_APPROVED) or a SPEED/TURBO submission committed
+ * (PLAN_AUTO_APPROVED), only if it equals the revision this same write commits,
+ * so a delayed approval can never authorize a newer plan, DoD or contract. Error handling:
  * INVALID_INPUT for a malformed value, STATE_CONFLICT / PLAN_REVISION_MISMATCH
  * for any other; both throw before any write.
  */
@@ -543,8 +544,9 @@ export async function updateTask(
   // Strict readiness, also before any write (and before the capture below).
   assertProgressionReady(state, task, normalizedUpdates, normalizedUpdates.status ?? task.status, event);
   // A strict profile may not approve unchecked. Behind the readiness gate
-  // above, which still refuses every verified-local progression.
-  const reviewed = event === 'PLAN_APPROVED' ? daemonOwned?.approvedPlanRevision : undefined;
+  // above, which still refuses every verified-local progression. Automatic
+  // approvals always carry the revision their submission committed (CQ-F05).
+  const reviewed = event === 'PLAN_APPROVED' || event === 'PLAN_AUTO_APPROVED' ? daemonOwned?.approvedPlanRevision : undefined;
   if (event === 'PLAN_APPROVED' && reviewed === undefined &&
     resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local') {
     throw invalidInput('expectedPlanRevision', `approval of task ${taskId} under verified-local must name the reviewed plan revision`);
@@ -725,9 +727,9 @@ export async function approveTask(
     throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
   }
   // Compare-and-swap on the plan revision the approver actually reviewed.
-  // ABSENCE is the only legacy opt-out (SPEED/TURBO auto-approval,
-  // set_task_status relaxed mode, an old client) — a supplied token is always
-  // validated and compared. This whole block runs before any write, so a
+  // ABSENCE is the only legacy opt-out (an old client; set_task_status relaxed
+  // mode never comes here, and SPEED/TURBO bind their own revision in
+  // submitPlan) — a supplied token is always validated and compared. This whole block runs before any write, so a
   // refusal cancels no pending timer, mutates no bytes and publishes nothing.
   let reviewed: number | undefined;
   if (expectedPlanRevision !== undefined) {

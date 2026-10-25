@@ -254,7 +254,7 @@ async function settleSpeedApproval(): Promise<void> {
 
 // Owner CQ-F05: enable after delayed approval compares its captured revision.
 // RED against pre-CQ production: received WORKING, expected AWAITING_APPROVAL.
-describe.skip('CQ-F05: delayed approval is bound to the submitted revision', () => {
+describe('CQ-F05: delayed approval is bound to the submitted revision', () => {
   it('a pending SPEED timer cannot approve criteria changed after submission', async () => {
     await scheduleSpeedApproval();
     await update({ definitionOfDone: ['A newer behavioral requirement needs approval'] });
