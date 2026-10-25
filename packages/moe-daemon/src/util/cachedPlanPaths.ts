@@ -30,24 +30,63 @@ export function cachedPlanRef(branch: unknown): string | undefined {
 
 export type PlanPathGitRunner = (args: string[], cwd: string, timeout: number, maxBuffer?: number) => Promise<string>;
 
-export const runGit: PlanPathGitRunner = async (args, cwd, timeout, maxBuffer = MAX_BUFFER) => {
+function readOnlyGitEnv(): NodeJS.ProcessEnv {
   // Do not inherit a seat's alternate index/repository/config. No shell, hooks,
   // replacement objects, optional locks, global config or network transports.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
     GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' });
+  return env;
+}
+
+function readOnlyGitArgs(cwd: string, args: string[]): string[] {
+  // Trust only this canonical project, never a wildcard or global config.
+  return ['--no-optional-locks', '--no-replace-objects',
+    '-c', 'protocol.allow=never', '-c', `safe.directory=${cwd}`, ...args];
+}
+
+export const runGit: PlanPathGitRunner = async (args, cwd, timeout, maxBuffer = MAX_BUFFER) => {
   try {
     // Global config is deliberately masked, including safe.directory. Trust
     // only this explicitly configured, canonical project for these read-only
     // commands (e.g. a Windows checkout retaining its previous owner's SID).
     // Never write Git config or broaden this to safe.directory=*.
-    const result = await execFileAsync('git', ['--no-optional-locks', '--no-replace-objects',
-      '-c', 'protocol.allow=never', '-c', `safe.directory=${cwd}`, ...args],
-    { cwd, env, timeout, maxBuffer, windowsHide: true });
+    const result = await execFileAsync('git', readOnlyGitArgs(cwd, args),
+      { cwd, env: readOnlyGitEnv(), timeout, maxBuffer, windowsHide: true });
     return result.stdout;
   } catch (error) {
     // git config returns 1 for no matching keys; every other failure is unknown.
     if (args[0] === 'config' && (error as { code?: unknown }).code === 1) return '';
+    throw error;
+  }
+};
+
+export interface GitHeadResult {
+  stdout: Buffer;
+  truncated: boolean;
+  exitCode: number | null;
+  stderr: string;
+}
+export type GitHeadRunner = (args: string[], cwd: string, timeout: number, maxBytes: number) => Promise<GitHeadResult>;
+
+/** Preserve a bounded raw prefix; only overflow and ordinary exits are data. */
+export const runGitHead: GitHeadRunner = async (args, cwd, timeout, maxBytes) => {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('maxBytes must be a positive safe integer');
+  try {
+    const { stdout } = await execFileAsync('git', readOnlyGitArgs(cwd, args), {
+      cwd, env: readOnlyGitEnv(), timeout, maxBuffer: maxBytes, windowsHide: true, encoding: 'buffer',
+    });
+    return { stdout, truncated: false, exitCode: 0, stderr: '' };
+  } catch (error) {
+    const e = (error ?? {}) as { code?: unknown; stdout?: unknown; stderr?: unknown; killed?: unknown; signal?: unknown };
+    const stderr = (Buffer.isBuffer(e.stderr) ? e.stderr.toString('utf8')
+      : typeof e.stderr === 'string' ? e.stderr : '').split(/\r?\n/)[0].slice(0, MAX_FAILURE_CHARS);
+    if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && Buffer.isBuffer(e.stdout)) {
+      return { stdout: e.stdout.subarray(0, maxBytes), truncated: true, exitCode: null, stderr };
+    }
+    if (typeof e.code === 'number' && !e.killed && !e.signal) {
+      return { stdout: Buffer.isBuffer(e.stdout) ? e.stdout : Buffer.alloc(0), truncated: false, exitCode: e.code, stderr };
+    }
     throw error;
   }
 };
@@ -63,7 +102,9 @@ function describeFailure(error: unknown): string {
 }
 
 /** Shared read-only trust envelope. All commands share one deadline, including setup. */
-export async function openProjectGit(projectRoot: string, run: PlanPathGitRunner = runGit, budgetMs = BUDGET_MS) {
+export async function openProjectGit(
+  projectRoot: string, run: PlanPathGitRunner = runGit, budgetMs = BUDGET_MS, head: GitHeadRunner = runGitHead,
+) {
   const started = performance.now();
   const deadline = started + budgetMs;
   const failure = (step: string, error: unknown) => new Error(
@@ -94,7 +135,13 @@ export async function openProjectGit(projectRoot: string, run: PlanPathGitRunner
   if (special.trim()) {
     throw new Error(`local Git config sets ${special.trim().split(/\s+/)[0]}; partial-clone, promisor and core.worktree repositories are never trusted`);
   }
-  return git;
+  return Object.assign(git, { head: async (label: string, args: string[], maxBytes: number) => {
+    try {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0) throw new Error('budget exhausted before the step started');
+      return await head(args, root, remaining, maxBytes);
+    } catch (error) { throw failure(`git ${label}`, error); }
+  } });
 }
 
 /**

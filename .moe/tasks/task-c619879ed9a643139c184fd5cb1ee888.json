@@ -1,0 +1,36 @@
+{
+  "id": "task-c619879ed9a643139c184fd5cb1ee888",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F04b] Delete revision-less human approval compatibility",
+  "description": "Objective: Implement the human decision recorded on F04 (task-076a0bd3, comment-656dc8f8, 2026-10-25), \"we dont need legacy and legacy should be deleted\", for human plan approvals. Every human approval route (WS APPROVE_TASK, UPDATE_TASK AWAITING_APPROVAL->WORKING, board drag) must require the rendered expectedPlanRevision; omission is refused rather than accepted as legacy. Existing audit history stays: approvals recorded without a stamp are never deleted, upgraded or inferred.\n\nWhy a separate row: F04 was re-planned to deliver its own DoD (durable numeric approvedPlanRevision, CAS, strict-profile omission guard) with NO new legacy machinery and no deletion. The epic rails still say \"Preserve legacy behavior\" / \"Preserve legacy policy\", so deleting the revision-less path needs a human-approved MODIFY_RAIL first (governor ruling msg-74b0b3fd).\n\nPreconditions before planning:\n(1) The human-approved MODIFY_RAIL proposal on CQ-F, plus any other affected CQ epic, names exactly what may be deleted.\n(2) The human has answered the scope question the governor raised: revision-less approval compatibility only, or also legacy execution/delivery profiles. If profiles are in scope, they belong to separate M-epic rows, not this one.\nIf either is missing, report_blocked naming the proposal or question instead of planning deletion.\n\nKnown legacy pins this row must revise deliberately (never silently weaken):\n- planApproval.test.ts:\n  - 'approves with no token at all (legacy caller)';\n  - 'accepts an explicit 0 for a legacy row that has no stored revision';\n  - 'approves when the key is omitted (legacy wire opt-out)';\n  - '... (legacy board drag)';\n  - 'does not use a stale token hidden in updates when the top-level key is omitted'.\n- planApproval.integration.test.ts:\n  - 'still approves a legacy stamp-less row when the client omits the token entirely';\n  - 'moves a legacy stamp-less row off the effective 0 ...'.\n- The HELD-OUT state/approvalRevision.acceptance.test.ts 'legacy missing revision remains effective zero for explicit approval' needs explicit human sign-off.\n\nToken-omitting clients must be handled, JetBrains first (drag / Approve), then VS Code, so no supported client silently loses approval. Split client work into I02/I04-style rows if needed. Token-free daemon producers stay with their owners: relaxed set_task_status PLAN_APPROVED, and SPEED/TURBO automatic approvals in F05 (task-c7d520ba).\n\nScope boundaries: implement this behavior and its regression tests only. Use original Moe source; daemon owns state, wrappers own host Git writes. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve existing dirty bytes and audit history. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test (plus cd moe-jetbrains && ./gradlew test, and the VS Code tests, if client code changes)",
+  "definitionOfDone": [
+    "Every human approval route refuses an omitted plan revision with INVALID_INPUT and writes nothing (task bytes, activity, broadcast unchanged).",
+    "Existing unstamped approvals remain audit history: nothing is deleted, upgraded or inferred as a checked approval.",
+    "Every changed legacy-pin or held-out test cites the human-approved MODIFY_RAIL; no supported JetBrains/VS Code approval action loses approval without an actionable refusal.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 (plus client suites when client code changes) and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "Plan deletion only after a human-approved MODIFY_RAIL on CQ-F names exactly what may be deleted; until then report_blocked instead of planning."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
+  ],
+  "priority": "HIGH",
+  "order": 45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T08:18:07.718Z",
+  "updatedAt": "2026-10-25T08:18:07.718Z"
+}
