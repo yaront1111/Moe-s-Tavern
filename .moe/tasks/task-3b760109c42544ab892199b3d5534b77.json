@@ -171,7 +171,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:47.723Z",
-  "updatedAt": "2026-10-25T13:51:28.780Z",
+  "updatedAt": "2026-10-25T13:53:03.100Z",
   "dependsOn": [
     "task-ad95cb270e9e46df8672eb094d0c1e74",
     "task-96526848b23549cf994ab82f47fad29f",
@@ -267,6 +267,22 @@
       "treeId": "3cbff990c9c89dc1d0f82a3e286269c88b9f860a",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "fb3ecb67ccda03318c4434758917bd8cad75a78c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T13:38:52Z",
+      "paths": [
+        ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+        ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T13:53:03.100Z",
+      "treeId": "7acdc838791a3e0bc4f9d52419bfa8b0d8da07bb",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -277,9 +293,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-25T12:20:37Z",
-    "at": "2026-10-25T13:38:24.437Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T13:38:52Z",
+    "at": "2026-10-25T13:53:03.100Z"
   },
   "blockedReason": "QA review complete on substance (PASS); the only open gate is size. Completion dec93e3 is on moe/work-2026-10-24, and the moe-jetbrains tree equals it. +1176/-7 source lines (net 1169: runtime +449/-7, tests +727) is over the 400 QA cap, and the epic rail lists R02/R03/R06/R07 as the ONLY size exceptions. The governor's prop-b315016b (epic ADD_RAIL, at most 1183 changed lines; counts match the commit exactly) is PENDING a human decision. Rejecting green, correct work would only burn a reopen.\n\nEvidence:\n- `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` (the WSL form of ./gradlew test), run twice under the jetbrains-gradle lease: exit 0, 21 fresh classes, 280 tests, 0 failures/errors/skips.\n- 16/16 independent QA mutants killed: gate, vouching, start match, pin, legacy fallback, containment, PATH, launcher, refusal, NODE_OPTIONS, lenient, cwd, record, fold, NOFOLLOW, size cap. Sources sha-restored.\n- DoD1: PROTECTED runs only the installed node + daemon/index.js (real paths, inside the root, outside the project), with no shell/PATH/parent fallback. NODE_* vars dropped, PATH filtered, installed cwd. The launcher uses only the installed wrapper + MOE_DAEMON_PATH/MOE_PROXY_PATH.\n- DoD2: the doConnect gate runs before any client or registration; (pid, start) records; only a supervisor vouches.\n- DoD3: legacy branches unchanged; S3/G3/L3 and existing suites green; N1/N2 paths.\n- DoD4: verification exit 0.\n- diff-check clean, LF, no forbidden patterns, 5 planned files. Test file proportionate. Nits: ProtectedDaemonCommand has 1 caller; IdleProcess duplicates FakeProcess (net -17 possible).\n- Follow-ups: c42dd646, d72fe292, R13.\n\nResume: APPROVED → set_task_status REVIEW, then QA approves. REJECTED → PLANNING; an architect splits it.",
   "blockedResourceId": null,
