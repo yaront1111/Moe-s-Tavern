@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { ExecutionPolicySnapshot, ExecutionProfile, Task, TaskCommit } from '../types/schema.js';
@@ -10,7 +11,8 @@ import { listCandidatesForTask } from '../state/candidateStore.js';
 import { contextStatus } from '../util/contextStatus.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
 import { routingInfo } from '../util/routing.js';
-import { currentAttempt } from '../state/attemptStore.js';
+import { currentAttempt, readContextSessionId, recordContextReceipt } from '../state/attemptStore.js';
+import { decodeStoredPlanRevision } from '../state/taskStore.js';
 import { readRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 import {
   readExecutionPolicySnapshot,
@@ -131,6 +133,60 @@ function executionPolicyContext(state: StateManager, task: Task): ExecutionPolic
     ...(unreadable.length > 0 ? { unreadable } : {}),
   };
 }
+
+type ReceiptStatus =
+  | 'recorded' | 'record-failed' | 'identity-unreadable' | 'no-session' | 'no-running-attempt' | 'not-attempt-owner';
+
+/**
+ * get_context's `servedContext`: the task's revision and approved revision, its
+ * open attempt and generation, and a durable receipt, recorded only with a
+ * presented sessionId on a running attempt whose worker is the caller and the
+ * task's assignee. A receipt records what was served to whom, never approval.
+ * packetId is the sha256 of JSON.stringify(packet); a recorded read serves
+ * JSON.parse of that text. Other statuses hash and write nothing.
+ *
+ * Error handling: never throws. An unreadable revision or attempt is served as
+ * null; a failed write is logged and served as 'record-failed' with no ids.
+ */
+async function servedContextIdentity<P extends object>(
+  state: StateManager,
+  task: Task,
+  packet: P,
+  caller: { view: 'default' | 'full'; workerId: string; sessionId: string | undefined }
+) {
+  const unreadable: string[] = [];
+  const planRevision = decoded(unreadable, 'planRevision', () => decodeStoredPlanRevision(task));
+  // currentAttempt copies the stored record, which overflows on a hand-edited one nested too deep.
+  const attempt = decoded(unreadable, 'attempt', () => currentAttempt(state, task.id));
+  const approved = task.approvedPlanRevision;
+  const identity = {
+    taskId: task.id,
+    planRevision,
+    approvedPlanRevision: typeof approved === 'number' && Number.isSafeInteger(approved) && approved >= 0 ? approved : null,
+    attemptId: attempt?.id ?? null,
+    generation: attempt?.generation ?? null,
+  };
+  const unrecorded = (receiptStatus: ReceiptStatus) =>
+    ({ packet, servedContext: { ...identity, receiptStatus, receiptId: null as string | null, packetId: null as string | null } });
+  if (unreadable.length > 0 || planRevision === null) return unrecorded('identity-unreadable');
+  if (caller.sessionId === undefined) return unrecorded('no-session');
+  if (!attempt || attempt.phase !== 'running') return unrecorded('no-running-attempt');
+  const owner = caller.workerId;
+  if (!owner || attempt.workerId !== owner || task.assignedWorkerId !== owner) return unrecorded('not-attempt-owner');
+  try {
+    const text = JSON.stringify(packet);
+    const packetId = `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
+    const receipt = await recordContextReceipt(state, {
+      attemptId: attempt.id, workerId: owner, sessionId: caller.sessionId, packetId, planRevision,
+      ...(identity.approvedPlanRevision !== null ? { approvedPlanRevision: identity.approvedPlanRevision } : {}),
+      view: caller.view,
+    });
+    return { packet: JSON.parse(text) as P, servedContext: { ...identity, receiptStatus: 'recorded' as ReceiptStatus, receiptId: receipt.id, packetId } };
+  } catch (err) {
+    logger.warn({ err, taskId: task.id, attemptId: attempt.id }, 'Failed to record a served-context receipt; serving the context without one');
+    return unrecorded('record-failed');
+  }
+}
 import { DEFAULT_CHAT_CONTEXT_CHARS, DEFAULT_CHAT_CONTEXT_LIMIT, truncateChatMessage } from '../util/chatPayload.js';
 import {
   compactTaskComments,
@@ -143,7 +199,7 @@ import {
 export function getContextTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_context',
-    description: 'Read the working context for one task: project settings and global/epic/task rails, the epic, the task (plan and steps, definitionOfDone, executionContract when set, recent comments, verification, commits), its assigned worker, recent chat, planningNotes and a nextAction hint. Read-only. Fetch it after claiming and before planning, implementing or reviewing. Includes `routing` (the model catalog, efforts and tier defaults the architect picks from at submit_plan). Trimmed per role by default (a QA caller does not get task.epicSiblings, planningNotes or routing; a worker does not get routing; the response lists what was left out in `omitted`). That default is the complete read for the role: pass view:"full" only if you need a left-out section (any role may). view:"status" is a lighter delivery poll that does not count as having read the context.',
+    description: 'Read the working context for one task: project settings and global/epic/task rails, the epic, the task (plan and steps, definitionOfDone, executionContract when set, recent comments, verification, commits), its assigned worker, recent chat, planningNotes and a nextAction hint. Read-only. Fetch it after claiming and before planning, implementing or reviewing. Includes `routing` (the model catalog, efforts and tier defaults the architect picks from at submit_plan). Trimmed per role by default (a QA caller does not get task.epicSiblings, planningNotes or routing; a worker does not get routing; the response lists what was left out in `omitted`). That default is the complete read for the role: pass view:"full" only if you need a left-out section (any role may). view:"status" is a lighter delivery poll that does not count as having read the context. With a task, the default and view:"full" reads end with `servedContext`: the task\'s planRevision and approvedPlanRevision, its open attempt\'s attemptId and generation, and receiptStatus. Pass `sessionId` and such a read by the worker owning the task\'s running attempt records a durable served-context receipt (receiptId, and packetId: the sha256 of the payload without servedContext). A receipt records what was served to whom, never approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -160,6 +216,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         commentsMaxChars: {
           type: 'number',
           description: 'Maximum chars per task comment (default: 1000, max: 10000; 0 returns full comment content).'
+        },
+        sessionId: {
+          type: 'string',
+          description: 'The receiving session\'s incarnation exactly as its runner names it, e.g. the agent wrapper\'s MOE_SESSION_ID `<workerId>@<preflight-iso>`; the daemon never derives it. With it, a default or view:"full" read by the worker that owns the task\'s running attempt records a durable served-context receipt on that attempt; view:"status" never does. Non-blank, at most 255 chars, no NUL or line breaks; anything else is refused.'
         }
       },
       additionalProperties: false
@@ -171,6 +231,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         view?: 'full' | 'status';
         commentsLimit?: number;
         commentsMaxChars?: number;
+        sessionId?: unknown;
       };
       const taskId = params.taskId || process.env.MOE_TASK_ID || '';
       const callerWorkerId = params.workerId || process.env.MOE_WORKER_ID || '';
@@ -181,6 +242,9 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       if (params.view !== undefined && params.view !== 'full' && params.view !== 'status') {
         throw invalidInput('view', 'must be one of: full, status');
       }
+      // Presented by the caller only (never process.env), and refused in every
+      // view before any write: a malformed id must not stamp contextFetchedBy.
+      const sessionId = readContextSessionId(params.sessionId);
 
       let task = taskId ? state.getTask(taskId) : null;
       let epic = task ? state.getEpic(task.epicId) : null;
@@ -399,7 +463,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const omitted = (callerRole && ROLE_OMITTED[callerRole]) || [];
       const trimForQa = callerRole === 'qa';
 
-      return {
+      const packet = {
         project: {
           id: state.project.id,
           name: state.project.name,
@@ -554,6 +618,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
           ? { omitted, omittedHint: `Left out for the ${callerRole} role, whose work does not read them; this is the complete read for the role. Pass view:"full" only if you need one of these sections.` }
           : {}),
       };
+      if (!task) return packet;
+      const view = params.view === 'full' ? 'full' : 'default';
+      const served = await servedContextIdentity(state, task, packet, { view, workerId: callerWorkerId, sessionId });
+      return { ...served.packet, servedContext: served.servedContext };
     }
   };
 }

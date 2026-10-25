@@ -1239,6 +1239,43 @@ export interface ExecutionAttempt {
    * approval or readiness.
    */
   executionPolicySnapshot?: ExecutionPolicySnapshot;
+  /** The latest get_context packet served to this attempt's own worker (see ServedContextReceipt). */
+  contextReceipt?: ServedContextReceipt;
+}
+
+/**
+ * The latest default or view:"full" get_context packet served to an attempt's
+ * own worker for one receiving session. Written only by
+ * attemptStore.recordContextReceipt, persisted before it is served; a later
+ * receipt replaces it. Never backfilled. Purely additive: no migration, no
+ * schemaVersion bump. Decode it with readContextReceipt.
+ *
+ * It records what was served to whom. It is NEVER approval, model
+ * understanding, readiness or liveness, and a packet id never substitutes for
+ * plan approval (that stays Task.approvedPlanRevision === Task.planRevision).
+ */
+export interface ServedContextReceipt {
+  /** 'ctxreceipt-<32 hex>'. */
+  id: string;
+  /** 'sha256:<64 hex>' of the served payload without its servedContext block. */
+  packetId: string;
+  taskId: string;
+  attemptId: string;
+  generation: number;
+  workerId: string;
+  /**
+   * The receiving session's incarnation exactly as its runner names it (the
+   * wrapper's MOE_SESSION_ID `<workerId>@<preflight-iso>`, one per CLI launch).
+   * The daemon never derives it; it is never evidence of liveness.
+   */
+  sessionId: string;
+  /** The task's planRevision when served. */
+  planRevision: number;
+  /** Task.approvedPlanRevision when it was a non-negative safe integer; else ABSENT, never null (the F04 rule). */
+  approvedPlanRevision?: number;
+  /** Which non-status read was served. */
+  view: 'default' | 'full';
+  servedAt: string;
 }
 
 // =============================================================================

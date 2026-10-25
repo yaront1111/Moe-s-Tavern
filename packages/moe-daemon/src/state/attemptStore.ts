@@ -39,6 +39,8 @@
 //
 // An attempt may carry a configuration identity (executionPolicySnapshot),
 // captured once at open, never rewritten, and returned only as detached copies.
+// recordContextReceipt writes the latest served get_context receipt onto a
+// running attempt through the same write-then-publish path.
 
 import type { StateManager } from './StateManager.js';
 import type {
@@ -46,12 +48,14 @@ import type {
   ExecutionAttempt,
   ExecutionAttemptPhase,
   ExecutionPolicySnapshot,
+  ServedContextReceipt,
   Task,
 } from '../types/schema.js';
 // The leaf, and the only policy import allowed here: delivery/policy.ts and
 // state/taskStore.ts both import this store, so either would close a cycle.
 import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
-import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
+import { validateStringValue } from './validators.js';
+import { MoeError, MoeErrorCode, invalidInput, notAllowed } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
 
@@ -108,12 +112,17 @@ function decodeStoredGeneration(attempt: ExecutionAttempt): number {
  * What every exported function hands out: the stored snapshot object never
  * leaves the store, so no caller can rewrite an attempt's identity through an
  * alias. A copy of the raw value, deliberately not validated, so one hand-edited
- * record can never make a read throw. A record without a snapshot is returned
- * as it always was.
+ * record can never make a read throw. The context receipt is copied the same
+ * way. A record with neither is returned as it always was.
  */
 function detached(attempt: ExecutionAttempt): ExecutionAttempt {
-  if (attempt.executionPolicySnapshot === undefined) return attempt;
-  return { ...attempt, executionPolicySnapshot: structuredClone(attempt.executionPolicySnapshot) };
+  const { executionPolicySnapshot: snapshot, contextReceipt: receipt } = attempt;
+  if (snapshot === undefined && receipt === undefined) return attempt;
+  return {
+    ...attempt,
+    ...(snapshot !== undefined ? { executionPolicySnapshot: structuredClone(snapshot) } : {}),
+    ...(receipt !== undefined ? { contextReceipt: structuredClone(receipt) } : {}),
+  };
 }
 
 export function getAttempt(state: StateManager, attemptId: string): ExecutionAttempt | null {
@@ -367,6 +376,86 @@ export async function recordAttemptPresence(
   await state.writeEntity('attempts', updated.id, updated);
   state.attempts.set(updated.id, updated);
   return detached(updated);
+}
+
+/** record_commit's sessionId bound. No trim, no truncation, no coercion. */
+const SESSION_ID_RULE = { maxLength: 255 };
+
+/** A caller-presented ServedContextReceipt.sessionId. Absent stays absent; null is refused, never "no session". */
+export function readContextSessionId(value: unknown): string | undefined {
+  return value === undefined ? undefined : validateStringValue(value, 'sessionId', SESSION_ID_RULE);
+}
+
+const isText = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+const isRevision = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+
+/** Every receipt field's check, in canonical key order; approvedPlanRevision is the one optional key. */
+const RECEIPT_FIELDS: Record<keyof ServedContextReceipt, (v: unknown) => boolean> = {
+  id: isText,
+  packetId: (v) => typeof v === 'string' && /^sha256:[0-9a-f]{64}$/.test(v),
+  taskId: isText,
+  attemptId: isText,
+  generation: (v) => isRevision(v) && v >= 1,
+  workerId: isText,
+  sessionId: (v) => validateStringValue(v, 'contextReceipt.sessionId', SESSION_ID_RULE) === v,
+  planRevision: isRevision,
+  approvedPlanRevision: isRevision,
+  view: (v) => v === 'default' || v === 'full',
+  servedAt: isText,
+};
+
+/**
+ * The ONE definition of a valid served-context receipt, used on every write
+ * and by every later reader. Strict: the enumerable own key set must match
+ * exactly, and anything malformed throws INVALID_INPUT, never coerced. Returns
+ * a fresh primitive-only copy in canonical key order.
+ */
+export function readContextReceipt(value: unknown): ServedContextReceipt | undefined {
+  if (value === undefined) return undefined;
+  const proto = value !== null && typeof value === 'object' ? Object.getPrototypeOf(value) : undefined;
+  if (proto !== Object.prototype && proto !== null) throw invalidInput('contextReceipt', 'must be a plain object');
+  const r = value as Record<string, unknown>;
+  const own = Object.keys(r);
+  const keys = Object.keys(RECEIPT_FIELDS).filter((k) => k !== 'approvedPlanRevision' || own.includes(k));
+  if (own.length !== keys.length || !own.every((k) => keys.includes(k))) {
+    throw invalidInput('contextReceipt', `must have exactly the keys ${keys.join(', ')}`);
+  }
+  for (const k of keys) {
+    if (!RECEIPT_FIELDS[k as keyof ServedContextReceipt](r[k])) throw invalidInput(`contextReceipt.${k}`, 'is malformed');
+  }
+  return Object.fromEntries(keys.map((k) => [k, r[k]])) as unknown as ServedContextReceipt;
+}
+
+/**
+ * Record what get_context is about to serve to a RUNNING attempt's own worker;
+ * the latest receipt replaces any earlier one. taskId, attemptId, generation
+ * and workerId come from the STORED attempt, never the caller. Every refusal
+ * precedes the write. Not setAttemptPhase: every other field, lastPhaseAt
+ * included, is carried over. Write-then-publish. Caller must hold state.mutex.
+ */
+export async function recordContextReceipt(
+  state: StateManager,
+  p: Pick<ServedContextReceipt, 'attemptId' | 'workerId' | 'sessionId' | 'packetId' | 'planRevision' | 'approvedPlanRevision' | 'view'>
+): Promise<ServedContextReceipt> {
+  const id = requireNonBlank('attemptId', p.attemptId);
+  const existing = state.attempts.get(id);
+  if (!existing) throw new MoeError(MoeErrorCode.NOT_FOUND, `Attempt not found: ${id}`, { attemptId: id }, 'ATTEMPT_NOT_FOUND');
+  if (existing.phase !== 'running') {
+    throw conflict(`Attempt ${id} is ${existing.phase}; a context receipt is recorded only on a running attempt`,
+      { attemptId: id, taskId: existing.taskId, phase: existing.phase }, 'ATTEMPT_NOT_RUNNING');
+  }
+  if (p.workerId !== existing.workerId) throw notAllowed('recordContextReceipt', `attempt ${id} belongs to another worker`);
+  const contextReceipt = readContextReceipt({
+    id: generateId('ctxreceipt'), packetId: p.packetId, taskId: existing.taskId, attemptId: existing.id,
+    generation: decodeStoredGeneration(existing), workerId: existing.workerId, sessionId: p.sessionId,
+    planRevision: p.planRevision,
+    ...(p.approvedPlanRevision !== undefined ? { approvedPlanRevision: p.approvedPlanRevision } : {}),
+    view: p.view, servedAt: new Date().toISOString(),
+  }) as ServedContextReceipt;
+  const updated: ExecutionAttempt = { ...existing, contextReceipt };
+  await state.writeEntity('attempts', id, updated);
+  state.attempts.set(id, updated);
+  return { ...contextReceipt };
 }
 
 /**

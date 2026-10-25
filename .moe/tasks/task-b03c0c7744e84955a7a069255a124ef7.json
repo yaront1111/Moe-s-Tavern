@@ -17,51 +17,89 @@
     {
       "stepId": "step-1",
       "description": "Schema: add the served-context receipt shape (types only, no behaviour). In packages/moe-daemon/src/types/schema.ts, directly after `interface ExecutionAttempt`, add:\n`export interface ServedContextReceipt { id: string; packetId: string; taskId: string; attemptId: string; generation: number; workerId: string; sessionId: string; planRevision: number; approvedPlanRevision?: number; view: 'default' | 'full'; servedAt: string }`\nand give ExecutionAttempt an optional last field `contextReceipt?: ServedContextReceipt`.\n\nBrief doc comments in the file's style:\n- It is the latest get_context packet served to THIS attempt's own worker for one receiving session.\n- Written only by attemptStore.recordContextReceipt and persisted before it is served. A later receipt replaces it. Never backfilled. Purely additive: no migration, no schemaVersion bump.\n- id is 'ctxreceipt-<32 hex>'. packetId is 'sha256:<64 hex>' of the served payload without its servedContext block.\n- sessionId is the receiving session's incarnation exactly as its runner names it: the wrapper's MOE_SESSION_ID `<workerId>@<preflight-iso>`, minted once per CLI launch. The daemon never derives it, and it is never evidence of liveness.\n- planRevision is the task's revision when served.\n- approvedPlanRevision is Task.approvedPlanRevision when that was a non-negative safe integer, else ABSENT. Never null: that is the F04 rule.\n- view names which non-status read was served.\n\nState plainly: a receipt records what was served to whom. It is never approval, model understanding, readiness or liveness, and a packet id never substitutes for plan approval (approval stays Task.approvedPlanRevision === Task.planRevision).\n\nDelivery: this file is a CONTESTED path. Follow the Delivery note in planningNotes.risks.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/types/schema.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "note": "Added ServedContextReceipt (directly after ExecutionAttempt) and optional ExecutionAttempt.contextReceipt, types + doc comments only. Edited with the built-in Claude Edit tool (contested-path TOOL witness). Shared checkout has many unrelated dirty paths from other sessions; untouched.",
+      "startedAt": "2026-10-25T10:58:05.595Z",
+      "completedAt": "2026-10-25T10:58:25.612Z"
     },
     {
       "stepId": "step-2",
       "description": "Store: persist the receipt on the existing attempt record. In packages/moe-daemon/src/state/attemptStore.ts, follow recordAttemptPresence's validate → writeEntity → map.set idiom. NEVER route through setAttemptPhase: lastPhaseAt is the reconcile-window clock.\n\n(a) `export function readContextSessionId(value: unknown): string | undefined`\n- undefined → undefined.\n- Anything else must pass `validateStringValue(value, 'sessionId', { maxLength: 255 })` from ./validators.js. That helper imports only leaf modules, so there is no cycle. 255 is record_commit's sessionId bound.\n- Non-string, blank, NUL/CR/LF or >255 chars → INVALID_INPUT. No trim, no truncation, no coercion. null is refused, not treated as absent.\n\n(b) `export function readContextReceipt(value: unknown): ServedContextReceipt | undefined`. This is the ONE definition of a valid receipt, used on every write and by later readers (F07).\n- undefined → undefined.\n- Otherwise it must be a plain object whose enumerable own key SET is exactly the required keys plus the optional approvedPlanRevision. Compare key sets, not count+hasOwn (mem gotcha-strict-decoder-key-set).\n- id, taskId, attemptId, workerId and servedAt are non-blank strings.\n- packetId matches /^sha256:[0-9a-f]{64}$/.\n- sessionId is required and validated via (a).\n- generation is a positive safe integer.\n- planRevision, and approvedPlanRevision when present, are non-negative safe integers.\n- view is 'default' or 'full'.\n- Anything malformed → INVALID_INPUT (field 'contextReceipt' or 'contextReceipt.<field>'), never coerced.\n- Returns a fresh primitive-only object in canonical key order: id, packetId, taskId, attemptId, generation, workerId, sessionId, planRevision, approvedPlanRevision?, view, servedAt.\n\n(c) `export async function recordContextReceipt(state, p: { attemptId: string; workerId: string; sessionId: string; packetId: string; planRevision: number; approvedPlanRevision?: number; view: 'default' | 'full' }): Promise<ServedContextReceipt>`.\nError handling, in this order and all before any write:\n1. requireNonBlank attemptId.\n2. A missing record → NOT_FOUND, codeName ATTEMPT_NOT_FOUND (the setAttemptPhase shape).\n3. phase !== 'running' → STATE_CONFLICT, codeName ATTEMPT_NOT_RUNNING, context { attemptId, taskId, phase }. Use the local conflict() helper; no enum edit.\n4. p.workerId !== record.workerId → NOT_ALLOWED.\nThen build the receipt:\n- Binding fields come from the STORED attempt, never from the caller: taskId, attemptId = record.id, generation via decodeStoredGeneration, workerId.\n- Add id = generateId('ctxreceipt') and servedAt = new Date().toISOString().\n- Pass the whole receipt through (b).\nPersist `{ ...record, contextReceipt }` with state.writeEntity('attempts', id, …), THEN state.attempts.set. A rejected write throws and leaves the map and disk exactly as they were. Return a copy.\nLatest wins: the new receipt replaces any earlier one, and phase, lastPhaseAt, presence and every other field are carried over unchanged. The caller holds state.mutex.\n\n(d) detached(): also structuredClone a present contextReceipt. When neither a snapshot nor a receipt exists, keep returning the stored object itself, so every existing record's behaviour is unchanged.\n\nAdd one header-comment line naming this write. No activity row and no emit, per the store convention.\n\nTests: CREATE packages/moe-daemon/src/tools/getContextReceipt.test.ts with the store cases:\n- recordContextReceipt refusals before any write (writeEntity spy not called, stored record toStrictEqual unchanged):\n  - unknown attempt → ATTEMPT_NOT_FOUND\n  - closed and finalizing attempts → ATTEMPT_NOT_RUNNING\n  - another worker → NOT_ALLOWED\n  - packetId 'sha256:abc', planRevision -1 and 1.5, approvedPlanRevision -1, view 'status' → INVALID_INPUT\n  Assert codeName/code, not only the message.\n- readContextReceipt:\n  - undefined → undefined\n  - a valid receipt round-trips to an equal but distinct object\n  - an extra key, a missing key and a wrong-typed field → INVALID_INPUT\n- Mutating getAttempt(...).contextReceipt does not alter the stored record.\n- recordAttemptPresence keeps the receipt.\nUse it.each tables and shared seed helpers.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/attemptStore.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/getContextReceipt.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/getContextReceipt.test.ts"
+      ],
+      "note": "attemptStore: readContextSessionId (validateStringValue max 255, undefined passes, null refused), readContextReceipt (strict enumerable key-set decoder, canonical order, fresh primitive copy), recordContextReceipt (ATTEMPT_NOT_FOUND / ATTEMPT_NOT_RUNNING / NOT_ALLOWED before any write; binding fields from the stored attempt; writeEntity then map.set; latest wins), detached() also clones contextReceipt and still returns the stored object when neither snapshot nor receipt exists. New test file getContextReceipt.test.ts (store cases), RED first (functions missing), then GREEN. Focused run in a git-archive snapshot with native Linux node_modules: getContextReceipt + attemptStore + finalizeAttempt + claimNextTask = 4 files, 173 passed.",
+      "startedAt": "2026-10-25T10:58:26.675Z",
+      "completedAt": "2026-10-25T11:00:50.839Z"
     },
     {
       "stepId": "step-3",
       "description": "get_context: expose the identities and record receipts. In packages/moe-daemon/src/tools/getContext.ts:\n\n(a) inputSchema gains `sessionId: { type: 'string', description }`. The description says:\n- It is the receiving session's incarnation exactly as its runner names it, e.g. the agent wrapper's MOE_SESSION_ID `<workerId>@<preflight-iso>`. The daemon never derives it.\n- With it, a default or view:\"full\" read by the worker that owns the task's running attempt records a durable served-context receipt on that attempt. view:\"status\" never does.\n- It is non-blank, at most 255 chars, with no NUL or line breaks; anything else is refused.\nNO env fallback: never read process.env.MOE_SESSION_ID. The daemon must not mint a receiver identity, and seat env leaks into tests.\n\n(b) Right after the existing view check, before task resolution and before any write: `const sessionId = readContextSessionId(params.sessionId)`. A malformed value refuses EVERY view, status included, with INVALID_INPUT and writes nothing (contextFetchedBy is not stamped).\n\n(c) Keep the view:\"status\" early return exactly as it is. It never builds or records a receipt (DoD1).\n\n(d) Add `servedContextIdentity(state, task, packet, { view: 'default' | 'full', workerId: callerWorkerId, sessionId })`, modelled on executionPolicyContext.\nError handling: it never throws.\nIdentity:\n- taskId.\n- planRevision = decodeStoredPlanRevision(task) from ../state/taskStore.js, in try/catch; null when unreadable.\n- attempt = currentAttempt(state, task.id), in try/catch, because a hand-edited deep record overflows structuredClone (mem gotcha-daemon-detached-clone-overflows-on-deep-json); null when unreadable.\n- approvedPlanRevision = task.approvedPlanRevision when it is a non-negative safe integer, else null.\n- attemptId and generation from the open attempt, else null.\nreceiptStatus precedence:\n1. 'identity-unreadable': either read failed.\n2. 'no-session': sessionId is undefined.\n3. 'no-running-attempt': no open attempt, or its phase !== 'running'.\n4. 'not-attempt-owner': callerWorkerId is empty, attempt.workerId !== caller, or task.assignedWorkerId !== caller.\n5. Otherwise record.\nEvery non-recorded status returns receiptId: null and packetId: null, and hashes and writes NOTHING. That keeps unrecorded payloads deterministic: getContext.test.ts compares whole payloads with toEqual.\nRecord:\n- text = JSON.stringify(packet). packet is the complete response object built so far, i.e. exactly what is served minus servedContext.\n- packetId = 'sha256:' + createHash('sha256').update(text, 'utf8').digest('hex'), from node:crypto.\n- await recordContextReceipt(state, {...}). Pass approvedPlanRevision only when it is non-null.\n- On success, serve JSON.parse(text) as the packet. It is a detached copy, so the bytes the adapter serializes are exactly the digested ones. Return receiptStatus 'recorded' with receiptId and packetId.\n- On ANY error: logger.warn({ err, taskId, attemptId }, ...). Return the original packet with receiptStatus 'record-failed', receiptId null and packetId null.\nDoD3 follows: no receipt id is ever served without a successful attempt write, and the context itself is still served in every profile.\n\n(e) In the handler, build the existing response object unchanged into a const.\n- A taskless read returns it as before.\n- With a task, return `{ ...packet, servedContext }`, with servedContext appended last: { taskId, planRevision, approvedPlanRevision, attemptId, generation, receiptStatus, receiptId, packetId }.\n\n(f) Extend the tool description: name servedContext and sessionId, and say that a receipt records what was served, never approval. Constraint: getContext.test.ts fails any tool description or inputSchema matching /full[- ](?:task )?context|full `?get_context/i. Write 'view:\"full\" read', never that phrase.\n\nTests: append to packages/moe-daemon/src/tools/getContextReceipt.test.ts.\nSetup:\n- beforeEach: vi.stubEnv('MOE_WORKER_ID', '') and vi.stubEnv('MOE_TASK_ID', ''). afterEach: vi.restoreAllMocks and vi.unstubAllEnvs.\n- Seed worker-r and task-1, WORKING, assigned to worker-r, planRevision 3, approvedPlanRevision 3. Open the attempt via openAttempt for worker-r.\n- Read durability from h.moePath/attempts/<id>.json.\nCases:\n1. it.each over default and view 'full':\n   - servedContext toStrictEqual { taskId 'task-1', planRevision 3, approvedPlanRevision 3, attemptId, generation 1, receiptStatus 'recorded', receiptId matching /^ctxreceipt-[0-9a-f]{32}$/, packetId matching /^sha256:[0-9a-f]{64}$/ }.\n   - The file's contextReceipt toStrictEqual { id, packetId, taskId, attemptId, generation 1, workerId 'worker-r', sessionId, planRevision 3, approvedPlanRevision 3, view, servedAt: any String }.\n   - It is unchanged after `await h.state.load()`.\n   - packetId equals the sha256 of JSON.stringify(the response minus servedContext).\n2. view 'status' with a valid sessionId on the same eligible attempt: no servedContext key, the attempt file bytes are identical, and writeEntity gets no 'attempts' call.\n3. Rebinding:\n   - A second read with another sessionId replaces the receipt: a new id, and the stored sessionId is the new one.\n   - After planRevision advances to 4 (a definitionOfDone change through h.state.updateTask; seed directly if a guard refuses), the next receipt records planRevision 4 and keeps approvedPlanRevision 3 as history.\n4. Ineligible cases, it.each. Each asserts receiptStatus, null receiptId and packetId, and no attempt write:\n   - no sessionId → 'no-session'\n   - no attempt → 'no-running-attempt'\n   - attempt finalizing, reconciling or closed (setAttemptPhase) → 'no-running-attempt'\n   - caller worker-x → 'not-attempt-owner'\n   - task assigned to worker-y with worker-r's attempt → 'not-attempt-owner'\n   - anonymous caller with a session → 'not-attempt-owner'\n   - stored planRevision -1 → 'identity-unreadable', planRevision null, no throw\n5. DoD3, it.each over attempt snapshots {version 2, profile 'legacy', planRevision 3, deliveryPolicy 'legacy'} and {version 2, profile 'verified-local', planRevision 3, deliveryPolicy 'local-branch'}:\n   - writeEntity rejects only kind 'attempts'. Use the bind + mockImplementation pass-through from attemptStore.test.ts ~:58, because contextFetchedBy writes the task first.\n   - get_context still resolves, with receiptStatus 'record-failed', receiptId null and packetId null.\n   - The in-memory attempt has no contextReceipt, and the file bytes are unchanged.\n   - readContextReceipt(currentAttempt(h.state, 'task-1')?.contextReceipt) is undefined.\n6. Malformed sessionId, it.each over ['', '  ', 7, null, {}, 'a\\nb', 'x'.repeat(256)] × views [undefined, 'status']: rejects /sessionId/, contextFetchedBy is unchanged and the attempt file is unchanged.\n\nDelivery: getContext.ts is a CONTESTED path. Follow the Delivery note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts",
         "packages/moe-daemon/src/tools/getContextReceipt.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextReceipt.test.ts"
+      ],
+      "note": "get_context: sessionId input (no env fallback) validated via readContextSessionId right after the view check, so a malformed value refuses every view before contextFetchedBy. Status early return untouched. servedContextIdentity (never throws; reuses the existing decoded() guard for planRevision + currentAttempt) appends servedContext {taskId, planRevision, approvedPlanRevision, attemptId, generation, receiptStatus, receiptId, packetId} to every task read; precedence identity-unreadable > no-session > no-running-attempt > not-attempt-owner > recorded|record-failed. Recorded reads hash JSON.stringify(packet) and serve JSON.parse(text). Description/inputSchema extended (FULL_READ-safe). Tests appended (RED first, then GREEN): getContextReceipt + getContext + getContextStatus = 3 files, 100 passed; tsc --noEmit clean. Edited with the built-in Claude Edit tool (contested-path TOOL witness).",
+      "startedAt": "2026-10-25T11:00:51.655Z",
+      "completedAt": "2026-10-25T11:03:38.600Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification: run the full daemon suite once, fresh. This task changes a shared schema and the MCP contract, so run the full suite, not just the new test file:\n`cd packages/moe-daemon && npm test`\nIt must exit 0, and its command, exit code and output tail are complete_task's verification evidence.\n\nAlso run `cd packages/moe-daemon && npx tsc --noEmit`, which must exit 0. Tests are excluded from tsconfig. Do NOT run `npm run build`: its prebuild regenerates the generated files.\n\nEnvironment:\n- On WSL, use a native Linux node_modules in a snapshot and never overwrite the shared Windows node_modules (mem gotcha-linux-vitest-reuse-native-node-modules).\n- Unset the MOE_* seat env.\n- For a failure outside this diff, re-run that file alone and on pristine HEAD before classifying it. waitForTask.test.ts:344 is a known load flake.\n\nSize: measure `git diff --numstat -- packages/` plus `wc -l` of the new test file. The total must stay at or under 400 net changed lines, QA's oversize threshold; aim for about 350, with tests about 160 lines and table-driven.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextReceipt.test.ts"
+      ],
+      "note": "First gate run was 460 net lines, so I trimmed: a table-driven receipt decoder, Pick<> params and shorter comments. I also added one case for a failure inside the receipt validation. Fresh gate on the final bytes: git archive of HEAD 77cfe99 (no daemon change since base b129cfb; the HEAD blobs of the 3 edited files equal the pre-edit hashes) with the 4 files overlaid (cmp-equal), native Linux node_modules (lock equal modulo CRLF) and a Linux-only PATH with MOE_* unset. `cd packages/moe-daemon && npm test` exit 0: 163 files, 4110 passed | 14 skipped. `npx tsc --noEmit` exit 0. Size: numstat +202/-8 under packages/ plus the 204-line new test file = 398 net (≤400). npm run build was not run. Many unrelated dirty paths in the shared checkout are left untouched.",
+      "startedAt": "2026-10-25T11:03:39.710Z",
+      "completedAt": "2026-10-25T11:09:30.329Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff only (adversarial-self-review skill). Fix whatever it finds. If anything changed, re-run step 4's command fresh before complete_task.\n\nCheck:\n1. No path serves a receiptId or packetId without a successful attempt write. Inject a failure at writeEntity, and also inside recordContextReceipt's validation.\n2. view:'status' and every non-recorded status write nothing under .moe/attempts.\n3. A receipt binds only the STORED attempt's taskId, attemptId, generation and workerId, and only for a running attempt the caller owns while the task is assigned to that caller.\n4. No process.env session read. A malformed sessionId is refused before contextFetchedBy is stamped, and null is refused rather than treated as absent.\n5. get_context never throws on a hand-edited planRevision or attempt record.\n6. The attempt byte pins still pass: claimNextTask.test.ts 'writes a claim that sends no identity byte for byte as before', and the finalizeAttempt.test.ts open-key-set pin. detached() returns the same object for a record with neither a receipt nor a snapshot.\n7. No description or inputSchema text matches the FULL_READ regex.\n8. Every edited contested path (schema.ts, getContext.ts) has a TOOL witness from this session (Delivery note).\n9. complete_step.modifiedFiles lists all four files.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/attemptStore.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextReceipt.test.ts"
+      ],
+      "note": "Adversarial review of this task's 4 files only. No fix was needed, and no bytes changed after the step-4 gate.\n(1) No id is served without a write. Ids are returned only after `await recordContextReceipt` succeeds. Tested both ways: a writeEntity rejection (legacy and verified-local snapshots) and a validation failure inside the record (stored generation 0) each give record-failed with null ids and no contextReceipt.\n(2) The status view returns before identity is built, so nothing is written (tested; the mutant that removes the early return is killed). Non-recorded statuses make no 'attempts' write (tested).\n(3) Binding fields come from the stored attempt. A receipt needs a running attempt, the caller as its worker, and the caller as the task's assignee (each tested).\n(4) No process.env session read: an env-stubbed MOE_SESSION_ID still gives no-session. A malformed id (including null) is refused in both views before contextFetchedBy is stamped.\n(5) Hand-edited planRevision -1 gives identity-unreadable with no throw. currentAttempt is read under the decoded() guard.\n(6) The claimNextTask and finalizeAttempt pins pass. detached() returns the same object when there is neither a snapshot nor a receipt.\n(7) The FULL_READ test passes.\n(8) Every edit to schema.ts and getContext.ts was a built-in Claude Edit call in this session (TOOL witness).\nMutation probes on the new test file: 10 real mutants, 10 killed; one no-op mutant was discarded.\nTheoretical notes:\n- A hand-edited deep receipt can overflow structuredClone in the unguarded attempt readers. This is the same pre-existing gap as for snapshots, reachable only through a forbidden .moe edit.\n- If writeEntity fails after its rename, the receipt can land on disk while 'record-failed' is served. That is the conservative direction.\n- sessionId follows the plan's validateStringValue rule: tabs and other control characters other than NUL/CR/LF are allowed.",
+      "startedAt": "2026-10-25T11:09:31.523Z",
+      "completedAt": "2026-10-25T11:10:13.261Z"
     }
   ],
-  "planRevision": 1,
-  "status": "BLOCKED",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Reopened for a real Claude worker seat; worker-c1d9de02 is idle. F06 edits schema.ts and getContext.ts, which V01's landed bytes contest, so the landing session needs Claude Edit/Write TOOL witnesses on those files (the plan's Delivery note). A Codex/gemini/grok seat must report_blocked again without editing, as worker-9cda703c correctly did; the governor will reopen for the next Claude seat. Its dependency F05 is DONE.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -69,25 +107,33 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:22.608Z",
-  "updatedAt": "2026-10-25T10:54:35.093Z",
+  "updatedAt": "2026-10-25T11:10:31.764Z",
   "dependsOn": [
     "task-c7d520ba9cf940e4b3bbe2e4c3c90f47"
   ],
   "contextFetchedBy": [
     "architect-bb003851",
     "architect-6e3edf85",
-    "worker-9cda703c"
+    "worker-9cda703c",
+    "worker-c1d9de02"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-25T10:19:12.947Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T10:43:33.230Z",
   "planningNotes": {
@@ -108,8 +154,54 @@
     ]
   },
   "planApprovedAt": "2026-10-25T10:43:33.349Z",
-  "blockedReason": "Approved Delivery note requires a TOOL-tier editing witness for contested schema.ts and getContext.ts before any edits. Actual parent-process argv confirms this is Codex, despite worker.type=CLAUDE; this session has no Claude Edit/Write witness, and Serena through Codex is not collected by the Claude-only TOOL stream. The wrapper still skips contested paths without TOOL. Please reroute to an actual Claude worker seat. No source changes, Git writes, or verification runs; all steps remain pending. Handoff and capability gotcha recorded in Serena.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-25T10:54:35.093Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "commits": [
+    {
+      "sha": "aa5af5e22ee5173b84258d04320477a93bac018a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-9cda703c@2026-10-25T10:52:42Z",
+      "paths": [
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+        ".moe/tasks/task-f981d0597b26401a974c0fcd8829107e.json"
+      ],
+      "recordedBy": "worker-9cda703c",
+      "recordedAt": "2026-10-25T10:55:01.168Z",
+      "treeId": "c4b1077169dd728a84ee82b64a61d9e3784a52b1",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/attemptStore.ts",
+    "packages/moe-daemon/src/tools/getContextReceipt.test.ts",
+    "packages/moe-daemon/src/tools/getContext.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-9cda703c@2026-10-25T10:52:42Z",
+    "at": "2026-10-25T10:55:01.168Z"
+  },
+  "priorBlockedReason": "Approved Delivery note requires a TOOL-tier editing witness for contested schema.ts and getContext.ts before any edits. Actual parent-process argv confirms this is Codex, despite worker.type=CLAUDE; this session has no Claude Edit/Write witness, and Serena through Codex is not collected by the Claude-only TOOL stream. The wrapper still skips contested paths without TOOL. Please reroute to an actual Claude worker seat. No source changes, Git writes, or verification runs; all steps remain pending. Handoff and capability gotcha recorded in Serena.",
+  "blockedOnTaskIds": null,
+  "workStartedAt": "2026-10-25T10:58:05.595Z",
+  "reviewStartedAt": "2026-10-25T11:10:31.761Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh run on a git archive of HEAD 77cfe99 with the 4 task files overlaid (cmp-equal to the worktree), native Linux node_modules (lock equal modulo CRLF), Linux-only PATH, MOE_* unset.\n Test Files  163 passed (163)\n      Tests  4110 passed | 14 skipped (4124)\n   Duration  29.18s\nNPM_TEST_EXIT=0\nAlso: npx tsc --noEmit -> TSC_EXIT=0",
+    "reportedAt": "2026-10-25T11:10:31.761Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-F06 delivered (plan rev 1, 5/5 steps). Served-context identity is persisted on existing attempts.\n- schema.ts adds ServedContextReceipt {id ctxreceipt-<32hex>, packetId sha256:<64hex>, taskId, attemptId, generation, workerId, sessionId, planRevision, approvedPlanRevision? (absent, never null), view default|full, servedAt} and an optional ExecutionAttempt.contextReceipt. Additive only: no migration, no schemaVersion bump.\n- attemptStore.ts:\n  - readContextSessionId: validateStringValue, max 255. Undefined stays absent; null is refused.\n  - readContextReceipt: the one strict decoder. Checks the exact enumerable key set, never coerces, and returns a canonical-order copy.\n  - recordContextReceipt: refuses ATTEMPT_NOT_FOUND, ATTEMPT_NOT_RUNNING and NOT_ALLOWED before any write. taskId, attemptId, generation and workerId come from the STORED attempt. writeEntity runs before map.set; latest receipt wins; lastPhaseAt is untouched.\n  - detached() also clones the receipt, and still returns the same object when there is neither a snapshot nor a receipt.\n- getContext.ts:\n  - New sessionId input. There is no env fallback. It is validated before any write in every view.\n  - The status view is unchanged and never writes (DoD1).\n  - Every task read now ends with servedContext {taskId, planRevision, approvedPlanRevision, attemptId, generation, receiptStatus, receiptId, packetId}.\n  - receiptStatus precedence: identity-unreadable, then no-session, then no-running-attempt, then not-attempt-owner, then recorded or record-failed.\n  - A recorded read hashes JSON.stringify(packet) and serves JSON.parse of that text. A failed write is logged, the context is still served with null ids, and the call never throws (DoD3).\n- The receipt binds worker plus the caller-presented session incarnation plus task/attempt/generation/revision (DoD2). A receipt is never approval.\n- Tests: new tools/getContextReceipt.test.ts, 48 tests, RED first then GREEN. Mutation probes: 10/10 real mutants killed.\n- G"
 }
