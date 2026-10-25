@@ -100,7 +100,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -132,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:18.748Z",
-  "updatedAt": "2026-10-25T10:17:12.640Z",
+  "updatedAt": "2026-10-25T10:59:26.915Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88",
     "task-ad95cb270e9e46df8672eb094d0c1e74",
@@ -142,11 +142,14 @@
     "firstClaimAt": "2026-10-25T07:58:14.777Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T10:59:26.915Z",
+    "wallClockMs": 10872138
   },
   "contextFetchedBy": [
     "architect-473624b4",
-    "worker-9cda703c"
+    "worker-9cda703c",
+    "qa-b0c1741e"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
@@ -229,5 +232,9 @@
     "reportedAt": "2026-10-25T10:15:03.993Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-I01 implemented in four paths: new clientCapabilities.ts, WebSocketServer.ts/.test.ts, docs/MCP_SERVER.md. Optional v1 CLIENT_HELLO returns exact nine-key server/intersection maps only to requester. Per-socket attempted/valid state is mutex-serialized, retry-safe and locked after success. Both approval routes require negotiated revision support plus rendered token; original token still goes through existing CAS/durable stamp/readiness. Unknown optional fields remain compatible; snapshots/projections unchanged; legacy no-handshake behavior preserved and verified-local unavailable.\n77 new tests (105 in WS file) cover decoder, handshake lifecycle, isolation/reconnect, both approval routes, refusal side effects, unknown task fields, delivery roundtrips, queued material edits and competing approvals. Seven targeted mutants killed. Protected approval/snapshot/projection suites unchanged. Single adversarial review tightened tests; no production defect found.\nFresh final npm test: 161 files, 4040 passed/15 skipped; production and strict owned-test typechecks exit 0. Native Linux snapshot /tmp/moe-i01-final2.XvQLX5 = archive f6900bc7 + exact owned overlays. Manifest /tmp/moe-i01-gate-manifest.json; log /tmp/moe-i01-full-final.log. Separate native dependencies match package/lock modulo CRLF; Linux PATH, MOE_* cleared. Shared dependencies/peer bytes untouched. Net +400 lines (+412/-12), four paths. Handoff and fixture gotcha saved in Serena. No Git writes or manual .moe edits; wrapper owns landing. No IDE/VM certification or whole-epic completion claim; I06 owns integration."
+  "completionSummary": "CQ-I01 implemented in four paths: new clientCapabilities.ts, WebSocketServer.ts/.test.ts, docs/MCP_SERVER.md. Optional v1 CLIENT_HELLO returns exact nine-key server/intersection maps only to requester. Per-socket attempted/valid state is mutex-serialized, retry-safe and locked after success. Both approval routes require negotiated revision support plus rendered token; original token still goes through existing CAS/durable stamp/readiness. Unknown optional fields remain compatible; snapshots/projections unchanged; legacy no-handshake behavior preserved and verified-local unavailable.\n77 new tests (105 in WS file) cover decoder, handshake lifecycle, isolation/reconnect, both approval routes, refusal side effects, unknown task fields, delivery roundtrips, queued material edits and competing approvals. Seven targeted mutants killed. Protected approval/snapshot/projection suites unchanged. Single adversarial review tightened tests; no production defect found.\nFresh final npm test: 161 files, 4040 passed/15 skipped; production and strict owned-test typechecks exit 0. Native Linux snapshot /tmp/moe-i01-final2.XvQLX5 = archive f6900bc7 + exact owned overlays. Manifest /tmp/moe-i01-gate-manifest.json; log /tmp/moe-i01-full-final.log. Separate native dependencies match package/lock modulo CRLF; Linux PATH, MOE_* cleared. Shared dependencies/peer bytes untouched. Net +400 lines (+412/-12), four paths. Handoff and fixture gotcha saved in Serena. No Git writes or manual .moe edits; wrapper owns landing. No IDE/VM certification or whole-epic completion claim; I06 owns integration.",
+  "completedAt": "2026-10-25T10:59:26.915Z",
+  "reviewCompletedAt": "2026-10-25T10:59:26.915Z",
+  "reviewSummary": "Delivery: all 4 owned paths are in checkpoint 263e9f5 on moe/work-2026-10-24. The architect wrapper swept the worker's shared-tree bytes into it at 10:13Z. The worker completion postflight then found nothing to commit (MOE_COMMIT_NOTHING_TO_COMMIT). There is no completion-kind commit, so I did not self-land or fabricate a record_commit. Proof: the blob hashes of the working tree, HEAD and 263e9f5 are identical, the sha256s match the worker's gate manifest, and no later commit touches these paths.\n\nGate re-run: fresh whole-repo git archive of HEAD aa5af5e with native Linux deps (lock/package byte-equal mod CR), Linux-only PATH, MOE_* cleared. `cd packages/moe-daemon && npm test` exit 0: 162 files, 4062 passed / 14 skipped. `npx tsc --noEmit` exit 0.\n\nDoD:\n1. Roundtrip test proves profile/snapshot/contract/revisions/delivery projection plus an unknown task field are equal through the initial snapshot, GET_STATE after hello, reply and both broadcasts.\n2. A negotiated client lacking planRevisions, a failed/invalid hello, and a missing/malformed/stale token are each refused on BOTH APPROVE_TASK and drag. Refusals leave disk, activity, events and the SPEED timer unchanged (spy pattern proven by protected planApproval). Unnegotiated legacy/observe omission is preserved, as the epic rail requires until F04b. verified-local stays refused.\n3. Unknown envelope/payload/capability keys are ignored, not echoed.\n4. Verification is present and re-ran green.\nOnly 2 approveTask call sites exist, both gated inside the mutex. REOPEN_TASK and APPROVE_DECISION cannot approve plans.\n\nIndependent mutants, all KILLED: drag admission removed; failed-hello null state removed; client claim ignored in the intersection; omitted token accepted.\n\nSize: +412/-12, net 400, at the cap and not over. Docs match the code.\n\nNon-blocking:\n- approvalRevisions is advertised but admission keys only on planRevisions (as planned).\n- I06 owns whole-epic integration despite isEpicFinal.",
+  "requiredCheckAtDone": null
 }
