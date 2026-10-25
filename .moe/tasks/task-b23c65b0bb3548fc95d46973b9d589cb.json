@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 46,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:28.025Z",
-  "updatedAt": "2026-10-25T10:15:33.355Z",
+  "updatedAt": "2026-10-25T10:31:40.265Z",
   "dependsOn": [],
   "metrics": {
     "firstClaimAt": "2026-10-24T21:14:23.632Z",
@@ -129,7 +129,9 @@
     "plannedDistinctFileCount": 2,
     "executedStepCount": 21,
     "rejectCount": 2,
-    "reopenCount": 2
+    "reopenCount": 2,
+    "doneAt": "2026-10-25T10:31:40.265Z",
+    "wallClockMs": 47836633
   },
   "contextFetchedBy": [
     "qa-b0c1741e",
@@ -174,7 +176,10 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/context/repositorySource.test.ts",
-    "packages/moe-daemon/src/context/repositorySource.ts"
+    "packages/moe-daemon/src/context/repositorySource.ts",
+    ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+    ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json",
+    ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json"
   ],
   "completionSummary": "QA round-2 fixes, kept to the two planned paths (+35/-2, net +33; cumulative five-path diff +985/-6). Helpers and service are unchanged, and no re-slice.\n\nFix: searchTree's grep argv replaces `-I` with `-a` and adds `--no-recurse-submodules`.\n- Local submodule.recurse can no longer serve gitlink content.\n- Worktree/info/config attributes can no longer silently hide committed text.\n- Binary match lines now surface as truncated/undecodable-match through the existing NUL guard instead of an empty success.\n- Prior flags (--literal-pathspecs, -F -z -n, --no-color, --no-column, --full-name) are preserved, as is error handling.\n\nThree new real-Git regressions, each with non-vacuity preconditions:\n- (A) Populated, active submodule plus local submodule.recurse=true. Unscoped and directory-scoped searches serve only the parent match; reading or scoping the gitlink is refused with 'submodule'.\n- (B) Untracked `a.ts -diff`: exact served match, complete:true.\n- (C) NUL blob: truncated/undecodable-match, matches [], bytes 0.\nAll three were RED before the fix for the reported reasons.\n\nGate on a fresh whole-repo archive of 99cbfa5 (two paths overlaid and hash-checked, Linux-native deps, env -i):\n- `cd packages/moe-daemon && npm test`: exit 0, 161 files, 3966 passed / 15 skipped.\n- `npx tsc --noEmit`: exit 0.\n\nMutation proof: removing --no-recurse-submodules, putting -I back in place of -a, removing --no-column, removing the NUL guard, or removing grep --literal-pathspecs each fails exactly its named test(s). The restored baseline passes 133/133.\n\nNot in scope: activation, docs, verified-local and certification. Size: the updated CQ-C02 exception text is in epic rails; QA must confirm prop-9991c0da is APPROVED. The wrapper owns landing.",
   "commits": [
@@ -252,19 +257,37 @@
       "treeId": "03721e89ae5ffa5c3d8288894ec56f22a1c13847",
       "status": "PLANNING",
       "pushed": true
+    },
+    {
+      "sha": "317f682ae34d3bcdeb34036bd55149aaa9ab59f9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T10:01:29Z",
+      "paths": [
+        ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+        ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json",
+        ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
+        "packages/moe-daemon/src/context/repositorySource.test.ts",
+        "packages/moe-daemon/src/context/repositorySource.ts"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T10:17:12.715Z",
+      "treeId": "e65b6d13ec3d6525aa0193623cdf8db509ec2b0f",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "unattributedPaths": [
     "2026-10-24-ai-code-quality-and-context.md"
   ],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-26ba32c3@2026-10-24T21:14:17Z",
-    "at": "2026-10-25T09:42:29.506Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-25T10:01:29Z",
+    "at": "2026-10-25T10:17:12.715Z"
   },
-  "reviewCompletedAt": "2026-10-25T09:12:48.532Z",
+  "reviewCompletedAt": "2026-10-25T10:31:40.265Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Root/symlink escape is refused.",
@@ -343,5 +366,12 @@
         }
       ]
     }
-  ]
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/repositorySource.test.ts",
+    "packages/moe-daemon/src/context/repositorySource.ts"
+  ],
+  "completedAt": "2026-10-25T10:31:40.265Z",
+  "reviewSummary": "QA r3 APPROVE 317f682.\nDelivery: on moe/work-2026-10-24, tree e65b6d1 = record, recorded after the 09:12Z reject. Delta vs fcc0a4e: repositorySource.ts +3/-2, test +32/-0. Helper and service files unchanged. No tests deleted or weakened.\nSize: cumulative 5-path +985/-6 (net 979). Waived by the epic rail from prop-9991c0da (HUMAN APPROVED 10:01Z). Growth is only the 2 named QA fixes, with real-Git tests and mutation proof.\nGate: fresh archive of 99cbfa5 + the 2 paths from 317f682 (all 5 blobs hash-equal), native deps, env -i. `cd packages/moe-daemon && npm test` exit 0: 161 files, 3966 passed/15 skipped. tsc --noEmit exit 0.\nAn exact 317f682 archive fails 10 tests, all CQ-F05 WIP from peer 84ac030 (c7d520ba, WORKING). Parent 2107448 fails the same 10, and neither file imports C02 code: C02 adds 3 passing tests, 0 failures.\nDoD 1: --no-recurse-submodules. Test A: populated active submodule, local recurse=true, precondition proves recursion would happen. Search serves only the parent; gitlink scope/read refused 'submodule'.\nDoD 2: service byte-identical, 16 tests green.\nDoD 3: -a replaces -I. Untracked -diff still serves the exact match; NUL line -> truncated/undecodable-match.\nDoD 4: reproduced.\nMutants (my harness):\n- drop --no-recurse-submodules -> A fails\n- -I for -a -> B and C fail\n- drop -a -> B fails\n- drop --no-column / NUL guard / grep --literal-pathspecs -> each fails its named test\n- --text for -a (equivalent) and baseline: 133/133\nReal-Git probe of the exact argv: untracked textconv + binary driver, UTF-16 working-tree-encoding, filter + eol=crlf + autocrlf. Committed bytes match unchanged, no filter command ran.\nNot verified: macOS precomposeUnicode. Activation/docs are C10/C11. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

@@ -104,7 +104,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:18.737Z",
-  "updatedAt": "2026-10-25T10:20:09.688Z",
+  "updatedAt": "2026-10-25T10:21:43.128Z",
   "dependsOn": [
     "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
   ],
@@ -176,6 +176,39 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "eaaff56f523871830c02b5bf3c5357795370be88",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-25T10:03:45Z",
+      "paths": [
+        ".moe/epics/epic-9d76d843b4ec484987139b930d1d681e.json",
+        ".moe/epics/epic-c9561bfb767248e38c9c0be82d09ec2c.json",
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+        ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+        ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json",
+        "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-25T10:21:43.128Z",
+      "treeId": "3f1ce50f425d6b21599585a31a4224e3971c7b74",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-bde8654052f648f9b209174c3708322b"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -183,14 +216,24 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts",
     "packages/moe-daemon/src/tools/submitPlan.ts",
-    "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts"
+    "packages/moe-daemon/src/state/approvalRevision.acceptance.test.ts",
+    ".moe/epics/epic-9d76d843b4ec484987139b930d1d681e.json",
+    ".moe/epics/epic-c9561bfb767248e38c9c0be82d09ec2c.json",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+    ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json",
+    ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+    ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-26ba32c3@2026-10-25T09:43:04Z",
-    "at": "2026-10-25T10:14:07.462Z"
+    "kind": "completion",
+    "sessionId": "worker-07cd2c56@2026-10-25T10:03:45Z",
+    "at": "2026-10-25T10:21:43.128Z"
   },
   "reviewStartedAt": "2026-10-25T10:20:09.685Z",
   "verification": {
@@ -200,5 +243,9 @@
     "reportedAt": "2026-10-25T10:20:09.685Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-F05 delivered (plan rev 1, 5/5 steps). Every automatic approval now stamps the revision its plan submission committed.\n- taskStore.updateTask accepts the private daemonOwned.approvedPlanRevision on PLAN_APPROVED || PLAN_AUTO_APPROVED, still checked by checkedApprovalRevision in the same image as WORKING/planApprovedAt. The strict guard is still PLAN_APPROVED-only, behind NOT_READY. decodeStoredPlanRevision is exported.\n- TURBO stamps decodeStoredPlanRevision(submitted).\n- SPEED: armSpeedModeApproval(…, revision) closes over that revision. The callback keeps the AWAITING_APPROVAL re-check. On PLAN_REVISION_MISMATCH only, it WITHHOLDS: no task write or task activity, plus an awaited #general notice naming both revisions. Every other error goes to recordSpeedApprovalFailure (the 'SPEED mode auto-approval failed' activity, unchanged).\n- rearmSpeedModeApprovals binds executionPolicySnapshot.planRevision, or the current revision for snapshot-less legacy rows. A per-row try/catch records the failure and never throws at startup.\n- No new field. schema.ts: doc comment only. The held-out acceptance group is unskipped and its assertions are unchanged.\n- New tests (automaticApprovalRevision.test.ts, 18): store gate, TURBO single-write stamp, SPEED stamp, withheld, an older queued timer vs an identical resubmission (ABA) and vs a cancel, the failure path (Error and a non-mismatch MoeError), and restart (unchanged, DoD changed, legacy, malformed beside healthy). Each was RED before its implementation, except the guard tests.\nEvidence: fresh gate on a git archive of HEAD 58c2f29 with the 5 owned files overlaid (byte-equal). Native Linux node_modules (lock equal modulo CRLF), Linux-only PATH, env -i. `npm test` exit 0, 162 files, 4062 passed | 14 skipped (F04's 15 minus the F05 skip). tsc --noEmit exit 0.\nMutation: 16 mutants, 14 killed. Two survive the FULL suite: M14, the notice not awaited (timing only), and M16, the strict guard extended to PLAN_AUTO_APPROVED (equivalent, si"
+  "completionSummary": "CQ-F05 delivered (plan rev 1, 5/5 steps). Every automatic approval now stamps the revision its plan submission committed.\n- taskStore.updateTask accepts the private daemonOwned.approvedPlanRevision on PLAN_APPROVED || PLAN_AUTO_APPROVED, still checked by checkedApprovalRevision in the same image as WORKING/planApprovedAt. The strict guard is still PLAN_APPROVED-only, behind NOT_READY. decodeStoredPlanRevision is exported.\n- TURBO stamps decodeStoredPlanRevision(submitted).\n- SPEED: armSpeedModeApproval(…, revision) closes over that revision. The callback keeps the AWAITING_APPROVAL re-check. On PLAN_REVISION_MISMATCH only, it WITHHOLDS: no task write or task activity, plus an awaited #general notice naming both revisions. Every other error goes to recordSpeedApprovalFailure (the 'SPEED mode auto-approval failed' activity, unchanged).\n- rearmSpeedModeApprovals binds executionPolicySnapshot.planRevision, or the current revision for snapshot-less legacy rows. A per-row try/catch records the failure and never throws at startup.\n- No new field. schema.ts: doc comment only. The held-out acceptance group is unskipped and its assertions are unchanged.\n- New tests (automaticApprovalRevision.test.ts, 18): store gate, TURBO single-write stamp, SPEED stamp, withheld, an older queued timer vs an identical resubmission (ABA) and vs a cancel, the failure path (Error and a non-mismatch MoeError), and restart (unchanged, DoD changed, legacy, malformed beside healthy). Each was RED before its implementation, except the guard tests.\nEvidence: fresh gate on a git archive of HEAD 58c2f29 with the 5 owned files overlaid (byte-equal). Native Linux node_modules (lock equal modulo CRLF), Linux-only PATH, env -i. `npm test` exit 0, 162 files, 4062 passed | 14 skipped (F04's 15 minus the F05 skip). tsc --noEmit exit 0.\nMutation: 16 mutants, 14 killed. Two survive the FULL suite: M14, the notice not awaited (timing only), and M16, the strict guard extended to PLAN_AUTO_APPROVED (equivalent, si",
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts",
+    "packages/moe-daemon/src/types/schema.ts"
+  ]
 }
