@@ -41,20 +41,25 @@
     {
       "stepId": "step-3",
       "description": "The single verification gate (regression-check and verification-before-completion skills). Run it once on the final bytes, from a WSL seat at the repo root, with run_in_background. The two full harnesses take about 1 to 1.5 h together; wait for the notification instead of poll-sleeping, and save the full log:\n```bash\nenv -u CLAUDE_CONFIG_DIR -u MOE_ACCOUNT_ID -u MOE_ACCOUNT_SAMPLE_FILE -u MOE_PROJECT_PATH -u MOE_WORKER_ID MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh && \"/mnt/c/Program Files/Git/bin/bash.exe\" -c 'cd /d/projexts/moes && MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh'\n```\n- First half: the Linux/WSL harness (DoD 3). The seat's real account variables are stripped, because a leased seat carries CLAUDE_CONFIG_DIR=<a real ~/.moe/claude-accounts/acct-N>.\n- Second half: native Windows Git Bash, through WSL interop (DoD 2). WSLENV does not forward the seat variables.\n- Both halves use fake CLIs only: no real claude, account or model request.\n- Expect exit 0. The log should show two `[accounts] ok` lines, two `PASS postflight.sh` lines, and `PASS frozen candidate scenarios: 73` from the native half.\n- Give complete_task this exact command, its exit code and the tail. Quote both `[accounts] ok` lines in the step note.\n\nIf the native half fails AFTER printing `[accounts] ok`, in a scenario this diff does not touch, do not widen scope. The plan-time native run of scenarios past [accounts] was not awaited. Post the scenario and log path with moe.add_comment on this task, and ask the architects on chat for a gate amendment.\n\nOptional faster iteration before the gate: build an accounts-only harness by anchors. Take [line 1, `FROZEN_SUITE=\"$TMP_DIR/frozen-candidate.cjs\"`) plus [`# --- [accounts] Account rotation`, `# --- Heartbeat sidecar`), then append `echo PASS`. Put it in a scratch tree holding a copy of scripts/ on a Windows drive (e.g. /mnt/d/moe-scratch/<id>/scripts/tests/). It runs in about 2 min per platform.\n\nOn a native Windows seat, run `bash scripts/tests/postflight.sh` in Git Bash instead, and the Linux half via `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu-24.04 -e bash <script file>`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-25T08:33:33.491Z"
+      "note": "Ran the plan's exact sequential WSL + native Git Bash full-gate command and polled the foreground exec session to completion (Codex has no run_in_background notification tool). Exit 0. Full log /tmp/moe-5f39-evidence/full-gate.log; exit /tmp/moe-5f39-evidence/full-gate.exit. WSL line 75: '[accounts] ok'; native line 269: '[accounts] ok'. Both halves print PASS postflight.sh and PASS frozen candidate scenarios: 73; each runs 36 commit-scope scenarios. Verified SHA-256 of postflight.sh unchanged since gate start. No project files modified by this verification step.",
+      "startedAt": "2026-10-25T08:33:33.491Z",
+      "completedAt": "2026-10-25T10:03:35.692Z"
     },
     {
       "stepId": "step-4",
       "description": "The final and only adversarial self-review (adversarial-self-review skill), of this task's diff to scripts/tests/postflight.sh. Check:\n- Heredoc escaping: `\\$acct1` and `\\${CLAUDE_CONFIG_DIR-}` stay runtime; `$ACCT_HOME` is baked in at generation.\n- -ef is false for an empty, unset or missing CLAUDE_CONFIG_DIR.\n- The seat's real CLAUDE_CONFIG_DIR, a real folder literally named acct-1, never reaches the fake. run_accounts keeps `env -u CLAUDE_CONFIG_DIR`, and the self-check sets it explicitly. Nothing lists, reads or writes inside any config folder.\n- The .cmd shim exists only where cygpath does, so Linux, macOS and WSL are unchanged. It has CRLF, `%*`, and both paths quoted (a Windows user name may contain spaces).\n- `native()` acts only on win32 with a leading '/'.\n- Error handling still fails closed: no new `|| true` and no swallowed exception.\n- Every pre-existing assertion of the six account runs (refused, signout, other, wait, none, interactive) is retained, none weakened.\n- No edits to moe-account-lease.mjs, moe-agent.{sh,ps1}, scripts/mods/** or postflight.ps1.\n\nIf the review changes any byte, re-run step 3's exact command and use that fresh output. Then complete_task with the exact modified path (scripts/tests/postflight.sh) and the verification evidence. Make no git writes: the wrapper lands the bytes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Final adversarial review of task-scoped diff completed; no byte changes. Runtime heredoc variables remain escaped, fixture home baked in; -ef rejects empty/unset/missing/sibling paths (fresh temp-only check). .cmd creation gated on cygpath, quotes both paths, emits CRLF/%*. native() only transforms win32 leading-/ paths via argument-array exec; realpath equality retained. Existing six scenario assertions, token scrubbing, run_accounts env -u CLAUDE_CONFIG_DIR, and failure reporting retained. Concurrent harnesses isolate generated files in mktemp directories; cleanup/error paths unchanged. No config contents accessed, no new swallowed errors, no production/mod/ps1 edits or git writes. Gate bytes unchanged by SHA-256 check; full sequential gate exit 0 (2x 73 frozen, 2x six account runs, 2x 36 commit-scope scenarios, 2x PASS postflight.sh).",
+      "startedAt": "2026-10-25T10:03:35.819Z",
+      "completedAt": "2026-10-25T10:04:17.832Z"
     }
   ],
-  "planRevision": 6,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-e8965f51",
+  "planRevision": 9,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -66,12 +71,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:28:10.463Z",
-  "updatedAt": "2026-10-25T08:33:33.491Z",
+  "updatedAt": "2026-10-25T10:04:32.364Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T07:48:06.707Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
@@ -84,7 +89,9 @@
   "lowEffortEligible": true,
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T08:21:55.958Z",
@@ -101,5 +108,49 @@
     ]
   },
   "planApprovedAt": "2026-10-25T08:21:56.082Z",
-  "workStartedAt": "2026-10-25T08:29:15.684Z"
+  "workStartedAt": "2026-10-25T08:29:15.684Z",
+  "commits": [
+    {
+      "sha": "1f9c7d5121f4e278e33c16a1dcc94d8052112e7d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-6e3edf85@2026-10-25T07:48:01Z",
+      "paths": [
+        ".moe/tasks/task-076a0bd3f09e4ce4ae4bbc6bb122d2ed.json",
+        ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+        ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json"
+      ],
+      "recordedBy": "architect-6e3edf85",
+      "recordedAt": "2026-10-25T09:43:09.811Z",
+      "treeId": "ee0efba06571e956ef6392e772483ad8907516fa",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-6e3edf85@2026-10-25T07:48:01Z",
+    "at": "2026-10-25T09:43:09.811Z"
+  },
+  "reviewStartedAt": "2026-10-25T10:04:32.362Z",
+  "verification": {
+    "command": "env -u CLAUDE_CONFIG_DIR -u MOE_ACCOUNT_ID -u MOE_ACCOUNT_SAMPLE_FILE -u MOE_PROJECT_PATH -u MOE_WORKER_ID MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh && \"/mnt/c/Program Files/Git/bin/bash.exe\" -c 'cd /d/projexts/moes && MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash scripts/tests/postflight.sh'",
+    "exitCode": 0,
+    "outputTail": "utocrlf=true, autocrlf=input and text=auto\nwarning: in the working copy of '.moe/tasks/task-postflight.json', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'seed.txt', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of '.moe/tasks/task-postflight.json', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'seed.txt', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of '.moe/tasks/task-postflight.json', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'seed.txt', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of '.gitattributes', LF will be replaced by CRLF the next time Git touches it\n[scenario AC] ok\n[scenario AD] a CRLF-committed file rewritten, deleted or replaced after the snapshot still drops as MOE_ATTR_CONCURRENT\nwarning: in the working copy of '.moe/tasks/task-postflight.json', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'seed.txt', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of '.moe/tasks/task-postflight.json', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'seed.txt', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of '.moe/tasks/task-postflight.json', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'seed.txt', LF will be replaced by CRLF the next time Git touches it\n[scenario AD] ok\ncommit-scope scenarios run: 36\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\n",
+    "reportedAt": "2026-10-25T10:04:32.362Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Updated only scripts/tests/postflight.sh: folder-identity account matching, alias regression self-check, Windows .cmd fake shim, and win32 MSYS-path conversion for interactive realpath assertion. All six account assertions retained. Regression red proofs reject original string comparison and always-true mutant; native signout red becomes green. Exact sequential WSL + native Git Bash gate exit 0: each passes 73 frozen candidate scenarios, six account runs, 36 commit-scope scenarios, and PASS postflight.sh. Full log /tmp/moe-5f39-evidence/full-gate.log; both [accounts] ok at lines 75/269. Final adversarial review made no edits; source checksum unchanged. No real account/model access or production/mod/ps1 changes. Serena handoff saved."
 }
