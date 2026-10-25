@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,12 +25,37 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 222.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ffb6d54a2c824b30aad3c9db58ea3217",
+      "author": "architect-26ba32c3",
+      "content": "Split on 2026-10-25 (architect-26ba32c3). The full bridge measured at about 650 net LOC: a host codec and scoping module, a guest supervisor in Python (the guest has python3 but no Node), a host session, and tests. That is far over the 400-net-LOC QA limit, and no rail waives it. Following this epic's M01 and C02 pattern, this row keeps its full DoD and becomes the final slice, depending on:\n- CQ-R08a task-f981d059 (PLANNING): scripts/local-runner/guest-bridge.mjs, which is the frame protocol, guest frame schema, per-role request scoping and fixed bridgeArgv. Tests go in the new scripts/tests/local-runner-bridge.test.mjs, registered in CI.\n- CQ-R08b task-502c00a5 (BACKLOG): scripts/local-runner/guest-supervisor.py, a stdlib-only supervisor that is the sole writer of its stdout. It relays child output only as base64 output frames and reports exit only from its own waitpid.\n- CQ-R08c task-10e201f9 (BACKLOG): the agent request ingress, a Unix socket that admits only the moe-agent peer uid, assigns its own ids, and routes each response back to the requester only.\n\nWhat remains for this row, to plan once the three slices land:\n- The host bridge session: run bridgeArgv through the R06 invoker style with an injected spawn, require hello first, pump frames, and pass each request through scopeRequest and an injected forward. Bound in-flight requests and time them out, deliver output and observations to callbacks, and fail closed by killing the child on any violation.\n- A loopback-only daemon guard: refuse to open when `.moe/daemon.json` records a non-loopback bindHost. That is WSL agent mode's 0.0.0.0, which a Multipass guest could reach through its gateway.\n- An end-to-end test between the JS session and the real Python supervisor that proves DoD 1-3.\nVerification: `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bridge.test.mjs`. It is a superset of the DoD command, so local-runner.test.mjs, which R04 and R05 also edit, is never touched.",
+      "timestamp": "2026-10-25T10:33:54.671Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:10.214Z",
-  "updatedAt": "2026-10-25T10:16:59.784Z",
+  "updatedAt": "2026-10-25T10:34:01.910Z",
   "dependsOn": [
     "task-84c2da018ce74995b609805dab4fe7da",
-    "task-b03c0c7744e84955a7a069255a124ef7"
-  ]
+    "task-b03c0c7744e84955a7a069255a124ef7",
+    "task-f981d0597b26401a974c0fcd8829107e",
+    "task-502c00a50db340c9941cae20eeef1021",
+    "task-10e201f9cdec49578c71981cd4799551"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:21:06.541Z"
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3"
+  ],
+  "blockedReason": "This row is now the final slice of a split; it is not stuck. R08 was about 650 net LOC, over the 400 QA limit, so it was split into CQ-R08a task-f981d0597b26401a974c0fcd8829107e (host frame protocol), CQ-R08b task-502c00a50db340c9941cae20eeef1021 (guest supervisor output relay) and CQ-R08c task-10e201f9cdec49578c71981cd4799551 (guest agent request ingress). This row keeps its full DoD: the host bridge session, a loopback-only daemon guard, and an end-to-end test against the real supervisor. It must be planned against the slices' landed code, not guessed interfaces. It returns to PLANNING automatically when all three are DONE. See the split comment for the remaining scope.",
+  "blockedOnTaskIds": [
+    "task-f981d0597b26401a974c0fcd8829107e",
+    "task-502c00a50db340c9941cae20eeef1021",
+    "task-10e201f9cdec49578c71981cd4799551"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-25T10:34:01.910Z"
 }

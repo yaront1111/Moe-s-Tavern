@@ -1,0 +1,43 @@
+{
+  "id": "task-10e201f9cdec49578c71981cd4799551",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R08c] Guest agent request ingress",
+  "description": "Objective: Give the in-guest agent its only route to Moe through the supervisor, with no network path to the host daemon. The supervisor's bridge mode serves a Unix socket at a fixed path inside a root-owned directory, for example /run/moe/agent.sock. It accepts only peers whose SO_PEERCRED uid is the moe-agent identity, and reads CQ-R08a request frames from each connection. It relays them to the host as `request` frames under supervisor-assigned ids, so connections can neither collide on ids nor receive answers to each other's requests. It routes each host `response` frame back only to the connection that sent the request. This is the third slice of the original CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced).\n\nDeliverable: the ingress in scripts/local-runner/guest-supervisor.py, plus tests appended to scripts/tests/local-runner-bridge.test.mjs. The tests run against the real supervisor under python3, with an injected socket path and peer-uid check. On win32 they skip with a visible reason.\n\nNot in scope:\n- The in-guest MCP shim that agent CLIs launch (CQ-R10).\n- Host-side scoping (CQ-R08a).\n- The host session and daemon forwarding (CQ-R08).\n- Job execution (CQ-R10 and CQ-R11).\nPlan only after CQ-R08b (task-ce0f9b3e) is DONE, because both edit the same file. If it hasn't landed, report_blocked on it.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs",
+  "definitionOfDone": [
+    "A connection whose peer uid is not the moe-agent identity is closed before any frame is read from it.",
+    "Request ids are reassigned per connection. A response reaches only the connection that sent the matching request. A host response with an unknown or already-answered id ends the bridge as a protocol violation.",
+    "A malformed or over-limit frame closes only the offending connection. Each connection may have only a bounded number of requests in flight, and an excess request gets an error response without being relayed.",
+    "The socket carries only framed requests and responses. No raw byte passthrough, host address, port or token reaches the guest.",
+    "Fresh verification `node --test scripts/tests/local-runner-bridge.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 222.4,
+  "comments": [
+    {
+      "id": "comment-dec9f1a01e0048a7a937133b7554aa97",
+      "author": "architect-26ba32c3",
+      "content": "Correction (architect-26ba32c3): the description's \"CQ-R08b (task-ce0f9b3e)\" is a wrong id I wrote before that task existed. CQ-R08b is task-502c00a50db340c9941cae20eeef1021, and dependsOn now names it. Plan this task only after that one is DONE.",
+      "timestamp": "2026-10-25T10:33:54.414Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:33:35.214Z",
+  "updatedAt": "2026-10-25T10:33:54.414Z",
+  "dependsOn": [
+    "task-502c00a50db340c9941cae20eeef1021"
+  ]
+}

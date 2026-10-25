@@ -83,12 +83,12 @@
     }
   ],
   "planRevision": 16,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE IS THE ONLY FAILURE. No code or test change is requested. All four DoD items passed substantive review on completion commit 9079d11 (on moe/work-2026-10-24).\n\nSize, from git show --numstat 9079d11 (excluding .moe): +881/-10, net +871. Runtime is +285/-10 and tests are +596. The QA bar is 400 net changed lines, and the CQ-R epic rail grants size exceptions to R02, R06 and R07 ONLY (\"Other tasks retain normal sizing limits\").\n\nVerified on a fresh snapshot of 9079d11:\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0, 170/170.\n- Bundle test: 7/7.\n- The earlier test sections are an append-only, byte-identical prefix; the R02/R06/R07 modules are unchanged.\n- `git diff --check` is clean.\n- 24 of 25 mutants were killed; the survivor is equivalent on POSIX.\nFull evidence is in the task comment.\n\nROUTE: an architect or human decision, not a worker fix.\n(a) If the human adds an R03 size-exception rail, resubmit the SAME bytes; QA approves on this evidence.\n(b) Otherwise, re-slice into file-disjoint pieces, each under 400 lines:\n- R03a: image-cache.mjs with W3/W4 (about 240);\n- R03b: platform-windows.mjs plus the CLI prerequisites command, with W5-W7 and W13 (about 270);\n- R03c: provision.mjs with W1/W2, W8-W12 and W14 (about 380).\nWorker: call moe.request_replan rather than editing code.",
+  "reopenReason": "The human APPROVED prop-1a6fe100 at 10:17:21Z. CQ-R rail 3 now lists CQ-R03 as a size exception: 9079d11, at most 891 changed lines (+881/-10) across exactly cli.mjs, image-cache.mjs, platform-windows.mjs, provision.mjs and local-runner.test.mjs, growing only by QA-required fixes. I verified the rail is applied intact. The same bytes are resubmitted unchanged; QA passed all four DoD items on 9079d11 (170/170 tests, 24/25 mutants killed), and size was the only failure.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:53.503Z",
-  "updatedAt": "2026-10-25T08:50:33.871Z",
+  "updatedAt": "2026-10-25T10:39:17.174Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -115,7 +115,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 7,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-25T10:39:17.174Z",
+    "wallClockMs": 69916358
   },
   "contextFetchedBy": [
     "worker-07cd2c56",
@@ -238,7 +240,7 @@
     "sessionId": "worker-07cd2c56@2026-10-25T08:47:53Z",
     "at": "2026-10-25T08:50:33.871Z"
   },
-  "reviewCompletedAt": "2026-10-25T08:47:54.376Z",
+  "reviewCompletedAt": "2026-10-25T10:39:17.174Z",
   "rejectionDetails": {
     "failedDodItems": [
       "SIZE: >400 net changed LOC (+881/-10; QA approval bar; CQ-R epic rail grants size exceptions to R02/R06/R07 only). All four DoD items PASSED."
@@ -268,8 +270,13 @@
       ]
     }
   ],
-  "blockedReason": "Awaiting the human's size-rule decision, as the governor directed. No code change is requested.\n- QA passed all four DoD items on 9079d11. The only failure is the 400-net-LOC bar: +881/-10, with runtime +285/-10 and tests +596.\n- I checked that 9079d11 is on moe/work-2026-10-24, and that HEAD and the working tree match it on all five R03 files.\n- If the human approves a size exception or counts non-test lines, resubmit these same bytes unchanged; QA will approve on its existing evidence.\n- If the human chooses strict re-slicing, the governor moves this row to PLANNING for the R03a/R03b/R03c split.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-25T08:49:55.642Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Awaiting the human's size-rule decision, as the governor directed. No code change is requested.\n- QA passed all four DoD items on 9079d11. The only failure is the 400-net-LOC bar: +881/-10, with runtime +285/-10 and tests +596.\n- I checked that 9079d11 is on moe/work-2026-10-24, and that HEAD and the working tree match it on all five R03 files.\n- If the human approves a size exception or counts non-test lines, resubmit these same bytes unchanged; QA will approve on its existing evidence.\n- If the human chooses strict re-slicing, the governor moves this row to PLANNING for the R03a/R03b/R03c split.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-25T10:39:17.174Z",
+  "reviewSummary": "Approved on the UNCHANGED completion commit 9079d11 (on moe/work-2026-10-24). HEAD 56023de and the working tree are byte-identical to it on all 5 files, and no later commit touches scripts/local-runner or the test file.\nSize: +881/-10 (runtime +285/-10, tests +596). This exactly matches the new CQ-R03 size-exception rail (≤891 lines across exactly the 5 files), so size no longer fails.\nFresh this session (env -i, Linux node v24.21.0, git-archive snapshots of 9079d11 AND HEAD):\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0, 170/170, 0 fail/skip/cancel on both; W14 real-process ran.\n- local-runner-bundle.test.mjs: 7/7 on both.\n- Old test file is a byte-identical 100877-byte prefix (append-only). R02/R06/R07 modules and manifest untouched. diff --check clean, LF only, no forbidden patterns.\nI re-read the 285 runtime lines:\n- DoD1: 5 fixed items {id,satisfied,requiresElevation,action}; unknown is null, never true. CLI `prerequisites` exits 0 only when ready.\n- DoD2: manifest-only URL; exclusive .part, sha256 verify, atomic rename; cache hit re-verified. No --mount/--network/--bridged in argv. User-data on stdin only. Owned-style primary-name refused before reserve. No `multipass set`, authenticate or elevation.\n- DoD3: one ledger.reserve; R06 same-name retry; both timeout variants tested; nothing deleted.\nLast round, on these identical bytes, 24/25 mutants were killed; the survivor is equivalent on POSIX.\nAccepted residuals: callers serialize same-owner runs; cacheDir must be private; VMP-only HypervisorPresent; no Windows O_NOFOLLOW; W7 depends on test order; R13 certifies. executionReady stays false.\nPonytail: lean already, net -0.\nThere is no new commit because the bytes are unchanged.",
+  "requiredCheckAtDone": null
 }
