@@ -139,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:58.945Z",
-  "updatedAt": "2026-10-25T11:47:09.648Z",
+  "updatedAt": "2026-10-25T11:47:47.354Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -203,7 +203,8 @@
     ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
     ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
     ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
-    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json"
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+    ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json"
   ],
   "completionSummary": "CQ-R05: macOS VM provisioning code is in place, but macOS provider support is NOT established. The native provider smoke was NOT run because this WSL host has no Mac. The opt-in test M12 skips with exactly that reason. Only a real-Mac run of `node scripts/local-runner/cli.mjs native-smoke --work-dir <abs>` (CQ-R13) can establish support.\n\n**DoD 1: matching image arch**\n- New platform-macos.mjs: the arch comes from the hardware via one bounded `/usr/sbin/sysctl -in hw.optional.arm64` call, so Rosetta x64 Node on Apple Silicon still gets arm64.\n- provision.mjs uses `pre.arch ?? platform.arch` and refuses any arch outside IMAGE_ARCHES before ensurePinnedImage, so an unknown arch never downloads. The URL and sha come only from the manifest.\n\n**DoD 2: unsupported combinations are explicit**\n- Ordered items: host-macos, multipass-installed, multipass-authenticated, host-provider-combination. Each is {id, satisfied, requiresElevation, action}.\n- A non-certified driver or arch is named in the action and blocked. A hostile token renders as 'unknown'. Moe never changes local.driver.\n- MACOS_SUPPORT_MATRIX is guarded against drift from certified-provider.json.\n\n**DoD 3: only a native smoke establishes support**\n- New native-smoke.mjs. nativeSmokeCore (injectable) always reports transport 'injected' and never establishes support.\n- runNativeProviderSmoke accepts exactly {workDir: absolute path}, uses this host's own platform module and no deps.\n- supportEstablished requires native && passed && cleanup==='deleted'. Cleanup always runs and deletes only this run's random attemptId; other ledger records are preserved.\n- The cli.mjs `native-smoke` command exits 0 only when supportEstablished === true. darwin is added to PLATFORMS.\n\n**DoD 4: fresh verification**\n- `node --test scripts/tests/local-runner.test.mjs` (Linux PATH, Node 24.21): exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12).\n- Also green: the bundle test (7/7), a fresh HEAD-archive snapshot, and Windows Node 24.16 (181 ",
   "commits": [
@@ -229,6 +230,21 @@
       "treeId": "2e033256e97eb3f53c743e71949f717331dc22eb",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "cb5704faf288113caee39b41808f4228c52d122a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T11:40:20Z",
+      "paths": [
+        ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T11:47:47.354Z",
+      "treeId": "4b701d4784cf09138827dd54bec7cc4641322a9a",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -239,9 +255,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-25T11:15:01Z",
-    "at": "2026-10-25T11:40:11.379Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T11:40:20Z",
+    "at": "2026-10-25T11:47:47.354Z"
   },
   "completedAt": "2026-10-25T11:47:09.648Z",
   "reviewCompletedAt": "2026-10-25T11:47:09.648Z",

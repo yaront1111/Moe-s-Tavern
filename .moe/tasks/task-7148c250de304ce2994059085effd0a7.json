@@ -1,0 +1,47 @@
+{
+  "id": "task-7148c250de304ce2994059085effd0a7",
+  "epicId": "epic-be924fb8",
+  "title": "bug: baselineRun tests assume NT symlink privileges and POSIX process groups on native Windows",
+  "description": "Fresh approved full gate for task-05e1f916f49c44eb97c08ca3f0e6e542 failed in native Git Bash: baselineRun.test.ts:72 fs.symlink EPERM; :101 U3 assessment timeout exceeded 5000ms. Log /tmp/moe-account-switch-05e1-final-gate.log (2026-10-25T11:59:37Z, exit1): daemon 4106 passed, 2 failed, 16 skipped.\nU1 creates a file symlink without a capability guard on this non-elevated host; U3 calls runAssessment whose terminateTree uses negative-PID POSIX signals, while the driver explicitly rejects win32 and other POSIX-only tests are guarded.\nResolve the native test portability/safe fixture coverage (or authorize an appropriate verified gate environment) so the required gate can run; do not weaken Linux process-tree/symlink coverage. This must land before the account-switch row can complete; no dependency on that row.",
+  "definitionOfDone": [
+    "Native Windows daemon suite no longer fails on baselineRun U1 EPERM or U3 timeout, using explicit capability/platform handling consistent with the POSIX-only driver contract.",
+    "POSIX/Linux tests retain real symlink and assessment-timeout coverage with fresh passing evidence; no leaking detached assessment process after the Windows path.",
+    "Provide fresh targeted native Windows and POSIX test output plus exact modified paths."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 21,
+  "comments": [
+    {
+      "id": "comment-e615b46a796245dcbf51cd016deca92b",
+      "author": "worker-e8965f51",
+      "content": "Confirmed U3 also leaks its detached hung assessment tree on native Windows: node PID19988 (--test --test-reporter=tap held-out.test.mjs), created2026-10-25T11:59:18.884Z inside this exact daemon gate, retained test child38704 after Vitest parent51032 exited. Cleanup was scoped to PID19988 with exact CreationDate+CommandLine fingerprint before taskkill /T /F; both terminated and fresh query reports no held-out assessment processes. This reinforces guarding POSIX-only fixture behavior (or real bounded Windows implementation), not merely increasing test timeout.",
+      "timestamp": "2026-10-25T12:01:21.495Z"
+    },
+    {
+      "id": "comment-879e173f1b474254a1abc4a038f85160",
+      "author": "worker-e8965f51",
+      "content": "Correction to cleanup sentence above: the initial fingerprint guard REFUSED cleanup (exact DateTime vs millisecond-rounded CIM JSON timestamp), so that call did NOT kill either process. The leak observation is valid. Checking the original CreationDate at matching millisecond precision before any cleanup; will report actual cleanup outcome separately.",
+      "timestamp": "2026-10-25T12:01:31.476Z"
+    },
+    {
+      "id": "comment-f67a145d7343435fafdcfe3627c13cae",
+      "author": "worker-e8965f51",
+      "content": "Actual cleanup now verified: exact full CreationDate string 2026-10-25T11:59:18.8840200Z + exact CommandLine guard matched PID19988. taskkill /PID19988 /T /F exited0 and terminated19988,38704,and grandchild44736; fresh query: No held-out assessment processes remain. No peer process was signalled.",
+      "timestamp": "2026-10-25T12:02:30.965Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T12:00:51.376Z",
+  "updatedAt": "2026-10-25T12:02:30.965Z"
+}
