@@ -1052,6 +1052,26 @@
             event.dataTransfer.dropEffect = 'move';
         }
 
+        // The plan revision a card was rendered with: its approval token. An
+        // absent field is a legacy row, which the daemon reads as 0. A malformed
+        // one yields undefined, which the host refuses visibly instead of
+        // approving a plan nobody reviewed.
+        function renderedPlanRevision(task) {
+            var raw = task.planRevision;
+            if (raw === undefined) { return 0; }
+            return typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined;
+        }
+
+        // The message that moves a rendered card to newStatus. AWAITING_APPROVAL
+        // to WORKING is an approval, so it carries the card's rendered revision
+        // and is never sent as a token-free status update.
+        function moveMessage(task, newStatus) {
+            if (task.status === 'AWAITING_APPROVAL' && newStatus === 'WORKING') {
+                return { type: 'approveTask', taskId: task.id, expectedPlanRevision: renderedPlanRevision(task) };
+            }
+            return { type: 'updateTaskStatus', taskId: task.id, status: newStatus };
+        }
+
         function onDrop(event, newStatus) {
             event.preventDefault();
             if (draggedEpicId && currentState && currentState.tasks) {
@@ -1067,11 +1087,7 @@
                 tasksToMove.forEach(function(t) {
                     if (t.status === 'BLOCKED') { return; }
                     if (displayStatus(t.status) !== newStatus) {
-                        vscode.postMessage({
-                            type: 'updateTaskStatus',
-                            taskId: t.id,
-                            status: newStatus
-                        });
+                        vscode.postMessage(moveMessage(t, newStatus));
                     }
                 });
                 draggedEpicId = null;
@@ -1082,6 +1098,10 @@
                     ? currentState.tasks.find(function(t) { return t.id === draggedTaskId; })
                     : null;
                 if (draggedTask && draggedTask.status === 'BLOCKED' && displayStatus(draggedTask.status) === newStatus) {
+                    return;
+                }
+                if (draggedTask) {
+                    vscode.postMessage(moveMessage(draggedTask, newStatus));
                     return;
                 }
                 vscode.postMessage({
@@ -1120,12 +1140,8 @@
 
             if (direction === 'next') {
                 if (idx >= workflowOrder.length - 1) { return; }
-                if (task.status === 'AWAITING_APPROVAL') {
-                    vscode.postMessage({ type: 'approveTask', taskId: taskId });
-                } else {
-                    const newStatus = workflowOrder[idx + 1];
-                    vscode.postMessage({ type: 'updateTaskStatus', taskId: taskId, status: newStatus });
-                }
+                // From AWAITING_APPROVAL the next status is WORKING: an approval.
+                vscode.postMessage(moveMessage(task, workflowOrder[idx + 1]));
             } else if (direction === 'prev') {
                 if (idx <= 0) { return; }
                 if (task.status === 'REVIEW' || task.status === 'DONE') {

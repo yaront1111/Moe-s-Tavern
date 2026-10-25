@@ -11,6 +11,7 @@ const ts = require('typescript');
 // TaskDetailPanel for the detail - so nothing here re-implements them.
 const boardScriptPath = path.join(__dirname, '../media/board.js');
 const panelPath = path.join(__dirname, '../src/panels/TaskDetailPanel.ts');
+const planReviewPath = path.join(__dirname, '../src/panels/PlanReviewPanel.ts');
 const providerPath = path.join(__dirname, '../src/providers/BoardViewProvider.ts');
 
 function transpile(sourcePath) {
@@ -21,6 +22,7 @@ function transpile(sourcePath) {
 
 const boardScript = fs.readFileSync(boardScriptPath, 'utf8');
 const panelSource = transpile(panelPath);
+const planReviewSource = transpile(planReviewPath);
 const providerSource = transpile(providerPath);
 
 // Every derived duration is measured against a fixed "now" of 10:10.
@@ -94,14 +96,16 @@ function renderCard(task) {
 function renderDetail(task) {
     const webview = fakeWebview({ html: '', onDidReceiveMessage: subscription });
     const panel = strict('WebviewPanel', { webview: strict('Webview', webview), onDidDispose: subscription, dispose() {} });
+    const vscode = {
+        ViewColumn: strict('vscode.ViewColumn', { One: 1 }), Uri: strict('vscode.Uri', { joinPath: fakeUri }),
+        window: strict('vscode.window', { createWebviewPanel: () => panel })
+    };
+    // TaskDetailPanel seeds its plan revision with PlanReviewPanel's real helper.
     const { TaskDetailPanel } = loadModule(panelSource, panelPath, {
-        vscode: {
-            ViewColumn: strict('vscode.ViewColumn', { One: 1 }), Uri: strict('vscode.Uri', { joinPath: fakeUri }),
-            window: strict('vscode.window', { createWebviewPanel: () => panel })
-        }
+        vscode, './PlanReviewPanel': loadModule(planReviewSource, planReviewPath, { vscode })
     });
     const state = { tasks: [task], epics: [] };
-    const client = strict('MoeDaemonClient', { currentState: state, onStateChanged: subscription });
+    const client = strict('MoeDaemonClient', { currentState: state, onStateChanged: subscription, onError: subscription, onConnectionChanged: subscription });
     let opened;
     try {
         opened = TaskDetailPanel.createOrShow({ path: '/extension' }, client, task.id, state);
@@ -120,7 +124,9 @@ function boardStylesheet() {
         dependencies[`../panels/${panel}`] = strict(`require('../panels/${panel}')`, {});
     }
     const { BoardViewProvider } = loadModule(providerSource, providerPath, dependencies);
-    const events = { onStateChanged: subscription, onConnectionChanged: subscription, onActivityLog: subscription };
+    const events = {
+        onStateChanged: subscription, onConnectionChanged: subscription, onActivityLog: subscription, onError: subscription
+    };
     const provider = new BoardViewProvider({ path: '/extension' }, strict('MoeDaemonClient', events));
     try {
         const style = /<style>([\s\S]*?)<\/style>/.exec(provider.getHtmlContent(strict('Webview', fakeWebview())));

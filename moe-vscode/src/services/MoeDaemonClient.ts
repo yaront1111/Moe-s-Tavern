@@ -443,25 +443,22 @@ export class MoeDaemonClient implements vscode.Disposable {
      * reviewed; the daemon compares it against the task's current revision and
      * refuses the approval if the plan moved underneath the reviewer.
      *
-     * Omitting it is the legacy, unchecked approval — omission is the daemon's
-     * ONLY unchecked opt-out, so the key must be absent rather than null. That
-     * is also why a malformed token is refused right here instead of degrading
-     * into the token-free frame: that fallback would approve a plan nobody
-     * reviewed, which is precisely the hole this guard closes.
+     * There is no token-free approval any more: CQ-F MODIFY_RAIL prop-5e7763ed
+     * (human-approved 2026-10-25) deleted it. An undefined token is therefore
+     * refused right here exactly like a malformed one — no frame is sent, the
+     * refusal is logged, and onError fires with the taskId so the surface that
+     * asked can tell the user which approval did not go through.
      *
      * The token is whatever the reviewed panel hands in. This method never
      * reads cached state to manufacture one — the newest revision is by
      * definition not the reviewed one.
      */
-    approveTask(taskId: string, expectedPlanRevision?: number): boolean {
-        if (expectedPlanRevision === undefined) {
-            const legacyPayload: ApproveTaskPayload = { taskId };
-            return this.sendMessage('APPROVE_TASK', legacyPayload);
-        }
+    approveTask(taskId: string, expectedPlanRevision: number): boolean {
         // Never coerce. Number.isSafeInteger already rejects fractional, NaN,
         // Infinity and out-of-range values, and a numeric conversion here would
         // be exactly the silent fallback this check exists to prevent. The
-        // typeof guard matters because untyped webview messages reach this.
+        // typeof guard matters because untyped webview messages reach this,
+        // and it is also what refuses an undefined token.
         if (typeof expectedPlanRevision !== 'number'
             || !Number.isSafeInteger(expectedPlanRevision)
             || expectedPlanRevision < 0) {
@@ -469,7 +466,7 @@ export class MoeDaemonClient implements vscode.Disposable {
                 + `non-negative safe integer, got ${String(expectedPlanRevision)} `
                 + `(${typeof expectedPlanRevision})`;
             log(message);
-            this._onError.fire({ operation: 'APPROVE_TASK', message });
+            this._onError.fire({ operation: 'APPROVE_TASK', message, context: { taskId } });
             return false;
         }
         const payload: ApproveTaskPayload = { taskId, expectedPlanRevision };

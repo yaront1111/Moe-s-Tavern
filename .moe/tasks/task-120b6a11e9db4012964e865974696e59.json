@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:55.825Z",
-  "updatedAt": "2026-10-25T11:14:37.031Z",
+  "updatedAt": "2026-10-25T11:15:13.191Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -195,7 +195,9 @@
     "scripts/local-runner/cli.mjs",
     ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
     ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
-    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json"
+    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+    ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
   ],
   "completionSummary": "CQ-R04 adds Linux VM provisioning in 4 files: +388/-6, 394 changed lines, under QA's 400 default. executionReady stays false; nothing is certified as isolated.\n- New platform-linux.mjs: read-only, operator-action-only prerequisites. Moe never runs sudo, snap install/connect or multipass set/authenticate.\n  - Client pinned to /snap/bin/multipass, never a PATH lookup.\n  - The snap must be exactly one row: multipass, 1.17.0, publisher canonical**, notes '-'. devmode, classic, jailmode, try, disabled and broken are refused.\n  - The six required multipassd plugs must be connected. I re-checked them against v1.17.0 snapcraft.yaml.\n  - The R02 doctor runs against the snap client.\n  - /dev/kvm must be a character device.\n  - CPUs, MemAvailable and statfs of /var/snap/multipass/common must cover GUEST_RESOURCES, plus 2 GiB of disk headroom.\n  - The image cache must be strictly under home with no hidden or '..' segment (all-home is home with read: all).\n  - A missing or unknown item blocks before any download, reserve or launch. There is no host or emulation fallback.\n- provision.mjs (+3/-1) passes cacheDir and uses the platform's executable for every Multipass call. Windows stays on 'multipass' (tested).\n- cli.mjs (+7/-3) adds a linux entry and exports platformFor, an own-key lookup.\n- Deviations:\n  - The default host is the real process.platform/arch, so arm64 fails closed.\n  - The probes are private.\n  - I edited one R03 test in place. It assumed Linux had no platform module; it now stubs process.platform='sunos' and runs on every OS.\n  - The two host-path provisioning tests skip on win32.\n- Fresh results:\n\n  | Run | Result |\n  |---|---|\n  | DoD command, Linux Node 24.21.0 | exit 0, 181/181, 0 skip, all 9 real-process tests ran |\n  | Bundle test | 7/7 |\n  | HEAD snapshot | 181/181 |\n  | Windows Node 24.16 | 171 pass, 10 win32 skips |\n  | Mutation probes | 24/24 killed |\n\n  RED was shown first: 10 R04 failures while the earlier sections stayed green. diff --check is clean, ",
   "commits": [
@@ -219,6 +221,23 @@
       "treeId": "e1e33851fae05ab0dcafdb090c839286f3f4808b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7df01eddbcb134258722a77cc581a3b5f0cb0afb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T11:07:17Z",
+      "paths": [
+        ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+        ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+        ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T11:15:13.191Z",
+      "treeId": "01d6d819c088a6bdbcde40e2ff51de1d9273c0f3",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -230,9 +249,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3617ccf7@2026-10-25T10:39:35Z",
-    "at": "2026-10-25T11:02:02.974Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T11:07:17Z",
+    "at": "2026-10-25T11:15:13.191Z"
   },
   "completedAt": "2026-10-25T11:14:37.031Z",
   "reviewCompletedAt": "2026-10-25T11:14:37.031Z",

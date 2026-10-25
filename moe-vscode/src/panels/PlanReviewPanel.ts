@@ -32,6 +32,14 @@ export class PlanReviewPanel implements vscode.Disposable {
     private disposed = false;
 
     /**
+     * True while a review is open for the task. That review reports every
+     * correlated APPROVE_TASK refusal itself, so other surfaces must not toast it again.
+     */
+    static isOpenFor(taskId: string): boolean {
+        return PlanReviewPanel.currentPanels.has(taskId);
+    }
+
+    /**
      * Create a new panel or reveal an existing one for the given task.
      */
     static createOrShow(
@@ -748,15 +756,44 @@ export class PlanReviewPanel implements vscode.Disposable {
 }
 
 // ============================================================================
-// Utility functions (module-scoped, not exported)
+// Utility functions
 // ============================================================================
+
+const OPEN_PLAN_REVIEW = 'Open Plan Review';
+
+/**
+ * Tell the user an approval sent from OUTSIDE this panel (the board or the task
+ * detail panel) was refused, and offer the review, which shows the current plan
+ * and can approve it. Callers own the correlation: they invoke this only for
+ * their own pending approvals, so a refusal of this panel's approval, which it
+ * reports inline, is never toasted twice.
+ */
+export async function showApprovalRefusal(
+    extensionUri: vscode.Uri,
+    client: MoeDaemonClient,
+    taskId: string,
+    event: { message: string; codeName?: string }
+): Promise<void> {
+    const detail = event.codeName === 'PLAN_REVISION_MISMATCH'
+        ? 'the plan changed since it was displayed. Open the review to read the current plan.'
+        : event.message;
+    try {
+        const choice = await vscode.window.showWarningMessage(`Plan approval refused: ${detail}`, OPEN_PLAN_REVIEW);
+        if (choice === OPEN_PLAN_REVIEW) {
+            PlanReviewPanel.createOrShow(extensionUri, client, taskId, client.currentState);
+        }
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        vscode.window.showErrorMessage(`Could not open the plan review: ${message}`);
+    }
+}
 
 /**
  * True only for a value that can serve as an approval token: a non-negative safe
  * integer. Never coerces — a numeric conversion here would be exactly the silent
  * fallback that lets an unreviewed plan through.
  */
-function isPlanRevision(value: unknown): value is number {
+export function isPlanRevision(value: unknown): value is number {
     return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
@@ -770,7 +807,7 @@ function isPlanRevision(value: unknown): value is number {
  * with Approve disabled rather than bound to a token nobody can trust. The same
  * goes for a task that is not awaiting approval.
  */
-function seedRevisionAttribute(task: Task): string {
+export function seedRevisionAttribute(task: Task): string {
     if (task.status !== 'AWAITING_APPROVAL') { return ''; }
     const raw: unknown = task.planRevision;
     if (raw === undefined) { return ` data-plan-revision="${escapeHtml('0')}"`; }

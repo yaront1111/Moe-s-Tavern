@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
+import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal } from './PlanReviewPanel';
 import type {
     HandoffNote,
     MoeStateSnapshot,
@@ -157,6 +158,8 @@ export class TaskDetailPanel implements vscode.Disposable {
     private readonly taskId: string;
     private readonly disposables: vscode.Disposable[] = [];
     private debounceTimer: ReturnType<typeof setTimeout> | undefined;
+    /** True while an approval this panel sent has not been refused or carried out. */
+    private approvalPending = false;
 
     /**
      * Create a new panel or reveal an existing one for the given task.
@@ -221,6 +224,18 @@ export class TaskDetailPanel implements vscode.Disposable {
             })
         );
 
+        // A refused approval must reach the user: locally (no usable token) or
+        // from the daemon (stale revision, or an omission it refuses).
+        this.disposables.push(
+            this.client.onError(event => this.handleClientError(event))
+        );
+        // A refusal can no longer arrive for an approval sent on a dropped socket.
+        this.disposables.push(
+            this.client.onConnectionChanged(state => {
+                if (state !== 'connected') { this.approvalPending = false; }
+            })
+        );
+
         // Cleanup on panel close
         this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     }
@@ -229,12 +244,47 @@ export class TaskDetailPanel implements vscode.Disposable {
         return this.client.currentState?.tasks.find(t => t.id === this.taskId);
     }
 
+    /**
+     * Approve with the revision the webview rendered. The token comes from the
+     * page's message and is never read from the client's cached state: the
+     * newest revision is not the reviewed one. The client refuses anything that
+     * is not a revision, and that refusal arrives in handleClientError.
+     */
+    private approveRendered(expectedPlanRevision: unknown): void {
+        this.approvalPending = true;
+        if (this.client.approveTask(this.taskId, expectedPlanRevision as number)) {
+            vscode.window.showInformationMessage('Plan approval sent');
+        } else if (this.approvalPending) {
+            // False with no APPROVE_TASK refusal for this task: nothing was sent.
+            this.approvalPending = false;
+            vscode.window.showWarningMessage('Not connected to Moe daemon — task was not approved.');
+        }
+    }
+
+    private handleClientError(event: {
+        operation?: string;
+        message: string;
+        codeName?: string;
+        context?: { taskId?: string };
+    }): void {
+        if (!this.approvalPending || event.operation !== 'APPROVE_TASK') { return; }
+        if (event.context?.taskId !== this.taskId) { return; }
+        this.approvalPending = false;
+        // An open review for this task already reports the refusal itself.
+        if (PlanReviewPanel.isOpenFor(this.taskId)) { return; }
+        void showApprovalRefusal(this.extensionUri, this.client, this.taskId, event);
+    }
+
     private debouncedUpdate(): void {
         if (this.debounceTimer) {
             clearTimeout(this.debounceTimer);
         }
         this.debounceTimer = setTimeout(() => {
             const task = this.findTask();
+            if (task?.status !== 'AWAITING_APPROVAL') {
+                // Approved, moved or gone: no refusal can still belong to us.
+                this.approvalPending = false;
+            }
             if (task) {
                 this.panel.webview.postMessage({
                     type: 'updateTask',
@@ -259,11 +309,7 @@ export class TaskDetailPanel implements vscode.Disposable {
                 }
 
                 case 'approve':
-                    if (this.client.approveTask(this.taskId)) {
-                        vscode.window.showInformationMessage('Task approved');
-                    } else {
-                        vscode.window.showWarningMessage('Not connected to Moe daemon — task was not approved.');
-                    }
+                    this.approveRendered(msg.expectedPlanRevision);
                     break;
 
                 case 'promptReject': {
@@ -337,11 +383,7 @@ export class TaskDetailPanel implements vscode.Disposable {
                     if (msg.type === 'next') {
                         if (idx >= workflowOrder.length - 1) { break; }
                         if (currentStatus === 'AWAITING_APPROVAL') {
-                            if (this.client.approveTask(this.taskId)) {
-                                vscode.window.showInformationMessage('Task approved');
-                            } else {
-                                vscode.window.showWarningMessage('Not connected to Moe daemon — task was not approved.');
-                            }
+                            this.approveRendered(msg.expectedPlanRevision);
                         } else {
                             this.client.updateTaskStatus(this.taskId, workflowOrder[idx + 1]);
                         }
@@ -826,7 +868,7 @@ export class TaskDetailPanel implements vscode.Disposable {
         <button class="btn btn-danger" id="deleteBtn">Delete</button>
     </div>
 
-    <div id="initial-data" data-task-id="${escapeHtml(task.id)}" data-task-status="${escapeHtml(task.status)}" style="display:none;"></div>
+    <div id="initial-data" data-task-id="${escapeHtml(task.id)}" data-task-status="${escapeHtml(task.status)}"${seedRevisionAttribute(task)} style="display:none;"></div>
     <script src="${scriptUri}"></script>
 </body>
 </html>`;
