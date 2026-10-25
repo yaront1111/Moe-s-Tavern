@@ -17,40 +17,69 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (RED). Create packages/moe-daemon/src/tools/startStepAuthorization.test.ts. It drives the REAL moe.start_step handler (startStepTool), the real get_context producer (getContextTool) and attemptStore (openAttempt, setAttemptPhase, recordContextReceipt).\n\nFixture: copy the harness shape of tools/getContextReceipt.test.ts:1-40 (ToolTestHarness; vi.stubEnv 'MOE_WORKER_ID' and 'MOE_TASK_ID' to ''). Worker 'worker-s'. task-1 is WORKING, assigned to worker-s, planRevision 3, approvedPlanRevision 3, contextFetchedBy ['worker-s'] (so receipt-less cases reach the new guard), two PENDING steps, and the strict snapshot {version:2, profile:'verified-local', planRevision:3, deliveryPolicy:'local-branch'}. update_settings refuses verified-local, so strict rows are seeded raw, as state/taskExecutionPolicy.test.ts:28 does. Then openAttempt (running, generation 1).\n\nHelpers:\n- serve(workerId, sessionId): get_context with a sessionId. It records the receipt and stamps contextFetchedBy.\n- start(over): start_step {taskId, stepId:'step-1', workerId, attemptId, generation, sessionId, ...over}.\n- refused(over, codeName): rejects toMatchObject({codeName}). Spies on h.state.updateTask, touchWorker and writeEntity were never called. The task and attempt JSON files are byte-identical. step-1 is still PENDING.\n\nCases, each asserting an exact codeName:\n(A) DoD2 permit: serve, then start step-1. It succeeds (IN_PROGRESS, startedAt set). Then step-2 with the SAME identity also succeeds: progress must not move planRevision (still 3) or stale the receipt.\n(B) DoD1 missing strict identity: it.each with workerId / attemptId / generation / sessionId omitted gives STEP_ENTRY_IDENTITY_REQUIRED. The code is MoeErrorCode.MISSING_REQUIRED and the message names the field.\n(C) Malformed input in every profile (include one legacy row): attemptId '' and 129 chars, generation 0, 1.5 and '1', sessionId null and 'a\\nb'. Each gives INVALID_INPUT.\n(D) DoD1 superseded generation: serve under generation 1, close that attempt, open generation 2 for worker-s. Presenting generation 1 gives ATTEMPT_SUPERSEDED. Presenting attempt 2 with generation 3 (a future one) also gives ATTEMPT_SUPERSEDED.\n(E) DoD1 reassigned worker: serve for worker-s, close its attempt, assign worker-b and open worker-b's attempt (generation 2).\n  - worker-s with its old identity gives NOT_ALLOWED.\n  - worker-b, after reading context WITHOUT a sessionId (stamps contextFetchedBy, records no receipt), gives CONTEXT_RECEIPT_STALE.\n  - After worker-b serves with its own session, entry is permitted.\n(F) Attempt not running:\n  - An attempt in reconciling gives ATTEMPT_NOT_RUNNING.\n  - A strict row with NO attempt record that presents an identity (e.g. a task-2 seeded the same way without openAttempt) also gives ATTEMPT_NOT_RUNNING. assertAttemptCurrent tolerates a task with no attempt records; that tolerance must not admit strict entry.\n(G) DoD1/DoD3 approval identity comes from the Task only:\n  - After serve, call moe.amend_plan_step as 'architect-t' on step-2. This is the real path: planRevision goes 3 to 4 and approvedPlanRevision stays 3. Entry gives PLAN_REVISION_NOT_APPROVED.\n  - A row with NO approvedPlanRevision, whose receipt claims approvedPlanRevision 3 (recordContextReceipt directly), also gives PLAN_REVISION_NOT_APPROVED. A receipt never grants approval.\n(H) DoD3 source validity comes from the receipt only, with the approval current:\n  - No receipt, a receipt recorded at planRevision 2, a receipt recorded without approvedPlanRevision, and a receipt for another sessionId each give CONTEXT_RECEIPT_STALE.\n  - A hand-edited malformed stored receipt (extra key written into the attempt file, then h.state.load()) gives INVALID_INPUT. It fails closed.\n(I) Where strictness comes from:\n  - Hand-edited live settings executionProfile 'verified-local' with no task snapshot is strict. Set h.state.project!.settings as taskExecutionPolicy.test.ts:795 does.\n  - Legacy settings with a legacy task snapshot, but an open attempt opened with a verified-local executionPolicySnapshot, is strict.\n  - A malformed task snapshot (version 3) gives INVALID_INPUT even with no identity presented.\n(J) Explicit legacy compatibility:\n  - A row with no snapshot, no approvedPlanRevision and no receipt starts with NO identity, exactly as before.\n  - The same holds after h.state.updateSettings({executionProfile:'observe'}).\n  - A legacy row that presents its current identity and a sessionId, with no receipt and a stale approval, still starts. Receipt and approval are strict-only.\n  - A legacy row that presents a superseded generation gives ATTEMPT_SUPERSEDED with no writes. A presented identity is fenced in every profile, as release_task and record_candidate already do.\n\nUse it.each tables and shared helpers. Budget is 220 lines at most, because the 400 net-LOC QA cap counts tests. The project's global forbiddenPatterns apply to test strings too.\n\nRun this file alone in the Linux snapshot described in the verification step. The strict refusal cases must FAIL against today's start_step (RED). Record that result.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/startStepAuthorization.test.ts"
       ],
-      "startedAt": "2026-10-25T22:19:51.494Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/startStepAuthorization.test.ts"
+      ],
+      "note": "RED recorded. Created tools/startStepAuthorization.test.ts (~218 lines). It drives the real start_step, get_context, amend_plan_step and attemptStore. Ran it in a Linux snapshot: git archive HEAD d839d82 into /tmp/moe-f07-gate.DXQDlc, with the native node_modules symlinked and env -i.\n\nResult: 33 failed | 4 passed (37).\n- Every strict, superseded and malformed case fails because start_step SUCCEEDS today (\"expected null to match {codeName}\"), which is the right reason.\n- The 4 that pass are case A (permit) and 3 legacy-compatibility cases, as expected.\n\nOne real test bug fixed: the reopen helper must unassign before reassigning, because updateTask refuses a direct reassignment (\"Task already assigned\").\n\nShared dirty paths from other sessions were left untouched.",
+      "startedAt": "2026-10-25T22:19:51.494Z",
+      "completedAt": "2026-10-25T22:22:44.915Z"
     },
     {
       "stepId": "step-2",
       "description": "IMPLEMENT (GREEN).\n\n(a) Create packages/moe-daemon/src/util/executionAuthorization.ts. It exports assertExecutionAuthorized(state, task, workerId: string|undefined, identity: {attemptId?: unknown; generation?: unknown; sessionId?: unknown}, toolName): void. The function is read-only and never writes.\n\nImports:\n- currentAttempt, readContextReceipt, readContextSessionId from state/attemptStore.ts\n- decodeStoredPlanRevision from state/taskStore.ts\n- readExecutionPolicySnapshot, resolveTaskExecutionProfile from delivery/executionProfile.ts\n- assertAttemptCurrent from util/enforcement.ts\n- MoeError, MoeErrorCode, invalidInput from util/errors.ts\n\nWhy a new module: enforcement.ts must not import taskStore, because taskStore imports tools/submitPlan, which imports util/enforcement (a cycle). CQ-F08 will also reuse this guard for completion.\n\nDecision order. Every refusal happens before any write.\n1. Every profile, error handling for malformed input (never coerced):\n   - A string attemptId over 128 chars gives INVALID_INPUT('attemptId'). This is release_task's bound; ATTEMPT_SUPERSEDED echoes the id.\n   - sessionId = readContextSessionId(identity.sessionId).\n   - Call assertAttemptCurrent(state, task, {attemptId, generation}, toolName). A presented attempt that is superseded, closed or from the future gives ATTEMPT_SUPERSEDED. Presenting nothing is the legacy tolerance.\n2. Strictness:\n   - open = currentAttempt(state, task.id).\n   - strict = resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local' || readExecutionPolicySnapshot(open?.executionPolicySnapshot)?.profile === 'verified-local'. The second half is claimEligibility's own-attempt floor.\n   - A malformed value throws INVALID_INPUT (fail closed).\n   - If not strict, return. Legacy and observe keep worker-ID-only freshness; this is the explicit compatibility path.\n3. Missing strict identity: if workerId is empty, or attemptId, generation or sessionId is undefined, throw new MoeError(MoeErrorCode.MISSING_REQUIRED, message, {taskId, missing}, 'STEP_ENTRY_IDENTITY_REQUIRED'). The message names each missing field and where it comes from: attemptId and generation from moe.claim_next_task, sessionId from the session that read moe.get_context.\n4. Attempt: open must exist, be 'running' and belong to workerId. After step 1 its id and generation already equal the presented ones. Otherwise throw STATE_CONFLICT 'ATTEMPT_NOT_RUNNING' with {taskId, attemptId|null, phase|null}; the message says to reattach or re-claim, then read context.\n5. Approval identity, from the Task only (never the receipt or a packet id):\n   - planRevision = decodeStoredPlanRevision(task).\n   - task.approvedPlanRevision must be a safe integer equal to planRevision.\n   - Otherwise throw STATE_CONFLICT 'PLAN_REVISION_NOT_APPROVED' with {taskId, planRevision, approvedPlanRevision: number|null}. The changed plan needs re-approval.\n6. Source validity, from the receipt only. DoD3 requires this check to stay separate from step 5.\n   - receipt = readContextReceipt(open.contextReceipt). A malformed receipt throws INVALID_INPUT.\n   - expected = {taskId: task.id, attemptId: open.id, generation: open.generation, workerId, sessionId, planRevision, approvedPlanRevision: planRevision}.\n   - stale = the keys whose value differs from expected, or ['receipt'] when there is no receipt.\n   - If stale is non-empty, throw STATE_CONFLICT 'CONTEXT_RECEIPT_STALE' with {taskId, attemptId: open.id, stale}. The message tells this session to call moe.get_context {taskId, sessionId} and retry.\n   - packetId, view and servedAt are not compared.\n\nEvery message carries the remedy: the '[CODENAME] ...' text crosses MCP, but context does not. Use a local conflict() helper in the attemptStore.ts:90 idiom.\n\nThe doc comment states:\n- the decision order;\n- that steps 5 and 6 are separate on purpose;\n- that a receipt or packet never grants approval;\n- that passing grants entry only, never readiness (verified-local stays unavailable at claim and at progression).\n\nTarget 90 lines at most.\n\n(b) Edit packages/moe-daemon/src/tools/startStep.ts:\n- Add inputSchema properties attemptId {type:'string', maxLength:128}, generation {type:'integer', minimum:1} and sessionId {type:'string'}, each with a one-line description: optional under legacy/observe, where a presented attempt is fenced; required under verified-local.\n- Leave the required list and additionalProperties:false unchanged. Type the new params as unknown.\n- Call assertExecutionAuthorized(state, task, params.workerId, {attemptId, generation, sessionId}, 'moe.start_step') immediately after assertContextFetched (line 32). That puts it before the plan/step checks, the account switch, updateTask (line 67) and touchWorker (line 70).\n- Extend the tool description by at most 2 sentences naming the verified-local requirements and the refusal codeNames.\n- The response shape is unchanged.\n\nDo not edit any other file.\n\nRun the new test file, startStep.test.ts, state/approvalRevision.acceptance.test.ts, tools/enforcement.integration.test.ts and delivery/executionPolicyLifecycle.test.ts in the Linux snapshot. All must pass, with the existing files unchanged. In the new test file, fix only real test bugs; never weaken an assertion.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/startStep.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/util/executionAuthorization.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/executionAuthorization.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStepAuthorization.test.ts"
+      ],
+      "note": "GREEN.\n\nNew util/executionAuthorization.ts (90 lines) exports assertExecutionAuthorized. It is read-only and follows the plan's decision order:\n1. The attemptId length bound (128), then readContextSessionId, then assertAttemptCurrent.\n2. Strictness: the resolved task profile OR the open attempt's snapshot is verified-local; malformed fails closed.\n3. STEP_ENTRY_IDENTITY_REQUIRED (MISSING_REQUIRED, context.missing).\n4. ATTEMPT_NOT_RUNNING.\n5. PLAN_REVISION_NOT_APPROVED, from the Task only.\n6. CONTEXT_RECEIPT_STALE, from the receipt only, with context.stale naming the mismatched keys.\n\nstartStep.ts (+12/-3):\n- Optional attemptId (maxLength 128), generation (integer, min 1) and sessionId in the schema. The required list and additionalProperties are unchanged.\n- The guard is called right after assertContextFetched.\n- The description is extended by 1 sentence.\n\nTest fixes, none of which weakens an assertion:\n- The missing-identity case now asserts context.missing === [field], which is stronger than the message check alone.\n- Trimmed to 220 lines.\n\nRan in the Linux snapshot (/tmp/moe-f07-gate.DXQDlc, HEAD d839d82 plus the 3 files, cmp-verified, env -i): the new file, startStep.test.ts, approvalRevision.acceptance, enforcement.integration and executionPolicyLifecycle gave 5 files, 106 passed. tsc --noEmit exit 0. The existing suites are unchanged.\n\nSize so far: 9 + 90 + 220 = 319 net.",
+      "startedAt": "2026-10-25T22:22:47.695Z",
+      "completedAt": "2026-10-25T22:25:53.300Z"
     },
     {
       "stepId": "step-3",
       "description": "ONE verification gate (regression-check and verification-before-completion skills), run fresh after the final edit.\n\nFrom the repository root run EXACTLY `cd packages/moe-daemon && npm test`. It must exit 0. Its command, exit code and output tail (file and test counts) are the complete_task verification evidence.\n\nIn the same gate, run `cd packages/moe-daemon && npx tsc --noEmit` as a supplemental typecheck; it must exit 0. Never run `npm run build`.\n\nFull daemon regression is required: the DoD names it, and this task changes a tool contract.\n\nThe shared node_modules on this WSL checkout is a Windows install, so:\n- Build a `git archive HEAD` snapshot under /tmp.\n- Copy in only this task's three files, and cmp each one against the worktree.\n- Symlink the native Linux node_modules DIRECTORY: /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules. If it is gone, run `npm ci` in a scratch copy, never in the shared checkout.\n- Run with `env -i` (HOME, a Linux-only PATH, TMPDIR) so no MOE_* variable leaks in.\n- Record the snapshot sha and the overlays for QA.\n\nwaitForTask.test.ts:344 is a known flake under load: re-run that file alone to classify it. Any other failure is a real regression to fix.\n\nMeasure size: `git diff --numstat` for startStep.ts plus `wc -l` for the two new files. Net must be 400 lines at most.\n\nNo Git writes; the wrappers land.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/executionAuthorization.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStepAuthorization.test.ts"
+      ],
+      "note": "Gate run fresh on the final bytes.\n\nSnapshot: /tmp/moe-f07-final.crhw5A, a git archive of HEAD d839d822 plus 3 cmp-verified overlays. sha256 prefixes:\n- test: cb1e0dcd32099c72\n- startStep.ts: 7ae756aa78279bc0\n- executionAuthorization.ts: 9c55216b7bf2c3fd\n\nIt uses the native node_modules symlink /tmp/moe-linux-daemon.3EJTl5/... and runs under env -i with a Linux-only PATH.\n\nResults:\n- `cd packages/moe-daemon && npm test`: Test Files 164 passed (164); Tests 4148 passed | 14 skipped (4162); exit 0. No flake re-run was needed.\n- `npx tsc --noEmit`: exit 0.\n\nSize: startStep.ts +12/-3, executionAuthorization.ts 90, test 225, so 324 net (cap 400). The test is 5 lines over the plan's 220 budget because of an added defense-in-depth case (\"another worker's open attempt\") found during pre-review mutation probing.\n\nMutation probes: 12/12 real mutants killed, and an unmutated control passed 38/38.\n\nNo forbidden patterns. No Git writes.",
+      "startedAt": "2026-10-25T22:28:44.466Z",
+      "completedAt": "2026-10-25T22:29:38.332Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW (adversarial-self-review skill). This is the final step, scoped to this task's three-file diff. Check:\n(1) Concurrency: start_step is non-blocking, so dispatch holds the state mutex. The guard is read-only, and get_context's receipt write is serialized with it.\n(2) Inputs, all refused and never coerced:\n   - attemptId: null, '', whitespace, huge, non-string;\n   - generation: 0, -1, 1.5, '1', MAX+1;\n   - sessionId: null, blank, newline, 256 chars;\n   - workerId: '' or missing.\n(3) Every refusal leaves the task, attempt and worker bytes untouched.\n(4) Fail-closed paths: malformed settings, malformed task or attempt snapshot, malformed stored receipt, malformed stored planRevision.\n(5) Legacy and observe without an identity behave exactly as before; the existing start_step suites are unchanged.\n(6) A receipt never grants approval, and an approval never stands in for a receipt.\n(7) No forbidden patterns, no edits outside the three files, no .moe edits, no Git writes.\n\nRun a short ponytail pass on the new module. If you make any fix, re-run step 3's exact command and submit THAT fresh output as the complete_task evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/executionAuthorization.ts",
+        "packages/moe-daemon/src/tools/startStep.ts",
+        "packages/moe-daemon/src/tools/startStepAuthorization.test.ts"
+      ],
+      "note": "Adversarial self-review of the three-file diff. No fixes were needed, so step 3's gate output stands as the evidence.\n\n(1) Concurrency: start_step is non-blocking and runs under state.runExclusive. The guard is read-only, and get_context's receipt write is serialized with it.\n\n(2) Inputs:\n- attemptId: null, '', whitespace and non-string give INVALID_INPUT via validateAttemptIdentity. Over 128 chars gives INVALID_INPUT from the local bound.\n- generation: 0, -1, 1.5, '1' and MAX+1 give INVALID_INPUT.\n- sessionId: null, blank, newline and 256 chars give INVALID_INPUT via validateStringValue (max 255).\n- workerId: '' or missing counts as missing under strict and is unchanged under legacy.\n- Nothing is coerced. A hand-edited \"3\" for approvedPlanRevision is refused.\n\n(3) The tests pin every refusal: the updateTask, touchWorker and writeEntity spies are never called, the task, attempt and worker bytes are identical, and the step stays PENDING.\n\n(4) Fail-closed:\n- Malformed settings, task snapshot or open-attempt snapshot gives INVALID_INPUT in every profile. This is intentional per the plan's risks; it goes to the F12 docs.\n- A malformed stored receipt or planRevision is read only on strict rows, so the legacy behavior is unchanged.\n\n(5) Legacy and observe without an identity behave as before. startStep.test.ts and the other named suites are unchanged and green.\n\n(6) Approval and receipt checks are separate gates with separate codeNames. Mutants M2 (approval read from the receipt) and M3 (receipt check skipped) were both killed.\n\n(7) No forbidden patterns, no edits outside the three files, no .moe edits, no Git writes.\n\nPonytail: the local conflict() and MAX_ATTEMPT_ID_LEN copies are deliberate. attemptStore's helper is private, and util must not import tools/releaseTask.\n\nTheoretical notes:\n- The account-switch check now runs after the guard, so a strict seat with a stale receipt sees CONTEXT_RECEIPT_STALE before ACCOUNT-SWITCH.\n- currentAttempt now runs on every start_step. It is cheap, and a deep-nested hand-edited attempt could throw a generic error, as claim already would.",
+      "startedAt": "2026-10-25T22:29:41.425Z",
+      "completedAt": "2026-10-25T22:30:27.933Z"
     }
   ],
-  "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3729a0d6",
+  "planRevision": 9,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -62,14 +91,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:26.330Z",
-  "updatedAt": "2026-10-25T22:19:51.494Z",
+  "updatedAt": "2026-10-25T22:30:45.012Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-25T21:58:19.947Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
@@ -79,7 +109,12 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T22:17:50.781Z",
   "planningNotes": {
@@ -99,5 +134,48 @@
     ]
   },
   "planApprovedAt": "2026-10-25T22:17:50.887Z",
-  "workStartedAt": "2026-10-25T22:19:51.494Z"
+  "workStartedAt": "2026-10-25T22:19:51.494Z",
+  "commits": [
+    {
+      "sha": "d839d822b0fca391dbf1485f2aeb0a04e65c7d24",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-4c57a52b@2026-10-25T21:58:15Z",
+      "paths": [
+        ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+        ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+        ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json"
+      ],
+      "recordedBy": "architect-4c57a52b",
+      "recordedAt": "2026-10-25T22:21:41.405Z",
+      "treeId": "06652c4bedc93683f9a93df4549e1557e180be95",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/tools/startStepAuthorization.test.ts",
+    "packages/moe-daemon/src/util/executionAuthorization.ts",
+    "packages/moe-daemon/src/tools/startStep.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-4c57a52b@2026-10-25T21:58:15Z",
+    "at": "2026-10-25T22:21:41.405Z"
+  },
+  "reviewStartedAt": "2026-10-25T22:30:45.010Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Snapshot: git archive HEAD d839d822 + 3 cmp-verified overlays (startStepAuthorization.test.ts cb1e0dcd, startStep.ts 7ae756aa, executionAuthorization.ts 9c55216b), native Linux node_modules, env -i.\n ✓ src/tools/toolAudience.test.ts (2 tests) 5ms\n\n Test Files  164 passed (164)\n      Tests  4148 passed | 14 skipped (4162)\n   Start at  00:28:54\n   Duration  28.61s (tests 89%, transform 5%, import 5%)\n\nnpm-test-exit=0\nSupplemental: npx tsc --noEmit exit 0.",
+    "reportedAt": "2026-10-25T22:30:45.010Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-F07 delivered (plan rev 1, 4/4 steps). Strict-profile step entry authorization for moe.start_step.\n\n- New util/executionAuthorization.ts (90 lines) exports assertExecutionAuthorized. It is read-only, and every refusal happens before any write. Order:\n  1. Every profile: attemptId over 128 chars, a malformed sessionId (readContextSessionId) and assertAttemptCurrent give INVALID_INPUT or ATTEMPT_SUPERSEDED.\n  2. Strict when resolveTaskExecutionProfile or the open attempt's snapshot is verified-local. Malformed fails closed. Legacy and observe return here unchanged.\n  3. STEP_ENTRY_IDENTITY_REQUIRED (MISSING_REQUIRED, context.missing).\n  4. ATTEMPT_NOT_RUNNING: the open attempt must be running and belong to the caller.\n  5. PLAN_REVISION_NOT_APPROVED, read from Task.approvedPlanRevision only (DoD1).\n  6. CONTEXT_RECEIPT_STALE, read from the F06 receipt only. It is bound to task, attempt, generation, worker, session, planRevision and approvedPlanRevision, and context.stale names the mismatched keys. This is DoD3: source validity is a separate gate, and a receipt never grants approval.\n- tools/startStep.ts (+12/-3): optional attemptId, generation and sessionId in the schema. The guard is called right after assertContextFetched, before the plan/step checks, the account switch and any write. The response shape is unchanged.\n- New tools/startStepAuthorization.test.ts (225 lines, 38 tests), RED first (33 failed against HEAD):\n  - DoD2: a permit, after which progress does not move planRevision.\n  - DoD1: refusals for missing identity, malformed input (strict and legacy), superseded/future generation, reassigned worker, not-running attempt, another worker's attempt, no attempt record, amendment past approval, approval taken from a receipt, and 4 stale-receipt cases.\n  - Fail-closed on a malformed receipt or snapshot, and strictness from settings or the attempt snapshot.\n  - Legacy compatibility.\n  - Each refusal is pinned: no writes and identical bytes.\n- 12/12 mutation pro"
 }

@@ -67,11 +67,17 @@
       "author": "architect-4c57a52b",
       "content": "CQ-F07 docs hand-forward (task-3918d119, plan rev 1). F07 edits no docs, because docs/MCP_SERVER.md is contested by F04b and task-c2cb5cf7. Re-verify against F07's landed code first.\n\n1. docs/MCP_SERVER.md, moe.start_step section:\n   - New optional inputs: attemptId (string, at most 128), generation (integer, at least 1) and sessionId (get_context's rules).\n   - Every profile: malformed input is refused INVALID_INPUT, and a presented attempt identity is fenced (ATTEMPT_SUPERSEDED).\n   - verified-local, strict when the task's resolved profile or the open attempt's recorded snapshot says so, requires:\n     - workerId, attemptId, generation and sessionId (STEP_ENTRY_IDENTITY_REQUIRED, -32602);\n     - the caller's running attempt (ATTEMPT_NOT_RUNNING);\n     - Task.approvedPlanRevision === planRevision (PLAN_REVISION_NOT_APPROVED). A receipt never grants approval.\n     - an attempt receipt that names this session, attempt, generation and worker and the approved current revision (CONTEXT_RECEIPT_STALE). packetId, view and servedAt are not compared.\n   - Every refusal happens before any write.\n   - Legacy and observe keep worker-ID-only freshness.\n2. docs/CONFIGURATION.md, executionProfile row: moe.start_step now judges the profile. A malformed setting, task or attempt snapshot, stored receipt or stored planRevision refuses it with INVALID_INPUT. Add it to the list of what a malformed or hand-edited verified-local value refuses.\n3. docs/PLAN_APPROVAL_FRESHNESS.md: under verified-local, step entry now consumes approvedPlanRevision. An amend_plan_step on a WORKING strict task blocks further step entry until the plan is re-approved.\n4. SCHEMA.md: no change; F07 persists nothing new.",
       "timestamp": "2026-10-25T22:18:13.341Z"
+    },
+    {
+      "id": "comment-dc06d662d16a4a9f86a72d54a19b84b6",
+      "author": "worker-7d158765",
+      "content": "Docs hand-forward from CQ-F04b (task-c619879e): approveTask now refuses an omitted expectedPlanRevision with INVALID_INPUT on both /ws human routes, ahead of readiness (rail prop-5e7763ed). MCP_SERVER.md is updated. These lines in your files are now stale: PLAN_APPROVAL_FRESHNESS.md:78 (\"An omitted expectedPlanRevision is still a legal approval\"), :81 (other entry points token-free; F04c/F04d made them send the token), :85 (SPEED/TURBO token-free; F05 stamps now), :128 (\"approval without the field still works\"); SCHEMA.md:718 (\"omitting the token remains a legal legacy approval\"). Explicit 0 on a stamp-less row still approves; unstamped history is untouched.",
+      "timestamp": "2026-10-25T22:28:29.969Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:45.303Z",
-  "updatedAt": "2026-10-25T22:18:13.341Z",
+  "updatedAt": "2026-10-25T22:28:29.969Z",
   "dependsOn": [
     "task-bf14bb1e39494eba83158a26e36ddb20",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
