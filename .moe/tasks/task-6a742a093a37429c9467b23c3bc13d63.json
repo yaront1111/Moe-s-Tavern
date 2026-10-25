@@ -119,7 +119,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -139,7 +139,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:58.945Z",
-  "updatedAt": "2026-10-25T11:39:46.705Z",
+  "updatedAt": "2026-10-25T11:47:09.648Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -150,7 +150,9 @@
     "firstClaimAt": "2026-10-24T15:24:49.542Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T11:47:09.648Z",
+    "wallClockMs": 73340106
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -180,7 +182,8 @@
   },
   "planApprovedAt": "2026-10-24T15:29:05.569Z",
   "contextFetchedBy": [
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "workStartedAt": "2026-10-25T11:20:13.414Z",
   "reviewStartedAt": "2026-10-25T11:39:46.703Z",
@@ -196,7 +199,52 @@
     "scripts/local-runner/platform-macos.mjs",
     "scripts/local-runner/provision.mjs",
     "scripts/local-runner/cli.mjs",
+    "scripts/local-runner/native-smoke.mjs",
+    ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+    ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+    ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json"
+  ],
+  "completionSummary": "CQ-R05: macOS VM provisioning code is in place, but macOS provider support is NOT established. The native provider smoke was NOT run because this WSL host has no Mac. The opt-in test M12 skips with exactly that reason. Only a real-Mac run of `node scripts/local-runner/cli.mjs native-smoke --work-dir <abs>` (CQ-R13) can establish support.\n\n**DoD 1: matching image arch**\n- New platform-macos.mjs: the arch comes from the hardware via one bounded `/usr/sbin/sysctl -in hw.optional.arm64` call, so Rosetta x64 Node on Apple Silicon still gets arm64.\n- provision.mjs uses `pre.arch ?? platform.arch` and refuses any arch outside IMAGE_ARCHES before ensurePinnedImage, so an unknown arch never downloads. The URL and sha come only from the manifest.\n\n**DoD 2: unsupported combinations are explicit**\n- Ordered items: host-macos, multipass-installed, multipass-authenticated, host-provider-combination. Each is {id, satisfied, requiresElevation, action}.\n- A non-certified driver or arch is named in the action and blocked. A hostile token renders as 'unknown'. Moe never changes local.driver.\n- MACOS_SUPPORT_MATRIX is guarded against drift from certified-provider.json.\n\n**DoD 3: only a native smoke establishes support**\n- New native-smoke.mjs. nativeSmokeCore (injectable) always reports transport 'injected' and never establishes support.\n- runNativeProviderSmoke accepts exactly {workDir: absolute path}, uses this host's own platform module and no deps.\n- supportEstablished requires native && passed && cleanup==='deleted'. Cleanup always runs and deletes only this run's random attemptId; other ledger records are preserved.\n- The cli.mjs `native-smoke` command exits 0 only when supportEstablished === true. darwin is added to PLATFORMS.\n\n**DoD 4: fresh verification**\n- `node --test scripts/tests/local-runner.test.mjs` (Linux PATH, Node 24.21): exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12).\n- Also green: the bundle test (7/7), a fresh HEAD-archive snapshot, and Windows Node 24.16 (181 ",
+  "commits": [
+    {
+      "sha": "8a53c497e8bed869d9b0b9614a1f192edd8a7e45",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T11:15:01Z",
+      "paths": [
+        ".moe/tasks/task-23e0b6af6c7e4e0987be0591db1ba517.json",
+        ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+        ".moe/tasks/task-3c54775146c946208dd90a94e2e9caac.json",
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/native-smoke.mjs",
+        "scripts/local-runner/platform-macos.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T11:40:11.379Z",
+      "treeId": "2e033256e97eb3f53c743e71949f717331dc22eb",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/platform-macos.mjs",
     "scripts/local-runner/native-smoke.mjs"
   ],
-  "completionSummary": "CQ-R05: macOS VM provisioning code is in place, but macOS provider support is NOT established. The native provider smoke was NOT run because this WSL host has no Mac. The opt-in test M12 skips with exactly that reason. Only a real-Mac run of `node scripts/local-runner/cli.mjs native-smoke --work-dir <abs>` (CQ-R13) can establish support.\n\n**DoD 1: matching image arch**\n- New platform-macos.mjs: the arch comes from the hardware via one bounded `/usr/sbin/sysctl -in hw.optional.arm64` call, so Rosetta x64 Node on Apple Silicon still gets arm64.\n- provision.mjs uses `pre.arch ?? platform.arch` and refuses any arch outside IMAGE_ARCHES before ensurePinnedImage, so an unknown arch never downloads. The URL and sha come only from the manifest.\n\n**DoD 2: unsupported combinations are explicit**\n- Ordered items: host-macos, multipass-installed, multipass-authenticated, host-provider-combination. Each is {id, satisfied, requiresElevation, action}.\n- A non-certified driver or arch is named in the action and blocked. A hostile token renders as 'unknown'. Moe never changes local.driver.\n- MACOS_SUPPORT_MATRIX is guarded against drift from certified-provider.json.\n\n**DoD 3: only a native smoke establishes support**\n- New native-smoke.mjs. nativeSmokeCore (injectable) always reports transport 'injected' and never establishes support.\n- runNativeProviderSmoke accepts exactly {workDir: absolute path}, uses this host's own platform module and no deps.\n- supportEstablished requires native && passed && cleanup==='deleted'. Cleanup always runs and deletes only this run's random attemptId; other ledger records are preserved.\n- The cli.mjs `native-smoke` command exits 0 only when supportEstablished === true. darwin is added to PLATFORMS.\n\n**DoD 4: fresh verification**\n- `node --test scripts/tests/local-runner.test.mjs` (Linux PATH, Node 24.21): exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12).\n- Also green: the bundle test (7/7), a fresh HEAD-archive snapshot, and Windows Node 24.16 (181 "
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-25T11:15:01Z",
+    "at": "2026-10-25T11:40:11.379Z"
+  },
+  "completedAt": "2026-10-25T11:47:09.648Z",
+  "reviewCompletedAt": "2026-10-25T11:47:09.648Z",
+  "reviewSummary": "CQ-R05 approved. Reviewed completion commit 8a53c49 (moe/work-2026-10-24, pushed); the 5 source paths are clean at HEAD, no later commits. Size 399 changed LOC (+382/-17), under the 400 default (no size rail for R05).\nRe-ran: (1) DoD cmd `env -i ... node --test scripts/tests/local-runner.test.mjs` (Node 24.21, repo root): exit 0, 193 tests, 192 pass, 0 fail, 1 skip (M12 'native provider smoke not run: macOS support is NOT established by this run'); (2) fresh git-archive snapshot of 8a53c49: same; (3) Windows Node 24.16: exit 0, 181 pass, 12 skip; (4) bundle test at root 7/7 (new files bundled by glob).\nDoD1: sysctl hw.optional.arm64 gives arm64 even under Rosetta; provision refuses arches outside IMAGE_ARCHES before any download (M2/M6). DoD2: virtualbox/applevz/ia32/non-darwin hosts named and blocked; driver token sanitized; matrix drift-guarded vs certified-provider.json (M3/M4). DoD3: nativeSmokeCore always 'injected'; runNativeProviderSmoke accepts exactly {workDir}; supportEstablished needs native+passed+deleted; CLI exits 0 only on === true. The native smoke was NOT run (no Mac), so macOS support is NOT established and stays unverified until CQ-R13. DoD4: reproduced.\nMutation sweep (/tmp/qa-r05-probe/mutate.mjs): 44 mutants, 39 killed. primary-leak and ensure-static-arch are equivalent. no-cleanup-req and native-deps sit only on the non-injectable native success path (M12/R13). arch-not-observed is a test gap: no smoke test uses the macOS platform. My snapshot probe confirmed evidence.arch is arm64 under Rosetta and x64 on Intel. Non-blocking follow-ups: add a macOS nativeSmokeCore case; blocked smoke evidence omits prerequisite reasons.\nRails: no forbidden patterns, git diff --check clean, no .moe hand edits (board JSON is the wrapper's), no agent Git writes, executionReady/certification unclaimed.",
+  "requiredCheckAtDone": null
 }

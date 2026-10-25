@@ -166,7 +166,7 @@ test('Bash final index drops newly dangling importers while keeping independent 
         'a.mjs': 'export { value } from "./b.mjs";', 'b.mjs': 'export const value = 1;', 'independent.txt': 'keep\n',
     });
     writeFileSync(join(result.root, 'b.mjs'), 'export const value = 2;\n');
-    const script = `${bashFunction('resolve_attribution')}\n${bashFunction('moe_temp_index_build')}\n
+    const script = `${bashFunction('resolve_attribution')}\n${bashFunction('moe_snapshot_hash')}\n${bashFunction('moe_temp_index_build')}\n
 create_secure_temp() { mktemp -d "$FIXTURE_SCRATCH/helper.XXXXXX"; }
 MOE_TOP="$FIXTURE_ROOT"; MOE_REL=""; MOE_TAB=$'\\t'
 MOE_GITDIR="$(git -C "$MOE_TOP" rev-parse --absolute-git-dir)"

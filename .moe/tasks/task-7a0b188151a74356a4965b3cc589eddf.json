@@ -1,0 +1,29 @@
+{
+  "id": "task-7a0b188151a74356a4965b3cc589eddf",
+  "epicId": "epic-be924fb8",
+  "title": "bug: account rotation relaunches an interactive claude seat on an account that never accepted folder trust, so the TUI silently blocks at the trust dialog",
+  "description": "Observed 2026-10-25 by governor-187cc44e.\n\nAt 10:58:51Z interactive architect-26ba32c3 rotated from acct-2 to acct-4 (wrapper_restart). The wrapper's pre-flight then claimed task-5c71dff9 and preloaded its context (worker status READING_CONTEXT).\n\nThe claude TUI, pid 1795029 with CLAUDE_CONFIG_DIR=acct-4, never produced a transcript. No acct-*/projects/*/*.jsonl contains its pre-flight prompt, and it made no moe tool call afterwards. The heartbeat sidecar kept lastActivityAt fresh, so for 40+ minutes it looked alive while the board's planning queue grew to about 12 rows.\n\nReading each account's .claude.json, projects['/mnt/d/projexts/moes'].hasTrustDialogAccepted is:\n- true for acct-1, acct-2 and acct-5\n- missing for acct-3, acct-4 and acct-6\n\nThose three only ever ran headless -p seats for moes, and -p skips the trust dialog. An interactive launch on them therefore stops at \"Do you trust the files in this folder?\" until a human answers, invisible to the daemon and the governor.\n\nExpected: an interactive claude seat never parks silently on a first-run dialog after rotation. Possible fixes, for the planner to choose:\n- the accounts add/login flow pre-accepts trust for the projects it serves;\n- the lease steers interactive seats to accounts that already trust the project;\n- the wrapper detects the condition and refuses with a named code and a #general escalation, instead of launching into a dialog.\n\nNote the rotation invariant in scripts/CLAUDE.md: \"The wrapper never opens a file inside a config directory\". A fix that touches .claude.json must either respect that invariant or get human sign-off to amend it. Both launchers must stay at parity.",
+  "definitionOfDone": [
+    "An interactive claude seat that the rotation moves to an account without folder trust for the project either launches without stopping at the trust dialog, or is refused before launch with a named code and a #general escalation that names the account and the project. It never parks silently.",
+    "Headless -p seats are unchanged, and the scripts/CLAUDE.md rotation invariant is either preserved or explicitly amended with human sign-off.",
+    "The sh and ps1 launchers behave identically, and bash scripts/tests/parity-check.sh passes. Regression coverage in scripts/tests/moe-account-lease.test.mjs or [accounts] postflight cases exercises the untrusted-account path. Any daemon change passes cd packages/moe-daemon && npm test.",
+    "docs/MCP_SERVER.md 'Claude Account Rotation' and scripts/CLAUDE.md describe the behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 20,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T11:39:58.071Z",
+  "updatedAt": "2026-10-25T11:39:58.071Z"
+}

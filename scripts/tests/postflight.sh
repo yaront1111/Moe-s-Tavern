@@ -4554,7 +4554,7 @@ EOF
   # (CQ-M01d, 71c7dbe). AC: the edit lands, as the CRLF blob git add made, under
   # each conversion mode; crlf.mjs is a source file, so the importee guard also
   # checks its staged-out blob against the temp index. AD: an edit made after
-  # the snapshot still drops.
+  # the snapshot still drops, a swap for a symlink to an identical copy too.
   seed_crlf_file() { # $1 = dir, $2 = autocrlf-true|autocrlf-input|text-auto, $3 = scenario letter
     local dir="$1" mode="$2"
     printf 'one\r\ntwo\r\n' > "$dir/crlf.txt"
@@ -4606,18 +4606,38 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AC] ok"
 
+  # Symlink support, probed once for AD's link variant and scenario AE: Git
+  # Bash without Windows symlink rights copies the target instead of linking.
+  # CI must run both, so a failed probe there is a failure, never a skip.
+  scope_symlinks_ok=0
+  if : > "$TMP_DIR/symlink-probe-target" && ln -s symlink-probe-target "$TMP_DIR/symlink-probe" 2>/dev/null && [ -L "$TMP_DIR/symlink-probe" ]; then
+    scope_symlinks_ok=1
+  elif [ "${GITHUB_ACTIONS:-}" = true ]; then
+    scope_fail AE "CI must be able to create symlinks" /dev/null
+  fi
+
   # AD: the pre-update-ref seam changes crlf.txt and commits a peer file, so the
   # CAS retry rebuilds the temp index against the OLD snapshot (scenario O). A
   # rewrite re-hashes differently; a delete leaves no staged entry; a directory
-  # in its place stages crlf.txt/inner while the re-hash fails. None may land.
-  echo "[scenario AD] a CRLF-committed file rewritten, deleted or replaced after the snapshot still drops as MOE_ATTR_CONCURRENT"
-  for scope_ad_variant in rewrite delete dir; do
+  # in its place stages crlf.txt/inner while the re-hash fails; a symlink to an
+  # identical copy stages the link, whose link text re-hashes differently (a
+  # re-hash that followed the link read the copy's bytes, and it landed). None
+  # may land.
+  echo "[scenario AD] a CRLF-committed file rewritten, deleted, or replaced by a directory or a symlink after the snapshot still drops as MOE_ATTR_CONCURRENT"
+  scope_ad_variants="rewrite delete dir"
+  if [ "$scope_symlinks_ok" = 1 ]; then
+    scope_ad_variants="$scope_ad_variants link"
+  else
+    echo "[scenario AD] link variant skipped: this host cannot create symlinks"
+  fi
+  for scope_ad_variant in $scope_ad_variants; do
     SCOPE_AD_DIR="$TMP_DIR/scope-ad-$scope_ad_variant"
     scope_ad_out="$TMP_DIR/scope-ad-$scope_ad_variant.out"
     case "$scope_ad_variant" in
       rewrite) scope_ad_hook='printf "one\r\nconcurrent\r\n" > crlf.txt' ;;
       delete)  scope_ad_hook='rm -f crlf.txt' ;;
       dir)     scope_ad_hook='rm -f crlf.txt && mkdir crlf.txt && echo inner > crlf.txt/inner' ;;
+      link)    scope_ad_hook='cp crlf.txt crlf-copy.txt && rm -f crlf.txt && ln -s crlf-copy.txt crlf.txt' ;;
     esac
     make_scope_project "$SCOPE_AD_DIR" '["owned-a.txt","crlf.txt"]'
     seed_crlf_file "$SCOPE_AD_DIR" autocrlf-true AD
@@ -4647,12 +4667,67 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AD] ok"
 
+  # Scenario AE -- a symlink is fingerprinted by its link text, the blob
+  # `git add` stores, not by its target's bytes (hash-object follows a link).
+  # Three links sit untracked in the baseline as foreign dirt:
+  #   retarget-link  retargeted by the session to a file with identical
+  #                  bytes: its link text changed, so it lands (MEASURED)
+  #   stay-link      the session edits its target, not the link: PREEXISTING
+  #   dangling-link  points nowhere and is never touched: PREEXISTING (it
+  #                  failed the hash batch, read as '?' and then dropped as
+  #                  MOE_ATTR_CONCURRENT)
+  if [ "$scope_symlinks_ok" = 1 ]; then
+    echo "[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING"
+    SCOPE_AE_DIR="$TMP_DIR/scope-ae"
+    make_scope_project "$SCOPE_AE_DIR" '["target.txt"]'
+    printf 'same\n' > "$SCOPE_AE_DIR/same-a.txt"
+    printf 'same\n' > "$SCOPE_AE_DIR/same-b.txt"
+    printf 'v1\n' > "$SCOPE_AE_DIR/target.txt"
+    git -C "$SCOPE_AE_DIR" add same-a.txt same-b.txt target.txt >/dev/null
+    git -C "$SCOPE_AE_DIR" commit -qm ae-seed >/dev/null
+    ln -s same-a.txt "$SCOPE_AE_DIR/retarget-link"
+    ln -s target.txt "$SCOPE_AE_DIR/stay-link"
+    ln -s missing.txt "$SCOPE_AE_DIR/dangling-link"
+    AE_CLI="$TMP_DIR/ae-cli"
+    cat > "$AE_CLI" <<'EOF'
+#!/usr/bin/env bash
+ln -sfn same-b.txt "$MOE_PROJECT_PATH/retarget-link"
+printf 'v2\n' > "$MOE_PROJECT_PATH/target.txt"
+exit 0
+EOF
+    chmod +x "$AE_CLI"
+    set +e
+    run_scope_wrapper "$SCOPE_AE_DIR" "$TMP_DIR/scope-ae.out" "$AE_CLI"
+    scope_ae_code=$?
+    set -e
+    [ "$scope_ae_code" -eq 0 ] || scope_fail AE "wrapper exited with $scope_ae_code" "$TMP_DIR/scope-ae.out"
+    scope_ae_files="$(committed_paths "$SCOPE_AE_DIR")"
+    [ "$scope_ae_files" = "retarget-link target.txt " ] \
+      || scope_fail AE "the completion must contain exactly retarget-link and target.txt; got [$scope_ae_files]" "$TMP_DIR/scope-ae.out"
+    git -C "$SCOPE_AE_DIR" ls-tree HEAD -- retarget-link | grep -q '^120000 ' \
+      || scope_fail AE "HEAD:retarget-link must be a symlink (mode 120000)" "$TMP_DIR/scope-ae.out"
+    [ "$(git -C "$SCOPE_AE_DIR" cat-file blob HEAD:retarget-link)" = same-b.txt ] \
+      || scope_fail AE "HEAD:retarget-link must hold the new link text same-b.txt" "$TMP_DIR/scope-ae.out"
+    for scope_ae_link in stay-link dangling-link; do
+      grep -Fq "[skip] $scope_ae_link MOE_ATTR_PREEXISTING" "$TMP_DIR/scope-ae.out" \
+        || scope_fail AE "expected '[skip] $scope_ae_link MOE_ATTR_PREEXISTING'" "$TMP_DIR/scope-ae.out"
+      git -C "$SCOPE_AE_DIR" status --porcelain | grep -qx "?? $scope_ae_link" \
+        || scope_fail AE "$scope_ae_link must stay untracked" "$TMP_DIR/scope-ae.out"
+    done
+    SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+    echo "[scenario AE] ok"
+  else
+    echo "[scenario AE] skipped: this host cannot create symlinks"
+  fi
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 36 ]; then
-    echo "Expected 36 commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD); ran $SCOPE_SCENARIOS_RUN" >&2
+  scope_expected_runs=37
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=36
+  if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks)); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

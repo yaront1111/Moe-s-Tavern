@@ -2680,11 +2680,36 @@ git_top() {
     return 0
 }
 
+# moe_snapshot_hash P -- the snapshot blob of TOP-relative P, the blob `git add`
+# would store; prints nothing and returns non-zero when P cannot be hashed. A
+# symlink is hashed by its link text: hash-object follows a link to its
+# target's bytes, so a retarget to identical bytes read as unchanged, an edit
+# to the target as a change to the link, and a dangling link failed the whole
+# --stdin-paths batch. `update-index --add --info-only` into a throwaway index
+# runs git's own add path (readlink; Git for Windows turns backslashes into
+# slashes) and writes no object. Twin: Get-MoeSnapshotBlob.
+moe_snapshot_hash() {
+    local idx row
+    if [ ! -L "$MOE_TOP/$1" ]; then
+        git -C "$MOE_TOP" hash-object -- "$1" 2>/dev/null
+        return
+    fi
+    idx="$(create_secure_temp)/link-$$.idx"
+    rm -f "$idx" 2>/dev/null || true
+    row=$(GIT_INDEX_FILE="$idx" git -C "$MOE_TOP" update-index --add --info-only -- "$1" 2>/dev/null \
+        && GIT_INDEX_FILE="$idx" git -C "$MOE_TOP" ls-files -s -- ":(literal)$1" 2>/dev/null) || row=""
+    rm -f "$idx" 2>/dev/null || true
+    [ -n "$row" ] || return 1
+    row="${row#* }"
+    printf '%s\n' "${row%% *}"
+}
+
 # git_dirty_snapshot OUT -- `status --porcelain=v1 -z --untracked-files=all
 # --no-renames` mapped to `<blob|D>\t<XY>\t<path>` lines (TOP-relative). Blobs
 # come from ONE `hash-object --stdin-paths` (newline-separated: git has no -z
 # for it), so a path carrying a newline/tab/CR is dropped with a WARN -- it
-# can never be committed by this machinery, which is the safe direction.
+# can never be committed by this machinery, which is the safe direction. A
+# symlink is hashed alone, by its link text (moe_snapshot_hash).
 # Returns 1 when `git status` itself fails: a failed status is NOT a clean
 # tree, and masking it as an empty snapshot would mark the landing "nothing"
 # (landed=1) and silently strand the session's real edits as inter-session
@@ -2703,7 +2728,7 @@ git_dirty_snapshot() {
     fi
     : > "$paths_txt"
     local -a present_paths=() present_xy=()
-    local entry xy p n_present=0
+    local entry xy p n_present=0 h
     while IFS= read -r -d '' entry; do
         [ "${#entry}" -ge 4 ] || continue
         xy="${entry:0:2}"
@@ -2715,7 +2740,14 @@ git_dirty_snapshot() {
         esac
         # A nested repository / submodule shows as a directory: skip it.
         if [ -d "$MOE_TOP/$p" ] && [ ! -L "$MOE_TOP/$p" ]; then continue; fi
-        if [ -e "$MOE_TOP/$p" ] || [ -L "$MOE_TOP/$p" ]; then
+        # A symlink never joins the batch, which would follow it; an
+        # unhashable one gets '?', which always counts as changed.
+        if [ -L "$MOE_TOP/$p" ]; then
+            h=$(moe_snapshot_hash "$p") || h=""
+            printf '%s\t%s\t%s\n' "${h:-?}" "$xy" "$p" >> "$out"
+            continue
+        fi
+        if [ -e "$MOE_TOP/$p" ]; then
             present_paths+=("$p")
             present_xy+=("$xy")
             printf '%s\n' "$p" >> "$paths_txt"
@@ -2725,7 +2757,7 @@ git_dirty_snapshot() {
         fi
     done < "$status_z"
     if [ "$n_present" -gt 0 ]; then
-        local hashes="" n_hashes=0 i=0 h
+        local hashes="" n_hashes=0 i=0
         hashes=$(git -C "$MOE_TOP" hash-object --stdin-paths < "$paths_txt" 2>/dev/null) || hashes=""
         if [ -n "$hashes" ]; then
             n_hashes=$(printf '%s\n' "$hashes" | wc -l | tr -d '[:space:]')
@@ -4053,15 +4085,16 @@ moe_temp_index_build() {
             # index (seeded from BASE), so git's safer-autocrlf rule keeps a CRLF
             # blob BASE already holds; the snapshot's `hash-object` loads no index
             # and normalizes it to LF (core.autocrlf=true/input, text=auto). So
-            # re-run the snapshot's own hash: unchanged since the snapshot keeps
-            # the blob git add staged (recorded as staged, which the importee
-            # guard checks against the index); anything else, a failed hash
-            # included, moved.
+            # re-run the snapshot's own hash (moe_snapshot_hash, which reads a
+            # symlink's link text, never its target): unchanged since the
+            # snapshot keeps the blob git add staged (recorded as staged, which
+            # the importee guard checks against the index); anything else, a
+            # failed hash included, moved.
             # ponytail: the re-hash runs after `git add`, so an edit reverted in
             # that window (ABA) keeps the intermediate staged blob. Hashing the
             # staged bytes through the same conversion would close it, but needs a
             # binary pipe the ps1 twin cannot do safely.
-            rehash=$(git -C "$MOE_TOP" hash-object -- "$p" 2>/dev/null) || rehash=""
+            rehash=$(moe_snapshot_hash "$p") || rehash=""
             if [ -n "$actual" ] && [ -n "$rehash" ] && [ "$rehash" = "$blob" ]; then
                 blob="$actual"
             else

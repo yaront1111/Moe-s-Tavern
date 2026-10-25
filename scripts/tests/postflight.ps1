@@ -3819,7 +3819,8 @@ else {
                 # a file as MOE_ATTR_CONCURRENT (CQ-M01d, 71c7dbe). AC: the edit
                 # lands, as the CRLF blob git add made, under each conversion mode;
                 # crlf.mjs is a source file the importee guard re-reads from the
-                # index. AD: a change after the snapshot still drops. Fixtures are
+                # index. AD: a change after the snapshot still drops, a swap for a
+                # symlink to an identical copy too. Fixtures are
                 # raw bytes (Set-Content rewrites line endings on 5.1) and every
                 # seeding git call pins core.autocrlf (Git for Windows defaults it
                 # to true). Byte equality is `hash-object --no-filters` against the
@@ -3877,25 +3878,70 @@ else {
                 $scopeScenariosRun++
                 Write-Host '[scenario AC] ok'
 
+                # Symlink support, probed once for AD's link variant and scenario
+                # AE: Windows needs admin rights or Developer Mode to create one.
+                # CI (windows-latest runs as admin) must run both, so a failed
+                # probe there is a failure, never a skip. Every link is made by
+                # node, which keeps the exact relative link text on both engines.
+                $symlinkCjs = Join-Path $tempRoot 'symlink-fixture.cjs'
+                Set-Content -Path $symlinkCjs -Encoding ASCII -Value @'
+const fs = require('fs'), path = require('path');
+const [mode, dir] = process.argv.slice(2);
+const link = (target, name) => fs.symlinkSync(target, path.join(dir, name), 'file');
+if (mode === 'probe') {
+  fs.writeFileSync(path.join(dir, 'symlink-probe-target'), '');
+  link('symlink-probe-target', 'symlink-probe');
+  if (!fs.lstatSync(path.join(dir, 'symlink-probe')).isSymbolicLink()) process.exit(1);
+} else if (mode === 'seed') {
+  link('same-a.txt', 'retarget-link');
+  link('target.txt', 'stay-link');
+  link('missing.txt', 'dangling-link');
+} else if (mode === 'session') {
+  fs.rmSync(path.join(dir, 'retarget-link'), { force: true });
+  link('same-b.txt', 'retarget-link');
+  fs.writeFileSync(path.join(dir, 'target.txt'), 'v2\n');
+} else {
+  process.exit(2);
+}
+'@
+                $symlinksOk = $false
+                try {
+                    & node $symlinkCjs probe $tempRoot 2>$null | Out-Null
+                    $symlinksOk = ($LASTEXITCODE -eq 0)
+                } catch { $symlinksOk = $false }
+                if (-not $symlinksOk -and $env:GITHUB_ACTIONS -eq 'true') {
+                    throw 'SCENARIO AE FAILED: CI must be able to create symlinks'
+                }
+
                 # AD: crlf-hook.cmd changes crlf.txt through node (cmd cannot quote
                 # CR bytes), then hook-peer.cmd commits a peer file, so the CAS
                 # retry rebuilds the temp index against the OLD snapshot (scenario
                 # O). A rewrite re-hashes differently; a delete leaves no staged
                 # entry; a directory in its place stages crlf.txt/inner while the
-                # re-hash fails. None may land.
+                # re-hash fails; a symlink to an identical copy stages the link,
+                # whose link text re-hashes differently (a re-hash that followed
+                # the link read the copy's bytes, and it landed). None may land.
                 Set-Content -Path (Join-Path $tempRoot 'crlf-hook.cjs') -Encoding ASCII -Value @'
 const fs = require('fs'), path = require('path');
 const f = path.join(process.env.MOE_PROJECT_PATH, 'crlf.txt'), mode = process.env.CRLF_HOOK_MODE;
+if (mode === 'link') fs.copyFileSync(f, path.join(path.dirname(f), 'crlf-copy.txt'));
 fs.rmSync(f, { force: true });
 if (mode === 'rewrite') fs.writeFileSync(f, 'one\r\nconcurrent\r\n');
 if (mode === 'dir') { fs.mkdirSync(f); fs.writeFileSync(path.join(f, 'inner'), 'inner\n'); }
+if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
 '@
                 $crlfHookCmd = Join-Path $tempRoot 'crlf-hook.cmd'
                 Set-Content -Path $crlfHookCmd -Encoding ASCII -Value ("@echo off`r`n" +
                     "node `"%~dp0crlf-hook.cjs`" || exit /b 1`r`n" +
                     "call `"%~dp0hook-peer.cmd`"`r`n")
-                Write-Host '[scenario AD] a CRLF-committed file rewritten, deleted or replaced after the snapshot still drops as MOE_ATTR_CONCURRENT'
-                foreach ($adVariant in 'rewrite', 'delete', 'dir') {
+                Write-Host '[scenario AD] a CRLF-committed file rewritten, deleted, or replaced by a directory or a symlink after the snapshot still drops as MOE_ATTR_CONCURRENT'
+                $adVariants = @('rewrite', 'delete', 'dir')
+                if ($symlinksOk) {
+                    $adVariants += 'link'
+                } else {
+                    Write-Host '[scenario AD] link variant skipped: this host cannot create symlinks'
+                }
+                foreach ($adVariant in $adVariants) {
                     $scopeADDir = Join-Path $tempRoot "scope-ad-$adVariant"
                     $scopeADOut = Join-Path $tempRoot "scope-ad-$adVariant.out"
                     New-ScopeProject $scopeADDir @('owned-a.txt', 'crlf.txt')
@@ -3928,11 +3974,65 @@ if (mode === 'dir') { fs.mkdirSync(f); fs.writeFileSync(path.join(f, 'inner'), '
                 $scopeScenariosRun++
                 Write-Host '[scenario AD] ok'
 
+                # Scenario AE — a symlink is fingerprinted by its link text, the
+                # blob `git add` stores, not by its target's bytes (hash-object
+                # follows a link). Three links sit untracked in the baseline as
+                # foreign dirt:
+                #   retarget-link  retargeted by the session to a file with
+                #                  identical bytes: its link text changed, so it
+                #                  lands (MEASURED)
+                #   stay-link      the session edits its target, not the link:
+                #                  PREEXISTING
+                #   dangling-link  points nowhere and is never touched: PREEXISTING
+                if ($symlinksOk) {
+                    Write-Host '[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING'
+                    $scopeAEDir = Join-Path $tempRoot 'scope-ae'
+                    $scopeAEOut = Join-Path $tempRoot 'scope-ae.out'
+                    New-ScopeProject $scopeAEDir @('target.txt')
+                    foreach ($f in 'same-a.txt', 'same-b.txt') { [IO.File]::WriteAllText((Join-Path $scopeAEDir $f), "same`n") }
+                    [IO.File]::WriteAllText((Join-Path $scopeAEDir 'target.txt'), "v1`n")
+                    & git -C $scopeAEDir add same-a.txt same-b.txt target.txt 2>$null | Out-Null
+                    & git -C $scopeAEDir commit -qm ae-seed 2>$null | Out-Null
+                    & node $symlinkCjs seed $scopeAEDir 2>$null | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw 'SCENARIO AE FAILED: fixture: node could not create the three links' }
+                    $aeCmd = Join-Path $tempRoot 'ae-session.cmd'
+                    Set-Content -Path $aeCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                        "node `"%~dp0symlink-fixture.cjs`" session `"%MOE_PROJECT_PATH%`" || exit /b 1`r`n" +
+                        "exit /b 0`r`n")
+                    Assert-ScopeRun 'AE' (Invoke-GateWrapper $scopeAEDir $scopeAEOut -Command $aeCmd) $scopeAEOut
+                    $aePaths = Get-CommittedPaths $scopeAEDir
+                    if ($aePaths -ne 'retarget-link target.txt') {
+                        Get-Content $scopeAEOut -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+                        throw "SCENARIO AE FAILED: the completion must contain exactly retarget-link and target.txt; got [$aePaths]"
+                    }
+                    if ("$(& git -C $scopeAEDir ls-tree HEAD -- retarget-link 2>$null)" -notlike '120000 *') {
+                        throw 'SCENARIO AE FAILED: HEAD:retarget-link must be a symlink (mode 120000)'
+                    }
+                    if ((Get-GitId $scopeAEDir @('cat-file', 'blob', 'HEAD:retarget-link')) -ne 'same-b.txt') {
+                        throw 'SCENARIO AE FAILED: HEAD:retarget-link must hold the new link text same-b.txt'
+                    }
+                    $aeOutText = Get-Content -Raw -Path $scopeAEOut
+                    $aeStatus = @(& git -C $scopeAEDir status --porcelain 2>$null)
+                    foreach ($aeLink in 'stay-link', 'dangling-link') {
+                        if (-not $aeOutText.Contains("[skip] $aeLink MOE_ATTR_PREEXISTING")) {
+                            Write-Host $aeOutText
+                            throw "SCENARIO AE FAILED: expected '[skip] $aeLink MOE_ATTR_PREEXISTING'"
+                        }
+                        if ($aeStatus -notcontains "?? $aeLink") { throw "SCENARIO AE FAILED: $aeLink must stay untracked" }
+                    }
+                    $scopeScenariosRun++
+                    Write-Host '[scenario AE] ok'
+                } else {
+                    Write-Host '[scenario AE] skipped: this host cannot create symlinks'
+                }
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 36) {
-                    throw "Expected 36 commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD); ran $scopeScenariosRun"
+                $scopeExpectedRuns = 36
+                if ($symlinksOk) { $scopeExpectedRuns = 37 }
+                if ($scopeScenariosRun -ne $scopeExpectedRuns) {
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks)); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

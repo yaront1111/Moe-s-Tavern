@@ -2412,8 +2412,54 @@ function Invoke-MoeGit {
     return @{ Out = $out; Rc = $rc }
 }
 
+# $true only for a symbolic link (to a file, a directory or nothing). The
+# attribute check comes first, so an ordinary file never pays for the link
+# lookup; [IO.FileInfo] reads LinkType from the link itself, so a dangling link
+# needs no provider existence check. Junctions and other reparse points keep
+# the plain-path handling.
+function Test-MoeSymlink([string]$FullPath) {
+    try {
+        if (-not ([IO.File]::GetAttributes($FullPath) -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+        return (([IO.FileInfo]$FullPath).LinkType -eq 'SymbolicLink')
+    } catch {
+        return $false   # GetAttributes throws on a missing path
+    }
+}
+
+# The snapshot blob of TOP-relative $Path, the blob `git add` would store; ''
+# when it cannot be hashed. A symlink is hashed by its link text: hash-object
+# follows a link to its target's bytes, so a retarget to identical bytes read as
+# unchanged, an edit to the target as a change to the link, and a dangling link
+# failed the whole --stdin-paths batch. `update-index --add --info-only` into a
+# throwaway index runs git's own add path (readlink; Git for Windows turns
+# backslashes into slashes, which .Target keeps, so never hash .Target) and
+# writes no object. Twin: moe_snapshot_hash.
+function Get-MoeSnapshotBlob([string]$Top, [string]$Path) {
+    if (-not (Test-MoeSymlink (Join-Path $Top $Path))) {
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('hash-object', '--', $Path)
+        if ($r.Rc -ne 0) { return '' }
+        return "$(@($r.Out) | Select-Object -First 1)".Trim()
+    }
+    # git rejects an empty index file, so the scratch path must not exist yet.
+    $idx = Join-Path ([IO.Path]::GetTempPath()) ('moe-link-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $u = Invoke-MoeGit -Top $Top -IndexFile $idx -GitArgs @('update-index', '--add', '--info-only', '--', $Path)
+        if ($u.Rc -ne 0) { return '' }
+        $ls = Invoke-MoeGit -Top $Top -IndexFile $idx -GitArgs @('ls-files', '-s', '--', ":(literal)$Path")
+        if ($ls.Rc -ne 0) { return '' }
+        $fields = @("$(@($ls.Out) | Select-Object -First 1)" -split '\s+')
+        if ($fields.Count -lt 2) { return '' }
+        return $fields[1]
+    } catch {
+        return ''
+    } finally {
+        Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # git status --porcelain=v1 -z (NUL-split, no quoting, no renames) + ONE
-# hash-object --stdin-paths. Returns hashtable pathKey -> @{Path; XY; Blob}
+# hash-object --stdin-paths; a symlink is hashed alone, by its link text
+# (Get-MoeSnapshotBlob). Returns hashtable pathKey -> @{Path; XY; Blob}
 # where Blob is 'D' for a path absent from disk. $null when git fails.
 function Get-MoeDirtySnapshot([string]$Top) {
     $snap = @{}
@@ -2435,6 +2481,7 @@ function Get-MoeDirtySnapshot([string]$Top) {
         $entries = $joined.Split([char]0)
         $toHash = New-Object System.Collections.Generic.List[string]
         $records = @()
+        $hashMap = @{}
         foreach ($e in $entries) {
             if ($e.Length -lt 4) { continue }
             $xy = $e.Substring(0, 2)
@@ -2446,7 +2493,13 @@ function Get-MoeDirtySnapshot([string]$Top) {
             }
             $full = Join-Path $Top $p
             $blob = 'D'
-            if (Test-Path -LiteralPath $full -PathType Leaf) {
+            if (Test-MoeSymlink $full) {
+                # Before Test-Path, which follows a link (a dangling one read as
+                # deleted, one to a directory as a directory); never in the batch.
+                $blob = ''
+                $linkBlob = Get-MoeSnapshotBlob $Top $p
+                if ($linkBlob) { $hashMap[(Get-MoePathKey $p)] = $linkBlob }
+            } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
                 $blob = ''
                 $toHash.Add($p)
             } elseif (Test-Path -LiteralPath $full) {
@@ -2455,7 +2508,6 @@ function Get-MoeDirtySnapshot([string]$Top) {
             }
             $records += @{ Path = $p; XY = $xy; Blob = $blob }
         }
-        $hashMap = @{}
         if ($toHash.Count -gt 0) {
             $hashes = @($toHash.ToArray() | & git -C $Top hash-object --stdin-paths 2>$null | ForEach-Object { "$_".Trim() })
             $hrc = $LASTEXITCODE
@@ -3632,15 +3684,16 @@ function Build-MoeTempIndexTree([string]$Top, [string]$IndexFile, [string]$OldSh
             # index (seeded from $OldSha), so git's safer-autocrlf rule keeps a
             # CRLF blob $OldSha already holds; the snapshot's `hash-object` loads
             # no index and normalizes it to LF (core.autocrlf=true/input,
-            # text=auto). So re-run the snapshot's own hash (no -IndexFile):
+            # text=auto). So re-run the snapshot's own hash (Get-MoeSnapshotBlob,
+            # which reads a symlink's link text, never its target; no -IndexFile):
             # unchanged since the snapshot keeps the blob git add staged; anything
             # else, a failed hash included, moved.
             # ponytail: the re-hash runs after `git add`, so an edit reverted in
             # that window (ABA) keeps the intermediate staged blob. Hashing the
             # staged bytes through the same conversion would close it, but needs a
             # binary pipe this twin cannot do safely.
-            $rehash = Invoke-MoeGit -Top $Top -GitArgs @('hash-object', '--', $c.Path)
-            $match = ($rehash.Rc -eq 0 -and "$(@($rehash.Out) | Select-Object -First 1)".Trim() -eq $c.Blob)
+            $rehash = Get-MoeSnapshotBlob $Top $c.Path
+            $match = ($rehash -and $rehash -eq $c.Blob)
         }
         if (-not $match) {
             if ($OldSha) {
