@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,12 +25,36 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 228.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-16dbc693da04451cb0e5c6a9747a4da1",
+      "author": "architect-473624b4",
+      "content": "Planning serialization: added F04 task-076a0bd3f09e4ce4ae4bbc6bb122d2ed as an explicit dependency because both plans own server/WebSocketServer.ts (and the protocol documentation). F03/M01 dependencies preserved. I01 is the daemon-side optional /ws negotiation slice; I02/I04 own JetBrains/VS Code consumers, I06 is the actual epic integration/hardening owner despite this reordered task's isEpicFinal flag. Existing legacy no-handshake clients remain compatible; negotiated/strict approvals must retain exact-revision CAS, and verified-local stays unconditionally unavailable.",
+      "timestamp": "2026-10-25T07:59:40.467Z"
+    },
+    {
+      "id": "comment-b9522ac1f2d244f8bcae41ed1b5da08f",
+      "author": "architect-473624b4",
+      "content": "Human instruction received during I01 planning: “we dont need legacy and legacy should be deleted” (answer to F04 revision-less approval clarification). This supersedes my earlier compatibility assumption but conflicts with current preserve-legacy epic rails. Asked one scope clarification: remove revision-less approvals only, or also legacy execution/delivery profiles throughout Moe? Audit history stays intact and verified-local stays unavailable either way. Need that explicit contract/rail reconciliation before finalizing I01's capability admission; no speculative protocol plan submitted. Investigation and proposed minimal files saved in Serena task handoff. F04 worker has a formal step amendment to request_replan; original submitted plan is not the latest acceptance contract.",
+      "timestamp": "2026-10-25T08:06:10.081Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:18.748Z",
-  "updatedAt": "2026-10-25T07:46:06.969Z",
+  "updatedAt": "2026-10-25T08:06:10.173Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88",
-    "task-ad95cb270e9e46df8672eb094d0c1e74"
-  ]
+    "task-ad95cb270e9e46df8672eb094d0c1e74",
+    "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T07:58:14.777Z"
+  },
+  "contextFetchedBy": [
+    "architect-473624b4"
+  ],
+  "blockedReason": "Concrete requirements conflict: the human now says legacy should be deleted, while current epic rails explicitly require preserving legacy policy/behavior. This determines I01's wire admission contract, not merely plan-approval preference. Scope question is whether deletion means revision-less approval compatibility only or all legacy execution/delivery profiles; preserve audit history and keep verified-local unavailable in either case. Source exploration is complete and saved in Serena; no implementation plan was submitted for the conflicting behavior. Reconcile the decision into the task/epic contract, then restore PLANNING.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-25T08:06:10.173Z"
 }

@@ -1,0 +1,163 @@
+{
+  "id": "task-ab6aac94d9424653bb45d6db4fa3fe67",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: Approved epic rail is silently truncated at 1000 characters",
+  "description": "Approved proposal prop-d3ccceade25f4af19518ce0e930e4123 retains the full R07 size exception and QA-required probe allowance, but allRails.epic and persisted epic-fe5e32c32b044a20944c693dfd79411b.epicRails cut it at exactly 1000 characters, ending scripts/local-runner/guest-b.\nRepro: compare the HUMAN-approved proposedValue (2026-10-25T07:43:43Z) with moe.get_context for task-84c2da018ce74995b609805dab4fe7da; required safety restrictions and the approved growth allowance are missing. Preserve approved rail text or reject oversize proposals before approval; repair existing truncated rail via Moe.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 13,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Per amend-1 / comment-f610453a: human chose \"Raise limit; preserve longer rails\" after steps 1-4, so the 1000-unit ceiling is obsolete (proposed 10000 UTF-16 units, reject-not-truncate kept). NOT calling complete_task. Steps 1-5 are COMPLETED and bytes are preserved in the worktree (uncommitted, all reported in modifiedFiles): validators.ts (MAX_EPIC_RAIL_CHARS=1000 constant; validateStringArrayValue trailing truncate=true param; epicRails passes false), proposeRail.ts (EPIC ADD/MODIFY prevalidation before createProposal; REMOVE/GLOBAL/TASK untouched), proposeRail.test.ts (15 lossless-boundary cases), validators.test.ts (3 truncate-option cases), docs/SCHEMA.md (Epic rail limits). Evidence at 1000 cap, native-Linux snapshot of HEAD 759cc61 + overlays: npm test exit 0, 159 files/3768 passed/15 skipped, tsc 0; mutation probes (restore truncation, drop prevalidation, validate REMOVE, validate all scopes, flip default) all RED. Moving to 10000 is small: change the one constant; update proposeRail.test.ts `LIMIT = 1000` and the literal 1000 mentions in SCHEMA.md; add a real 1650-unit single-entry test plus a >10000 refusal test; then a fresh full gate. Heads-up: (1) epic rails ride in every get_context twice (epic.epicRails and allRails.epic), so a larger cap raises every task's token cost; (2) createEpic still truncates at 1000 via sanitizeStringArray, filed as task-6b607b1278914531a75bfe16decf3199 (depends on this task); (3) recombining the three restored slices into one rail must wait for a daemon restart on the new build. Details in Serena memory task-task-ab6aac94d9424653bb45d6db4fa3fe67-handoff.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 227.5,
+  "comments": [
+    {
+      "id": "comment-47c11f2a0a9a4a6bb19539857c296764",
+      "author": "architect-473624b4",
+      "content": "Planning acceptance criteria replacing the prose placeholder (architect MCP has no edit-task/DoD-field tool; please copy these into the DoD via the board): (1) EPIC ADD/MODIFY proposals over 1000 UTF-16 code units fail INVALID_INPUT before proposal persistence/publication; 1000 is accepted losslessly. (2) Direct epicRails updates and approval of pre-existing oversized EPIC proposals fail before entity mutation, retain PENDING proposals and preserve all rail/proposal bytes; never truncate. (3) Accepted epic rails preserve whitespace and Unicode exactly through apply/reload; GLOBAL/TASK long-rail behavior and REMOVE_RAIL remain compatible. (4) The HUMAN-approved prop-d3ccceade25f4af19518ce0e930e4123 text is restored through Moe without dropping clauses or editing .moe by hand. (5) Fresh `cd packages/moe-daemon && npm test` exits 0 with completion evidence. Data repair already performed through moe.update_epic: replaced the one 1000-character prefix with three exact consecutive slices at CQ-R06:/CQ-R07: boundaries; concatenating them equals the complete approved proposedValue, and every other epic rail is unchanged. This restores the R07 deny-probe allowance and fail-closed restrictions without granting a new exception.",
+      "timestamp": "2026-10-25T07:56:12.038Z"
+    },
+    {
+      "id": "comment-f610453aa9d64b58908cf58f17b157d7",
+      "author": "architect-473624b4",
+      "content": "HUMAN REQUIREMENT CHANGE received after steps 1-4 completed: user selected “Raise limit; preserve longer rails”. This supersedes the 1000-unit acceptance ceiling in comment-47c11f2a and the initial plan, not the reject-not-truncate requirement. Proposed revised bound is 10000 UTF-16 code units (existing controls retained), with the actual 1650-unit approved text passing losslessly as one entry; >10000 refused upfront and on apply. Worker notified to request_replan so completed steps are not rewritten through an unrelated self-review step. Preserve finished lossless-boundary implementation and evidence; source update/test/doc needs a fresh gate. Data repair already restored every clause via Moe; recombining to one approved rail must wait until the running daemon supports the higher cap.",
+      "timestamp": "2026-10-25T08:03:29.543Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T07:49:44.510Z",
+  "updatedAt": "2026-10-25T08:06:46.775Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T07:54:15.283Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-473624b4",
+    "governor-187cc44e",
+    "worker-c1d9de02"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T07:57:57.308Z",
+  "planningNotes": {
+    "approachesConsidered": "# Lossless epic rail validation\nGoal: refuse unrepresentable EPIC rail changes before review and never silently shorten human-approved constraints. Architecture: reuse validateStringValue and add an opt-out to the existing array truncation behavior only at validateEpicUpdates; propose_rail shares the same cap. TypeScript/Node/Vitest. Raising the cap would merely postpone silent truncation and broaden policy; retaining the established 1000 bound with explicit refusals is the minimal compatible fix.",
+    "codebaseInsights": "Root cause confirmed: validateStringArrayValue unconditionally passes truncate:true; validateEpicUpdates calls it for epicRails with 1000. proposeRail accepts any proposed string. StateManager.approveProposal calls applyRailChange before persisting APPROVED, and the EPIC branch calls updateEpic -> validateEpicUpdates, so one strict store validator also protects old pending proposals. GLOBAL/TASK apply paths intentionally preserve long rails; StateManager.test.ts has a >1000 global rule regression. No need to edit StateManager. Runtime repair already performed by architect via moe.update_epic using exact approved slices (419/432/799), not source editing or a new waiver.",
+    "risks": "Keep the shared array validator's existing default behavior for its other callers; only epicRails opts into rejection. Length uses JS string.length, not UTF-8 bytes or code points. At 100-item boundary a later approval can legitimately refuse due to newer rails; never mark a failed apply APPROVED. Don't promise transaction rollback across epic and subsequent proposal writes. DoD has only a placeholder and no architect MCP update tool: concrete criteria recorded in comment-47c11f2a0a9a4a6bb19539857c296764 and governor notified via msg-d6996dd217774f5c95f9ff72645d7d7e. No unanswered question blocks this TURBO plan.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/proposeRail.ts",
+      "packages/moe-daemon/src/tools/proposeRail.test.ts",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-25T07:57:57.384Z",
+  "workStartedAt": "2026-10-25T07:58:47.638Z",
+  "priorAttempt": {
+    "attemptedAt": "2026-10-25T08:06:46.775Z",
+    "reason": "Per amend-1 / comment-f610453a: human chose \"Raise limit; preserve longer rails\" after steps 1-4, so the 1000-unit ceiling is obsolete (proposed 10000 UTF-16 units, reject-not-truncate kept). NOT calling complete_task. Steps 1-5 are COMPLETED and bytes are preserved in the worktree (uncommitted, all reported in modifiedFiles): validators.ts (MAX_EPIC_RAIL_CHARS=1000 constant; validateStringArrayValue trailing truncate=true param; epicRails passes false), proposeRail.ts (EPIC ADD/MODIFY prevalidation before createProposal; REMOVE/GLOBAL/TASK untouched), proposeRail.test.ts (15 lossless-boundary cases), validators.test.ts (3 truncate-option cases), docs/SCHEMA.md (Epic rail limits). Evidence at 1000 cap, native-Linux snapshot of HEAD 759cc61 + overlays: npm test exit 0, 159 files/3768 passed/15 skipped, tsc 0; mutation probes (restore truncation, drop prevalidation, validate REMOVE, validate all scopes, flip default) all RED. Moving to 10000 is small: change the one constant; update proposeRail.test.ts `LIMIT = 1000` and the literal 1000 mentions in SCHEMA.md; add a real 1650-unit single-entry test plus a >10000 refusal test; then a fresh full gate. Heads-up: (1) epic rails ride in every get_context twice (epic.epicRails and allRails.epic), so a larger cap raises every task's token cost; (2) createEpic still truncates at 1000 via sanitizeStringArray, filed as task-6b607b1278914531a75bfe16decf3199 (depends on this task); (3) recombining the three restored slices into one rail must wait for a daemon restart on the new build. Details in Serena memory task-task-ab6aac94d9424653bb45d6db4fa3fe67-handoff.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "Add focused lossless-rail regressions first (test-driven-development), reusing ToolTestHarness in this file. For EPIC ADD_RAIL and MODIFY_RAIL, proposedValue length 1001 must throw INVALID_INPUT before createProposal, leave proposals/map/files/activity/events unchanged; length 1000 must survive proposal, real approveProposal and state.load byte-for-byte, including leading/trailing whitespace and Unicode. Example boundary assertion: `const rail = 'x'.repeat(999) + 'Z'; ... expect(h.state.getEpic('epic-1')!.epicRails).toContain(rail);`. Seed a legacy PENDING oversized EPIC proposal directly through state.createProposal and call the real approval path; assert it stays PENDING, both proposal and epic files/cache remain identical, and no PROPOSAL_APPROVED/EPIC_UPDATED event appears. Exercise direct updateEpic with a valid first rail and oversized second rail, then with non-string/blank/NUL/newline values: fail the entire update without partial changes. Keep existing trailing-whitespace lookup assertions. Add compatibility controls for GLOBAL and TASK rails longer than 1000 and REMOVE_RAIL with empty proposedValue; never cap currentValue, so historic long rails remain removable.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "packages/moe-daemon/src/tools/proposeRail.test.ts"
+        ],
+        "modifiedFiles": [
+          "packages/moe-daemon/src/tools/proposeRail.test.ts"
+        ],
+        "note": "Added 'lossless epic rail boundary' describe (13 cases) to proposeRail.test.ts. Red-proved in a native-Linux HEAD snapshot (/tmp/moe-ab6a-gate.snap, node_modules symlinked to the existing Linux tree): 7 new cases fail on unfixed code because oversized rails are accepted/truncated, and the 6 compatibility controls (write failure keeps PENDING, malformed direct updates, GLOBAL/TASK long rails, REMOVE_RAIL) already pass. Fixed my own fixture-length slip (surrogate pair counts as 2 units). Peers' dirty paths (479 under .moe/scripts) untouched; nothing under packages/moe-daemon or docs was dirty except my file. Found out-of-scope sibling: StateManager.createEpic truncates epicRails via sanitizeStringArray(…,100,1000) — filing a bug: task, not fixing here.",
+        "startedAt": "2026-10-25T07:58:47.638Z",
+        "completedAt": "2026-10-25T08:00:43.485Z"
+      },
+      {
+        "stepId": "step-2",
+        "description": "Fix the actual lossy boundary with the smallest shared validation change. Export MAX_EPIC_RAIL_CHARS = 1000 from validators.ts; let validateStringArrayValue accept an optional truncation flag defaulting to its existing true behavior, and have validateEpicUpdates use false ONLY for epicRails. Example: `validateStringArrayValue(input.epicRails, 'epicRails', 100, MAX_EPIC_RAIL_CHARS, false)` with the option fed into validateStringValue; preserve unrelated attribution.exclude/appendOnlyFiles sanitization and every existing item-count/type/empty/control-character rule. In proposeRail.handler, before createProposal and publication, validate proposedValue for EPIC ADD_RAIL/MODIFY_RAIL with `validateStringValue(params.proposedValue, 'proposedValue', {maxLength: MAX_EPIC_RAIL_CHARS})`; retain the original exact string, no trim/truncate/coercion. Document the conditional EPIC bound in the schema property's description rather than imposing a universal maxLength that would break GLOBAL/TASK compatibility. REMOVE_RAIL uses only currentValue and must not validate its unused proposedValue as a replacement. Error handling: oversize or malformed new text returns INVALID_INPUT with the field, no proposal write. Existing pending proposals and direct epic writes hit validateEpicUpdates before writeEntity, so approval fails before approveProposal marks it APPROVED; do not add a second write, migration, StateManager refactor or client change. Verify first-epic-write failure also leaves the proposal pending via an injected writeEntity failure. Keep changes and tests below 400 net LOC.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "packages/moe-daemon/src/state/validators.ts",
+          "packages/moe-daemon/src/tools/proposeRail.ts",
+          "packages/moe-daemon/src/tools/proposeRail.test.ts"
+        ],
+        "modifiedFiles": [
+          "packages/moe-daemon/src/state/validators.ts",
+          "packages/moe-daemon/src/tools/proposeRail.ts"
+        ],
+        "note": "validators.ts: exported MAX_EPIC_RAIL_CHARS=1000; validateStringArrayValue gained a trailing truncate=true param (default preserves attribution.exclude/appendOnlyFiles behavior); validateEpicUpdates passes false for epicRails only. proposeRail.ts: EPIC ADD/MODIFY proposals run validateStringValue(proposedValue, {maxLength: MAX_EPIC_RAIL_CHARS}) before any write (exact string kept; REMOVE_RAIL, GLOBAL, TASK untouched); schema description documents the conditional bound. No StateManager change: approveProposal -> applyRailChange -> updateEpic -> validateEpicUpdates refuses before writeEntity so legacy oversized PENDING proposals stay PENDING. Evidence in native-Linux HEAD snapshot + overlay: proposeRail.test.ts 18/18 and src/state suite 28 files/1098 tests pass, tsc --noEmit exit 0. Net source diff +15/-4.",
+        "startedAt": "2026-10-25T08:00:50.606Z",
+        "completedAt": "2026-10-25T08:01:29.179Z"
+      },
+      {
+        "stepId": "step-3",
+        "description": "Document Epic.epicRails' existing 100-item/1000-UTF-16-code-unit-per-entry bounds and new reject-not-truncate contract, plus EPIC ADD/MODIFY proposal validation before review and apply-time validation for old pending proposals. State whitespace/Unicode are retained exactly; control/newline and empty-entry restrictions are unchanged; GLOBAL/TASK policy is not newly bounded. Record the already-completed data repair in the task completion note, not a migration: architect used moe.update_epic to replace the truncated prefix with exact consecutive 419/432/799-character fragments of HUMAN-approved prop-d3ccceade25f4af19518ce0e930e4123; joining them is the exact 1650-character approved value and other rails are unchanged. Before completion, read fresh get_context to confirm the restored R07 deny probe and final safety restrictions remain present; if peers have legitimately edited rails, do not overwrite them. No manual .moe edits or approval of new exceptions. The five checkable criteria in comment-47c11f2a0a9a4a6bb19539857c296764 govern this plan; governor has been asked to replace the placeholder task DoD because the architect tool surface has no DoD editor.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "docs/SCHEMA.md"
+        ],
+        "modifiedFiles": [
+          "docs/SCHEMA.md"
+        ],
+        "note": "docs/SCHEMA.md: annotated Epic.epicRails with the 100x1000 bound and added an 'Epic rail limits' subsection: reject-not-truncate (INVALID_INPUT, whole update fails, nothing written), UTF-16 code-unit length, exact whitespace/Unicode retention, unchanged single-line/non-blank/no-NUL rules, propose_rail prevalidation for EPIC ADD/MODIFY only (REMOVE_RAIL/GLOBAL/TASK not newly bounded), legacy oversized PENDING proposal stays PENDING on approval, and the known create_epic gap -> task-6b607b1278914531a75bfe16decf3199. Data repair (already done by architect via moe.update_epic, not a migration): truncated 1000-char prefix replaced with exact consecutive 419/432/799-char slices of HUMAN-approved prop-d3ccceade25f4af19518ce0e930e4123 (joined = exact 1650-char value; other rails unchanged) — to be re-confirmed against fresh get_context before completion.",
+        "startedAt": "2026-10-25T08:01:32.366Z",
+        "completedAt": "2026-10-25T08:01:50.366Z"
+      },
+      {
+        "stepId": "step-4",
+        "description": "Single final verification gate: from the repo root run exactly `cd packages/moe-daemon && npm test`; require fresh exit 0 and supply command/outputTail to complete_task. The shared validator/public proposal boundary warrants the full daemon suite, including old global-rail preservation and settings-validation tests. Use a source-identical native-Linux dependency snapshot on WSL with Linux-only PATH and MOE_* isolated, never replace shared Windows node_modules; preserve original line endings on all platforms. Capture source identity and owned overlays for QA reproduction. This bug is not CQ-R rollout certification: R13 remains the epic-wide local-runner integration/hardening owner even though the appended bug is reported isEpicFinal. Do not run/provision VMs or claim verified-local readiness. No agent Git writes; wrappers own landing.",
+        "status": "COMPLETED",
+        "affectedFiles": [],
+        "note": "Gate: `cd packages/moe-daemon && npm test` (vitest run) in native-Linux snapshot /tmp/moe-ab6a-gate.snap = git archive HEAD 759cc61 (packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json) + node_modules symlink to /tmp/moe-linux-daemon.3EJTl5/.../node_modules + 4 owned overlays (proposeRail.test.ts, proposeRail.ts, validators.ts, docs/SCHEMA.md; cmp-identical to the worktree). env -i PATH=/usr/local/bin:/usr/bin:/bin so no MOE_* leakage. Result exit 0: 159 files passed, 3763 tests passed, 15 skipped, 20.3s. Rebuild with /tmp/moe-ab6a-tools/snap.sh <dir>. Windows node_modules untouched; no VM/readiness claims; not CQ-R rollout certification.",
+        "startedAt": "2026-10-25T08:01:53.771Z",
+        "completedAt": "2026-10-25T08:02:28.251Z"
+      },
+      {
+        "stepId": "step-5",
+        "description": "Final single adversarial-self-review of this bug's diff: test 999/1000/1001 lengths, a surrogate pair at the boundary, trailing whitespace, missing/malformed proposedValue, direct update and pre-existing oversized PENDING approval, a stale/missing original rail, and an epic write failure. Confirm no lossy success, no partial map/disk publication on validation refusal, no new cap on GLOBAL/TASK/currentValue, and no accidental change to settings array truncation. In a disposable copy, restore epic truncation (approval regression must fail) and remove proposal prevalidation (upfront-refusal regression must fail). Restore final bytes; refresh the single verification gate if any fix was needed. Load verification-before-completion and complete only with observed evidence; report the live Moe repair separately from source implementation.",
+        "status": "COMPLETED",
+        "affectedFiles": [],
+        "modifiedFiles": [
+          "packages/moe-daemon/src/state/validators.ts",
+          "packages/moe-daemon/src/state/validators.test.ts",
+          "packages/moe-daemon/src/tools/proposeRail.ts",
+          "packages/moe-daemon/src/tools/proposeRail.test.ts",
+          "docs/SCHEMA.md"
+        ],
+        "note": "Adversarial review + mutation probes (disposable snapshot copies, removed afterwards). Probes: M1 restore epicRails truncation -> RED 4 (legacy-oversized approval, direct-update atomicity, stored-long-rail, validators epic cap); M2 drop proposal prevalidation -> RED 3 (ADD/MODIFY over 1000 + surrogate-pair); M4 also validate REMOVE_RAIL -> RED 1; M5 validate all scopes -> RED 1 (GLOBAL/TASK/removal compat); M3 flip validateStringArrayValue default truncate -> SURVIVED all 2405 existing tests, so I added a characterization test (validators.test.ts, small scope growth beyond the 4 planned files, justified by that survivor) and M3b is now RED 1. Review findings: (1) whole-array revalidation means a hand-edited/legacy >1000 entry blocks other epic rail changes until shortened/removed; now pinned by a test and documented in SCHEMA.md; live epic has 11 rails, max 799 chars, none blank/multiline, so unaffected. (2) archive_epic status-only updates never touch epicRails, unaffected. (3) IDE EPIC_UPDATE (WebSocketServer) now surfaces INVALID_INPUT instead of silent truncation — intended. (4) Out-of-scope sibling create_epic truncation filed as task-6b607b1278914531a75bfe16decf3199. Final gate on final bytes: npm test exit 0, 159 files / 3768 passed / 15 skipped; tsc --noEmit 0. Peer-dirty src/server/planApproval.test.ts untouched.",
+        "startedAt": "2026-10-25T08:02:29.215Z",
+        "completedAt": "2026-10-25T08:05:46.701Z",
+        "amendments": [
+          {
+            "amendmentId": "amend-1",
+            "description": "Human requirement changed while this step was in flight. Preserve all existing source/test bytes and completed-step evidence; do not mark the old acceptance target complete. Read the latest task comments recording the human decision, then call moe.request_replan for this task with that decision and the current implementation/evidence summary. This amendment is a hand-back instruction, not permission to edit completed steps, perform Git writes, delete audit history, weaken tests, or activate verified-local. The architect will replace the whole plan against the revised acceptance contract; error handling and test requirements remain mandatory.",
+            "reason": "Human explicitly chose 'Raise limit; preserve longer rails' after steps 1-4 were completed. The original 1000-unit ceiling is obsolete; completed history must be preserved.",
+            "amendedBy": "architect-473624b4",
+            "amendedAt": "2026-10-25T08:04:39.067Z"
+          }
+        ],
+        "activeAmendmentId": "amend-1"
+      }
+    ],
+    "stepsCompleted": [
+      "step-1",
+      "step-2",
+      "step-3",
+      "step-4",
+      "step-5"
+    ]
+  }
+}

@@ -242,11 +242,15 @@ export function validateEnumValue<T extends string>(value: unknown, fieldName: s
   return value as T;
 }
 
+/** Longest epic rail, in UTF-16 code units. Longer text is refused, never shortened. */
+export const MAX_EPIC_RAIL_CHARS = 1000;
+
 export function validateStringArrayValue(
   value: unknown,
   fieldName: string,
   maxItems: number,
-  maxItemLength: number
+  maxItemLength: number,
+  truncate = true
 ): string[] {
   if (!Array.isArray(value)) {
     throw invalidInput(fieldName, 'must be an array');
@@ -262,7 +266,7 @@ export function validateStringArrayValue(
       maxLength: maxItemLength,
       allowEmpty: false,
       trim: false,
-      truncate: true,
+      truncate,
     });
   });
 }
@@ -537,7 +541,7 @@ export function validateEpicUpdates(updates: Partial<Epic>): Partial<Epic> {
     });
   }
   if (input.epicRails !== undefined) {
-    sanitized.epicRails = validateStringArrayValue(input.epicRails, 'epicRails', 100, 1000);
+    sanitized.epicRails = validateStringArrayValue(input.epicRails, 'epicRails', 100, MAX_EPIC_RAIL_CHARS, false);
   }
   if (input.status !== undefined) {
     sanitized.status = validateEnumValue(input.status, 'status', ['PLANNED', 'ACTIVE', 'COMPLETED', 'ARCHIVED'] as const);

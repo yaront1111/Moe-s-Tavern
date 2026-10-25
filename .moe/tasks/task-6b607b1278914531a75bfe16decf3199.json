@@ -1,0 +1,32 @@
+{
+  "id": "task-6b607b1278914531a75bfe16decf3199",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: create_epic still silently truncates epicRails entries at 1000 characters",
+  "description": "StateManager.createEpic (packages/moe-daemon/src/state/StateManager.ts:1253) builds epicRails with sanitizeStringArray(input.epicRails, 100, 1000), which substring-truncates entries and drops blanks/non-strings and extra items without any error. Same lossy class as task-ab6aac94d9424653bb45d6db4fa3fe67, which only covers updateEpic/propose_rail. Repro: moe.create_epic with a 1500-char rail -> persisted rail is 1000 chars. Fix should reject (INVALID_INPUT) rather than truncate, reusing validateStringArrayValue/MAX_EPIC_RAIL_CHARS from that task.",
+  "definitionOfDone": [
+    "createEpic with an epicRails entry over 1000 UTF-16 code units fails INVALID_INPUT and persists nothing",
+    "createEpic with a 1000-unit rail keeps it byte-exact through reload",
+    "Blank/non-string/over-100-item epicRails are rejected or explicitly documented, with tests",
+    "cd packages/moe-daemon && npm test exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ab6aac94d9424653bb45d6db4fa3fe67"
+  ],
+  "priority": "MEDIUM",
+  "order": 228.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T08:00:47.902Z",
+  "updatedAt": "2026-10-25T08:00:47.902Z"
+}
