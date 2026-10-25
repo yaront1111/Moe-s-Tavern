@@ -241,6 +241,110 @@ export function injectRunnerIdentity(
   }
 }
 
+export interface ExecutionIdentityRefusal { code: number; codeName: string; message: string }
+
+type IdentityGroup = 'attempt' | 'session';
+type IdentityFields = Record<string, string | number>;
+/** A group's env read: null when absent, a reason string when partial or malformed. */
+type GroupRead = IdentityFields | string | null;
+
+/** The tools that carry the session's execution identity, under every spelling. */
+const EXECUTION_IDENTITY_TOOLS = new Map<string, readonly IdentityGroup[]>();
+for (const [tool, groups] of [['get_context', ['session']], ['start_step', ['attempt', 'session']]] as const) {
+  for (const name of [`moe.${tool}`, `moe_${tool}`, tool]) EXECUTION_IDENTITY_TOOLS.set(name, groups);
+}
+
+const IDENTITY_ENV: Record<string, string> = {
+  attemptId: 'MOE_ATTEMPT_ID', generation: 'MOE_ATTEMPT_GENERATION', sessionId: 'MOE_SESSION_ID',
+};
+
+const nonBlank = (value: string | undefined) => (typeof value === 'string' && value.trim() !== '' ? value : undefined);
+
+/** The daemon's sessionId rule (readContextSessionId): at most 255 UTF-16 units, no NUL, CR or LF. Verbatim. */
+function readSessionGroup(env: Record<string, string | undefined>): GroupRead {
+  const sessionId = nonBlank(env.MOE_SESSION_ID);
+  if (sessionId === undefined) return null;
+  if (sessionId.length > 255 || /[\u0000\r\n]/.test(sessionId)) {
+    return 'MOE_SESSION_ID must be at most 255 characters with no NUL, CR or LF';
+  }
+  return { sessionId };
+}
+
+/** Both or neither; attemptId is the wrapper's pin_attempt_identity shape; generation is never trimmed or loosely parsed. */
+function readAttemptGroup(env: Record<string, string | undefined>): GroupRead {
+  const attemptId = nonBlank(env.MOE_ATTEMPT_ID);
+  const generation = nonBlank(env.MOE_ATTEMPT_GENERATION);
+  if (attemptId === undefined && generation === undefined) return null;
+  if (attemptId === undefined || generation === undefined) {
+    return 'MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION must be set together';
+  }
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(attemptId)) {
+    return 'MOE_ATTEMPT_ID must be 1-128 characters of A-Z, a-z, 0-9, _ or -';
+  }
+  const value = Number(generation);
+  if (!/^[1-9][0-9]*$/.test(generation) || !Number.isSafeInteger(value)) {
+    return 'MOE_ATTEMPT_GENERATION must be a positive safe integer in plain decimal digits';
+  }
+  return { attemptId, generation: value };
+}
+
+const GROUP_READERS: Record<IdentityGroup, (env: Record<string, string | undefined>) => GroupRead> = {
+  attempt: readAttemptGroup, session: readSessionGroup,
+};
+
+/**
+ * CQ-F09: stamp the session's execution identity onto moe.get_context
+ * (sessionId) and moe.start_step (attemptId, generation, sessionId). The
+ * runner (the wrapper's env), never the CLI caller, owns that identity: the
+ * same transport as injectRunnerIdentity, except the caller can never
+ * override it. A presented field must equal the env value exactly, and a
+ * malformed or partial env group refuses the calls that carry it. With no
+ * identity env this is the legacy proxy: returns false and the daemon decides.
+ * Returns true when the checked object must be forwarded (stamped or already
+ * equal), or a refusal; it never mutates on refusal, never echoes a value and
+ * never throws (an unexpected error fails closed).
+ */
+export function stampExecutionIdentity(
+  parsed: unknown,
+  env: Record<string, string | undefined>
+): boolean | ExecutionIdentityRefusal {
+  try {
+    if (!parsed || typeof parsed !== 'object') return false;
+    const msg = parsed as Record<string, unknown>;
+    if (msg.method !== 'tools/call') return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    if (!params || typeof params !== 'object') return false;
+    const tool = params.name;
+    const groups = typeof tool === 'string' ? EXECUTION_IDENTITY_TOOLS.get(tool) : undefined;
+    if (!groups) return false;
+    const args = params.arguments as Record<string, unknown> | undefined;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+    const stamp: IdentityFields = {};
+    for (const group of groups) {
+      const read = GROUP_READERS[group](env);
+      if (typeof read === 'string') {
+        return { code: -32602, codeName: 'EXECUTION_IDENTITY_INVALID', message: `${tool}: ${read}; fix the session environment` };
+      }
+      if (read) Object.assign(stamp, read);
+    }
+    const fields = Object.keys(stamp);
+    if (fields.length === 0) return false;
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(args, field) && args[field] !== stamp[field]) {
+        return {
+          code: -32003,
+          codeName: 'EXECUTION_IDENTITY_SUBSTITUTED',
+          message: `${tool}: ${field} differs from this session's ${IDENTITY_ENV[field]}; omit ${field} so the proxy supplies the session's own value`,
+        };
+      }
+    }
+    Object.assign(args, stamp);
+    return true;
+  } catch {
+    return { code: -32602, codeName: 'EXECUTION_IDENTITY_INVALID', message: 'execution identity could not be checked' };
+  }
+}
+
 export function parseJsonLines(buffer: string): { lines: string[]; remaining: string } {
   const lines: string[] = [];
   let remaining = buffer;

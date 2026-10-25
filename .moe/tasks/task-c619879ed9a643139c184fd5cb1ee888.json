@@ -18,22 +18,12 @@
     {
       "stepId": "step-1",
       "description": "FLIP THE OMISSION PINS FIRST (tests, RED). This plan was written 2026-10-25 against I01's landed WebSocketServer.test.ts. If I01 was reopened since, re-locate the named tests by title before editing.\n\nGive every rewritten test a one-line comment citing the rail: CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.\n\nIn packages/moe-daemon/src/server/planApproval.test.ts:\n- 'approves with no token at all (legacy caller)' becomes a refusal: approve('task-1') with no token rejects with INVALID_INPUT naming expectedPlanRevision. The task file bytes are unchanged, status stays AWAITING_APPROVAL, there is no PLAN_APPROVED activity and no approvedPlanRevision.\n- 'approves when the key is omitted (legacy wire opt-out)', for APPROVE_TASK without the key, and '... (legacy board drag)', for UPDATE_TASK {status:'WORKING'} without the key, each become an ERROR frame with INVALID_INPUT. The row is unchanged, and a second connected client receives no TASK_UPDATED.\n- 'does not use a stale token hidden in updates when the top-level key is omitted' still proves the hidden token is never used. The outcome is now an INVALID_INPUT refusal instead of a legacy approval.\n\nIn planApproval.integration.test.ts, 'still approves a legacy stamp-less row when the client omits the token entirely' becomes: an omitted token is refused with no approval event, and the same stamp-less row is then approved by an explicit 0.\n\nIn WebSocketServer.test.ts:\n- `${route} preserves unnegotiated %s omission` becomes `${route} refuses unnegotiated %s omission without side effects`: refused with INVALID_INPUT, status unchanged, no approvedPlanRevision.\n- In 'keeps incapable sockets isolated, locked, and reset only by reconnect', the reconnected socket's final approval now sends approval('APPROVE_TASK', 4), so the test still proves that reconnect resets the lock.\n- Any other token-free approval in these three files that is only setup passes the explicit stored revision.\n\nKEEP UNCHANGED, because an explicit 0 is not an omission (architect-473624b4's comment on this task):\n- 'accepts an explicit 0 for a legacy row that has no stored revision';\n- 'an explicit 0 on a legacy stamp-less row authorizes revision 0';\n- 'moves a legacy stamp-less row off the effective 0 ...';\n- the HELD-OUT state/approvalRevision.acceptance.test.ts 'legacy missing revision remains effective zero for explicit approval'. It does not need the human sign-off its description mentions, because it is not edited.\n\nRun the three files and confirm the flipped tests FAIL against current code for the stated reason.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/server/planApproval.test.ts",
         "packages/moe-daemon/src/server/planApproval.integration.test.ts",
         "packages/moe-daemon/src/server/WebSocketServer.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/planApproval.test.ts",
-        "packages/moe-daemon/src/server/planApproval.integration.test.ts",
-        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
-        "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
-        "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
-      ],
-      "note": "Pins flipped, each citing CQ-F MODIFY_RAIL prop-5e7763ed. planApproval.test: store omission refusal moved to (F) (INVALID_INPUT field expectedPlanRevision, bytes/activity/broadcast unchanged); APPROVE_TASK and drag omissions share expectWireOmissionRefused (ERROR INVALID_INPUT, bytes unchanged, peer sees no TASK_UPDATED via PING/PONG barrier); hidden-token test now expects INVALID_INPUT (not MISMATCH). integration: omitted refused then explicit 0 approves. WS test: unnegotiated omission refused via refused() (bytes, activity, events, SPEED cancel, PONG barrier); reconnect final approval sends 4. taskExecutionPolicy: PROGRESSIONS row removed, replaced by D4 it.each over STRICT+RELAXED setups -> refusedWithoutWrites INVALID_INPUT. executionPolicySnapshot W5 table now carries code/codeName; omission row answers -32602 INVALID_INPUT, token rows NOT_READY. Explicit-0 tests and held-out acceptance file untouched. RED on Linux-native snapshot /tmp/moe-f04b-gate.QDPr1o (HEAD archive + overlays, lock-equal node_modules, env -i Linux PATH): exactly 15 flipped cases fail, rest green.",
-      "startedAt": "2026-10-25T22:19:46.711Z",
-      "completedAt": "2026-10-25T22:24:27.878Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -48,68 +38,48 @@
     {
       "stepId": "step-2",
       "description": "IMPLEMENT THE REFUSAL in packages/moe-daemon/src/state/taskStore.ts approveTask.\n\nOnly the two /ws human routes call state.approveTask: APPROVE_TASK, and UPDATE_TASK AWAITING_APPROVAL->WORKING (the board drag), at WebSocketServer.ts around lines 531 and 656. Relaxed moe.set_task_status and the SPEED/TURBO automatic approvals (CQ-F05) never reach it, so they stay token-free with their owners, as the description requires.\n\nAfter the existing status check, add: if expectedPlanRevision === undefined, throw invalidInput('expectedPlanRevision', <fixed message: approval must name the reviewed plan revision>). Use the same helper as the verified-local guard. This error handling runs before decode, compare, readiness and any write. A refusal therefore changes no bytes or activity, publishes nothing, and keeps a pending SPEED timer, because cancelSpeedModeTimeout runs only after the write.\n\nKeep everything else as it is:\n- An explicit 0 for a stamp-less row is still accepted.\n- null and malformed tokens still go through decodeSuppliedPlanRevision.\n- A stale token still gets PLAN_REVISION_MISMATCH.\n- The stamp still travels in the daemonOwned argument.\n- Unstamped history is never upgraded or backfilled. F04's existing \"(L) durable approval authorization\" tests pin this and must stay green unchanged.\n\nRewrite the approveTask comment that says ABSENCE is the only legacy opt-out, citing the rail. In packages/moe-daemon/src/server/WebSocketServer.ts, change ONLY the two comments that call omission the legacy approval (the APPROVE_TASK case and the UPDATE_TASK drag route); there is no behavior change in that file. assertApprovalCapabilities stays as it is: a negotiated socket still gets its own negotiation message first. Do not touch StateManager.approveTask's signature.\n\nRe-run the three test files: the flipped tests pass and the kept explicit-0 tests stay green.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/server/WebSocketServer.ts",
         "packages/moe-daemon/src/server/planApproval.test.ts",
         "packages/moe-daemon/src/server/planApproval.integration.test.ts",
         "packages/moe-daemon/src/server/WebSocketServer.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/state/taskStore.ts",
-        "packages/moe-daemon/src/server/WebSocketServer.ts",
-        "packages/moe-daemon/src/server/planApproval.test.ts"
-      ],
-      "note": "taskStore.approveTask: after the status check, `expectedPlanRevision === undefined` throws invalidInput('expectedPlanRevision', 'approval of task X must name the reviewed plan revision') before decode/compare/readiness/write; the token is then always decoded+compared and the stamp always travels in daemonOwned. Comment rewritten citing prop-5e7763ed. decodeSuppliedPlanRevision's message no longer tells clients to 'omit the field entirely to approve without a revision check' (now 'send the plan revision the approver reviewed'); no test pinned that text. WebSocketServer.ts: only the two route comments changed; assertApprovalCapabilities untouched; StateManager signature untouched.\nDEVIATION (rail-covered): six more legacy omission pins in F04's planApproval.test.ts 'durable approval authorization' group failed and were flipped with the rail citation: 'X without a token records no stamp' (4 rows) now asserts INVALID_INPUT and the row (incl. the older-stamp history row) unchanged on disk/cache/reload; the verified-local ordering test (2 rows) now asserts an omitted approveTask token is INVALID_INPUT ahead of readiness, while the token-free store PLAN_APPROVED write keeps F04's NOT_READY-then-INVALID_INPUT strict-guard ordering. The plan's 'must stay green unchanged' targeted the history/backfill pins, which pass unchanged.\nFocused, Linux-native snapshot /tmp/moe-f04b-gate.R3cykJ (HEAD archive + only my 8 owned paths; peer F07's dirty startStep.ts/untracked executionAuthorization.ts excluded): planApproval, planApproval.integration, WebSocketServer, taskExecutionPolicy, executionPolicySnapshot, approvalRevision.acceptance: 460/460; automaticApprovalRevision + submitPlan: 113/113.",
-      "startedAt": "2026-10-25T22:24:30.113Z",
-      "completedAt": "2026-10-25T22:27:46.989Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "UPDATE THE WIRE CONTRACT in docs/MCP_SERVER.md. Change only the sentences about omitted human-approval tokens:\n- Around line 2909, \"optional only for unnegotiated legacy clients ...\" now says both routes require expectedPlanRevision from every client. An omission is refused with -32602 / INVALID_INPUT before any write. An explicit 0 still approves a stamp-less row.\n- Around line 2913, the APPROVE_TASK request type makes expectedPlanRevision: number required. Make the UPDATE_TASK drag text match, wherever the doc describes it.\n- Around line 2954, in the token-free approvals bullet, drop the unnegotiated omitted-token APPROVE_TASK and drag. Replace \"stays accepted only until the human-approved deletion lands (CQ-F04b ...)\" with a statement that it was deleted by CQ-F04b under the human-approved CQ-F rail. Keep the relaxed set_task_status clause, and do not rewrite the CQ-F05 clause beyond what its landed behavior requires.\ndocs/PLAN_APPROVAL_FRESHNESS.md and docs/SCHEMA.md belong to CQ-F12 (task-72184c65), the epic's docs sweep. Do not edit them; a comment on F12 records the stale line.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ],
-      "modifiedFiles": [
-        "docs/MCP_SERVER.md"
-      ],
-      "note": "MCP_SERVER.md, 8 sentences: capability section says no-handshake admission is unchanged but both routes require the token (CQ-F04b, CQ-F rail); token is \"required from every client\", omission -32602/INVALID_INPUT before any write, explicit 0 still approves a stamp-less row; both request types now `expectedPlanRevision: number`; Token-rules omission bullet rewritten, \"no fallback to an unchecked approval\"; durable-authorization bullet: relaxed set_task_status is the remaining token-free path, SPEED/TURBO stamp their committed revision (CQ-F05, landed), revision-less human approval deleted by CQ-F04b, unstamped history never upgraded; verified-local bullet notes an omitted human token is refused before readiness. PLAN_APPROVAL_FRESHNESS.md/SCHEMA.md untouched (F12); stale lines listed in comment-dc06d662 on F12 task-72184c65.",
-      "startedAt": "2026-10-25T22:27:49.944Z",
-      "completedAt": "2026-10-25T22:28:35.063Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "VERIFY, ONCE, at full daemon scope, because this changes the /ws approval contract. Run fresh in the local gate setup: Linux-native node_modules, lockfile unchanged, Linux-only PATH, MOE_* unset.\n  cd packages/moe-daemon && npm test\nIt must exit 0; its output is the complete_task evidence. Also run `npx tsc --noEmit` in packages/moe-daemon (exit 0). Confirm all of these:\n- the dependencies CQ-F04c (JetBrains) and CQ-F04d (VS Code) are DONE, so both clients send the rendered token on every approval path;\n- CQ-F04e is DONE, so no setup test outside the three edited files approves token-free;\n- a grep shows no remaining token-free APPROVE_TASK in daemon tests except the intended refusal cases.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts"
-      ],
-      "note": "Gate: whole-repo `git archive` of HEAD d839d82 + only my 8 owned paths (cmp byte-equal to worktree), native Linux node_modules (/tmp/moe-linux-daemon.3EJTl5, package.json + lock equal modulo CR), env -i Linux-only PATH, MOE_* unset. `cd packages/moe-daemon && npm test` EXIT=0: 163 files passed, 4110 passed | 14 skipped (4124). `npx tsc --noEmit` exit 0. Log /tmp/moe-f04b-scripts/full-gate.log, snapshot /tmp/moe-f04b-gate.O71o18. (A first attempt archived only subdirs and failed initFiles.test's root .gitignore read; a snapshot artifact, not a code failure.) Confirmed: F04c, F04d, F04e DONE/landed; state.approveTask has exactly 2 callers (WebSocketServer.ts:533 drag, :658 APPROVE_TASK); every token-free APPROVE_TASK/approveTask in daemon tests is an intended refusal (StateManager.test:747 is not-found; the delivery/finalizeAttempt approve() helpers are qa_approve). No bytes changed in this step.",
-      "startedAt": "2026-10-25T22:28:42.939Z",
-      "completedAt": "2026-10-25T22:30:20.234Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW (load adversarial-self-review), over this task's diff. Check each of the following.\n- Is there any human route left that approves without a token? Cover APPROVE_TASK, the UPDATE_TASK drag, negotiated sockets, and unnegotiated sockets after a reconnect.\n- Does any refusal write bytes, append activity, broadcast to another socket, cancel a SPEED timer or touch approvedPlanRevision?\n- Are explicit 0 on a stamp-less row and stale-token PLAN_REVISION_MISMATCH unchanged? Do null, '' and other malformed tokens still give INVALID_INPUT?\n- Grep that state.approveTask still has exactly the two WS callers, and that relaxed set_task_status and SPEED/TURBO still bypass it.\n- Does every rewritten pin cite the rail?\n- Was the held-out acceptance file left untouched?\n- Does the diff stay free of the project's globalRails forbidden patterns?\nFix anything you find. If any byte changed, re-run step 4's command and submit that fresh output.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskStore.ts",
         "packages/moe-daemon/src/server/planApproval.test.ts"
-      ],
-      "note": "Adversarial review over the 8 owned paths, no defect found, no bytes changed, so step 4's gate stands. (1) Routes: APPROVE_TASK and the UPDATE_TASK AWAITING_APPROVAL->WORKING drag are the only state.approveTask callers. A negotiated socket is refused by assertApprovalCapabilities first; an unnegotiated or reconnected socket hits the store guard. No other /ws case approves plans: APPROVE_PROPOSAL is for rails, APPROVE_DECISION for chat decisions, REOPEN_TASK moves to BACKLOG. (2) The guard is a pure check under the mutex, before decode, readiness, the write and cancelSpeedModeTimeout. Tests pin no bytes/activity/broadcast/SPEED-cancel/stamp. (3) Unchanged: explicit 0 on a stamp-less row (3 kept tests plus the held-out acceptance, untouched), stale-token PLAN_REVISION_MISMATCH, and INVALID_INPUT for null and '' (typeof check) and the MALFORMED table. (4) Relaxed set_task_status and SPEED/TURBO still bypass approveTask; the F05 suites pass (113/113). (5) Every flipped pin cites prop-5e7763ed. (6) The forbidden-pattern scan of the added lines is empty. Theoretical: the new INVALID_INPUT message 'approval of task X must name the reviewed plan revision' reaches clients only as the frame message; the context is allowlisted to taskId.",
-      "startedAt": "2026-10-25T22:30:22.468Z",
-      "completedAt": "2026-10-25T22:30:59.637Z"
+      ]
     }
   ],
-  "planRevision": 12,
-  "status": "REVIEW",
+  "planRevision": 13,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Both rail preconditions are now human-APPROVED and verified intact: CQ-F prop-5e7763ed (10:01:20Z) and CQ-I prop-9d41b22b (10:17:22Z). Scope (a) only: every human approval route must carry the rendered expectedPlanRevision and refuse omission with INVALID_INPUT; existing unstamped approvals remain audit history; no other legacy behavior or execution/delivery profile is removed. dependsOn still gates WORKING on I01 (task-96526848, in REVIEW).",
+  "reopenCount": 1,
+  "reopenReason": "REGRESSION: the change breaks the CI/release onboarding smoke gate. The daemon change is correct and well tested, but an unlisted legacy pin outside the daemon was left un-revised.\n\nEvidence (Linux snapshot of HEAD 21471ae, owned files cmp-equal to 4c66cf1, daemon dist built, exit 0):\n- `node scripts/tests/onboarding.mjs` exits 1: `Timed out: board approval` (onboarding.mjs:194). The daemon logs the new guard: APPROVE_TASK INVALID_INPUT \"must name the reviewed plan revision\". Log: /tmp/moe-qa-f04b-onboarding.log.\n- onboarding.mjs:193 sends a token-free APPROVE_TASK `{ taskId: task.id }`, exactly what F04b deletes.\n- It is a merge/release gate: ci.yml:35/:190/:227, release.yml:58/:75/:77.\n- Probe in my /tmp snapshot only (no repo edit): adding `expectedPlanRevision: context.servedContext.planRevision` makes it PASS end-to-end (exit 0), so this is the only break.\n\nThis fails DoD 3 (legacy pins revised deliberately with the rail citation) and the epic rail \"Shared schema/protocol changes get broad regression\". Step 4's grep covered only daemon tests.\n\nVerified fine (keep as is):\n- daemon `npm test`: 164 files, 4148 passed | 14 skipped, EXIT=0. tsc --noEmit: 0.\n- Restoring the old taskStore.ts fails 21 of the new tests.\n- 2 approveTask callers; the guard runs before decode, readiness, the write and the SPEED cancel. Explicit 0, MISMATCH and malformed handling are unchanged. The held-out file is untouched. Pins cite the rail.\n- JetBrains and VS Code approveTask require the token. About 69 net LOC.\n- The docs/MCP_SERVER.md hunk is uncommitted (governor comment-dc85625c) and OK. Make sure the next landing carries it.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -144,17 +114,17 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:18:07.718Z",
-  "updatedAt": "2026-10-25T22:34:56.639Z",
+  "updatedAt": "2026-10-25T22:44:07.249Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:01:48.266Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-473624b4",
-    "architect-26ba32c3",
-    "worker-7d158765"
+    "qa-7c627d35"
   ],
   "blockedReason": null,
   "blockedResourceId": null,
@@ -163,20 +133,20 @@
   "priorBlockedReason": "F04b's explicit precondition requires human-approved rail reconciliation on every affected CQ epic before planning deletion. CQ-F prop-5e7763edb6c54d328c38bc49ad43d128 is APPROVED and resolves scope to revision-less human approvals only. Fresh CQ-I context still requires preserving legacy admission. Matching CQ-I MODIFY_RAIL prop-9d41b22b2bda4048910c6e55e98eafca has been filed and is PENDING. Await that approval; no speculative deletion plan. I01's additive plan is valid and remains a structural implementation dependency, but this hold is the missing rail approval, not dependency progress or REPL silence.",
   "blockedOnTaskIds": null,
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "Every changed legacy-pin or held-out test cites the human-approved MODIFY_RAIL; no supported JetBrains/VS Code approval action loses approval without an actionable refusal.",
+      "rejectedAt": "2026-10-25T22:42:41.363Z",
+      "rejectedBy": "qa-7c627d35"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T10:49:33.651Z",
   "planningNotes": {
     "approachesConsidered": "Option 1, chosen: refuse the omission once, inside taskStore.approveTask. Both human /ws routes funnel into it, and nothing else calls it; relaxed set_task_status uses updateTask directly, and SPEED/TURBO use daemonOwned. So one guard covers APPROVE_TASK and the board drag, and leaves the token-free daemon producers with their owners, as the description requires.\nOption 2, rejected: refuse in each WS route. That puts two guards in two places, and a third route could be added later without one.\nOption 3, rejected: make StateManager.approveTask's parameter required in TypeScript. Vitest does not type-check tests, and both production callers already pass the argument, so it adds a file for no enforced benefit.\nThe client work was split into CQ-F04c (JetBrains) and CQ-F04d (VS Code), and the incidental test fixtures into CQ-F04e. All three are dependencies, so no supported client ever loses approval, and this row stays at 6 files.",
@@ -236,6 +206,25 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "42c2fa49aa2774c09f4b847e51c21667488f2815",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-25T22:37:06Z",
+      "paths": [
+        ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json",
+        ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json",
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-25T22:44:07.248Z",
+      "treeId": "e37e35cd8e4e8bdf5567abf9353122d9d25e89d1",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -247,14 +236,18 @@
     "packages/moe-daemon/src/state/taskStore.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
     "docs/MCP_SERVER.md",
-    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json"
+    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json",
+    ".moe/tasks/task-3918d1190a3c4895ad5d924ad6d00f1d.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json",
+    ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-25T22:18:35Z",
-    "at": "2026-10-25T22:32:07.073Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-25T22:37:06Z",
+    "at": "2026-10-25T22:44:07.248Z"
   },
   "workStartedAt": "2026-10-25T22:19:46.711Z",
   "declaredFiles": [
@@ -279,5 +272,47 @@
     "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
     "packages/moe-daemon/src/state/taskStore.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts"
+  ],
+  "reviewCompletedAt": "2026-10-25T22:42:41.363Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Every changed legacy-pin or held-out test cites the human-approved MODIFY_RAIL; no supported JetBrains/VS Code approval action loses approval without an actionable refusal."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "scripts/tests/onboarding.mjs",
+        "line": 193,
+        "description": "Token-free APPROVE_TASK `{ taskId: task.id }` is now refused (INVALID_INPUT), so the CI/release onboarding smoke times out at 'board approval' (:194). Fix: moe.declare_files scripts/tests/onboarding.mjs, then send `expectedPlanRevision: context.servedContext.planRevision` (from the get_context on line 189). Add the rail citation comment the other flipped pins use (CQ-F MODIFY_RAIL prop-5e7763ed)."
+      },
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/onboarding.mjs",
+        "description": "Supply both outputs to complete_task: daemon `npm test` exit 0, and `node scripts/tests/onboarding.mjs` exit 0 with its PASS line (fresh daemon dist via npm run build, plus proxy dist). Extend step 4's grep to the whole repo (scripts/, moe-vscode/tests, moe-jetbrains/src/test; no node_modules/dist) and report it: no other token-free APPROVE_TASK or UPDATE_TASK->WORKING producer outside the intended refusal tests."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "REGRESSION: the change breaks the CI/release onboarding smoke gate. The daemon change is correct and well tested, but an unlisted legacy pin outside the daemon was left un-revised.\n\nEvidence (Linux snapshot of HEAD 21471ae, owned files cmp-equal to 4c66cf1, daemon dist built, exit 0):\n- `node scripts/tests/onboarding.mjs` exits 1: `Timed out: board approval` (onboarding.mjs:194). The daemon logs the new guard: APPROVE_TASK INVALID_INPUT \"must name the reviewed plan revision\". Log: /tmp/moe-qa-f04b-onboarding.log.\n- onboarding.mjs:193 sends a token-free APPROVE_TASK `{ taskId: task.id }`, exactly what F04b deletes.\n- It is a merge/release gate: ci.yml:35/:190/:227, release.yml:58/:75/:77.\n- Probe in my /tmp snapshot only (no repo edit): adding `expectedPlanRevision: context.servedContext.planRevision` makes it PASS end-to-end (exit 0), so this is the only break.\n\nThis fails DoD 3 (legacy pins revised deliberately with the rail citation) and the epic rail \"Shared schema/protocol changes get broad regression\". Step 4's grep covered only daemon tests.\n\nVerified fine (keep as is):\n- daemon `npm test`: 164 files, 4148 passed | 14 skipped, EXIT=0. tsc --noEmit: 0.\n- Restoring the old taskStore.ts fails 21 of the new tests.\n- 2 approveTask callers; the guard runs before decode, readiness, the write and the SPEED cancel. Explicit 0, MISMATCH and malformed handling are unchanged. The held-out file is untouched. Pins cite the rail.\n- JetBrains and VS Code approveTask require the token. About 69 net LOC.\n- The docs/MCP_SERVER.md hunk is uncommitted (governor comment-dc85625c) and OK. Make sure the next landing carries it.",
+      "rejectedAt": "2026-10-25T22:42:41.363Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Every changed legacy-pin or held-out test cites the human-approved MODIFY_RAIL; no supported JetBrains/VS Code approval action loses approval without an actionable refusal."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "scripts/tests/onboarding.mjs",
+          "line": 193,
+          "description": "Token-free APPROVE_TASK `{ taskId: task.id }` is now refused (INVALID_INPUT), so the CI/release onboarding smoke times out at 'board approval' (:194). Fix: moe.declare_files scripts/tests/onboarding.mjs, then send `expectedPlanRevision: context.servedContext.planRevision` (from the get_context on line 189). Add the rail citation comment the other flipped pins use (CQ-F MODIFY_RAIL prop-5e7763ed)."
+        },
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/onboarding.mjs",
+          "description": "Supply both outputs to complete_task: daemon `npm test` exit 0, and `node scripts/tests/onboarding.mjs` exit 0 with its PASS line (fresh daemon dist via npm run build, plus proxy dist). Extend step 4's grep to the whole repo (scripts/, moe-vscode/tests, moe-jetbrains/src/test; no node_modules/dist) and report it: no other token-free APPROVE_TASK or UPDATE_TASK->WORKING producer outside the intended refusal tests."
+        }
+      ]
+    }
   ]
 }

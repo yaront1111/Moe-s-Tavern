@@ -13,7 +13,9 @@ import {
   readDaemonInfoResult,
   resolveToolCallName,
   rewriteToolsListResult,
+  stampExecutionIdentity,
   toolNameStyleFromEnv,
+  type ExecutionIdentityRefusal,
 } from './utils.js';
 
 // Reconnect configuration
@@ -79,11 +81,11 @@ function writeError(message: string, code = -32000) {
  * the id is unknown), so a hung client can correlate the failure to its request
  * instead of waiting on a reply that never comes.
  */
-function writeErrorWithId(id: string | number | null, message: string, code = -32000) {
+function writeErrorWithId(id: string | number | null, message: string, code = -32000, data?: Record<string, unknown>) {
   const payload = JSON.stringify({
     jsonrpc: '2.0',
     id,
-    error: { code, message }
+    error: { code, message, data }
   });
   safeStdoutWrite(payload + '\n');
 }
@@ -107,6 +109,49 @@ function extractRequestId(line: string): string | number | null {
     if (match[2] !== undefined) return Number(match[2]);
   }
   return null;
+}
+
+const requestIdOf = (msg: unknown): string | number | null => {
+  const id = (msg as { id?: unknown } | null)?.id;
+  return typeof id === 'string' || typeof id === 'number' ? id : null;
+};
+
+/**
+ * CQ-F09: the execution-identity fence for one stdin frame. A JSON-RPC batch
+ * (the daemon executes arrays) is checked element by element, so it cannot
+ * bypass the fence. Returns true when the frame must be re-serialized and
+ * false for the legacy path. On a refusal it writes the id-aware error(s),
+ * never echoing a value, and returns null: the frame is dropped, untracked.
+ */
+function fenceExecutionIdentity(parsed: unknown): boolean | null {
+  let stamped = false;
+  for (const element of Array.isArray(parsed) ? parsed : [parsed]) {
+    const result = stampExecutionIdentity(element, process.env);
+    if (typeof result === 'boolean') {
+      stamped = stamped || result;
+      continue;
+    }
+    writeIdentityRefusal(parsed, element, result);
+    return null;
+  }
+  return stamped;
+}
+
+function writeIdentityRefusal(parsed: unknown, element: unknown, refusal: ExecutionIdentityRefusal): void {
+  const tool = (element as { params?: { name?: unknown } } | null)?.params?.name;
+  const data = { tool, codeName: refusal.codeName };
+  writeLog(`Refused ${String(tool)}: ${refusal.codeName}`);
+  if (!Array.isArray(parsed)) {
+    writeErrorWithId(requestIdOf(parsed), refusal.message, refusal.code, data);
+    return;
+  }
+  const message = `batch refused: ${refusal.message}`;
+  const ids = parsed.map(requestIdOf).filter((id) => id !== null);
+  if (ids.length === 0) {
+    writeErrorWithId(null, message, refusal.code, data);
+    return;
+  }
+  safeStdoutWrite(JSON.stringify(ids.map((id) => ({ jsonrpc: '2.0', id, error: { code: refusal.code, message, data } }))) + '\n');
 }
 
 function writeLog(message: string) {
@@ -522,7 +567,10 @@ function connect(projectPath: string): void {
           const renamed = resolveToolCallName(parsed, toolAliases);
           const mutated = injectWorkerId(parsed, process.env.MOE_WORKER_ID);
           const stamped = injectRunnerIdentity(parsed, process.env.MOE_RUNNER_PROCESS_STARTED_AT, process.env.MOE_RUNNER_HOST);
-          const payload = (renamed || mutated || stamped) ? JSON.stringify(parsed) : line;
+          // Last, so it checks the daemon name and exactly what is forwarded.
+          const identity = fenceExecutionIdentity(parsed);
+          if (identity === null) continue;
+          const payload = (renamed || mutated || stamped || identity) ? JSON.stringify(parsed) : line;
           if (TOOL_NAME_STYLE === 'underscore' && parsed.method === 'tools/list' &&
               parsed.id !== undefined && parsed.id !== null) {
             pendingToolsListIds.add(parsed.id);

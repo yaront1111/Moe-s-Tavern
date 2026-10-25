@@ -17,6 +17,7 @@ import {
   exposeToolName,
   rewriteToolsListResult,
   resolveToolCallName,
+  stampExecutionIdentity,
   type DaemonInfo,
 } from './utils.js';
 
@@ -581,5 +582,135 @@ describe('injectRunnerIdentity', () => {
     expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 'moe.claim_next_task' } }, STARTED, HOST)).toBe(false);
     expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 'moe.claim_next_task', arguments: [1] } }, STARTED, HOST)).toBe(false);
     expect(injectRunnerIdentity({ method: 'tools/call', params: { name: 7, arguments: {} } }, STARTED, HOST)).toBe(false);
+  });
+});
+
+describe('stampExecutionIdentity', () => {
+  const SESSION = 'worker-t@2026-10-26T00:00:00Z';
+  const FULL = { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123', MOE_ATTEMPT_GENERATION: '7' };
+  const IDENTITY = { attemptId: 'attempt-0123', generation: 7, sessionId: SESSION };
+  const MARK = 'Qz7Marker';
+  const call = (name: string, args: unknown = { taskId: 't1', stepId: 's1' }) =>
+    ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+  const refusal = (code: number, codeName: string) => expect.objectContaining({ code, codeName });
+  const messageOf = (result: unknown) => String((result as { message?: unknown }).message);
+
+  it('is the legacy proxy when the session carries no identity, even for presented fields', () => {
+    for (const env of [{}, { MOE_SESSION_ID: '', MOE_ATTEMPT_ID: '  ', MOE_ATTEMPT_GENERATION: '' }]) {
+      for (const args of [{ taskId: 't1' }, { taskId: 't1', attemptId: 'x' }, { taskId: 't1', generation: '7' }]) {
+        for (const name of ['moe.get_context', 'moe.start_step']) {
+          const msg = call(name, { ...args });
+          expect(stampExecutionIdentity(msg, env)).toBe(false);
+          expect(msg.params.arguments).toEqual(args);
+        }
+      }
+    }
+  });
+
+  it('stamps only sessionId from a session-only env', () => {
+    for (const name of ['moe.get_context', 'moe.start_step']) {
+      const msg = call(name, { taskId: 't1' });
+      expect(stampExecutionIdentity(msg, { MOE_SESSION_ID: SESSION })).toBe(true);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', sessionId: SESSION });
+    }
+  });
+
+  it('stamps all three onto start_step, with generation a number, and only sessionId onto get_context', () => {
+    const step = call('moe.start_step');
+    expect(stampExecutionIdentity(step, FULL)).toBe(true);
+    expect(step.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
+    const ctx = call('moe.get_context', { taskId: 't1' });
+    expect(stampExecutionIdentity(ctx, FULL)).toBe(true);
+    expect(ctx.params.arguments).toEqual({ taskId: 't1', sessionId: SESSION });
+  });
+
+  it('accepts presented values equal to the env and completes the rest', () => {
+    for (const presented of [IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 }, { sessionId: SESSION }]) {
+      const msg = call('moe.start_step', { taskId: 't1', stepId: 's1', ...presented });
+      expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
+    }
+  });
+
+  it('refuses a substituted field without coercing or mutating', () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['moe.start_step', { attemptId: 'attempt-other' }], ['moe.start_step', { attemptId: null }],
+      ['moe.start_step', { generation: '7' }], ['moe.start_step', { generation: 8 }], ['moe.start_step', { generation: null }],
+      ['moe.start_step', { sessionId: `${SESSION} ` }], ['moe.get_context', { sessionId: 'worker-t@other' }],
+    ];
+    for (const [name, presented] of cases) {
+      const msg = call(name, { taskId: 't1', ...presented });
+      const result = stampExecutionIdentity(msg, FULL);
+      expect(result).toEqual(refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'));
+      expect(msg.params.arguments).toEqual({ taskId: 't1', ...presented });
+      expect(messageOf(result)).not.toContain('attempt-');
+    }
+  });
+
+  it('refuses start_step on a partial attempt env, while get_context still gets sessionId', () => {
+    for (const env of [{ MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' }, { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_GENERATION: '7', MOE_ATTEMPT_ID: ' ' }]) {
+      const step = call('moe.start_step');
+      expect(stampExecutionIdentity(step, env)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+      expect(step.params.arguments).toEqual({ taskId: 't1', stepId: 's1' });
+      const ctx = call('moe.get_context', { taskId: 't1' });
+      expect(stampExecutionIdentity(ctx, env)).toBe(true);
+      expect(ctx.params.arguments).toEqual({ taskId: 't1', sessionId: SESSION });
+    }
+  });
+
+  it('refuses a malformed env value, adding nothing and echoing nothing', () => {
+    const cases: Array<[string, Record<string, string>, string]> = [
+      ...['0', '07', '+7', '7.0', '1e3', ' 7', '7 ', '7\n', '-1', 'abc', '9007199254740992']
+        .map((g): [string, Record<string, string>, string] => ['moe.start_step', { ...FULL, MOE_ATTEMPT_GENERATION: g }, g]),
+      ...[`a b${MARK}`, `a/b${MARK}`, `\u00e9${MARK}`, MARK + 'a'.repeat(129 - MARK.length)]
+        .map((a): [string, Record<string, string>, string] => ['moe.start_step', { ...FULL, MOE_ATTEMPT_ID: a }, a]),
+      ...[MARK + 'x'.repeat(256 - MARK.length), `${MARK}\nx`, `${MARK}\rx`, `${MARK}\u0000x`]
+        .flatMap((s): Array<[string, Record<string, string>, string]> =>
+          ['moe.start_step', 'moe.get_context'].map((name): [string, Record<string, string>, string] => [name, { ...FULL, MOE_SESSION_ID: s }, s])),
+    ];
+    for (const [name, env, bad] of cases) {
+      const msg = call(name, { taskId: 't1' });
+      const result = stampExecutionIdentity(msg, env);
+      expect(result).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+      expect(msg.params.arguments).toEqual({ taskId: 't1' });
+      expect(messageOf(result)).not.toContain(bad.trim());
+      expect(messageOf(result)).not.toContain(MARK);
+    }
+  });
+
+  it('accepts the boundary values', () => {
+    const env = { MOE_SESSION_ID: 's'.repeat(255), MOE_ATTEMPT_ID: 'a'.repeat(128), MOE_ATTEMPT_GENERATION: '9007199254740991' };
+    const msg = call('moe.start_step', {});
+    expect(stampExecutionIdentity(msg, env)).toBe(true);
+    expect(msg.params.arguments).toEqual({ attemptId: 'a'.repeat(128), generation: 9007199254740991, sessionId: 's'.repeat(255) });
+  });
+
+  it('fails closed when an argument cannot be read', () => {
+    const args = { taskId: 't1' };
+    Object.defineProperty(args, 'attemptId', { enumerable: true, get() { throw new Error('boom'); } });
+    expect(stampExecutionIdentity(call('moe.start_step', args), FULL)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+  });
+
+  it('matches every spelling of the carried tools and nothing else', () => {
+    const aliased = call('moe_start_step');
+    expect(resolveToolCallName(aliased, new Map())).toBe(true);
+    for (const msg of [call('moe_start_step'), call('start_step'), aliased]) {
+      expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
+    }
+    for (const name of ['moe.claim_next_task', 'moe.complete_step', 'moe.complete_task', 'moe.heartbeat',
+      'moe.get_activity_log', 'moe.reattach_attempt', 'constructor', 'toString', 'hasOwnProperty']) {
+      const msg = call(name);
+      expect(stampExecutionIdentity(msg, FULL)).toBe(false);
+      expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1' });
+    }
+    const odd: unknown[] = [null, 42, 'x', { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+      { method: 'tools/call', params: null }, { method: 'tools/call', params: { name: 7, arguments: {} } },
+      call('moe.start_step', null), call('moe.start_step', []), { method: 'tools/call', params: { name: 'moe.start_step' } }];
+    for (const shape of odd) {
+      const before = JSON.stringify(shape);
+      expect(stampExecutionIdentity(shape, FULL)).toBe(false);
+      expect(JSON.stringify(shape)).toBe(before);
+    }
   });
 });

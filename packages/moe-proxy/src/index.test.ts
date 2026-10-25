@@ -653,4 +653,83 @@ describe('moe-proxy graceful shutdown', () => {
     proxy.stdin!.end();
     await new Promise<void>((resolve) => { const t = setTimeout(() => { proxy.kill(); resolve(); }, 5000); proxy.on('exit', () => { clearTimeout(t); resolve(); }); });
   }, 20000);
+
+  // CQ-F09: spawn a proxy recording the raw frames the daemon receives and every stdout line.
+  async function spawnIdentityProxy(env: Record<string, string>, reply: (msg: { id?: unknown }) => string) {
+    const frames: string[] = [];
+    const lines: string[] = [];
+    let connected = false;
+    mockServer!.on('connection', (ws) => {
+      connected = true;
+      ws.on('message', (data) => { frames.push(data.toString()); ws.send(reply(JSON.parse(data.toString()))); });
+    });
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir, ...env }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let partial = '';
+    proxy.stdout!.on('data', (chunk) => {
+      const parts = (partial + chunk.toString()).split('\n');
+      partial = parts.pop()!;
+      lines.push(...parts.filter(Boolean));
+    });
+    const exited = new Promise<void>((resolve) => proxy.on('exit', () => resolve()));
+    await new Promise<void>((resolve) => { const c = setInterval(() => { if (connected) { clearInterval(c); resolve(); } }, 25); });
+    const waitFor = async (n: number) => { const t0 = Date.now(); while (lines.length < n && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 25)); };
+    const close = async () => { proxy.stdin!.end(); const t = setTimeout(() => proxy.kill(), 5000); await exited; clearTimeout(t); };
+    return { proxy, frames, lines, waitFor, close };
+  }
+  const IDENTITY_ENV = { MOE_WORKER_ID: 'worker-t', MOE_SESSION_ID: 'worker-t@2026-10-26T00:00:00Z',
+    MOE_ATTEMPT_ID: 'attempt-0123', MOE_ATTEMPT_GENERATION: '3', MOE_TOOL_NAME_STYLE: 'underscore' };
+  const ok = (msg: { id?: unknown }) => JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'ok' }] } });
+  const rpc = (id: number, name: string, args: Record<string, unknown>) =>
+    JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+
+  it('carries the session execution identity to start_step and get_context under the underscore alias style', async () => {
+    const servedContext = { attemptId: 'attempt-0123', generation: 3, receiptId: 'ctxreceipt-1', packetId: 'sha256:ab' };
+    const served = JSON.stringify({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: JSON.stringify({ servedContext }) }] } });
+    const p = await spawnIdentityProxy(IDENTITY_ENV, (msg) => (msg.id === 2 ? served : ok(msg)));
+    p.proxy.stdin!.write([rpc(1, 'moe_start_step', { taskId: 'task-1', stepId: 'step-1' }),
+      rpc(2, 'moe_get_context', { taskId: 'task-1' }), rpc(3, 'moe.claim_next_task', { statuses: ['WORKING'] })].join('\n') + '\n');
+    await p.waitFor(3);
+    const sessionId = IDENTITY_ENV.MOE_SESSION_ID;
+    expect(p.frames.map((f) => JSON.parse(f).params)).toEqual([
+      { name: 'moe.start_step', arguments: { taskId: 'task-1', stepId: 'step-1', workerId: 'worker-t', attemptId: 'attempt-0123', generation: 3, sessionId } },
+      { name: 'moe.get_context', arguments: { taskId: 'task-1', workerId: 'worker-t', sessionId } },
+      { name: 'moe.claim_next_task', arguments: { statuses: ['WORKING'], workerId: 'worker-t' } },
+    ]);
+    expect(p.lines).toContain(served);
+    await p.close();
+  }, 20000);
+
+  it('refuses caller substitution without forwarding, keeping stdin framing', async () => {
+    const p = await spawnIdentityProxy(IDENTITY_ENV, ok);
+    const step = { taskId: 'task-1', stepId: 'step-1' };
+    p.proxy.stdin!.write([
+      rpc(10, 'moe.start_step', { ...step, attemptId: 'attempt-other' }),
+      JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'ping' }),
+      `[${rpc(12, 'moe.start_step', { ...step, generation: '3' })}]`,
+      rpc(13, 'moe.start_step', { ...step, attemptId: 'attempt-0123', generation: 3, sessionId: IDENTITY_ENV.MOE_SESSION_ID }),
+    ].join('\n') + '\n');
+    await p.waitFor(4);
+    await p.close();
+    const data = { tool: 'moe.start_step', codeName: 'EXECUTION_IDENTITY_SUBSTITUTED' };
+    const out = p.lines.map((l) => JSON.parse(l));
+    expect(out).toHaveLength(4);
+    expect(out.filter((r) => r.id === 10)).toEqual([
+      { jsonrpc: '2.0', id: 10, error: { code: -32003, message: expect.stringContaining('attemptId'), data } }]);
+    expect(out.find(Array.isArray)).toEqual([
+      { jsonrpc: '2.0', id: 12, error: { code: -32003, message: expect.stringMatching(/^batch refused: .*generation/), data } }]);
+    expect(out.filter((r) => r.id === 11 || r.id === 13).map((r) => r.result?.content?.[0]?.text)).toEqual(['ok', 'ok']);
+    expect(p.frames.map((f) => JSON.parse(f).id)).toEqual([11, 13]);
+  }, 20000);
+
+  it('is the legacy proxy when the session carries no identity', async () => {
+    const p = await spawnIdentityProxy({ MOE_WORKER_ID: '', MOE_SESSION_ID: '', MOE_ATTEMPT_ID: '', MOE_ATTEMPT_GENERATION: '' }, ok);
+    const line = '{"jsonrpc":"2.0",  "id":20,"method":"tools/call","params":{ "name":"moe.start_step","arguments":{"taskId":"task-1", "attemptId":"x"}}}';
+    p.proxy.stdin!.write(line + '\n');
+    await p.waitFor(1);
+    expect(p.frames).toEqual([line]);
+    expect(p.lines).toEqual([ok({ id: 20 })]);
+    await p.close();
+  }, 20000);
 });
