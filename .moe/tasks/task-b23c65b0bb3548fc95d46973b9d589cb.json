@@ -17,108 +17,80 @@
     {
       "stepId": "step-1",
       "description": "Shared bounded raw Git read in the existing read-only trust envelope (packages/moe-daemon/src/util/cachedPlanPaths.ts). Behavior-preserving for every current caller: submit_plan's findCachedPlanPaths and delivery/requiredChecks.ts keep calling `git(label, args, opts)` exactly as today.\n(a) Move the hardened invocation that runGit builds inline into private helpers (e.g. readOnlyGitArgs(cwd, args) / readOnlyGitEnv()) and make runGit use them with byte-identical argv/env: strip every GIT_* variable; GIT_CONFIG_NOSYSTEM=1; GIT_CONFIG_GLOBAL=NUL on win32 else /dev/null; GIT_NO_LAZY_FETCH=1; GIT_TERMINAL_PROMPT=0; `--no-optional-locks --no-replace-objects -c protocol.allow=never -c safe.directory=<cwd>`; windowsHide; no shell. The `config` exit-1 special case stays in runGit only.\n(b) Export `interface GitHeadResult { stdout: Buffer; truncated: boolean; exitCode: number | null; stderr: string }`, `type GitHeadRunner = (args: string[], cwd: string, timeout: number, maxBytes: number) => Promise<GitHeadResult>` and `runGitHead`, built on the same promisified execFile and helpers plus `encoding: 'buffer'` and `maxBuffer: maxBytes`. maxBytes must be a positive safe integer (else throw before spawning). Exit 0 -> { stdout, truncated: false, exitCode: 0, stderr: '' }. stdout overflow (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' with a Buffer error.stdout; verified on Node 24: Node kills the child and keeps exactly the first maxBuffer bytes) -> { stdout: error.stdout.subarray(0, maxBytes), truncated: true, exitCode: null }. An ordinary non-zero exit (numeric error.code, error.killed falsy) resolves { stdout, truncated: false, exitCode: code, stderr: first stderr line, max 240 chars } so the caller interprets codes such as git grep's 1 = no match. Spawn errors (ENOENT), timeouts and signals are rethrown unchanged.\n(c) openProjectGit gains an optional 4th parameter `head: GitHeadRunner = runGitHead` and returns the existing `git` closure with one added method (Object.assign): `head(label, args, maxBytes)` runs head(args, root, remaining, maxBytes) on the SAME canonical root and SAME shared deadline, with the same 'budget exhausted before the step started' guard and the same failure(`git ${label}`, error) wrapping. Trust checks, BUDGET_MS, MAX_BUFFER, describeFailure and findCachedPlanPaths stay unchanged.\nTests, appended to src/util/cachedPlanPaths.test.ts (its hoisted vi.mock of node:child_process execFile is exactly what these unit tests need; never put real-git tests there): (1) exit 0 returns a Buffer, truncated false, exitCode 0; (2) overflow returns exactly the first maxBytes bytes with truncated true; (3) exit 1 resolves exitCode 1 with the first stderr line; (4) a killed/timeout error and an ENOENT error reject; (5) runGitHead sends the same hardened argv/env as runGit (safe.directory=<cwd> exactly once, a stubbed GIT_DIR removed, NOSYSTEM/GLOBAL/NO_LAZY_FETCH/TERMINAL_PROMPT set, windowsHide true, encoding 'buffer', maxBuffer = maxBytes); (6) maxBytes 0, -1 and 1.5 reject before execFile is called; (7) openProjectGit(...).head uses cwd = realpath(root) and a timeout no larger than the remaining shared budget, and after the deadline throws 'git <label>: budget exhausted before the step started' without calling the head runner (mock performance.now like the existing deadline test). Every existing test in the file stays byte-unchanged and green. Error handling: no new catch swallows an error it does not name; overflow and ordinary non-zero exit are the only non-throwing outcomes.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/util/cachedPlanPaths.ts",
         "packages/moe-daemon/src/util/cachedPlanPaths.test.ts"
-      ],
-      "note": "QA reopen revalidation: the existing runGitHead/read-only helpers and shared-deadline head closure are intact and require no fix. All 189 focused tests passed freshly in /tmp/moe-c02-reopen.TFDDNB (native Linux deps with JSON-identical lockfile, scrubbed environment); raw helper tests included. Both helper files unchanged. Shared checkout has extensive peer/pre-existing dirt, left untouched. Size exception prop-674c207614b84b69b1d5851a6ae03d5b filed and #governors notified; runtime additions +393/-6, tests +549/-0 at c9c2643. Empty modifiedFiles is intentional for this already-landed step.",
-      "startedAt": "2026-10-25T08:36:14.699Z",
-      "completedAt": "2026-10-25T08:37:45.363Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Create packages/moe-daemon/src/context/repositorySource.ts, the new home for CQ-C context providers (import StateManager as a TYPE only; no runtime import of src/state), with the request/result contract and pure validation. It is a library: do NOT register an MCP tool and do NOT wire it into get_context. Activation, the packet (C01) and docs are later tasks.\nContract (export all):\n- type SourcePurpose = 'source' | 'pattern' | 'caller' | 'config' | 'test'.\n- type SourceQuery = { id: string; purpose: SourcePurpose; op: 'read'; path: string } | { id: string; purpose: SourcePurpose; op: 'search'; literal: string; paths?: string[] }.\n- type SourceItemStatus = 'served' | 'truncated' | 'omitted' | 'missing' | 'refused' | 'unavailable'.\n- interface SourceMatch { path: string; line: number; text: string }.\n- interface SourceItem { id; purpose; op; status; reason?: string (present for every status except served); path?; oid?; mode?; size?; content?: string; matches?: SourceMatch[]; bytes: number }. bytes = UTF-8 bytes served (content for a read; sum of path + text over search matches).\n- interface RepositorySource { manifest: { commit: string }; items: SourceItem[] (exactly one per query, in query order, ids preserved); complete: boolean (true iff every item is served); limitations: string[] (sorted unique codes); bytes: number (sum of item bytes) }.\n- SOURCE_LIMITS defaults: timeBudgetMs 3000 (may be raised to at most 10000), maxQueries 32, maxFileBytes 65536, maxSearchBytes 65536, maxMatches 200, maxTotalBytes 262144, maxLiteralChars 200, maxScopePaths 16, maxPathspecChars 24000. options.limits may lower any limit; a non-positive, non-integer or above-ceiling value is INVALID_INPUT, never clamped.\n- The manifest is a full lowercase 40- or 64-hex Git COMMIT id: immutable and content-addressed. Never a ref name, HEAD, the working tree or an uncommitted overlay.\nExport validateSourceRequest(commit, queries, limits). It throws invalidInput(field, reason) (code MoeErrorCode.INVALID_INPUT, codeName 'INVALID_INPUT') before any process, lock or filesystem access for: commit not /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/; queries not an array, empty, or longer than maxQueries; a query that is not a plain object; unknown op or purpose; id not a non-empty string of at most 128 chars, or duplicated; a read path or search scope that is not exactly its own normalizeAffectedFile() form (refuses '../x', 'a/../b', '/etc/passwd', 'C:/x', a backslash path like 'a\\b', './a', 'a//b', leading/trailing spaces) or contains NUL, U+FFFD, C0/C1 controls, U+2028 or U+2029 (same rule as the private normalizedPath in delivery/requiredChecks.ts; mirror it, do not export it); a literal that is empty, longer than maxLiteralChars, or contains NUL, CR or LF (git -F treats newlines as several patterns); more than maxScopePaths scopes; and a sum of (length + 3) over every distinct pathspec the lookup will pass (each path and scope plus all of its ancestor prefixes) above maxPathspecChars, which keeps the one bounded ls-tree under the Windows command-line limit.\nTests: new packages/moe-daemon/src/context/repositorySource.test.ts. This file must NOT vi.mock node:child_process, because step 4 adds real-git fixtures to it. One it.each row per refusal listed above, each asserting { code: MoeErrorCode.INVALID_INPUT, codeName: 'INVALID_INPUT' } and the field; plus valid read and search requests pass, and a limits override above the ceiling is refused.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/repositorySource.ts",
         "packages/moe-daemon/src/context/repositorySource.test.ts"
-      ],
-      "note": "Revalidated landed SourceQuery/SourceItem/RepositorySource contracts and pure validation (including sparse arrays, normalization, UTF-8 path representation, commit ids, limits and pathspec ancestor budget). No requested QA repair in this step; no bytes changed. Existing request-validation cases passed in fresh focused baseline (189 total, /tmp/moe-c02-reopen.TFDDNB/baseline.log). No registration or activation changes. TDD skill loaded; new failing tests/fix belong to step 5.",
-      "startedAt": "2026-10-25T08:37:53.142Z",
-      "completedAt": "2026-10-25T08:37:59.824Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Add the daemon-wide concurrency bound to repositorySource.ts. A small FIFO semaphore class SourceSlots(limit) with run<T>(timeoutMs, fn): Promise<T> waits at most timeoutMs for a slot, rejects with Error('budget exhausted waiting for a git slot') when the wait times out, and always releases in finally. A waiter whose wait timed out is removed from the queue (and its timer is cleared when it is granted), so a later release can never hand a slot to a dead waiter, which would leak the slot forever. Export one shared instance SOURCE_SLOTS = new SourceSlots(4) as the default, injectable through options.slots for tests. Add the wrappers readRepositorySource hands to openProjectGit: limitedRun(slots, run) and limitedHead(slots, head) acquire a slot within the timeout openProjectGit passes, then call the real runner with that timeout minus the time spent waiting. When nothing is left they refuse with the same budget message without calling the runner. Waiting for a slot can therefore never extend a request past its deadline.\nTests (repositorySource.test.ts): (1) with limit 2 and a deferred fake runner, 5 concurrent calls never have more than 2 in flight (record the maximum) and run in FIFO order; (2) a waiter that times out rejects with the budget message, and once the holders release the full limit is available again (two new calls start immediately), proving no leak; (3) a runner that throws still releases its slot; (4) the wrapper passes the reduced timeout to the runner, and refuses without calling it when the wait used the whole budget (vi.useFakeTimers or a controlled clock; restore real timers in afterEach, see mem gotcha-vitest-fake-timers-order-and-real-io). Error handling: every acquire path settles exactly once.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/context/repositorySource.ts",
         "packages/moe-daemon/src/context/repositorySource.test.ts"
-      ],
-      "note": "Revalidated the existing FIFO SourceSlots semaphore, timeout removal, finally release and deadline-reducing wrappers; no changes needed for the reopen. All source-slot tests passed in the fresh focused baseline (189 tests total, /tmp/moe-c02-reopen.TFDDNB/baseline.log). Shared SOURCE_SLOTS(4) and bounded per-request deadlines remain unchanged.",
-      "startedAt": "2026-10-25T08:38:03.091Z",
-      "completedAt": "2026-10-25T08:38:08.791Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "Add readRepositorySource(projectRoot, commit, queries, options?: { limits?, run?, head?, slots? }): Promise<RepositorySource>. It is read-only, must be called outside the state mutex, and is bounded by ONE shared deadline: const git = await openProjectGit(projectRoot, limitedRun(slots, run), limits.timeBudgetMs, limitedHead(slots, head)). This step covers the trust envelope, the manifest, path classification and reads; step 5 adds searches and the total byte cap.\n1. validateSourceRequest runs first: INVALID_INPUT, nothing spawned.\n2. Any openProjectGit failure (Git missing, timeout, root ending in /*, Git toplevel is not the project root (a project nested in another repository), partial-clone/promisor/core.worktree) makes every item 'unavailable' with reason `repository: <message first line>`, plus the limitation 'repository-unavailable'. Never fall back to reading the filesystem.\n3. git('rev-parse --verify', ['rev-parse', '--verify', '--end-of-options', `${commit}^{commit}`]) must print exactly the commit. A tree or blob id, or an unknown object, makes every item 'unavailable' with reason `manifest: <message first line>`.\n4. ONE listing: git('ls-tree', ['--literal-pathspecs', 'ls-tree', '-z', '-l', '--full-tree', commit, '--', ...pathspecs], { maxBuffer: 1048576 }), where pathspecs are every read path and search scope plus all their ancestor prefixes, deduplicated. Parse each NUL-terminated record with /^(100644|100755|120000|040000|160000) (blob|tree|commit) ([0-9a-f]{40}|[0-9a-f]{64}) +(\\d+|-)\\t([\\s\\S]+)$/. Unterminated or unparsable output makes the affected items 'unavailable' with 'git ls-tree: unparsable output'. Paths of unrelated children are only used for prefix comparison and need no normalization.\nGit behavior verified on 2.43, which the classifier must handle: when one pathspec forces descent into a directory D, ls-tree prints D's direct children instead of D itself. So D exists as a tree iff it is printed with 040000 OR any printed entry starts with `D/`. A blocking symlink (120000) or gitlink (160000) is printed only because its own prefix is a pathspec, which is why ancestors are always listed.\nClassify each read path and scope, in order:\n- an ancestor that is 120000: refused 'symlink-ancestor';\n- an ancestor that is 160000: refused 'submodule';\n- an ancestor that is a regular blob: missing 'not-in-manifest';\n- the entry itself 120000: refused 'symlink';\n- the entry itself 160000: refused 'submodule';\n- a tree: refused 'not-a-file' for a read, a valid scope for a search;\n- absent: missing 'not-in-manifest' for a read, missing 'scope-not-in-manifest' for a scope.\nGit paths are exact and case-sensitive on every platform. Symlinks are never followed.\n5. Reads of regular blobs (100644/100755) use git.head('cat-file', ['cat-file', 'blob', oid], limits.maxFileBytes):\n- exitCode not 0: 'unavailable' `git cat-file: <stderr>`;\n- not truncated but the byte length differs from the ls-tree size: 'unavailable' 'size-mismatch';\n- any NUL byte: refused 'binary';\n- when truncated, cut back to the last complete UTF-8 sequence first;\n- decode with new TextDecoder('utf-8', { fatal: true }); a failure is refused 'not-utf8';\n- size above maxFileBytes: truncated 'file-byte-cap' with the decoded prefix;\n- otherwise served.\nAlways report path, oid, mode, size and bytes.\n6. A per-item failure (budget exhausted, slot timeout, killed, ENOENT) makes only that item 'unavailable' with the error's first line. Items run concurrently through the slots. items.length always equals queries.length, complete is true iff every item is served, and the limitation 'committed-bytes-only' is always present.\nTests (real Git, repositorySource.test.ts). The fixture helper builds disposable repositories under os.tmpdir() only, with plumbing as in src/tools/submitPlan.test.ts cachedBranch(): `hash-object -w --no-filters --stdin`, `update-index --add --cacheinfo <mode>,<oid>,<path>` (120000/160000 entries need no filesystem symlink, so this runs on Windows), write-tree, commit-tree, update-ref refs/heads/fixture. It runs with an env that strips EVERY inherited GIT_* variable, sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL to the null device, sets fixture author/committer, and uses its own GIT_INDEX_FILE inside the fixture .git. It must never write to the project checkout. Pass timeBudgetMs 10000 for slow Windows runners.\nCases, each asserting exact status, reason and content:\n(1) a served read gives exact bytes, oid, mode 100644, size and bytes, complete true; mode 100755 is also served;\n(2) a missing path gives missing/not-in-manifest while a sibling query is still served, complete false, items in query order;\n(3) a symlink entry gives refused/symlink with no content;\n(4) lnk/x.ts under a symlinked directory gives refused/symlink-ancestor;\n(5) a gitlink at the path and as an ancestor gives refused/submodule;\n(6) a directory read gives refused/not-a-file, also when another query reads a file inside it (the descent case);\n(7) a path whose ancestor is a regular file gives missing/not-in-manifest;\n(8) a blob with NUL gives refused/binary;\n(9) a latin-1 blob gives refused/not-utf8;\n(10) a file over a lowered maxFileBytes, with a multi-byte character straddling the cap, gives truncated/file-byte-cap; content is valid UTF-8, bytes <= cap, size is the full size;\n(11) immutability: after a second commit changes the file AND the fixture working-tree file is rewritten, reading the first commit returns the first commit's bytes;\n(12) a project directory nested inside the fixture repository makes every item unavailable, with a reason naming the toplevel mismatch;\n(13) a well-formed unknown commit, and a tree id passed as the commit, make every item unavailable with a 'manifest:' reason;\n(14) with fake run/head runners and a mocked clock, an exhausted deadline makes the remaining items unavailable /budget exhausted/ and no runner call starts after it;\n(15) an invalid request through readRepositorySource gives INVALID_INPUT with zero runner calls.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/context/repositorySource.ts",
         "packages/moe-daemon/src/context/repositorySource.test.ts"
-      ],
-      "note": "Revalidated existing immutable commit-only reads, single bounded listing, symlink/gitlink ancestor refusal, UTF-8 truncation, size-mismatch and failure statuses. No changes required here; fresh focused baseline passes the real-Git read/refusal cases (189 total). Read-only fixture Git operations remain restricted to disposable os.tmpdir roots with inherited GIT_* scrubbed. Repository local config is intentionally not globally masked; the confirmed QA output-format defect will be fixed narrowly in the step-5 grep argv/parser.",
-      "startedAt": "2026-10-25T08:39:08.409Z",
-      "completedAt": "2026-10-25T08:39:58.486Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "Complete readRepositorySource with searches, the deterministic total byte cap and limitations.\nSearch runs git.head('grep', ['--literal-pathspecs', 'grep', '-F', '-z', '-n', '-I', '--no-color', '--full-name', '-e', literal, commit, '--', ...scopes], limits.maxSearchBytes), and only when every scope classified in step 4 as a valid tree or regular file. Otherwise the item takes that scope's missing/refused status and reason: a missing scope must never become an empty served search, which would be a false negative. Never pass --no-index, --untracked, --cached or --recurse-submodules. Tree grep reads committed blobs only and skips symlink and gitlink entries (verified on git 2.43).\nParse output records `<commit>:<path>\\0<line>\\0<text>\\n` (verified). Require the exact `${commit}:` prefix, a decimal line >= 1, path and text that decode as fatal UTF-8, and a path that passes the step-2 path rule. Outcomes:\n- exit 1: served with matches [] (a real negative for this commit, literal and scope set only);\n- any other non-zero exit: 'unavailable' `git grep: <stderr>`;\n- truncated output: parse complete records only, truncated 'search-byte-cap';\n- more than maxMatches: keep the first maxMatches, truncated 'match-cap';\n- any record dropped as undecodable or unrepresentable: truncated 'undecodable-match'.\nMatches keep Git's output order.\nApply the total byte cap after every item settles, walking items in QUERY order, so the result is deterministic whatever the completion order. An item whose bytes would push the running total past maxTotalBytes becomes omitted 'total-byte-cap', with content/matches removed and bytes 0.\nLimitations, sorted and unique:\n- always 'committed-bytes-only' (uncommitted worktree/overlay bytes are never part of the manifest);\n- 'literal-search-only' when any search ran (patterns and callers are textual matches, not resolved references; semantic analysis is C03's);\n- 'repository-unavailable' as in step 4.\nTests (real Git unless noted):\n(1) a served search returns exact path (one containing a space), line and text;\n(2) zero matches gives served with [];\n(3) a missing scope gives missing/scope-not-in-manifest, not served-empty; a symlinked scope gives refused/symlink; a scope under a gitlink gives refused/submodule;\n(4) a file scope and a directory scope both work;\n(5) a lowered maxSearchBytes gives truncated/search-byte-cap with only complete records; maxMatches 1 gives truncated/match-cap;\n(6) a symlink whose target text contains the literal produces no match;\n(7) items past maxTotalBytes in query order become omitted/total-byte-cap, and result bytes <= the cap;\n(8) a fake head runner completing in reverse query order omits exactly the same items as natural order;\n(9) limitations are exactly ['committed-bytes-only'] for reads only and ['committed-bytes-only', 'literal-search-only'] once a search ran.\nError handling: a grep failure affects only its own item.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/context/repositorySource.ts",
         "packages/moe-daemon/src/context/repositorySource.test.ts"
-      ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/context/repositorySource.ts",
-        "packages/moe-daemon/src/context/repositorySource.test.ts"
-      ],
-      "note": "QA-required delta only (+14/-4, net +10): grep now passes --no-column and decodeMatch drops NUL-containing text as undecodable-match. Real Git regression with local grep.column=true and raw NUL-record regression both failed first (served corrupted text '3\\0  hello') and passed after the two-line production fix. Added committed literal1.ts sibling and exactly-one-match assertion; removing grep --literal-pathspecs in a separate scratch snapshot now fails the named metacharacter test by returning both siblings. Fresh focused command: npx vitest run src/util/cachedPlanPaths.test.ts src/context/repositorySource.test.ts src/context/repositorySource.service.test.ts — exit 0, 191 passed. Logs: /tmp/moe-c02-reopen.TFDDNB/{output-shape-red.log,output-shape-green.log,focused-green.log}; pathspec mutant path recorded in /tmp/moe-c02-worker-9cda703c-mutant. All task files byte-compared with snapshot; no shared Git/dependency/peer changes.",
-      "startedAt": "2026-10-25T08:40:02.903Z",
-      "completedAt": "2026-10-25T08:42:06.018Z"
+      ]
     },
     {
       "stepId": "step-6",
       "description": "Add serveRepositorySource(state: StateManager, request: { taskId: string; commit: string; queries: SourceQuery[]; expectedPlanRevision?: number }, options?), returning RepositorySource & { taskId: string; planRevision: number }. This covers DoD 2: external analysis runs outside the fleet mutex, and the revision is revalidated before service.\n1. If state.mutex.isHeld(), throw before any lock, process or task read: new MoeError(MoeErrorCode.NOT_ALLOWED, 'repository source analysis must run outside the state mutex; call it from a blocking: true path (see submit_plan)', { taskId }, 'SOURCE_ANALYSIS_UNDER_MUTEX'). McpAdapter runs every non-blocking tool handler inside the global reentrant mutex, so this guard makes 'outside the mutex' structural, not a convention.\n2. Run validateSourceRequest. When expectedPlanRevision is present it must be a non-negative safe integer, else INVALID_INPUT 'expectedPlanRevision'.\n3. Under state.runExclusive:\n- task = state.getTask(taskId), else throw notFound('Task', taskId).\n- Decode its revision with the same rule as taskStore's private decodeStoredPlanRevision: absent means 0 (legacy record); present but not a non-negative safe integer is INVALID_INPUT 'planRevision' (fail closed). Mirror the rule here. Do not import or edit src/state/taskStore.ts, which WORKING task F04 is changing (epic rail: serialize overlapping files).\n- If expectedPlanRevision is given and differs, throw new MoeError(MoeErrorCode.STATE_CONFLICT, ..., { taskId, expectedPlanRevision, currentPlanRevision }, 'SOURCE_REVISION_MISMATCH') with no process started.\n4. Leave the lock and run readRepositorySource(state.projectPath, commit, queries, options).\n5. Under state.runExclusive again:\n- re-read the task; deleted means notFound;\n- decode the revision the same way;\n- if it differs from the captured one, throw new MoeError(MoeErrorCode.STATE_CONFLICT, `plan revision changed from ${captured} to ${current} during source analysis; nothing was served`, { taskId, servedForRevision: captured, currentPlanRevision: current }, 'SOURCE_REVISION_CHANGED') and discard the analysis;\n- otherwise return { taskId, planRevision: captured, ...result }.\nNever write task state, attempts, activity or receipts: packet/receipt identity is F06/C01's. Do not edit StateManager.ts, whose 1500-line budget is enforced by stateModules.test.ts.\nTests: new packages/moe-daemon/src/context/repositorySource.service.test.ts using ToolTestHarness (src/tools/toolTestHarness.ts: init, setupMoeFolder, createTask, then state.load()). The fake run answers --show-toplevel with the test dir's realpath, config with '', rev-parse with the commit and ls-tree with one blob record. The fake head parks on a deferred.\n(1) Called inside state.runExclusive, it rejects NOT_ALLOWED / SOURCE_ANALYSIS_UNDER_MUTEX and no runner is called.\n(2) While head is parked, `await state.runExclusive(async () => 'free')` resolves. Race it against a 2 s timer so a regression fails instead of hanging.\n(3) While parked, state.updateTask(taskId, { definitionOfDone: [...changed] }) advances planRevision; releasing head makes the serve reject STATE_CONFLICT / SOURCE_REVISION_CHANGED, and no content is returned.\n(4) While parked, state.updateTask(taskId, { priority: 'LOW' }) leaves the revision unchanged, and the serve resolves with taskId, planRevision and the served item.\n(5) The task deleted while parked gives NOT_FOUND.\n(6) An expectedPlanRevision mismatch gives STATE_CONFLICT / SOURCE_REVISION_MISMATCH with zero runner calls.\n(7) expectedPlanRevision -1, 1.5, '1' and null give INVALID_INPUT.\n(8) A task created without planRevision serves with planRevision 0.\n(9) Tasks created with planRevision 'x' and -1 give INVALID_INPUT naming planRevision, with zero runner calls.\n(10) An unknown task gives NOT_FOUND with zero runner calls.\n(11) The task JSON on disk is byte-identical after a successful serve.\nAssert code and codeName on every refusal.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "packages/moe-daemon/src/context/repositorySource.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/context/repositorySource.service.test.ts"
-      ],
-      "note": "Revalidated unchanged serveRepositorySource: pre-read isHeld guard, strict captured/expected revision decoding, external analysis outside mutex, second locked revision/deletion check, and no state writes. All 16 service tests passed freshly in the post-fix 191-test focused run; task-JSON byte invariance and two simultaneous serves sharing four default slots included. No service/test/StateManager/taskStore edits needed.",
-      "startedAt": "2026-10-25T08:42:09.437Z",
-      "completedAt": "2026-10-25T08:42:16.351Z"
+      ]
     },
     {
       "stepId": "step-7",
       "description": "Verification, run once, after all implementation steps. The completion evidence is a FRESH run of exactly `cd packages/moe-daemon && npm test` with exit 0; put its command, exitCode and output tail in moe.complete_task.verification. Also run `cd packages/moe-daemon && npx tsc --noEmit` (vitest does not type-check) and report its exit status in the step note.\nThis is the full daemon suite: the task changes a shared Git helper used by submit_plan and requiredChecks, so full regression applies.\nEnvironment:\n- On native Windows/macOS, run it in place.\n- In WSL, the shared checkout's node_modules is a Windows install and vitest fails with 'Cannot find native binding'. Do NOT npm install over it. Use the snapshot recipe in mem gotcha-linux-vitest-reuse-native-node-modules: git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json into a mktemp dir, symlink a native Linux node_modules directory, copy only this task's 5 files over it and cmp them against the worktree.\n- Scrub the seat environment (env -i with a Linux-only PATH, HOME, TMPDIR) so ambient MOE_* variables do not fail getContext tests (mem gotcha-daemon-tests-ambient-moe-worker-id).\nReport peer-dirty or pre-existing failures honestly, by name. Never edit, skip or weaken a test to get green. affectedFiles is empty on purpose: this step changes nothing.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "FRESH full named gate: cd packages/moe-daemon && npm test — exit 0, 161 test files passed, 3930 tests passed / 44 skipped (3974 total), 30.44s. Additional cd packages/moe-daemon && npx tsc --noEmit — exit 0. Snapshot /tmp/moe-c02-reopen-gate.rY1MJN archives fresh HEAD 3e2dbdab4e30883a3452e1df1d71502987c850d3 using the approved WSL path recipe, overlays and byte-compares exactly five task paths, uses native Linux node_modules with matching package-lock JSON, and runs env -i with Linux-only PATH/HOME/TMPDIR. Logs npm-test.log/typecheck.log and explicit exit-code files retained there. No shared dependency installation, Git write, peer-dirty override or weakened tests. settings.qualityGate was unset in context.",
-      "startedAt": "2026-10-25T08:42:41.440Z",
-      "completedAt": "2026-10-25T08:43:25.720Z"
+      "status": "PENDING",
+      "affectedFiles": []
     },
     {
       "stepId": "step-8",
       "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill). The epic's whole-diff review belongs to C11 (task-4e0264fc); isEpicFinal on this row is an artifact of its order 222.5, not of its scope.\nChecklist:\n- Two serves running at once and many SOURCE_SLOTS waiters: no slot leak, no deadlock, deadline honored while waiting.\n- No input reaches Git as an option or pathspec magic: --literal-pathspecs on ls-tree and grep, '-e' before the literal, '--' before paths.\n- A symlink or gitlink at every depth is refused, and the descent case is classified correctly.\n- No working-tree or overlay byte is ever served.\n- A missing, failed or timed-out search never reads as served-empty (C03's DoD: an absent analyzer never implies no helper).\n- The total cap is deterministic.\n- UTF-8 truncation lands on a character boundary.\n- Windows: no shell, command-line budget, NUL device. macOS: /var -> /private/var realpath.\n- Existing runGit/openProjectGit/findCachedPlanPaths/requiredChecks behavior is byte-identical.\n- The guard rejects callers under the mutex.\n- Every refusal is pinned by a named test.\nMutation proof, in a scratch copy of the snapshot and never in the shared checkout. Apply in one batch, then confirm the target test files go red and name the failing test for each (mem pattern-mutation-union-proves-every-test):\n- delete the isHeld guard;\n- skip the second revision check;\n- drop the symlink-ancestor branch;\n- skip removing timed-out waiters;\n- walk the total cap in completion order;\n- treat a missing scope as served-empty;\n- remove the size-mismatch check;\n- make runGitHead return an overflow as a full result.\nFix any surviving mutant with a test.\nConfirm the diff touches only the 5 planned files, registers no MCP tool, edits no .moe file, StateManager.ts or taskStore.ts, and runs no Git write outside disposable os.tmpdir() fixtures. If this review changes any byte, re-run the step 7 command and use that fresh output in complete_task.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "Adversarial review complete; no further project bytes changed. Reviewed bounded decoding, local config, option/pathspec isolation, all refusal/partial paths, concurrent slots/deadlines, immutable reads, revision revalidation and fixture-only Git writes. Eight planned mutations applied in one scratch batch: all killed by 11 named failures. Independent reopen mutants removing --no-column, NUL-text guard or grep --literal-pathspecs each fail exactly the new/strengthened regression. Evidence /tmp/moe-c02-review-mutants.rQmWFs/{check_mutations.py,summary.json}. Final five-path cmp/SHA256 checks still match the fresh gate snapshot; diff --check clean. Only the two step-5 paths changed in this round (+14/-4); helpers/service and peer paths untouched, no MCP/state/verified-local changes. Fresh full suite remains 3930 passed / 44 skipped (161 files), tsc exit 0. Handoff and local-Git-config gotcha memories written. Size proposal prop-674c207614b84b69b1d5851a6ae03d5b pending; QA approval must await APPROVED, not another reject of green work. Wrapper owns landing.",
-      "startedAt": "2026-10-25T08:43:30.692Z",
-      "completedAt": "2026-10-25T08:47:06.847Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
-  "planRevision": 34,
-  "status": "REVIEW",
+  "planRevision": 35,
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 1,
-  "reopenReason": "QA verified c9c2643 (on moe/work-2026-10-24) from a whole-repo git archive, using native Linux deps with a matching lockfile under env -i. `cd packages/moe-daemon && npm test` exit 0: 161 files, 3923 passed / 44 skipped. `npx tsc --noEmit` exit 0. DoD 1 (root/symlink/submodule escape refused) and DoD 2 (mutex guard plus revision revalidation) hold. 17 of 19 independent QA mutants were killed. Rejected for one silent-failure defect, one unpinned guard, and size:\n(1) DoD 'Partial/missing source remains explicit': the project's local Git config can change grep's output shape, and the provider then serves corrupted match text as status 'served'. Confirmed with real git 2.43.\n(2) A mutant that drops `--literal-pathspecs` from the grep argv survives all 189 focused tests. The ls-tree mutant is equivalent, because ls-tree does not glob, so it needs no test.\n(3) Net 936 LOC with no CQ-C size-exception rail. Route this through a rail exception, not a re-slice.\nEverything else passed, so keep the fix small. Then re-run `npm test` fresh and supply its output.",
+  "reopenCount": 2,
+  "reopenReason": "QA round 2 on fcc0a4e. The gate is green: on a fresh whole-repo archive, `cd packages/moe-daemon && npm test` exits 0 (161 files, 3960 passed / 15 skipped) and `tsc --noEmit` exits 0. All three round-1 fixes are pinned: removing each one fails its own named test.\n\nREJECT: two repo-local-state escapes in the searchTree grep argv (repositorySource.ts:238). I missed both in round 1. Both reproduce end to end on the fcc0a4e provider with real git 2.43.\n(A) Local `submodule.recurse=true` makes grep recurse into a populated submodule. An unscoped search then returns served and complete:true, with a match at sub/s.txt, which is content from inside a gitlink. Reads and scopes refuse that same gitlink as 'submodule'.\n(B) `-I` takes \"binary\" from attributes in the working tree, info/attributes and local config. An untracked `.gitattributes` line `a.ts -diff` turns a search of committed a.ts, which contains the literal, into served/[]/complete:true. That is a silent false negative caused by uncommitted bytes.\nEvidence is in comment-a518c26a.\n\n\"Partial/missing source remains explicit.\" has now failed twice, so this goes back to PLANNING. That fits: the plan prescribed this argv. Keep the fix small (two flags plus two real-Git tests) and do not re-slice. The pending exception prop-674c2076 lists only the round-1 fixes, so the architect should file an updated exception that also covers these fixes and ping #governors. QA approval still waits for APPROVED.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -135,42 +107,48 @@
       "author": "worker-9cda703c",
       "content": "QA reopen repaired with only +14/-4 across repositorySource.ts and its test (net +10). Added --no-column, NUL-text refusal, real-Git grep.column fixture, and committed literal1.ts pathspec sibling. Two new regressions were red before the production fix; removal of each of --no-column, NUL guard and grep --literal-pathspecs now independently fails exactly its regression. Fresh full gate: 161 files, 3930 passed / 44 skipped; tsc --noEmit exit 0. Eight original plan mutants also killed. Evidence: /tmp/moe-c02-reopen-gate.rY1MJN; mutation directory named in handoff memory. Size exception prop-674c207614b84b69b1d5851a6ae03d5b remains pending; #governors notified. Per QA request, keep green work in REVIEW and gate QA approval on APPROVED rather than re-rejecting/re-slicing landed bytes.",
       "timestamp": "2026-10-25T08:45:33.948Z"
+    },
+    {
+      "id": "comment-a518c26af2b441f4971ec3fc8fa1ef27",
+      "author": "qa-b0c1741e",
+      "content": "QA round 2 (qa-b0c1741e) on fcc0a4e: REJECT. The provider has two new escapes that come from repo-local state. Both existed in round 1 and I missed them there.\n\nVerified OK:\n- fcc0a4e is on moe/work-2026-10-24, with parent 3bb12fc. Its source delta is exactly repositorySource.ts (+2/-2) and repositorySource.test.ts (+12/-2), plus the wrapper's board records. The snapshot's five task paths match the commit blobs.\n- Test gate, on a fresh whole-repo `git archive fcc0a4e` (/tmp/qa-c02r2.ZO0AVV) with native Linux deps (lockfile equal) and env -i:\n  - `cd packages/moe-daemon && npm test`: exit 0. 161 files, 3960 passed / 15 skipped.\n  - `npx tsc --noEmit`: exit 0.\n- The reopen fixes are pinned (harness /tmp/qa-c02r2-harness/mut.py). Dropping --no-column, the NUL-text guard or grep --literal-pathspecs each fails exactly its named test. Dropping both column guards fails 2 tests. Baseline passes 130/130.\n- These local settings are already neutralised by the existing flags, so no action is needed: grep.patternType=perl, grep.extendedRegexp, color.ui and color.grep=always, core.ignoreCase, grep.lineNumber and grep.fullName=false, grep.threads, and sparse checkout.\n\nDefect A, DoD 'Root/symlink escape is refused.':\n- Cause: repo-local `submodule.recurse=true` makes `git grep <commit>` recurse into populated, active submodules. git-config documents that submodule.recurse applies to grep.\n- Result: provider at fcc0a4e, real git 2.43, unscoped search 'hello' with gitlink `sub`. It returns status served and complete true, and the matches include {path:'sub/s.txt', line:1, text:'hello from SUBMODULE'}.\n- Why it matters: reads and scopes at or under a gitlink are refused with 'submodule', but search serves exactly those bytes. The submodule's `.git` gitfile is a worktree file and can point outside the root.\n- Fix: verified that `--no-recurse-submodules` stops the recursion even with the config set.\n\nDefect B, DoD 'Partial/missing source remains explicit.':\n- Cause: `-I` decides binary from attributes, which come from the working tree/index (even an untracked .gitattributes), .git/info/attributes, local core.attributesFile and diff.<driver>.binary.\n- Result: provider at fcc0a4e with an untracked `.gitattributes` containing `a.ts -diff` (git status `?? .gitattributes`). A search scoped to the committed a.ts, which contains 'hello', returns status served, matches [] and complete true. That is a false negative caused by uncommitted bytes, which breaks 'committed-bytes-only'.\n- Fix: with `-a`/`--text`, git never consults attributes, so a.ts matches. A binary blob's record then contains a NUL, so the existing guard makes it explicit truncated/undecodable-match.\n\nRepros:\n- /tmp/qa-c02r2-harness/{probe-sub.sh, probe-attrs2.sh, probe-config.sh}\n- Provider end-to-end probe, in a scratch copy and not the shared tree: /tmp/qa-c02r2-e2e.hY99zc/repo/packages/moe-daemon/src/context/qaProbe.test.ts",
+      "timestamp": "2026-10-25T09:11:59.989Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:28.025Z",
-  "updatedAt": "2026-10-25T08:47:46.415Z",
+  "updatedAt": "2026-10-25T09:14:04.308Z",
   "dependsOn": [],
   "metrics": {
     "firstClaimAt": "2026-10-24T21:14:23.632Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 16,
-    "rejectCount": 1,
-    "reopenCount": 1
+    "rejectCount": 2,
+    "reopenCount": 2
   },
   "contextFetchedBy": [
-    "worker-9cda703c",
     "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5",
-    "step-6",
-    "step-7",
-    "step-8"
-  ],
+  "stepsCompleted": [],
   "failedDodItems": [
     {
       "item": "Partial/missing source remains explicit.",
       "rejectedAt": "2026-10-25T08:34:15.877Z",
+      "rejectedBy": "qa-b0c1741e"
+    },
+    {
+      "item": "Root/symlink escape is refused.",
+      "rejectedAt": "2026-10-25T09:12:48.532Z",
+      "rejectedBy": "qa-b0c1741e"
+    },
+    {
+      "item": "Partial/missing source remains explicit.",
+      "rejectedAt": "2026-10-25T09:12:48.532Z",
       "rejectedBy": "qa-b0c1741e"
     }
   ],
@@ -209,7 +187,9 @@
     "packages/moe-daemon/src/context/repositorySource.ts",
     "packages/moe-daemon/src/context/repositorySource.test.ts",
     ".moe/tasks/task-076a0bd3f09e4ce4ae4bbc6bb122d2ed.json",
-    ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json"
+    ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json",
+    ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json"
   ],
   "completionSummary": "QA reopen fixed narrowly in repositorySource.ts and repositorySource.test.ts (+14/-4, net +10): grep --no-column pins local config output; NUL match text becomes explicit truncated/undecodable-match; committed literal1.ts sibling pins --literal-pathspecs. Two new tests reproduced corruption before the production fix. Focused suite: 191 passed. Fresh full daemon suite: 161 files, 3930 passed / 44 skipped; tsc --noEmit exit 0. Eight original mutations plus three reopen-specific guard removals all killed in scratch; final task-path hashes still match verified snapshot. Helpers/service unchanged; no MCP activation, state writes, verified-local changes or peer-byte edits. Handoff and gotcha memories updated. EPIC size proposal prop-674c207614b84b69b1d5851a6ae03d5b remains pending; #governors notified, QA approval must wait for APPROVED. Wrapper owns landing.",
   "commits": [
@@ -271,6 +251,22 @@
       "treeId": "05a78b4aaf0b9a0a3244cf53dde964a1ca365ee7",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "0814323f13b1a97cc5b03708034cbc871b936c05",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T09:02:04Z",
+      "paths": [
+        ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+        ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T09:14:04.308Z",
+      "treeId": "03721e89ae5ffa5c3d8288894ec56f22a1c13847",
+      "status": "PLANNING",
+      "pushed": true
     }
   ],
   "unattributedPaths": [
@@ -278,35 +274,63 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-9cda703c@2026-10-25T08:34:35Z",
-    "at": "2026-10-25T08:47:46.415Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T09:02:04Z",
+    "at": "2026-10-25T09:14:04.308Z"
   },
-  "reviewCompletedAt": "2026-10-25T08:34:15.877Z",
+  "reviewCompletedAt": "2026-10-25T09:12:48.532Z",
   "rejectionDetails": {
     "failedDodItems": [
+      "Root/symlink escape is refused.",
       "Partial/missing source remains explicit."
     ],
     "issues": [
       {
+        "type": "security",
+        "file": "packages/moe-daemon/src/context/repositorySource.ts",
+        "line": 238,
+        "description": "Add --no-recurse-submodules to the grep argv. With repo-local submodule.recurse=true, an unscoped or directory search serves sub/s.txt (status served) from a populated submodule that reads and scopes refuse as 'submodule'. The flag is verified to work while the config is set. Real-Git test: an active, populated gitlink `sub` plus `git config submodule.recurse true` gives no sub/ match. Dropping the flag must fail the test."
+      },
+      {
         "type": "other",
         "file": "packages/moe-daemon/src/context/repositorySource.ts",
         "line": 238,
-        "description": "Local repo config isn't masked. With `git config grep.column true` in the project, git 2.43 prints `<commit>:<path>\\0<line>\\0<col>\\0<text>\\n`. parseMatches folds the column into text, and the item comes back SERVED with text \"1\\u0000hello\" (QA real-git probe). Fix: pass `--no-column` in the grep argv, and treat a NUL in decoded match text as undecodable-match. Add a real-git fixture test with grep.column=true."
-      },
-      {
-        "type": "missing_feature",
-        "file": "packages/moe-daemon/src/context/repositorySource.test.ts",
-        "line": 296,
-        "description": "Removing `--literal-pathspecs` from the grep argv survives all 189 focused tests. The 'does not interpret literal or pathspec metacharacters' case has no sibling the glob could match. Without the flag, real git also matches `literal1.ts` for scope `literal[1].ts`. Add a committed sibling `literal1.ts` containing `-hello` and assert exactly one match. The ls-tree mutant is equivalent (ls-tree doesn't glob), so no test is needed there."
+        "description": "-I reads 'binary' from attributes in the worktree, the index, info/attributes and local config, so an untracked `.gitattributes` line `a.ts -diff` makes a search of committed a.ts return served with matches []. Use -a/--text instead: binary records then contain NUL and become undecodable-match. Real-Git tests: (1) with untracked -diff, the match is still served; (2) a NUL blob containing the literal gives truncated, not served-empty; (3) restoring -I fails them."
       },
       {
         "type": "other",
-        "description": "c9c2643 adds 942 lines and deletes 6 across the five source/test files: net 936 (393 runtime, 549 tests). That is over the 400 cap, and epic-9d76d843 has no size-exception rail. Do NOT re-slice landed bytes. File moe.propose_rail ADD_RAIL on epic-9d76d843 naming c9c2643, the five paths and +/- counts, 'grow only by QA-required fixes', and ping #governors. QA approves once the proposal is APPROVED."
+        "description": "The pending prop-674c207614b84b69b1d5851a6ae03d5b lists only the three round-1 fixes. File an updated EPIC size exception that adds these two QA-required fixes. Keep 'grow only by QA-required fixes', do not re-slice, and ping #governors. QA approves only once it is APPROVED, both defects are fixed, and a fresh `cd packages/moe-daemon && npm test` exits 0."
       }
     ]
   },
   "rejectionHistory": [
+    {
+      "reason": "QA round 2 on fcc0a4e. The gate is green: on a fresh whole-repo archive, `cd packages/moe-daemon && npm test` exits 0 (161 files, 3960 passed / 15 skipped) and `tsc --noEmit` exits 0. All three round-1 fixes are pinned: removing each one fails its own named test.\n\nREJECT: two repo-local-state escapes in the searchTree grep argv (repositorySource.ts:238). I missed both in round 1. Both reproduce end to end on the fcc0a4e provider with real git 2.43.\n(A) Local `submodule.recurse=true` makes grep recurse into a populated submodule. An unscoped search then returns served and complete:true, with a match at sub/s.txt, which is content from inside a gitlink. Reads and scopes refuse that same gitlink as 'submodule'.\n(B) `-I` takes \"binary\" from attributes in the working tree, info/attributes and local config. An untracked `.gitattributes` line `a.ts -diff` turns a search of committed a.ts, which contains the literal, into served/[]/complete:true. That is a silent false negative caused by uncommitted bytes.\nEvidence is in comment-a518c26a.\n\n\"Partial/missing source remains explicit.\" has now failed twice, so this goes back to PLANNING. That fits: the plan prescribed this argv. Keep the fix small (two flags plus two real-Git tests) and do not re-slice. The pending exception prop-674c2076 lists only the round-1 fixes, so the architect should file an updated exception that also covers these fixes and ping #governors. QA approval still waits for APPROVED.",
+      "rejectedAt": "2026-10-25T09:12:48.532Z",
+      "reopenCount": 2,
+      "failedDodItems": [
+        "Root/symlink escape is refused.",
+        "Partial/missing source remains explicit."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "packages/moe-daemon/src/context/repositorySource.ts",
+          "line": 238,
+          "description": "Add --no-recurse-submodules to the grep argv. With repo-local submodule.recurse=true, an unscoped or directory search serves sub/s.txt (status served) from a populated submodule that reads and scopes refuse as 'submodule'. The flag is verified to work while the config is set. Real-Git test: an active, populated gitlink `sub` plus `git config submodule.recurse true` gives no sub/ match. Dropping the flag must fail the test."
+        },
+        {
+          "type": "other",
+          "file": "packages/moe-daemon/src/context/repositorySource.ts",
+          "line": 238,
+          "description": "-I reads 'binary' from attributes in the worktree, the index, info/attributes and local config, so an untracked `.gitattributes` line `a.ts -diff` makes a search of committed a.ts return served with matches []. Use -a/--text instead: binary records then contain NUL and become undecodable-match. Real-Git tests: (1) with untracked -diff, the match is still served; (2) a NUL blob containing the literal gives truncated, not served-empty; (3) restoring -I fails them."
+        },
+        {
+          "type": "other",
+          "description": "The pending prop-674c207614b84b69b1d5851a6ae03d5b lists only the three round-1 fixes. File an updated EPIC size exception that adds these two QA-required fixes. Keep 'grow only by QA-required fixes', do not re-slice, and ping #governors. QA approves only once it is APPROVED, both defects are fixed, and a fresh `cd packages/moe-daemon && npm test` exits 0."
+        }
+      ]
+    },
     {
       "reason": "QA verified c9c2643 (on moe/work-2026-10-24) from a whole-repo git archive, using native Linux deps with a matching lockfile under env -i. `cd packages/moe-daemon && npm test` exit 0: 161 files, 3923 passed / 44 skipped. `npx tsc --noEmit` exit 0. DoD 1 (root/symlink/submodule escape refused) and DoD 2 (mutex guard plus revision revalidation) hold. 17 of 19 independent QA mutants were killed. Rejected for one silent-failure defect, one unpinned guard, and size:\n(1) DoD 'Partial/missing source remains explicit': the project's local Git config can change grep's output shape, and the provider then serves corrupted match text as status 'served'. Confirmed with real git 2.43.\n(2) A mutant that drops `--literal-pathspecs` from the grep argv survives all 189 focused tests. The ls-tree mutant is equivalent, because ls-tree does not glob, so it needs no test.\n(3) Net 936 LOC with no CQ-C size-exception rail. Route this through a rail exception, not a re-slice.\nEverything else passed, so keep the fix small. Then re-run `npm test` fresh and supply its output.",
       "rejectedAt": "2026-10-25T08:34:15.877Z",

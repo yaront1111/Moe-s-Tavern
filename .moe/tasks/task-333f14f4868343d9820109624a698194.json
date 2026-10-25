@@ -49,7 +49,7 @@
     }
   ],
   "planRevision": 7,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -69,7 +69,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:42:57.015Z",
-  "updatedAt": "2026-10-25T09:08:45.523Z",
+  "updatedAt": "2026-10-25T09:19:10.480Z",
   "declaredFiles": [
     "docs/SCHEMA.md"
   ],
@@ -77,12 +77,15 @@
     "firstClaimAt": "2026-10-25T08:46:00.695Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-25T09:19:10.480Z",
+    "wallClockMs": 1989785
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
     "worker-9cda703c",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "tier": "light",
   "effort": "medium",
@@ -163,5 +166,9 @@
   ],
   "touchedFiles": [
     "docs/SCHEMA.md"
-  ]
+  ],
+  "completedAt": "2026-10-25T09:19:10.480Z",
+  "reviewCompletedAt": "2026-10-25T09:19:10.480Z",
+  "reviewSummary": "Verified on completion commit 0e67ab2 (recorded in task.commits, on moe/work-2026-10-24). `git show --numstat` lists docs/SCHEMA.md 2 insertions / 2 deletions, so the TOOL witness worked and the contested path landed. The hunks are exactly line 330 (Epic interface epicRails comment, 1000→10000 chars each) and line 377 (\"Epic rail limits\" paragraph, 1000→10000 UTF-16 code units). No other hunk in SCHEMA.md. Re-ran `grep -n \"10000\" docs/SCHEMA.md`, exit 0, hits at 330/377 plus the pre-existing unrelated step-description caps at 569/688. `grep -c '10000 chars each\\|at most 10000 UTF-16'` = 2 at HEAD; the same grep for the 1000 text on 0e67ab2^ was 2, so the old text is gone. MAX_EPIC_RAIL_CHARS = 10000 in validators.ts:246, and proposeRail.test.ts:131 pins it with toBe(10000). Working tree docs/SCHEMA.md is clean against HEAD. The commit's only other paths are daemon-driven board state: this task's own JSON, and 07474ee4's JSON, which only drops this task from dependsOn (the cycle fix) and bumps updatedAt. No source, test or other doc file changed. No tests were needed or run for this two-line doc landing. The Moe-Contested trailer is expected, and the stat is the proof of landing. No oversize concern (4 doc lines).",
+  "requiredCheckAtDone": null
 }
