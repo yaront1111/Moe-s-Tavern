@@ -138,7 +138,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -161,16 +161,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:38:58.620Z",
-  "updatedAt": "2026-10-25T00:05:31.972Z",
+  "updatedAt": "2026-10-25T00:14:24.376Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T22:46:52.452Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-10-25T00:14:24.376Z",
+    "wallClockMs": 5251924
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
-    "worker-9cda703c"
+    "worker-9cda703c",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -219,7 +222,45 @@
     "packages/moe-daemon/src/delivery/requiredChecks.ts",
     "packages/moe-daemon/src/state/taskStore.ts",
     "packages/moe-daemon/src/tools/submitPlan.ts",
-    "packages/moe-daemon/src/delivery/requiredChecks.test.ts"
+    "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+    ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+    ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json"
   ],
-  "completionSummary": "Implemented daemon-owned approved required-check snapshots: exact tree/blob identity and current-definition digest, shared masked/bounded read-only Git envelope, strict detached fail-closed reader, caller-write stripping and atomic PLAN_SUBMITTED set/clear. Optional requiredCheckRevision accepts commit/tree IDs; measurement stays outside mutex and revalidates under lock. Legacy plans perform no new measurement. 66 new real-Git/injected regression tests cover identity, explicit revisions, all refusals, atomic write failure, caller ownership, stale decoding, cached retry and concurrency. Seven files: approved six plus necessary fake Git-reader fixture in existing V01a tests; all original assertions retained. Adversarial review caught and fixed lossy UTF-8 filename identity (3 RED failures before fix). All 8 required scratch mutations killed. Final full suite: 3718 passed/15 existing skipped; source and explicit test typechecks exit 0. Evidence: /tmp/moe-v01b-gkkgdstu/{manifest.json,run.log}, /tmp/moe-v01b-mutants-8k63rsyx/summary.json. Native Linux archive + owned overlays, source hashes/HEAD rechecked, no shared installs or peer edits. Handoff/gotcha saved in Serena; wrapper owns landing. No verified-local enablement, delivery predicate, context or docs change."
+  "completionSummary": "Implemented daemon-owned approved required-check snapshots: exact tree/blob identity and current-definition digest, shared masked/bounded read-only Git envelope, strict detached fail-closed reader, caller-write stripping and atomic PLAN_SUBMITTED set/clear. Optional requiredCheckRevision accepts commit/tree IDs; measurement stays outside mutex and revalidates under lock. Legacy plans perform no new measurement. 66 new real-Git/injected regression tests cover identity, explicit revisions, all refusals, atomic write failure, caller ownership, stale decoding, cached retry and concurrency. Seven files: approved six plus necessary fake Git-reader fixture in existing V01a tests; all original assertions retained. Adversarial review caught and fixed lossy UTF-8 filename identity (3 RED failures before fix). All 8 required scratch mutations killed. Final full suite: 3718 passed/15 existing skipped; source and explicit test typechecks exit 0. Evidence: /tmp/moe-v01b-gkkgdstu/{manifest.json,run.log}, /tmp/moe-v01b-mutants-8k63rsyx/summary.json. Native Linux archive + owned overlays, source hashes/HEAD rechecked, no shared installs or peer edits. Handoff/gotcha saved in Serena; wrapper owns landing. No verified-local enablement, delivery predicate, context or docs change.",
+  "commits": [
+    {
+      "sha": "d1116c8d27072bd72b8d870491012deb683e5212",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-9cda703c@2026-10-24T23:54:36Z",
+      "paths": [
+        ".moe/tasks/task-6177c9c4711542509512fa96cfee8b50.json",
+        ".moe/tasks/task-db57e0148a9d47839c4159aab8a8c16d.json",
+        "packages/moe-daemon/src/delivery/requiredChecks.snapshot.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.test.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+      ],
+      "recordedBy": "worker-9cda703c",
+      "recordedAt": "2026-10-25T00:05:53.538Z",
+      "treeId": "a25184b2bdda24eae3a9adfb19dbd70f0bc828df",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-9cda703c@2026-10-24T23:54:36Z",
+    "at": "2026-10-25T00:05:53.538Z"
+  },
+  "completedAt": "2026-10-25T00:14:24.376Z",
+  "reviewCompletedAt": "2026-10-25T00:14:24.376Z",
+  "reviewSummary": "APPROVED. Reviewed completion d1116c8 on moe/work-2026-10-24 (pushed). Archived blobs match the worker's SHA-256 manifest.\nQA re-ran on a full git-archive (Linux deps, env -i):\n- npm test: exit 0, 158 files, 3718 passed / 15 skipped.\n- tsc --noEmit: exit 0.\nDoD:\n1) The snapshot (tree, digest, byte-sorted blobs) lands in the same single write as planRevision 8 and survives reload. requiredCheckRevision is tested as commit and as tree. A resubmit without checks removes the key on disk and in memory. All on real Git.\n2) Each refusal is INVALID_INPUT with byte-identical task bytes: absent config or script path, unresolvable revision, non-git dir, nested toplevel, injected failures, 2001 entries, gitlink, lossy UTF-8, promisor/worktree config. An empty assertion root records entries: [].\n3) updateTask strips caller set/alter/null/undefined. The 6th parameter applies only on PLAN_SUBMITTED, whose sole caller is submitPlan. The reader returns null when stale or malformed and returns a detached copy.\n4) A plan with no checks writes no key and makes no runner call.\n5) Fresh run reproduced.\nQA mutations: 9/10 killed. The survivor (decoder Array.isArray) is equivalent: the catch returns null.\nRails: Git use is read-only and masked (protocol.allow=never). No fetch, writes, hooks or verified-local. The 7th file is fixture-only; V01a assertions are unchanged.\nSize: +464/-42 (net 422; production +186/-40). That is over 400 with no waiver. Not rejected: the slice is plan-mandated, the diff was fully reviewed with mutations, and the bytes are landed (CQ-M04 precedent).\nNotes for V01:\n- Measurement runs before the locked status check, so INVALID_INPUT precedes INVALID_STATE (per plan).\n- The reader doesn't re-check that entries are under protected paths.",
+  "requiredCheckAtDone": null
 }
