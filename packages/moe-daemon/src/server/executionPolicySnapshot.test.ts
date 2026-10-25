@@ -253,11 +253,14 @@ it('W4 CREATE_TASK never persists a client snapshot or planRevision', async () =
 describe('a strict approval is refused before any write', () => {
   const AWAITING = { status: 'AWAITING_APPROVAL', implementationPlan: [STEP] };
 
+  const NOT_READY = { code: -32003, codeName: 'EXECUTION_PROFILE_NOT_READY' };
   it.each([
-    { name: 'APPROVE_TASK without a token', type: 'APPROVE_TASK', payload: { taskId: 'task-1' } },
-    { name: 'APPROVE_TASK with the current token', type: 'APPROVE_TASK', payload: { taskId: 'task-1', expectedPlanRevision: 1 } },
-    { name: 'the UPDATE_TASK drag to WORKING', type: 'UPDATE_TASK', payload: { taskId: 'task-1', expectedPlanRevision: 1, updates: { status: 'WORKING' } } },
-  ])('W5 $name answers EXECUTION_PROFILE_NOT_READY', async ({ type, payload }) => {
+    // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is
+    // deleted, so an omitted token is refused as INVALID_INPUT ahead of readiness.
+    { name: 'APPROVE_TASK without a token', type: 'APPROVE_TASK', payload: { taskId: 'task-1' }, code: -32602, codeName: 'INVALID_INPUT' },
+    { name: 'APPROVE_TASK with the current token', type: 'APPROVE_TASK', payload: { taskId: 'task-1', expectedPlanRevision: 1 }, ...NOT_READY },
+    { name: 'the UPDATE_TASK drag to WORKING', type: 'UPDATE_TASK', payload: { taskId: 'task-1', expectedPlanRevision: 1, updates: { status: 'WORKING' } }, ...NOT_READY },
+  ])('W5 $name answers $codeName', async ({ type, payload, code, codeName }) => {
     await boot({ ...AWAITING, executionPolicySnapshot: STRICT });
     const client = await connect();
     const before = fileBytes();
@@ -266,7 +269,7 @@ describe('a strict approval is refused before any write', () => {
     const error = await client.waitFor((frame) => frame.type === 'ERROR' || frame.type === 'TASK_UPDATED');
     await client.flush();
 
-    expect(error).toMatchObject({ type: 'ERROR', operation: type, code: -32003, codeName: 'EXECUTION_PROFILE_NOT_READY' });
+    expect(error).toMatchObject({ type: 'ERROR', operation: type, code, codeName });
     // Only allowlisted context crosses /ws: the capability list stays server-side.
     expect(error.context).toEqual({ taskId: 'task-1' });
     expect(fileBytes()).toBe(before);

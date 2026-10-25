@@ -551,7 +551,6 @@ const PROGRESSIONS: Transition[] = [
     act: () => upd({ implementationPlan: [step('step-1')] }, 'PLAN_SUBMITTED'),
     status: 'PLANNING',
   },
-  { name: 'approveTask without a token', row: AWAITING_ROW, act: () => approve(), status: 'WORKING' },
   { name: 'approveTask with the current token', row: AWAITING_ROW, act: () => approve(1), status: 'WORKING' },
   {
     name: 'the complete_task shape (an assigned all-done WORKING row -> REVIEW, no seat in the update)',
@@ -764,6 +763,15 @@ describe('D. the strict-progression readiness backstop (DoD 5)', () => {
 
       expect((await createIn(status)).status).toBe(status);
     });
+  });
+
+  // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+  it.each([...STRICT_SETUPS, ...RELAXED_SETUPS])('D4 approveTask without a token is refused ahead of readiness under $name', async ({ settings, snapshot }) => {
+    await seed([withSnapshot(AWAITING_ROW, snapshot)], settings);
+
+    const error = await refusedWithoutWrites(() => approve(), 'INVALID_INPUT');
+
+    expect(error.context).toMatchObject({ field: 'expectedPlanRevision' });
   });
 
   it('D4 a readiness environment flag does not lift a refusal', async () => {

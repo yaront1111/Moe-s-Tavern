@@ -520,11 +520,13 @@ export class MoeWebSocketServer {
                   // SAME state.approveTask the board's APPROVE_TASK button uses so
                   // it stamps planApprovedAt and records PLAN_APPROVED — a raw
                   // updateTask would silently lose both. A board drag is a human
-                  // action, equivalent to clicking Approve. The optional
+                  // action, equivalent to clicking Approve. The required
                   // compare-and-swap token rides along so a drag of a card that
-                  // was re-planned since it was rendered is refused here too —
-                  // we are already inside withMutex, so the comparison is
-                  // serialized with the write. The rest of safeUpdates is still
+                  // was re-planned since it was rendered is refused here too,
+                  // and a drag that omits it is refused (CQ-F MODIFY_RAIL
+                  // prop-5e7763ed deleted revision-less approval) — we are
+                  // already inside withMutex, so the comparison is serialized
+                  // with the write. The rest of safeUpdates is still
                   // deliberately ignored on this route.
                   if (existing.status === 'AWAITING_APPROVAL' && newStatus === 'WORKING') {
                     this.assertApprovalCapabilities(ws, approvalToken);
@@ -646,11 +648,11 @@ export class MoeWebSocketServer {
             this.safeSend(ws, JSON.stringify({ type: 'ERROR', message: 'Missing taskId' }));
             return;
           }
-          // Forward the optional compare-and-swap token INSIDE the mutex, so the
+          // Forward the required compare-and-swap token INSIDE the mutex, so the
           // validation + revision comparison happen under the same lock as the
-          // status re-check and the write. Omitting the key is the only legacy
-          // (unchecked) approval; an explicit null is a malformed token and
-          // surfaces INVALID_INPUT from taskStore.
+          // status re-check and the write. An omitted key (CQ-F MODIFY_RAIL
+          // prop-5e7763ed deleted revision-less approval) and an explicit null
+          // both surface INVALID_INPUT from taskStore.
           const task = await this.withMutex(async () => {
             this.assertApprovalCapabilities(ws, message.payload.expectedPlanRevision);
             return this.state.approveTask(message.payload.taskId, message.payload.expectedPlanRevision);

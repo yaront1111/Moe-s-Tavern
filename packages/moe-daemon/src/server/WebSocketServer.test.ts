@@ -314,14 +314,17 @@ describe('MoeWebSocketServer Integration', () => {
         await refused(peer, approval('APPROVE_TASK'), 'INVALID_INPUT');
         client.ws.close();
         const reconnected = await connect();
-        expect((await request(reconnected, approval('APPROVE_TASK'))).type).toBe('TASK_UPDATED');
+        // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+        expect((await request(reconnected, approval('APPROVE_TASK', 4))).type).toBe('TASK_UPDATED');
       });
 
       for (const route of ['APPROVE_TASK', 'UPDATE_TASK']) {
-        it.each(['legacy', 'observe'])(`${route} preserves unnegotiated %s omission`, async profile => {
+        // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+        it.each(['legacy', 'observe'])(`${route} refuses unnegotiated %s omission without side effects`, async profile => {
           await seed({}, profile);
           const client = await connect();
-          expect((await request(client, approval(route))).type).toBe('TASK_UPDATED');
+          await refused(client, approval(route), 'INVALID_INPUT');
+          expect(state.getTask('task-1')).toMatchObject({ status: 'AWAITING_APPROVAL' });
           expect(state.getTask('task-1')).not.toHaveProperty('approvedPlanRevision');
         });
         it.each([undefined, null, '4', true, -1, 4.5, Number.MAX_SAFE_INTEGER + 1, 3, 5])(

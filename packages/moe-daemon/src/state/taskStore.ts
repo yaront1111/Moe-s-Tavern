@@ -81,15 +81,14 @@ export function decodeStoredPlanRevision(task: Task): number {
  * what a token is. Error handling contract: only a non-negative safe integer
  * passes; null, strings, booleans, fractional, negative, unsafe and non-finite
  * values throw INVALID_INPUT. Never coerce, and never degrade a malformed
- * token into the token-free legacy approval — that would turn a typo into an
- * unchecked approval.
+ * token into an unchecked approval — that would turn a typo into one.
  */
 function decodeSuppliedPlanRevision(value: unknown, taskId: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw invalidInput(
       'expectedPlanRevision',
       `approval token for task ${taskId} must be a non-negative safe integer (got ${String(value)}); ` +
-        'omit the field entirely to approve without a revision check'
+        'send the plan revision the approver reviewed'
     );
   }
   return value;
@@ -726,26 +725,28 @@ export async function approveTask(
   if (task.status !== 'AWAITING_APPROVAL') {
     throw new Error(`Cannot approve task in ${task.status} status, must be AWAITING_APPROVAL`);
   }
-  // Compare-and-swap on the plan revision the approver actually reviewed.
-  // ABSENCE is the only legacy opt-out (an old client; set_task_status relaxed
-  // mode never comes here, and SPEED/TURBO bind their own revision in
-  // submitPlan) — a supplied token is always validated and compared. This whole block runs before any write, so a
-  // refusal cancels no pending timer, mutates no bytes and publishes nothing.
-  let reviewed: number | undefined;
-  if (expectedPlanRevision !== undefined) {
-    reviewed = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
-    // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
-    // stored stamp still fails closed as INVALID_INPUT.
-    const current = decodeStoredPlanRevision(task);
-    if (reviewed !== current) throw planRevisionMismatch(taskId, reviewed, current);
+  // Compare-and-swap on the plan revision the approver actually reviewed. Only
+  // the two human /ws routes come here (set_task_status relaxed mode never
+  // does, and SPEED/TURBO bind their own revision in submitPlan), and each must
+  // name the revision: CQ-F MODIFY_RAIL prop-5e7763ed (human-approved
+  // 2026-10-25) deleted revision-less approval, so an omission is refused. This
+  // whole block runs before any write, so a refusal cancels no pending timer,
+  // mutates no bytes and publishes nothing.
+  if (expectedPlanRevision === undefined) {
+    throw invalidInput('expectedPlanRevision', `approval of task ${taskId} must name the reviewed plan revision`);
   }
+  const reviewed = decodeSuppliedPlanRevision(expectedPlanRevision, taskId);
+  // Absent stamp reads as 0, so a legacy row matches an explicit 0; a corrupt
+  // stored stamp still fails closed as INVALID_INPUT.
+  const current = decodeStoredPlanRevision(task);
+  if (reviewed !== current) throw planRevisionMismatch(taskId, reviewed, current);
   // Readiness is checked here too, before the write.
   assertProgressionReady(state, task, {}, 'WORKING', 'PLAN_APPROVED');
   // The reviewed revision travels in the store's private argument, so this one
-  // write stamps it beside the approval; a token-free approval stamps nothing.
+  // write stamps it beside the approval.
   const updated = await updateTask(
     state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_APPROVED', undefined,
-    reviewed === undefined ? undefined : { approvedPlanRevision: reviewed }
+    { approvedPlanRevision: reviewed }
   );
   // Only once the write has landed: a refused or failed approval keeps a pending
   // SPEED timer, whose queued callback re-checks the status under the mutex.

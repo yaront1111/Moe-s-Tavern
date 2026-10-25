@@ -200,6 +200,42 @@ describe('plan-approval revision compare-and-swap', () => {
     }
   }
 
+  /** PING is a barrier: every frame queued for `client` before the PONG, by type. */
+  async function framesUntilPong(client: ReturnType<typeof connectAndCollect>): Promise<string[]> {
+    client.ws.send(JSON.stringify({ type: 'PING' }));
+    const types: string[] = [];
+    for (;;) {
+      const frame = JSON.parse(await client.nextMessage()) as { type: string };
+      if (frame.type === 'PONG') return types;
+      types.push(frame.type);
+    }
+  }
+
+  /**
+   * CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less
+   * human plan approval is deleted. A wire approval that omits the token is
+   * refused before any write, and a second connected client sees no TASK_UPDATED.
+   */
+  async function expectWireOmissionRefused(frame: Record<string, unknown>, operation: string): Promise<void> {
+    setupMoeFolder();
+    createEpic();
+    const file = writeTask({ planRevision: 3 });
+    await start();
+    const client = connectAndCollect();
+    const peer = connectAndCollect();
+    await Promise.all([client.ready, peer.ready]);
+    const bytesBefore = fs.readFileSync(file, 'utf-8');
+
+    client.ws.send(JSON.stringify(frame));
+
+    const error = await client.nextOfType('ERROR');
+    expect(error).toMatchObject({ operation, code: INVALID_INPUT_CODE, codeName: 'INVALID_INPUT' });
+    expect(fs.readFileSync(file, 'utf-8')).toBe(bytesBefore);
+    expect(state.getTask('task-1')?.status).toBe('AWAITING_APPROVAL');
+    expect(state.getTask('task-1')).not.toHaveProperty('approvedPlanRevision');
+    expect(await framesUntilPong(peer)).not.toContain('TASK_UPDATED');
+  }
+
   /** Run an approval exactly the way production does: under the state mutex. */
   function approve(taskId: string, ...token: unknown[]) {
     return state.runExclusive(() =>
@@ -270,18 +306,6 @@ describe('plan-approval revision compare-and-swap', () => {
       await state.flushActivityLog();
       const events = state.getActivityLog(200).filter((e) => e.taskId === 'task-1');
       expect(events.some((e) => e.event === 'PLAN_APPROVED')).toBe(true);
-    });
-
-    it('approves with no token at all (legacy caller)', async () => {
-      setupMoeFolder();
-      createEpic();
-      writeTask({ planRevision: 7 });
-      await start();
-
-      const updated = (await approve('task-1')) as { status: string; planRevision?: number };
-
-      expect(updated.status).toBe('WORKING');
-      expect(updated.planRevision).toBe(7);
     });
 
     it('accepts an explicit 0 for a legacy row that has no stored revision', async () => {
@@ -430,6 +454,34 @@ describe('plan-approval revision compare-and-swap', () => {
       expect(published).toEqual([]);
       expect(state.getActivityLog(500).length).toBe(activityBefore);
     });
+
+    // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+    it('refuses an omitted token with INVALID_INPUT naming expectedPlanRevision, and writes nothing', async () => {
+      setupMoeFolder();
+      createEpic();
+      const file = writeTask({ planRevision: 7 });
+      await start();
+      await state.flushActivityLog();
+      const bytesBefore = fs.readFileSync(file, 'utf-8');
+      const published: string[] = [];
+      const unsubscribe = state.subscribe((event) => published.push(event.type));
+
+      const caught = await approve('task-1').then(() => null, (error: unknown) => error);
+
+      unsubscribe();
+      await state.flushActivityLog();
+      expect(caught).toBeInstanceOf(MoeError);
+      expect(caught).toMatchObject({
+        code: INVALID_INPUT_CODE,
+        codeName: 'INVALID_INPUT',
+        context: { field: 'expectedPlanRevision' },
+      });
+      expect(fs.readFileSync(file, 'utf-8')).toBe(bytesBefore);
+      expect(state.getTask('task-1')?.status).toBe('AWAITING_APPROVAL');
+      expect(state.getTask('task-1')).not.toHaveProperty('approvedPlanRevision');
+      expect(published).toEqual([]);
+      expect(state.getActivityLog(500).some((e) => e.taskId === 'task-1' && e.event === 'PLAN_APPROVED')).toBe(false);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -483,18 +535,9 @@ describe('plan-approval revision compare-and-swap', () => {
       expect(state.getTask('task-1')?.status).toBe('WORKING');
     });
 
-    it('approves when the key is omitted (legacy wire opt-out)', async () => {
-      setupMoeFolder();
-      createEpic();
-      writeTask({ planRevision: 2 });
-      await start();
-      const client = connectAndCollect();
-      await client.ready;
-
-      client.ws.send(JSON.stringify({ type: 'APPROVE_TASK', payload: { taskId: 'task-1' } }));
-
-      const frame = await client.nextOfType('TASK_UPDATED');
-      expect((frame.payload as { status: string }).status).toBe('WORKING');
+    // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+    it('refuses an omitted key with INVALID_INPUT and broadcasts nothing', async () => {
+      await expectWireOmissionRefused({ type: 'APPROVE_TASK', payload: { taskId: 'task-1' } }, 'APPROVE_TASK');
     });
 
     it('refuses a stale token with a machine-readable ERROR frame', async () => {
@@ -577,21 +620,12 @@ describe('plan-approval revision compare-and-swap', () => {
       expect(typeof payload.planApprovedAt).toBe('string');
     });
 
-    it('approves when the key is omitted (legacy board drag)', async () => {
-      setupMoeFolder();
-      createEpic();
-      writeTask({ planRevision: 3 });
-      await start();
-      const client = connectAndCollect();
-      await client.ready;
-
-      client.ws.send(JSON.stringify({
-        type: 'UPDATE_TASK',
-        payload: { taskId: 'task-1', updates: { status: 'WORKING' } },
-      }));
-
-      const frame = await client.nextOfType('TASK_UPDATED');
-      expect((frame.payload as { status: string }).status).toBe('WORKING');
+    // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+    it('refuses a board drag that omits the key with INVALID_INPUT and broadcasts nothing', async () => {
+      await expectWireOmissionRefused(
+        { type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { status: 'WORKING' } } },
+        'UPDATE_TASK'
+      );
     });
 
     it('refuses a stale token and keeps the task AWAITING_APPROVAL', async () => {
@@ -689,6 +723,7 @@ describe('plan-approval revision compare-and-swap', () => {
       expect(state.getTask('task-1')?.status).toBe('AWAITING_APPROVAL');
     });
 
+    // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
     it('does not use a stale token hidden in updates when the top-level key is omitted', async () => {
       setupMoeFolder();
       createEpic();
@@ -702,8 +737,11 @@ describe('plan-approval revision compare-and-swap', () => {
         payload: { taskId: 'task-1', updates: { status: 'WORKING', expectedPlanRevision: 1 } },
       }));
 
-      const frame = await client.nextOfType('TASK_UPDATED');
-      expect((frame.payload as { status: string }).status).toBe('WORKING');
+      // An omission refusal, not PLAN_REVISION_MISMATCH: the hidden 1 was never compared.
+      const frame = await client.nextOfType('ERROR');
+      expect(frame.code).toBe(INVALID_INPUT_CODE);
+      expect(frame.codeName).toBe('INVALID_INPUT');
+      expect(state.getTask('task-1')?.status).toBe('AWAITING_APPROVAL');
     });
   });
 
@@ -871,18 +909,19 @@ describe('plan-approval revision compare-and-swap', () => {
       ['APPROVE_TASK', { executionProfile: 'observe' }, {}],
       // History: an older stamp stays untouched, and 3 !== 4 is no current association.
       ['UPDATE_TASK', {}, { planRevision: 4, approvedPlanRevision: 3 }],
-    ])('%s without a token (settings %j) records no stamp over row %j', async (route, settings, row) => {
+    ])('%s without a token (settings %j) is refused and leaves the stamp of row %j as it was', async (route, settings, row) => {
+      // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
       const file = await boot({ planRevision: 7, ...row }, settings);
       const client = connectAndCollect();
       await client.ready;
 
       client.ws.send(approvalFrame(route));
-      await client.nextOfType('TASK_UPDATED');
+      expect(await client.nextOfType('ERROR')).toMatchObject({ operation: route, code: INVALID_INPUT_CODE, codeName: 'INVALID_INPUT' });
 
       // Own keys only: an own null or undefined stamp would be a write too.
       const stampOf = (seen: object) => Object.entries(seen).filter(([key]) => key === 'approvedPlanRevision');
       for (const seen of [fileRow(file), state.getTask('task-1')!, await reloaded()]) {
-        expect(seen).toMatchObject({ status: 'WORKING', planRevision: row.planRevision ?? 7 });
+        expect(seen).toMatchObject({ status: 'AWAITING_APPROVAL', planRevision: row.planRevision ?? 7 });
         expect(stampOf(seen)).toEqual(stampOf(row));
       }
     });
@@ -1040,10 +1079,16 @@ describe('plan-approval revision compare-and-swap', () => {
     it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
       ['live verified-local settings', { executionProfile: 'verified-local' }, {}],
       ['a stored verified-local floor under rolled-back settings', {}, { executionPolicySnapshot: STRICT }],
-    ])('%s: a token-free approval is NOT_READY today and INVALID_INPUT behind a stubbed gate', async (_label, settings, row) => {
+    ])('%s: an omitted approval token is INVALID_INPUT ahead of readiness; a token-free PLAN_APPROVED write is NOT_READY today and INVALID_INPUT behind a stubbed gate', async (_label, settings, row) => {
+      // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is
+      // deleted, so approveTask refuses the omission before readiness. The strict guard still backs the
+      // token-free store write below.
       const file = await boot({ planRevision: 1, ...row }, settings);
       const bytes = fs.readFileSync(file, 'utf-8');
-      await expectRefusal('task-1', undefined, { code: NOT_ALLOWED_CODE, codeName: 'EXECUTION_PROFILE_NOT_READY' });
+      const tokenFreeWrite = () => state.runExclusive(() => state.updateTask('task-1', { status: 'WORKING' }, 'PLAN_APPROVED'));
+      const omitted = await expectRefusal('task-1', undefined, { code: INVALID_INPUT_CODE, codeName: 'INVALID_INPUT' });
+      expect(omitted.context).toMatchObject({ field: 'expectedPlanRevision' });
+      await expect(tokenFreeWrite()).rejects.toMatchObject({ code: NOT_ALLOWED_CODE, codeName: 'EXECUTION_PROFILE_NOT_READY' });
 
       // Test-only stand-in for a future certified readiness gate; production
       // readiness is untouched and verified-local stays unavailable.
@@ -1051,8 +1096,7 @@ describe('plan-approval revision compare-and-swap', () => {
       const writes = vi.spyOn(state, 'writeEntity');
       const err = await expectRefusal('task-1', undefined, { code: INVALID_INPUT_CODE, codeName: 'INVALID_INPUT' });
       expect(err.context).toMatchObject({ field: 'expectedPlanRevision' });
-      await expect(state.runExclusive(() => state.updateTask('task-1', { status: 'WORKING' }, 'PLAN_APPROVED')))
-        .rejects.toMatchObject({ codeName: 'INVALID_INPUT' });
+      await expect(tokenFreeWrite()).rejects.toMatchObject({ codeName: 'INVALID_INPUT' });
       expect(writes).not.toHaveBeenCalled();
       expect(fs.readFileSync(file, 'utf-8')).toBe(bytes);
 
