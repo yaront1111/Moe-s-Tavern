@@ -144,6 +144,7 @@ describe('protected required checks in the shared delivery predicate', () => {
     expect(missing()).toEqual(['protected-checks-unmeasured', `required-check:${UNIT}`, `required-check:${LINT}`]);
     candidate(tree1);
     expect(missing()).toEqual(['protected-checks-unmeasured']);
+    expect(deliveryProjection(h.state, task())?.requiredCheckSatisfied).toBe(false);
     h.state.candidates.set('cand-001', { ...h.state.candidates.get('cand-001')!, protectedEntries: 'bogus' as never });
     expect(missing()).toEqual(['protected-checks-unmeasured']);
   });
