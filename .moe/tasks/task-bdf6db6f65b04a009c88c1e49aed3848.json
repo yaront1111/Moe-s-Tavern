@@ -1,0 +1,36 @@
+{
+  "id": "task-bdf6db6f65b04a009c88c1e49aed3848",
+  "epicId": "epic-be924fb8",
+  "title": "bug: every seat registers as worker.type=CLAUDE even when its wrapper launched codex/gemini/grok",
+  "description": "Observed 2026-10-25: worker-e8965f51 and worker-9cda703c show `type: \"CLAUDE\"` in moe.list_workers, but their wrappers launched the Codex CLI (process argv `codex …`, tool inventory apply_patch/exec_command, no Claude Edit/Write). architect-473624b4 was a Codex TUI shown as CLAUDE. Root cause: auto-registration hardcodes the type. See packages/moe-daemon/src/tools/claimNextTask.ts:650 (`const workerType: WorkerType = 'CLAUDE';`) and tools/joinTeam.ts:31 (`type: 'CLAUDE'`), although types/schema.ts:28 defines WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI' | 'GROK'.\n\nImpact: governors and humans cannot tell which seats can produce the Claude-only TOOL witness. scripts/moe-agent.sh:3567 requires that witness to land a contested path, and its stream collector is Claude-only. Four delivery gaps on 2026-10-24/25 (M01 CONFIGURATION.md, ab6aac94 SCHEMA.md, c2cb5cf7, 5f3960df postflight.sh) involved seats whose label hid that they couldn't witness. Diagnosing them meant mapping /proc/*/environ MOE_WORKER_ID to argv by hand.\n\nExpected: the wrapper, which knows the CLI it launches, reports it. moe-proxy forwards it the way it injects workerId. The daemon records it on registration, validated against WorkerType, and refreshes it when a seat relaunches under a different CLI. list_workers / chat_who then show the real type. Keep both launchers in parity.",
+  "definitionOfDone": [
+    "A seat launched by scripts/moe-agent.{sh,ps1} with codex, gemini or grok registers with worker.type CODEX, GEMINI or GROK respectively, and a claude seat registers CLAUDE; covered by daemon tests for claim_next_task and join_team registration.",
+    "A seat whose wrapper relaunches it under a different CLI has its recorded type updated on the next claim/registration, and an unknown or missing type keeps today's CLAUDE default without failing the call.",
+    "moe-proxy forwards the launcher-provided type the same way it injects workerId, with a proxy test; both launchers set it, and `bash scripts/tests/parity-check.sh` stays green.",
+    "Fresh `cd packages/moe-daemon && npm test` and the proxy's `npm test` exit 0, with output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 16,
+  "comments": [
+    {
+      "id": "comment-eb0208a35b3e4abdaf6981593efb84ae",
+      "author": "governor-187cc44e",
+      "content": "Planner/worker note (governor): scripts/moe-agent.sh and scripts/moe-agent.ps1 are contested by task-07474ee4 (stale September assertions) until it is ARCHIVED or DONE. Until then, a landing of either wrapper needs this session's Claude Edit/Write TOOL witness (scripts/moe-agent.sh:3567). A Codex/gemini/grok seat's edits to them would be silently dropped, as happened to 5f3960df's postflight.sh. Plan accordingly: a real Claude seat for the wrapper steps, or dependsOn 07474ee4 while the human decides on archiving it.",
+      "timestamp": "2026-10-25T10:15:44.361Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:15:36.235Z",
+  "updatedAt": "2026-10-25T10:15:44.361Z"
+}

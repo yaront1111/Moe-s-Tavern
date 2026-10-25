@@ -228,6 +228,38 @@ describe('literal searches and aggregate bounds', () => {
       matches: [{ path: 'src/a.ts', line: 2, text: '  hello' }], bytes: Buffer.byteLength('src/a.ts  hello') });
     expect(result.complete).toBe(true);
   });
+  it('never serves matches from a populated submodule when local submodule.recurse is enabled', async () => {
+    const f = fixture(); const child = (args: string[], input?: string) => f.git(['-C', 'src/sub', ...args], input);
+    f.git(['init', '-q', 'src/sub']); const blob = child(['hash-object', '-w', '--no-filters', '--stdin'], 'hello from SUBMODULE\n');
+    f.link('src/sub', child(['commit-tree', child(['mktree'], `100644 blob ${blob}\ts.txt\n`), '-m', 'child']));
+    const gitmodules = '[submodule "sub"]\n\tpath = src/sub\n\turl = ./src/sub\n';
+    f.put('.gitmodules', gitmodules); fs.writeFileSync(path.join(f.root, '.gitmodules'), gitmodules);
+    f.git(['config', 'submodule.sub.active', 'true']); f.git(['config', 'submodule.recurse', 'true']);
+    const c = f.save().commit;
+    expect(f.git(['grep', '-l', '-F', '-e', 'hello', c]).split('\n')).toEqual([`${c}:src/a.ts`, `${c}:src/sub/s.txt`]);
+    const result = await source.readRepositorySource(f.root, c, [{ ...search(), id: 'all' }, { ...search(['src']), id: 'dir' },
+      { ...search(['src/sub']), id: 'link' }, read('src/sub/s.txt')], options);
+    const parent = [{ path: 'src/a.ts', line: 1, text: 'hello' }];
+    expect(result.items.map(i => [i.id, i.status, i.reason, i.matches])).toEqual([['all', 'served', undefined, parent],
+      ['dir', 'served', undefined, parent], ['link', 'refused', 'submodule', undefined], ['r', 'refused', 'submodule', undefined]]);
+  });
+  it('serves committed text matches despite an untracked -diff attribute', async () => {
+    const f = fixture({ 'a.ts': 'first\nhello\n' });
+    fs.writeFileSync(path.join(f.root, '.gitattributes'), 'a.ts -diff\n');
+    expect(f.git(['check-attr', 'diff', '--', 'a.ts'])).toBe('a.ts: diff: unset');
+    expect(f.git(['ls-tree', '--name-only', f.commit])).toBe('a.ts');
+    const result = await source.readRepositorySource(f.root, f.commit, [search(['a.ts'])], options);
+    expect(result.items[0]).toEqual({ id: 's', purpose: 'caller', op: 'search', status: 'served',
+      matches: [{ path: 'a.ts', line: 2, text: 'hello' }], bytes: Buffer.byteLength('a.tshello') });
+    expect(result.complete).toBe(true);
+  });
+  it('reports a NUL-containing binary match line explicitly instead of an empty success', async () => {
+    const f = fixture({ 'b.bin': Buffer.from('bin\0hello\n') });
+    const result = await source.readRepositorySource(f.root, f.commit, [search()], options);
+    expect(result.items[0]).toEqual({ id: 's', purpose: 'caller', op: 'search', status: 'truncated',
+      reason: 'undecodable-match', matches: [], bytes: 0 });
+    expect(result.complete).toBe(false);
+  });
   it('serves exact committed matches with spaces, lines, and literal-only limitations', async () => {
     const f = fixture({ 'dir/a space.ts': 'first\nhello world\n', 'other': 'no' });
     const result = await source.readRepositorySource(f.root, f.commit, [search()], options);

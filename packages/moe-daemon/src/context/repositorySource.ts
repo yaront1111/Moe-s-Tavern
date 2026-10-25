@@ -235,8 +235,9 @@ function parseMatches(commit: string, bytes: Buffer, truncated: boolean, maxMatc
 }
 async function searchTree(git: ProjectGit, commit: string, query: SourceQuery & { op: 'search' }, limits: SourceLimits): Promise<SourceItem> {
   try {
-    const output = await git.head('grep', ['--literal-pathspecs', 'grep', '-F', '-z', '-n', '-I', '--no-color', '--no-column', '--full-name',
-      '-e', query.literal, commit, '--', ...query.paths ?? []], limits.maxSearchBytes);
+    // Mutable local state must not change what a commit matches: no gitlink recursion, no attribute-based binary skip.
+    const output = await git.head('grep', ['--literal-pathspecs', 'grep', '-F', '-z', '-n', '-a', '--no-recurse-submodules',
+      '--no-color', '--no-column', '--full-name', '-e', query.literal, commit, '--', ...query.paths ?? []], limits.maxSearchBytes);
     if (!output.truncated && output.exitCode === 1) return { ...item(query, 'served'), matches: [] };
     if (!output.truncated && output.exitCode !== 0) return item(query, 'unavailable', `git grep: ${output.stderr}`);
     const { matches, reason } = parseMatches(commit, output.stdout, output.truncated, limits.maxMatches);
