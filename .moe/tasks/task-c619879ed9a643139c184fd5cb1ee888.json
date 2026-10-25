@@ -134,11 +134,17 @@
       "author": "architect-473624b4",
       "content": "Precondition audit: CQ-F MODIFY_RAIL prop-5e7763edb6c54d328c38bc49ad43d128 is APPROVED by HUMAN (10:01:20Z); scope now explicitly revision-less human approval only, not legacy profiles. However fresh CQ-I/I01 context still has unqualified preserve-legacy admission rails. Filed matching CQ-I MODIFY_RAIL prop-9d41b22b2bda4048910c6e55e98eafca, pending human approval, as this task's description requires approval on every affected CQ epic before planning. I01's just-submitted additive plan remains valid and deletes nothing. No speculative F04b deletion plan submitted. Once matching exception is approved, restore PLANNING; keep I01 dependency for worker serialization. Explicit token 0 for absent stored revision is distinct from omitted token and should not be deleted without additional approval.",
       "timestamp": "2026-10-25T10:03:51.467Z"
+    },
+    {
+      "id": "comment-dc85625c813a40f5a7bcd1a0635a97b2",
+      "author": "governor-96f92f36",
+      "content": "Governor note for QA: completion 4c66cf1 is missing this task's step-3 docs edit.\n\n- What: docs/MCP_SERVER.md, +8/-8 (the approval-token sentences). The edit is still uncommitted in the shared checkout; review it with `git diff -- docs/MCP_SERVER.md`. It is F04b's own work, recorded in step-3 modifiedFiles.\n- Cause: c2cb5cf7's plan also names that file, and the edit had no Edit/Write witness, so the wrapper's contested-untouched skip dropped it silently. That is the c2cb5cf7 bug itself, not a worker error.\n- Fix (22:3xZ): c2cb5cf7 now dependsOn F04b, so it no longer contests the path, and I ran declare_files docs/MCP_SERVER.md on F04b. Your QA session's exit checkpoint will commit it under F04b. No other open task claims that file.\n- Please review the doc hunk with the rest. Don't reject only because the hunk is absent from 4c66cf1: that would burn a reopen on a wrapper defect. After your session exits, check that the QA checkpoint carries docs/MCP_SERVER.md.",
+      "timestamp": "2026-10-25T22:34:56.639Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:18:07.718Z",
-  "updatedAt": "2026-10-25T22:31:30.908Z",
+  "updatedAt": "2026-10-25T22:34:56.639Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:01:48.266Z",
     "plannedStepCount": 5,
@@ -202,6 +208,34 @@
       "treeId": "9321d88f3b157e72b07879ca3cd30c20a3cff4a6",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "4c66cf1e8c05fb268ccbfc510049d6311f48fcc5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-25T22:18:35Z",
+      "paths": [
+        ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
+        "packages/moe-daemon/src/server/planApproval.integration.test.ts",
+        "packages/moe-daemon/src/server/planApproval.test.ts",
+        "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-25T22:32:07.073Z",
+      "treeId": "9d06c1620ae42009e7b96329b89e616264264689",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-c2cb5cf717794c169bda13934e4ee877"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -212,19 +246,21 @@
     "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
     "packages/moe-daemon/src/state/taskStore.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-7d158765@2026-10-25T22:16:00Z",
-    "at": "2026-10-25T22:18:03.231Z"
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-25T22:18:35Z",
+    "at": "2026-10-25T22:32:07.073Z"
   },
   "workStartedAt": "2026-10-25T22:19:46.711Z",
   "declaredFiles": [
     "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
-    "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
+    "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
+    "docs/MCP_SERVER.md"
   ],
   "reviewStartedAt": "2026-10-25T22:31:30.906Z",
   "verification": {
@@ -234,5 +270,14 @@
     "reportedAt": "2026-10-25T22:31:30.906Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-F04b: human plan approval now requires the token (rail prop-5e7763ed, scope a).\n\ntaskStore.approveTask: after the status check, an omitted expectedPlanRevision throws INVALID_INPUT (field expectedPlanRevision) before decode, compare, readiness, the write and the SPEED-timer cancel. It covers both /ws routes, APPROVE_TASK and the UPDATE_TASK AWAITING_APPROVAL->WORKING drag, the only two callers. A negotiated socket is still refused first by assertApprovalCapabilities. The token is now always decoded and compared, and every human approval stamps approvedPlanRevision. decodeSuppliedPlanRevision no longer tells clients to omit the field. WebSocketServer.ts: comments only.\n\nUnchanged: explicit 0 on a stamp-less row, stale-token PLAN_REVISION_MISMATCH, malformed/null INVALID_INPUT, relaxed set_task_status, SPEED/TURBO (F05), and unstamped history (never upgraded or backfilled).\n\nTests, each citing the rail:\n- planApproval: store omission, APPROVE_TASK and drag omissions (bytes unchanged; a peer gets no TASK_UPDATED, checked with a PING/PONG barrier), hidden-token. DEVIATION, rail-covered: F04's durable group had 2 more omission pins. 'without a token records no stamp' (4 rows) now asserts a refusal with the stamp unchanged. The verified-local ordering test (2 rows): an omission is INVALID_INPUT ahead of readiness; the token-free store PLAN_APPROVED keeps NOT_READY, then INVALID_INPUT.\n- integration: omission refused, then an explicit 0 approves.\n- WebSocketServer: unnegotiated omission refused with no side effects; the reconnect test sends 4.\n- Amend-1 pins: taskExecutionPolicy D4 over strict and relaxed setups, and the executionPolicySnapshot W5 omission row, both INVALID_INPUT.\n- The explicit-0 tests and the held-out acceptance file are untouched.\n\nRED: the 15 flipped cases failed before the change.\nDocs: MCP_SERVER.md, 8 sentences. The stale F12 lines are listed in comment-dc06d662.\nDependencies F04c/F04d/F04e are DONE, so clients send the token.\nNo client code chan"
+  "completionSummary": "CQ-F04b: human plan approval now requires the token (rail prop-5e7763ed, scope a).\n\ntaskStore.approveTask: after the status check, an omitted expectedPlanRevision throws INVALID_INPUT (field expectedPlanRevision) before decode, compare, readiness, the write and the SPEED-timer cancel. It covers both /ws routes, APPROVE_TASK and the UPDATE_TASK AWAITING_APPROVAL->WORKING drag, the only two callers. A negotiated socket is still refused first by assertApprovalCapabilities. The token is now always decoded and compared, and every human approval stamps approvedPlanRevision. decodeSuppliedPlanRevision no longer tells clients to omit the field. WebSocketServer.ts: comments only.\n\nUnchanged: explicit 0 on a stamp-less row, stale-token PLAN_REVISION_MISMATCH, malformed/null INVALID_INPUT, relaxed set_task_status, SPEED/TURBO (F05), and unstamped history (never upgraded or backfilled).\n\nTests, each citing the rail:\n- planApproval: store omission, APPROVE_TASK and drag omissions (bytes unchanged; a peer gets no TASK_UPDATED, checked with a PING/PONG barrier), hidden-token. DEVIATION, rail-covered: F04's durable group had 2 more omission pins. 'without a token records no stamp' (4 rows) now asserts a refusal with the stamp unchanged. The verified-local ordering test (2 rows): an omission is INVALID_INPUT ahead of readiness; the token-free store PLAN_APPROVED keeps NOT_READY, then INVALID_INPUT.\n- integration: omission refused, then an explicit 0 approves.\n- WebSocketServer: unnegotiated omission refused with no side effects; the reconnect test sends 4.\n- Amend-1 pins: taskExecutionPolicy D4 over strict and relaxed setups, and the executionPolicySnapshot W5 omission row, both INVALID_INPUT.\n- The explicit-0 tests and the held-out acceptance file are untouched.\n\nRED: the 15 flipped cases failed before the change.\nDocs: MCP_SERVER.md, 8 sentences. The stale F12 lines are listed in comment-dc06d662.\nDependencies F04c/F04d/F04e are DONE, so clients send the token.\nNo client code chan",
+  "touchedFiles": [
+    "packages/moe-daemon/src/server/planApproval.test.ts",
+    "packages/moe-daemon/src/server/planApproval.integration.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+    "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts"
+  ]
 }
