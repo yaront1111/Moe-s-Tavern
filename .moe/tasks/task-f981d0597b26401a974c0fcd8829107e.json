@@ -117,7 +117,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,16 +133,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:33:14.692Z",
-  "updatedAt": "2026-10-25T10:54:43.990Z",
+  "updatedAt": "2026-10-25T11:05:59.870Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:34:45.259Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-25T11:05:59.870Z",
+    "wallClockMs": 1874611
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -225,5 +228,9 @@
     "kind": "completion",
     "sessionId": "worker-c1d9de02@2026-10-25T10:40:51Z",
     "at": "2026-10-25T10:54:43.990Z"
-  }
+  },
+  "completedAt": "2026-10-25T11:05:59.870Z",
+  "reviewCompletedAt": "2026-10-25T11:05:59.870Z",
+  "reviewSummary": "Reviewed completion commit 17bc7ac (on moe/work-2026-10-24; HEAD bytes identical). Size: 185 + 203 + 1 = 389 net LOC. No forbidden patterns.\n\nRe-ran (env -i, Linux Node 24.21.0):\n- `node --test scripts/tests/local-runner-bridge.test.mjs`: exit 0, 15/15, 0 skipped, in the working tree and in a clean `git archive 17bc7ac` snapshot.\n- The full CI step (local-runner, bundle and bridge tests): exit 0, 203/203, 0 skipped.\n\nDoD:\n1. Covered by B1-B5: split at every offset, zero/max+1/0xFFFFFFFF headers refused from the header alone, fatal UTF-8 and BOM, non-object JSON, truncation, poison.\n2. Covered by B7/B8: exact-key shapes only, output as an unparsed Buffer, the full violation table.\n3. Covered by B11/B12: every listed tool is TOOL_DENIED, and evidence and unknown keys are ARGUMENT_DENIED.\n4. Covered by B13/B10. I checked every TOOLS entry against the committed daemon inputSchemas (all additionalProperties:false; handoff_history taskId-only, heartbeat workerId-only). The binding shapes match validOwner.\n5. Covered by B15: exact frozen argv; GUEST_LAYOUT.supervisor and isOwnedInstanceName confirmed. ci.yml is a single-line append to the local-runner step.\n6. Evidence reproduces.\n\nIndependent 24-mutant sweep: 23 killed. The survivor (hasOwn to `in`) is equivalent, because the /^moe\\./ regex excludes prototype members.\n\nNote, non-blocking: the uncommitted CQ-F06 edit adds get_context.sessionId, which the bridge refuses (fails closed). I commented on CQ-R08 asking for a stamp-or-refuse decision. Complexity pass: nothing to cut. verified-local stays unavailable.",
+  "requiredCheckAtDone": null
 }

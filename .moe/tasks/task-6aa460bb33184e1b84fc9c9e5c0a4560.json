@@ -1,0 +1,33 @@
+{
+  "id": "task-6aa460bb33184e1b84fc9c9e5c0a4560",
+  "epicId": "epic-be924fb8",
+  "title": "bug: an architect's exit checkpoint lands the live assignee's in-flight bytes for the task it planned, so the worker's completion is NOTHING_TO_COMMIT and the DONE task has no completion commit",
+  "description": "Observed 2026-10-25 by governor-187cc44e on CQ-I01 task-96526848b23549cf994ab82f47fad29f.\n\nTimeline:\n- Codex architect-473624b4's session (pre-flight 09:51:54Z) claimed I01 at pre-flight. It planned I01 at 09:58:13; TURBO auto-approved it to WORKING.\n- worker-9cda703c claimed I01 at 09:58:22 and worked steps 1-6. Step 6 started at 10:09:43 and completed at 10:14:37.\n- At 10:13:23 the architect session exited. Its wrapper landed checkpoint 263e9f5, `wip(task-96526848…) [status=WORKING role=architect]`, which held the worker's in-flight source bytes: docs/MCP_SERVER.md, server/WebSocketServer.ts, server/WebSocketServer.test.ts and server/clientCapabilities.ts (+412/-12).\n- The worker's completion at 10:17:12 returned MOE_COMMIT_NOTHING_TO_COMMIT.\n- qa_approve at 10:59:26 raised ⚠️ NO-COMPLETION-COMMIT. task.landing is null on a DONE task whose bytes ARE on the branch. A governor has to reconstruct this by hand every time.\n\nSame shape: 1f9c7d5 (architect-6e3edf85's exit checkpoint on WORKING task-5f3960df).\n\nCause: the wrapper lands its session's pre-flight task at exit even after that task moved to another live assignee. getCommitScope.ts says there is no ownership guard; orphan mode exists for crash recovery. Interactive architects exit often through the account-switch mod, so this keeps happening.\n\nEffects:\n- Mid-edit worker bytes get committed and pushed as a wip under the wrong role, which can break the branch at that commit.\n- The completion commit goes missing, along with landing metadata and the Moe-Contested trailer evidence.\n- False NO-COMPLETION-COMMIT alarms.\n\nExpected: a session that is not the task's assignee, while the assignee is live or holds an open attempt, lands no source path for that task. It may still land the task's own board record. The bytes stay dirty for the assignee's own landing. Orphan recovery is unchanged when the assignee is dead or absent.\n\nFiles: scripts/moe-agent.sh and scripts/moe-agent.ps1 (twins), scripts/tests/postflight.sh and .ps1, and possibly packages/moe-daemon/src/tools/getCommitScope.ts (expose the assignee's liveness). The wrapper and postflight files are currently contested by the stale task-07474ee438f34021a23809f9c764d15c. Plan for a Claude Edit/Write seat, or wait for that contest to clear. Serialize behind task-c532d223459b4ef4b5bab2ba0eb4005e and task-5c71dff9ff2a488d8f75ec375c4f99f8, which edit moe-agent.sh.",
+  "definitionOfDone": [
+    "A non-assignee session exit (architect/QA/governor) on a task whose assignee is a live worker, or holds an open execution attempt, lands no source path for that task. The skip is reported with a named code and through record_commit. The assignee's own later completion commits those bytes, so the task gets a completion commit and landing metadata.",
+    "Orphan recovery is unchanged: when the assignee is dead or absent, or the task is unassigned, the existing checkpoint landing still happens. The sh and ps1 wrappers behave identically.",
+    "The postflight harness has a case for each behavior in both postflight.sh and postflight.ps1, and bash scripts/tests/parity-check.sh passes. If the daemon is touched, cd packages/moe-daemon && npm test exits 0.",
+    "scripts/CLAUDE.md 'Land on every exit' documents the live-assignee rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 19,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T11:02:10.593Z",
+  "updatedAt": "2026-10-25T11:02:19.842Z",
+  "dependsOn": [
+    "task-c532d223459b4ef4b5bab2ba0eb4005e",
+    "task-5c71dff9ff2a488d8f75ec375c4f99f8"
+  ]
+}

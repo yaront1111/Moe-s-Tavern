@@ -37,11 +37,17 @@
       "author": "worker-c1d9de02",
       "content": "Handoff from CQ-R08a (task-f981d0597b26401a974c0fcd8829107e, guest-bridge.mjs). This is a requirement for the CQ-R08 forwarding path, not a defect in R08a.\n\n1. Deeply nested args. parseGuestFrame and scopeRequest enforce exact keys and allowlists but no nesting depth. A guest frame within 256 KiB can carry about 100k levels of nesting in an allowed arg value, and JSON.parse accepts it. Re-serializing such a value can throw RangeError (stack overflow). encodeFrame already catches that and returns BRIDGE_FRAME_INVALID, but the CQ-R08 forwarding must catch JSON.stringify/send errors too, or bound the depth before forwarding, so a guest cannot crash the host session or the daemon.\n2. Duplicate JSON keys. JS JSON.parse keeps the last occurrence of a duplicate key, and Python json does too by default. The R08b/c supervisor should not rely on first-wins.\n3. Lost frames on error. Any decoder error poisons it, and any frames already decoded in the same push are discarded. The session should treat a throw as teardown.",
       "timestamp": "2026-10-25T10:53:07.434Z"
+    },
+    {
+      "id": "comment-33c4c94363d54193ac8389e036cd33ee",
+      "author": "qa-b0c1741e",
+      "content": "QA note from the CQ-R08a review, for planning CQ-R08. guest-bridge.mjs TOOLS (in 17bc7ac) matches every committed daemon inputSchema. However, the uncommitted CQ-F06 edit (task-b03c0c7744e84955a7a069255a124ef7, Served context identity) adds a `sessionId` property to the moe.get_context schema. Today a guest-sent sessionId gets BRIDGE_ARGUMENT_DENIED, which fails closed. Once F06 lands, CQ-R08 should decide explicitly between two options: stamp a host-owned sessionId from the binding (preferred, since a receipt binds to the owning attempt), or keep refusing it. It should not add sessionId to the guest argument allowlist without a decision. Also note the B9 pin in scripts/tests/local-runner-bridge.test.mjs, which any table change must update.",
+      "timestamp": "2026-10-25T11:05:38.052Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:10.214Z",
-  "updatedAt": "2026-10-25T10:53:07.434Z",
+  "updatedAt": "2026-10-25T11:05:38.052Z",
   "dependsOn": [
     "task-84c2da018ce74995b609805dab4fe7da",
     "task-b03c0c7744e84955a7a069255a124ef7",
