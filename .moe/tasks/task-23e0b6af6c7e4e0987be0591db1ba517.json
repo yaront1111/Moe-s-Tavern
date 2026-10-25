@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 7,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,16 +79,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:44.698Z",
-  "updatedAt": "2026-10-25T11:14:29.969Z",
+  "updatedAt": "2026-10-25T11:28:19.971Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:50:09.877Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-25T11:28:19.971Z",
+    "wallClockMs": 2290094
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -159,5 +162,9 @@
     "kind": "completion",
     "sessionId": "worker-c1d9de02@2026-10-25T11:11:48Z",
     "at": "2026-10-25T11:14:29.969Z"
-  }
+  },
+  "completedAt": "2026-10-25T11:28:19.971Z",
+  "reviewCompletedAt": "2026-10-25T11:28:19.971Z",
+  "reviewSummary": "Reviewed completion commit be0b1f0 (moe/work-2026-10-24, pushed). 5 daemon test files change by 1-2 lines each, plus the task's own .moe json. No production file is in the diff, and the working-tree test files are byte-identical to the commit.\n\nDoD 3: the in-tree node_modules is Windows-native, so I ran `cd packages/moe-daemon && npm test` in a Linux-native snapshot of be0b1f0 with MOE_* unset. Exit 0: 163 files passed, 4110 tests passed, 14 skipped, matching the worker.\n\nDoD 1: I grepped approveTask( calls, APPROVE_TASK frames, UPDATE_TASK drags to WORKING and token-less approve() helpers outside the 3 excluded files. Remaining token-free sites: the not-found test (StateManager.test:747), the PROGRESSIONS row (taskExecutionPolicy.test:554) and the W5 'APPROVE_TASK without a token' row (executionPolicySnapshot.test:257). The other approve() helpers are qa_approve or submit_plan calls. Then a mutation probe in a scratch copy made approveTask and the WS UPDATE_TASK drag throw on an omitted token. The full suite had exactly 24 failures, all in 5 files: WebSocketServer.test (7), planApproval.test (10) and planApproval.integration.test (1), which are the excluded pin files, plus executionPolicySnapshot W5 no-token (1) and taskExecutionPolicy (5). Those 5 are it.each expansions of the single PROGRESSIONS row (D1 x2, D4 x3). Both rows belong to CQ-F04b. StateManager, taskTimestamps, the lifecycle e2e and the W5 drag row stay green, so no setup approval was missed.\n\nDoD 2: only approval-call arguments changed: approveTask(..., 0) in StateManager.test and taskTimestamps.test; stored planRevision ?? 0 in the lifecycle helper; approve(1) in D4/D6; top-level expectedPlanRevision: 1 on the W5 drag row. No assertion was added, removed or loosened, and the refusal tests still assert EXECUTION_PROFILE_NOT_READY.\n\nRails: no .moe edits besides the task row, no agent Git writes, and verified-local is not enabled. The diff is 6 test lines. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

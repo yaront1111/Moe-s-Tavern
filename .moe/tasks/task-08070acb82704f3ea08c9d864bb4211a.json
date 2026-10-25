@@ -127,7 +127,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:36.619Z",
-  "updatedAt": "2026-10-25T11:23:54.371Z",
+  "updatedAt": "2026-10-25T11:24:34.160Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:55:13.064Z",
     "plannedStepCount": 6,
@@ -191,7 +191,8 @@
     "moe-vscode/src/providers/BoardViewProvider.ts",
     "moe-vscode/tests/approval-paths.test.cjs",
     ".moe/tasks/task-08070acb82704f3ea08c9d864bb4211a.json",
-    ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json"
+    ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
+    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
   ],
   "completionSummary": "Every VS Code approval path now sends the plan revision its webview rendered, and none can approve token-free.\n\nClient:\n- MoeDaemonClient.approveTask(taskId, expectedPlanRevision: number) no longer has a legacy branch (rail prop-5e7763ed).\n- An undefined or malformed token is refused locally: it is logged, onError fires with operation APPROVE_TASK and context.taskId, and no frame is sent.\n\nTask detail:\n- TaskDetailPanel seeds data-plan-revision with PlanReviewPanel's exported seedRevisionAttribute.\n- taskDetail.js posts that revision on Approve and on Next. It re-derives the revision after each live re-render of the plan.\n- The host forwards msg.expectedPlanRevision and never reads it from cache.\n\nBoard:\n- board.js uses one pure moveMessage(). An AWAITING_APPROVAL→WORKING move (Next, drag, epic sweep with the BLOCKED skip kept) posts approveTask with the card's revision: an absent revision sends 0, a malformed one sends undefined and is refused.\n- BoardViewProvider forwards that token.\n- It blocks a token-free updateTaskStatus AWAITING_APPROVAL→WORKING.\n- It toasts 'Plan approval refused…' with an 'Open Plan Review' action, but only for its own pending approvals. The pending set is pruned on state change, disconnect and dispose.\n\nRefusal toasts:\n- The board and the detail panel share showApprovalRefusal.\n- They defer to an open Plan Review (PlanReviewPanel.isOpenFor), so no refusal is toasted twice.\n\nTests:\n- New tests/approval-paths.test.cjs has 21 tests. They drive the production board.js, taskDetail.js, panels, provider and the real client over a fake socket, so they assert the actual wire frames.\n- plan-approval-client.test.cjs: the legacy omission tests were replaced by refusal tests, as the rail authorizes.\n- task-blocker-visibility and task-time-budget only declare new harness dependencies; no assertion changed.\n- Mutation-checked: 15 production mutations, each caught.\n\nResidual, theoretical: a card missing from the webview's state and not AWAITING_APPROVAL i",
   "commits": [
@@ -220,6 +221,22 @@
       "treeId": "a67a52220c2f18038e40a97ef80e53bd5b90e3e9",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "17c6d44bf9d35bbf714aa39e1cee01fb1ac6355d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T11:20:00Z",
+      "paths": [
+        ".moe/tasks/task-08070acb82704f3ea08c9d864bb4211a.json",
+        ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T11:24:34.160Z",
+      "treeId": "db2ba7937ca07300e3ff60c5e3841494c491cfb0",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -228,9 +245,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3617ccf7@2026-10-25T11:02:37Z",
-    "at": "2026-10-25T11:16:56.515Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T11:20:00Z",
+    "at": "2026-10-25T11:24:34.160Z"
   },
   "blockedReason": "QA review complete on substance; the only open gate is size. Completion cb7b75f is on moe/work-2026-10-24: net 754 changed lines (184 source / 570 tests, 558 of them in the new approval-paths test file). That is over the 400-line QA cap, and no CQ-F rail waives it yet. The governor's per-task size-exception proposal prop-4de7f0e7 is PENDING a human decision. A rail must exist before QA can approve. Rejecting green, correct work now would only burn a reopen.\n\nEvidence:\n- Fresh `cd moe-vscode && npm test && npm run compile` exits 0: 134/134 pass, tsc clean. moe-vscode in the tree is identical to the commit.\n- DoD 1: board Next, drag and epic sweep go through moveMessage → approveTask with the card's rendered revision. Detail Approve and Next go through approveRendered(msg.expectedPlanRevision). PlanReviewPanel is unchanged and token-bound. The provider guard refuses a token-free AWAITING_APPROVAL→WORKING. A grep shows no other sender.\n- DoD 2: approveTask(taskId, number) has no legacy branch. An undefined or malformed token is logged, fires onError with context.taskId, and is toasted with 'Open Plan Review'; no frame is sent.\n- DoD 3: the token comes from the webview message or the seeded data-plan-revision, never from cache. Tests: 21 in approval-paths plus the refusal tests in plan-approval-client. 2 QA mutations were each caught.\n- DoD 4: re-run green.\n\nResume: proposal APPROVED → set_task_status REVIEW and QA approves. REJECTED → PLANNING, and the architect splits it.",
   "blockedResourceId": null,
