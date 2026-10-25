@@ -144,6 +144,11 @@ class MoeProjectService @JvmOverloads constructor(
 
         val daemonInfo = daemonSupervisor.readDaemonInfo() ?: run {
             connecting = false
+            // A protected refusal needs a human, not a retry; Restart Daemon tries again.
+            daemonSupervisor.selectionRefusal()?.let {
+                publishStatus(false, it)
+                return
+            }
             publishStatus(false, "Daemon not running. Start with: moe-daemon start")
             scheduleReconnect()
             return
@@ -241,6 +246,12 @@ class MoeProjectService @JvmOverloads constructor(
 
     private fun doConnect(daemonInfo: DaemonInfo) {
         if (disposed.get() || connected || connecting) return
+        // Every activation passes here: an unverified daemon gets no client, no registration and no retry.
+        daemonSupervisor.activationRefusal(daemonInfo)?.let {
+            log.warn(it)
+            publishStatus(false, it)
+            return
+        }
         connecting = true
 
         // Synchronize the client swap to prevent races with callbacks

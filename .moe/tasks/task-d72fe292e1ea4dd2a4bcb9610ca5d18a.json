@@ -1,0 +1,28 @@
+{
+  "id": "task-d72fe292e1ea4dd2a4bcb9610ca5d18a",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: on Windows the daemon's bare `git` execFile with cwd=<project> runs a repository git.exe",
+  "description": "util/diskState.ts defaultGitRunner (claim_next_task/release_task computeDiskStateSignature) and util/cachedPlanPaths.ts runGit/runGitHead call execFile('git', …, { cwd: <project> }); on Windows libuv searches the spawn cwd before PATH, so a git.exe/git.com committed at the project root runs as the daemon user — this bypasses the IDE-side protected runtime selection (CQ-R01 pins only the daemon's own working directory, not explicit spawn cwds).\nVerified 2026-10-25, node v24.16.0 / libuv 1.52.1: whoami.exe copied to <cwd>\\git.exe ran for execFile('git', [], { cwd }) both with NoDefaultCurrentDirectoryInExePath unset and =1 (real git: 2.54.0.windows.1).\nFix: resolve git once to an absolute path from PATH, skipping cwd, blank and relative entries (as accounts/claudeAuth.ts findWindowsCommand does), and execFile that path from every runner; also check diskState's runner, which lacks cachedPlanPaths' readOnlyGitEnv/readOnlyGitArgs config masking.",
+  "definitionOfDone": [
+    "On Windows no daemon git runner executes a git.exe/git.com from the spawn cwd or a blank/relative PATH entry; a Windows-only test plants <cwd>/git.exe and proves the PATH git runs instead.",
+    "diskState defaultGitRunner and cachedPlanPaths runGit/runGitHead share the one resolved absolute git; POSIX behaviour is unchanged.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 231.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T13:33:14.380Z",
+  "updatedAt": "2026-10-25T13:33:14.380Z"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "task-8333866a53464d07bcaf88134f259ff4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a notification-only session can't reply when its idle seat's worker record was pruned (chat_send \"Unknown sender\"), and the mention stays unread",
+  "description": "Observed 2026-10-25T13:09Z: the wrapper launched a notification-only session for worker-07cd2c56 to answer routed mention msg-185b0639451c4fce9e18c139d4298fb2 (chan-b6d8273b). The daemon had no record for that worker (it was absent from list_workers), so the required reply failed. chat_send and chat_join both answer 'Unknown sender: workerId must be a registered worker or \"human\"' (packages/moe-daemon/src/tools/chatSend.ts:51, chatJoin.ts:31).\nNothing re-registers an idle seat whose record was pruned. retry_team_join returns early once TEAM_JOINED=true (scripts/moe-agent.sh:2064; its ps1 twin is Invoke-MoeTeamJoinRetry). claim_next_task creates the worker only on a successful claim (tools/claimNextTask.ts:648-651), and the notification-only prompt forbids claiming.\nSide effect: chat_read silently skips the cursor write for an unknown worker (state/workerStore.ts:214), so the mention is never marked read. It will likely resurface in another notification-only launch on each later no-task iteration (inferred from the code; repeats not yet observed).",
+  "definitionOfDone": [
+    "A notification-only session launched for a seat whose worker record was pruned can send its chat_send reply under that seat's own workerId, never as \"human\".",
+    "Reading the surfaced mention advances that seat's chat cursor, so the same mention does not trigger another notification-only launch.",
+    "A regression test (a postflight.{sh,ps1} scenario and/or a daemon test) covers a pruned idle seat with an unread routed mention."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 22,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T13:13:17.758Z",
+  "updatedAt": "2026-10-25T13:13:17.758Z"
+}

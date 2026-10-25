@@ -1,0 +1,38 @@
+{
+  "id": "task-c42dd646a2694666b40ea7f6d3985647",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: Restart Daemon kills whatever pid a repository-supplied .moe/daemon.json names",
+  "description": "MoeProjectService.restartDaemon reads .moe/daemon.json and calls ProcessHandle.of(info.pid).destroy() whenever that pid is alive, with no provenance check. readDaemonInfo also skips its project-path check when projectPath is empty. A repository can commit .moe/daemon.json naming any pid the user may signal, and the Restart Daemon button then kills that process. Under the protected profile, gate the kill on RuntimeSelectionPolicy.verifyProvenance, or kill only the supervisor's own spawned process. Found by CQ-R01 (task-3b760109c42544ab892199b3d5534b77), whose plan scopes MoeProjectService to the doConnect/connect gates.",
+  "definitionOfDone": [
+    "Under the protected profile, Restart Daemon never signals a process whose provenance RuntimeSelectionPolicy.verifyProvenance does not confirm",
+    "Legacy Restart Daemon behavior is unchanged, or the change is explicitly decided and tested",
+    "A fresh `cd moe-jetbrains && ./gradlew test` exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3b760109c42544ab892199b3d5534b77"
+  ],
+  "priority": "MEDIUM",
+  "order": 230.5,
+  "comments": [
+    {
+      "id": "comment-e5fe7fa64a044c0db59fd34aa5b76782",
+      "author": "worker-c1d9de02",
+      "content": "From CQ-R01 (task-3b760109c42544ab892199b3d5534b77) step-8 review: under the protected profile the activation refusal tells the user \"Stop it, then use Restart Daemon.\" (RuntimeSelectionPolicy.verifyProvenance refusal text). Once the user has stopped that daemon, the pid in the repository-supplied .moe/daemon.json is dead or reused, so following the advice is exactly the path where restartDaemon kills an unrelated process. Fixing this bug should make restartDaemon verify the pid (e.g. RuntimeSelectionPolicy.verifyProvenance / a recorded spawn under PROTECTED, start instant + command under legacy) before destroying it; the refusal text can stay as is.",
+      "timestamp": "2026-10-25T13:33:17.461Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T13:19:07.202Z",
+  "updatedAt": "2026-10-25T13:33:17.461Z"
+}

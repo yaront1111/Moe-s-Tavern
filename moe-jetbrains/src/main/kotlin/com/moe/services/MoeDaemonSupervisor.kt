@@ -7,6 +7,9 @@ import com.intellij.openapi.extensions.PluginId
 import com.moe.model.DaemonInfo
 import com.moe.util.MoeProjectInitializer
 import com.moe.util.MoeProjectRegistry
+import com.moe.util.RuntimeProfile
+import com.moe.util.RuntimeSelection
+import com.moe.util.RuntimeSelectionPolicy
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -26,7 +29,10 @@ class MoeDaemonSupervisor(
     private val portProbe: (Int, Int) -> Boolean = ::defaultPortProbe,
     private val processAliveProbe: (Int) -> Boolean = ::defaultProcessAliveProbe,
     private val processStarter: (ProcessBuilder) -> Process = { it.start() },
-    private val wslAgentsEnabled: () -> Boolean = { false }
+    private val wslAgentsEnabled: () -> Boolean = { false },
+    private val profile: () -> RuntimeProfile = { RuntimeSelectionPolicy.profile(basePath) },
+    private val installedRoot: () -> File? = { RuntimeSelectionPolicy.installedRoot() },
+    private val nodeExecutable: (() -> String?)? = null
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -35,6 +41,7 @@ class MoeDaemonSupervisor(
     private val maxDaemonSpawnAttempts = 3
     @Volatile private var lastDaemonStartAttemptAt = 0L
     private val daemonStartCooldownMs = 10_000L
+    @Volatile private var selectionRefusal: String? = null
 
     fun readDaemonInfo(): DaemonInfo? {
         val base = basePath.ifBlank { return null }
@@ -91,7 +98,8 @@ class MoeDaemonSupervisor(
         daemonSpawnAttempts++
 
         val projectBasePath = basePath.ifBlank { return false }
-        val direct = buildDirectDaemonCommand(projectBasePath)
+        val isProtected = profile() == RuntimeProfile.PROTECTED
+        val direct = if (isProtected) protectedCommandOrRefuse(projectBasePath) ?: return false else buildDirectDaemonCommand(projectBasePath)
 
         try {
             val pb = if (direct != null) {
@@ -105,9 +113,13 @@ class MoeDaemonSupervisor(
                 }
             }
             pb.redirectErrorStream(true)
+            // direct[1] is the installed daemon: an IDE started inside a repository must not lend it that working directory.
+            if (isProtected && direct != null) pb.directory(File(direct[1]).parentFile)
             val env = pb.environment()
             env["PATH"] = daemonPath(env["PATH"] ?: "", direct?.firstOrNull())
+            if (isProtected) protectedDaemonEnvironment(env, projectBasePath)
             val process = processStarter(pb)
+            if (isProtected) recordProtectedSpawn(projectBasePath, process)
             val oldProcess = spawnedDaemonProcess
             if (oldProcess != null) {
                 try {
@@ -141,6 +153,80 @@ class MoeDaemonSupervisor(
             log.warn("Failed to start Moe daemon", ex)
             onStatus(false, ex.message ?: "Failed to start daemon")
             return false
+        }
+    }
+
+    /** Why the protected profile refused to start a daemon; null under LEGACY or once a selection succeeds. */
+    fun selectionRefusal(): String? = selectionRefusal?.takeIf { profile() == RuntimeProfile.PROTECTED }
+
+    /** Under PROTECTED, why the daemon [info] names must not be activated; null when it may be. */
+    fun activationRefusal(info: DaemonInfo): String? =
+        if (profile() == RuntimeProfile.PROTECTED) RuntimeSelectionPolicy.verifyProvenance(basePath, info.pid.toLong()) else null
+
+    internal sealed interface ProtectedDaemonCommand {
+        data class Ready(val command: List<String>) : ProtectedDaemonCommand
+        data class Refused(val reason: String) : ProtectedDaemonCommand
+    }
+
+    /** The installed node and daemon; project, parent, PATH, env and global-config copies are never consulted. */
+    internal fun protectedDaemonCommand(basePath: String, root: File?, node: String?): ProtectedDaemonCommand {
+        val daemon = when (val selection = RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", basePath)) {
+            is RuntimeSelection.Accepted -> selection.file
+            is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
+        }
+        val nodeFile = when (val selection = RuntimeSelectionPolicy.installedExecutable(node, basePath)) {
+            is RuntimeSelection.Accepted -> selection.file
+            is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
+        }
+        val command = mutableListOf(nodeFile.path, daemon.path, "start", "--project", basePath)
+        if (wslAgentsEnabled()) command += listOf("--host", "0.0.0.0")
+        return ProtectedDaemonCommand.Ready(command)
+    }
+
+    // A refusal starts nothing: it is logged, published and kept for connect() to show.
+    private fun protectedCommandOrRefuse(basePath: String): List<String>? {
+        val node = if (nodeExecutable != null) {
+            nodeExecutable.invoke()
+        } else {
+            resolveNodeExecutable(nodeOnPath = { nodeOnProtectedPath(System.getenv("PATH").orEmpty(), basePath) })
+        }
+        return when (val selection = protectedDaemonCommand(basePath, installedRoot(), node)) {
+            is ProtectedDaemonCommand.Ready -> selection.command.also { selectionRefusal = null }
+            is ProtectedDaemonCommand.Refused -> {
+                val message = "Protected execution profile: ${selection.reason}. Project and PATH copies of the Moe daemon are not used."
+                selectionRefusal = message
+                log.warn(message)
+                onStatus(false, message)
+                null
+            }
+        }
+    }
+
+    /** Drops what could load repository code into the installed daemon: NODE_OPTIONS, NODE_PATH and unsafe PATH entries. */
+    internal fun protectedDaemonEnvironment(env: MutableMap<String, String>, basePath: String) {
+        env.remove("NODE_OPTIONS")
+        env.remove("NODE_PATH")
+        env["PATH"]?.let { env["PATH"] = protectedPathEntries(it, basePath).joinToString(File.pathSeparator) }
+    }
+
+    // In-process: running `where`/`which` by bare name could start a copy in the IDE's working directory.
+    internal fun nodeOnProtectedPath(path: String, basePath: String, windows: Boolean = isWindows()): String? =
+        protectedPathEntries(path, basePath).asSequence()
+            .map { File(unquoted(it), if (windows) "node.exe" else "node") }
+            .firstOrNull { it.isFile }?.absolutePath
+
+    // Blank, relative and project entries go, so the daemon's own lookups cannot reach repository executables.
+    private fun protectedPathEntries(path: String, basePath: String): List<String> =
+        path.split(File.pathSeparator).filter { RuntimeSelectionPolicy.isOutsideProject(unquoted(it), basePath) }
+
+    private fun unquoted(entry: String): String = entry.trim().removeSurrounding("\"")
+
+    private fun recordProtectedSpawn(basePath: String, process: Process) {
+        try {
+            RuntimeSelectionPolicy.recordProtectedSpawn(basePath, process.toHandle())
+        } catch (ex: Exception) {
+            // Test fakes have no handle; the daemon then fails provenance and is never activated.
+            log.debug("Cannot record the protected Moe daemon process: ${ex.message}")
         }
     }
 
