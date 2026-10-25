@@ -151,7 +151,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -171,7 +171,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:47.723Z",
-  "updatedAt": "2026-10-25T13:36:10.080Z",
+  "updatedAt": "2026-10-25T13:51:28.780Z",
   "dependsOn": [
     "task-ad95cb270e9e46df8672eb094d0c1e74",
     "task-96526848b23549cf994ab82f47fad29f",
@@ -186,7 +186,8 @@
   "contextFetchedBy": [
     "architect-26ba32c3",
     "worker-9cda703c",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -234,7 +235,54 @@
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+    ".moe/tasks/task-6b978f9e38e2412396289d024421edcb.json",
+    ".moe/tasks/task-8333866a53464d07bcaf88134f259ff4.json",
+    ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json",
+    ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json"
   ],
-  "completionSummary": "IDE-side protected runtime selection. Nothing enables the strong profile: verified-local is still unavailable in the daemon, and no isolation is claimed.\n- RuntimeSelectionPolicy (new): strict, fail-closed profile; a verified-local read pins PROTECTED for the session. Also Windows/UNC/device/POSIX path normalisation, installed-artifact and node validation (real paths outside the project), and a per-project ProcessHandle provenance registry with supervisor-only vouching.\n- MoeDaemonSupervisor: under PROTECTED it runs only the installed node + daemon, never a shell fallback. NODE_OPTIONS/NODE_PATH are dropped, and PATH loses blank, relative and project entries. Node is found by an in-process PATH scan. The daemon runs in the installed daemon folder (step 8). A refusal starts nothing and stays visible.\n- TerminalAgentLauncher: under PROTECTED only the installed wrapper, MOE_DAEMON_PATH and MOE_PROXY_PATH are used; otherwise the launch is refused.\n- MoeProjectService: the doConnect gate refuses an unverified daemon (no client, registration or reconnect), and connect() shows selection refusals.\n- Legacy is unchanged: legacy functions are byte-identical, and S3/L3/G3 pass.\nTests: RuntimeSelectionPolicyTest, 25 tests. Mutation survivors: S-M3 and 3 resolveContext call sites, which cannot run headless.\nFiled bugs:\n- task-c42dd646a2694666b40ea7f6d3985647: Restart Daemon kills a pid named by the repo's daemon.json.\n- task-d72fe292e1ea4dd2a4bcb9610ca5d18a (HIGH): on Windows the daemon's execFile('git', {cwd: project}) runs a repo git.exe. Verified on node 24.16/libuv 1.52.1.\nCQ-R13 follow-ups:\n- Provenance is in-memory, so after an IDE restart a running daemon is refused until Restart Daemon.\n- Downgrade-confirmation UI.\n- Auto-replacement of an unverified daemon.\nTheoretical: init writes project.json non-atomically, so a legacy read mid-write fails closed once."
+  "completionSummary": "IDE-side protected runtime selection. Nothing enables the strong profile: verified-local is still unavailable in the daemon, and no isolation is claimed.\n- RuntimeSelectionPolicy (new): strict, fail-closed profile; a verified-local read pins PROTECTED for the session. Also Windows/UNC/device/POSIX path normalisation, installed-artifact and node validation (real paths outside the project), and a per-project ProcessHandle provenance registry with supervisor-only vouching.\n- MoeDaemonSupervisor: under PROTECTED it runs only the installed node + daemon, never a shell fallback. NODE_OPTIONS/NODE_PATH are dropped, and PATH loses blank, relative and project entries. Node is found by an in-process PATH scan. The daemon runs in the installed daemon folder (step 8). A refusal starts nothing and stays visible.\n- TerminalAgentLauncher: under PROTECTED only the installed wrapper, MOE_DAEMON_PATH and MOE_PROXY_PATH are used; otherwise the launch is refused.\n- MoeProjectService: the doConnect gate refuses an unverified daemon (no client, registration or reconnect), and connect() shows selection refusals.\n- Legacy is unchanged: legacy functions are byte-identical, and S3/L3/G3 pass.\nTests: RuntimeSelectionPolicyTest, 25 tests. Mutation survivors: S-M3 and 3 resolveContext call sites, which cannot run headless.\nFiled bugs:\n- task-c42dd646a2694666b40ea7f6d3985647: Restart Daemon kills a pid named by the repo's daemon.json.\n- task-d72fe292e1ea4dd2a4bcb9610ca5d18a (HIGH): on Windows the daemon's execFile('git', {cwd: project}) runs a repo git.exe. Verified on node 24.16/libuv 1.52.1.\nCQ-R13 follow-ups:\n- Provenance is in-memory, so after an IDE restart a running daemon is refused until Restart Daemon.\n- Downgrade-confirmation UI.\n- Auto-replacement of an unverified daemon.\nTheoretical: init writes project.json non-atomically, so a legacy read mid-write fails closed once.",
+  "commits": [
+    {
+      "sha": "dec93e3a2c4a134c3c3e4e9b4dd5b8d1ce465d92",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T12:20:37Z",
+      "paths": [
+        ".moe/tasks/task-3b760109c42544ab892199b3d5534b77.json",
+        ".moe/tasks/task-6b978f9e38e2412396289d024421edcb.json",
+        ".moe/tasks/task-8333866a53464d07bcaf88134f259ff4.json",
+        ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json",
+        ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T13:38:24.437Z",
+      "treeId": "3cbff990c9c89dc1d0f82a3e286269c88b9f860a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-25T12:20:37Z",
+    "at": "2026-10-25T13:38:24.437Z"
+  },
+  "blockedReason": "QA review complete on substance (PASS); the only open gate is size. Completion dec93e3 is on moe/work-2026-10-24, and the moe-jetbrains tree equals it. +1176/-7 source lines (net 1169: runtime +449/-7, tests +727) is over the 400 QA cap, and the epic rail lists R02/R03/R06/R07 as the ONLY size exceptions. The governor's prop-b315016b (epic ADD_RAIL, at most 1183 changed lines; counts match the commit exactly) is PENDING a human decision. Rejecting green, correct work would only burn a reopen.\n\nEvidence:\n- `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` (the WSL form of ./gradlew test), run twice under the jetbrains-gradle lease: exit 0, 21 fresh classes, 280 tests, 0 failures/errors/skips.\n- 16/16 independent QA mutants killed: gate, vouching, start match, pin, legacy fallback, containment, PATH, launcher, refusal, NODE_OPTIONS, lenient, cwd, record, fold, NOFOLLOW, size cap. Sources sha-restored.\n- DoD1: PROTECTED runs only the installed node + daemon/index.js (real paths, inside the root, outside the project), with no shell/PATH/parent fallback. NODE_* vars dropped, PATH filtered, installed cwd. The launcher uses only the installed wrapper + MOE_DAEMON_PATH/MOE_PROXY_PATH.\n- DoD2: the doConnect gate runs before any client or registration; (pid, start) records; only a supervisor vouches.\n- DoD3: legacy branches unchanged; S3/G3/L3 and existing suites green; N1/N2 paths.\n- DoD4: verification exit 0.\n- diff-check clean, LF, no forbidden patterns, 5 planned files. Test file proportionate. Nits: ProtectedDaemonCommand has 1 caller; IdleProcess duplicates FakeProcess (net -17 possible).\n- Follow-ups: c42dd646, d72fe292, R13.\n\nResume: APPROVED → set_task_status REVIEW, then QA approves. REJECTED → PLANNING; an architect splits it.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-25T13:51:28.780Z"
 }
