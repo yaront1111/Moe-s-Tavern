@@ -18,7 +18,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { ActivityEventType, ExecutionPolicySnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import type { ActivityEventType, ExecutionPolicySnapshot, RequiredCheckSnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
 import {
   assertExecutionProfileReady,
   readExecutionPolicySnapshot,
@@ -400,7 +400,10 @@ export function assertNoFinalizingAttempt(state: StateManager, taskId: string): 
   );
 }
 
-export async function updateTask(state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string): Promise<Task> {
+export async function updateTask(
+  state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string,
+  daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot },
+): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
     throw new Error(`Task not found: ${taskId}`);
@@ -422,6 +425,9 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
   // board echo of the whole row) may forge, reset, null or erase it. Deleting
   // the key also keeps an own-key undefined out of the merged row.
   delete (sanitized as Record<string, unknown>).executionPolicySnapshot;
+  // Protected file identity has the same ownership: only submit_plan's internal
+  // parameter may set/clear it. StateManager's public update signature omits it.
+  delete sanitized.requiredCheckSnapshot;
   if (Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')) {
     sanitized.executionContract = validateExecutionContract(sanitized.executionContract);
   }
@@ -532,6 +538,10 @@ export async function updateTask(state: StateManager, taskId: string, updates: P
     ...capture,
     updatedAt: new Date().toISOString()
   };
+  if (event === 'PLAN_SUBMITTED' && daemonOwned) {
+    if (daemonOwned.requiredCheckSnapshot) updated.requiredCheckSnapshot = daemonOwned.requiredCheckSnapshot;
+    else delete updated.requiredCheckSnapshot;
+  }
 
   await state.writeEntity('tasks', taskId, updated);
   state.tasks.set(taskId, updated);

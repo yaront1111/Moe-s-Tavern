@@ -28,9 +28,9 @@ export function cachedPlanRef(branch: unknown): string | undefined {
   return `refs/remotes/origin/${branch}`;
 }
 
-export type PlanPathGitRunner = (args: string[], cwd: string, timeout: number) => Promise<string>;
+export type PlanPathGitRunner = (args: string[], cwd: string, timeout: number, maxBuffer?: number) => Promise<string>;
 
-const runGit: PlanPathGitRunner = async (args, cwd, timeout) => {
+export const runGit: PlanPathGitRunner = async (args, cwd, timeout, maxBuffer = MAX_BUFFER) => {
   // Do not inherit a seat's alternate index/repository/config. No shell, hooks,
   // replacement objects, optional locks, global config or network transports.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
@@ -43,7 +43,7 @@ const runGit: PlanPathGitRunner = async (args, cwd, timeout) => {
     // Never write Git config or broaden this to safe.directory=*.
     const result = await execFileAsync('git', ['--no-optional-locks', '--no-replace-objects',
       '-c', 'protocol.allow=never', '-c', `safe.directory=${cwd}`, ...args],
-    { cwd, env, timeout, maxBuffer: MAX_BUFFER, windowsHide: true });
+    { cwd, env, timeout, maxBuffer, windowsHide: true });
     return result.stdout;
   } catch (error) {
     // git config returns 1 for no matching keys; every other failure is unknown.
@@ -60,6 +60,41 @@ function describeFailure(error: unknown): string {
   const text = stderr || (typeof e.message === 'string' ? e.message : String(error));
   const code = e.code === undefined || e.code === null || text.startsWith(String(e.code)) ? '' : `${String(e.code)}: `;
   return `${code}${text.split(/\r?\n/)[0]}`.slice(0, MAX_FAILURE_CHARS);
+}
+
+/** Shared read-only trust envelope. All commands share one deadline, including setup. */
+export async function openProjectGit(projectRoot: string, run: PlanPathGitRunner = runGit, budgetMs = BUDGET_MS) {
+  const started = performance.now();
+  const deadline = started + budgetMs;
+  const failure = (step: string, error: unknown) => new Error(
+    `${step}: ${describeFailure(error)} (${Math.round(performance.now() - started)} ms into the ${budgetMs} ms budget)`);
+  const realpath = async (name: string, step: string) => {
+    try { return await fs.promises.realpath(name); } catch (error) { throw failure(step, error); }
+  };
+  const root = await realpath(projectRoot, 'realpath');
+  // A literal star directory must never become a subtree safe.directory rule.
+  if (root.replace(/\\/g, '/').endsWith('/*')) {
+    throw new Error(`project root ${root} ends in /*, which Git would read as a subtree trust rule`);
+  }
+  const git = async (label: string, args: string[], opts?: { maxBuffer?: number }) => {
+    try {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0) throw new Error('budget exhausted before the step started');
+      return await run(args, root, remaining, opts?.maxBuffer);
+    } catch (error) { throw failure(`git ${label}`, error); }
+  };
+  const top = (await git('rev-parse --show-toplevel', ['rev-parse', '--show-toplevel'])).trim();
+  if (pathKey(await realpath(top, 'realpath of the Git toplevel')) !== pathKey(root)) {
+    throw new Error(`Git toplevel ${top} is not the project root ${root}`);
+  }
+  // Older Git ignores GIT_NO_LAZY_FETCH: reject all hydratable/redirected repos,
+  // including included local config, rather than risking an implicit fetch.
+  const special = await git('config --get-regexp', ['config', '--local', '--includes', '--get-regexp',
+    '^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.worktree)$']);
+  if (special.trim()) {
+    throw new Error(`local Git config sets ${special.trim().split(/\s+/)[0]}; partial-clone, promisor and core.worktree repositories are never trusted`);
+  }
+  return git;
 }
 
 /**
@@ -81,16 +116,6 @@ export async function findCachedPlanPaths(
   if (missing.length === 0 || missing.length > 100 || missing.join('').length > 24000) {
     return { miss: 'the path list is empty or over the 100-path / 24000-character lookup limit' };
   }
-  const started = performance.now();
-  const deadline = started + BUDGET_MS;
-  let cwd = projectRoot;
-  let step = 'realpath';
-  const git = (label: string, args: string[]) => {
-    step = `git ${label}`;
-    const remaining = Math.floor(deadline - performance.now());
-    if (remaining <= 0) throw new Error('budget exhausted before the step started');
-    return run(args, cwd, remaining);
-  };
   try {
     // Defense in depth: callers pass normalized paths, never pathspecs. The
     // normalizer throws on traversal and absolute paths: those are not normalized.
@@ -98,26 +123,7 @@ export async function findCachedPlanPaths(
     if (missing.some(p => !normalized(p) || p.includes('\0'))) {
       return { miss: 'a path is not in normalized project-relative form' };
     }
-    const root = await fs.promises.realpath(projectRoot);
-    // Git interprets a trailing /* as trusting a subtree, even when it is a
-    // literal directory name on this filesystem. Uncertainty stays missing.
-    if (root.replace(/\\/g, '/').endsWith('/*')) {
-      return { miss: `project root ${root} ends in /*, which Git would read as a subtree trust rule` };
-    }
-    cwd = root;
-    const top = (await git('rev-parse --show-toplevel', ['rev-parse', '--show-toplevel'])).trim();
-    step = 'realpath of the Git toplevel';
-    if (pathKey(await fs.promises.realpath(top)) !== pathKey(root)) {
-      return { miss: `Git toplevel ${top} is not the project root ${root}` };
-    }
-    // Older Git ignores GIT_NO_LAZY_FETCH. Refuse partial/promisor repositories
-    // outright, including included local config, rather than risking hydration.
-    // Explicit core.worktree is also refused: it may redirect a shared tree.
-    const special = await git('config --get-regexp', ['config', '--local', '--includes', '--get-regexp',
-      '^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.worktree)$']);
-    if (special.trim()) {
-      return { miss: `local Git config sets ${special.trim().split(/\s+/)[0]}; partial-clone, promisor and core.worktree repositories are never trusted` };
-    }
+    const git = await openProjectGit(projectRoot, run);
     const commit = (await git('rev-parse --verify', ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])).trim();
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) return { miss: `${ref} did not resolve to a commit id` };
     // ls-tree does not support icase pathspec magic. Cached evidence requires
@@ -140,6 +146,6 @@ export async function findCachedPlanPaths(
   } catch (error) {
     // Missing Git/ref, timeout, oversized output, bad config or unreadable
     // objects preserve the ordinary missing-path rejection. Never fetch.
-    return { miss: `${step}: ${describeFailure(error)} (${Math.round(performance.now() - started)} ms into the ${BUDGET_MS} ms budget)` };
+    return { miss: error instanceof Error ? error.message : describeFailure(error) };
   }
 }

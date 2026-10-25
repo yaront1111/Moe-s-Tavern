@@ -729,6 +729,15 @@ export interface ProtectedCheckDefinition {
   assertionRoots?: string[];
 }
 
+/** Git object identity of every blob under the approved protected paths. Never evidence by itself. */
+export interface RequiredCheckSnapshot {
+  version: 1;
+  /** Resolved tree id, not a mutable ref. */
+  revision: string;
+  definitionDigest: string;
+  entries: { path: string; oid: string }[];
+}
+
 /**
  * Optional execution intent, canonicalized by validateExecutionContract. A docs
  * fix may supply only intendedBehavior; an API change may also need compatibility.
@@ -800,6 +809,13 @@ export interface Task {
    * memory that is omitted on disk and after reload.
    */
   executionContract?: TaskExecutionContract;
+  /**
+   * Daemon-owned, measured only by submit_plan: Git object ids of every blob
+   * under the approved protected paths at revision (a tree id). Valid only
+   * while definitionDigest matches the current contract; readers must use
+   * readRequiredCheckSnapshot. Never verification evidence by itself.
+   */
+  requiredCheckSnapshot?: RequiredCheckSnapshot;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;

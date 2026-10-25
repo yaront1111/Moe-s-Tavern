@@ -17,6 +17,8 @@ import {
   planSizeFloor, resolveLaunch,
 } from '../util/routing.js';
 import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchFor, accountSwitchReply } from '../state/accountStore.js';
+import { updateTask } from '../state/taskStore.js';
+import { definitionDigest, measureRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 
 /**
  * The affected-path refusal. `cachedRefMiss` says why the configured cached
@@ -186,6 +188,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       type: 'object',
       properties: {
         taskId: { type: 'string', description: 'The PLANNING task this plan is for' },
+        requiredCheckRevision: {
+          type: 'string', pattern: '^[0-9a-f]{40}$',
+          description: 'Commit or tree to measure the protected check snapshot at (default HEAD); use a candidate tree to approve changed protected definitions.',
+        },
         steps: {
           type: 'array',
           description: 'Ordered implementation steps; each has a description and the files it edits (affectedFiles) or creates (newFiles)',
@@ -268,6 +274,18 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
+      const input = args as { executionContract?: unknown; requiredCheckRevision?: unknown };
+      const measuredContract = validateExecutionContract(input.executionContract, 'executionContract');
+      const revision = input.requiredCheckRevision;
+      if (revision !== undefined && (typeof revision !== 'string' || !/^[0-9a-f]{40}$/.test(revision)
+          || !measuredContract?.requiredChecks)) {
+        throw invalidInput('requiredCheckRevision', 'must be a 40-hex commit or tree id supplied with requiredChecks');
+      }
+      // Bounded Git reads never hold the fleet mutex. The locked attempt below
+      // revalidates ownership/status/rails and binds exactly these definitions.
+      const snapshot = measuredContract?.requiredChecks
+        ? await measureRequiredCheckSnapshot(state.projectPath, measuredContract.requiredChecks, revision as string | undefined)
+        : undefined;
       let cachedPaths: CachedPlanPaths | undefined;
       let lookupBranch: unknown;
       const submit = () => state.runExclusive(async () => {
@@ -351,6 +369,10 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         }
 
         const executionContract = validateExecutionContract(params.executionContract, 'executionContract');
+        const digest = executionContract?.requiredChecks ? definitionDigest(executionContract.requiredChecks) : undefined;
+        if (digest !== snapshot?.definitionDigest) {
+          throw invalidInput('executionContract.requiredChecks', 'definitions changed during measurement; resubmit the plan');
+        }
 
         const epic = state.getEpic(task.epicId);
         const project = state.project;
@@ -526,7 +548,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // Keep the Task this write returned: its planRevision is the value that
         // was actually committed with this plan. Reading the cache later would
         // report a stamp a concurrent write had already moved past.
-        const submitted = await state.updateTask(task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId);
+        const submitted = await updateTask(state, task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId,
+          snapshot ? { requiredCheckSnapshot: snapshot } : {});
         // Use the captured assignee because updateTask clears assignedWorkerId on
         // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
         // records and never blocks a successfully submitted plan.

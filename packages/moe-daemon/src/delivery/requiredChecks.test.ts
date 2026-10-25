@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -7,6 +7,7 @@ import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { submitPlanTool } from '../tools/submitPlan.js';
 import { MoeErrorCode } from '../util/errors.js';
 import * as validators from '../state/validators.js';
+import { requiredCheckGit } from './requiredChecks.js';
 
 const kinds = ['configs', 'scripts', 'assertionRoots'] as const;
 const definition = () => ({ id: 'check-1', command: '  npm test -- שלום 😀  ',
@@ -121,8 +122,16 @@ describe('pure required check helpers', () => {
 
 const h = new ToolTestHarness();
 beforeEach(() => h.init());
-afterEach(() => h.cleanup());
+afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
 async function boot(): Promise<void> {
+  // These cases test definition/rail semantics; real Git identity is covered in
+  // requiredChecks.snapshot.test.ts. Supply blobs for each requested path.
+  vi.spyOn(requiredCheckGit, 'run').mockImplementation(async args => {
+    if (args.includes('--show-toplevel')) return h.testDir;
+    if (args[0] === 'config') return '';
+    if (args.includes('--verify')) return 'a'.repeat(40);
+    return args.slice(args.indexOf('--') + 1).map(p => `100644 blob ${'b'.repeat(40)}\t${p}\0`).join('');
+  });
   h.setupMoeFolder(); h.createEpic();
   h.createWorker({ currentTaskId: 'task-1', status: 'CODING' });
   h.createTask({ status: 'PLANNING', assignedWorkerId: 'worker-1', contextFetchedBy: ['worker-1'], planRevision: 7 });
