@@ -11,7 +11,7 @@
   ],
   "taskRails": [
     "Harness-only change; scripts/moe-agent.ps1 and scripts/moe-agent.sh stay as df42861 left them unless the case proves them wrong.",
-    "Keep both harness twins byte-identical in the shared fake-proxy JavaScript, as the surrounding cases already require."
+    "Add no new divergence to the fake-proxy JavaScript of either harness twin. The twins already differ at HEAD (measured 2026-10-25); reconciling them belongs to task-7c2872e7052646b7a521cb7a8f01c546."
   ],
   "implementationPlan": [
     {
@@ -52,7 +52,7 @@
     }
   ],
   "planRevision": 19,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -114,12 +114,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-09-18T11:58:26.168Z",
-  "updatedAt": "2026-10-25T09:39:53.480Z",
+  "updatedAt": "2026-10-25T10:08:39.410Z",
   "metrics": {
     "firstClaimAt": "2026-09-19T13:06:56.720Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 0,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-25T10:08:39.409Z",
+    "wallClockMs": 3099702689
   },
   "contextFetchedBy": [
     "architect-0a85355d",
@@ -127,7 +129,8 @@
     "architect-74607b1b",
     "architect-26ba32c3",
     "worker-9cda703c",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "qa-b0c1741e"
   ],
   "priorHandoffs": [
     {
@@ -186,15 +189,36 @@
       "treeId": "5c12bf029997db220ab785c294a0d45e2511f87b",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "2ebc672be702dfd91043014f1c22805370395365",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T09:04:48Z",
+      "paths": [
+        ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+        ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T09:40:14.175Z",
+      "treeId": "be4ceb1edfc1d00d6601be5e5311099f2065ff59",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
-  "filesModified": [],
+  "filesModified": [
+    ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
+    ".moe/tasks/task-a9824bc1a509462da88294d364c0a9dc.json",
+    ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json"
+  ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-c1d9de02@2026-10-25T08:46:00Z",
-    "at": "2026-10-25T09:04:17.688Z"
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-25T09:04:48Z",
+    "at": "2026-10-25T09:40:14.175Z"
   },
   "dependsOn": [
     "task-84150869c3194fce908e6efad8f4c82b"
@@ -266,5 +290,9 @@
     "reportedAt": "2026-10-25T09:39:53.477Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Verification-only completion, NO EDIT MADE: the self-restart hand-over cases this card asked for already exist at HEAD (ported by squash 5e74fb8). The sh '[hot reload]' case is in postflight.sh, the ps1 'Hot reload keeps ONE wrapper process' arm is in postflight.ps1, and both parity checkers have 'hot reload' groups, with wrapper_restart registered.\nProof this session (snapshots of HEAD 23df1bf; the six harness/wrapper/parity paths are unchanged through bc45829):\n- RED on scratch copies: ps1 pre-df42861 (Start-Process relaunch, terminal_closed) fails the arm on PS 5.1.26100.9711 and pwsh 7.6.8 with RPC sequence 'cx'. sh mutants ARGV, S1 and S2 fail with 'cr', 'cx' and 'r'. A wrapper_restart rename fails parity-check.sh and parity-check.ps1 on both engines.\n- GREEN on the fresh snapshot: parity-check.sh, parity-check.ps1 (5.1 and pwsh 7), postflight.sh, and postflight.ps1 on PS 5.1 and pwsh 7, all exit 0 (73 frozen, 36 scope scenarios each).\n- Rail: fake-proxy bodies sh 7c3afb75...955ba and ps1 caf7a0b0...dc304 equal the b35d46c hashes, so no new divergence. The twins already differ (mem gotcha-postflight-fake-proxy-twins-diverged); prop-0da6d575 (MODIFY_RAIL) is pending, and reconciliation is task-7c2872e7052646b7a521cb7a8f01c546.\nDeviation: MOE_POSTFLIGHT_TIMEOUT_SEC=400, not the DoD's 180, because the box was loaded by three peer harnesses; nothing was retried or failed. Not covered: stock macOS without sha256sum (reload is off by design), and the ps1 harness through node->powershell (CI's 5.1 leg).\nThe wrappers land only the board record. Self-review is comment-18f9289d."
+  "completionSummary": "Verification-only completion, NO EDIT MADE: the self-restart hand-over cases this card asked for already exist at HEAD (ported by squash 5e74fb8). The sh '[hot reload]' case is in postflight.sh, the ps1 'Hot reload keeps ONE wrapper process' arm is in postflight.ps1, and both parity checkers have 'hot reload' groups, with wrapper_restart registered.\nProof this session (snapshots of HEAD 23df1bf; the six harness/wrapper/parity paths are unchanged through bc45829):\n- RED on scratch copies: ps1 pre-df42861 (Start-Process relaunch, terminal_closed) fails the arm on PS 5.1.26100.9711 and pwsh 7.6.8 with RPC sequence 'cx'. sh mutants ARGV, S1 and S2 fail with 'cr', 'cx' and 'r'. A wrapper_restart rename fails parity-check.sh and parity-check.ps1 on both engines.\n- GREEN on the fresh snapshot: parity-check.sh, parity-check.ps1 (5.1 and pwsh 7), postflight.sh, and postflight.ps1 on PS 5.1 and pwsh 7, all exit 0 (73 frozen, 36 scope scenarios each).\n- Rail: fake-proxy bodies sh 7c3afb75...955ba and ps1 caf7a0b0...dc304 equal the b35d46c hashes, so no new divergence. The twins already differ (mem gotcha-postflight-fake-proxy-twins-diverged); prop-0da6d575 (MODIFY_RAIL) is pending, and reconciliation is task-7c2872e7052646b7a521cb7a8f01c546.\nDeviation: MOE_POSTFLIGHT_TIMEOUT_SEC=400, not the DoD's 180, because the box was loaded by three peer harnesses; nothing was retried or failed. Not covered: stock macOS without sha256sum (reload is off by design), and the ps1 harness through node->powershell (CI's 5.1 leg).\nThe wrappers land only the board record. Self-review is comment-18f9289d.",
+  "completedAt": "2026-10-25T10:08:39.409Z",
+  "reviewCompletedAt": "2026-10-25T10:08:39.409Z",
+  "reviewSummary": "APPROVED. Verification-only card: completion commit 2ebc672 (pushed, on moe/work-2026-10-24) carries 3 board JSONs, no harness/wrapper edits. The cases already exist at HEAD; I checked by anchor in `git show HEAD:<path>`: postflight.sh '[hot reload]' (1849-1933), postflight.ps1 'Hot reload keeps ONE wrapper process' (1698-1783), moe-agent.sh ARGV capture (224, above parser at 226) + exec hand-over reason wrapper_restart (6026), moe-agent.ps1 in-process hand-over with -Reason 'wrapper_restart' (5467), both parity 'hot reload' groups (DoD 4). `git diff --quiet b35d46c HEAD` over the six paths exits 0.\nGREEN (fresh `git archive HEAD scripts` snapshots, MOE_*/CLAUDE* scrubbed, MOE_POSTFLIGHT_TIMEOUT_SEC=180 per DoD, load 9-22): parity-check.sh PASS; parity-check.ps1 PASS on PS 5.1.26100.9711 and pwsh 7.6.8; postflight.sh exit 0 (73 frozen, '[hot reload] ok: 2 restarts...', 36 scope); postflight.ps1 exit 0 on PS 5.1 and pwsh 7.6.8 ('[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity').\nRED (my own mutants of the copied wrapper): sh reason->terminal_closed: exit 1, 'HOT RELOAD FAILED: a deregister other than wrapper_restart (RPC sequence 'cx')'. ps1 same mutant on PS 5.1: 'HOT RELOAD FAILED: no claim after reload 1 ... RPC sequence 'cxccc...''. The worker's own pre-df42861 Start-Process mutant (RED on both engines) and sh ARGV/S1/S2 mutants were not re-run by me.\nRail: fake-proxy twins already differ at HEAD ('byte-identical' premise is false). I recomputed the hashes: sh 7c3afb75...955ba (32746 B), ps1 caf7a0b0...dc304 (31418 B), equal to the worker's. This card added no fake-proxy bytes, so no new divergence; prop-0da6d575 (MODIFY_RAIL) pending, reconcile = task-7c2872e7. moe-agent.* untouched.\nNot covered: stock macOS without sha256sum (reload off by design); ps1 harness via node->powershell (CI 5.1 leg). Scratch removed; live tree untouched.",
+  "requiredCheckAtDone": null
 }
