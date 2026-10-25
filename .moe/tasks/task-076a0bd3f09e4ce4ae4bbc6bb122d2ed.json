@@ -1,0 +1,35 @@
+{
+  "id": "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F04] Durable revision authorization",
+  "description": "Objective: Stamp daemon-owned approvedPlanRevision atomically in human approval paths and invalidate stale associations without deleting history.\n\nDeliverable: Durable revision authorization. This is task F04 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): F03.",
+  "definitionOfDone": [
+    "A delayed approval cannot authorize a newer contract.",
+    "Strict callers cannot omit approval revision; malformed tokens never become legacy omission.",
+    "Existing legacy approvals remain explicitly legacy, not inferred strict approvals.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion under the 2026-10-24 delegation: every dependsOn (F03 task-bf86954d) is DONE (approved 22:12Z). F04 is the next link in the F03→F04→F05→F06 chain that C01, R08, F07 and F09 wait on.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 40,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:16.329Z",
+  "updatedAt": "2026-10-25T07:46:04.973Z",
+  "dependsOn": [
+    "task-bf86954dc6bc43279d96d77cf0ebff88"
+  ]
+}
