@@ -140,7 +140,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:53.503Z",
-  "updatedAt": "2026-10-25T08:36:56.599Z",
+  "updatedAt": "2026-10-25T08:37:48.238Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -198,7 +198,42 @@
     "scripts/local-runner/image-cache.mjs",
     "scripts/local-runner/platform-windows.mjs",
     "scripts/local-runner/provision.mjs",
-    "scripts/local-runner/cli.mjs"
+    "scripts/local-runner/cli.mjs",
+    ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json"
   ],
-  "completionSummary": "CQ-R03 adds Windows VM provisioning, with executionReady always false and no isolation or certification claim.\n- New platform-windows.mjs: explicit operator prerequisites {id, satisfied, requiresElevation, action}, built from the R02 doctor plus one read-only HypervisorPresent CIM query. Moe never elevates, runs `multipass set`/`authenticate` or touches local.driver.\n- New image-cache.mjs: manifest-pinned image only, via a private exclusive .part, sha256 verify (R07), then atomic rename. A cache hit is re-verified and a corrupt entry is removed.\n- New provision.mjs: prerequisite gate, primary-name conflict, user-data, image, ONE R06 reserve, provisionOwned's same-name retry, then R07 readiness. No mounts, no deletes, and the credential travels only on `--cloud-init -` stdin.\n- cli.mjs gains `prerequisites` (exit 0 only when ready).\n- Tests: 31 appended. HEAD bytes are an identical prefix. Prerequisite/download/launch/retry code is covered with fakes; real-process tests cover stdin user-data, owned-only argv and EPIPE safety (the last one ran mutant-red).\nFresh results: DoD 170/170 exit 0; bundle 7/7; HEAD snapshot 170/170; diff --check clean. R02/R06/R07 modules and the manifest are unchanged (hash-checked).\nDeviations from the plan:\n- The report field is named providerCode.\n- maxBytes is a test-only lower bound.\n- The file:// URL uses process.platform, so a win32 path is never built on POSIX.\n- A non-regular cache entry is refused.\n- Launch timeout is 1–3600 s.\n- User-data is built before download, and a fileImageUrl precheck runs before reserve.\n- The review added the stdin error listener test, made the .part unlink created-only and added the sleep guard.\nResiduals: concurrent same-owner calls must be serialized by the caller, cacheDir must be private, HypervisorPresent can be true where only VMP is enabled, and there is no O_NOFOLLOW on Windows. Real-hardware certification is R13. R04/R05 reuse provision/image-cache: they add a platform module and a PLATFORMS ent"
+  "completionSummary": "CQ-R03 adds Windows VM provisioning, with executionReady always false and no isolation or certification claim.\n- New platform-windows.mjs: explicit operator prerequisites {id, satisfied, requiresElevation, action}, built from the R02 doctor plus one read-only HypervisorPresent CIM query. Moe never elevates, runs `multipass set`/`authenticate` or touches local.driver.\n- New image-cache.mjs: manifest-pinned image only, via a private exclusive .part, sha256 verify (R07), then atomic rename. A cache hit is re-verified and a corrupt entry is removed.\n- New provision.mjs: prerequisite gate, primary-name conflict, user-data, image, ONE R06 reserve, provisionOwned's same-name retry, then R07 readiness. No mounts, no deletes, and the credential travels only on `--cloud-init -` stdin.\n- cli.mjs gains `prerequisites` (exit 0 only when ready).\n- Tests: 31 appended. HEAD bytes are an identical prefix. Prerequisite/download/launch/retry code is covered with fakes; real-process tests cover stdin user-data, owned-only argv and EPIPE safety (the last one ran mutant-red).\nFresh results: DoD 170/170 exit 0; bundle 7/7; HEAD snapshot 170/170; diff --check clean. R02/R06/R07 modules and the manifest are unchanged (hash-checked).\nDeviations from the plan:\n- The report field is named providerCode.\n- maxBytes is a test-only lower bound.\n- The file:// URL uses process.platform, so a win32 path is never built on POSIX.\n- A non-regular cache entry is refused.\n- Launch timeout is 1–3600 s.\n- User-data is built before download, and a fileImageUrl precheck runs before reserve.\n- The review added the stdin error listener test, made the .part unlink created-only and added the sleep guard.\nResiduals: concurrent same-owner calls must be serialized by the caller, cacheDir must be private, HypervisorPresent can be true where only VMP is enabled, and there is no O_NOFOLLOW on Windows. Real-hardware certification is R13. R04/R05 reuse provision/image-cache: they add a platform module and a PLATFORMS ent",
+  "commits": [
+    {
+      "sha": "9079d1169c7dfb1bb5474a5431a398e46e0f0284",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T08:11:18Z",
+      "paths": [
+        ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+        "scripts/local-runner/cli.mjs",
+        "scripts/local-runner/image-cache.mjs",
+        "scripts/local-runner/platform-windows.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T08:37:48.237Z",
+      "treeId": "bbb3d332fbdddc93a7f4313274b7aef5102d73bf",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/image-cache.mjs",
+    "scripts/local-runner/platform-windows.mjs",
+    "scripts/local-runner/provision.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-25T08:11:18Z",
+    "at": "2026-10-25T08:37:48.237Z"
+  }
 }
