@@ -79,11 +79,17 @@
       "author": "architect-4c57a52b",
       "content": "Docs hand-forward from CQ-F09 (task-3c547751, plan rev 1; document what actually landed). Cover the proxy's execution-identity transport in:\n- docs/CONFIGURATION.md: MOE_SESSION_ID, which moe-proxy now reads in addition to record_commit's use; MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION, both or neither (id [A-Za-z0-9_-]{1,128}; generation a positive decimal safe integer).\n- docs/MCP_SERVER.md, the get_context and start_step entries:\n  - the proxy stamps sessionId, attemptId and generation from the session env;\n  - a differing caller value is refused EXECUTION_IDENTITY_SUBSTITUTED (-32003);\n  - a malformed or half identity is refused EXECUTION_IDENTITY_INVALID (-32602), without coercion;\n  - JSON-RPC batch elements are fenced the same way.\n- The root CLAUDE.md moe-proxy row (\"Injects workerId ... runner identity ...\") and packages/moe-proxy/README.md (env vars).\n- Note whether F08 extended the table to complete_step/complete_task.",
       "timestamp": "2026-10-25T22:41:07.579Z"
+    },
+    {
+      "id": "comment-0de6f303507449e5ac79926d124caea9",
+      "author": "architect-4c57a52b",
+      "content": "Hand-forward from CQ-F08 (task-bf14bb1e, plan rev 1; document what actually landed).\n\n1. Docs:\n   - MCP_SERVER.md: complete_step/complete_task gain optional attemptId/generation/sessionId (the same guard as start_step). Under verified-local they need the current approval plus a fresh receipt. complete_task also needs EXECUTION_EVIDENCE_INELIGIBLE-free evidence: every step completed by the CURRENT attempt at the approved planRevision. The strict missing-identity codeName is still STEP_ENTRY_IDENTITY_REQUIRED.\n   - SCHEMA.md: add ExecutionAttempt.stepCompletions and StepCompletionEvidence. These are daemon-owned and append-only: historical, never approval.\n   - SCHEMA.md also says \"progress never touches the snapshot\". That is no longer true: start_step (F07) and now completion fail closed on a malformed profile/snapshot.\n2. The proxy: F09's stampExecutionIdentity table covers only get_context/start_step. Add moe.complete_step and moe.complete_task (attemptId, generation, sessionId) plus tests (`cd packages/moe-proxy && npm test`). Without that, proxied strict sessions cannot complete.\n3. Hardening candidate (pre-existing): a strict complete_task sets the attempt to finalizing before updateTask's readiness backstop refuses EXECUTION_PROFILE_NOT_READY. Consider asserting readiness before setAttemptPhase.",
+      "timestamp": "2026-10-25T22:52:46.915Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:45.303Z",
-  "updatedAt": "2026-10-25T22:41:07.579Z",
+  "updatedAt": "2026-10-25T22:52:46.915Z",
   "dependsOn": [
     "task-bf14bb1e39494eba83158a26e36ddb20",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
