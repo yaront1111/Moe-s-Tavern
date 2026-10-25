@@ -133,7 +133,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:33:14.692Z",
-  "updatedAt": "2026-10-25T10:54:11.210Z",
+  "updatedAt": "2026-10-25T10:54:43.990Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:34:45.259Z",
     "plannedStepCount": 6,
@@ -185,7 +185,45 @@
   "filesModified": [
     "scripts/local-runner/guest-bridge.mjs",
     "scripts/tests/local-runner-bridge.test.mjs",
-    ".github/workflows/ci.yml"
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+    ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+    ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+    ".moe/tasks/task-f981d0597b26401a974c0fcd8829107e.json"
   ],
-  "completionSummary": "CQ-R08a delivered as pure functions in the new scripts/local-runner/guest-bridge.mjs, with tests B1-B15 in the new scripts/tests/local-runner-bridge.test.mjs. ci.yml changed by one line, adding the bridge test to the local-runner step. Net size: 185 + 203 + 1 = 389 lines, under the 400 limit.\n\nDoD:\n1. The decoder round-trips frames whole, byte by byte, and split at every offset. A zero, over-limit or 0xFFFFFFFF header is refused from the header alone. Invalid UTF-8 (overlong forms and lone surrogates included), a BOM, non-object JSON and a truncated frame all give BRIDGE_FRAME_INVALID. The decoder is O(n), with a preallocated bounded body, and any error poisons it.\n2. parseGuestFrame accepts hello, request, output and observation(exit) frames with exact keys. Output returns canonical-base64 bytes untouched, so an encoded observation stays 'output'. Everything else is BRIDGE_PROTOCOL_VIOLATION.\n3-4. The frozen TOOLS table was sourced from the daemon schemas and re-verified (all additionalProperties:false). The listed tools are TOOL_DENIED, including moe.constructor and the QA tools for a worker binding. prLink, currentBranch, resourceId, manualArtifact and mergedPullRequest are ARGUMENT_DENIED. role, attemptId, generation, processStartedAt and host are IDENTITY_MISMATCH even when equal to the binding; workerId or taskId give IDENTITY_MISMATCH when they differ. The binding's ids are stamped per daemon schema: get_handoff_history gets taskId only, heartbeat gets workerId only.\n5. bridgeArgv returns a frozen constant argv for an owned name only.\n6. The fresh named run is above: exit 0, 15/15, 0 skipped.\n\nSelf-review: attacker probes plus a 24-mutant sweep on a /tmp snapshot. All mutants are killed; three test gaps were fixed in tests only. One guard was added beyond the plan: encodeFrame requires the body to start with '{', which closes a toJSON loophole.\n\nOut of scope, commented on CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced): forwarding must handle deeply nested arg"
+  "completionSummary": "CQ-R08a delivered as pure functions in the new scripts/local-runner/guest-bridge.mjs, with tests B1-B15 in the new scripts/tests/local-runner-bridge.test.mjs. ci.yml changed by one line, adding the bridge test to the local-runner step. Net size: 185 + 203 + 1 = 389 lines, under the 400 limit.\n\nDoD:\n1. The decoder round-trips frames whole, byte by byte, and split at every offset. A zero, over-limit or 0xFFFFFFFF header is refused from the header alone. Invalid UTF-8 (overlong forms and lone surrogates included), a BOM, non-object JSON and a truncated frame all give BRIDGE_FRAME_INVALID. The decoder is O(n), with a preallocated bounded body, and any error poisons it.\n2. parseGuestFrame accepts hello, request, output and observation(exit) frames with exact keys. Output returns canonical-base64 bytes untouched, so an encoded observation stays 'output'. Everything else is BRIDGE_PROTOCOL_VIOLATION.\n3-4. The frozen TOOLS table was sourced from the daemon schemas and re-verified (all additionalProperties:false). The listed tools are TOOL_DENIED, including moe.constructor and the QA tools for a worker binding. prLink, currentBranch, resourceId, manualArtifact and mergedPullRequest are ARGUMENT_DENIED. role, attemptId, generation, processStartedAt and host are IDENTITY_MISMATCH even when equal to the binding; workerId or taskId give IDENTITY_MISMATCH when they differ. The binding's ids are stamped per daemon schema: get_handoff_history gets taskId only, heartbeat gets workerId only.\n5. bridgeArgv returns a frozen constant argv for an owned name only.\n6. The fresh named run is above: exit 0, 15/15, 0 skipped.\n\nSelf-review: attacker probes plus a 24-mutant sweep on a /tmp snapshot. All mutants are killed; three test gaps were fixed in tests only. One guard was added beyond the plan: encodeFrame requires the body to start with '{', which closes a toJSON loophole.\n\nOut of scope, commented on CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced): forwarding must handle deeply nested arg",
+  "commits": [
+    {
+      "sha": "17bc7ac06bda38f81c652f48dc58536831d9cda8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c1d9de02@2026-10-25T10:40:51Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json",
+        ".moe/tasks/task-f981d0597b26401a974c0fcd8829107e.json",
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-c1d9de02",
+      "recordedAt": "2026-10-25T10:54:43.990Z",
+      "treeId": "e17cf9a2b61df212c8874d774f2158cfc51bb9cc",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-bridge.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c1d9de02@2026-10-25T10:40:51Z",
+    "at": "2026-10-25T10:54:43.990Z"
+  }
 }
