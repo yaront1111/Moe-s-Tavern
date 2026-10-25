@@ -2130,9 +2130,14 @@ for (const args of [['prerequisites', 'extra'], ['prerequisites', '--executable'
   });
 }
 
-test('CLI prerequisites refuse a host without a platform module', { skip: process.platform === 'win32' }, async () => {
+test('CLI prerequisites refuse a host without a platform module', async () => {
+  // R04 gave Linux a platform module, so an unsupported host is simulated.
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   const writes = [];
-  assert.equal(await runCli(['prerequisites'], { write: text => writes.push(text) }), 2);
+  Object.defineProperty(process, 'platform', { ...platform, value: 'sunos' });
+  try {
+    assert.equal(await runCli(['prerequisites'], { write: text => writes.push(text) }), 2);
+  } finally { Object.defineProperty(process, 'platform', platform); }
   assert.deepEqual(writes, [`${JSON.stringify({ code: 'PLATFORM_UNSUPPORTED', ready: false, executionReady: false })}\n`]);
 });
 
@@ -2204,5 +2209,250 @@ process.exitCode = main();
   const state = JSON.parse(readFileSync(statePath, 'utf8'));
   assert.deepEqual(state.launches, [{ args: launchArgs(hostUrl(path.join(cacheDir, IMAGE_FILE))), stdin: BOOTSTRAP.userData }]);
   assert.deepEqual(state.instances, { [GUEST]: 'Running' });
+  assert.equal(existsSync(violations), false);
+});
+
+// CQ-R04 Linux VM provisioning
+import { platformFor } from '../local-runner/cli.mjs';
+import { HOST_DISK_HEADROOM_BYTES, linuxPlatform, MULTIPASS_STORAGE, REQUIRED_SNAP_PLUGS } from '../local-runner/platform-linux.mjs';
+
+const LINUX_HOST = { platform: 'linux', arch: 'x64' };
+const SNAP = '/usr/bin/snap';
+const SNAP_MULTIPASS = '/snap/bin/multipass';
+const SNAP_LIST = 'list multipass --unicode=never --color=never';
+const DISK = GUEST_RESOURCES.diskBytes + HOST_DISK_HEADROOM_BYTES;
+// snapd's --unicode=never table: a verified publisher renders as `canonical**`; Notes `-` is strict confinement.
+const snapRow = ({ version = '1.17.0', publisher = 'canonical**', notes = '-' } = {}) => `multipass  ${version}  14535  latest/stable  ${publisher}  ${notes}`;
+const snapList = (...rows) => `${['Name       Version  Rev    Tracking       Publisher    Notes', ...rows].join('\n')}\n`;
+const plugRow = (plug, slot = `:${plug === 'all-home' ? 'home' : plug}`) => `${plug === 'all-home' ? 'home' : plug}  multipass:${plug}  ${slot}  -`;
+const connections = (rows = REQUIRED_SNAP_PLUGS.map(plug => plugRow(plug))) =>
+  `${['Interface          Plug                         Slot                 Notes', ...rows, plugRow('network-manager', '-')].join('\n')}\n`;
+const LINUX_ANSWERS = {
+  [SNAP_LIST]: snapList(snapRow()), 'connections multipass': connections(), 'version --format json': '{"multipass":"1.17.0","multipassd":"1.17.0"}',
+  'get local.driver': 'qemu\n', 'get client.primary-name': 'primary\n',
+};
+/** One execFile-compatible transport for the snap CLI and the R02 doctor; an Error answer is thrown. */
+function linuxTransport(changes = {}) {
+  const answers = { ...LINUX_ANSWERS, ...changes };
+  const calls = [];
+  const run = async (executable, args, options) => {
+    calls.push({ argv: [executable, ...args], options });
+    const answer = answers[args.join(' ')];
+    if (answer instanceof Error) throw answer;
+    return { stdout: answer, stderr: '' };
+  };
+  return { run, calls };
+}
+const ROOMY = {
+  host: LINUX_HOST, cacheDir: '/home/u/moe-images', homedir: () => '/home/u', cpus: () => GUEST_RESOURCES.cpus, freemem: () => GUEST_RESOURCES.memoryBytes,
+  statDevice: async () => ({ isCharacterDevice: () => true }), statfs: async () => ({ bavail: DISK / 4096, bsize: 4096 }),
+};
+const RESOURCE_ACTION = 'Free host CPU, memory or disk, or use a larger host; Moe never runs jobs on the host instead.';
+const connectAction = (plugs = REQUIRED_SNAP_PLUGS) =>
+  `Connect the required Multipass snap interfaces (requires sudo): ${plugs.map(plug => `sudo snap connect multipass:${plug}`).join('; ')}.`;
+const LINUX_ITEMS = [
+  ['host-linux-x64', false, 'Run Moe on a Linux x64 host.'],
+  ['multipass-snap', true, 'Install the Multipass 1.17.0 snap from the verified Canonical publisher with strict confinement (requires sudo).'],
+  ['snap-interfaces', true, connectAction()],
+  ['multipass-installed', true, 'Refresh the Multipass snap so client and daemon both report 1.17.0 (requires sudo).'],
+  ['multipass-authenticated', true, 'An administrator sets a Multipass passphrase; then run `multipass authenticate` as this user.'],
+  ['driver-qemu', true, 'An administrator configures the Multipass driver to qemu; Moe never changes local.driver.'],
+  ['kvm-available', true, 'Enable hardware virtualization in firmware and load the kvm module (requires administrator); Moe never falls back to emulation or host execution.'],
+  ['host-cpus', false, RESOURCE_ACTION], ['host-memory', false, RESOURCE_ACTION], ['host-disk', false, RESOURCE_ACTION],
+  ['image-cache-location', false, 'Use a non-hidden directory under your home directory for the image cache.'],
+];
+const linuxItems = (states, plugs) => LINUX_ITEMS.map(([id, requiresElevation, action], at) => ({
+  id, satisfied: states[at], requiresElevation, action: plugs && id === 'snap-interfaces' ? connectAction(plugs) : action,
+}));
+/** Every prerequisite satisfied except the one at index `at`. */
+const only = (at, value) => Array.from({ length: LINUX_ITEMS.length }, (_, index) => (index === at ? value : T));
+const LINUX_READY = linuxItems(Array(LINUX_ITEMS.length).fill(T));
+const satisfiedOf = result => result.prerequisites.map(item => item.satisfied);
+const linuxPrerequisites = (changes = {}, transport = linuxTransport()) => linuxPlatform.prerequisites({ provider: { run: transport.run }, ...ROOMY, ...changes });
+
+test('Linux prerequisites pin the snap client and the required plugs of the v1.17.0 snap', async () => {
+  assert.equal(Object.isFrozen(linuxPlatform), true);
+  assert.deepEqual([linuxPlatform.id, linuxPlatform.arch, linuxPlatform.executable], ['linux', 'x64', SNAP_MULTIPASS]);
+  assert.equal(Object.isFrozen(REQUIRED_SNAP_PLUGS), true);
+  assert.deepEqual(REQUIRED_SNAP_PLUGS, ['all-home', 'firewall-control', 'kvm', 'multipass-support', 'network-bind', 'network-control']);
+  assert.deepEqual([HOST_DISK_HEADROOM_BYTES, MULTIPASS_STORAGE], [2 * GiB, '/var/snap/multipass/common']);
+  const transport = linuxTransport();
+  const probed = [];
+  const result = await linuxPrerequisites({
+    statDevice: async file => { probed.push(file); return { isCharacterDevice: () => true }; },
+    statfs: async dir => { probed.push(dir); return { bavail: DISK / 4096, bsize: 4096 }; },
+  }, transport);
+  assert.deepEqual(result, { platform: 'linux', ready: true, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: LINUX_READY, primaryName: 'primary' });
+  assert.deepEqual(transport.calls.map(call => call.argv.join(' ')).sort(), [
+    `${SNAP_MULTIPASS} get client.primary-name`, `${SNAP_MULTIPASS} get local.driver`, `${SNAP_MULTIPASS} version --format json`,
+    `${SNAP} connections multipass`, `${SNAP} ${SNAP_LIST}`,
+  ]);
+  for (const call of transport.calls) assert.deepEqual(call.options, lifecycleOptions(MAX_PROBE_TIMEOUT_MS));
+  assert.deepEqual(probed.sort(), ['/dev/kvm', MULTIPASS_STORAGE]);
+  for (const item of result.prerequisites) assert.deepEqual(Object.keys(item), ['id', 'satisfied', 'requiresElevation', 'action']);
+});
+
+test('only the strictly confined Canonical-verified Multipass 1.17.0 snap satisfies multipass-snap', async () => {
+  const rejected = [{ version: '1.16.1' }, { version: '1.17.0+win' }, { publisher: 'canonical' }, { publisher: 'canonical*' }, { publisher: 'someone**' },
+    ...['devmode', 'classic', 'jailmode', 'disabled', 'try', 'broken', 'devmode,disabled'].map(notes => ({ notes }))];
+  for (const [answer, expected] of [
+    ...rejected.map(row => [snapList(snapRow(row)), F]), [failWith({ code: 'ENOENT' }), F],
+    [snapList(), U], [snapList(snapRow(), snapRow()), U], [snapList(`${snapRow()}  extra`), U], [snapList('multipass  1.17.0  14535'), U], [snapRow(), U],
+    [snapList(snapRow()).replace('Publisher', 'Developer'), U], ['', U], [undefined, U], [`${snapList(snapRow())}${' '.repeat(MAX_PROBE_BUFFER)}`, U],
+    [failWith({ code: 1, stderr: 'error: no matching snaps installed' }), U], [failWith({ killed: true, code: 'ETIMEDOUT' }), U],
+  ]) {
+    const result = await linuxPrerequisites({}, linuxTransport({ [SNAP_LIST]: answer }));
+    assert.deepEqual([result.ready, satisfiedOf(result)], [false, only(1, expected)], JSON.stringify(answer)?.slice(0, 90));
+  }
+});
+
+test('every required multipassd plug must be connected; the action names exactly the missing connects', async () => {
+  for (const plug of REQUIRED_SNAP_PLUGS) {
+    const disconnected = REQUIRED_SNAP_PLUGS.map(name => plugRow(name, name === plug ? '-' : undefined));
+    const absent = REQUIRED_SNAP_PLUGS.filter(name => name !== plug).map(name => plugRow(name));
+    for (const answer of [connections(disconnected), connections(absent)]) {
+      const result = await linuxPrerequisites({}, linuxTransport({ 'connections multipass': answer }));
+      assert.deepEqual([result.ready, result.prerequisites], [false, linuxItems(only(2, F), [plug])], plug);
+    }
+  }
+  const others = REQUIRED_SNAP_PLUGS.filter(name => !['kvm', 'network-control'].includes(name)).map(name => plugRow(name));
+  const two = await linuxPrerequisites({}, linuxTransport({ 'connections multipass': connections([...others, 'kvm  other:kvm  :kvm  -']) }));
+  assert.deepEqual(two.prerequisites, linuxItems(only(2, F), ['kvm', 'network-control']));
+  for (const answer of [connections().replace('Slot ', 'Slots'), `${connections()}kvm  multipass:kvm  :kvm\n`, '', undefined, failWith({ code: 1 }), failWith({ code: 'ENOENT' })]) {
+    const result = await linuxPrerequisites({}, linuxTransport({ 'connections multipass': answer }));
+    assert.deepEqual([result.ready, result.prerequisites], [false, linuxItems(only(2, U))], JSON.stringify(answer)?.slice(0, 90));
+  }
+});
+
+test('a failed provider check marks only its own Linux prerequisite; the doctor runs against the snap client', async () => {
+  for (const [code, [host, installed, authenticated, driver]] of [
+    ['HOST_UNSUPPORTED', [F, U, U, U]], ['PROVIDER_NOT_FOUND', [U, F, U, U]], ['VERSION_MISMATCH', [U, F, U, U]], ['VERSION_UNSUPPORTED', [U, F, U, U]],
+    ['PROVIDER_ACCESS_DENIED', [U, U, F, U]], ['DRIVER_UNSUPPORTED', [U, U, U, F]], ['PROVIDER_TIMEOUT', [U, U, U, U]],
+  ]) {
+    const seen = [];
+    const transport = linuxTransport();
+    const result = await linuxPrerequisites({ doctor: async options => { seen.push(options); return doctorReport(code); } }, transport);
+    assert.deepEqual([result.ready, result.providerCode, result.primaryName, satisfiedOf(result)],
+      [false, code, null, [host, T, T, installed, authenticated, driver, T, T, T, T, T]], code);
+    assert.deepEqual(seen, [{ host: LINUX_HOST, executable: SNAP_MULTIPASS, run: transport.run }], code);
+  }
+  // The real R02 doctor applies the manifest's linux entry: a Windows build or the hcs driver is refused.
+  for (const [changes, expected] of [
+    [{ 'version --format json': JSON.stringify(version) }, [U, T, T, F, U, U]], [{ 'get local.driver': 'hcs\n' }, [U, T, T, U, U, F]],
+    [{ 'version --format json': failWith({ code: 1, stderr: 'The client is not authenticated with the Multipass service.' }) }, [U, T, T, U, F, U]],
+  ]) {
+    const result = await linuxPrerequisites({}, linuxTransport(changes));
+    assert.deepEqual([result.ready, satisfiedOf(result)], [false, [...expected, T, T, T, T, T]], JSON.stringify(changes));
+  }
+});
+
+test('missing KVM, short resources or an unreadable cache location block without a fallback', async () => {
+  const device = (character, error) => async () => { if (error) throw error; return { isCharacterDevice: () => character }; };
+  const disk = (bavail, bsize = 4096) => async () => ({ bavail, bsize });
+  for (const [changes, at, expected] of [
+    [{ statDevice: device(false) }, 6, F], [{ statDevice: device(true, failWith({ code: 'ENOENT' })) }, 6, F],
+    [{ statDevice: device(true, failWith({ code: 'EACCES' })) }, 6, U], [{ statDevice: async () => ({}) }, 6, U],
+    [{ cpus: () => GUEST_RESOURCES.cpus - 1 }, 7, F], [{ cpus: () => Number.NaN }, 7, U],
+    [{ freemem: () => GUEST_RESOURCES.memoryBytes - 1 }, 8, F], [{ freemem: () => undefined }, 8, U],
+    [{ statfs: disk(DISK / 4096 - 1) }, 9, F], [{ statfs: disk(DISK - 1, 1) }, 9, F], [{ statfs: disk(1.5) }, 9, U],
+    [{ statfs: async () => { throw failWith({ code: 'ENOENT' }); } }, 9, U],
+    ...['/home/u/.cache/moe', '/home/u/moe/.x', '/home/u/moe/../.x', '/var/tmp/x', 'moe-images', '/home/u', '/home/u2/x', '/home/u/../u2/x', 7]
+      .map(cacheDir => [{ cacheDir }, 10, F]),
+    [{ cacheDir: undefined }, 10, U], [{ homedir: () => 'home/u' }, 10, U], [{ cacheDir: 'moe-images', homedir: () => '/' }, 10, F],
+  ]) {
+    const result = await linuxPrerequisites(changes);
+    assert.deepEqual([result.ready, satisfiedOf(result)], [false, only(at, expected)], `${at} ${JSON.stringify(changes)}`);
+  }
+  const huge = await linuxPrerequisites({ statfs: disk(2n ** 60n, 4096n), cacheDir: '/home/u/a b/moe-images', cpus: () => 64 });
+  assert.equal(huge.ready, true);
+});
+
+test('Linux checks are isolated: a throwing check is unknown, never ready, and nothing rejects', async () => {
+  const boom = () => { throw failWith({ code: 'EIO' }); };
+  const result = await linuxPrerequisites({ doctor: async () => boom(), statDevice: boom, statfs: boom, cpus: boom, freemem: boom, homedir: boom },
+    linuxTransport({ [SNAP_LIST]: failWith({ code: 'EIO' }), 'connections multipass': failWith({ code: 'EIO' }) }));
+  assert.deepEqual(result, { platform: 'linux', ready: false, providerCode: null, prerequisites: linuxItems(Array(LINUX_ITEMS.length).fill(U)), primaryName: null });
+});
+
+/** R03's fakeVm behind the Linux snap and doctor answers, recording the executable of every call. */
+function linuxVm(h, changes) {
+  const transport = linuxTransport(changes);
+  const executables = [];
+  const run = (executable, args, options) => {
+    executables.push(executable);
+    return executable === SNAP || ['version', 'get'].includes(args[0]) ? transport.run(executable, args, options) : h.fake.run(executable, args, options);
+  };
+  return { run, transport, executables };
+}
+// The two Linux provisioning tests compose POSIX host paths, so they run only where Linux provisioning can.
+const onLinux = (h, probes = {}) => ({
+  ...linuxPlatform, prerequisites: options => linuxPlatform.prerequisites({ ...ROOMY, homedir: () => path.dirname(h.cacheDir), ...options, ...probes }),
+});
+
+test('Linux provisioning does nothing until every prerequisite is satisfied: there is no host fallback', { skip: process.platform === 'win32' }, async t => {
+  const noKvm = [{ statDevice: async () => { throw failWith({ code: 'ENOENT' }); } }, {}, only(6, F)];
+  for (const [label, [probes, changes, states, plugs]] of Object.entries({
+    devmode: [{}, { [SNAP_LIST]: snapList(snapRow({ notes: 'devmode' })) }, only(1, F)],
+    unplugged: [{}, { 'connections multipass': connections(REQUIRED_SNAP_PLUGS.slice(0, 2).map(plug => plugRow(plug))) }, only(2, F), REQUIRED_SNAP_PLUGS.slice(2)],
+    mismatch: [{}, { 'version --format json': '{"multipass":"1.17.0","multipassd":"1.16.1"}' }, [U, T, T, F, U, U, T, T, T, T, T]],
+    noKvm, cpus: [{ cpus: () => 1 }, {}, only(7, F)], memory: [{ freemem: () => Number.NaN }, {}, only(8, U)],
+    disk: [{ statfs: async () => ({ bavail: 0, bsize: 4096 }) }, {}, only(9, F)], cache: [{ homedir: () => '/home/nobody' }, {}, only(10, F)],
+  })) {
+    const h = provisionHarness(t);
+    const result = await provisionWith(h, { platform: onLinux(h, probes), provider: { run: linuxVm(h, changes).run } });
+    assert.deepEqual(result, { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: linuxItems(states, plugs) }, label);
+    assert.deepEqual([h.download.calls.length, existsSync(h.cacheDir), existsSync(h.ledgerDir), h.fake.commands()], [0, false, false, []], label);
+  }
+});
+
+test('Linux provisioning launches the pinned image through the snap client without mounts or settings', { skip: process.platform === 'win32' }, async t => {
+  const h = provisionHarness(t);
+  const vm = linuxVm(h);
+  assert.deepEqual(await provisionWith(h, { platform: onLinux(h), provider: { run: vm.run } }), { ...provisioned(), prerequisites: LINUX_READY });
+  assert.deepEqual([...new Set(vm.executables)].sort(), [SNAP_MULTIPASS, SNAP]);
+  assert.deepEqual(vm.transport.calls.map(call => call.argv.join(' ')).sort(), [
+    `${SNAP_MULTIPASS} get client.primary-name`, `${SNAP_MULTIPASS} get local.driver`, `${SNAP_MULTIPASS} version --format json`,
+    `${SNAP} connections multipass`, `${SNAP} ${SNAP_LIST}`,
+  ]);
+  assert.deepEqual(h.fake.launches.map(launch => launch.args), [launchArgs(hostUrl(path.join(h.cacheDir, IMAGE_FILE)))]);
+  assert.deepEqual(h.fake.commands(), ['info', 'launch', 'info', ...Array(1 + BOUNDARY.length).fill('exec')]);
+  assert.deepEqual(h.fake.guest.unexpected, []);
+  const record = await h.ledger.read(GUEST);
+  assert.deepEqual([readdirSync(h.ledgerDir), record.phase, record.image], [[`${GUEST}.json`], 'owned', { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }]);
+});
+
+test('Windows provisioning keeps its own multipass client and ignores the cache location argument', async t => {
+  const h = provisionHarness(t);
+  const executables = new Set();
+  const run = (executable, args, options) => { executables.add(executable); return h.fake.run(executable, args, options); };
+  assert.deepEqual(await provisionWith(h, { provider: { run } }), provisioned());
+  assert.deepEqual([...executables], ['multipass']);
+});
+
+test('the CLI selects the Linux platform module and no other host gains one', () => {
+  assert.deepEqual([platformFor('linux'), platformFor('win32'), platformFor('darwin'), platformFor('constructor'), platformFor('toString')],
+    [linuxPlatform, windowsPlatform, null, null, null]);
+});
+
+test('real snap and Multipass processes: Linux prerequisites read genuine output and refuse a devmode snap', { skip: process.platform === 'win32' }, async t => {
+  const dir = scratch(t);
+  const [answersPath, violations, snap, multipass] = ['answers.json', 'violations.log', 'fake snap', 'fake multipass'].map(name => path.join(dir, name));
+  const script = `#!${process.execPath}
+const fs = process.getBuiltinModule('node:fs');
+const [answersPath, violations] = ${JSON.stringify([answersPath, violations])};
+const answer = JSON.parse(fs.readFileSync(answersPath, 'utf8'))[process.argv.slice(2).join(' ')];
+if (typeof answer === 'string') process.stdout.write(answer);
+else {
+  fs.appendFileSync(violations, JSON.stringify(process.argv.slice(2)) + '\\n');
+  process.exitCode = 64;
+}
+`;
+  for (const file of [snap, multipass]) writeFileSync(file, script, { mode: 0o755 });
+  const probe = () => linuxPlatform.prerequisites({ ...ROOMY, provider: { executable: multipass }, snapExecutable: snap });
+  writeFileSync(answersPath, JSON.stringify(LINUX_ANSWERS));
+  assert.deepEqual(await probe(), { platform: 'linux', ready: true, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: LINUX_READY, primaryName: 'primary' });
+  writeFileSync(answersPath, JSON.stringify({ ...LINUX_ANSWERS, [SNAP_LIST]: snapList(snapRow({ notes: 'devmode' })) }));
+  const devmode = await probe();
+  assert.deepEqual([devmode.ready, satisfiedOf(devmode)], [false, only(1, F)]);
   assert.equal(existsSync(violations), false);
 });

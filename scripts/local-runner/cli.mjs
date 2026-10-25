@@ -3,10 +3,11 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runDoctor } from './doctor.mjs';
+import { linuxPlatform } from './platform-linux.mjs';
 import { windowsPlatform } from './platform-windows.mjs';
 
-// Keyed by process.platform; R04 and R05 add their platform modules here.
-const PLATFORMS = Object.freeze({ win32: windowsPlatform });
+// Keyed by process.platform; R05 adds its platform module here.
+const PLATFORMS = Object.freeze({ win32: windowsPlatform, linux: linuxPlatform });
 const COMMANDS = ['doctor', 'prerequisites'];
 const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>]';
 
@@ -18,9 +19,12 @@ function argumentsFor(argv) {
   return { command: argv[0], options: { executable: argv[2] } };
 }
 
+/** The platform module for a process.platform id, or null. */
+export const platformFor = id => (Object.hasOwn(PLATFORMS, id) ? PLATFORMS[id] : null);
+
 /** This host's operator prerequisites; a host without a platform module is unsupported, never ready. */
 async function hostPrerequisites({ executable }) {
-  const platform = Object.hasOwn(PLATFORMS, process.platform) ? PLATFORMS[process.platform] : null;
+  const platform = platformFor(process.platform);
   if (!platform) return { code: 'PLATFORM_UNSUPPORTED', ready: false, executionReady: false };
   const report = await platform.prerequisites({ provider: { executable } });
   return {

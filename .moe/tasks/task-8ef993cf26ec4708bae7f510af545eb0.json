@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:53.503Z",
-  "updatedAt": "2026-10-25T10:39:17.174Z",
+  "updatedAt": "2026-10-25T10:40:20.410Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -169,7 +169,11 @@
     ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
     ".moe/tasks/task-333f14f4868343d9820109624a698194.json",
     ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
-    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+    ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+    ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+    ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
   ],
   "completionSummary": "CQ-R03 adds Windows VM provisioning, with executionReady always false and no isolation or certification claim.\n- New platform-windows.mjs: explicit operator prerequisites {id, satisfied, requiresElevation, action}, built from the R02 doctor plus one read-only HypervisorPresent CIM query. Moe never elevates, runs `multipass set`/`authenticate` or touches local.driver.\n- New image-cache.mjs: manifest-pinned image only, via a private exclusive .part, sha256 verify (R07), then atomic rename. A cache hit is re-verified and a corrupt entry is removed.\n- New provision.mjs: prerequisite gate, primary-name conflict, user-data, image, ONE R06 reserve, provisionOwned's same-name retry, then R07 readiness. No mounts, no deletes, and the credential travels only on `--cloud-init -` stdin.\n- cli.mjs gains `prerequisites` (exit 0 only when ready).\n- Tests: 31 appended. HEAD bytes are an identical prefix. Prerequisite/download/launch/retry code is covered with fakes; real-process tests cover stdin user-data, owned-only argv and EPIPE safety (the last one ran mutant-red).\nFresh results: DoD 170/170 exit 0; bundle 7/7; HEAD snapshot 170/170; diff --check clean. R02/R06/R07 modules and the manifest are unchanged (hash-checked).\nDeviations from the plan:\n- The report field is named providerCode.\n- maxBytes is a test-only lower bound.\n- The file:// URL uses process.platform, so a win32 path is never built on POSIX.\n- A non-regular cache entry is refused.\n- Launch timeout is 1–3600 s.\n- User-data is built before download, and a fileImageUrl precheck runs before reserve.\n- The review added the stdin error listener test, made the .part unlink created-only and added the sleep guard.\nResiduals: concurrent same-owner calls must be serialized by the caller, cacheDir must be private, HypervisorPresent can be true where only VMP is enabled, and there is no O_NOFOLLOW on Windows. Real-hardware certification is R13. R04/R05 reuse provision/image-cache: they add a platform module and a PLATFORMS ent",
   "commits": [
@@ -226,6 +230,25 @@
       "treeId": "df351f9bfd3726da6ed1477e4a121dfeaec61a06",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "094d713460f7b1ab83c5a21f167a418ef6a693f1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T10:33:21Z",
+      "paths": [
+        ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+        ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T10:40:20.410Z",
+      "treeId": "3f80bf8ea598549e4d71304855cb167ad0f90435",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -237,8 +260,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-07cd2c56@2026-10-25T08:47:53Z",
-    "at": "2026-10-25T08:50:33.871Z"
+    "sessionId": "qa-b0c1741e@2026-10-25T10:33:21Z",
+    "at": "2026-10-25T10:40:20.410Z"
   },
   "reviewCompletedAt": "2026-10-25T10:39:17.174Z",
   "rejectionDetails": {

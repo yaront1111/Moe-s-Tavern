@@ -70,7 +70,9 @@ export async function provisionGuest({
       || (sleep !== undefined && typeof sleep !== 'function')) {
     throw provisionError('PROVISION_INPUT_INVALID');
   }
-  const pre = await platform.prerequisites({ provider });
+  // Every Multipass call goes to the platform's certified client (Linux pins the snap's), unless overridden.
+  provider = { ...provider, executable: provider.executable ?? platform.executable };
+  const pre = await platform.prerequisites({ provider, cacheDir });
   if (pre?.ready !== true) return { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: pre?.prerequisites };
   if (isOwnedInstanceName(pre.primaryName)) throw provisionError('PRIMARY_NAME_CONFLICT');
   const bootstrap = buildUserData({ supervisor, credential });
