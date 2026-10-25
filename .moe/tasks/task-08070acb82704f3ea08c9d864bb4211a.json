@@ -1,0 +1,32 @@
+{
+  "id": "task-08070acb82704f3ea08c9d864bb4211a",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F04d] VS Code approvals send the rendered plan revision",
+  "description": "Objective: CQ-F04b (task-c619879ed9a643139c184fd5cb1ee888) will make the daemon refuse an omitted expectedPlanRevision on every human approval route. Before it does, make every VS Code approval action send the plan revision its webview rendered, so no VS Code approval silently breaks. Today only PlanReviewPanel sends it. These paths omit it:\n- moe-vscode/src/panels/TaskDetailPanel.ts: the 'approve' message, and 'next' from AWAITING_APPROVAL.\n- moe-vscode/src/providers/BoardViewProvider.ts: the 'approveTask' message, and any 'updateTaskStatus' that moves an AWAITING_APPROVAL card to WORKING (a token-free UPDATE_TASK approval).\n\nDeliverable:\n- Each webview message that can approve carries the planRevision the webview rendered for that task, and the host passes it to MoeDaemonClient.approveTask. As MoeDaemonClient already documents, the token must never be read from the client's cached state at click time: the newest revision is not the reviewed one.\n- A board drag of an AWAITING_APPROVAL card to WORKING goes through approveTask with that rendered token, never through updateTaskStatus.\n- MoeDaemonClient.approveTask requires the token: the legacy token-free payload branch is removed, and an undefined token refuses locally like a malformed one, with an error the user sees and no message sent.\n- Tests in moe-vscode/tests (node --test, .cjs), extending plan-approval-client.test.cjs and plan-review.test.cjs.\n\nNot in scope: the daemon refusal (CQ-F04b), JetBrains (CQ-F04c, which goes first per the JetBrains-first rule), CLIENT_HELLO negotiation (CQ-I04), and any daemon file.\n\nVerification command (fresh, exit 0 required): cd moe-vscode && npm test && npm run compile",
+  "definitionOfDone": [
+    "Every VS Code approval path (TaskDetailPanel Approve and Next, the board's approveTask message, a board drag of an AWAITING_APPROVAL card to WORKING, PlanReviewPanel) sends APPROVE_TASK with the plan revision its webview rendered. None sends a token-free approval or a token-free UPDATE_TASK AWAITING_APPROVAL->WORKING.",
+    "MoeDaemonClient.approveTask has no token-free branch. An undefined or malformed token refuses locally with a user-visible error and sends nothing.",
+    "The rendered revision comes from the webview message or the panel render, never from cached client state at click time. Tests in moe-vscode/tests cover each path's payload and the refusal.",
+    "Fresh verification `cd moe-vscode && npm test && npm run compile` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 230.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:47:36.619Z",
+  "updatedAt": "2026-10-25T10:47:36.619Z"
+}

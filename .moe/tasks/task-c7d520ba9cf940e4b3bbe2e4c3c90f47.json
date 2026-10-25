@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -104,20 +104,23 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:18.737Z",
-  "updatedAt": "2026-10-25T10:21:43.128Z",
+  "updatedAt": "2026-10-25T10:52:23.430Z",
   "dependsOn": [
     "task-076a0bd3f09e4ce4ae4bbc6bb122d2ed"
   ],
   "contextFetchedBy": [
     "architect-473624b4",
     "architect-26ba32c3",
-    "worker-07cd2c56"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-25T09:43:07.526Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-25T10:52:23.430Z",
+    "wallClockMs": 4155904
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -247,5 +250,9 @@
   "touchedFiles": [
     "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts",
     "packages/moe-daemon/src/types/schema.ts"
-  ]
+  ],
+  "completedAt": "2026-10-25T10:52:23.430Z",
+  "reviewCompletedAt": "2026-10-25T10:52:23.430Z",
+  "reviewSummary": "CQ-F05 verified on completion eaaff56 (on moe/work-2026-10-24; checkpoint 84ac030 same task). Owned diff 263e9f5..eaaff56: +367/-35 = 332 net (<400); no later commit touches the 5 files.\nGate: whole-repo archive of eaaff56, native Linux node_modules (lock equal modulo CRLF), env -i Linux PATH: `cd packages/moe-daemon && npm test` exit 0, 162 files, 4062 passed | 14 skipped (matches task.verification); `npx tsc --noEmit` exit 0. HEAD f088ec2 archive: focused 4 suites (automaticApprovalRevision, approvalRevision.acceptance, planApproval, submitPlan) exit 0.\nDoD1: the SPEED timer captures the submitted revision; the store's checkedApprovalRevision refuses a stale one and the timer withholds with no write. Pinned by queued-older-timer tests (identical resubmission, cancel) and the unskipped F01 held-out group (only describe.skip->describe).\nDoD2: rearm binds executionPolicySnapshot.planRevision (post-bump revision of the PLAN_SUBMITTED write), legacy rows fall back to the current revision, per-row try/catch never throws. Tests: unchanged, DoD changed, legacy, malformed beside healthy.\nDoD3: TURBO (same runExclusive as PLAN_SUBMITTED) and SPEED stamp approvedPlanRevision in the image with WORKING/planApprovedAt; store accepts it on PLAN_AUTO_APPROVED only. F04 strict guard and NOT_READY order unchanged; approval modes preserved.\nDoD4: verification present, exit 0, reproduced.\nMy mutation check (8 mutants, focused suites), all KILLED: SPEED no stamp, TURBO no stamp, gate without PLAN_AUTO_APPROVED, catch-all, rearm current revision, no legacy fallback, re-check removed, fire-time revision.\nNon-blocking: an older callback already queued behind the mutex during a resubmission posts a spurious \"withheld\" notice (the new timer still approves); inner `const revision` in submit shadows the outer requiredCheckRevision `revision`. Docs are F12's (task-72184c65).",
+  "requiredCheckAtDone": null
 }

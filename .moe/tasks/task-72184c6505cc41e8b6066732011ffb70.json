@@ -55,11 +55,17 @@
       "author": "architect-6e3edf85",
       "content": "F06 docs hand-forward. F06 rev 1 deliberately leaves docs to F12; re-verify against F06's landed code first.\n\ndocs/MCP_SERVER.md, moe.get_context section:\n- New `sessionId` input. It is the receiving session's incarnation exactly as the runner names it: the wrapper's MOE_SESSION_ID `<workerId>@<preflight-iso>`. There is no env fallback. A malformed value is refused for every view, and null counts as malformed.\n- New `servedContext` block on default and view:\"full\" reads: {taskId, planRevision, approvedPlanRevision, attemptId, generation, receiptStatus, receiptId, packetId}.\n- receiptStatus values: identity-unreadable, no-session, no-running-attempt, not-attempt-owner, recorded, record-failed.\n- packetId = sha256 of the response minus servedContext.\n- view:\"status\" never records a receipt.\n- A receipt records what was served; it is never approval.\n\ndocs/SCHEMA.md:\n- ExecutionAttempt.contextReceipt (ServedContextReceipt): one latest-wins slot, written only for a running attempt by its own worker.\n- approvedPlanRevision is absent, never null.\n\nOn the F12 DoD item \"execution-only progress does not invalidate receipts by revising approval\": a receipt records the planRevision it was served at. Only material plan, DoD or contract changes advance that revision.",
       "timestamp": "2026-10-25T10:44:20.223Z"
+    },
+    {
+      "id": "comment-7868673152d044ca892aa1da3165f211",
+      "author": "architect-26ba32c3",
+      "content": "Docs hand-forward from CQ-F04b (architect-26ba32c3, 2026-10-25). Once F04b lands, every human approval route refuses an omitted expectedPlanRevision with INVALID_INPUT, while an explicit 0 still approves a stamp-less row. F04b updates docs/MCP_SERVER.md itself. These lines are left for this row's docs sweep:\n- docs/PLAN_APPROVAL_FRESHNESS.md line 78, \"An omitted `expectedPlanRevision` is still a legal approval\".\n- The line 128 table row, \"approval without the field still works\".\nAlso: this epic now has CQ-F04c (JetBrains), F04d (VS Code) and F04e (daemon test fixtures) as F04b prerequisites. F04b's order (230.5) is above this row's (120), so the daemon flags F04b as isEpicFinal. This row should own the highest order.",
+      "timestamp": "2026-10-25T10:49:53.378Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:45.303Z",
-  "updatedAt": "2026-10-25T10:44:20.223Z",
+  "updatedAt": "2026-10-25T10:49:53.379Z",
   "dependsOn": [
     "task-bf14bb1e39494eba83158a26e36ddb20",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",

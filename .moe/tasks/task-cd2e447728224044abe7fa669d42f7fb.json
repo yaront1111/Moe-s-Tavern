@@ -1,0 +1,29 @@
+{
+  "id": "task-cd2e447728224044abe7fa669d42f7fb",
+  "epicId": "epic-be924fb8",
+  "title": "bug: isEpicFinal follows the highest board order, so any dragged or newly created row becomes \"epic-final\"",
+  "description": "Rule today, mirrored in two places: packages/moe-daemon/src/delivery/policy.ts:202 isEpicFinalTask() and tools/getContext.ts:348. Epic-final means the highest `order` among the epic's non-ARCHIVED tasks, ties counting.\n\nBut `order` is a per-column sort position. A board drag or set_task_status move puts a row at the end of its new column (e.g. 229.5/230.5 in PLANNING), and create_task appends new rows at max+1. So the flag drifts to whichever row was last moved or created.\n\nMeasured 2026-10-25, five of six CQ epics flag the wrong row:\n- CQ-F flags F04b (230.5); the real final is F12 \"Contract integration and hardening\" (120).\n- CQ-R flags R01 (226.5); the real final is R13 (130).\n- CQ-V flags V01 (227.5); the real final is V12 (120).\n- CQ-C flags C03 (224.5); the real final is C11 (110).\n- CQ-I flags I03 (228.5); the real final is I06 (60).\n- Only CQ-M (M06) is right, by coincidence.\n\nImpact: get_context hands architects isEpicFinal, and moe-planning / architect.md put full regression, integration coverage, the docs sweep and the whole-epic adversarial pass on the epic's final task only. Mid-epic rows get over-gated and the real hardening rows get under-gated. Projects with settings.qualityGate also run the wrapper's landing gate on the wrong row (requiredCheckCommand); this project has no qualityGate, so no landing is affected today.\n\nA fix must name the final task independently of board position. Two candidate rules: an explicit, persisted designation set when the epic is broken down and editable later; or the epic task whose dependsOn closure covers every other non-ARCHIVED task in the epic. Keep policy.ts and getContext.ts on one shared helper, which the existing pin test should enforce.",
+  "definitionOfDone": [
+    "Dragging a row to the end of any column, moving it via set_task_status, or creating a new row in an epic does not change which task get_context reports as isEpicFinal; covered by daemon tests.",
+    "Each CQ epic's \"integration and hardening\" row (F12, R13, V12, C11, I06, M06) reports isEpicFinal true, and their mid-epic siblings report false, under the new rule. Existing epics without a designation keep a deterministic, documented fallback.",
+    "isEpicFinalTask (delivery/policy.ts) and get_context's isEpicFinal use one shared implementation, the existing pin test still passes, and docs/MCP_SERVER.md and the moe-planning skill describe the rule.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0 with output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 17,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:51:12.686Z",
+  "updatedAt": "2026-10-25T10:51:12.686Z"
+}
