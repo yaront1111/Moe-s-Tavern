@@ -86,14 +86,22 @@
     {
       "stepId": "step-6",
       "description": "Final and only adversarial self-review (adversarial-self-review), scoped to this producer diff: try invalid/future hello, unknown fields, capability escalation, same-socket retry/downgrade, independent sockets/reconnect, both approval entry points, token hidden in updates, two concurrent approvals/material edit race, and null/huge revision inputs. Confirm all refusals leave disk/activity/timers/broadcasts unchanged; negotiated state cannot persist or mint trusted evidence; legacy clients and strict readiness remain as required; all output fields match docs. Inspect owned diff only for peer-byte preservation, unsafe context leaks, CRLF churn, needless abstractions and size. If fixes result, refresh the same gate's evidence after the final edits. Record cases/results and exact modified paths, then complete_task for QA; no Git writes, no approval polling, no whole-epic completion claim (I06 owns that).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-25T10:09:43.803Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/clientCapabilities.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Single final adversarial review completed over owned diff/new module: inputs/unknowns, false-server escalation, failed/repeated/downgraded negotiation, socket isolation/reconnect, both routes, smuggled token, queued edit, competing approvals, side effects, cleanup and context allowlist. No production defect found. Tightened tests: reverse-key canonical repeat, held-mutex hello ordering, additional null/string/container capability values; typed valid RequiredCheckDefinition fixture prevents corrupt-record fallback masquerading as delivery verdict. Seven isolated single-point mutants killed: remove either admission call, failed-hello fallback, malformed-repeat reset, unlock repeats, client escalation, hello outside mutex. Fresh FINAL gate after edits: 161 files / 4040 passed / 15 skipped, exact npm test exit 0; production and owned-test strict tsc both exit 0. Snapshot /tmp/moe-i01-final2.XvQLX5, archive f6900bc7 + four byte-equal owned files; /tmp/moe-i01-full-final.log and manifest retain evidence. Protected approval/snapshot/projection suites byte-identical; no forbidden additions or CRLF churn. 4 paths, net +400 lines (+412/-12). No Git writes/.moe edits/client or VM certification. Wrapper owns landing on moe/work-2026-10-24; I06 owns epic hardening.",
+      "startedAt": "2026-10-25T10:09:43.803Z",
+      "completedAt": "2026-10-25T10:14:37.817Z"
     }
   ],
-  "planRevision": 12,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-9cda703c",
+  "planRevision": 13,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -124,7 +132,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:18.748Z",
-  "updatedAt": "2026-10-25T10:09:43.803Z",
+  "updatedAt": "2026-10-25T10:15:03.996Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88",
     "task-ad95cb270e9e46df8672eb094d0c1e74",
@@ -134,7 +142,7 @@
     "firstClaimAt": "2026-10-25T07:58:14.777Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-473624b4",
@@ -155,7 +163,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T09:58:13.043Z",
@@ -174,5 +183,50 @@
     ]
   },
   "planApprovedAt": "2026-10-25T09:58:13.144Z",
-  "workStartedAt": "2026-10-25T09:59:59.108Z"
+  "workStartedAt": "2026-10-25T09:59:59.108Z",
+  "commits": [
+    {
+      "sha": "263e9f538b87dbcbd488a7acc7dc5bdfa13b3671",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-473624b4@2026-10-25T09:51:54Z",
+      "paths": [
+        ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
+        ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json",
+        ".moe/tasks/task-e92b2cb33f744bf18074fc87121f22df.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/clientCapabilities.ts"
+      ],
+      "recordedBy": "architect-473624b4",
+      "recordedAt": "2026-10-25T10:13:23.333Z",
+      "treeId": "be7ec4c1ea9bfb6659cae8878044ce1104ece45e",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+    "packages/moe-daemon/src/server/clientCapabilities.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-473624b4@2026-10-25T09:51:54Z",
+    "at": "2026-10-25T10:13:23.333Z"
+  },
+  "reviewStartedAt": "2026-10-25T10:15:03.993Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Fresh native Linux snapshot /tmp/moe-i01-final2.XvQLX5; git archive f6900bc7abbe6be1dec98ef89927b7872b01c41b + four exact owned overlays; source/package/lock hashes verified in /tmp/moe-i01-gate-manifest.json. Separate native dependencies; Linux-only PATH; inherited MOE_* unset.\n Test Files  161 passed (161)\n      Tests  4040 passed | 15 skipped (4055)\n   Start at  12:12:36\n   Duration  23.23s (tests 88%, transform 6%, import 5%)\nExit 0. Full output: /tmp/moe-i01-full-final.log\nSupplemental npx tsc --noEmit: exit 0. Strict standalone WebSocketServer.test.ts typecheck: exit 0.",
+    "reportedAt": "2026-10-25T10:15:03.993Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-I01 implemented in four paths: new clientCapabilities.ts, WebSocketServer.ts/.test.ts, docs/MCP_SERVER.md. Optional v1 CLIENT_HELLO returns exact nine-key server/intersection maps only to requester. Per-socket attempted/valid state is mutex-serialized, retry-safe and locked after success. Both approval routes require negotiated revision support plus rendered token; original token still goes through existing CAS/durable stamp/readiness. Unknown optional fields remain compatible; snapshots/projections unchanged; legacy no-handshake behavior preserved and verified-local unavailable.\n77 new tests (105 in WS file) cover decoder, handshake lifecycle, isolation/reconnect, both approval routes, refusal side effects, unknown task fields, delivery roundtrips, queued material edits and competing approvals. Seven targeted mutants killed. Protected approval/snapshot/projection suites unchanged. Single adversarial review tightened tests; no production defect found.\nFresh final npm test: 161 files, 4040 passed/15 skipped; production and strict owned-test typechecks exit 0. Native Linux snapshot /tmp/moe-i01-final2.XvQLX5 = archive f6900bc7 + exact owned overlays. Manifest /tmp/moe-i01-gate-manifest.json; log /tmp/moe-i01-full-final.log. Separate native dependencies match package/lock modulo CRLF; Linux PATH, MOE_* cleared. Shared dependencies/peer bytes untouched. Net +400 lines (+412/-12), four paths. Handoff and fixture gotcha saved in Serena. No Git writes or manual .moe edits; wrapper owns landing. No IDE/VM certification or whole-epic completion claim; I06 owns integration."
 }
