@@ -190,7 +190,10 @@ try {
   assert.equal(context.task.status, 'AWAITING_APPROVAL', 'CONTROL must wait for approval');
   board = new WebSocket(`ws://127.0.0.1:${info.port}/ws`);
   await once(board, 'open');
-  board.send(JSON.stringify({ type: 'APPROVE_TASK', payload: { taskId: task.id } }));
+  // CQ-F MODIFY_RAIL prop-5e7763ed (human-approved 2026-10-25): revision-less human plan approval is deleted.
+  board.send(JSON.stringify({
+    type: 'APPROVE_TASK', payload: { taskId: task.id, expectedPlanRevision: context.servedContext.planRevision },
+  }));
   await until(async () => {
     context = await call('get_context', { taskId: task.id });
     return context.task.status === 'WORKING';

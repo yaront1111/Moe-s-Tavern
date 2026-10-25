@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:28.987Z",
-  "updatedAt": "2026-10-25T23:07:23.055Z",
+  "updatedAt": "2026-10-25T23:07:57.758Z",
   "dependsOn": [
     "task-3918d1190a3c4895ad5d924ad6d00f1d"
   ],
@@ -182,7 +182,8 @@
     ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
     ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json",
     ".moe/tasks/task-fdbc59358b8746a4b19073b5f2ef5a7c.json",
-    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
+    ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json"
   ],
   "completionSummary": "CQ-F08 delivered (plan rev 1, 5/5 steps), six files, +398/-16 (382 net).\n- complete_step/complete_task gain optional attemptId (max 128), generation (int >= 1) and sessionId, and call F07's assertExecutionAuthorized. It now returns StrictExecution {attempt, planRevision} under verified-local and null otherwise; start_step is unchanged.\n- complete_step: the guard runs after assertContextFetched. Under strict, recordStepCompletion appends {stepId, planRevision, completedAt} to the NEW ExecutionAttempt.stepCompletions BEFORE updateTask (fail-safe order). It is the only writer; readStepCompletions is the strict decoder.\n- complete_task: the guard runs after assertWorkerHoldsTask. Under strict, assertCompletionEvidenceEligible requires current-attempt evidence at the approved revision for every step, else STATE_CONFLICT EXECUTION_EVIDENCE_INELIGIBLE {taskId, attemptId, generation, planRevision, steps}. Every refusal precedes checkBranchPolicy, finalizing and updateTask. Old evidence stays on its attempt.\n- DoD:\n  1. Amending the in-progress step, or editing the DoD, is refused with PLAN_REVISION_NOT_APPROVED, even after re-serving.\n  2. A superseded or future attempt is refused ATTEMPT_SUPERSEDED on strict and legacy rows. Strict also refuses missing identity and a finalizing or foreign attempt.\n  3. Evidence that is superseded, from an earlier revision or missing is ineligible, and malformed evidence fails closed.\n  Legacy rows without identity are unchanged.\n- Tests: new completionAuthorization.test.ts, 31 tests; RED was 29 failed. 8/8 self-mutants killed. Gate: 165 files, 4179 passed | 14 skipped, exit 0; tsc exit 0.\n- For F12:\n  - the proxy identity table lacks complete_step/complete_task;\n  - pre-existing strict order: finalizing precedes the readiness backstop, so a retry gets ATTEMPT_NOT_RUNNING;\n  - legacy completion now fails closed on a malformed profile or snapshot, like start_step;\n  - missing strict identity reuses STEP_ENTRY_IDENTITY_REQUIRED.",
   "commits": [
@@ -217,6 +218,22 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "5f7d06adace0f684ff9044ba57e2531a6866faf9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-25T23:04:11Z",
+      "paths": [
+        ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json",
+        ".moe/tasks/task-bf14bb1e39494eba83158a26e36ddb20.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-25T23:07:57.758Z",
+      "treeId": "8b4bb29c7c13420beb53c87318ca9a3ca27a2016",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -227,9 +244,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-25T22:52:42Z",
-    "at": "2026-10-25T23:03:58.355Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-25T23:04:11Z",
+    "at": "2026-10-25T23:07:57.758Z"
   },
   "completedAt": "2026-10-25T23:07:23.055Z",
   "reviewCompletedAt": "2026-10-25T23:07:23.055Z",
