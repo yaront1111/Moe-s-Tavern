@@ -1,0 +1,36 @@
+{
+  "id": "task-502c00a50db340c9941cae20eeef1021",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R08b] Guest supervisor output relay",
+  "description": "Objective: Make it impossible for child output to impersonate supervisor frames. Implement the protected guest supervisor's bridge core as a Python 3 standard-library program; Ubuntu 24.04 guests ship python3 for cloud-init, and there is no Node in the guest. The supervisor is the only writer of its stdout. It speaks the CQ-R08a protocol exactly as scripts/local-runner/guest-bridge.mjs defines it (task-f981d0597b26401a974c0fcd8829107e) and sends hello first. It runs a child with stdin from /dev/null and stdout and stderr on pipes. It relays the child's bytes only inside base64 `output` frames within the guest frame limit, and reports termination only as its own `observation`/`exit` frame derived from waitpid. This is the second slice of the original CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced).\n\nDeliverable:\n- A new scripts/local-runner/guest-supervisor.py. These are the bytes R07's buildUserData installs at /opt/moe/bin/moe-supervisor, and the file starts with `#!/usr/bin/python3 -I`.\n- Tests appended to scripts/tests/local-runner-bridge.test.mjs that run the supervisor under the host's python3 and decode its stdout with R08a's decoder and parseGuestFrame. The tests skip only on win32, with a visible reason, because the supervisor runs only in the Linux guest.\n\nNot in scope:\n- Agent request ingress (CQ-R08c).\n- The host bridge session and daemon forwarding (CQ-R08).\n- Job tables, identities, workspaces and credentials (CQ-R10 and CQ-R11).\n- Wiring the supervisor bytes into provisioning.\nDo not edit guest-bridge.mjs except to fix a defect QA requires. Plan only after CQ-R08a is DONE, because its module is the protocol source of truth. If it hasn't landed, report_blocked on it.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs",
+  "definitionOfDone": [
+    "A child writes byte-exact hello, request, observation and partial-header frames to stdout and stderr. They reach the host only as output frames whose decoded bytes equal what it wrote, and the decoder yields no other frame kind from that child. Proven against the real supervisor running under python3.",
+    "A child that prints a forged exit-0 observation and then exits 7 yields exactly one exit observation, with code 7. A child killed by SIGKILL yields signal SIGKILL and code null.",
+    "Every frame the supervisor writes passes parseGuestFrame and stays within MAX_GUEST_FRAME_BYTES. Output larger than one chunk is split, arrives in order, and is written as whole frames.",
+    "guest-supervisor.py imports only the Python standard library and runs with -I. Its bridge mode refuses to start unless euid is 0, exiting nonzero without writing any frame.",
+    "Fresh verification `node --test scripts/tests/local-runner-bridge.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f981d0597b26401a974c0fcd8829107e"
+  ],
+  "priority": "HIGH",
+  "order": 222.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:33:26.853Z",
+  "updatedAt": "2026-10-25T10:33:26.853Z"
+}

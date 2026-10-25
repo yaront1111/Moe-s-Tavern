@@ -1,0 +1,37 @@
+{
+  "id": "task-f981d0597b26401a974c0fcd8829107e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R08a] Host bridge frame protocol",
+  "description": "Objective: Define the host side of the CQ-R08 host-guest bridge wire protocol as pure functions. That means bounded length-prefixed stdio frames, the strict schema of every frame a guest may send, the scoping that binds every agent request to the host-owned task and worker identity, and the one fixed command that opens the bridge. This is the first slice of the original CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced), split on 2026-10-25 because the whole bridge is far over the 400-net-LOC review limit.\n\nDeliverable: a new scripts/local-runner/guest-bridge.mjs exporting the frame limits, encodeFrame, a streaming frame decoder, parseGuestFrame, scopeRequest and bridgeArgv. Its tests go in a new scripts/tests/local-runner-bridge.test.mjs, and that file is added to the CI local-runner step in .github/workflows/ci.yml. This module is the protocol source of truth that CQ-R08b and CQ-R08c (the guest supervisor, in Python) and CQ-R08 (the host bridge session) implement and consume.\n\nProtocol contract:\n- A frame is a 4-byte unsigned big-endian length L followed by exactly L bytes of UTF-8 JSON encoding one plain object. Guest-to-host frames allow 1 <= L <= 262144 (MAX_GUEST_FRAME_BYTES). Host-to-guest frames allow 1 <= L <= 4194304 (MAX_HOST_FRAME_BYTES); the daemon's WebSocket maxPayload is 2 MiB.\n- Guest kinds, with exact keys:\n  - {kind:'hello', protocol:1}\n  - {kind:'request', id, tool, args}: id is a safe integer from 1 to 2^31-1, tool is 'moe.<name>', args is a plain object.\n  - {kind:'output', stream:'stdout'|'stderr', data}: data is canonical base64.\n  - {kind:'observation', type:'exit', code, signal}: exactly one of code (0-255) and signal ('SIG...') is non-null.\n- Host kinds: {kind:'response', id, ok:true, result} or {kind:'response', id, ok:false, error:{code}}.\n- Scoping: the host binding {role:'worker'|'qa', workerId, taskId, attemptId, generation} comes from the host's claim and the R06 ledger record, never from a frame. Each role has a fixed tool table listing the exact argument keys a guest may send. workerId and taskId may be omitted or must equal the binding, and they are stamped from the binding only for tools whose daemon schema has them. role, attemptId, generation, processStartedAt and host are never accepted from a guest.\n\nNot in scope:\n- Spawning the bridge or any provider call, forwarding to the daemon, the handshake and state machine, and timeouts (all CQ-R08).\n- The guest supervisor (CQ-R08b and CQ-R08c).\n- Job execution (CQ-R10 and CQ-R11).\n- Any change to existing local-runner modules or to scripts/tests/local-runner.test.mjs.\nverified-local stays unavailable.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs",
+  "definitionOfDone": [
+    "The frame decoder round-trips frames split at every byte boundary. It refuses each of the following with BRIDGE_FRAME_INVALID: a zero or over-limit length header (before buffering the body), invalid UTF-8, non-object JSON, and a truncated final frame. Proven by tests in scripts/tests/local-runner-bridge.test.mjs.",
+    "parseGuestFrame accepts only hello, request, output and observation(exit) frames with exact keys, and returns output data as bytes without ever parsing it. It rejects each of the following with BRIDGE_PROTOCOL_VIOLATION: an unknown kind, type or key, a host-only kind, non-canonical base64, and an out-of-range id or exit code.",
+    "scopeRequest refuses every tool outside the binding role's table with BRIDGE_TOOL_DENIED, including moe.set_task_dependencies, moe.set_task_status, moe.update_epic, moe.propose_rail, moe.claim_next_task, and moe.qa_approve for a worker binding. It refuses any argument key outside the tool's table with BRIDGE_ARGUMENT_DENIED.",
+    "A request is refused with BRIDGE_IDENTITY_MISMATCH if its workerId or taskId differs from the binding, or if it carries role, attemptId, generation, processStartedAt or host. Accepted requests carry the binding's workerId and taskId exactly where the tool's daemon schema has them.",
+    "bridgeArgv(name) returns exactly ['exec','--no-map-working-directory',name,'--','sudo','-n','/opt/moe/bin/moe-supervisor','bridge'] for an owned instance name and refuses any other name. .github/workflows/ci.yml runs scripts/tests/local-runner-bridge.test.mjs in the local-runner step.",
+    "Fresh verification `node --test scripts/tests/local-runner-bridge.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-84c2da018ce74995b609805dab4fe7da"
+  ],
+  "priority": "HIGH",
+  "order": 222.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-25T10:33:14.692Z",
+  "updatedAt": "2026-10-25T10:33:14.692Z"
+}

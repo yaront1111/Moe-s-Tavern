@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:28.025Z",
-  "updatedAt": "2026-10-25T10:31:40.265Z",
+  "updatedAt": "2026-10-25T10:32:50.344Z",
   "dependsOn": [],
   "metrics": {
     "firstClaimAt": "2026-10-24T21:14:23.632Z",
@@ -179,7 +179,8 @@
     "packages/moe-daemon/src/context/repositorySource.ts",
     ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
     ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json",
-    ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json"
+    ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
+    ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json"
   ],
   "completionSummary": "QA round-2 fixes, kept to the two planned paths (+35/-2, net +33; cumulative five-path diff +985/-6). Helpers and service are unchanged, and no re-slice.\n\nFix: searchTree's grep argv replaces `-I` with `-a` and adds `--no-recurse-submodules`.\n- Local submodule.recurse can no longer serve gitlink content.\n- Worktree/info/config attributes can no longer silently hide committed text.\n- Binary match lines now surface as truncated/undecodable-match through the existing NUL guard instead of an empty success.\n- Prior flags (--literal-pathspecs, -F -z -n, --no-color, --no-column, --full-name) are preserved, as is error handling.\n\nThree new real-Git regressions, each with non-vacuity preconditions:\n- (A) Populated, active submodule plus local submodule.recurse=true. Unscoped and directory-scoped searches serve only the parent match; reading or scoping the gitlink is refused with 'submodule'.\n- (B) Untracked `a.ts -diff`: exact served match, complete:true.\n- (C) NUL blob: truncated/undecodable-match, matches [], bytes 0.\nAll three were RED before the fix for the reported reasons.\n\nGate on a fresh whole-repo archive of 99cbfa5 (two paths overlaid and hash-checked, Linux-native deps, env -i):\n- `cd packages/moe-daemon && npm test`: exit 0, 161 files, 3966 passed / 15 skipped.\n- `npx tsc --noEmit`: exit 0.\n\nMutation proof: removing --no-recurse-submodules, putting -I back in place of -a, removing --no-column, removing the NUL guard, or removing grep --literal-pathspecs each fails exactly its named test(s). The restored baseline passes 133/133.\n\nNot in scope: activation, docs, verified-local and certification. Size: the updated CQ-C02 exception text is in epic rails; QA must confirm prop-9991c0da is APPROVED. The wrapper owns landing.",
   "commits": [
@@ -276,6 +277,22 @@
       "treeId": "e65b6d13ec3d6525aa0193623cdf8db509ec2b0f",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "bf46e8aea9b8dea7b57e2cfece727fa270900a7a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T10:17:36Z",
+      "paths": [
+        ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json",
+        ".moe/tasks/task-c7d520ba9cf940e4b3bbe2e4c3c90f47.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T10:32:50.344Z",
+      "treeId": "93810c7548bb607caed079654b450458b23d1bd0",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [
@@ -283,9 +300,9 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-25T10:01:29Z",
-    "at": "2026-10-25T10:17:12.715Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T10:17:36Z",
+    "at": "2026-10-25T10:32:50.344Z"
   },
   "reviewCompletedAt": "2026-10-25T10:31:40.265Z",
   "rejectionDetails": {

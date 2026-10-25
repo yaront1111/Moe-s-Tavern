@@ -1587,7 +1587,8 @@ fi
 # A claude launch whose account is refused at its limit, or found signed out,
 # relaunches at once on the next account, even under --no-loop and without the
 # launch-failure backoff; a lease that finds every account spent waits and
-# leases again. The fake CLI tells its account by CLAUDE_CONFIG_DIR and answers
+# leases again. The fake CLI tells its account by folder, not spelling: Git
+# Bash hands it C:\...\acct-1 while ACCT_HOME is /tmp/.... It answers
 # `auth status --json` like claude; no token may reach it or the sign-in probe,
 # and no directory may reach the daemon. Three runs are sh-only: an account
 # signed in some other way (state=other; its email and org must go nowhere),
@@ -1611,9 +1612,11 @@ ACCT_CLI="$TMP_DIR/acct-cli"
 cat > "$ACCT_CLI" <<EOF
 #!/usr/bin/env bash
 if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN+x}\${ANTHROPIC_API_KEY+x}\${ANTHROPIC_AUTH_TOKEN+x}" ]; then token=set; else token=unset; fi
+acct1=false
+if [ "\${CLAUDE_CONFIG_DIR-}" -ef "$ACCT_HOME/acct-1" ]; then acct1=true; fi
 if [ "\${1:-}" = auth ]; then
   echo "dir=\${CLAUDE_CONFIG_DIR-} token=\$token \$*" >> "$ACCT_PROBES"
-  if [ "\${CLAUDE_CONFIG_DIR-}" = "$ACCT_HOME/acct-1" ]; then
+  if [ "\$acct1" = true ]; then
     case "\${FAKE_ACCT_MODE-}" in
       signout) echo '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}'; exit 1 ;;
       other) echo '{"loggedIn":true,"authMethod":"console","apiProvider":"firstParty","email":"seat@example.com","orgId":"org-postflight","orgName":"Example Org"}'; exit 0 ;;
@@ -1636,7 +1639,7 @@ if [ -n "\$settings" ]; then
   printf '%s' '$ACCT_STATUS_INPUT' | sh -c "\$cmd" >> "$ACCT_STATUS"
   exit 0
 fi
-if [ "\${FAKE_ACCT_MODE-}" != fine ] && [ "\${CLAUDE_CONFIG_DIR-}" = "$ACCT_HOME/acct-1" ]; then
+if [ "\${FAKE_ACCT_MODE-}" != fine ] && [ "\$acct1" = true ]; then
   case "\${FAKE_ACCT_MODE-}" in signout|other) exit 1 ;; esac
   echo '$ACCT_SPENT_EVENT'
   exit 1
@@ -1645,11 +1648,22 @@ echo '$ACCT_FINE_EVENT'
 exit 0
 EOF
 chmod +x "$ACCT_CLI"
+if command -v cygpath >/dev/null 2>&1; then
+  printf '@"%s" "%s" %%*\r\n' "$(cygpath -w "$BASH")" "$(cygpath -w "$ACCT_CLI")" > "$ACCT_CLI.cmd"
+fi
+
+acct_alias="$ACCT_HOME/./acct-1"
+if command -v cygpath >/dev/null 2>&1; then acct_alias="$(cygpath -w "$ACCT_HOME/acct-1")"; fi
+if env -u FAKE_ACCT_MODE CLAUDE_CONFIG_DIR="$acct_alias" "$ACCT_CLI" --print >/dev/null 2>&1 \
+  || ! env -u FAKE_ACCT_MODE CLAUDE_CONFIG_DIR="${acct_alias%1}2" "$ACCT_CLI" --print >/dev/null 2>&1; then
+  echo "[accounts] the fake CLI must tell acct-1 ($acct_alias) from acct-2 by folder" >&2
+  exit 1
+fi
 
 ACCT_CHECK="$TMP_DIR/accounts-check.cjs"
 cat > "$ACCT_CHECK" <<'ACCTJS'
 // One [accounts] run: node accounts-check.cjs <name> <exit> <wrapper out> <rpcs> <launches> <argv> <probes> <statusline> <home> <.mcp.json>
-const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict'), cp = require('node:child_process');
 const [name, code, outFile, rpcFile, launchFile, argvFile, probeFile, statusFile, home, mcpFile] = process.argv.slice(2);
 const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
 const lines = (file) => read(file).split('\n').filter(Boolean);
@@ -1664,6 +1678,8 @@ const launch = (id) => `dir=${path.join(home, id)} token=unset`;
 const probe = (id) => `dir=${path.join(home, id)} token=unset auth status --json`;
 const want = (...texts) => texts.forEach((text) => assert.ok(out.includes(text), `expected '${text}'`));
 const after = (flag) => argv[argv.indexOf(flag) + 1];
+// The bash fake logs MSYS paths unchanged; Windows node needs a native path.
+const native = (file) => (process.platform === 'win32' && file.startsWith('/') ? cp.execFileSync('cygpath', ['-w', file], { encoding: 'utf8' }).trim() : file);
 function relaunched(state) {
   want(`[account] MOE_ACCOUNT_SIGNED_OUT account=acct-1 state=${state} - relaunching on the next account; the held task stays held.`,
     '[account] Relaunching now on the next account.', '[account] MOE_ACCOUNT_SWITCHED from=acct-1 to=acct-2');
@@ -1721,7 +1737,7 @@ try {
       want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%');
       assert.deepEqual(lines(launchFile), [launch('acct-1')]);
       assert.ok(!argv.includes('--print'), 'expected the TUI');
-      assert.equal(fs.realpathSync(after('--mcp-config') || '.'), fs.realpathSync(mcpFile), 'expected --mcp-config <project>/.mcp.json');
+      assert.equal(fs.realpathSync(native(after('--mcp-config') || '.')), fs.realpathSync(mcpFile), 'expected --mcp-config <project>/.mcp.json');
       assert.equal(path.basename(after('--settings') || ''), 'account-settings.json', 'expected --settings with the statusline');
       assert.deepEqual(lines(statusFile), ['Opus | acct-1 | 5h 91%']);
       assert.deepEqual(reports, [{ workerId: 'qa-accounts-interactive', accountId: 'acct-1', refused: false,
