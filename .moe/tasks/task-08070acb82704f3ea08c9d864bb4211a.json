@@ -127,7 +127,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:36.619Z",
-  "updatedAt": "2026-10-25T22:16:00.521Z",
+  "updatedAt": "2026-10-25T22:16:47.844Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:55:13.064Z",
     "plannedStepCount": 6,
@@ -195,7 +195,9 @@
     "moe-vscode/tests/approval-paths.test.cjs",
     ".moe/tasks/task-08070acb82704f3ea08c9d864bb4211a.json",
     ".moe/tasks/task-120b6a11e9db4012964e865974696e59.json",
-    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json"
+    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json",
+    ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
   ],
   "completionSummary": "Every VS Code approval path now sends the plan revision its webview rendered, and none can approve token-free.\n\nClient:\n- MoeDaemonClient.approveTask(taskId, expectedPlanRevision: number) no longer has a legacy branch (rail prop-5e7763ed).\n- An undefined or malformed token is refused locally: it is logged, onError fires with operation APPROVE_TASK and context.taskId, and no frame is sent.\n\nTask detail:\n- TaskDetailPanel seeds data-plan-revision with PlanReviewPanel's exported seedRevisionAttribute.\n- taskDetail.js posts that revision on Approve and on Next. It re-derives the revision after each live re-render of the plan.\n- The host forwards msg.expectedPlanRevision and never reads it from cache.\n\nBoard:\n- board.js uses one pure moveMessage(). An AWAITING_APPROVAL→WORKING move (Next, drag, epic sweep with the BLOCKED skip kept) posts approveTask with the card's revision: an absent revision sends 0, a malformed one sends undefined and is refused.\n- BoardViewProvider forwards that token.\n- It blocks a token-free updateTaskStatus AWAITING_APPROVAL→WORKING.\n- It toasts 'Plan approval refused…' with an 'Open Plan Review' action, but only for its own pending approvals. The pending set is pruned on state change, disconnect and dispose.\n\nRefusal toasts:\n- The board and the detail panel share showApprovalRefusal.\n- They defer to an open Plan Review (PlanReviewPanel.isOpenFor), so no refusal is toasted twice.\n\nTests:\n- New tests/approval-paths.test.cjs has 21 tests. They drive the production board.js, taskDetail.js, panels, provider and the real client over a fake socket, so they assert the actual wire frames.\n- plan-approval-client.test.cjs: the legacy omission tests were replaced by refusal tests, as the rail authorizes.\n- task-blocker-visibility and task-time-budget only declare new harness dependencies; no assertion changed.\n- Mutation-checked: 15 production mutations, each caught.\n\nResidual, theoretical: a card missing from the webview's state and not AWAITING_APPROVAL i",
   "commits": [
@@ -240,6 +242,23 @@
       "treeId": "db2ba7937ca07300e3ff60c5e3841494c491cfb0",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "64159cd954de12da60f1846b5caa8569a758c8c5",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-25T22:12:19Z",
+      "paths": [
+        ".moe/tasks/task-07474ee438f34021a23809f9c764d15c.json",
+        ".moe/tasks/task-08070acb82704f3ea08c9d864bb4211a.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-25T22:16:47.844Z",
+      "treeId": "ff96ca4d533a7a099ab1933e14a6d2dccda2d221",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -249,8 +268,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-b0c1741e@2026-10-25T11:20:00Z",
-    "at": "2026-10-25T11:24:34.160Z"
+    "sessionId": "qa-7c627d35@2026-10-25T22:12:19Z",
+    "at": "2026-10-25T22:16:47.844Z"
   },
   "blockedReason": null,
   "blockedResourceId": null,
