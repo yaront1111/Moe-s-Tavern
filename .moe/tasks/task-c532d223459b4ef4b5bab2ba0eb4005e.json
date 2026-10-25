@@ -118,7 +118,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T22:39:38.780Z",
-  "updatedAt": "2026-10-25T11:46:54.454Z",
+  "updatedAt": "2026-10-25T11:47:22.087Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T08:22:29.688Z",
     "plannedStepCount": 6,
@@ -177,6 +177,46 @@
       "treeId": "18ef49e0b39260c9b2d9d7dd9ebb19e233197f66",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "16ec9f96ab9a65a9f8cc66d83dd7c2f56a241bbd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-07cd2c56@2026-10-25T10:45:58Z",
+      "paths": [
+        ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/importee-guard-bash.test.mjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-07cd2c56",
+      "recordedAt": "2026-10-25T11:47:22.087Z",
+      "treeId": "54bb5388773e350227ac82900db256a9e89e92ef",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-07474ee438f34021a23809f9c764d15c"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -184,14 +224,17 @@
     "scripts/moe-agent.sh",
     "scripts/tests/importee-guard-bash.test.mjs",
     "scripts/moe-agent.ps1",
-    "scripts/tests/postflight.ps1"
+    "scripts/tests/postflight.ps1",
+    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/tasks/task-c532d223459b4ef4b5bab2ba0eb4005e.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-6e3edf85@2026-10-25T09:43:41Z",
-    "at": "2026-10-25T10:18:33.617Z"
+    "kind": "completion",
+    "sessionId": "worker-07cd2c56@2026-10-25T10:45:58Z",
+    "at": "2026-10-25T11:47:22.087Z"
   },
   "workStartedAt": "2026-10-25T10:48:05.765Z",
   "reviewStartedAt": "2026-10-25T11:46:54.451Z",
@@ -202,5 +245,12 @@
     "reportedAt": "2026-10-25T11:46:54.451Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Wrapper attribution now fingerprints a symlink by its link text, the blob `git add` stores, instead of its target's bytes. Fixed in both twins, in the baseline snapshot and in the temp-index mismatch re-hash.\n\nsh (scripts/moe-agent.sh):\n- New moe_snapshot_hash. A symlink goes through `update-index --add --info-only` into a throwaway SECURE_TEMP_DIR index, read back with `ls-files -s`; this writes no object and the index is always removed. A regular file still uses `hash-object`.\n- git_dirty_snapshot hashes each symlink on its own; symlinks never join the --stdin-paths batch.\n- moe_temp_index_build re-hashes through the same helper.\n\nps1 (scripts/moe-agent.ps1):\n- Test-MoeSymlink checks the ReparsePoint attribute first, then `[IO.FileInfo].LinkType`. This is a small change from the plan's Get-Item: it is the same property, but it does not depend on the provider's existence check for a dangling link.\n- Get-MoeSnapshotBlob runs the same git path with a %TEMP% guid index that a finally block removes.\n- Get-MoeDirtySnapshot checks for a symlink before Test-Path; Build-MoeTempIndexTree uses Get-MoeSnapshotBlob for the re-hash.\n- importee-guard-bash.test.mjs now also extracts moe_snapshot_hash.\n\nTests (postflight.sh and postflight.ps1):\n- A symlink probe; a failed probe under CI fails the run.\n- AD gains a `link` variant: a file swapped for a symlink to an identical copy after the snapshot still drops as MOE_ATTR_CONCURRENT.\n- New scenario AE: a retargeted link lands as mode 120000 'same-b.txt'; a link whose target changed, and a dangling link, stay MOE_ATTR_PREEXISTING.\n- The count is 37, or 36 without symlinks. Skip lines start with \"[scenario\".\n\nRED: the HEAD wrapper fails both new cases (sh subsets).\nGate: run once, fresh, exit 0. sh 37 scenarios PASS. PS 5.1 and pwsh 7 each print both skip lines and pass 36. Parity PASS everywhere; importee guard 40/40 (bash) and 48/0 on each PowerShell engine.\nMutants M1, M2 and M3 were all killed (task comment).\n\nLimits: this host c"
+  "completionSummary": "Wrapper attribution now fingerprints a symlink by its link text, the blob `git add` stores, instead of its target's bytes. Fixed in both twins, in the baseline snapshot and in the temp-index mismatch re-hash.\n\nsh (scripts/moe-agent.sh):\n- New moe_snapshot_hash. A symlink goes through `update-index --add --info-only` into a throwaway SECURE_TEMP_DIR index, read back with `ls-files -s`; this writes no object and the index is always removed. A regular file still uses `hash-object`.\n- git_dirty_snapshot hashes each symlink on its own; symlinks never join the --stdin-paths batch.\n- moe_temp_index_build re-hashes through the same helper.\n\nps1 (scripts/moe-agent.ps1):\n- Test-MoeSymlink checks the ReparsePoint attribute first, then `[IO.FileInfo].LinkType`. This is a small change from the plan's Get-Item: it is the same property, but it does not depend on the provider's existence check for a dangling link.\n- Get-MoeSnapshotBlob runs the same git path with a %TEMP% guid index that a finally block removes.\n- Get-MoeDirtySnapshot checks for a symlink before Test-Path; Build-MoeTempIndexTree uses Get-MoeSnapshotBlob for the re-hash.\n- importee-guard-bash.test.mjs now also extracts moe_snapshot_hash.\n\nTests (postflight.sh and postflight.ps1):\n- A symlink probe; a failed probe under CI fails the run.\n- AD gains a `link` variant: a file swapped for a symlink to an identical copy after the snapshot still drops as MOE_ATTR_CONCURRENT.\n- New scenario AE: a retargeted link lands as mode 120000 'same-b.txt'; a link whose target changed, and a dangling link, stay MOE_ATTR_PREEXISTING.\n- The count is 37, or 36 without symlinks. Skip lines start with \"[scenario\".\n\nRED: the HEAD wrapper fails both new cases (sh subsets).\nGate: run once, fresh, exit 0. sh 37 scenarios PASS. PS 5.1 and pwsh 7 each print both skip lines and pass 36. Parity PASS everywhere; importee guard 40/40 (bash) and 48/0 on each PowerShell engine.\nMutants M1, M2 and M3 were all killed (task comment).\n\nLimits: this host c",
+  "touchedFiles": [
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/tests/importee-guard-bash.test.mjs",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
+  ]
 }
