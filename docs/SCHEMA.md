@@ -327,7 +327,7 @@ interface Epic {
   architectureNotes: string;     // "Using JWT in httpOnly cookies..."
   
   // Epic-level rails (add to global)
-  epicRails: string[];           // ["Use Supabase Auth", "Follow OAuth 2.0"]; max 100 entries, 1000 chars each (see "Epic rail limits")
+  epicRails: string[];           // ["Use Supabase Auth", "Follow OAuth 2.0"]; max 100 entries, 10000 chars each (see "Epic rail limits")
   
   // Status
   status: EpicStatus;
@@ -374,7 +374,7 @@ type EpicStatus =
 
 ### Epic rail limits
 
-An epic update (`moe.update_epic`, and the apply step of an approved EPIC rail proposal) accepts at most 100 `epicRails` entries of at most 1000 UTF-16 code units each (JavaScript `string.length`, not bytes or code points). Each entry must be a non-blank single-line string with no NUL character. An entry that breaks a limit is **refused with `INVALID_INPUT`, never truncated**, and the whole update fails with nothing written. Accepted entries are stored exactly as sent, including leading/trailing whitespace and Unicode.
+An epic update (`moe.update_epic`, and the apply step of an approved EPIC rail proposal) accepts at most 100 `epicRails` entries of at most 10000 UTF-16 code units each (JavaScript `string.length`, not bytes or code points). Each entry must be a non-blank single-line string with no NUL character. An entry that breaks a limit is **refused with `INVALID_INPUT`, never truncated**, and the whole update fails with nothing written. Accepted entries are stored exactly as sent, including leading/trailing whitespace and Unicode.
 
 - `moe.propose_rail` applies the same check to the `proposedValue` of an EPIC `ADD_RAIL`/`MODIFY_RAIL` before the proposal is saved or published. `REMOVE_RAIL` uses only `currentValue`, so a rail stored before the cap stays removable. GLOBAL and TASK rails are not newly bounded.
 - The whole array is re-validated on every epic rail change, so an entry already stored over the limit (only possible from a hand edit or an older build) blocks other rail changes until it is shortened (`MODIFY_RAIL`) or removed (`REMOVE_RAIL`); the error names the offending `epicRails[i]`.
