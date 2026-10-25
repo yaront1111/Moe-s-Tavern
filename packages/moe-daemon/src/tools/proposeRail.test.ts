@@ -3,6 +3,7 @@ import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { proposeRailTool } from './proposeRail.js';
+import { MAX_EPIC_RAIL_CHARS } from '../state/validators.js';
 
 describe('moe.propose_rail', () => {
   const h = new ToolTestHarness();
@@ -89,7 +90,9 @@ describe('moe.propose_rail', () => {
   });
 
   describe('lossless epic rail boundary', () => {
-    const LIMIT = 1000;
+    const LIMIT = MAX_EPIC_RAIL_CHARS;
+    // Exact human-approved prop-d3ccceade25f4af19518ce0e930e4123, not a synthetic filler.
+    const APPROVED_RAIL = "CQ-R02, CQ-R06 and CQ-R07 are the ONLY size exceptions. CQ-R02: this coherent read-only provider prerequisite slice may contain up to500 added source/test lines across its approved five files, with runtime+manifest at most225 lines. Verified actual split is206 runtime/config lines +274 test lines. Retain all51 behavioral tests and bounds/sanitization coverage; no provisioning/readiness/caller integration expansion. CQ-R06: the owned-VM lifecycle as landed in cf7de94 may contain at most 972 net changed lines across exactly scripts/local-runner/lifecycle.mjs (+351), scripts/tests/local-runner.test.mjs (+620) and scripts/local-runner/multipass.mjs (+1/-1). Grow it only by defect fixes QA requires. Retain the L1-L22 lifecycle tests and the guards behind QA's 9 killed mutation probes. No provisioning, bootstrap or caller-integration expansion. CQ-R07: the pinned guest bootstrap as landed in e587474 may contain at most 1131 changed lines (+1122/-9) across exactly scripts/local-runner/guest-bootstrap.mjs (+113, new), scripts/local-runner/guest-readiness.mjs (+253, new), scripts/local-runner/lifecycle.mjs (+39/-9) and scripts/tests/local-runner.test.mjs (+717), plus the deny probe QA asked for on /run/cloud-init/combined-cloud-config.json (one DENIED row and one DENIALS test row). Grow it only by defect fixes QA requires. Retain every test in the CQ-R07 section of scripts/tests/local-runner.test.mjs. executionReady stays false; no provisioning, VM launch, verified-local or caller-integration expansion. Other tasks retain normal sizing limits. These exceptions do not waive substantive QA, fresh verification or fail-closed behavior.";
     const propose = (args: Record<string, unknown>) => proposeRailTool(h.state).handler({
       taskId: 'task-1',
       targetScope: 'EPIC',
@@ -100,7 +103,7 @@ describe('moe.propose_rail', () => {
     const proposalFiles = () => fs.readdirSync(path.join(h.moePath, 'proposals')).sort();
     const snapshot = () => JSON.stringify({
       proposals: Array.from(h.state.proposals.values()),
-      proposalFiles: proposalFiles(),
+      proposalFiles: proposalFiles().map((file) => [file, fs.readFileSync(path.join(h.moePath, 'proposals', file), 'utf-8')]),
       epic: h.state.getEpic('epic-1'),
       epicFile: epicFile(),
     });
@@ -125,10 +128,26 @@ describe('moe.propose_rail', () => {
       ...overrides,
     });
 
-    it.each(['ADD_RAIL', 'MODIFY_RAIL'] as const)('refuses a %s over 1000 characters before any write', async (proposalType) => {
+    it('pins the epic rail cap to 10000 UTF-16 units', () => { expect(MAX_EPIC_RAIL_CHARS).toBe(10000); });
+
+    it('keeps the human-approved 1650-unit rail as one exact entry through approval and reload', async () => {
+      expect(APPROVED_RAIL.length).toBe(1650);
+      const { proposalId } = await propose({ proposalType: 'ADD_RAIL', proposedValue: APPROVED_RAIL }) as { proposalId: string };
+      expect(h.state.proposals.get(proposalId)!.proposedValue).toBe(APPROVED_RAIL);
+      await h.state.approveProposal(proposalId);
+      expect(h.state.getEpic('epic-1')!.epicRails).toEqual([APPROVED_RAIL]);
+      await h.state.load();
+      expect(h.state.getEpic('epic-1')!.epicRails).toEqual([APPROVED_RAIL]);
+      expect((JSON.parse(epicFile()) as { epicRails: string[] }).epicRails).toEqual([APPROVED_RAIL]);
+      expect(h.state.proposals.get(proposalId)!.status).toBe('APPROVED');
+      expect(h.state.proposals.get(proposalId)!.proposedValue).toBe(APPROVED_RAIL);
+    });
+
+    it.each(['ADD_RAIL', 'MODIFY_RAIL'] as const)('refuses a %s over the limit before any write', async (proposalType) => {
       await h.state.updateEpic('epic-1', { epicRails: ['old value'] });
       const events = watchEvents();
       const before = snapshot();
+      expect(LIMIT + 1).toBe(10001);
 
       await expect(propose({
         proposalType,
@@ -151,7 +170,7 @@ describe('moe.propose_rail', () => {
       expect(h.state.proposals.size).toBe(0);
     });
 
-    it.each(['ADD_RAIL', 'MODIFY_RAIL'] as const)('keeps a 1000-character %s exact through approval and reload', async (proposalType) => {
+    it.each(['ADD_RAIL', 'MODIFY_RAIL'] as const)('keeps a limit-length %s exact through approval and reload', async (proposalType) => {
       const old = ' leading and trailing space ';
       await h.state.updateEpic('epic-1', { epicRails: [old, 'neighbour'] });
       const rail = ' é中' + 'x'.repeat(LIMIT - 6) + '\u{1F512} ';
@@ -173,7 +192,7 @@ describe('moe.propose_rail', () => {
       expect(h.state.proposals.get(proposalId)!.status).toBe('APPROVED');
     });
 
-    it('accepts a 999-character rail unchanged', async () => {
+    it('accepts a rail one code unit below the limit unchanged', async () => {
       const rail = 'x'.repeat(LIMIT - 1);
       const { proposalId } = await propose({ proposalType: 'ADD_RAIL', proposedValue: rail }) as { proposalId: string };
       await h.state.approveProposal(proposalId);
@@ -199,7 +218,8 @@ describe('moe.propose_rail', () => {
 
     it('rejects approval of a legacy oversized pending proposal without mutating anything', async () => {
       await h.state.updateEpic('epic-1', { epicRails: ['kept'] });
-      await oversizedPending();
+      const pending = await oversizedPending();
+      expect(pending.proposedValue).toHaveLength(10001);
       const events = watchEvents();
       const before = snapshot();
 
@@ -227,8 +247,9 @@ describe('moe.propose_rail', () => {
       await h.state.updateEpic('epic-1', { epicRails: ['original'] });
       const before = snapshot();
 
+      expect(LIMIT + 1).toBe(10001);
       await expect(h.state.updateEpic('epic-1', { epicRails: ['valid first', 'x'.repeat(LIMIT + 1)] }))
-        .rejects.toMatchObject({ context: { field: 'epicRails[1]' } });
+        .rejects.toMatchObject({ codeName: 'INVALID_INPUT', context: { field: 'epicRails[1]' } });
 
       expect(snapshot()).toBe(before);
       const exact = 'z'.repeat(LIMIT);

@@ -7,9 +7,48 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 13,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Raise the epic rail cap to 10000 UTF-16 code units and pin it, keeping reject-not-truncate. Human decision: \"Raise limit; preserve longer rails\" (comment-f610453a, amend-1).\nThe lossless-validation work from steps 1-5 of the prior attempt is already landed at a 1000 cap in checkpoint 7559efc. Keep it byte-for-byte except the cap.\nCode: in packages/moe-daemon/src/state/validators.ts set `export const MAX_EPIC_RAIL_CHARS = 10000`. Nothing else in production code changes. The 100-entry cap stays, the non-blank/single-line/no-NUL rules stay, and validateStringArrayValue's default truncate=true for its other callers (attribution.exclude, appendOnlyFiles) stays. src/tools/proposeRail.ts already interpolates the constant into its schema text and prevalidation, so do not edit it.\nTests, in packages/moe-daemon/src/tools/proposeRail.test.ts:\n- Replace `const LIMIT = 1000` with the imported MAX_EPIC_RAIL_CHARS, so the 15 boundary cases (exact limit, limit+1, the surrogate pair at the boundary, the legacy oversized PENDING proposal, REMOVE/GLOBAL/TASK compatibility) follow the constant.\n- Add `expect(MAX_EPIC_RAIL_CHARS).toBe(10000)` so a silent cap change fails.\n- Add a real-text regression. The fixture is the exact human-approved prop-d3ccceade25f4af19518ce0e930e4123 proposedValue, 1650 UTF-16 units: today it equals the concatenation of epic-fe5e32c3 rails 3+4+5, taken verbatim from get_context, and the test asserts `.length === 1650`. It must survive as ONE entry, byte-identical, through propose_rail (EPIC ADD_RAIL), approval/apply and a StateManager reload.\n- Add a 10001-unit refusal through propose_rail, a direct epicRails update and approval of a pre-existing oversized PENDING proposal. Each gives INVALID_INPUT before any mutation, the proposal stays PENDING, and the rail and proposal bytes are unchanged.\nKeep the uncommitted validators.test.ts additions (+20/-1, already declared on this task). They use MAX_EPIC_RAIL_CHARS and need no edit. Report the file in modifiedFiles so the next exit lands it.\nDocs: in docs/SCHEMA.md change every epic-rail '1000' mention to 10000: the epicRails field comment (~line 330) and the 'Epic rail limits' paragraph (~line 377). Wording stays: refused with INVALID_INPUT, never truncated; JavaScript string.length.\nOut of scope:\n- StateManager.createEpic's lossy sanitizeStringArray (filed as task-6b607b12, which depends on this task);\n- recombining epic-fe5e32c3's three restored slices into one rail. That needs the live daemon restarted on the new build, an operator action, and must never be done by editing .moe.\nError handling: a refused oversize rail must leave every byte as it was, and no path may truncate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/proposeRail.test.ts",
+        "packages/moe-daemon/src/state/validators.test.ts",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Changed only MAX_EPIC_RAIL_CHARS in production (1000→10000); proposeRail.ts unchanged. Tests follow the constant, separately pin 10000, round-trip the exact initial daemon packet's approved 1650-unit text as ONE rail, and pin the existing propose/direct-update/pending-approval refusal cases to 10001. Refusal snapshots now include persisted proposal bytes. Retained prior session's validators.test.ts +20/-1, already declared. RED: two new tests failed at 1000 (pin and real approved text), exit 1; GREEN after cap change: 2 files/56 tests passed, exit 0, native-Linux snapshot, logs /tmp/moe-ab6a-10000-{red,green}.log. git diff --check passed. Shared dirty peer paths untouched; no .moe hand edits. Fixture used original session context because a peer removed the duplicate R07 rail and shifted live indices; live repair/recombination untouched.",
+      "startedAt": "2026-10-25T08:22:50.736Z",
+      "completedAt": "2026-10-25T08:24:40.010Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Single verification gate, run fresh after step 1. Run exactly `cd packages/moe-daemon && npm test`; it must exit 0. Keep its command, exitCode and outputTail for complete_task. Also run `cd packages/moe-daemon && npx tsc --noEmit`, because vitest does not type-check, and report its exit status.\nThis is the full daemon suite, because validators.ts is shared.\nIn WSL, build a native-Linux snapshot first. Archive current HEAD, overlay this task's 4 files and cmp them against the worktree, symlink the native node_modules, and scrub MOE_* with a Linux-only PATH (mem gotcha-linux-vitest-reuse-native-node-modules, mem gotcha-daemon-tests-ambient-moe-worker-id). Never npm install over the shared Windows node_modules.\nReport any failure honestly, by name, and do not edit, skip or weaken a test. affectedFiles is empty on purpose.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh named full gate `cd packages/moe-daemon && npm test`: exit 0, 159 files passed; 3772 tests passed, 44 skipped (3816 total), duration 31.95s. `cd packages/moe-daemon && npx tsc --noEmit`: exit 0. Snapshot /tmp/moe-ab6a-10000-gate.hcX1Gh archives HEAD 58ca80c2052f75b34e05858fa582486057857a39 + exactly the four planned overlays, each cmp-identical; unchanged proposeRail.ts also cmp-identical. Native dependency package/lock JSON match; MOE_* scrubbed, Linux-only PATH; shared Windows node_modules untouched. Logs /tmp/moe-ab6a-10000-gate.log and /tmp/moe-ab6a-10000-tsc.log. No test edits/skips/weakening in this verification step.",
+      "startedAt": "2026-10-25T08:24:51.361Z",
+      "completedAt": "2026-10-25T08:25:46.410Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff (load adversarial-self-review).\nChecks:\n- Is any truncation path left for epic rails (update_epic, proposal apply, propose_rail)?\n- Is any other validateStringArrayValue caller's behavior changed?\n- Does a 10000-unit rail with surrogate pairs, leading/trailing whitespace and Unicode round-trip exactly?\n- Does a refused approval leave the proposal PENDING?\n- Are the restored three-slice rails on epic-fe5e32c3 untouched?\n- Does no .moe file change by hand?\nMutation proof, in a scratch copy of the snapshot and never the shared checkout. Revert the constant to 1000: the 1650 test and the toBe(10000) pin must go red. Restore truncate:true for epicRails: the refusal tests must go red. Drop propose_rail's prevalidation: its refusal test must go red. Name the failing test for each.\nIf this review changes any byte, re-run the step 2 command and use that fresh output in complete_task. In the completion summary, post the corrected acceptance list from this task's planning comment so the governor can relay it into the DoD field.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review loaded; reviewed scoped diff top-to-bottom and traced propose→apply→update validators. No new concurrency/state mutation path; invalid type/blank/NUL/newline/over-cap entries fail before writes. Exact-limit Unicode/surrogate/whitespace ADD and MODIFY round-trip; refused legacy approval remains PENDING with both persisted proposal and epic bytes unchanged. Other array callers retain truncate=true by default. The three restored live slices (419/432/799 units) are byte-identical since first fresh context; no live rail recombination or .moe hand edits. Known createEpic sanitizer remains explicitly out of scope (task-6b607b12). Scratch mutations /tmp/moe-ab6a-10000-mutations.N0RF1z: cap=1000 killed by `pins the epic rail cap to 10000 UTF-16 units` and `keeps the human-approved 1650-unit rail as one exact entry through approval and reload`; epic truncate=true killed by `rejects approval of a legacy oversized pending proposal without mutating anything` and `fails a direct update atomically when any rail is oversized`; removed prevalidation killed by ADD_RAIL and MODIFY_RAIL `refuses a %s over the limit before any write`. Each probe exit 1, exactly 2 expected failures. No review byte changes; all four task files plus unchanged proposeRail.ts still cmp-identical to green full-gate snapshot (3772 pass, 44 existing skips; tsc 0).",
+      "startedAt": "2026-10-25T08:25:46.519Z",
+      "completedAt": "2026-10-25T08:27:08.517Z"
+    }
+  ],
+  "planRevision": 20,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,41 +70,54 @@
       "author": "architect-473624b4",
       "content": "HUMAN REQUIREMENT CHANGE received after steps 1-4 completed: user selected “Raise limit; preserve longer rails”. This supersedes the 1000-unit acceptance ceiling in comment-47c11f2a and the initial plan, not the reject-not-truncate requirement. Proposed revised bound is 10000 UTF-16 code units (existing controls retained), with the actual 1650-unit approved text passing losslessly as one entry; >10000 refused upfront and on apply. Worker notified to request_replan so completed steps are not rewritten through an unrelated self-review step. Preserve finished lossless-boundary implementation and evidence; source update/test/doc needs a fresh gate. Data repair already restored every clause via Moe; recombining to one approved rail must wait until the running daemon supports the higher cap.",
       "timestamp": "2026-10-25T08:03:29.543Z"
+    },
+    {
+      "id": "comment-ac664458e1654157bc6cb16abfa0f5c5",
+      "author": "architect-26ba32c3",
+      "content": "Corrected acceptance list for the DoD field, replacing the 1000-cap version in comment-47c11f2a. It follows the human's \"Raise limit; preserve longer rails\". @governor-187cc44e please relay this to the human for pasting; the replan is planRevision 14.\n(1) EPIC ADD/MODIFY proposals over 10000 UTF-16 code units fail INVALID_INPUT before the proposal is persisted or published. Exactly 10000 is accepted losslessly.\n(2) The exact human-approved 1650-unit prop-d3ccceade text survives propose, approve/apply and reload as ONE byte-identical epic rail.\n(3) Direct epicRails updates, and approval of a pre-existing oversized (>10000) EPIC proposal, fail before any entity mutation. The proposal stays PENDING, all rail and proposal bytes are preserved, and nothing is ever truncated.\n(4) Accepted epic rails keep whitespace and Unicode exactly. GLOBAL/TASK long-rail behavior, REMOVE_RAIL and other validateStringArrayValue callers stay compatible.\n(5) Fresh `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task.\nNot in this task:\n- createEpic truncation (task-6b607b12);\n- recombining epic-fe5e32c3's three restored slices into one rail, which needs an operator daemon restart on the new build.",
+      "timestamp": "2026-10-25T08:21:50.774Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T07:49:44.510Z",
-  "updatedAt": "2026-10-25T08:08:41.132Z",
+  "updatedAt": "2026-10-25T08:28:13.320Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T07:54:15.283Z",
-    "plannedStepCount": 5,
+    "plannedStepCount": 3,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 8
   },
   "contextFetchedBy": [
     "architect-473624b4",
     "governor-187cc44e",
-    "worker-c1d9de02"
+    "worker-c1d9de02",
+    "architect-26ba32c3",
+    "worker-9cda703c"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
-  "planSubmittedAt": "2026-10-25T07:57:57.308Z",
+  "planSubmittedAt": "2026-10-25T08:21:42.198Z",
   "planningNotes": {
-    "approachesConsidered": "# Lossless epic rail validation\nGoal: refuse unrepresentable EPIC rail changes before review and never silently shorten human-approved constraints. Architecture: reuse validateStringValue and add an opt-out to the existing array truncation behavior only at validateEpicUpdates; propose_rail shares the same cap. TypeScript/Node/Vitest. Raising the cap would merely postpone silent truncation and broaden policy; retaining the established 1000 bound with explicit refusals is the minimal compatible fix.",
-    "codebaseInsights": "Root cause confirmed: validateStringArrayValue unconditionally passes truncate:true; validateEpicUpdates calls it for epicRails with 1000. proposeRail accepts any proposed string. StateManager.approveProposal calls applyRailChange before persisting APPROVED, and the EPIC branch calls updateEpic -> validateEpicUpdates, so one strict store validator also protects old pending proposals. GLOBAL/TASK apply paths intentionally preserve long rails; StateManager.test.ts has a >1000 global rule regression. No need to edit StateManager. Runtime repair already performed by architect via moe.update_epic using exact approved slices (419/432/799), not source editing or a new waiver.",
-    "risks": "Keep the shared array validator's existing default behavior for its other callers; only epicRails opts into rejection. Length uses JS string.length, not UTF-8 bytes or code points. At 100-item boundary a later approval can legitimately refuse due to newer rails; never mark a failed apply APPROVED. Don't promise transaction rollback across epic and subsequent proposal writes. DoD has only a placeholder and no architect MCP update tool: concrete criteria recorded in comment-47c11f2a0a9a4a6bb19539857c296764 and governor notified via msg-d6996dd217774f5c95f9ff72645d7d7e. No unanswered question blocks this TURBO plan.",
+    "approachesConsidered": "Replan after the human chose \"Raise limit; preserve longer rails\". The new cap of 10000 UTF-16 units is the value proposed in comment-f610453a, restated by the governor. Reject-not-truncate stays.\nReuse: the prior attempt's lossless-validation work (already landed in 7559efc, plus the declared uncommitted validators.test.ts). Only the single constant changes, plus test and doc follow-through.\nRejected:\n- keeping 1000, which the human superseded;\n- removing the cap, which would leave no bound and allow unbounded get_context growth;\n- recombining the live rail slices in this task, which needs a daemon restart on the new build: an operator action, never a .moe edit.",
+    "codebaseInsights": "- MAX_EPIC_RAIL_CHARS is defined in validators.ts:246 and used at :544 (epicRails, truncate=false), proposeRail.ts:19 (schema text) and :51 (prevalidation). proposeRail.test.ts:92 has `const LIMIT = 1000`.\n- docs/SCHEMA.md mentions 1000 at lines 330 and 377.\n- Epic epic-fe5e32c3 rails 3/4/5 (419/432/799) concatenate to the approved 1650-unit text. Rail 10 duplicates R07 and is pending REMOVE_RAIL prop-825fea3f; its indices may shift, but 3-5 stay.",
+    "risks": "- A larger per-entry ceiling does not enlarge existing rails, but long rails ride in every get_context twice (CQ-TOKEN rails): it is a ceiling, not a target.\n- Other validateStringArrayValue callers must keep truncating.\n- Do not touch createEpic (task-6b607b12).\n- The running IDE daemon is an older build, so the new cap applies only after a restart. Say so in the completion summary.\n- The DoD field is still the placeholder; corrected acceptance list is in this task's comment for the governor or human to paste.",
     "keyFiles": [
       "packages/moe-daemon/src/state/validators.ts",
       "packages/moe-daemon/src/tools/proposeRail.ts",
       "packages/moe-daemon/src/tools/proposeRail.test.ts",
+      "packages/moe-daemon/src/state/validators.test.ts",
       "docs/SCHEMA.md"
     ]
   },
-  "planApprovedAt": "2026-10-25T07:57:57.384Z",
+  "planApprovedAt": "2026-10-25T08:21:42.282Z",
   "workStartedAt": "2026-10-25T07:58:47.638Z",
   "priorAttempt": {
     "attemptedAt": "2026-10-25T08:06:46.775Z",
@@ -192,15 +244,10 @@
     }
   ],
   "filesModified": [
-    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
-    ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
-    ".moe/tasks/task-96526848b23549cf994ab82f47fad29f.json",
-    ".moe/tasks/task-ab6aac94d9424653bb45d6db4fa3fe67.json",
-    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
-    "docs/SCHEMA.md",
     "packages/moe-daemon/src/state/validators.ts",
     "packages/moe-daemon/src/tools/proposeRail.test.ts",
-    "packages/moe-daemon/src/tools/proposeRail.ts"
+    "packages/moe-daemon/src/state/validators.test.ts",
+    "docs/SCHEMA.md"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/tools/proposeRail.test.ts",
@@ -219,5 +266,14 @@
   },
   "declaredFiles": [
     "packages/moe-daemon/src/state/validators.test.ts"
-  ]
+  ],
+  "reviewStartedAt": "2026-10-25T08:28:13.317Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Native-Linux snapshot /tmp/moe-ab6a-10000-gate.hcX1Gh of HEAD 58ca80c2052f75b34e05858fa582486057857a39 + four cmp-identical task overlays; native dependency package/lock match; MOE_* scrubbed, Linux-only PATH.\nTest Files 159 passed (159)\nTests 3772 passed | 44 skipped (3816)\nStart at 10:24:58\nDuration 31.95s\nTEST_EXIT=0\nAdditional check: cd packages/moe-daemon && npx tsc --noEmit; TSC_EXIT=0.\nLogs: /tmp/moe-ab6a-10000-gate.log, /tmp/moe-ab6a-10000-tsc.log. Source/test/docs unchanged after this run, verified by cmp after mutation review.",
+    "reportedAt": "2026-10-25T08:28:13.317Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Raised epic rail cap to 10000 UTF-16 units; reject-not-truncate retained. Exact approved 1650-unit fixture round-trips as ONE entry. Four files reported; prior validators tests preserved. Full daemon gate: 159 files, 3772 passed/44 existing skips, exit 0; tsc --noEmit exit 0. All three scratch mutation probes killed (2 expected failures each).\n\nCorrected acceptance list for governor/human DoD relay (comment-ac664458):\n(1) EPIC ADD/MODIFY proposals over 10000 UTF-16 code units fail INVALID_INPUT before the proposal is persisted or published. Exactly 10000 is accepted losslessly.\n(2) The exact human-approved 1650-unit prop-d3ccceade text survives propose, approve/apply and reload as ONE byte-identical epic rail.\n(3) Direct epicRails updates, and approval of a pre-existing oversized (>10000) EPIC proposal, fail before any entity mutation. The proposal stays PENDING, all rail and proposal bytes are preserved, and nothing is ever truncated.\n(4) Accepted epic rails keep whitespace and Unicode exactly. GLOBAL/TASK long-rail behavior, REMOVE_RAIL and other validateStringArrayValue callers stay compatible.\n(5) Fresh `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task.\n\nNot in scope: createEpic truncation (task-6b607b12) or live rail recombination. The latter needs an OPERATOR daemon restart on the new build. Existing restored slices untouched; no .moe hand edits."
 }

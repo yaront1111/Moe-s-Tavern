@@ -243,7 +243,7 @@ export function validateEnumValue<T extends string>(value: unknown, fieldName: s
 }
 
 /** Longest epic rail, in UTF-16 code units. Longer text is refused, never shortened. */
-export const MAX_EPIC_RAIL_CHARS = 1000;
+export const MAX_EPIC_RAIL_CHARS = 10000;
 
 export function validateStringArrayValue(
   value: unknown,

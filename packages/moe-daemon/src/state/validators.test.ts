@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_COMMITS_PER_TASK, sanitizeImplementationPlan, sanitizeStepAmendments, trimCommits, validateSettingsUpdate } from './validators.js';
+import { MAX_COMMITS_PER_TASK, MAX_EPIC_RAIL_CHARS, sanitizeImplementationPlan, sanitizeStepAmendments, trimCommits, validateEpicUpdates, validateSettingsUpdate, validateStringArrayValue } from './validators.js';
 import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import type { Project, TaskCommit } from '../types/schema.js';
 
@@ -197,5 +197,24 @@ describe('validateSettingsUpdate — execution profile foundation', () => {
   it.each(['ready', 'executionProfileReady', 'capabilities', 'executionPolicySnapshot'])('refuses caller readiness/policy injection through %s', key => {
     expect(() => validateSettingsUpdate(project(), { executionProfile: 'observe', [key]: true } as never))
       .toThrow('is not a supported project setting field');
+  });
+});
+
+describe('validateStringArrayValue — truncate option', () => {
+  it('still shortens an over-long entry by default (settings arrays keep their old behavior)', () => {
+    expect(validateStringArrayValue(['a'.repeat(600)], 'appendOnlyFiles', 100, 500)).toEqual(['a'.repeat(500)]);
+    const next = validateSettingsUpdate(project(), { attribution: { exclude: ['b'.repeat(600)] } });
+    expect(next.attribution?.exclude).toEqual(['b'.repeat(500)]);
+  });
+
+  it('refuses instead of shortening when truncate is false, with the entry named', () => {
+    expect(() => validateStringArrayValue(['ok', 'a'.repeat(501)], 'rails', 100, 500, false)).toThrow(/rails\[1\].*500 characters or fewer/);
+    expect(validateStringArrayValue(['a'.repeat(500)], 'rails', 100, 500, false)).toEqual(['a'.repeat(500)]);
+  });
+
+  it('epicRails uses the strict cap while other epic text fields keep truncating', () => {
+    expect(() => validateEpicUpdates({ epicRails: ['x'.repeat(MAX_EPIC_RAIL_CHARS + 1)] })).toThrow(/epicRails\[0\]/);
+    expect(validateEpicUpdates({ title: 't'.repeat(600), epicRails: ['x'.repeat(MAX_EPIC_RAIL_CHARS)] }))
+      .toMatchObject({ title: 't'.repeat(500), epicRails: ['x'.repeat(MAX_EPIC_RAIL_CHARS)] });
   });
 });
