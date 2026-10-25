@@ -228,9 +228,10 @@ for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (
   require_both "runner reattach prose" "$prose"
 done
 
-# Hot reload: the restart announcement an operator sees and the deregister
-# reason both postflight hot-reload cases assert, spelled identically in both.
-for lit in 'wrapper source changed on disk; restarting to load it' wrapper_restart; do
+# Hot reload: the restart announcement an operator sees, the deregister reason
+# both postflight hot-reload cases assert, and the refusal of changed bytes that
+# do not parse, spelled identically in both.
+for lit in 'wrapper source changed on disk; restarting to load it' wrapper_restart MOE_WRAPPER_RELOAD_REFUSED 'does not parse; staying on the current bytes until it changes again'; do
   require_both "hot reload" "$lit"
 done
 

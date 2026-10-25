@@ -105,9 +105,10 @@ $required = [ordered]@{
     # identically in both.
     'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')
     'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach.')
-    # Hot reload: the restart announcement an operator sees and the deregister
-    # reason both postflight hot-reload cases assert, spelled identically in both.
-    'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart')
+    # Hot reload: the restart announcement an operator sees, the deregister
+    # reason both postflight hot-reload cases assert, and the refusal of changed
+    # bytes that do not parse, spelled identically in both.
+    'hot reload' = @('wrapper source changed on disk; restarting to load it', 'wrapper_restart', 'MOE_WRAPPER_RELOAD_REFUSED', 'does not parse; staying on the current bytes until it changes again')
     # Team join: a refused join (a full team) leaves the seat SOLO, and a solo
     # seat's claims are refused NO_TEAM_MEMBERSHIP; both are named, never hidden.
     'team join prose' = @('moe.join_team refused: ', 'this seat has NO team, so claim_next_task skips every epic a live worker already holds', 'moe.join_team got no answer; team membership is unconfirmed.', 'claim_next_task refused with NO_TEAM_MEMBERSHIP', 'moe.join_team retry refused: ', 'this seat is still TEAMLESS; the wrapper retries before the next claim.', 'on retry; this seat is no longer teamless.', 'MOE_TASKLESS_NO_LAUNCH reason=teamless', 'so claims skip every epic+status a live worker already holds', 'a claiming seat retries the join before every claim.')

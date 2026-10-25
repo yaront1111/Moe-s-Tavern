@@ -6009,6 +6009,7 @@ account_after_exit() {
 # restart: the re-exec'd process captures the new hash and cannot thrash.
 MOE_WRAPPER_PATH="${BASH_SOURCE[0]:-$0}"
 MOE_WRAPPER_LAUNCH_HASH=""
+MOE_WRAPPER_REFUSED_HASH=""
 if [ -f "$MOE_WRAPPER_PATH" ]; then
     # FAIL-OPEN: a wrapper that dies because it could not hash itself is a fleet
     # outage; a stale wrapper is merely the status quo this guard improves on.
@@ -6042,28 +6043,43 @@ while [ "$LOOP_RUNNING" = true ]; do
     # a restart can never interleave with a half-done completion.
     if [ -n "$MOE_WRAPPER_LAUNCH_HASH" ]; then
         MOE_WRAPPER_CURRENT_HASH="$(sha256sum "$MOE_WRAPPER_PATH" 2>/dev/null | cut -d' ' -f1 || true)"
-        if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ]; then
-            echo "wrapper source changed on disk; restarting to load it"
-            # `exec` replaces this process WITHOUT running the EXIT trap, so
-            # do its two must-haves by hand (ps1 parity): stop the sidecar and
-            # deregister -- the re-exec'd wrapper registers afresh and any
-            # held task is released for it (or a peer) to re-claim. The
-            # previous post-flight already ran, so nothing is left to land.
-            stop_heartbeat_sidecar
-            if [ -n "$HEARTBEAT_PID" ]; then
-                echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
-                continue
+        if [ -n "$MOE_WRAPPER_CURRENT_HASH" ] &&            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_LAUNCH_HASH" ] &&
+            [ "$MOE_WRAPPER_CURRENT_HASH" != "$MOE_WRAPPER_REFUSED_HASH" ]; then
+            # A seat launched from the shared checkout reloads every edit of
+            # this file, and a half-applied edit used to cost it its
+            # registration and then its process. So parse the new bytes
+            # first: bytes that fail are refused once per hash, and the seat
+            # keeps serving the bytes it already parsed. The `||` keeps set -e
+            # from ending the seat on the very failure this guards.
+            MOE_WRAPPER_PARSE_RC=0
+            MOE_WRAPPER_PARSE_ERR="$(bash -n "$MOE_WRAPPER_PATH" 2>&1)" || MOE_WRAPPER_PARSE_RC=$?
+            if [ "$MOE_WRAPPER_PARSE_RC" -ne 0 ]; then
+                MOE_WRAPPER_REFUSED_HASH="$MOE_WRAPPER_CURRENT_HASH"
+                MOE_WRAPPER_PARSE_ERR=${MOE_WRAPPER_PARSE_ERR%%$'\n'*}
+                echo "[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: ${MOE_WRAPPER_PARSE_ERR:-bash -n exited $MOE_WRAPPER_PARSE_RC}" >&2
+            else
+                echo "wrapper source changed on disk; restarting to load it"
+                # `exec` replaces this process WITHOUT running the EXIT trap, so
+                # do its two must-haves by hand (ps1 parity): stop the sidecar and
+                # deregister -- the re-exec'd wrapper registers afresh and any
+                # held task is released for it (or a peer) to re-claim. The
+                # previous post-flight already ran, so nothing is left to land.
+                stop_heartbeat_sidecar
+                if [ -n "$HEARTBEAT_PID" ]; then
+                    echo "[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle." >&2
+                    continue
+                fi
+                if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
+                    bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
+                        "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
+                        --project "$PROJECT" >/dev/null 2>&1 || true
+                fi
+                if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
+                    rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
+                fi
+                exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
+                echo "wrapper relaunch failed; continuing on current bytes"
             fi
-            if [ -n "${WORKER_ID:-}" ] && [ -n "${PROJECT:-}" ] && [ -f "$SCRIPT_DIR/moe-call.sh" ]; then
-                bash "$SCRIPT_DIR/moe-call.sh" deregister_worker \
-                    "{\"workerId\":\"$WORKER_ID\",\"reason\":\"wrapper_restart\"}" \
-                    --project "$PROJECT" >/dev/null 2>&1 || true
-            fi
-            if [ -n "$SECURE_TEMP_DIR" ] && [ -d "$SECURE_TEMP_DIR" ]; then
-                rm -rf "$SECURE_TEMP_DIR" 2>/dev/null || true
-            fi
-            exec "$MOE_WRAPPER_PATH" "${MOE_WRAPPER_ARGV[@]}"
-            echo "wrapper relaunch failed; continuing on current bytes"
         fi
     fi
 

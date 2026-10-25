@@ -87,8 +87,10 @@ if (-not $global:MoeWrapperSupervised -and $PSCommandPath) {
             $moeReloaded = $global:MoeWrapperReload
         } while ($moeReloaded)
     } catch {
-        # A reloaded file that no longer parses, rejects the bound parameters or
-        # is gone stops the seat, as a failed child relaunch did before.
+        # The restart check refuses changed bytes that fail to parse, so a parse
+        # error reaches here only when the file changed again after that check.
+        # That, a file that rejects the bound parameters, or one that is gone
+        # stops the seat, as a failed child relaunch did before.
         if ($moeReloaded) { Write-Host "wrapper relaunch failed; the seat is stopped, relaunch it by hand: $_" -ForegroundColor Yellow }
         throw
     } finally { $global:MoeWrapperSupervised = $false }
@@ -5452,6 +5454,7 @@ function Send-MoeAccountSample {
 # file is touched again mid-flight.
 $script:MoeWrapperPath = $PSCommandPath
 $script:MoeWrapperLaunchHash = $null
+$script:MoeWrapperRefusedHash = $null
 # Set by the restart check below and read once, past the outer finally, by the
 # hand-over at the very bottom of this file.
 $script:MoeWrapperRelaunchRequested = $false
@@ -5497,29 +5500,49 @@ do {
         } catch {
             $moeCurrentHash = $null   # FAIL-OPEN: keep running the current bytes
         }
-        if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash) {
-            Write-Host "wrapper source changed on disk; restarting to load it"
-            # The hand-over itself happens past the outer finally, IN THIS
-            # PROCESS AND CONSOLE (the supervisor at the top of this file runs
-            # the file again). Until 2026-09-18 this was a `Start-Process`,
-            # which gives the relaunched wrapper its OWN console window and
-            # leaves the launching terminal at a prompt: the operator reads that
-            # as a dead seat and relaunches the same worker id, so two wrapper
-            # loops share it and both resume the held task. Measured that day on
-            # qa-a36819c3 (two CLIs reviewing one REVIEW row, one deleting the
-            # other's harness log) and on worker-d0c3b06e. The sh twin `exec`s
-            # in place for the same reason.
-            # Deregister BEFORE handing over (sh twin parity, same reason
-            # string): the next pass registers afresh, and the post-flight
-            # above has already landed this session's work.
-            Stop-HeartbeatSidecar
-            if ($script:CurrentHeartbeatJob) {
-                Write-Host '[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle.' -ForegroundColor Yellow
-                continue
+        if ($moeCurrentHash -and $moeCurrentHash -ne $script:MoeWrapperLaunchHash -and $moeCurrentHash -ne $script:MoeWrapperRefusedHash) {
+            # A seat launched from the shared checkout reloads every edit of
+            # this file, and a half-applied edit used to cost it its
+            # registration and then its process (the supervisor's `&` threw).
+            # So parse the new bytes first, with the engine's own reader:
+            # bytes that fail are refused once per hash, and the seat keeps
+            # serving the bytes it already parsed. A failed parse call is a
+            # refusal too, never a reload.
+            $moeParseReason = ''
+            try {
+                $moeParseErrors = $null
+                $null = [System.Management.Automation.Language.Parser]::ParseFile($script:MoeWrapperPath, [ref]$null, [ref]$moeParseErrors)
+                if ($moeParseErrors.Count -gt 0) { $moeParseReason = "line $($moeParseErrors[0].Extent.StartLineNumber): $($moeParseErrors[0].Message)" }
+            } catch {
+                $moeParseReason = "ParseFile failed: $($_.Exception.Message)"
             }
-            Invoke-MoeDeregister -Reason 'wrapper_restart'
-            $script:MoeWrapperRelaunchRequested = $true
-            break
+            if ($moeParseReason) {
+                $script:MoeWrapperRefusedHash = $moeCurrentHash
+                Write-Host "[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: $moeParseReason" -ForegroundColor Yellow
+            } else {
+                Write-Host "wrapper source changed on disk; restarting to load it"
+                # The hand-over itself happens past the outer finally, IN THIS
+                # PROCESS AND CONSOLE (the supervisor at the top of this file runs
+                # the file again). Until 2026-09-18 this was a `Start-Process`,
+                # which gives the relaunched wrapper its OWN console window and
+                # leaves the launching terminal at a prompt: the operator reads that
+                # as a dead seat and relaunches the same worker id, so two wrapper
+                # loops share it and both resume the held task. Measured that day on
+                # qa-a36819c3 (two CLIs reviewing one REVIEW row, one deleting the
+                # other's harness log) and on worker-d0c3b06e. The sh twin `exec`s
+                # in place for the same reason.
+                # Deregister BEFORE handing over (sh twin parity, same reason
+                # string): the next pass registers afresh, and the post-flight
+                # above has already landed this session's work.
+                Stop-HeartbeatSidecar
+                if ($script:CurrentHeartbeatJob) {
+                    Write-Host '[WARN] MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle.' -ForegroundColor Yellow
+                    continue
+                }
+                Invoke-MoeDeregister -Reason 'wrapper_restart'
+                $script:MoeWrapperRelaunchRequested = $true
+                break
+            }
         }
     }
 

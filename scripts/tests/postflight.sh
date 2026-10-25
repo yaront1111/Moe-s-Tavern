@@ -1948,6 +1948,63 @@ grep -Fq 'restarting to load it (edit 1 loaded)' "$TMP_DIR/wrapper-reload.out" \
   || reload_fail "the second restart did not run the edited bytes"
 echo "[hot reload] ok: 2 restarts, each re-registered, none without an edit"
 
+# --- Hot reload refused (twin: the refused-reload arm in postflight.ps1). Seats
+# launched from the shared checkout reload every edit of the real file, and a
+# half-applied edit used to make each of them deregister and exec bytes bash
+# could not parse. An unparseable change must log one refusal and keep the seat
+# registered on its current bytes; the next parseable change reloads once. The
+# helpers above resolve RELOAD_PROJECT and reload_pid at call time, so they are
+# re-pointed at a fresh copy. Edits are short APPENDS: a whole-file rewrite can
+# be hashed half-written and log a second refusal. ---
+echo "[hot reload refused] an unparseable change is refused once and the seat stays registered"
+RELOAD_DIR="$TMP_DIR/reload-refused"
+RELOAD_PROJECT="$RELOAD_DIR/project"
+RELOAD_WRAPPER="$RELOAD_DIR/scripts/moe-agent.sh"
+mkdir -p "$RELOAD_PROJECT/.moe/messages"
+cp -R "$ROOT_DIR/scripts" "$RELOAD_DIR/"
+chmod +x "$RELOAD_WRAPPER"
+printf '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}\n' > "$RELOAD_PROJECT/.moe/project.json"
+: > "$RELOAD_PROJECT/.moe/messages/chan-general.jsonl"
+printf '{"port":9876,"projectPath":"%s"}\n' "$RELOAD_PROJECT" > "$RELOAD_PROJECT/.moe/daemon.json"
+PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CLAIM_MODE=idle MOE_DISABLE_HEARTBEAT=1 \
+  "$RELOAD_WRAPPER" \
+  --project "$RELOAD_PROJECT" \
+  --worker-id worker-reload-refused \
+  --role worker \
+  --no-start-daemon \
+  --command /bin/true \
+  --loop \
+  --poll-interval 1 \
+  >"$TMP_DIR/wrapper-reload.out" 2>&1 &
+reload_pid=$!
+reload_live_before="$LIVE_PIDS"
+LIVE_PIDS="$LIVE_PIDS $reload_pid"
+reload_wait 0 '^c'
+reload_claims="$(reload_seq)"
+reload_claims="${reload_claims//[!c]/}"
+# An open `if` at the end: bash -n fails with "unexpected end of file".
+printf 'if true; then :\n' >> "$RELOAD_WRAPPER"
+# Three more claims mean at least two loop tops hashed the refused bytes; with
+# EDITS=0 a wrapper_restart fails at once, and a dead seat fails too.
+reload_wait 0 "^c{$((${#reload_claims} + 3)),}\$"
+# Closing it makes the tail parse; it would only run after the main loop ends.
+printf 'fi\n' >> "$RELOAD_WRAPPER"
+reload_wait 1 '^c+rc'
+reload_final="$(reload_seq)"
+kill -KILL "$reload_pid" 2>/dev/null || true
+wait "$reload_pid" 2>/dev/null || true
+LIVE_PIDS="$reload_live_before"
+[[ $reload_final =~ ^c+rc+$ ]] \
+  || reload_fail "a refused edit must not deregister; the next parseable edit reloads once"
+reload_refusals="$(grep -c 'MOE_WRAPPER_RELOAD_REFUSED' "$TMP_DIR/wrapper-reload.out" || true)"
+[ "$reload_refusals" = 1 ] || reload_fail "one refusal line per refused hash, got $reload_refusals"
+# bash prefixes its own message with the script path: the reason is bash -n's.
+grep -Eq 'MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: .*moe-agent\.sh' "$TMP_DIR/wrapper-reload.out" \
+  || reload_fail "the refusal line must carry bash -n's reason"
+reload_restarts="$(grep -c 'restarting to load it' "$TMP_DIR/wrapper-reload.out" || true)"
+[ "$reload_restarts" = 1 ] || reload_fail "expected one restart announcement, got $reload_restarts"
+echo "[hot reload refused] ok: refused once, stayed registered, reloaded on the next parseable edit"
+
 # --- Quality gate (settings.qualityGate): the post-flight runs the configured
 # command before auto-commit. Failing gate => no commit, PUSH-BLOCKED chat
 # message; passing gate => commit lands; MOE_DISABLE_QUALITY_GATE=1 => gate

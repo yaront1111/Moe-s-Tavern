@@ -1787,6 +1787,72 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
         if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD FAILED: ' + ($reloadProblems -join ' | ')) }
         Write-Host '[hot reload] ok: 2 reloads, 1 wrapper process, 1 runner identity'
 
+        # --- Hot reload refused (twin: the refused-reload arm in postflight.sh).
+        # Seats launched from the shared checkout reload every edit of the real
+        # file, and a half-applied edit used to make each of them deregister and
+        # then stop on bytes the supervisor could not parse. An unparseable
+        # change must log one refusal and keep the one process registered; the
+        # next parseable change reloads once. The helpers above resolve their
+        # variables at call time, so they are re-pointed at a fresh copy. Edits
+        # are short APPENDS after the file's final `exit 0`, so they never run:
+        # a whole-file rewrite can be hashed half-written and refused twice. ---
+        $reloadWrapper = Join-Path $tempRoot 'reload-refused\scripts\moe-agent.ps1'
+        $reloadProject = Join-Path $tempRoot 'reload-refused\project'
+        New-Item -ItemType Directory -Force -Path @((Split-Path $reloadWrapper), (Join-Path $reloadProject '.moe\messages')) | Out-Null
+        Copy-Item -LiteralPath $wrapper -Destination $reloadWrapper
+        Get-ChildItem -LiteralPath (Split-Path $wrapper) -Filter '*.mjs' | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination (Split-Path $reloadWrapper)
+        }
+        Set-Content -Path (Join-Path $reloadProject '.moe\project.json') -Value '{"id":"proj-reload","name":"postflight-reload","settings":{"autoCommit":false}}' -Encoding UTF8
+        Set-Content -Path (Join-Path $reloadProject '.moe\messages\chan-general.jsonl') -Value '' -Encoding UTF8
+        $reloadRpcLog = Join-Path $reloadProject '.moe\evidence-rpcs.jsonl'
+        $reloadOut = Join-Path $tempRoot 'wrapper-reload-refused.out'
+        function Add-ReloadWrapperText([string]$Text) {
+            for ($i = 1; ; $i++) {
+                try { [IO.File]::AppendAllText($reloadWrapper, $Text, (New-Object System.Text.UTF8Encoding($false))); return }
+                catch { if ($i -ge 20) { throw }; Start-Sleep -Milliseconds 100 }
+            }
+        }
+        $reloadProc = $null
+        $refusedCount = $null
+        $env:FAKE_CLAIM_MODE = 'idle'
+        $env:MOE_DISABLE_HEARTBEAT = '1'
+        try {
+            $reloadArgs = @('-NoProfile', '-File', $reloadWrapper, '-Project', $reloadProject, '-WorkerId', 'worker-reload-refused', '-Role', 'worker', '-NoStartDaemon', '-Command', $trueCmd, '-Loop', '-PollInterval', '1') |
+                ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+            $reloadProc = Start-Process -FilePath $psExe -ArgumentList $reloadArgs -RedirectStandardOutput $reloadOut -RedirectStandardError "$reloadOut.err" -PassThru -NoNewWindow
+            $null = $reloadProc.Handle
+            Wait-ReloadSequence '^c' 'first claim'
+            $refusedClaims = ((Get-ReloadSequence) -replace '[^c]', '').Length
+            # An open block at the end: ParseFile reports a missing closing '}'.
+            Add-ReloadWrapperText "if (`$true) {`n"
+            # Three more claims mean at least two loop tops hashed the refused bytes.
+            Wait-ReloadSequence ('^c{' + ($refusedClaims + 3) + ',}$|[rx]') 'three claims after the refused edit'
+            if ((Get-ReloadSequence) -match '[rx]') { throw "HOT RELOAD REFUSED FAILED: a refused edit must not deregister; RPC sequence '$(Get-ReloadSequence)'" }
+            $refusedCount = @(Get-ReloadWrapperPids).Count
+            Add-ReloadWrapperText "}`n"
+            Wait-ReloadSequence '^c+rc' 'claim after the parseable edit'
+        } finally {
+            Remove-Item Env:FAKE_CLAIM_MODE, Env:MOE_DISABLE_HEARTBEAT -ErrorAction SilentlyContinue
+            if ($reloadProc -and -not $reloadProc.HasExited) { & taskkill /T /F /PID $reloadProc.Id 2>&1 | Out-Null; $reloadProc.WaitForExit(5000) | Out-Null }
+            foreach ($reloadPid in @(Get-ReloadWrapperPids)) { Stop-Process -Id $reloadPid -Force -ErrorAction SilentlyContinue }
+        }
+        $reloadSeq = Get-ReloadSequence
+        $reloadLog = [string](Get-Content -Raw -LiteralPath $reloadOut -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$reloadOut.err" -ErrorAction SilentlyContinue)
+        # A console host can wrap a long line; the reason is matched unwrapped.
+        $reloadFlat = $reloadLog -replace '\r?\n', ''
+        $reloadProblems = @()
+        if ($reloadSeq -notmatch '^c+rc+$') { $reloadProblems += "a refused edit must not deregister; the next parseable edit reloads once; RPC sequence '$reloadSeq'" }
+        $refusals = [regex]::Matches($reloadLog, 'MOE_WRAPPER_RELOAD_REFUSED').Count
+        if ($refusals -ne 1) { $reloadProblems += "one refusal line per refused hash, got $refusals" }
+        # The wrapper's own 'line N:' then the parser's (localized) message.
+        if ($reloadFlat -notmatch 'does not parse; staying on the current bytes until it changes again: line \d+: ') { $reloadProblems += "the refusal line must carry ParseFile's reason" }
+        if ($refusedCount -ne 1) { $reloadProblems += "expected exactly 1 wrapper process after the refused edit; counted $refusedCount" }
+        $restarts = [regex]::Matches($reloadLog, 'restarting to load it').Count
+        if ($restarts -ne 1) { $reloadProblems += "expected one restart announcement, got $restarts" }
+        if ($reloadProblems.Count) { Write-Host $reloadLog; throw ('HOT RELOAD REFUSED FAILED: ' + ($reloadProblems -join ' | ')) }
+        Write-Host '[hot reload refused] ok: refused once, one process, reloaded on the next parseable edit'
+
         # --- Quality gate (settings.qualityGate): the post-flight runs the
         # configured command before a COMPLETION commit. Failing gate => no
         # branch commit (the edits go to a rescue ref), PUSH-BLOCKED chat
