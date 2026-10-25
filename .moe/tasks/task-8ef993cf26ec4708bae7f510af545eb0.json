@@ -17,130 +17,93 @@
     {
       "stepId": "step-1",
       "description": "Test-first (RED). Append ONE new section, `// CQ-R03 Windows VM provisioning`, to the END of scripts/tests/local-runner.test.mjs, after R06's and R07's sections (both are landed dependencies).\n\n**Fixture rules**\n- Keep every existing byte (LF). Add only new imports: image-cache.mjs, provision.mjs, platform-windows.mjs, plus the landed lifecycle, guest-bootstrap and guest-readiness modules.\n- No real Multipass, PowerShell, network or paid calls.\n- Reuse R06's and R07's fake providers and fixtures where they fit. Extend them in this section, not by editing theirs, so they also answer `launch`:\n  - record argv and options;\n  - capture the bytes written to the returned promise's `child.stdin` (the promisified-execFile shape);\n  - create the instance, or reject with a scripted error.\n- A `fakeFetch(bytes, { status, url, contentLength })` returns a Response-like object with a ReadableStream body.\n- Inject a `digest` so the fake bytes 'match' the pinned sha. R07 makes the digest injectable for tests; real hashing is covered by R07.\n\nEnumerate these groups. Mutation-resistant assertions only.\n\n**Launch arguments**\n- **W1. fileImageUrl(file, platform).**\n  - Win32 'C:\\\\Users\\\\me\\\\My Images\\\\<sha>.img' gives exactly 'file://C:/Users/me/My Images/<sha>.img': forward slashes, the space kept, NO %20.\n  - POSIX '/home/u/x.img' gives 'file:///home/u/x.img'.\n  - A relative path, a win32 UNC path ('\\\\\\\\server\\\\share\\\\x.img') or control characters throw PROVISION_INPUT_INVALID.\n- **W2. launchInstance.**\n  - argv is exactly ['launch', <fileUrl>, '--name', name, '--cloud-init', '-', '--timeout', '900', '--cpus', '2', '--memory', '4G', '--disk', '20G'].\n  - Options are shell:false, windowsHide:true, timeout 960000, maxBuffer MAX_PROBE_BUFFER, killSignal 'SIGKILL'.\n  - stdin receives exactly the userData bytes and is ended.\n  - No '--mount', '--network', '--bridged' or '--all' appears.\n  - A rejection carrying stderr 'secret-diagnostic' throws a sanitized code without that text.\n\n**Image cache**\n- **W3. ensurePinnedImage({cacheDir, arch, fetch, digest}).**\n  - fetch is called exactly once, with the MANIFEST url for the arch and an AbortSignal; there is no caller URL parameter.\n  - The result is {file: <cacheDir>/<pin>.img, sourceImage: {arch, url, sha256}}, and no `.part` files remain.\n  - Each of these throws IMAGE_DOWNLOAD_FAILED or IMAGE_INPUT_INVALID, removes the .part file and leaves no .img:\n    - a non-ok status;\n    - a final response.url that is not https;\n    - a content-length above the bound, refused before any write;\n    - a body that exceeds the bound mid-stream.\n  - A digest mismatch throws IMAGE_CHECKSUM_MISMATCH with the .part file removed.\n- **W4. Cache hit.**\n  - An existing <pin>.img is re-verified (digest called) and fetch is NOT called.\n  - A corrupted cache entry is removed and downloaded again exactly once; a second mismatch throws.\n\n**Windows prerequisites (DoD: surfaced)**\n- **W5. windowsPlatform.prerequisites({provider, doctor, hypervisor, host}).** Every item has EXACTLY {id, satisfied, requiresElevation, action}.\n  - Doctor ready plus hypervisor true gives ready:true and every item satisfied:true.\n  - Each mapping:\n    - PROVIDER_NOT_FOUND and VERSION_* give 'multipass-installed' false, requiresElevation true, and an action naming Multipass 1.17.0 for Windows and Administrator;\n    - PROVIDER_ACCESS_DENIED gives 'multipass-authenticated' false, with an action naming `multipass authenticate` and an administrator-set passphrase;\n    - DRIVER_UNSUPPORTED gives 'driver-hcs' false, requiresElevation true, and an action stating Moe never changes local.driver;\n    - HOST_UNSUPPORTED gives 'host-windows-x64' false;\n    - hypervisor false gives 'hyper-v' false, requiresElevation true, and a reboot noted;\n    - hypervisor null (probe failed) gives 'hyper-v' satisfied null and ready false.\n- **W6. The hypervisor probe.**\n  - argv is exactly [<SystemRoot>\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe, '-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance -ClassName Win32_ComputerSystem).HypervisorPresent'].\n  - 'True' gives true, 'False' gives false, and anything else, an error or a timeout gives null.\n- **W7. No global change and no elevation.** Across every R03 test's recorded multipass and PowerShell calls, no argv element equals or contains 'set', 'authenticate', 'RunAs', 'Enable-WindowsOptionalFeature', 'dism', 'bcdedit', '--all', '--mount' or 'mount'.\n\n**Composition**\n- **W8. provisionGuest when not ready.** It returns {provisioned:false, bootstrapReady:false, executionReady:false, prerequisites}, with zero fetch calls, zero ledger records and zero multipass mutations.\n- **W9. Happy path** (windowsPlatform with injected doctor and hypervisor, plus a fake provider for launch, info, exec and delete):\n  - the result is {provisioned:true, instance:'moe-vm-…', bootstrapReady:true, executionReady:false, image:{source…, provider…}};\n  - there is exactly ONE ledger record, in phase 'owned', with the image recorded;\n  - the launch argv uses the file URL of the cached pinned image.\n- **W10 (DoD: durable identity).**\n  - Variant (a): launch #1 rejects with a timeout and the instance is absent on query. Launch #2 uses the SAME --name and the fake ends with exactly one instance.\n  - Variant (b): launch #1 rejects with a timeout and the instance is present. It is adopted, and launch was called once.\n  - In both variants reserve is called once (one ledger file), and there is never a second name.\n- **W11.** A doctor primaryName that is an owned-style name ('moe-vm-'+20 hex) is refused with PRIMARY_NAME_CONFLICT before reserve. Multipass auto-mounts home into the primary instance (launch.cpp petenv).\n- **W12.** When readiness fails after launch:\n  - the record stays for R06 reconcile and cleanup;\n  - no delete argv is issued;\n  - the result has bootstrapReady false and failures carried through.\n\n**CLI**\n- **W13. The cli.mjs `prerequisites` command.**\n  - It writes one JSON line and exits 0 when ready, 2 otherwise.\n  - `--executable <path>` is passed through.\n  - ['prerequisites', 'extra'] and duplicate flags give CLI_INPUT_INVALID before any call.\n  - With no injection on a non-win32 host it reports PLATFORM_UNSUPPORTED and exits 2.\n  - Every R02 CLI test is unchanged and green.\n\n**Real process (POSIX only, `{ skip: process.platform === 'win32' }`)**\n- **W14.**\n  - Write a fake multipass executable in a mkdtemp dir whose path has a space. It handles version, get, launch (reads all of stdin into the scenario state), info, exec (R07 probes) and delete.\n  - Run provisionGuest(windowsPlatform with host win32/x64 injected and hypervisor injected true; real R02 doctor against the fake reporting 1.17.0+win and hcs) through the DEFAULT transports.\n  - Expect bootstrapReady true and recorded stdin equal to userData.\n  - The violations file is absent.\n\nRun the file: the new tests are RED and the earlier sections are green. Note this in the step.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/tests/local-runner.test.mjs"
-      ],
-      "note": "RED. Appended one section `// CQ-R03 Windows VM provisioning` at the END of scripts/tests/local-runner.test.mjs; earlier bytes unchanged (baseline hashes in /tmp/cq-r03-worker-c1d9de02-baseline.sha256). It covers W1-W14 as 30 tests and reuses R06's scratch/sequence/notFound/assertSanitized/lifecycleOptions and R07's fakeGuest/healthy/guestDetail/BOOTSTRAP/SOURCE. Additions: fakeLaunch (a promisified-execFile shape with child.stdin as a Writable), fakeVm (doctor + launch + R06 info + R07 exec), fakeFetch (ReadableStream body with highWaterMark 0, so a never-read body is provable) and pinDigest (an injected digest over the real file bytes).\nRED was run in a HEAD snapshot (/tmp/cq-r03-red.3JGSjb) with the new test file and three throwing stub modules; cli.mjs was at HEAD. Linux Node v24.21.0, env -i: 169 tests, 139 pass (all earlier sections), 30 fail (exactly the new tests, failing on missing behaviour), 0 skip or cancel. Log: /tmp/cq-r03-worker-c1d9de02-red.log.\nDeviations from the plan, all test-visible:\n- ensurePinnedImage takes a test-only `maxBytes`, which can only be <= MAX_IMAGE_BYTES. It is needed to exercise the size bound without 4 GiB of data.\n- The platform result adds `providerCode`, the doctor's sanitized code, so an all-unknown report still says why.\n- A non-regular or symlink cache entry is refused (IMAGE_INPUT_INVALID) without a download.\n- provisionGuest builds the URL from the host's own path syntax (process.platform), not platform.id. With platform.id, W14 (a win32 host injected on POSIX) could never launch.\n- launchInstance bounds timeoutSeconds to 1..3600, which avoids Node timer overflow.",
-      "startedAt": "2026-10-25T08:20:48.543Z",
-      "completedAt": "2026-10-25T08:27:16.586Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Create scripts/local-runner/image-cache.mjs: download and cache the PINNED image, shared by R03, R04 and R05.\n\n**Header comment**\n- The source is always the module-relative R02 manifest. Callers cannot choose a URL.\n- Integrity comes from the sha256 pin (R07 verifySourceImage). HTTPS is defense in depth.\n- The cache dir must be controller-private. Callers choose it; there is no env or default.\n\n**Export `ensurePinnedImage({ cacheDir, arch }, { fetch = globalThis.fetch, digest } = {})`.** `digest` is forwarded to R07's verifySourceImage and exists for tests only.\n\n1. **Validate.** cacheDir is an absolute path with no control characters, and arch is 'x64' or 'arm64'. Otherwise throw IMAGE_INPUT_INVALID. Create the dir with mkdir recursive, mode 0o700.\n2. **Pin.** pin = (await loadCertifiedProvider()).images[arch]; target = join(cacheDir, `${pin.sha256}.img`).\n3. **Cache hit.** If lstat shows a regular file, call verifySourceImage({file:target, arch}, {digest}).\n   - Ok: return {file:target, sourceImage}.\n   - IMAGE_CHECKSUM_MISMATCH: unlink it and fall through, ONE re-download at most.\n4. **Download.**\n   - Call fetch(pin.url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS = 3_600_000), redirect: 'follow' }).\n   - Require response.ok and that response.url starts with 'https://'.\n   - If content-length is present it must be <= MAX_IMAGE_BYTES (R07).\n   - Stream the body to `.${pin.sha256}.${process.pid}.${hex}.part` in cacheDir (flag 'wx', mode 0o600), counting bytes and aborting past MAX_IMAGE_BYTES.\n   - fsync, close, then verifySourceImage on the part file.\n   - On success, rename it to target and return.\n   - On ANY failure, unlink the part file (ignoring ENOENT) and throw IMAGE_DOWNLOAD_FAILED, IMAGE_INPUT_INVALID or IMAGE_CHECKSUM_MISMATCH.\n\n**Concurrency.** Two concurrent provisioners each write their own .part, and rename is atomic, so both results stay valid.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) stable code and message pairs only, with no URL query strings, paths or response bodies.\n\nMake W3 and W4 green.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/image-cache.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/local-runner/image-cache.mjs"
-      ],
-      "note": "Created scripts/local-runner/image-cache.mjs (95 lines). Exports DOWNLOAD_TIMEOUT_MS (3_600_000), imageError and ensurePinnedImage({cacheDir, arch}, {fetch, digest, maxBytes}).\n- The URL comes only from the manifest pin. Inputs are validated before any fetch.\n- mkdir is recursive with mode 0700.\n- A cache hit is always re-verified through R07 verifySourceImage.\n- A corrupt entry is unlinked and downloaded once; a second mismatch throws.\n- A non-regular target is refused.\n- A download is a streamed exclusive 0600 .part with the byte bound, fsync, verify, then an atomic rename.\n- On any failure the .part is removed and the unread body cancelled.\n- Errors: R07 image codes pass through via bootstrapError; anything else becomes IMAGE_DOWNLOAD_FAILED with no URL, path or body.\nW3/W4 GREEN in the snapshot (/tmp/cq-r03-red.3JGSjb, live module copied in): 5/5 pass, Linux Node 24.21.0.",
-      "startedAt": "2026-10-25T08:27:19.247Z",
-      "completedAt": "2026-10-25T08:27:52.874Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "Create scripts/local-runner/platform-windows.mjs: explicit operator prerequisites and elevation requirements for the certified Windows host. Moe surfaces them and NEVER performs them.\n\n**Export `windowsPlatform`**, frozen: {id:'win32', arch:'x64', prerequisites}.\n\n**`prerequisites({ provider = {}, doctor = runDoctor, hypervisor = probeHypervisor, host = { platform: process.platform, arch: process.arch } } = {})`**\n- Call doctor({ host, executable: provider.executable, run: provider.run }) (R02, read-only) and `await hypervisor({ run: provider.run })`.\n- Map to a FIXED ordered item list. Each item is EXACTLY {id, satisfied: true|false|null, requiresElevation, action}:\n  - **host-windows-x64:** requiresElevation false; satisfied false on HOST_UNSUPPORTED.\n  - **multipass-installed:** requiresElevation true; action: 'Install Multipass 1.17.0 for Windows (+win build) as an Administrator.' Satisfied false on PROVIDER_NOT_FOUND, VERSION_MISMATCH or VERSION_UNSUPPORTED.\n  - **multipass-authenticated:** requiresElevation true, because an administrator sets local.passphrase. Action: 'An administrator sets a Multipass passphrase; then run `multipass authenticate` as this user.' Satisfied false on PROVIDER_ACCESS_DENIED.\n  - **driver-hcs:** requiresElevation true; action: 'An administrator configures the Multipass driver to hcs; Moe never changes local.driver.' Satisfied false on DRIVER_UNSUPPORTED.\n  - **hyper-v:** requiresElevation true; action: 'Enable Hyper-V as an Administrator and reboot.' Satisfied is the probe result: true, false or null.\n- Items the failing doctor code cannot speak to are null (unknown), never true.\n- Return {platform:'win32', ready: doctor.providerReady === true && hv === true, prerequisites, primaryName: doctor.primaryName ?? null}.\n\n**`probeHypervisor({ run = promisified execFile } = {})`**\n- argv: [join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), '-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance -ClassName Win32_ComputerSystem).HypervisorPresent'].\n- This is a fixed, non-elevated, read-only CIM query, with shell:false, windowsHide, a 10 s timeout, a bounded buffer and SIGKILL.\n- Trimmed 'True' gives true, 'False' gives false, and anything else gives null. It never throws.\n\n**Header comment.** List what Moe will never do: elevate, run as another user, enable features, change `multipass set` keys, or change the driver. Note that HypervisorPresent can be true under VMP-only Windows editions, where hcs still fails. Readiness is NOT claimed by these checks; real certification is R13.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) the doctor's sanitized codes are reused, and probe failures map to null.\n\nMake W5-W7 green.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/platform-windows.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/local-runner/platform-windows.mjs",
-        "scripts/tests/local-runner.test.mjs"
-      ],
-      "note": "Created scripts/local-runner/platform-windows.mjs (65 lines). windowsPlatform is frozen {id:'win32', arch:'x64', prerequisites}.\n- prerequisites runs the R02 doctor read-only, then the hypervisor probe; on HOST_UNSUPPORTED the probe is skipped, so a non-Windows host never runs PowerShell.\n- It returns five fixed items, each exactly {id, satisfied, requiresElevation, action}. A failing doctor code marks only its own item false and leaves the rest null, never true.\n- The result is {platform, ready, providerCode, prerequisites, primaryName}. ready = providerReady===true && hyper-v===true.\n- probeHypervisor runs one fixed non-elevated CIM query via path.win32.join(SystemRoot, ...). A SystemRoot that is not drive-absolute falls back to C:\\\\Windows.\n  - Options: shell:false, windowsHide, a 10 s timeout, a bounded buffer and SIGKILL.\n  - Only an exact trimmed 'True' or 'False' within the bound is known; everything else is null, and it never throws.\n- The header lists everything Moe never does, the VMP-only caveat, and the note that R13 certifies.\nTest fix: one W5 table case passed `undefined`, which the helper's default turns into `true`; it was replaced by `0`, which is equivalent coverage. W5/W6 GREEN in the snapshot: 4/4. W7 goes green once the launch/CLI calls exist (steps 4-5).",
-      "startedAt": "2026-10-25T08:27:53.500Z",
-      "completedAt": "2026-10-25T08:28:30.207Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "Create scripts/local-runner/provision.mjs: the platform-neutral owned-VM provisioning composition. R04 and R05 add only their platform modules.\n\n**1. `fileImageUrl(file, platform = process.platform)`**\n- Multipass v1.17.0 src/client/cli/cmd/launch.cpp strips the literal 'file://' and treats the rest as a path, with NO percent-decoding. So:\n  - win32: requires a drive-letter absolute path matching /^[A-Za-z]:[\\\\/]/ (UNC and device paths are refused); return 'file://' + file with backslashes replaced by '/';\n  - POSIX: requires path.posix.isAbsolute; return 'file://' + file.\n- Never use pathToFileURL, because its %-encoding and the leading '/' before a drive letter break Multipass.\n- Control characters throw PROVISION_INPUT_INVALID.\n\n**2. `launchInstance({ name, imageFile, userData, provider = {}, platform, timeoutSeconds = 900 })`**\n- isOwnedInstanceName(name) must hold.\n- argv: ['launch', fileImageUrl(imageFile, platform), '--name', name, '--cloud-init', '-', '--timeout', String(timeoutSeconds), ...launchResourceArgs()].\n  - `--cloud-init -` makes the client read user-data from stdin (launch.cpp term->read_all_cin), so the credential never touches disk.\n  - NEVER --mount, --network, --bridged or any `set`.\n- Options: shell:false, windowsHide:true, timeout (timeoutSeconds+60)*1000, maxBuffer MAX_PROBE_BUFFER, killSignal 'SIGKILL'.\n- Call `const pending = run(executable, argv, options)`, then `pending.child.stdin.end(userData)`. Node attaches .child to promisified execFile. Missing stdin throws PROVISION_LAUNCH_FAILED.\n- A rejection throws providerError(classifyFailure(error)). R06's provisionOwned then queries the SAME name before any retry.\n\n**3. `provisionGuest({ platform, ledger, owner, cacheDir, supervisor, credential, provider = {}, fetch, digest, sleep })`**\n1. `pre = await platform.prerequisites({ provider })`. If !pre.ready, return {provisioned:false, bootstrapReady:false, executionReady:false, prerequisites: pre.prerequisites}: no download, reserve or mutation.\n2. If pre.primaryName is an owned-style name (isOwnedInstanceName), throw PRIMARY_NAME_CONFLICT, because Multipass auto-mounts home into the primary instance. Moe never changes client.primary-name.\n3. `image = await ensurePinnedImage({ cacheDir, arch: platform.arch }, { fetch, digest })`.\n4. `bootstrap = buildUserData({ supervisor, credential })` (R07).\n5. `record = await ledger.reserve(owner)`; name = record.instance.\n6. `await provisionOwned({ ledger, name, owner, launch: n => launchInstance({ name: n, imageFile: image.file, userData: bootstrap.userData, provider, platform: platform.id }), provider, sleep })` (R06).\n7. `ready = await waitForGuestReady({ ledger, name, owner, sourceImage: image.sourceImage, bootstrap, provider, sleep })` (R07).\n8. Return {provisioned:true, instance:name, bootstrapReady: ready.bootstrapReady, executionReady:false, prerequisites: pre.prerequisites, image: ready.image, failures: ready.failures}.\n\n**Failure after reserve.** The record stays for R06 reconcile and cleanup. This module NEVER deletes.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) R06 and R07 codes propagate unchanged and sanitized. No raw provider output.\n\nMake W1, W2 and W8-W12 green.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/provision.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/local-runner/provision.mjs"
-      ],
-      "note": "Created scripts/local-runner/provision.mjs (95 lines).\n- **fileImageUrl:** win32 takes only drive-letter paths, with backslashes turned into '/'; POSIX takes absolute paths. No %-encoding; control characters, UNC and device paths give PROVISION_INPUT_INVALID.\n- **launchInstance:**\n  - validates the owned name, a non-empty string userData and timeoutSeconds in 1..3600;\n  - argv is exactly launch <fileUrl> --name n --cloud-init - --timeout T plus launchResourceArgs();\n  - it runs through R06 invoker (shell:false, windowsHide, (T+60) s, bounded buffer, SIGKILL);\n  - it writes userData to pending.child.stdin, with an error listener for EPIPE, and ends it;\n  - a transport without stdin gives PROVISION_LAUNCH_FAILED and the child is SIGKILLed;\n  - a rejection gives providerError(classifyFailure).\n- **provisionGuest:** input guard, then prerequisites, then:\n  - not ready: {provisioned:false, …} with nothing downloaded, reserved or launched;\n  - an owned-style primaryName: PRIMARY_NAME_CONFLICT;\n  - then buildUserData, ensurePinnedImage, a fileImageUrl precheck, ONE ledger.reserve, R06 provisionOwned (same-name retry) and R07 waitForGuestReady;\n  - executionReady is always false, and it never deletes.\n\nDeviations, intended and covered by tests:\n- buildUserData runs before the download, so bad bootstrap input never downloads 600 MB.\n- The URL uses the host's own path syntax (process.platform), not platform.id; see the step-1 note.\n- A precheck refuses an unlaunchable cache path before reserving.\n\nSnapshot full run: 169 tests, 160 pass. The 9 failures are exactly the CLI tests (step 5). W1, W2, W7-W12 and the W14 real-process test pass.",
-      "startedAt": "2026-10-25T08:28:31.189Z",
-      "completedAt": "2026-10-25T08:29:24.049Z"
+      ]
     },
     {
       "stepId": "step-5",
       "description": "Surface the prerequisites to the operator through R02's existing CLI, in scripts/local-runner/cli.mjs.\n\n**Command.** Add `prerequisites [--executable <path>]`, using the SAME argument validation as `doctor`: a non-blank path without control characters, and no extras or duplicates.\n- runCli gains an injectable `prerequisites` dependency, beside `doctor`.\n- The default selects the platform from a small `PLATFORMS = { win32: windowsPlatform }` map keyed by process.platform. R04 and R05 add their entries.\n- An unknown platform yields {code:'PLATFORM_UNSUPPORTED', ready:false, executionReady:false}.\n\n**Output.**\n- One JSON line: {platform, ready, executionReady:false, prerequisites:[…]}.\n- Exit 0 when ready, otherwise 2.\n- The usage message lists both commands.\n\n**Unchanged.**\n- `doctor` behaves exactly as before.\n- Every R02 CLI test must pass unchanged, including ['launch'] and the bad-flag rejections.\n\n**Error handling:** (this error handling is asserted by the step-1 tests) a thrown prerequisites dependency yields {code:'PREREQUISITES_UNAVAILABLE', ready:false, executionReady:false} with exit 2. It never prints a stack or path.\n\nMake W13 green.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/local-runner/cli.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/local-runner/cli.mjs"
-      ],
-      "note": "cli.mjs: +37/-10, 58 lines.\n- **New command.** `prerequisites [--executable <path>]` uses the same argument validation as `doctor`.\n- **runCli** gains an injectable `prerequisites` dependency. The default, hostPrerequisites, picks from the frozen PLATFORMS={win32: windowsPlatform} by process.platform:\n  - a known platform gives {platform, ready, executionReady:false, providerCode, prerequisites};\n  - no module gives {code:'PLATFORM_UNSUPPORTED', ready:false, executionReady:false}.\n- **Errors.** A thrown or sync-throwing dependency gives {code:'PREREQUISITES_UNAVAILABLE', ready:false, executionReady:false}, with no stack or path.\n- **Exit code.** It is per command: prerequisites uses `ready`, doctor uses `providerReady`, so neither can exit 0 on the other's field.\n- **Unchanged.** The usage text now lists both commands; doctor output and behaviour are otherwise unchanged.\n\nResults:\n- Snapshot full file: 169/169 pass (all R02 CLI tests unchanged and green).\n- Real entry point on Linux:\n  - `prerequisites` gives PLATFORM_UNSUPPORTED, exit 2;\n  - `prerequisites extra` gives CLI_INPUT_INVALID, exit 2;\n  - `doctor --executable /does-not-exist/multipass` gives PROVIDER_NOT_FOUND, exit 2.",
-      "startedAt": "2026-10-25T08:29:24.942Z",
-      "completedAt": "2026-10-25T08:30:14.974Z"
+      ]
     },
     {
       "stepId": "step-6",
       "description": "The one verification gate. Use the Linux-only PATH (PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin) and unset every MOE_* variable.\n\n**1. The DoD command, fresh, from the repository root:**\n```\nnode --test scripts/tests/local-runner.test.mjs\n```\nIt must exit 0 with 0 failed and 0 cancelled. On Linux, W14 plus the earlier real-process tests must RUN. Record the pass, fail and skip counts.\n\n**2. Packaging regression.**\n```\nnode --test scripts/tests/local-runner-bundle.test.mjs\n```\nIt must exit 0: the three new modules are bundled.\n\n**3. Snapshot check.** Peers share this checkout, so rerun command 1 in a fresh tree:\n```\nD=$(mktemp -d)\ngit -C /mnt/d/projexts/moes archive HEAD scripts packages/moe-daemon/src/state/resourceStore.ts package.json | tar -x -C \"$D\"\n```\nOverlay the five changed files' working-tree bytes, then run it from $D. It must exit 0.\n\n**4. Byte checks.**\n- `git diff --check` is clean for the five files.\n- The earlier test sections are byte-identical apart from new imports.\n- lifecycle, guest-bootstrap, guest-readiness, multipass and doctor .mjs are unchanged.\n\nKeep command 1's command, exit code and output tail for complete_task.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs",
         "scripts/local-runner/cli.mjs",
         "scripts/local-runner/image-cache.mjs",
         "scripts/local-runner/provision.mjs",
         "scripts/local-runner/platform-windows.mjs"
-      ],
-      "note": "Gate run under env -i with the Linux-only PATH, Node v24.21.0, no MOE_* variables.\n1. DoD command `node --test scripts/tests/local-runner.test.mjs` from the repo root: exit 0. 169 tests, 169 pass, 0 fail, 0 cancelled, 0 skipped, 17.6 s. All 8 real-process tests RAN, including the new R03 one (provisioning sends cloud-init on stdin). Log: /tmp/cq-r03-worker-c1d9de02-step6.log.\n2. Bundle `node --test scripts/tests/local-runner-bundle.test.mjs`: exit 0, 7/7. The bundler copies the whole local-runner dir, so the new modules are included. Log: /tmp/cq-r03-worker-c1d9de02-bundle.log.\n3. Snapshot (git archive HEAD scripts + resourceStore.ts + package.json, overlaid with the five working-tree files) at /tmp/cq-r03-snapshot.4ZPHVX: exit 0, 169/169.\n4. Byte checks:\n   - git diff --check is clean, with no tab or trailing-space hits in the new files;\n   - the HEAD test file is a byte-identical prefix of the new one (append only);\n   - lifecycle, guest-bootstrap, guest-readiness, multipass, doctor and the manifest match the pre-task hashes.\nSizes:\n- local-runner.test.mjs +588/-0 and cli.mjs +37/-10;\n- new files image-cache.mjs (93 lines), provision.mjs (87) and platform-windows.mjs (63).\nscripts/tests/postflight.sh (+21/-5) is a peer's dirty file, left untouched and not reported.",
-      "startedAt": "2026-10-25T08:30:15.882Z",
-      "completedAt": "2026-10-25T08:31:21.281Z"
+      ]
     },
     {
       "stepId": "step-7",
       "description": "Exactly one adversarial self-review. Load adversarial-self-review and read the diff as an attacker.\n\n**Prerequisites (DoD 1).**\n- Is every operator prerequisite explicit, with the correct requiresElevation flag?\n- Is unknown ever reported as satisfied?\n- Does any code path elevate, authenticate, enable features or run `multipass set`?\n\n**Pinned image and no mounts or global changes (DoD 2).**\n- Can a caller choose the image URL or file?\n- Can a cached file skip re-verification?\n- Do .part files leak on every failure path?\n- Can the file URL be mangled? Check spaces, UNC paths (refused; only drive-letter absolute paths are allowed), drive letters and %-encoding.\n- Can any argv carry --mount, --network or --bridged?\n- Is the credential ever written to disk or logs (it travels by stdin only)?\n- Can the primary-name auto-mount slip through?\n\n**Durable identity (DoD 3).**\n- Is there exactly one reserve per provisionGuest call?\n- Does every retry reuse the same --name via R06?\n- Is nothing ever deleted here?\n\n**Robustness.**\n- Concurrent provisioners.\n- A huge, empty or slow download, a redirect to http, or an abort.\n- Process cleanup on timeout (SIGKILL).\n- Windows path and ACL notes.\n\n**Scope.**\n- executionReady stays false; no isolation or certification claim.\n- No .moe edits, no Git writes, no daemon or launcher changes.\n- No forbidden pattern from the global rails in new code.\n\nFix the findings and rerun the step-6 commands fresh. Use the fresh output for complete_task.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs",
         "scripts/local-runner/cli.mjs",
         "scripts/local-runner/image-cache.mjs",
         "scripts/local-runner/provision.mjs",
         "scripts/local-runner/platform-windows.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/tests/local-runner.test.mjs",
-        "scripts/local-runner/cli.mjs",
-        "scripts/local-runner/image-cache.mjs",
-        "scripts/local-runner/provision.mjs",
-        "scripts/local-runner/platform-windows.mjs"
-      ],
-      "note": "I did one adversarial self-review of this task's 5 paths only.\n\nFIXES\n(1) provision.mjs: the stdin 'error' listener is load-bearing. Without it, a client that exits before reading stdin crashed the process with an unhandled EPIPE. A new POSIX real-process test covers this: a fake multipass exits 3 with 1 MiB of user-data pending, and the launch must reject as a sanitized PROVIDER_COMMAND_FAILED. A mutant with the listener removed fails that test with \"write EPIPE\" (/tmp/cq-r03-worker-c1d9de02-mut7.log).\n(2) image-cache.mjs downloadImage: it now unlinks only a .part that this call created (a `created` flag), so an EEXIST collision can never delete another download's part. The name is pid plus 32 random bits, so no deterministic test exists. It is defensive only.\n(3) provisionGuest: a non-function sleep is now rejected with PROVISION_INPUT_INVALID before any prerequisite probe. The input-guard test now also covers provider:null and sleep:5.\n(4) The provision.mjs header says Multipass keeps its own NoCloud seed. Moe itself never writes the credential to a file.\n\nFRESH EVIDENCE (Linux env -i, Node v24.21.0)\n- DoD `node --test scripts/tests/local-runner.test.mjs`: exit 0, 170 tests, 170 pass, 0 fail/cancelled/skipped (/tmp/cq-r03-worker-c1d9de02-step7.log).\n- Bundle test: exit 0, 7/7.\n- HEAD snapshot with the 5 files overlaid: exit 0, 170/170 (/tmp/cq-r03-snapshot7.GvzYo1).\n- git diff --check: clean.\n- The test file's HEAD bytes are an identical 100877-byte prefix.\n- lifecycle, guest-bootstrap, guest-readiness, multipass, doctor and certified-provider.json match the baseline hashes. Only cli.mjs and the test file differ, as intended.\n- No forbidden patterns. All files are ≤96 lines.\n\nRESIDUALS (theoretical, not fixed)\n- A corrupt-cache unlink can race a concurrent rename. The worst case is one extra download.\n- cacheDir must be controller-private: the window between verify and launch is the caller's contract.\n- Concurrent provisionGuest calls for the same owner create two VMs, so the caller serializes them.\n- Launch stdout over 64 KiB SIGKILLs the client; R06 then re-queries the same name.\n- HypervisorPresent can be true on editions with only VMP; R06 bounds the hcs failures.\n- SystemRoot is trusted from the environment, with its drive-letter shape checked.\n- The owner is validated only at reserve, after the download.\n- Only the final URL of an http redirect is checked; integrity rests on the sha256 pin.\n- Windows has no O_NOFOLLOW.\n- Nothing was certified on real Windows, Multipass or Hyper-V (R13). executionReady stays false.",
-      "startedAt": "2026-10-25T08:31:22.101Z",
-      "completedAt": "2026-10-25T08:36:22.668Z"
+      ]
     }
   ],
-  "planRevision": 15,
-  "status": "REVIEW",
+  "planRevision": 16,
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Human asked to move more tasks to planning by order. Prerequisites: R02 DONE, R06 WORKING, R07 being planned (claimed).",
+  "reopenCount": 1,
+  "reopenReason": "SIZE IS THE ONLY FAILURE. No code or test change is requested. All four DoD items passed substantive review on completion commit 9079d11 (on moe/work-2026-10-24).\n\nSize, from git show --numstat 9079d11 (excluding .moe): +881/-10, net +871. Runtime is +285/-10 and tests are +596. The QA bar is 400 net changed lines, and the CQ-R epic rail grants size exceptions to R02, R06 and R07 ONLY (\"Other tasks retain normal sizing limits\").\n\nVerified on a fresh snapshot of 9079d11:\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0, 170/170.\n- Bundle test: 7/7.\n- The earlier test sections are an append-only, byte-identical prefix; the R02/R06/R07 modules are unchanged.\n- `git diff --check` is clean.\n- 24 of 25 mutants were killed; the survivor is equivalent on POSIX.\nFull evidence is in the task comment.\n\nROUTE: an architect or human decision, not a worker fix.\n(a) If the human adds an R03 size-exception rail, resubmit the SAME bytes; QA approves on this evidence.\n(b) Otherwise, re-slice into file-disjoint pieces, each under 400 lines:\n- R03a: image-cache.mjs with W3/W4 (about 240);\n- R03b: platform-windows.mjs plus the CLI prerequisites command, with W5-W7 and W13 (about 270);\n- R03c: provision.mjs with W1/W2, W8-W12 and W14 (about 380).\nWorker: call moe.request_replan rather than editing code.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 30,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-64a6285668fb4e4d8dcedcfd8e7c0bf5",
+      "author": "qa-b0c1741e",
+      "content": "QA substantive review of R03 completion commit 9079d11, by qa-b0c1741e. Verdict: no defects. The only failure is size.\n\n**Verification**\n- `node --test scripts/tests/local-runner.test.mjs` on a fresh git-archive snapshot of 9079d11 (Linux env -i, node 24.21.0): exit 0, 170/170, 0 fail/skip/cancel. The W14 and EPIPE real-process tests ran.\n- `node --test scripts/tests/local-runner-bundle.test.mjs`: 7/7.\n- Real CLI: `prerequisites` returns PLATFORM_UNSUPPORTED, exit 2. `prerequisites extra` returns CLI_INPUT_INVALID, exit 2.\n\n**Bytes**\n- The test file at 9079d11~1 is a byte-identical 100877-byte prefix, so the change is append-only.\n- lifecycle, guest-bootstrap, guest-readiness, multipass, doctor and certified-provider.json are untouched.\n- `git diff --check` is clean. No forbidden patterns.\n\n**DoD 1: prerequisites surfaced.**\n- Five fixed items, each {id, satisfied, requiresElevation, action}.\n- Unknown is null, never true.\n- The CLI exits 0 only when ready.\n- Nothing elevates, runs `set` or `authenticate`, or touches local.driver.\n\n**DoD 2: pinned image, no mounts or global changes.**\n- The URL comes from the manifest only.\n- The image is written to an exclusive .part, sha256-verified, then atomically renamed. A cache hit is re-verified.\n- Launch argv carries no --mount, --network or --bridged.\n- User-data goes on stdin only.\n- A Moe-owned primary-name is refused before reserve.\n\n**DoD 3: durable identity.**\n- There is ONE ledger.reserve.\n- R06 provisionOwned retries under the same name. Both variants are tested: a timeout with the VM absent, and a timeout with the VM present.\n- Nothing is deleted in R03.\n\n**Mutation probes**\nI ran 25 mutants, each in its own snapshot copy (/tmp/qa-b0c1741e-r03-harness/summary.json), against a green baseline. 24 were killed:\n- prerequisite gate off; primary-name check off;\n- stdin error listener off; empty stdin;\n- cache hit unverified; https check off; content-length check off; stream bound off;\n- .part not unlinked; symlink followed; download unverified;\n- unknown reported as satisfied; Hyper-V answer case-insensitive; ready without Hyper-V;\n- CLI exit taken from either field; unsupported platform reported ready;\n- --mount added; two reserves;\n- maxBytes unbounded; launch timeout unbounded;\n- Hyper-V marked as needing no elevation; user-data built after the download;\n- CLI error leaking extra fields.\n\nOne survived: the dropped fileImageUrl precheck before reserve. It is equivalent on POSIX and reachable only on win32 with a UNC cacheDir. It is not a defect.\n\n**Non-blocking notes**\n- The W7 no-global-change test reads R03_CALLS accumulated by earlier tests, so it depends on test order. Its `kinds` deepEqual keeps it from passing vacuously in a full run.\n- The worker's documented residuals stand: callers serialize same-owner provisioning, cacheDir must be private, HypervisorPresent can be true on VMP-only editions, Windows has no O_NOFOLLOW, and real certification is R13.\n\n**Size**\nExcluding .moe: +881/-10 (net +871).\n- Runtime +285/-10: cli.mjs +37/-10, image-cache.mjs +96, platform-windows.mjs +63, provision.mjs +89.\n- Tests +596.\nThe CQ-R epic rail grants size exceptions to R02, R06 and R07 ONLY.",
+      "timestamp": "2026-10-25T08:47:46.332Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:53.503Z",
-  "updatedAt": "2026-10-25T08:37:48.238Z",
+  "updatedAt": "2026-10-25T08:49:55.642Z",
   "dependsOn": [
     "task-3ab82a8016514240b53d295792daebe1",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -150,26 +113,26 @@
     "firstClaimAt": "2026-10-24T15:14:00.816Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-26ba32c3",
-    "worker-c1d9de02"
+    "worker-07cd2c56",
+    "qa-b0c1741e"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5",
-    "step-6",
-    "step-7"
+  "stepsCompleted": [],
+  "failedDodItems": [
+    {
+      "item": "SIZE: >400 net changed LOC (+881/-10; QA approval bar; CQ-R epic rail grants size exceptions to R02/R06/R07 only). All four DoD items PASSED.",
+      "rejectedAt": "2026-10-25T08:47:54.376Z",
+      "rejectedBy": "qa-b0c1741e"
+    }
   ],
-  "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T15:19:54.053Z",
   "planningNotes": {
     "approachesConsidered": "**Chosen: a platform-neutral composition (provision.mjs) plus a shared pinned-image cache (image-cache.mjs) plus a Windows platform module.** The platform module surfaces explicit operator prerequisites with elevation flags, and R02's CLI exposes them through a `prerequisites` command.\n\nThe flow: prerequisites gate, then pinned image download and verify, then R07 user-data, then R06 reserve and provisionOwned (one durable name, retries query the same instance), then R07 waitForGuestReady.\n\nR04 and R05 then add only platform-linux.mjs and platform-macos.mjs, plus a PLATFORMS entry and tests.\n\n**Rejected.**\n- **Launching from the https URL.** The Multipass id is then derived from the URL string and the source is never verified.\n- **A cloud-init file on disk.** That puts the credential at rest; stdin (`--cloud-init -`) is used instead.\n- **pathToFileURL.** Multipass strips 'file://' literally with no decoding.\n- **Auto-elevation, `multipass set`, or enabling Hyper-V.** These are forbidden; they are surfaced as operator actions instead.\n- **Elevated DISM or Get-WindowsOptionalFeature detection.** It needs admin; the non-elevated CIM HypervisorPresent query is used instead.\n- **Per-platform copies of the composition.** That would triple the code.\n\nUnder TURBO these choices are recorded here, not held for a REPL answer.\n\n**Sequencing.** R04 and R05 append to the same test file and extend cli.mjs PLATFORMS. Per the epic rail on serializing overlapping files, the architect adds the dependencies R04 → R03 and R05 → R04.",
@@ -199,7 +162,8 @@
     "scripts/local-runner/platform-windows.mjs",
     "scripts/local-runner/provision.mjs",
     "scripts/local-runner/cli.mjs",
-    ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json"
+    ".moe/tasks/task-8ef993cf26ec4708bae7f510af545eb0.json",
+    ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json"
   ],
   "completionSummary": "CQ-R03 adds Windows VM provisioning, with executionReady always false and no isolation or certification claim.\n- New platform-windows.mjs: explicit operator prerequisites {id, satisfied, requiresElevation, action}, built from the R02 doctor plus one read-only HypervisorPresent CIM query. Moe never elevates, runs `multipass set`/`authenticate` or touches local.driver.\n- New image-cache.mjs: manifest-pinned image only, via a private exclusive .part, sha256 verify (R07), then atomic rename. A cache hit is re-verified and a corrupt entry is removed.\n- New provision.mjs: prerequisite gate, primary-name conflict, user-data, image, ONE R06 reserve, provisionOwned's same-name retry, then R07 readiness. No mounts, no deletes, and the credential travels only on `--cloud-init -` stdin.\n- cli.mjs gains `prerequisites` (exit 0 only when ready).\n- Tests: 31 appended. HEAD bytes are an identical prefix. Prerequisite/download/launch/retry code is covered with fakes; real-process tests cover stdin user-data, owned-only argv and EPIPE safety (the last one ran mutant-red).\nFresh results: DoD 170/170 exit 0; bundle 7/7; HEAD snapshot 170/170; diff --check clean. R02/R06/R07 modules and the manifest are unchanged (hash-checked).\nDeviations from the plan:\n- The report field is named providerCode.\n- maxBytes is a test-only lower bound.\n- The file:// URL uses process.platform, so a win32 path is never built on POSIX.\n- A non-regular cache entry is refused.\n- Launch timeout is 1–3600 s.\n- User-data is built before download, and a fileImageUrl precheck runs before reserve.\n- The review added the stdin error listener test, made the .part unlink created-only and added the sleep guard.\nResiduals: concurrent same-owner calls must be serialized by the caller, cacheDir must be private, HypervisorPresent can be true where only VMP is enabled, and there is no O_NOFOLLOW on Windows. Real-hardware certification is R13. R04/R05 reuse provision/image-cache: they add a platform module and a PLATFORMS ent",
   "commits": [
@@ -222,6 +186,21 @@
       "treeId": "bbb3d332fbdddc93a7f4313274b7aef5102d73bf",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "484b78869b3f3da28e0013b3defa65aea432e02d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-b0c1741e@2026-10-25T08:41:06Z",
+      "paths": [
+        ".moe/tasks/task-b23c65b0bb3548fc95d46973b9d589cb.json"
+      ],
+      "recordedBy": "qa-b0c1741e",
+      "recordedAt": "2026-10-25T08:48:57.230Z",
+      "treeId": "bbaf3ed395d7f7213bb1eef66d14f4c5d412f857",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -232,8 +211,42 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c1d9de02@2026-10-25T08:11:18Z",
-    "at": "2026-10-25T08:37:48.237Z"
-  }
+    "kind": "checkpoint",
+    "sessionId": "qa-b0c1741e@2026-10-25T08:41:06Z",
+    "at": "2026-10-25T08:48:57.230Z"
+  },
+  "reviewCompletedAt": "2026-10-25T08:47:54.376Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "SIZE: >400 net changed LOC (+881/-10; QA approval bar; CQ-R epic rail grants size exceptions to R02/R06/R07 only). All four DoD items PASSED."
+    ],
+    "issues": [
+      {
+        "type": "other",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "description": "The diff is oversized, and this is the ONLY failure. 9079d11 changes +881/-10 lines outside .moe: runtime +285/-10, tests +596. That is over the 400-net-LOC QA bar, and the CQ-R rail allows size exceptions for R02/R06/R07 only. Fix: either the human adds an R03 size-exception rail and the same bytes are resubmitted, or the architect re-slices into R03a image-cache (about 240), R03b platform-windows+CLI (about 270) and R03c provision (about 380). No code change is requested."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "SIZE IS THE ONLY FAILURE. No code or test change is requested. All four DoD items passed substantive review on completion commit 9079d11 (on moe/work-2026-10-24).\n\nSize, from git show --numstat 9079d11 (excluding .moe): +881/-10, net +871. Runtime is +285/-10 and tests are +596. The QA bar is 400 net changed lines, and the CQ-R epic rail grants size exceptions to R02, R06 and R07 ONLY (\"Other tasks retain normal sizing limits\").\n\nVerified on a fresh snapshot of 9079d11:\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0, 170/170.\n- Bundle test: 7/7.\n- The earlier test sections are an append-only, byte-identical prefix; the R02/R06/R07 modules are unchanged.\n- `git diff --check` is clean.\n- 24 of 25 mutants were killed; the survivor is equivalent on POSIX.\nFull evidence is in the task comment.\n\nROUTE: an architect or human decision, not a worker fix.\n(a) If the human adds an R03 size-exception rail, resubmit the SAME bytes; QA approves on this evidence.\n(b) Otherwise, re-slice into file-disjoint pieces, each under 400 lines:\n- R03a: image-cache.mjs with W3/W4 (about 240);\n- R03b: platform-windows.mjs plus the CLI prerequisites command, with W5-W7 and W13 (about 270);\n- R03c: provision.mjs with W1/W2, W8-W12 and W14 (about 380).\nWorker: call moe.request_replan rather than editing code.",
+      "rejectedAt": "2026-10-25T08:47:54.376Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "SIZE: >400 net changed LOC (+881/-10; QA approval bar; CQ-R epic rail grants size exceptions to R02/R06/R07 only). All four DoD items PASSED."
+      ],
+      "issues": [
+        {
+          "type": "other",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "description": "The diff is oversized, and this is the ONLY failure. 9079d11 changes +881/-10 lines outside .moe: runtime +285/-10, tests +596. That is over the 400-net-LOC QA bar, and the CQ-R rail allows size exceptions for R02/R06/R07 only. Fix: either the human adds an R03 size-exception rail and the same bytes are resubmitted, or the architect re-slices into R03a image-cache (about 240), R03b platform-windows+CLI (about 270) and R03c provision (about 380). No code change is requested."
+        }
+      ]
+    }
+  ],
+  "blockedReason": "Awaiting the human's size-rule decision, as the governor directed. No code change is requested.\n- QA passed all four DoD items on 9079d11. The only failure is the 400-net-LOC bar: +881/-10, with runtime +285/-10 and tests +596.\n- I checked that 9079d11 is on moe/work-2026-10-24, and that HEAD and the working tree match it on all five R03 files.\n- If the human approves a size exception or counts non-test lines, resubmit these same bytes unchanged; QA will approve on its existing evidence.\n- If the human chooses strict re-slicing, the governor moves this row to PLANNING for the R03a/R03b/R03c split.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-25T08:49:55.642Z"
 }
