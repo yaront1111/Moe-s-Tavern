@@ -538,7 +538,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             fun handleNext(task: Task) {
                 val nextStatus = getNextStatus(task.status) ?: return
                 if (task.status == "AWAITING_APPROVAL") {
-                    service.approveTask(task.id)
+                    BoardApproval.approveRendered(project, service, task)
                 } else {
                     service.updateTaskStatus(task.id, nextStatus, task.order)
                 }
@@ -597,7 +597,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     onDrop = { taskId, newStatus, order ->
                         val currentTask = allTasks.find { it.id == taskId }
                         if (currentTask?.status == "AWAITING_APPROVAL" && newStatus == "WORKING") {
-                            service.approveTask(taskId)
+                            BoardApproval.approveRendered(project, service, currentTask)
                         } else {
                             service.updateTaskStatus(taskId, newStatus, order)
                         }
@@ -615,7 +615,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                             // blocker clears.
                             if (task.status == "BLOCKED") continue
                             order += 1.0
-                            service.updateTaskStatus(task.id, newStatus, order)
+                            if (task.status == "AWAITING_APPROVAL" && newStatus == "WORKING") {
+                                BoardApproval.approveRendered(project, service, task)
+                            } else {
+                                service.updateTaskStatus(task.id, newStatus, order)
+                            }
                         }
                         val epicStatus = mapEpicStatus(newStatus)
                         service.updateEpicStatus(epicId, epicStatus, epic.order)
@@ -698,6 +702,10 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 ColumnConfig(MoeBundle.message("moe.column.done"), "DONE", isDone = true)
             )
 
+            // Drop callbacks capture tasks outside their own column. Refresh
+            // them when approvals change, even if the destination is unchanged.
+            val approvalFingerprint = tasks.filter { it.status == PlanReviewApprovalState.STATUS_AWAITING_APPROVAL }
+                .joinToString(",") { "${it.id}:${it.planRevision}" }
             var updatedColumns = false
 
             fun updateColumn(config: ColumnConfig, force: Boolean = false) {
@@ -707,7 +715,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     val stepFp = it.implementationPlan.joinToString(";") { s -> "${s.stepId}:${s.status}" }
                     "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}:[$stepFp]"
                 }
-                val fingerprint = "$taskFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
+                val fingerprint = "$taskFingerprint|approvals=$approvalFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
 
                 if (!force && columnFingerprints[config.status] == fingerprint && container.componentCount > 0) {
                     return

@@ -11,7 +11,10 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.moe.model.Task
+import com.moe.toolwindow.PlanReviewApprovalState
+import com.moe.toolwindow.PlanReviewDialog
 import com.moe.toolwindow.TaskDetailDialog
+import com.moe.util.MoeBundle
 
 @Service(Service.Level.PROJECT)
 class MoeNotificationService(private val project: Project) {
@@ -39,6 +42,25 @@ class MoeNotificationService(private val project: Project) {
             )
             .addAction(ViewTaskAction(project, task))
 
+        notification.notify(project)
+    }
+
+    fun notifyApprovalBlocked(task: Task?, message: String) {
+        assertEdt()
+        val label = MoeBundle.message("moe.dialog.planReview")
+        val notification = NotificationGroupManager.getInstance()
+            .getNotificationGroup(GROUP_ID)
+            .createNotification(label, message, NotificationType.WARNING)
+        if (task?.status == PlanReviewApprovalState.STATUS_AWAITING_APPROVAL) {
+            notification.addAction(object : NotificationAction(label) {
+                override fun actionPerformed(e: AnActionEvent, notification: Notification) {
+                    assertEdt()
+                    val service = MoeProjectService.getInstance(project)
+                    PlanReviewDialog(project, task, service).show()
+                    notification.expire()
+                }
+            })
+        }
         notification.notify(project)
     }
 

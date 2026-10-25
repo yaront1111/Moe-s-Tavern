@@ -27,7 +27,7 @@ import java.net.URI
 
 /**
  * Wire contract for the reviewed plan approval: the `planRevision` both MoeJson
- * routes decode, and the optional `expectedPlanRevision` APPROVE_TASK carries.
+ * routes decode, and the required `expectedPlanRevision` APPROVE_TASK carries.
  *
  * The revision assertions deliberately inspect the serialized parser output
  * instead of naming `Task.planRevision`, so the very same test bytes compile
@@ -123,25 +123,23 @@ class PlanApprovalContractTest {
     // --------------------------------------------------------------- approval
 
     @Test
-    fun `legacy one-argument approval sends the exact old payload`() {
+    fun `every approval requires a non-null token including an explicit zero`() {
+        // CQ-F MODIFY_RAIL prop-5e7763ed, human-approved 2026-10-25:
+        // revision-less approvals are removed, not a compatibility fallback.
+        listOf(MoeCommandSender::class.java, MoeProjectService::class.java).forEach { type ->
+            val methods = type.methods.filter { it.name == "approveTask" }
+            assertEquals("no token-free overload on ${type.simpleName}", 1, methods.size)
+            assertEquals(listOf(String::class.java, java.lang.Long.TYPE), methods.single().parameterTypes.toList())
+            assertFalse("no default token on ${type.simpleName}",
+                type.declaredMethods.any { it.name == "approveTask\$default" })
+        }
         val sent = mutableListOf<String>()
-        val sender = connectedSender(sent)
-
-        sender.approveTask("task-1")
-
+        assertTrue(connectedSender(sent).approveTask("task-1", 0L))
         val payload = singlePayload(sent, "APPROVE_TASK")
-        assertEquals("legacy approval must not add wire keys", setOf("taskId"), payload.keySet())
+        assertEquals(setOf("taskId", REVISION_KEY), payload.keySet())
         assertEquals("task-1", payload.get("taskId").asString)
-    }
-
-    @Test
-    fun `an explicitly null revision is omitted rather than sent as a null token`() {
-        val sent = mutableListOf<String>()
-        val sender = connectedSender(sent)
-
-        assertTrue("a delivered packet must report success", sender.approveTask("task-1", null))
-
-        assertEquals("null means omitted metadata", setOf("taskId"), singlePayload(sent, "APPROVE_TASK").keySet())
+        assertEquals(0L, payload.get(REVISION_KEY).asLong)
+        assertTrue(payload.get(REVISION_KEY).asJsonPrimitive.isNumber)
     }
 
     @Test
@@ -234,7 +232,7 @@ class PlanApprovalContractTest {
         )
 
         val thrown = try {
-            sender.approveTask("task-1")
+            sender.approveTask("task-1", 7L)
             null
         } catch (ex: Throwable) {
             ex
@@ -253,7 +251,7 @@ class PlanApprovalContractTest {
             send = { _, message -> sent.add(message); true }
         )
 
-        assertFalse("a disconnected approval is not an approval", sender.approveTask("task-1"))
+        assertFalse("a disconnected approval is not an approval", sender.approveTask("task-1", 7L))
 
         assertEquals("a refused approval must emit no packet", emptyList<String>(), sent)
         assertEquals("existing disconnected notification must fire exactly once", 1, disconnections)
@@ -277,11 +275,7 @@ class PlanApprovalContractTest {
     }
 
     @Test
-    fun `the facade keeps the legacy payload and an explicit zero`() = withFacade { facade ->
-        assertTrue(facade.service.approveTask("task-1"))
-        assertEquals(setOf("taskId"), singlePayload(facade.sent, "APPROVE_TASK").keySet())
-
-        facade.sent.clear()
+    fun `the facade preserves an explicit zero`() = withFacade { facade ->
         assertTrue(facade.service.approveTask("task-1", 0L))
         val payload = singlePayload(facade.sent, "APPROVE_TASK")
         assertEquals(setOf("taskId", REVISION_KEY), payload.keySet())

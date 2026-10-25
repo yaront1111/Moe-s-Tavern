@@ -431,7 +431,7 @@ class MoeProjectService @JvmOverloads constructor(
      *   `0..MAX_SAFE_PLAN_REVISION` (nothing is sent).
      * @see MoeCommandSender.approveTask
      */
-    fun approveTask(taskId: String, expectedPlanRevision: Long? = null): Boolean =
+    fun approveTask(taskId: String, expectedPlanRevision: Long): Boolean =
         commandSender.approveTask(taskId, expectedPlanRevision)
 
     fun releaseTask(taskId: String, reason: String? = null) = commandSender.releaseTask(taskId, reason)
