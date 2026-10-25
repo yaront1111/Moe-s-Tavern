@@ -1610,3 +1610,599 @@ process.exitCode = main();
   assert.deepEqual((await ledger.read(GUEST)).image, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH });
   assert.equal(existsSync(violations), false);
 });
+
+// CQ-R03 Windows VM provisioning
+import { Writable } from 'node:stream';
+import { MAX_IMAGE_BYTES } from '../local-runner/guest-bootstrap.mjs';
+import { DOWNLOAD_TIMEOUT_MS, ensurePinnedImage } from '../local-runner/image-cache.mjs';
+import { probeHypervisor, windowsPlatform } from '../local-runner/platform-windows.mjs';
+import { fileImageUrl, launchInstance, provisionGuest } from '../local-runner/provision.mjs';
+
+const WIN_HOST = { platform: 'win32', arch: 'x64' };
+const IMAGE_BYTES = Buffer.from('pinned ubuntu image bytes');
+const IMAGE_FILE = `${PINS.x64.sha256}.img`;
+const T = true;
+const F = false;
+const U = null;
+const POWERSHELL_ARGS = ['-NoProfile', '-NonInteractive', '-Command', '(Get-CimInstance -ClassName Win32_ComputerSystem).HypervisorPresent'];
+const launchArgs = (url, name = GUEST) => ['launch', url, '--name', name, '--cloud-init', '-', '--timeout', '900', '--cpus', '2', '--memory', '4G', '--disk', '20G'];
+const hostUrl = file => `file://${process.platform === 'win32' ? file.replaceAll('\\', '/') : file}`;
+const WIN_ITEMS = [
+  ['host-windows-x64', false, 'Run Moe on a Windows x64 host.'],
+  ['multipass-installed', true, 'Install Multipass 1.17.0 for Windows (+win build) as an Administrator.'],
+  ['multipass-authenticated', true, 'An administrator sets a Multipass passphrase; then run `multipass authenticate` as this user.'],
+  ['driver-hcs', true, 'An administrator configures the Multipass driver to hcs; Moe never changes local.driver.'],
+  ['hyper-v', true, 'Enable Hyper-V as an Administrator and reboot.'],
+];
+const items = states => WIN_ITEMS.map(([id, requiresElevation, action], at) => ({ id, satisfied: states[at], requiresElevation, action }));
+const READY_ITEMS = items([T, T, T, T, T]);
+/** Every argv an R03 fake saw, as [executable, ...args]; the no-global-change test reads it last. */
+const R03_CALLS = [];
+
+/** Stands in for R07's sha256 (tested there): the expected bytes hash to the pin, anything else does not. */
+function pinDigest(arch = 'x64') {
+  const files = [];
+  const digest = async ({ file }) => {
+    files.push(file);
+    return readFileSync(file).equals(IMAGE_BYTES) ? PINS[arch].sha256 : 'ee'.repeat(32);
+  };
+  return { digest, files };
+}
+
+/** A fetch Response stand-in. highWaterMark 0: the body is pulled only when the code reads it. */
+function fakeFetch(chunks = [IMAGE_BYTES], { status = 200, url, contentLength } = {}) {
+  const calls = [];
+  let pulls = 0;
+  const fetch = async (target, init) => {
+    calls.push({ target, init });
+    if (chunks instanceof Error) throw chunks;
+    const queue = [...chunks];
+    const body = new ReadableStream({
+      pull(controller) {
+        pulls++;
+        const next = queue.shift();
+        if (next === undefined) controller.close();
+        else if (next instanceof Error) controller.error(next);
+        else controller.enqueue(new Uint8Array(next));
+      },
+    }, { highWaterMark: 0 });
+    const headers = new Headers(contentLength === undefined ? {} : { 'content-length': String(contentLength) });
+    return { ok: status >= 200 && status < 300, status, url: url ?? target, headers, body };
+  };
+  return { fetch, calls, pulls: () => pulls };
+}
+
+function cacheHarness(t, arch) {
+  return { cacheDir: path.join(scratch(t), 'image cache'), ...pinDigest(arch) };
+}
+
+/** A promisified-execFile stand-in for `launch`: the promise carries child.stdin and settles once stdin is captured. */
+function fakeLaunch(settle = () => ({ stdout: 'Launched\n', stderr: '' })) {
+  const calls = [];
+  const launches = [];
+  const run = (executable, args, options) => {
+    calls.push([...args]);
+    R03_CALLS.push([executable, ...args]);
+    const chunks = [];
+    const stdin = new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } });
+    const pending = new Promise(resolve => setImmediate(resolve)).then(() => {
+      launches.push({ executable, args: [...args], options, stdin: Buffer.concat(chunks).toString('utf8'), ended: stdin.writableEnded });
+      return settle(args, launches.length);
+    });
+    pending.child = { stdin };
+    return pending;
+  };
+  return { run, calls, launches };
+}
+
+/** One provider for the R02 doctor, the R03 launch, the R06 query and the R07 probes (R07's fakeGuest). */
+function fakeVm({ primaryName = 'primary', versionError, launch, answers } = {}) {
+  const present = new Map();
+  const guest = fakeGuest({ answers });
+  const calls = [];
+  const launcher = fakeLaunch((args, count) => {
+    const outcome = launch?.(count) ?? {};
+    if (outcome.create !== false) present.set(args[3], 'Running');
+    if (outcome.error) throw outcome.error;
+    return { stdout: `Launched: ${args[3]}\n`, stderr: '' };
+  });
+  const answer = async (executable, args, options) => {
+    const command = args.join(' ');
+    if (command === 'version --format json') {
+      if (versionError) throw versionError;
+      return { stdout: JSON.stringify(version), stderr: '' };
+    }
+    if (command === 'get local.driver') return { stdout: 'hcs\n', stderr: '' };
+    if (command === 'get client.primary-name') return { stdout: `${primaryName}\n`, stderr: '' };
+    if (args[0] === 'info' && !present.has(args[1])) throw notFound('info', args[1]);
+    return guest.run(executable, args, options);
+  };
+  const run = (executable, args, options) => {
+    calls.push([...args]);
+    if (args[0] === 'launch') return launcher.run(executable, args, options);
+    R03_CALLS.push([executable, ...args]);
+    return answer(executable, args, options);
+  };
+  return { run, present, guest, launches: launcher.launches, commands: () => calls.map(args => args[0]) };
+}
+
+const onWindows = (hypervisor = async () => true) => ({
+  ...windowsPlatform, prerequisites: options => windowsPlatform.prerequisites({ ...options, host: WIN_HOST, hypervisor }),
+});
+
+function provisionHarness(t, fakeOptions = {}, download = fakeFetch()) {
+  const dir = scratch(t);
+  const ledgerDir = path.join(dir, 'ledger');
+  return {
+    fake: fakeVm(fakeOptions), download, sleeps: [], ledgerDir, cacheDir: path.join(dir, 'image cache'),
+    ledger: createLedger(ledgerDir, { random: sequence() }), ...pinDigest(),
+  };
+}
+
+const provisionWith = (h, overrides = {}) => provisionGuest({
+  platform: onWindows(), ledger: h.ledger, owner, cacheDir: h.cacheDir, supervisor: SUPERVISOR, credential: CREDENTIAL,
+  provider: { run: h.fake.run }, fetch: h.download.fetch, digest: h.digest, sleep: async ms => { h.sleeps.push(ms); }, ...overrides,
+});
+
+const provisioned = (failures = []) => ({
+  provisioned: true, instance: GUEST, bootstrapReady: failures.length === 0, executionReady: false, prerequisites: READY_ITEMS,
+  image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, failures,
+});
+
+test('fileImageUrl keeps the literal path Multipass strips from file://, never percent-encoded', () => {
+  assert.equal(fileImageUrl(`C:\\Users\\me\\My Images\\${IMAGE_FILE}`, 'win32'), `file://C:/Users/me/My Images/${IMAGE_FILE}`);
+  assert.equal(fileImageUrl('d:/cache/x.img', 'win32'), 'file://d:/cache/x.img');
+  assert.equal(fileImageUrl('/home/u/My Images/x.img', 'linux'), 'file:///home/u/My Images/x.img');
+  assert.equal(fileImageUrl('/Users/u/x%20y#1.img', 'darwin'), 'file:///Users/u/x%20y#1.img');
+  for (const [file, platform] of [
+    ['x.img', 'linux'], ['C:\\x.img', 'linux'], ['\\\\server\\share\\x.img', 'win32'], ['\\\\?\\C:\\x.img', 'win32'], ['/home/u/x.img', 'win32'],
+    ['C:x.img', 'win32'], ['C:\\a\nb.img', 'win32'], ['/tmp/a\u0000.img', 'linux'], ['/tmp/a\x7f.img', 'linux'], ['', 'linux'], [undefined, 'linux'],
+  ]) assert.throws(() => fileImageUrl(file, platform), error => assertSanitized(error, 'PROVISION_INPUT_INVALID'), JSON.stringify([file, platform]));
+});
+
+const LAUNCH = { name: GUEST, imageFile: `/var/cache/moe images/${IMAGE_FILE}`, userData: BOOTSTRAP.userData, platform: 'linux' };
+
+test('launchInstance runs one bounded launch of a local image with cloud-init only on stdin', async () => {
+  const fake = fakeLaunch();
+  assert.equal(await launchInstance({ ...LAUNCH, provider: { run: fake.run } }), undefined);
+  assert.deepEqual(fake.launches, [{
+    executable: 'multipass', args: launchArgs(`file:///var/cache/moe images/${IMAGE_FILE}`), options: lifecycleOptions(960_000),
+    stdin: BOOTSTRAP.userData, ended: true,
+  }]);
+  const secret = CREDENTIAL.toString('base64');
+  assert.equal(fake.launches[0].args.some(arg => ['--mount', '--network', '--bridged', '--all'].includes(arg) || arg.includes(secret)), false);
+  const windows = fakeLaunch();
+  const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
+  await launchInstance({ ...LAUNCH, imageFile: 'C:\\Moe Cache\\x.img', platform: 'win32', timeoutSeconds: 60, provider: { run: windows.run, executable } });
+  assert.deepEqual(windows.launches.map(({ executable: exe, args, options }) => [exe, args, options.timeout]),
+    [[executable, ['launch', 'file://C:/Moe Cache/x.img', '--name', GUEST, '--cloud-init', '-', '--timeout', '60', '--cpus', '2', '--memory', '4G', '--disk', '20G'], 120_000]]);
+});
+
+test('a failed launch reports a sanitized provider code, never its diagnostics', async () => {
+  for (const [error, code] of [
+    [failWith({ killed: true, code: 'ETIMEDOUT', stderr: 'secret-diagnostic' }), 'PROVIDER_TIMEOUT'],
+    [failWith({ code: 1, stderr: 'launch failed: secret-diagnostic /private/path' }), 'PROVIDER_COMMAND_FAILED'],
+    [failWith({ code: 'ENOENT' }), 'PROVIDER_NOT_FOUND'],
+  ]) {
+    const fake = fakeLaunch(() => { throw error; });
+    await assert.rejects(launchInstance({ ...LAUNCH, provider: { run: fake.run } }), failure => assertSanitized(failure, code), code);
+    assert.deepEqual(fake.launches.map(launch => [launch.stdin, launch.ended]), [[BOOTSTRAP.userData, true]], code);
+  }
+});
+
+test('launchInstance refuses invalid input before running and a transport that cannot take stdin', async () => {
+  const fake = fakeLaunch();
+  for (const [changes, code] of [
+    [{ name: 'primary' }, 'PROVISION_INPUT_INVALID'], [{ name: GUEST.toUpperCase() }, 'PROVISION_INPUT_INVALID'],
+    [{ userData: '' }, 'PROVISION_INPUT_INVALID'], [{ userData: Buffer.from('#cloud-config\n') }, 'PROVISION_INPUT_INVALID'],
+    [{ imageFile: 'relative.img' }, 'PROVISION_INPUT_INVALID'], [{ imageFile: 'C:\\x.img', platform: 'linux' }, 'PROVISION_INPUT_INVALID'],
+    [{ timeoutSeconds: 0 }, 'PROVISION_INPUT_INVALID'], [{ timeoutSeconds: 3601 }, 'PROVISION_INPUT_INVALID'], [{ timeoutSeconds: 1.5 }, 'PROVISION_INPUT_INVALID'],
+    [{ provider: { run: fake.run, executable: ' ' } }, 'PROVIDER_INPUT_INVALID'],
+  ]) {
+    await assert.rejects(launchInstance({ ...LAUNCH, provider: { run: fake.run }, ...changes }), error => assertSanitized(error, code), JSON.stringify(changes));
+  }
+  assert.deepEqual(fake.calls, []);
+  assert.equal(await launchInstance({ ...LAUNCH, timeoutSeconds: 3600, provider: { run: fake.run } }), undefined);
+  assert.equal(fake.launches[0].options.timeout, 3_660_000);
+  const killed = [];
+  const noStdin = () => Object.assign(Promise.resolve({ stdout: '', stderr: '' }), { child: { stdin: null, kill: signal => killed.push(signal) } });
+  const noChild = () => Promise.resolve({ stdout: '', stderr: '' });
+  for (const run of [noStdin, noChild]) {
+    await assert.rejects(launchInstance({ ...LAUNCH, provider: { run } }), error => assertSanitized(error, 'PROVISION_LAUNCH_FAILED'));
+  }
+  assert.deepEqual(killed, ['SIGKILL']);
+});
+
+test('a client that exits without reading stdin fails the launch without an unhandled pipe error', { skip: process.platform === 'win32' }, async t => {
+  const executable = path.join(scratch(t), 'fake multipass');
+  writeFileSync(executable, `#!${process.execPath}\nprocess.exitCode = 3;\n`, { mode: 0o755 });
+  // Larger than any pipe buffer, so a write is still pending when the client exits (EPIPE).
+  const userData = `#cloud-config\n${'x'.repeat(2 ** 20)}\n`;
+  await assert.rejects(launchInstance({ ...LAUNCH, userData, provider: { executable } }), error => assertSanitized(error, 'PROVIDER_COMMAND_FAILED'));
+});
+
+test('ensurePinnedImage downloads only the manifest URL into a verified private cache entry', async t => {
+  assert.equal(DOWNLOAD_TIMEOUT_MS, 3_600_000);
+  for (const [arch, chunks] of [['x64', [IMAGE_BYTES]], ['arm64', [IMAGE_BYTES.subarray(0, 5), IMAGE_BYTES.subarray(5, 9), IMAGE_BYTES.subarray(9)]]]) {
+    const h = cacheHarness(t, arch);
+    const download = fakeFetch(chunks);
+    const result = await ensurePinnedImage({ cacheDir: h.cacheDir, arch, url: 'https://attacker.invalid/x.img' }, { fetch: download.fetch, digest: h.digest });
+    const file = path.join(h.cacheDir, `${PINS[arch].sha256}.img`);
+    assert.deepEqual(result, { file, sourceImage: { arch, url: PINS[arch].url, sha256: PINS[arch].sha256 } });
+    assert.deepEqual(download.calls.map(({ target, init }) => [target, Object.keys(init).sort(), init.redirect]), [[PINS[arch].url, ['redirect', 'signal'], 'follow']]);
+    assert.ok(download.calls[0].init.signal instanceof AbortSignal);
+    assert.equal(download.calls[0].init.signal.aborted, false);
+    assert.deepEqual(readdirSync(h.cacheDir), [path.basename(file)]);
+    assert.deepEqual(readFileSync(file), IMAGE_BYTES);
+    // The digest checked the private partial download before it became the cache entry.
+    assert.equal(h.files.length, 1);
+    assert.equal(path.dirname(h.files[0]), h.cacheDir);
+    assert.match(path.basename(h.files[0]), new RegExp(`^\\.${PINS[arch].sha256}\\.${process.pid}\\.[0-9a-f]{8}\\.part$`));
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(file).mode & 0o777, 0o600);
+      assert.equal(statSync(h.cacheDir).mode & 0o777, 0o700);
+    }
+  }
+});
+
+test('unsafe or unverifiable downloads are refused and leave no partial or cached file', async t => {
+  const size = IMAGE_BYTES.length;
+  for (const [label, download, code, read = true] of [
+    ['a non-ok status', fakeFetch(undefined, { status: 404 }), 'IMAGE_DOWNLOAD_FAILED', false],
+    ['a final URL that is not https', fakeFetch(undefined, { url: PINS.x64.url.replace('https:', 'http:') }), 'IMAGE_DOWNLOAD_FAILED', false],
+    ['an aborted or failed request', fakeFetch(failWith({ name: 'AbortError', code: 20 })), 'IMAGE_DOWNLOAD_FAILED', false],
+    ['a body stream error', fakeFetch([IMAGE_BYTES.subarray(0, 4), failWith({ code: 'ECONNRESET' })]), 'IMAGE_DOWNLOAD_FAILED'],
+    ['a declared length above the bound', fakeFetch(undefined, { contentLength: size + 1 }), 'IMAGE_INPUT_INVALID', false],
+    ['a body exceeding the bound mid-stream', fakeFetch([IMAGE_BYTES, Buffer.from('x')], { contentLength: size }), 'IMAGE_INPUT_INVALID'],
+    ['bytes not matching the pin', fakeFetch([Buffer.from('tampered image bytes')]), 'IMAGE_CHECKSUM_MISMATCH'],
+  ]) {
+    const h = cacheHarness(t);
+    const options = { fetch: download.fetch, digest: h.digest, maxBytes: size };
+    await assert.rejects(ensurePinnedImage({ cacheDir: h.cacheDir, arch: 'x64' }, options), error => assertSanitized(error, code), label);
+    assert.deepEqual(readdirSync(h.cacheDir), [], label);
+    assert.equal(download.calls.length, 1, label);
+    assert.equal(download.pulls() > 0, read, label);
+    assert.equal(h.files.length, code === 'IMAGE_CHECKSUM_MISMATCH' ? 1 : 0, label);
+  }
+});
+
+test('invalid cache inputs are refused before any download', async t => {
+  const h = cacheHarness(t);
+  const download = fakeFetch();
+  const valid = { cacheDir: h.cacheDir, arch: 'x64' };
+  for (const [input, options] of [
+    [{ cacheDir: 'relative cache', arch: 'x64' }, {}], [{ cacheDir: `${h.cacheDir}\n`, arch: 'x64' }, {}], [{ cacheDir: h.cacheDir, arch: 'ia32' }, {}],
+    [undefined, {}], [valid, { fetch: PINS.x64.url }], [valid, { digest: PINS.x64.sha256 }], [valid, { maxBytes: 0 }],
+    [valid, { maxBytes: MAX_IMAGE_BYTES + 1 }], [valid, { maxBytes: 1.5 }],
+  ]) {
+    const attempt = ensurePinnedImage(input, { fetch: download.fetch, digest: h.digest, ...options });
+    await assert.rejects(attempt, error => assertSanitized(error, 'IMAGE_INPUT_INVALID'), JSON.stringify([input, options]));
+  }
+  assert.equal(download.calls.length, 0);
+  assert.equal(existsSync(h.cacheDir), false);
+});
+
+test('a cached pinned image is re-verified without a download; a corrupt one is replaced at most once', async t => {
+  const h = cacheHarness(t);
+  const file = path.join(h.cacheDir, IMAGE_FILE);
+  const ensure = download => ensurePinnedImage({ cacheDir: h.cacheDir, arch: 'x64' }, { fetch: download.fetch, digest: h.digest });
+  mkdirSync(h.cacheDir);
+  writeFileSync(file, IMAGE_BYTES);
+  const idle = fakeFetch();
+  assert.deepEqual(await ensure(idle), { file, sourceImage: SOURCE });
+  assert.deepEqual(h.files, [file]);
+  assert.equal(idle.calls.length, 0);
+  writeFileSync(file, 'corrupted cache entry');
+  const repair = fakeFetch();
+  assert.deepEqual(await ensure(repair), { file, sourceImage: SOURCE });
+  assert.equal(repair.calls.length, 1);
+  assert.deepEqual(readFileSync(file), IMAGE_BYTES);
+  assert.deepEqual(readdirSync(h.cacheDir), [IMAGE_FILE]);
+  writeFileSync(file, 'corrupted cache entry');
+  const tampered = fakeFetch([Buffer.from('tampered image bytes')]);
+  await assert.rejects(ensure(tampered), error => assertSanitized(error, 'IMAGE_CHECKSUM_MISMATCH'));
+  assert.equal(tampered.calls.length, 1);
+  assert.deepEqual(readdirSync(h.cacheDir), []);
+});
+
+test('a non-regular cache entry is refused without a download', async t => {
+  const h = cacheHarness(t);
+  const file = path.join(h.cacheDir, IMAGE_FILE);
+  const download = fakeFetch();
+  const ensure = () => ensurePinnedImage({ cacheDir: h.cacheDir, arch: 'x64' }, { fetch: download.fetch, digest: h.digest });
+  mkdirSync(file, { recursive: true });
+  await assert.rejects(ensure(), error => assertSanitized(error, 'IMAGE_INPUT_INVALID'));
+  if (process.platform !== 'win32') {
+    rmSync(file, { recursive: true });
+    const outside = path.join(path.dirname(h.cacheDir), 'outside.img');
+    writeFileSync(outside, IMAGE_BYTES);
+    symlinkSync(outside, file);
+    await assert.rejects(ensure(), error => assertSanitized(error, 'IMAGE_INPUT_INVALID'));
+    assert.deepEqual(readFileSync(outside), IMAGE_BYTES);
+  }
+  assert.equal(download.calls.length, 0);
+  assert.deepEqual(h.files, []);
+});
+
+const doctorReport = code => (code === 'PROVIDER_PREREQUISITES_READY'
+  ? { provider: 'multipass', code, providerReady: true, executionReady: false, primaryName: 'primary' }
+  : { provider: 'multipass', code, providerReady: false, executionReady: false, message: 'sanitized' });
+
+async function windowsPrerequisites({ report = doctorReport('PROVIDER_PREREQUISITES_READY'), hypervisor = true, provider } = {}) {
+  const calls = { doctor: [], hypervisor: [] };
+  const result = await windowsPlatform.prerequisites({
+    provider, host: WIN_HOST,
+    doctor: async options => { calls.doctor.push(options); return report; },
+    hypervisor: async options => { calls.hypervisor.push(options); return hypervisor; },
+  });
+  return { result, calls };
+}
+
+test('Windows prerequisites are explicit operator actions with their elevation needs', async () => {
+  assert.equal(Object.isFrozen(windowsPlatform), true);
+  assert.deepEqual([windowsPlatform.id, windowsPlatform.arch], ['win32', 'x64']);
+  const run = async () => assert.fail('the injected checks own every call');
+  const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
+  const { result, calls } = await windowsPrerequisites({ provider: { executable, run } });
+  assert.deepEqual(result, { platform: 'win32', ready: true, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: READY_ITEMS, primaryName: 'primary' });
+  assert.deepEqual(calls, { doctor: [{ host: WIN_HOST, executable, run }], hypervisor: [{ run }] });
+  for (const item of result.prerequisites) assert.deepEqual(Object.keys(item), ['id', 'satisfied', 'requiresElevation', 'action']);
+});
+
+test('a failed provider check marks only its own prerequisite; what it cannot speak to stays unknown', async () => {
+  for (const [code, expected] of [
+    ['HOST_UNSUPPORTED', [F, U, U, U, U]], ['PROVIDER_NOT_FOUND', [U, F, U, U, T]], ['VERSION_MISMATCH', [U, F, U, U, T]],
+    ['VERSION_UNSUPPORTED', [U, F, U, U, T]], ['PROVIDER_ACCESS_DENIED', [U, U, F, U, T]], ['DRIVER_UNSUPPORTED', [U, U, U, F, T]],
+    ['PROVIDER_TIMEOUT', [U, U, U, U, T]], ['MANIFEST_INVALID', [U, U, U, U, T]],
+  ]) {
+    const { result, calls } = await windowsPrerequisites({ report: doctorReport(code) });
+    assert.deepEqual(result, { platform: 'win32', ready: false, providerCode: code, prerequisites: items(expected), primaryName: null }, code);
+    // An unsupported host never gets a PowerShell probe.
+    assert.equal(calls.hypervisor.length, code === 'HOST_UNSUPPORTED' ? 0 : 1, code);
+  }
+  for (const [hypervisor, satisfied] of [[false, F], [null, U], ['True', U], [1, U], [0, U]]) {
+    const { result } = await windowsPrerequisites({ hypervisor });
+    assert.deepEqual(result, {
+      platform: 'win32', ready: false, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: items([T, T, T, T, satisfied]), primaryName: 'primary',
+    }, String(hypervisor));
+  }
+  const { result } = await windowsPrerequisites({ report: { ...doctorReport('PROVIDER_PREREQUISITES_READY'), providerReady: 'true' } });
+  assert.deepEqual([result.ready, result.primaryName, result.prerequisites.map(item => item.satisfied)], [false, null, [U, U, U, U, T]]);
+});
+
+test('the Hyper-V check is one fixed, non-elevated, bounded read-only CIM query', async () => {
+  const saved = process.env.SystemRoot;
+  const fallback = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+  try {
+    for (const [root, executable] of [['D:\\WinRoot', 'D:\\WinRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'], [undefined, fallback], ['relative\\root', fallback]]) {
+      if (root === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = root;
+      const calls = [];
+      const run = async (exe, args, options) => {
+        calls.push({ exe, args: [...args], options });
+        R03_CALLS.push([exe, ...args]);
+        return { stdout: 'True\r\n', stderr: '' };
+      };
+      assert.equal(await probeHypervisor({ run }), true);
+      assert.deepEqual(calls, [{
+        exe: executable, args: POWERSHELL_ARGS,
+        options: { encoding: 'utf8', shell: false, windowsHide: true, timeout: 10_000, maxBuffer: MAX_PROBE_BUFFER, killSignal: 'SIGKILL' },
+      }], String(root));
+    }
+  } finally {
+    if (saved === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = saved;
+  }
+});
+
+test('only an exact True or False Hyper-V answer is known; anything else is unknown', async () => {
+  for (const [answer, expected] of [
+    [{ stdout: 'True\n' }, T], [{ stdout: '  False\r\n' }, F], [{ stdout: 'true\n' }, U], [{ stdout: 'True\nFalse\n' }, U], [{ stdout: '' }, U],
+    [{ stdout: undefined }, U], [{ stdout: `${' '.repeat(MAX_PROBE_BUFFER)}True` }, U], [{ error: failWith({ killed: true, code: 'ETIMEDOUT' }) }, U],
+    [{ error: failWith({ code: 1, stdout: 'True\n' }) }, U], [{ error: failWith({ code: 'ENOENT' }) }, U],
+  ]) {
+    const run = async (exe, args) => {
+      R03_CALLS.push([exe, ...args]);
+      if (answer.error) throw answer.error;
+      return { stdout: answer.stdout, stderr: '' };
+    };
+    assert.equal(await probeHypervisor({ run }), expected, JSON.stringify(answer).slice(0, 60));
+  }
+});
+
+test('provisioning does nothing until every Windows prerequisite is satisfied', async t => {
+  const unauthenticated = failWith({ code: 1, stderr: 'The client is not authenticated with the Multipass service. secret-diagnostic' });
+  for (const [label, fakeOptions, hypervisor, expected, commands] of [
+    ['an unauthenticated client', { versionError: unauthenticated }, async () => true, [U, U, F, U, T], ['version']],
+    ['Hyper-V absent', {}, async () => false, [T, T, T, T, F], ['version', 'get', 'get']],
+    ['Hyper-V unknown', {}, async () => null, [T, T, T, T, U], ['version', 'get', 'get']],
+  ]) {
+    const h = provisionHarness(t, fakeOptions);
+    const result = await provisionWith(h, { platform: onWindows(hypervisor) });
+    assert.deepEqual(result, { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: items(expected) }, label);
+    assert.deepEqual(h.fake.commands(), commands, label);
+    assert.equal(h.download.calls.length, 0, label);
+    assert.equal(existsSync(h.cacheDir), false, label);
+    assert.equal(existsSync(h.ledgerDir), false, label);
+  }
+});
+
+test('provisionGuest launches the verified cached image once under one durable owned name', async t => {
+  const h = provisionHarness(t);
+  assert.deepEqual(await provisionWith(h), provisioned());
+  const cached = path.join(h.cacheDir, IMAGE_FILE);
+  assert.deepEqual(h.fake.launches.map(({ args, stdin, ended }) => ({ args, stdin, ended })), [{ args: launchArgs(hostUrl(cached)), stdin: BOOTSTRAP.userData, ended: true }]);
+  assert.deepEqual(h.fake.launches[0].options, lifecycleOptions(960_000));
+  assert.deepEqual(h.fake.commands(), ['version', 'get', 'get', 'info', 'launch', 'info', ...Array(1 + BOUNDARY.length).fill('exec')]);
+  assert.deepEqual(h.fake.guest.unexpected, []);
+  assert.deepEqual(readdirSync(h.ledgerDir), [`${GUEST}.json`]);
+  const record = await h.ledger.read(GUEST);
+  assert.deepEqual([record.phase, record.launchTries, record.image], ['owned', 1, { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }]);
+  assert.deepEqual(h.download.calls.map(call => call.target), [PINS.x64.url]);
+  assert.deepEqual(readdirSync(h.cacheDir), [IMAGE_FILE]);
+  assert.deepEqual([...h.fake.present.keys()], [GUEST]);
+  assert.deepEqual(h.sleeps, []);
+});
+
+for (const [label, created, launches, sleeps] of [
+  ['absent is retried under the same name', false, [GUEST, GUEST], [5_000]],
+  ['present is adopted without another launch', true, [GUEST], []],
+]) {
+  test(`a timed-out launch whose VM is ${label}`, async t => {
+    const h = provisionHarness(t, { launch: count => (count === 1 ? { error: failWith({ killed: true, code: 'ETIMEDOUT' }), create: created } : {}) });
+    assert.deepEqual(await provisionWith(h), provisioned());
+    assert.deepEqual(h.fake.launches.map(launch => [launch.args[3], launch.stdin === BOOTSTRAP.userData, launch.ended]), launches.map(name => [name, true, true]));
+    assert.deepEqual(readdirSync(h.ledgerDir), [`${GUEST}.json`]);
+    assert.equal((await h.ledger.read(GUEST)).launchTries, launches.length);
+    assert.deepEqual([...h.fake.present.keys()], [GUEST]);
+    assert.deepEqual(h.sleeps, sleeps);
+    assert.equal(h.download.calls.length, 1);
+  });
+}
+
+test('refusals before reservation leave no record, launch or extra download', async t => {
+  const conflict = provisionHarness(t, { primaryName: `moe-vm-${'ab'.repeat(10)}` });
+  await assert.rejects(provisionWith(conflict), error => assertSanitized(error, 'PRIMARY_NAME_CONFLICT'));
+  const unavailable = provisionHarness(t, {}, fakeFetch(undefined, { status: 503 }));
+  await assert.rejects(provisionWith(unavailable), error => assertSanitized(error, 'IMAGE_DOWNLOAD_FAILED'));
+  const unbootable = provisionHarness(t);
+  await assert.rejects(provisionWith(unbootable, { credential: Buffer.alloc(0) }), error => assertSanitized(error, 'BOOTSTRAP_INPUT_INVALID'));
+  for (const [h, downloads] of [[conflict, 0], [unavailable, 1], [unbootable, 0]]) {
+    assert.deepEqual(h.fake.commands(), ['version', 'get', 'get']);
+    assert.equal(h.download.calls.length, downloads);
+    assert.equal(existsSync(h.ledgerDir), false);
+  }
+  const unready = provisionHarness(t);
+  for (const changes of [{ platform: { ...windowsPlatform, prerequisites: undefined } }, { platform: null }, { ledger: {} }, { provider: null }, { sleep: 5 }]) {
+    await assert.rejects(provisionWith(unready, changes), error => assertSanitized(error, 'PROVISION_INPUT_INVALID'));
+  }
+  assert.deepEqual(unready.fake.commands(), []);
+});
+
+test('a launched guest that fails readiness keeps its record for reconcile and is never deleted here', async t => {
+  const h = provisionHarness(t, { answers: healthy({ mountinfo: mountinfo([...MOUNTS, '41 22 0:60 / /home/ubuntu rw - 9p host rw']) }) });
+  assert.deepEqual(await provisionWith(h), provisioned(['MOUNTS_PRESENT']));
+  const record = await h.ledger.read(GUEST);
+  assert.deepEqual([record.phase, record.image], ['owned', undefined]);
+  assert.equal(h.fake.commands().includes('delete'), false);
+  assert.deepEqual([...h.fake.present.keys()], [GUEST]);
+  const exhausted = provisionHarness(t, { launch: () => ({ error: failWith({ code: 1, stderr: 'secret-diagnostic' }), create: false }) });
+  await assert.rejects(provisionWith(exhausted), error => assertSanitized(error, 'LIFECYCLE_RETRY_EXHAUSTED'));
+  assert.deepEqual(exhausted.fake.launches.map(launch => launch.args[3]), [GUEST, GUEST, GUEST]);
+  assert.deepEqual(readdirSync(exhausted.ledgerDir), [`${GUEST}.json`]);
+  assert.equal((await exhausted.ledger.read(GUEST)).phase, 'failed');
+  assert.equal(exhausted.fake.commands().includes('delete'), false);
+});
+
+const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>]';
+
+test('CLI prerequisites prints one JSON report and exits 0 only when every prerequisite is ready', async () => {
+  const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
+  for (const [args, ready, options] of [[['prerequisites', '--executable', executable], true, { executable }], [['prerequisites'], false, {}]]) {
+    const writes = [];
+    const seen = [];
+    const report = { platform: 'win32', ready, executionReady: false, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: items([T, T, T, T, ready]) };
+    const code = await runCli(args, {
+      doctor: async () => assert.fail('doctor is a separate command'), prerequisites: async received => { seen.push(received); return report; }, write: text => writes.push(text),
+    });
+    assert.deepEqual([code, seen, writes], [ready ? 0 : 2, [options], [`${JSON.stringify(report)}\n`]]);
+  }
+  const crossed = [];
+  assert.equal(await runCli(['prerequisites'], { prerequisites: async () => ({ providerReady: true, ready: false }), write: text => crossed.push(text) }), 2);
+  assert.equal(await runCli(['doctor'], {
+    doctor: async () => ({ providerReady: false, ready: true }), prerequisites: async () => assert.fail('not a doctor dependency'), write: text => crossed.push(text),
+  }), 2);
+  for (const failure of [async () => { throw failWith({ code: 'EACCES' }); }, () => { throw failWith({}); }]) {
+    const writes = [];
+    assert.equal(await runCli(['prerequisites'], { prerequisites: failure, write: text => writes.push(text) }), 2);
+    assert.deepEqual(writes, [`${JSON.stringify({ code: 'PREREQUISITES_UNAVAILABLE', ready: false, executionReady: false })}\n`]);
+  }
+});
+
+for (const args of [['prerequisites', 'extra'], ['prerequisites', '--executable'], ['prerequisites', '--executable', ' '], ['prerequisites', '--executable', 'a\nb'],
+  ['prerequisites', '--executable', 'a', '--executable', 'b'], ['prerequisites', '--manifest', 'evil'], ['Prerequisites']]) {
+  test(`CLI rejects ${JSON.stringify(args)} before any prerequisite call`, async () => {
+    let calls = 0;
+    const writes = [];
+    const code = await runCli(args, { doctor: async () => { calls++; }, prerequisites: async () => { calls++; }, write: text => writes.push(text) });
+    assert.deepEqual([code, calls, writes.length], [2, 0, 1]);
+    assert.deepEqual(JSON.parse(writes[0]), { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE });
+  });
+}
+
+test('CLI prerequisites refuse a host without a platform module', { skip: process.platform === 'win32' }, async () => {
+  const writes = [];
+  assert.equal(await runCli(['prerequisites'], { write: text => writes.push(text) }), 2);
+  assert.deepEqual(writes, [`${JSON.stringify({ code: 'PLATFORM_UNSUPPORTED', ready: false, executionReady: false })}\n`]);
+});
+
+test('no R03 command changes provider or host settings, elevates, authenticates or mounts', () => {
+  const FORBIDDEN = ['set', 'authenticate', 'runas', 'enable-windowsoptionalfeature', 'dism', 'bcdedit', '--all', '--mount', 'mount', '--network', '--bridged'];
+  const kinds = new Set(R03_CALLS.map(argv => (argv[0].endsWith('powershell.exe') ? 'powershell' : argv[1])));
+  assert.deepEqual([...kinds].sort(), ['exec', 'get', 'info', 'launch', 'powershell', 'version']);
+  for (const argv of R03_CALLS) {
+    // After `--` is R07's frozen guest probe table, tested there; the image URL holds a temporary path.
+    const head = argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv;
+    for (const element of head.filter(value => !value.startsWith('file://'))) {
+      assert.equal(FORBIDDEN.some(token => element.toLowerCase().includes(token)), false, JSON.stringify(argv));
+    }
+    if (argv[1] === 'get') assert.ok(['local.driver', 'client.primary-name'].includes(argv[2]), JSON.stringify(argv));
+  }
+});
+
+test('real provider process: provisioning sends cloud-init on stdin and runs only owned commands', { skip: process.platform === 'win32' }, async t => {
+  const dir = scratch(t);
+  const statePath = path.join(dir, 'provider state.json');
+  const violations = path.join(dir, 'violations.log');
+  const executable = path.join(dir, 'fake multipass');
+  const probes = Object.fromEntries(Object.entries(healthy()).map(([id, answer]) => [JSON.stringify(EXPECTED_PROBES[id]), answer]));
+  writeFileSync(statePath, JSON.stringify({ instances: {}, launches: [], info: guestDetail(), probes }));
+  writeFileSync(executable, `#!${process.execPath}
+const fs = process.getBuiltinModule('node:fs');
+const [statePath, violations] = ${JSON.stringify([statePath, violations])};
+const args = process.argv.slice(2);
+const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+const out = text => {
+  process.stdout.write(text);
+  return 0;
+};
+function main() {
+  const command = args.join(' ');
+  if (command === 'version --format json') return out('{"multipass":"1.17.0+win","multipassd":"1.17.0+win"}');
+  if (command === 'get local.driver') return out('hcs\\n');
+  if (command === 'get client.primary-name') return out('primary\\n');
+  if (args[0] === 'launch') {
+    state.launches.push({ args, stdin: fs.readFileSync(0, 'utf8') });
+    state.instances[args[3]] = 'Running';
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    return out('Launched: ' + args[3] + '\\n');
+  }
+  if (args.length === 4 && args[0] === 'info' && args[2] === '--format' && args[3] === 'json') {
+    if (!Object.hasOwn(state.instances, args[1])) {
+      process.stderr.write('info failed: The following errors occurred:\\ninstance "' + args[1] + '" does not exist\\n');
+      return 2;
+    }
+    return out(JSON.stringify({ errors: [], info: { [args[1]]: state.info } }));
+  }
+  const exec = args.length > 4 && args[0] === 'exec' && args[1] === '--no-map-working-directory' && Object.hasOwn(state.instances, args[2]) && args[3] === '--';
+  const answer = exec ? state.probes[JSON.stringify(args.slice(4))] : undefined;
+  if (answer) {
+    process.stdout.write(answer.stdout);
+    return answer.code;
+  }
+  fs.appendFileSync(violations, JSON.stringify(args) + '\\n');
+  return 64;
+}
+process.exitCode = main();
+`, { mode: 0o755 });
+  const cacheDir = path.join(dir, 'image cache');
+  const result = await provisionGuest({
+    platform: onWindows(), ledger: createLedger(path.join(dir, 'ledger state'), { random: sequence() }), owner, cacheDir,
+    supervisor: SUPERVISOR, credential: CREDENTIAL, provider: { executable }, fetch: fakeFetch().fetch, digest: pinDigest().digest, sleep: noSleep,
+  });
+  assert.deepEqual(result, provisioned());
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.deepEqual(state.launches, [{ args: launchArgs(hostUrl(path.join(cacheDir, IMAGE_FILE))), stdin: BOOTSTRAP.userData }]);
+  assert.deepEqual(state.instances, { [GUEST]: 'Running' });
+  assert.equal(existsSync(violations), false);
+});
