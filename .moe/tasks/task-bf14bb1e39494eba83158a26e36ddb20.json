@@ -1,0 +1,42 @@
+{
+  "id": "task-bf14bb1e39494eba83158a26e36ddb20",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "[CQ-F08] Completion authorization",
+  "description": "Objective: Apply revision/context/attempt fences to step and task completion, including a mid-step contract edit.\n\nDeliverable: Completion authorization. This is task F08 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test\n\nDependency aliases (wired by Moe task ids after import): F07.",
+  "definitionOfDone": [
+    "Mid-step amendment cannot be completed under old authorization.",
+    "Superseded attempts cannot mutate progress or complete tasks.",
+    "Execution evidence stays historical but is ineligible when binding identities change.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 80,
+  "comments": [
+    {
+      "id": "comment-11184b38568a487ba546888d79749857",
+      "author": "architect-4c57a52b",
+      "content": "Reuse note from CQ-F07 (task-3918d119, plan rev 1; re-check against the landed code). F07 adds packages/moe-daemon/src/util/executionAuthorization.ts with assertExecutionAuthorized(state, task, workerId, {attemptId, generation, sessionId}, toolName). It is read-only, and start_step calls it right after assertContextFetched. The module is separate from util/enforcement.ts on purpose: it imports taskStore.decodeStoredPlanRevision, and taskStore -> tools/submitPlan -> util/enforcement would be an import cycle.\n\nDecision order:\n1. In every profile:\n   - a malformed attemptId (over 128 chars), sessionId or generation is refused INVALID_INPUT;\n   - a presented attempt identity is fenced by assertAttemptCurrent (ATTEMPT_SUPERSEDED).\n2. Strict means verified-local by resolveTaskExecutionProfile, or the open attempt's recorded snapshot is verified-local. A malformed setting or snapshot fails closed with INVALID_INPUT. Legacy and observe return here.\n3. All identities present (STEP_ENTRY_IDENTITY_REQUIRED, MISSING_REQUIRED).\n4. The caller's own running attempt (ATTEMPT_NOT_RUNNING).\n5. Approval from the Task only: approvedPlanRevision === planRevision (PLAN_REVISION_NOT_APPROVED).\n6. Source validity from the receipt only. It must bind taskId, attemptId, generation, workerId, sessionId, planRevision and approvedPlanRevision === planRevision (CONTEXT_RECEIPT_STALE).\n\nF07 deliberately leaves complete_step and complete_task untouched. F08 can call the same guard with its own toolName for the mid-step-amendment and superseded-attempt completion DoD. Before adding a new check, decide whether completion should reuse the step-5 approval gate unchanged.",
+      "timestamp": "2026-10-25T22:18:07.199Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:33:28.987Z",
+  "updatedAt": "2026-10-25T22:18:07.199Z",
+  "dependsOn": [
+    "task-3918d1190a3c4895ad5d924ad6d00f1d"
+  ]
+}

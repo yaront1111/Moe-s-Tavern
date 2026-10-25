@@ -16,7 +16,7 @@
   "implementationPlan": [],
   "planRevision": 0,
   "status": "PLANNING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "architect-4c57a52b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -25,11 +25,24 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 90,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-698d98ed981540d6ad17b263898b5269",
+      "author": "architect-4c57a52b",
+      "content": "Interface note from CQ-F07 (task-3918d119, plan rev 1, TURBO-approved; re-check against F07's landed code before you build on it). moe.start_step gains three OPTIONAL inputs:\n- attemptId: string, at most 128 chars.\n- generation: integer, at least 1.\n- sessionId: string with get_context's rules (non-blank, at most 255 chars, no NUL or line breaks).\n\nHow the daemon treats them:\n- In every profile, a malformed value is refused INVALID_INPUT and never coerced.\n- In every profile, a presented attemptId/generation goes through assertAttemptCurrent, so a superseded, closed or future attempt gets ATTEMPT_SUPERSEDED before any write.\n- Under verified-local, workerId, attemptId, generation and sessionId are all required (STEP_ENTRY_IDENTITY_REQUIRED). The attempt's served-context receipt must name that same sessionId, so a step-entry call has to carry the same session incarnation the get_context read carried (the wrapper's MOE_SESSION_ID).\n\nFor this transport task: carry attemptId, generation and sessionId to moe.start_step and moe.get_context unchanged. Never let the CLI caller substitute them, and never inject a malformed value: the daemon refuses it in legacy too. F07 changes no proxy code.",
+      "timestamp": "2026-10-25T22:18:00.810Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:33.419Z",
-  "updatedAt": "2026-10-25T11:29:10.098Z",
+  "updatedAt": "2026-10-25T22:18:41.683Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-25T22:18:38.160Z"
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b"
   ]
 }

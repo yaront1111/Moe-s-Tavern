@@ -61,11 +61,17 @@
       "author": "architect-26ba32c3",
       "content": "Docs hand-forward from CQ-F04b (architect-26ba32c3, 2026-10-25). Once F04b lands, every human approval route refuses an omitted expectedPlanRevision with INVALID_INPUT, while an explicit 0 still approves a stamp-less row. F04b updates docs/MCP_SERVER.md itself. These lines are left for this row's docs sweep:\n- docs/PLAN_APPROVAL_FRESHNESS.md line 78, \"An omitted `expectedPlanRevision` is still a legal approval\".\n- The line 128 table row, \"approval without the field still works\".\nAlso: this epic now has CQ-F04c (JetBrains), F04d (VS Code) and F04e (daemon test fixtures) as F04b prerequisites. F04b's order (230.5) is above this row's (120), so the daemon flags F04b as isEpicFinal. This row should own the highest order.",
       "timestamp": "2026-10-25T10:49:53.378Z"
+    },
+    {
+      "id": "comment-e4992d0440364eb4aca640113aa816c7",
+      "author": "architect-4c57a52b",
+      "content": "CQ-F07 docs hand-forward (task-3918d119, plan rev 1). F07 edits no docs, because docs/MCP_SERVER.md is contested by F04b and task-c2cb5cf7. Re-verify against F07's landed code first.\n\n1. docs/MCP_SERVER.md, moe.start_step section:\n   - New optional inputs: attemptId (string, at most 128), generation (integer, at least 1) and sessionId (get_context's rules).\n   - Every profile: malformed input is refused INVALID_INPUT, and a presented attempt identity is fenced (ATTEMPT_SUPERSEDED).\n   - verified-local, strict when the task's resolved profile or the open attempt's recorded snapshot says so, requires:\n     - workerId, attemptId, generation and sessionId (STEP_ENTRY_IDENTITY_REQUIRED, -32602);\n     - the caller's running attempt (ATTEMPT_NOT_RUNNING);\n     - Task.approvedPlanRevision === planRevision (PLAN_REVISION_NOT_APPROVED). A receipt never grants approval.\n     - an attempt receipt that names this session, attempt, generation and worker and the approved current revision (CONTEXT_RECEIPT_STALE). packetId, view and servedAt are not compared.\n   - Every refusal happens before any write.\n   - Legacy and observe keep worker-ID-only freshness.\n2. docs/CONFIGURATION.md, executionProfile row: moe.start_step now judges the profile. A malformed setting, task or attempt snapshot, stored receipt or stored planRevision refuses it with INVALID_INPUT. Add it to the list of what a malformed or hand-edited verified-local value refuses.\n3. docs/PLAN_APPROVAL_FRESHNESS.md: under verified-local, step entry now consumes approvedPlanRevision. An amend_plan_step on a WORKING strict task blocks further step entry until the plan is re-approved.\n4. SCHEMA.md: no change; F07 persists nothing new.",
+      "timestamp": "2026-10-25T22:18:13.341Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:45.303Z",
-  "updatedAt": "2026-10-25T10:49:53.379Z",
+  "updatedAt": "2026-10-25T22:18:13.341Z",
   "dependsOn": [
     "task-bf14bb1e39494eba83158a26e36ddb20",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
