@@ -16,34 +16,57 @@
     {
       "stepId": "step-1",
       "description": "PASS EXPLICIT REVISIONS AT EVERY SETUP APPROVAL. These are test-only edits; production code is untouched. Each token must equal the fixture's stored revision, or 0 when the fixture writes none. A wrong token turns the test into PLAN_REVISION_MISMATCH and the suite fails, so a green run proves the tokens are right. Read each fixture helper to get the value; never guess it.\n- packages/moe-daemon/src/state/StateManager.test.ts: 'sets task status to WORKING' calls stateManager.approveTask('task-test123'), so pass the fixture's revision. Leave 'throws if task not found' as it is: the task lookup precedes every token check, so it is not an approval.\n- packages/moe-daemon/src/tools/taskTimestamps.test.ts: 'manual approval sets planApprovedAt' calls h.state.approveTask('task-1'), so pass the fixture's revision.\n- packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts: the approveAndClaimWorker helper calls state.approveTask(taskId). Pass the task's current stored revision; reading it from state is fine in a test, because the scenario's reviewer saw exactly that.\n- packages/moe-daemon/src/state/taskExecutionPolicy.test.ts: D4 (line ~774) and D6 (line ~796) call refusedNotReady(() => approve()). Pass the row's current revision, approve(1) if that is what the seeded row or submit() produced, so the test still proves the READINESS refusal once CQ-F04b puts an omission guard ahead of readiness. Leave the PROGRESSIONS row 'approveTask without a token' alone. It is a true legacy pin, and CQ-F04b converts it under the human-approved rail.\n- packages/moe-daemon/src/server/executionPolicySnapshot.test.ts: in the W5 table, the row 'the UPDATE_TASK drag to WORKING' gets expectedPlanRevision: 1 in its payload (top-level payload key, not inside updates), so it still answers EXECUTION_PROFILE_NOT_READY. Leave the row 'APPROVE_TASK without a token' alone; CQ-F04b owns it.\nThen grep packages/moe-daemon/src for approveTask( calls, APPROVE_TASK frames and UPDATE_TASK drags to WORKING in *.test.ts files outside planApproval.test.ts, planApproval.integration.test.ts and WebSocketServer.test.ts. Fix any other setup approval you find the same way.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/StateManager.test.ts",
         "packages/moe-daemon/src/tools/taskTimestamps.test.ts",
         "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
         "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
         "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/taskTimestamps.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+        "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+        "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
+      ],
+      "note": "Passed explicit revisions at 6 setup sites: StateManager.test (0), taskTimestamps.test (0), lifecycle.e2e helper (reads stored planRevision), taskExecutionPolicy D4/D6 approve(1), executionPolicySnapshot W5 drag expectedPlanRevision:1. Left not-found test, PROGRESSIONS 'without a token' row, W5 'APPROVE_TASK without a token' row. Other dirty paths belong to peers; untouched.",
+      "startedAt": "2026-10-25T11:12:16.700Z",
+      "completedAt": "2026-10-25T11:12:41.751Z"
     },
     {
       "stepId": "step-2",
       "description": "VERIFY, ONCE. Run fresh in the local gate setup: Linux-native node_modules, lockfile unchanged, Linux-only PATH, MOE_* unset.\n  cd packages/moe-daemon && npm test\nIt must exit 0; its output is the complete_task evidence. In the completion summary, paste the final grep. It shows that the only remaining token-free approvals outside the three pin files are exactly these three, with the reason for each:\n(a) the not-found test, which is not an approval;\n(b) the PROGRESSIONS row 'approveTask without a token', owned by CQ-F04b;\n(c) the W5 row 'APPROVE_TASK without a token', owned by CQ-F04b.\nWith that, QA can check DoD 1 mechanically.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts"
-      ]
+      ],
+      "note": "Full daemon suite in a Linux-native snapshot (worktree bytes copied, symlinked native node_modules, MOE_* unset): 163 files passed, 4110 tests passed, 14 skipped, exit 0. In-tree node_modules is Windows-native so npm test there fails at rolldown startup. Final grep: remaining token-free sites are StateManager.test.ts:747 (not-found, not an approval), taskExecutionPolicy.test.ts:554 (PROGRESSIONS row, F04b), executionPolicySnapshot.test.ts:257 (W5 row, F04b). taskExecutionPolicy.test.ts:106 is the approve() helper's own token-less branch, which is used only by that row.",
+      "startedAt": "2026-10-25T11:13:42.478Z",
+      "completedAt": "2026-10-25T11:13:51.172Z"
     },
     {
       "stepId": "step-3",
       "description": "SELF-REVIEW (load adversarial-self-review) over the diff:\n- Every edited test still asserts what it asserted before. No expectation, assertion or test is removed or loosened, and only the approval call's arguments changed.\n- Every token equals the fixture's stored revision.\n- No production file is in the diff.\n- None of the project's globalRails forbidden patterns appears.\nError handling note: a refusal path such as refusedNotReady must still refuse for its original reason, now with a valid token. If any byte changed during review, re-run step 2's command and submit that fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/tools/taskTimestamps.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+        "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+        "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
+      ],
+      "note": "Self-review of the 5-file, 6-line diff. Only approval-call arguments changed; no assertion added, removed or loosened. Tokens: 0 for fixtures with no stored revision (StateManager, taskTimestamps), the stored value read from state in lifecycle, 1 for the AWAITING_ROW/submit() fixtures, which the suite passing confirms. No production file touched and no forbidden pattern. Snapshot files are byte-identical (cmp) to the worktree files the suite ran against, so no re-run was needed. The concurrency, input and side-effect checks do not apply to test-argument edits.",
+      "startedAt": "2026-10-25T11:13:53.808Z",
+      "completedAt": "2026-10-25T11:13:58.241Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 7,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -56,21 +79,27 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:47:44.698Z",
-  "updatedAt": "2026-10-25T10:52:13.583Z",
+  "updatedAt": "2026-10-25T11:14:03.697Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:50:09.877Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-26ba32c3"
+    "architect-26ba32c3",
+    "worker-c1d9de02"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T10:52:13.469Z",
   "planningNotes": {
@@ -83,5 +112,22 @@
       "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
     ]
   },
-  "planApprovedAt": "2026-10-25T10:52:13.583Z"
+  "planApprovedAt": "2026-10-25T10:52:13.583Z",
+  "workStartedAt": "2026-10-25T11:12:16.700Z",
+  "reviewStartedAt": "2026-10-25T11:14:03.695Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test (run in a Linux-native snapshot copy of the worktree with the native node_modules symlinked and MOE_PROJECT_PATH/MOE_WORKER_ID unset)",
+    "exitCode": 0,
+    "outputTail": "Test Files  163 passed (163)\n      Tests  4110 passed | 14 skipped (4124)\n   Start at  13:13:05\n   Duration  22.54s (tests 89%, transform 6%, import 4%)",
+    "reportedAt": "2026-10-25T11:14:03.695Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/StateManager.test.ts",
+    "packages/moe-daemon/src/tools/taskTimestamps.test.ts",
+    "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+    "packages/moe-daemon/src/state/taskExecutionPolicy.test.ts",
+    "packages/moe-daemon/src/server/executionPolicySnapshot.test.ts"
+  ],
+  "completionSummary": "Six setup approvals in five test files now pass explicit revisions: StateManager.test (0), taskTimestamps.test (0), lifecycle.e2e helper (reads the stored planRevision from state), taskExecutionPolicy D4 and D6 (approve(1)), executionPolicySnapshot W5 drag (top-level expectedPlanRevision: 1). No production files changed and no assertion was touched. Remaining token-free approvals outside the three pin files: (a) StateManager.test.ts:747 'nonexistent' not-found test, not an approval; (b) taskExecutionPolicy.test.ts:554 PROGRESSIONS row 'approveTask without a token', owned by CQ-F04b; (c) executionPolicySnapshot.test.ts:257 W5 row 'APPROVE_TASK without a token', owned by CQ-F04b. taskExecutionPolicy.test.ts:106 is the approve() helper's own token-less branch, reachable only from row (b). Verification ran in a Linux-native snapshot of the worktree, because the in-tree node_modules is Windows-native and fails at rolldown startup. Snapshot test files are byte-identical to the worktree files."
 }

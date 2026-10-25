@@ -256,7 +256,7 @@ describe('a strict approval is refused before any write', () => {
   it.each([
     { name: 'APPROVE_TASK without a token', type: 'APPROVE_TASK', payload: { taskId: 'task-1' } },
     { name: 'APPROVE_TASK with the current token', type: 'APPROVE_TASK', payload: { taskId: 'task-1', expectedPlanRevision: 1 } },
-    { name: 'the UPDATE_TASK drag to WORKING', type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { status: 'WORKING' } } },
+    { name: 'the UPDATE_TASK drag to WORKING', type: 'UPDATE_TASK', payload: { taskId: 'task-1', expectedPlanRevision: 1, updates: { status: 'WORKING' } } },
   ])('W5 $name answers EXECUTION_PROFILE_NOT_READY', async ({ type, payload }) => {
     await boot({ ...AWAITING, executionPolicySnapshot: STRICT });
     const client = await connect();

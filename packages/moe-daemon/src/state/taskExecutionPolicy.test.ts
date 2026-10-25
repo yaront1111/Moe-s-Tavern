@@ -771,7 +771,7 @@ describe('D. the strict-progression readiness backstop (DoD 5)', () => {
     vi.stubEnv('MOE_DISABLE_QUALITY_GATE', '1');
     await seed([{ ...AWAITING_ROW, executionPolicySnapshot: STRICT }]);
 
-    await refusedNotReady(() => approve());
+    await refusedNotReady(() => approve(1));
     await refusedNotReady(() => upd({ status: 'WORKING', planApprovedAt: '2026-10-24T12:00:00.000Z' }, 'PLAN_APPROVED'));
   });
 
@@ -793,7 +793,7 @@ describe('D. the strict-progression readiness backstop (DoD 5)', () => {
     expectStoredSnapshot(legacyAt(1));
 
     h.state.project!.settings.executionProfile = 'verified-local';
-    await refusedNotReady(() => approve());
+    await refusedNotReady(() => approve(1));
     expect(row().status).toBe('AWAITING_APPROVAL');
 
     const failure = await waitForActivity(

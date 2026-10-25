@@ -739,7 +739,7 @@ describe('StateManager', () => {
     });
 
     it('sets task status to WORKING', async () => {
-      const task = await stateManager.approveTask('task-test123');
+      const task = await stateManager.approveTask('task-test123', 0);
       expect(task.status).toBe('WORKING');
     });
 
