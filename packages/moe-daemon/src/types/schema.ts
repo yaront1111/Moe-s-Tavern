@@ -793,11 +793,14 @@ export interface Task {
    */
   planRevision?: number;
   /**
-   * The planRevision a revision-checked human approval reviewed. Daemon-owned:
-   * only approveTask's PLAN_APPROVED write sets it, in the same task image as
-   * status and planApprovedAt and only when it equals the planRevision that
-   * write commits; every caller update (and the /ws UPDATE_TASK denylist)
-   * strips it. Absent means an unchecked or legacy approval. The daemon never
+   * The planRevision an approval was bound to: the revision a token-checked
+   * human approval reviewed (approveTask, PLAN_APPROVED), or the revision a
+   * SPEED/TURBO plan submission committed (PLAN_AUTO_APPROVED). Daemon-owned:
+   * only those approval writes set it, in the same task image as status and
+   * planApprovedAt and only when it equals the planRevision that write
+   * commits; every caller update (and the /ws UPDATE_TASK denylist) strips it.
+   * Absent means an unchecked or legacy approval: an omitted-token human
+   * approval or a relaxed moe.set_task_status. The daemon never
    * writes null, and a stored null or non-integer reads exactly like absence.
    * Never backfilled from status, planApprovedAt or event names. A material
    * change advances only planRevision and keeps this number as history: it is

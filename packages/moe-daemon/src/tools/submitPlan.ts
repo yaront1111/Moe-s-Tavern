@@ -17,8 +17,9 @@ import {
   planSizeFloor, resolveLaunch,
 } from '../util/routing.js';
 import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchFor, accountSwitchReply } from '../state/accountStore.js';
-import { updateTask } from '../state/taskStore.js';
+import { decodeStoredPlanRevision, updateTask } from '../state/taskStore.js';
 import { definitionDigest, measureRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
+import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
 
 /**
  * The affected-path refusal. `cachedRefMiss` says why the configured cached
@@ -75,15 +76,27 @@ export function clearAllSpeedModeTimeouts(): void {
   speedModeTimeouts.clear();
 }
 
+/** Record a failed SPEED auto-approval in the activity log so the task doesn't get stuck silently. */
+function recordSpeedApprovalFailure(state: StateManager, taskId: string, error: unknown): void {
+  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+  state.appendActivity('TASK_BLOCKED', {
+    error: errorMessage,
+    reason: 'SPEED mode auto-approval failed'
+  }, state.getTask(taskId) ?? undefined);
+}
+
 /**
  * Arm (or re-arm) the SPEED-mode delayed auto-approval for a task. Cancels any
  * prior pending timer for the task before scheduling so the old timer can't leak,
  * then approves inside the StateManager mutex with a re-check that the task is
  * still AWAITING_APPROVAL (TOCTOU-safe against concurrent manual approve/reject).
+ * The approval is bound to `revision`, the plan revision the timer was armed
+ * for: the store refuses it once the plan, DoD or contract has moved on, and the
+ * timer then withholds instead of approving (a human approves or resubmits).
  * A delayMs of 0 approves on the next tick. Shared by submit_plan and the
  * post-restart re-arm (rearmSpeedModeApprovals) so they can never diverge.
  */
-function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: number): void {
+function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: number, revision: number): void {
   // Cancel any prior pending auto-approval for this task before scheduling a
   // new one (e.g. a plan resubmitted after an AWAITING_APPROVAL→PLANNING bounce
   // that didn't cancel the timer) — otherwise the old timer leaks.
@@ -94,24 +107,26 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
   // re-check + approval WITHOUT the lock, voiding the TOCTOU guarantee below.
   const timeoutId = state.detachFromMutexContext(() => setTimeout(async () => {
     try {
-      // approveTask path acquires the StateManager mutex and re-checks that
+      // Acquire the StateManager mutex and re-check that
       // status === 'AWAITING_APPROVAL' inside the locked section.
       await state.runExclusive(async () => {
         const currentTask = state.getTask(taskId);
         if (!currentTask || currentTask.status !== 'AWAITING_APPROVAL') return;
-        await state.updateTask(
-          taskId,
-          { status: 'WORKING', planApprovedAt: new Date().toISOString() },
-          'PLAN_AUTO_APPROVED'
-        );
+        try {
+          await updateTask(state, taskId, { status: 'WORKING', planApprovedAt: new Date().toISOString() },
+            'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision });
+        } catch (error) {
+          if (!(error instanceof MoeError) || error.codeName !== 'PLAN_REVISION_MISMATCH') throw error;
+          // Withheld, not failed: nothing was written. Say why on the board.
+          try {
+            await state.postSystemMessage(taskId, `SPEED auto-approval withheld: it was armed for plan revision ${revision}, `
+              + `but the plan is now at revision ${String(error.context?.currentPlanRevision)}. `
+              + 'Approve the current revision from the board, or reject the plan and resubmit it.');
+          } catch { /* never throw from a timer */ }
+        }
       });
     } catch (error) {
-      // Log error via activity log so task doesn't get stuck silently
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      state.appendActivity('TASK_BLOCKED' as import('../types/schema.js').ActivityEventType, {
-        error: errorMessage,
-        reason: 'SPEED mode auto-approval failed'
-      }, state.getTask(taskId) ?? undefined);
+      recordSpeedApprovalFailure(state, taskId, error);
     } finally {
       // Only clear the map entry if it still points at THIS timer — a successor
       // timer scheduled in the meantime must not be deleted (which would leave
@@ -131,6 +146,11 @@ function armSpeedModeApproval(state: StateManager, taskId: string, delayMs: numb
  * approving immediately (remaining delay 0) when its planSubmittedAt is already
  * older than the configured delay. No-op unless approvalMode === 'SPEED'. Skips
  * tasks that already have a live timer so it's safe to call more than once.
+ * Each timer is bound to the revision captured with the plan in its
+ * PLAN_SUBMITTED write (executionPolicySnapshot.planRevision), so a change made
+ * before the restart is never auto-approved; a row submitted before snapshots
+ * existed binds its current revision. Never throws: startup calls it unguarded,
+ * so a malformed row records a failure activity and is left for a human.
  */
 export function rearmSpeedModeApprovals(state: StateManager): void {
   const project = state.project;
@@ -140,11 +160,18 @@ export function rearmSpeedModeApprovals(state: StateManager): void {
   for (const task of state.tasks.values()) {
     if (task.status !== 'AWAITING_APPROVAL') continue;
     if (speedModeTimeouts.has(task.id)) continue; // already armed
+    let revision: number;
+    try {
+      revision = readExecutionPolicySnapshot(task.executionPolicySnapshot)?.planRevision ?? decodeStoredPlanRevision(task);
+    } catch (error) {
+      recordSpeedApprovalFailure(state, task.id, error);
+      continue;
+    }
     const submittedAt = task.planSubmittedAt ? Date.parse(task.planSubmittedAt) : NaN;
     const remaining = Number.isFinite(submittedAt)
       ? Math.max(0, delayMs - (now - submittedAt))
       : 0;
-    armSpeedModeApproval(state, task.id, remaining);
+    armSpeedModeApproval(state, task.id, remaining, revision);
   }
 }
 
@@ -554,6 +581,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
         // records and never blocks a successfully submitted plan.
         await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
+        // The revision this submission committed: the only one an automatic approval may stamp.
+        const revision = decodeStoredPlanRevision(submitted);
 
         const approvalMode = project.settings.approvalMode;
         let finalStatus = 'AWAITING_APPROVAL';
@@ -561,15 +590,16 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
 
         if (approvalMode === 'TURBO') {
           // Instant auto-approval
-          await state.updateTask(task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() }, 'PLAN_AUTO_APPROVED');
+          await updateTask(state, task.id, { status: 'WORKING', planApprovedAt: new Date().toISOString() },
+            'PLAN_AUTO_APPROVED', undefined, { approvedPlanRevision: revision });
           finalStatus = 'WORKING';
           message = 'Plan auto-approved (TURBO mode). Ready to work.';
         } else if (approvalMode === 'SPEED') {
-          // Delayed auto-approval. Run the status re-check inside the state
-          // mutex (via approveTask) to avoid a TOCTOU race with concurrent
-          // manual approve/reject calls.
+          // Delayed auto-approval, bound to this submission's revision. The
+          // timer re-checks the status inside the state mutex to avoid a TOCTOU
+          // race with concurrent manual approve/reject calls.
           const delayMs = project.settings.speedModeDelayMs || 2000;
-          armSpeedModeApproval(state, task.id, delayMs);
+          armSpeedModeApproval(state, task.id, delayMs, revision);
           message = `Plan submitted. Auto-approval in ${delayMs}ms (SPEED mode).`;
         }
 

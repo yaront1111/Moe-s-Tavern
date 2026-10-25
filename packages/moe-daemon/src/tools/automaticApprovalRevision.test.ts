@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { ActivityEventType, Task } from '../types/schema.js';
 import { StateManager } from '../state/StateManager.js';
 import { updateTask as storeUpdateTask } from '../state/taskStore.js';
+import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals, submitPlanTool } from './submitPlan.js';
 
@@ -227,11 +228,15 @@ describe('automatic approvals stamp the revision their submission committed', ()
     expect(row).not.toHaveProperty('approvedPlanRevision');
   });
 
-  it('a failed approval write keeps the failure activity and leaves the row unapproved', async () => {
+  it.each([
+    ['an Error', new Error('injected approval write failure')],
+    // Same category as PLAN_REVISION_MISMATCH: only that codeName is withheld.
+    ['a non-mismatch MoeError', new MoeError(MoeErrorCode.STATE_CONFLICT, 'injected conflict', {}, 'INJECTED_CONFLICT')],
+  ])('a failed approval write (%s) keeps the failure activity and leaves the row unapproved', async (_label, failure) => {
     await bootSpeed();
     const write = h.state.writeEntity.bind(h.state);
     vi.spyOn(h.state, 'writeEntity').mockImplementation(async (kind, id, row) => {
-      if (kind === 'tasks' && (row as Task).status === 'WORKING') throw new Error('injected approval write failure');
+      if (kind === 'tasks' && (row as Task).status === 'WORKING') throw failure;
       return write(kind, id, row);
     });
 
