@@ -12,9 +12,52 @@
   "taskRails": [
     "Harness, parity-checker and docs changes only: scripts/moe-agent.sh and scripts/moe-agent.ps1 stay unchanged unless a harmonized fixture proves a wrapper wrong, which becomes its own bug row."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Parity group first (RED on today's tree).\n\nAdd a 'postflight fake proxy' group to BOTH scripts/tests/parity-check.sh and scripts/tests/parity-check.ps1. Each uses its own native implementation, as the existing groups do. The group passes only when all three hold:\n- (a) scripts/tests/postflight-fake-proxy.js exists.\n- (b) scripts/tests/postflight.sh INSTALLS it: a `cp` of postflight-fake-proxy.js to \"$FAKE_PROXY\". Match the install line itself, not any mention, and require that no `cat > \"$FAKE_PROXY\" <<` heredoc remains.\n- (c) scripts/tests/postflight.ps1 installs it with a `Copy-Item` of postflight-fake-proxy.js to $fakeProxy, and no `Set-Content -Path $fakeProxy` here-string remains.\n\nError handling: each failure prints a PARITY FAIL line naming the harness and what drifted, and counts toward the checker's existing failure total. A missing file is a failure, never a silent skip.\n\nRun both checkers now. They must FAIL on today's tree, because both harnesses embed private proxy bodies. That run is this task's test that fails on the old behaviour (epic rail). Update each checker's header comment to name the new group.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "One shared fake proxy; the sh harness installs it.\n\nMeasure first, at the CURRENT HEAD after the three dependencies (5f3960df, 07474ee4, c2cb5cf7) have landed:\n- sh body: `git show HEAD:scripts/tests/postflight.sh`, from after `cat > \"$FAKE_PROXY\" <<'JS'` through the next `\\nJS\\n`;\n- ps1 body: `git show HEAD:scripts/tests/postflight.ps1`, from after `Set-Content -Path $fakeProxy -Encoding UTF8 -Value @'` through the next `\\n'@`.\nNormalize BOM and CRLF, then diff the two.\n\nBefore editing, post the per-hunk classification as a task comment; QA audits DoD 1 against it. Each hunk is one of:\n- SHARED: one behaviour is kept, chosen to mirror the real daemon tool it fakes; cite the packages/moe-daemon/src/tools source.\n- ENGINE-SPECIFIC: kept behind an explicit branch in the shared file, with a comment at the site giving the reason.\n\nArchitect's measurement at HEAD 1f9c7d5 (161 lines in about 20 hunks; re-check it, because the dependencies edit these bodies):\n- helpers: ps1 has top-level readTask (strips the PS 5.1 Set-Content BOM), strList, declaredSets and csv; sh uses inline lambdas;\n- resume alreadyAssigned: sh status is fixed REVIEW, ps1 uses FAKE_TASK_STATUS || REVIEW, and the reason text differs;\n- BLOCKED hold: sh uses task-blocked with moe.wait_for_task, ps1 uses task-resume with moe.get_context;\n- the get_context no-taskId adoption comment;\n- placement of chat_send and heartbeat;\n- two get_commit_scope implementations:\n  - sh: FAKE_SCOPE_* lists APPEND; FAKE_SCOPE_PEERS_ACTIVE; alwaysInclude = own record + project.json + idle peers' records; preflight answers the record's own status;\n  - ps1: lists OVERRIDE; peer entries split on the last ':'; peers' touchedFiles are included; alwaysInclude is [];\n- record_commit: ps1 adds ensureDir and sha;\n- declare_files: sh returns addedPaths;\n- deregister_worker: sh logs deregister.log for scenario W.\nExpected outcome: zero engine-specific branches, with the BOM strip shared (a no-op for sh).\n\nCreate scripts/tests/postflight-fake-proxy.js (LF) holding the union. Switch postflight.sh to `cp <repo root>/scripts/tests/postflight-fake-proxy.js \"$FAKE_PROXY\"`, using the harness's existing repo-root variable. Keep the $TMP_DIR/fake-proxy.js destination, so MOE_PROXY_PATH, the frozen-suite argument and any runtime edits still work on the copy.\n\nWhere a unified knob semantics changes what a sh scenario sees, adjust that scenario's SETUP, never its assertion about wrapper behaviour. Never copy one proxy wholesale over the other.\n\nRail: scripts/moe-agent.sh and .ps1 stay unchanged. If a harmonized fixture shows a wrapper behaving wrongly, keep that harness's old fixture behaviour behind a marked engine-specific branch, post the defect to #governors so it gets its own bug row, and continue.\n\nError handling: a failed cp must abort the harness (set -e).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "newFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "The ps1 harness installs the shared proxy, and the docs say so.\n\nIn scripts/tests/postflight.ps1, delete the fake-proxy here-string and install the shared file instead: `Copy-Item -LiteralPath (Join-Path <repo root> 'scripts\\tests\\postflight-fake-proxy.js') -Destination $fakeProxy -ErrorAction Stop`, using the harness's existing root variable. Keep $fakeProxy's temp path.\n\nError handling: a missing source must fail the run, never fall back to anything. Copying (rather than re-encoding with Set-Content) adds no BOM on Windows PowerShell 5.1.\n\nAdjust ps1 scenario SETUPS for the unified knob semantics (for example, FAKE_SCOPE_* lists that relied on override). Do not touch their assertions about wrapper behaviour.\n\nIn docs/DEVELOPMENT.md (~line 218), say that both smoke tests run one shared fake proxy, scripts/tests/postflight-fake-proxy.js, which parity-check.sh and parity-check.ps1 enforce. Make the knob list match the shared file exactly, adding or removing names as harmonized.\n\nBoth parity checkers now pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1",
+        "docs/DEVELOPMENT.md",
+        "scripts/tests/postflight-fake-proxy.js"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single verification gate on a fresh snapshot.\n\nSnapshot: `git archive HEAD` with this task's six owned files overlaid byte-identically, on a native filesystem that Windows can reach, with MOE_*/CLAUDE* env scrubbed. Use the recipe from mem task-task-e92b2cb33f744bf18074fc87121f22df-handoff.\n\nEvidence command, from the snapshot root: `bash scripts/tests/parity-check.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh`. It must exit 0. Also required, each exiting 0 and recorded in the outputTail and summary with engine versions:\n- parity-check.ps1 on Windows PowerShell 5.1 and on pwsh 7;\n- postflight.ps1 with MOE_POSTFLIGHT_TIMEOUT_SEC=180 on Windows PowerShell 5.1 and on pwsh 7.\n\nTiming: sh takes about 8.5 minutes and each ps1 engine about 11-13. Launch each run detached (setsid nohup writing a .log and a .done file) and poll in bounded loops under the 600 s tool cap. If a loaded box needs a larger timeout, record the value and the load as a deviation. Never silently retry a failure.\n\nCoverage: each harness's printed frozen and commit-scope scenario counts must equal the counts in the latest landed dependency's recorded verification, or a baseline run if none is recorded. A drop means a scenario lost its knob.\n\nRED proof (DoD 2), on a scratch copy of the snapshot:\n1. Inject one difference: restore a private embedded proxy body in postflight.ps1.\n2. Show that parity-check.sh and parity-check.ps1 both exit non-zero and name that harness.\n3. Repeat for postflight.sh.\n4. Restore.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "One adversarial self-review of this task's diff (load adversarial-self-review). Check that:\n- every hunk in the posted classification comment is accounted for in postflight-fake-proxy.js;\n- every FAKE_* knob either harness sets is still read by the shared proxy (grep both harnesses against it: a knob that is set but never read is a lost scenario), and every knob the proxy reads is documented in DEVELOPMENT.md;\n- no assertion was weakened to fit the union;\n- ps1 records written with a BOM still parse;\n- the frozen suite still receives the copied proxy path;\n- the parity group cannot pass vacuously: a mention in a comment while a private body remains must still fail, so match install sites;\n- `git diff --stat` shows scripts/moe-agent.sh and scripts/moe-agent.ps1 untouched, and no peer's dirty bytes are touched.\n\nThe diff is mostly a move, so net LOC is negative. Name the classification comment id in the completion summary so QA can audit the shared file against both old bodies.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,9 +66,39 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "LOW",
-  "order": 233,
+  "order": 229.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:43:34.952Z",
-  "updatedAt": "2026-10-25T08:43:34.952Z"
+  "updatedAt": "2026-10-25T10:10:59.040Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-25T10:04:27.551Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-26ba32c3"
+  ],
+  "dependsOn": [
+    "task-5f3960df261a47b5b8b95afb7e67a4fa",
+    "task-07474ee438f34021a23809f9c764d15c",
+    "task-c2cb5cf717794c169bda13934e4ee877"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-25T10:10:58.931Z",
+  "planningNotes": {
+    "approachesConsidered": "A (chosen): one shared fake proxy, scripts/tests/postflight-fake-proxy.js, copied by both harnesses. This follows the repo's mention-provenance precedent, where scripts/tests/mention-provenance-proxy.js is used by both mention-provenance.sh and .ps1. Drift between engines becomes impossible by construction, later rows edit one file instead of two, and the parity group only has to enforce that both harnesses install the shared file and neither re-embeds a private body.\n\nB (rejected): keep two embedded copies, harmonize them hunk by hunk, and add an extract-and-compare checker. It meets DoD 2's literal example, but it keeps the duplication that caused the drift, and every future fake-proxy change would still have to be made twice.\n\nBoth approaches need the same per-hunk harmonization decisions; A needs no ongoing byte comparison. The description's 'for example' leaves the check's form open, and with A the 'injected difference' is a private body restored in one harness.\n\nThe frozen candidate suites are also embedded twice, but they are byte-identical (66055 B each, sha256 98683ba5…), so they are out of scope.",
+    "codebaseInsights": "- Fake-proxy bodies at HEAD 1f9c7d5: sh 32732 B / 525 lines, ps1 31414 B / 508 lines, a 161-line diff in about 20 hunks. The full hunk list is in step 2.\n- Both harnesses write the proxy to a temp path ($TMP_DIR/fake-proxy.js and $tempRoot\\fake-proxy.js). The wrapper reaches it through MOE_PROXY_PATH, and the frozen suite gets it as argv.\n- All six files are LF (.gitattributes `* text=auto eol=lf`).\n- Knob usage counts (sh/ps1): FAKE_SCOPE_PEER_DECLARED 4/6, FAKE_SCOPE_PEERS_ACTIVE 7/13, FAKE_SCOPE_DECLARED_FIELD 5/6, FAKE_TASK_STATUS 38/18, FAKE_CLAIM_MODE 40/37. ps1 sets PEERS_ACTIVE although its get_commit_scope ignores it, so check where ps1 consumes it.\n- Run times from e92b2cb3: postflight.sh about 8.5 min; postflight.ps1 about 11-13 min per engine.\n- Both powershell.exe (5.1) and pwsh.exe are on the WSL PATH.",
+    "risks": "- Scenario semantics. Unifying FAKE_SCOPE_* (append vs override) and the BLOCKED-hold task id changes what one harness's scenarios see. Adjust setups, never wrapper assertions, and verify that scenario counts don't drop.\n- Vacuous parity: match install lines, not mentions.\n- Wrapper rail: never edit moe-agent.{sh,ps1}. A real wrapper difference that the union exposes becomes its own bug row, posted to #governors.\n- PS 5.1: Copy-Item does not add a BOM, but records written with Set-Content still have one, so keep the BOM strip in readTask.\n- Long runs: use detached runs and bounded polling. On a loaded box, record any timeout deviation.\n- The dependencies (5f3960df, 07474ee4, c2cb5cf7) edit these bodies first. Re-measure and re-classify at the then-current HEAD; the architect's hunk list is a guide, not the contract.\n- Never revert peers' dirty bytes."
+  },
+  "planApprovedAt": "2026-10-25T10:10:59.040Z"
 }
