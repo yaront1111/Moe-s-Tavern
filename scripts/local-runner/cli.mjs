@@ -1,22 +1,24 @@
 #!/usr/bin/env node
 // Read-only provider and host prerequisites. Provisioning and execution readiness are separate gates.
+// The exception is `native-smoke`: an operator-invoked run that launches and deletes one owned VM.
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runDoctor } from './doctor.mjs';
 import { linuxPlatform } from './platform-linux.mjs';
+import { macosPlatform } from './platform-macos.mjs';
 import { windowsPlatform } from './platform-windows.mjs';
 
-// Keyed by process.platform; R05 adds its platform module here.
-const PLATFORMS = Object.freeze({ win32: windowsPlatform, linux: linuxPlatform });
-const COMMANDS = ['doctor', 'prerequisites'];
-const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>]';
+const PLATFORMS = Object.freeze({ win32: windowsPlatform, linux: linuxPlatform, darwin: macosPlatform });
+const COMMANDS = ['doctor', 'prerequisites', 'native-smoke'];
+const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>] | native-smoke --work-dir <absolute path>';
 
 function argumentsFor(argv) {
   if (!Array.isArray(argv) || !COMMANDS.includes(argv[0])) return null;
-  if (argv.length === 1) return { command: argv[0], options: {} };
-  if (argv.length !== 3 || argv[1] !== '--executable' || typeof argv[2] !== 'string' ||
-      argv[2].trim() === '' || /[\x00-\x1f\x7f]/.test(argv[2])) return null;
-  return { command: argv[0], options: { executable: argv[2] } };
+  const smoke = argv[0] === 'native-smoke';
+  if (argv.length === 1 && !smoke) return { command: argv[0], options: {} };
+  if (argv.length !== 3 || argv[1] !== (smoke ? '--work-dir' : '--executable') || typeof argv[2] !== 'string' ||
+      argv[2].trim() === '' || /[\x00-\x1f\x7f]/.test(argv[2]) || (smoke && !path.isAbsolute(argv[2]))) return null;
+  return { command: argv[0], options: smoke ? { workDir: argv[2] } : { executable: argv[2] } };
 }
 
 /** The platform module for a process.platform id, or null. */
@@ -44,11 +46,20 @@ async function reportFor(parsed, doctor, prerequisites) {
   }
 }
 
-export async function runCli(argv, { doctor = runDoctor, prerequisites = hostPrerequisites, write = text => process.stdout.write(text) } = {}) {
+/** The smoke's evidence; a refusal is only its stable NATIVE_SMOKE_* code. native-smoke.mjs imports this module. */
+const smokeReport = nativeSmoke => async options => {
+  try { return await (nativeSmoke ?? (await import('./native-smoke.mjs')).runNativeProviderSmoke)(options); } catch (error) {
+    const code = typeof error?.code === 'string' && /^NATIVE_SMOKE_[A-Z_]{1,40}$/.test(error.code) ? error.code : 'NATIVE_SMOKE_UNAVAILABLE';
+    return { code, supportEstablished: false, executionReady: false };
+  }
+};
+
+export async function runCli(argv, { doctor = runDoctor, prerequisites = hostPrerequisites, nativeSmoke, write = text => process.stdout.write(text) } = {}) {
   const parsed = argumentsFor(argv);
-  const result = await reportFor(parsed, doctor, prerequisites);
+  const smoke = parsed?.command === 'native-smoke';
+  const result = await reportFor(parsed, doctor, smoke ? smokeReport(nativeSmoke) : prerequisites);
   write(`${JSON.stringify(result)}\n`);
-  const ready = parsed?.command === 'prerequisites' ? result.ready : result.providerReady;
+  const ready = smoke ? result.supportEstablished : parsed?.command === 'prerequisites' ? result.ready : result.providerReady;
   return ready === true ? 0 : 2;
 }
 

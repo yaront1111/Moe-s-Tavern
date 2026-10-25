@@ -10,7 +10,7 @@
 // - `--cloud-init -` reads the user-data from stdin, so Moe never writes the supervisor credential to a file
 //   (Multipass keeps its own NoCloud seed in its daemon data directory; R07 probes the guest-side copies).
 // - launching the configured primary instance name auto-mounts the user's home directory.
-import { buildUserData, launchResourceArgs } from './guest-bootstrap.mjs';
+import { buildUserData, IMAGE_ARCHES, launchResourceArgs } from './guest-bootstrap.mjs';
 import { waitForGuestReady } from './guest-readiness.mjs';
 import { ensurePinnedImage } from './image-cache.mjs';
 import { invoker, isOwnedInstanceName, provisionOwned } from './lifecycle.mjs';
@@ -73,10 +73,12 @@ export async function provisionGuest({
   // Every Multipass call goes to the platform's certified client (Linux pins the snap's), unless overridden.
   provider = { ...provider, executable: provider.executable ?? platform.executable };
   const pre = await platform.prerequisites({ provider, cacheDir });
-  if (pre?.ready !== true) return { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: pre?.prerequisites };
+  // A per-host arch (macOS detects its hardware) wins over a static one; only a pinned image arch proceeds.
+  const arch = pre?.arch ?? platform.arch;
+  if (pre?.ready !== true || !IMAGE_ARCHES.includes(arch)) return { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: pre?.prerequisites };
   if (isOwnedInstanceName(pre.primaryName)) throw provisionError('PRIMARY_NAME_CONFLICT');
   const bootstrap = buildUserData({ supervisor, credential });
-  const image = await ensurePinnedImage({ cacheDir, arch: platform.arch }, { fetch, digest });
+  const image = await ensurePinnedImage({ cacheDir, arch }, { fetch, digest });
   // The image path is in this host's own path syntax; refuse an unlaunchable one before reserving.
   fileImageUrl(image.file);
   // One durable name per call: every launch retry and any crash recovery reuse it (R06).

@@ -2094,7 +2094,7 @@ test('a launched guest that fails readiness keeps its record for reconcile and i
   assert.equal(exhausted.fake.commands().includes('delete'), false);
 });
 
-const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>]';
+const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>] | native-smoke --work-dir <absolute path>';
 
 test('CLI prerequisites prints one JSON report and exits 0 only when every prerequisite is ready', async () => {
   const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
@@ -2430,8 +2430,9 @@ test('Windows provisioning keeps its own multipass client and ignores the cache 
 });
 
 test('the CLI selects the Linux platform module and no other host gains one', () => {
-  assert.deepEqual([platformFor('linux'), platformFor('win32'), platformFor('darwin'), platformFor('constructor'), platformFor('toString')],
-    [linuxPlatform, windowsPlatform, null, null, null]);
+  // R05 gave darwin its module (tested in the CQ-R05 section).
+  assert.deepEqual([platformFor('linux'), platformFor('win32'), platformFor('darwin'), platformFor('sunos'), platformFor('constructor'), platformFor('toString')],
+    [linuxPlatform, windowsPlatform, macosPlatform, null, null, null]);
 });
 
 test('real snap and Multipass processes: Linux prerequisites read genuine output and refuse a devmode snap', { skip: process.platform === 'win32' }, async t => {
@@ -2455,4 +2456,231 @@ else {
   const devmode = await probe();
   assert.deepEqual([devmode.ready, satisfiedOf(devmode)], [false, only(1, F)]);
   assert.equal(existsSync(violations), false);
+});
+
+// CQ-R05 macOS VM provisioning
+import { detectHostArch, MACOS_SUPPORT_MATRIX, macosPlatform } from '../local-runner/platform-macos.mjs';
+import { nativeSmokeCore, runNativeProviderSmoke } from '../local-runner/native-smoke.mjs';
+
+const [MAC_HOST, MAC_X64] = [{ platform: 'darwin', arch: 'arm64' }, { platform: 'darwin', arch: 'x64' }];
+const [SYSCTL, MAC_MULTIPASS, ARM64] = ['/usr/sbin/sysctl', '/usr/local/bin/multipass', '-in hw.optional.arm64'];
+const MAC_ANSWERS = { [ARM64]: '1\n', 'version --format json': '{"multipass":"1.17.0+mac","multipassd":"1.17.0+mac"}', 'get local.driver': 'qemu\n',
+  'get client.primary-name': 'primary\n' };
+const macTransport = (changes = {}) => linuxTransport({ ...MAC_ANSWERS, ...changes });
+const macPrerequisites = (changes = {}, transport = macTransport()) => macosPlatform.prerequisites({ provider: { run: transport.run }, host: MAC_HOST, ...changes });
+const macItems = (states, { host = 'darwin/arm64', combination } = {}) => [
+  ['host-macos', false, `Run Moe on a certified Mac (darwin/x64 or darwin/arm64); this host is ${host}.`],
+  ['multipass-installed', true, 'Install Multipass 1.17.0 for macOS (+mac package) as an administrator.'],
+  ['multipass-authenticated', true, 'An administrator sets a Multipass passphrase; then run `multipass authenticate` as this user.'],
+  ['host-provider-combination', true, combination ? `${combination} is not a certified combination (certified: qemu); Moe never changes local.driver.`
+    : 'An administrator configures the Multipass driver to qemu; Moe never changes local.driver.'],
+].map(([id, requiresElevation, action], at) => ({ id, satisfied: states[at], requiresElevation, action }));
+const macReady = (arch = 'arm64') => ({ platform: 'darwin', arch, ready: true, providerCode: 'PROVIDER_PREREQUISITES_READY', primaryName: 'primary',
+  certification: 'not-established', prerequisites: macItems([T, T, T, T], { host: `darwin/${arch}` }) });
+
+test('detectHostArch asks the hardware once: a Rosetta-translated x64 Node on Apple Silicon is arm64', async () => {
+  for (const [answer, processArch, expected] of [
+    ['1\n', 'x64', 'arm64'], ['1', 'arm64', 'arm64'], ['', 'x64', 'x64'], ['0\n', 'x64', 'x64'], ['', 'arm64', null], ['0', 'ia32', null], ['2', 'x64', null],
+    ['1 1', 'arm64', null], [undefined, 'x64', null], [`1${' '.repeat(MAX_PROBE_BUFFER)}`, 'arm64', null], [failWith({ code: 'ENOENT' }), 'x64', null],
+  ]) {
+    const { run, calls } = linuxTransport({ [ARM64]: answer });
+    assert.equal(await detectHostArch({ run, processArch }), expected, JSON.stringify([answer, processArch]).slice(0, 60));
+    assert.deepEqual(calls, [{ argv: [SYSCTL, '-in', 'hw.optional.arm64'], options: lifecycleOptions(MAX_PROBE_TIMEOUT_MS) }]);
+  }
+  assert.equal(await detectHostArch({ run: () => { throw failWith({}); }, processArch: 'x64' }), null);
+});
+
+test('macOS prerequisites are explicit operator actions; ready only when all hold on a certified Mac', async () => {
+  assert.deepEqual([Object.isFrozen(macosPlatform), macosPlatform.id, macosPlatform.arch, macosPlatform.executable], [true, 'darwin', null, MAC_MULTIPASS]);
+  const transport = macTransport();
+  const result = await macPrerequisites({}, transport);
+  assert.deepEqual(result, macReady());
+  assert.deepEqual(transport.calls.map(call => call.argv.join(' ')), [`${SYSCTL} ${ARM64}`, ...commands.map(args => `${MAC_MULTIPASS} ${args.join(' ')}`)]);
+  assert.deepEqual(await macPrerequisites({ host: MAC_X64 }), macReady());
+  assert.deepEqual(await macPrerequisites({ host: MAC_X64 }, macTransport({ [ARM64]: '' })), macReady('x64'));
+  const boom = async () => { throw failWith({ code: 'EIO' }); };
+  const broken = await macPrerequisites({ doctor: boom, probe: boom }, macTransport({ [ARM64]: failWith({ code: 'EIO' }) }));
+  assert.deepEqual(broken, { ...macReady(), arch: null, ready: false, providerCode: null, prerequisites: macItems([U, U, U, U]), primaryName: null });
+});
+
+test('the macOS support matrix mirrors the manifest; every other host/driver pair is named and blocked', async () => {
+  assert.equal(Object.isFrozen(MACOS_SUPPORT_MATRIX) && MACOS_SUPPORT_MATRIX.every(Object.isFrozen), true);
+  const darwin = (await loadCertifiedProvider()).hosts.filter(entry => entry.platform === 'darwin').map(({ arch, driver }) => ({ arch, driver }));
+  assert.deepEqual([MACOS_SUPPORT_MATRIX, darwin], Array(2).fill([{ arch: 'x64', driver: 'qemu' }, { arch: 'arm64', driver: 'qemu' }]));
+  for (const [host, changes, states, named] of [
+    [MAC_HOST, { 'get local.driver': 'virtualbox\n' }, [T, U, U, F], { combination: 'darwin/arm64 + virtualbox' }],
+    [MAC_X64, { [ARM64]: '0\n', 'get local.driver': 'applevz\n' }, [T, U, U, F], { host: 'darwin/x64', combination: 'darwin/x64 + applevz' }],
+    ...[['ia32', 'darwin/ia32'], ['Evil Arch', 'darwin/unknown']].map(([arch, named]) => [{ platform: 'darwin', arch }, { [ARM64]: '' }, [F, U, U, U], { host: named }]),
+    [MAC_X64, { [ARM64]: '?' }, [U, T, T, T], { host: 'darwin/x64' }], [{ platform: 'linux', arch: 'x64' }, { [ARM64]: '?' }, [F, F, U, U], { host: 'linux/x64' }],
+  ]) {
+    const transport = macTransport(changes);
+    const result = await macPrerequisites({ host }, transport);
+    assert.deepEqual([result.ready, result.prerequisites], [false, macItems(states, named)], JSON.stringify([host, named]));
+    assert.equal(transport.calls.some(call => call.argv[0] === SYSCTL), host.platform === 'darwin', JSON.stringify(host));
+  }
+  for (const [driver, probe] of [['Evil;$(x)\n', undefined], ['qemu\n', async () => { throw failWith({ code: 'EIO' }); }], ['qemu\n', async () => ({ driver: 42 })]]) {
+    const result = await macPrerequisites({ doctor: async () => doctorReport('DRIVER_UNSUPPORTED'), probe }, macTransport({ 'get local.driver': driver }));
+    assert.deepEqual(result.prerequisites, macItems([T, U, U, F], { combination: 'darwin/arm64 + unknown' }), driver);
+  }
+});
+
+test('the macOS doctor runs against the pkg client for the detected arch; its codes mark only their own item', async () => {
+  const seen = [];
+  const transport = macTransport();
+  const ready = async options => { seen.push(options); return doctorReport('PROVIDER_PREREQUISITES_READY'); };
+  assert.equal((await macPrerequisites({ host: MAC_X64, doctor: ready }, transport)).ready, true);
+  assert.equal((await macPrerequisites({ provider: { executable: '/opt/mp', run: transport.run }, doctor: ready })).ready, true);
+  assert.deepEqual(seen, [{ host: MAC_HOST, executable: MAC_MULTIPASS, run: transport.run }, { host: MAC_HOST, executable: '/opt/mp', run: transport.run }]);
+  for (const [code, states] of [['PROVIDER_NOT_FOUND', [T, F, U, U]], ['VERSION_MISMATCH', [T, F, U, U]], ['VERSION_UNSUPPORTED', [T, F, U, U]],
+    ['PROVIDER_ACCESS_DENIED', [T, U, F, U]], ['PROVIDER_TIMEOUT', [T, U, U, U]], ['HOST_UNSUPPORTED', [T, U, U, U]]]) {
+    const result = await macPrerequisites({ doctor: async () => doctorReport(code) });
+    assert.deepEqual([result.ready, result.providerCode, result.primaryName, result.prerequisites], [false, code, null, macItems(states)], code);
+  }
+  // The real R02 doctor applies the manifest's darwin entry: a Windows build on a Mac is refused.
+  assert.deepEqual((await macPrerequisites({}, macTransport({ 'version --format json': JSON.stringify(version) }))).prerequisites, macItems([T, F, U, U]));
+});
+
+/** R03's fakeVm behind the macOS sysctl and doctor answers, recording every executable. */
+function macVm(h, changes) {
+  const transport = macTransport(changes);
+  const executables = new Set();
+  const run = (executable, args, options) => {
+    executables.add(executable);
+    return (executable === SYSCTL || ['version', 'get'].includes(args[0]) ? transport.run : h.fake.run)(executable, args, options);
+  };
+  return { run, executables };
+}
+const onMac = arch => ({ ...macosPlatform, prerequisites: options => macosPlatform.prerequisites({ ...options, host: { platform: 'darwin', arch } }) });
+
+test('macOS provisioning launches the pinned image of the hardware arch, even under Rosetta; an unknown arch downloads nothing', async t => {
+  for (const [sysctl, processArch, arch] of [['1\n', 'x64', 'arm64'], ['1\n', 'arm64', 'arm64'], ['\n', 'x64', 'x64'], ['', 'arm64'], [failWith({}), 'x64'], ['', 'ia32']]) {
+    const h = provisionHarness(t);
+    const vm = macVm(h, { [ARM64]: sysctl });
+    const result = await provisionWith(h, { platform: onMac(processArch), provider: { run: vm.run }, digest: pinDigest(arch).digest });
+    if (!arch) {
+      assert.deepEqual([result.provisioned, result.prerequisites[0].satisfied], [false, processArch === 'ia32' ? F : U]);
+      assert.deepEqual([h.download.calls.length, existsSync(h.cacheDir), existsSync(h.ledgerDir), h.fake.commands()], [0, false, false, []]);
+      continue;
+    }
+    assert.deepEqual([result.provisioned, result.bootstrapReady, result.executionReady, result.image.source], [true, true, false, { arch, ...PINS[arch] }]);
+    assert.deepEqual(h.download.calls.map(call => call.target), [PINS[arch].url]);
+    assert.deepEqual(h.fake.launches.map(launch => launch.args), [launchArgs(hostUrl(path.join(h.cacheDir, `${PINS[arch].sha256}.img`)))]);
+    assert.deepEqual([...vm.executables].sort(), [MAC_MULTIPASS, SYSCTL]);
+  }
+});
+
+test('provisionGuest prefers the prerequisite arch and refuses any other image arch before any mutation', async t => {
+  for (const arch of ['ia32', 'amd64', '']) {
+    const h = provisionHarness(t);
+    const result = await provisionWith(h, { platform: { ...onWindows(), prerequisites: async options => ({ ...(await onWindows().prerequisites(options)), arch }) } });
+    assert.deepEqual(result, { provisioned: false, bootstrapReady: false, executionReady: false, prerequisites: READY_ITEMS }, arch);
+    assert.deepEqual([h.download.calls.length, existsSync(h.cacheDir), existsSync(h.ledgerDir), h.fake.commands()], [0, false, false, ['version', 'get', 'get']]);
+  }
+});
+
+const SMOKE_SUPERVISOR = { code: 0, stdout: `${createHash('sha256').update('#!/bin/sh\nexit 0\n').digest('hex')}  /opt/moe/bin/moe-supervisor\n` };
+/** R03's fakeVm, also answering `delete --purge <name>`; its guest holds the smoke's own no-op supervisor (R07 checks the hash). */
+function smokeHarness(t, { guest, deleteFails = false, ...fakeOptions } = {}) {
+  const workDir = scratch(t);
+  const fake = fakeVm({ ...fakeOptions, answers: healthy({ supervisorHash: SMOKE_SUPERVISOR, ...guest }) });
+  const [download, deletes] = [fakeFetch(), []];
+  // Not async: R03's launch transport carries child.stdin on the returned promise.
+  const run = (executable, args, options) => {
+    if (args[0] !== 'delete') return fake.run(executable, args, options);
+    deletes.push([...args]);
+    if (deleteFails) return Promise.reject(failWith({ code: 1 }));
+    fake.present.delete(args[2]);
+    return Promise.resolve({ stdout: '', stderr: '' });
+  };
+  const deps = { provider: { run }, fetch: download.fetch, digest: pinDigest().digest, sleep: async () => {}, random: sequence() };
+  return { workDir, fake, download, deletes, smoke: (platform = onWindows()) => nativeSmokeCore({ platform, workDir, deps }) };
+}
+const evidence = changes => ({ kind: 'native-provider-smoke', platform: 'win32', arch: 'x64', result: 'passed', transport: 'injected', supportEstablished: false,
+  bootstrapReady: true, image: { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }, failures: [], cleanup: 'deleted', ...changes });
+const unready = changes => evidence({ result: 'failed', bootstrapReady: false, image: null, ...changes });
+
+test('an injected smoke passes, deletes only its own guest and never establishes support', async t => {
+  const h = smokeHarness(t);
+  const foreign = createLedger(path.join(h.workDir, 'ledger'), { random: () => Buffer.alloc(10, 0xab) });
+  const other = await seed(foreign, 'owned');
+  h.fake.present.set(other.instance, 'Running');
+  const result = await h.smoke();
+  assert.deepEqual([result, h.deletes, JSON.stringify(result).includes(h.workDir)], [evidence(), [['delete', '--purge', GUEST]], false]);
+  assert.deepEqual([(await foreign.read(GUEST)).phase, (await foreign.read(other.instance)).phase, h.fake.present.get(other.instance)], ['deleted', 'owned', 'Running']);
+});
+
+test('a blocked, failed or uncleaned smoke is reported as such, and cleanup runs on every path', async t => {
+  const blocked = smokeHarness(t);
+  assert.deepEqual(await blocked.smoke(onWindows(async () => false)), unready({ result: 'blocked', cleanup: 'none' }));
+  assert.deepEqual([blocked.download.calls.length, blocked.fake.launches.length, readdirSync(blocked.workDir)], [0, 0, []]);
+  const mounted = smokeHarness(t, { guest: { mountinfo: mountinfo([...MOUNTS, '41 22 0:60 / /home/ubuntu rw - 9p host rw']) } });
+  assert.deepEqual([await mounted.smoke(), mounted.deletes], [unready({ failures: ['MOUNTS_PRESENT'] }), [['delete', '--purge', GUEST]]]);
+  const exhausted = smokeHarness(t, { launch: () => ({ error: failWith({ code: 1 }), create: false }) });
+  assert.deepEqual(await exhausted.smoke(), unready({ failures: ['LIFECYCLE_RETRY_EXHAUSTED'] }));
+  const conflict = smokeHarness(t, { primaryName: nameAt(9) });
+  assert.deepEqual(await conflict.smoke(), unready({ failures: ['PRIMARY_NAME_CONFLICT'], cleanup: 'none' }));
+  assert.deepEqual(await smokeHarness(t, { deleteFails: true }).smoke(), evidence({ cleanup: 'failed' }));
+});
+
+test('the native smoke entry takes exactly an absolute workDir: nothing can be injected into it', async () => {
+  const spy = () => assert.fail('an injected dependency ran');
+  const workDir = path.resolve(tmpdir(), 'moe native smoke');
+  for (const options of [undefined, null, {}, [workDir], workDir, { workDir: '' }, { workDir: 'relative/dir' }, { workDir: `${workDir}\n` }, { workDir: 7 },
+    { workDir, provider: { run: spy } }, { workDir, fetch: spy }, { workDir, [Symbol('deps')]: { fetch: spy } }]) {
+    await assert.rejects(runNativeProviderSmoke(options), error => assertSanitized(error, 'NATIVE_SMOKE_INPUT_INVALID'), JSON.stringify(options));
+  }
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...platform, value: 'sunos' });
+  try {
+    await assert.rejects(runNativeProviderSmoke({ workDir }), error => assertSanitized(error, 'NATIVE_SMOKE_UNSUPPORTED_HOST'));
+  } finally { Object.defineProperty(process, 'platform', platform); }
+  assert.equal(existsSync(workDir), false);
+});
+
+test('CLI native-smoke prints the evidence and exits 0 only when native support is established', async () => {
+  assert.equal(platformFor('darwin'), macosPlatform);
+  const workDir = path.resolve(tmpdir(), 'moe native smoke');
+  const cli = async (args, nativeSmoke) => {
+    const writes = [];
+    const other = async () => assert.fail('not a native-smoke dependency');
+    return [await runCli(args, { doctor: other, prerequisites: other, nativeSmoke, write: text => writes.push(text) }), writes.map(text => JSON.parse(text))];
+  };
+  for (const established of [true, false, 'true']) {
+    const [seen, report] = [[], evidence({ transport: 'native', supportEstablished: established })];
+    assert.deepEqual([...await cli(['native-smoke', '--work-dir', workDir], async options => { seen.push(options); return report; }), seen],
+      [established === true ? 0 : 2, [report], [{ workDir }]]);
+  }
+  for (const [code, error] of [['NATIVE_SMOKE_UNSUPPORTED_HOST', failWith({ code: 'NATIVE_SMOKE_UNSUPPORTED_HOST' })], ['NATIVE_SMOKE_UNAVAILABLE', failWith({ code: 'EIO' })]]) {
+    assert.deepEqual(await cli(['native-smoke', '--work-dir', workDir], async () => { throw error; }), [2, [{ code, supportEstablished: false, executionReady: false }]]);
+  }
+  for (const args of [['native-smoke'], ['native-smoke', '--work-dir'], ['native-smoke', '--work-dir', 'relative'], ['native-smoke', '--work-dir', `${workDir}\n`],
+    ['native-smoke', '--work-dir', workDir, 'extra'], ['native-smoke', '--executable', workDir], ['prerequisites', '--work-dir', workDir]]) {
+    const invalid = { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE };
+    assert.deepEqual(await cli(args, async () => assert.fail('no smoke on invalid input')), [2, [invalid]], JSON.stringify(args));
+  }
+});
+
+const NATIVE_SMOKE = process.platform === 'darwin' && process.env.MOE_NATIVE_PROVIDER_SMOKE === '1' && path.isAbsolute(process.env.MOE_NATIVE_SMOKE_WORK_DIR ?? '');
+test('opt-in native provider smoke on real macOS hardware establishes support', {
+  skip: !NATIVE_SMOKE && 'native provider smoke not run: macOS support is NOT established by this run', timeout: 3_600_000,
+}, async () => {
+  const result = await runNativeProviderSmoke({ workDir: process.env.MOE_NATIVE_SMOKE_WORK_DIR });
+  assert.deepEqual([result.result, result.transport, result.supportEstablished, result.cleanup], ['passed', 'native', true, 'deleted'], JSON.stringify(result));
+});
+
+test('real sysctl and Multipass processes: macOS prerequisites read genuine output and name a virtualbox driver', { skip: process.platform === 'win32' }, async t => {
+  const dir = scratch(t);
+  const [answersPath, sysctl, multipass] = ['answers.json', 'fake sysctl', 'fake multipass'].map(name => path.join(dir, name));
+  const script = `#!${process.execPath}
+const answer = JSON.parse(process.getBuiltinModule('node:fs').readFileSync(${JSON.stringify(answersPath)}, 'utf8'))[process.argv.slice(2).join(' ')];
+if (typeof answer === 'string') process.stdout.write(answer); else process.exitCode = 64;
+`;
+  for (const file of [sysctl, multipass]) writeFileSync(file, script, { mode: 0o755 });
+  const probe = answers => {
+    writeFileSync(answersPath, JSON.stringify({ ...MAC_ANSWERS, ...answers }));
+    return macosPlatform.prerequisites({ provider: { executable: multipass }, sysctlExecutable: sysctl, host: MAC_X64 });
+  };
+  assert.deepEqual(await probe(), macReady());
+  const virtualbox = await probe({ 'get local.driver': 'virtualbox\n' });
+  assert.deepEqual([virtualbox.ready, virtualbox.prerequisites], [false, macItems([T, U, U, F], { combination: 'darwin/arm64 + virtualbox' })]);
 });
