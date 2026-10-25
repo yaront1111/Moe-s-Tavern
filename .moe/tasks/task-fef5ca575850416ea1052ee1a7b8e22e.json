@@ -17,44 +17,73 @@
     {
       "stepId": "step-1",
       "description": "RED tests first, in the NEW file packages/moe-daemon/src/tools/getContextPacket.test.ts.\n- Use ToolTestHarness with vi.stubEnv('MOE_WORKER_ID','') and vi.stubEnv('MOE_TASK_ID',''), as getContextReceipt.test.ts does.\n- Seed: an epic with epicRails, and a WORKING task with description, DoD, taskRails, a 2-step plan and a valid executionContract. Copy the contract shape from an existing test (`grep -rn \"executionContract:\" src --include=*.test.ts`).\n- Callers: worker-w, qa-q, architect-a, governor-g, and none.\n\nCases (whole-object assertions on the manifest wherever it is deterministic):\n1. DoD1, required fields survive role trimming.\n   - For every caller, in both the default and full views, every MANDATORY_SECTIONS path the task has is present with its stored value (toStrictEqual against the stored task/epic/project).\n   - packetManifest.sections lists each of them as {path, mandatory:true, status:'served'}.\n   - QA and worker trims appear as {path, mandatory:false, status:'omitted', reason:'role-trim'}.\n   - No ROLE_OMITTED entry (exported from getContext.ts) is a mandatory path.\n2. Missing mandatory facts are explicit. A PLANNING task with an empty DoD, no plan and no executionContract lists those paths as status 'missing' (reason 'empty' or 'not-set'), with complete:false. Nothing is invented.\n3. Explicit omissions:\n   - comments beyond commentsLimit give {path:'task.comments', mandatory:false, status:'truncated', reason:'compacted', count};\n   - more than 20 commits give task.commits 'capped' with the overflow count;\n   - a chat message over the chat character cap gives chat.recentMessages 'truncated';\n   - complete is false;\n   - limitations is sorted and includes 'no-repository-source'.\n4. DoD2, budget.\n   - A default read gives budget {limitChars: DEFAULT_PACKET_BUDGET_CHARS, mandatoryChars > 0, status:'within'}.\n   - packetBudgetChars below mandatoryChars gives status 'overflow' and requirement 'expand', while task.description, definitionOfDone, implementationPlan and executionContract stay byte-equal to the stored values (never truncated).\n   - A plan of 30 steps x 9000 chars gives requirement 'restructure', even at packetBudgetChars = MAX, and is still served whole.\n   - packetBudgetChars of 0, -1, 1.5, '100', null or MAX+1 is refused INVALID_INPUT before any write (contextFetchedBy and attempt bytes unchanged), in both the default and status views.\n5. DoD3, packet identity never grants approval.\n   - The manifest's key set is exactly {version, provenance, sections, complete, limitations, budget}: no approval, authorization or readiness field.\n   - A recorded read (the worker owning a running attempt, plus sessionId) leaves Task.approvedPlanRevision unchanged.\n   - Its servedContext.packetId equals the sha256 of JSON.stringify(response minus servedContext), INCLUDING packetManifest.\n   - On a strict row (planRevision 4, approvedPlanRevision 3; follow the F07 startStepAuthorization.test.ts pattern), a recorded read followed by start_step with the full identity is still refused PLAN_REVISION_NOT_APPROVED.\n6. view:'status' is unchanged: it has no packetManifest key.\n\nRun the file RED in the step-4 snapshot. Budget: about 220 test lines or fewer.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/tools/getContextPacket.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContextPacket.test.ts"
+      ],
+      "note": "RED test file written (~185 lines), 18 cases: DoD1 across 5 callers x 2 views, missing facts, omissions with counts, a builder unit for odd shapes/chat/conditional requiredCheckSnapshot, expand/restructure, 7 refusal values x 3 views before any write, DoD3 recorded read + strict start_step PLAN_REVISION_NOT_APPROVED, status/no-task without a manifest. RED in snapshot /tmp/moe-c01-gate.BhBju5: the file fails at import of ../context/contextPacket.js, because the module does not exist yet.\nDeviation: DEFAULT_CHAT_CONTEXT_LIMIT is 0 (and the per-message cap is 300, not 1000), so get_context never serves chat messages. Chat truncation is therefore tested at the builder level instead of through the tool. The shared tree has other sessions' dirty paths; I left them untouched.",
+      "startedAt": "2026-10-25T23:18:36.156Z",
+      "completedAt": "2026-10-25T23:22:01.578Z"
     },
     {
       "stepId": "step-2",
       "description": "NEW packages/moe-daemon/src/context/contextPacket.ts. It is pure: no state, no IO, no writes.\n\nExports:\n- MANDATORY_SECTIONS = ['project.globalRails', 'allRails', 'task.description', 'task.definitionOfDone', 'task.taskRails', 'task.implementationPlan', 'task.executionContract'].\n  - Plus a conditional 'task.requiredCheckSnapshot': it is listed as served only when present and is never reported missing.\n- DEFAULT_PACKET_BUDGET_CHARS 100000, MIN_PACKET_BUDGET_CHARS 1000, MAX_PACKET_BUDGET_CHARS 250000.\n- readPacketBudgetChars(value): undefined returns DEFAULT. Anything else must be a safe integer in [MIN, MAX], else invalidInput('packetBudgetChars', ...). Strict, never clamped. Do NOT use normalizeIntegerOption, which clamps.\n- Types:\n  - PacketSection {path; mandatory: boolean; status; reason?: string; count?: number}. status is 'served' | 'truncated' | 'omitted' | 'missing': reuse C02's SourceItemStatus from context/repositorySource.ts (Extract<...>) rather than defining a parallel vocabulary.\n  - PacketManifest {version: 1; provenance: {task: {id; planRevision: number | null}; epic: {id} | null; project: {id}; candidate?: {id}}; sections; complete: boolean; limitations: string[]; budget: {limitChars; mandatoryChars; status: 'within' | 'overflow'; requirement?: 'expand' | 'restructure'}}.\n- buildPacketManifest(body, input). body is the assembled get_context response, without the manifest or servedContext. input is {planRevision: number | null, roleOmitted: string[], siblingsBeyondCap: number, commitsTotal: number, rejectionsTotal: number, budgetChars: number}.\n\nWhat buildPacketManifest does:\n- Mandatory sections. Read each path with a tiny own-property path reader (hasOwnProperty per segment, never an inherited key).\n  - A section is served when present and non-empty: a non-blank string, a non-empty array (taskRails is served whenever it is an array), or an object.\n  - Otherwise it is missing, with reason 'not-set' (absent) or 'empty'.\n  - mandatoryChars is the sum of JSON.stringify(value).length over the served mandatory sections.\n- Optional sections are reported only when not served in full:\n  - each roleOmitted path: omitted, 'role-trim';\n  - task.comments: truncated, 'compacted', count = commentSummary.omitted + commentSummary.truncated, when above 0;\n  - chat.recentMessages: truncated, 'compacted', count = the number of contentTruncated messages;\n  - task.commits: truncated, 'capped', count = commitsTotal minus the served length;\n  - task.epicSiblings: truncated, 'capped', count = siblingsBeyondCap, only when not role-trimmed;\n  - task.rejectionHistory: truncated, 'capped', count = total minus served.\n- Sort sections by path. complete is true only when every section is served.\n- limitations, sorted and unique: always 'no-repository-source' (C10 later serves C02's provider), plus 'plan-revision-unreadable' when planRevision is null.\n- Budget: 'within' when mandatoryChars <= budgetChars. Otherwise 'overflow', with requirement 'expand' when mandatoryChars <= MAX, else 'restructure'.\n  - Error handling here is reporting, never truncation: the manifest only measures and reports, and nothing served is removed or shortened.\n- Provenance: the ids come from body.project, epic and task, planRevision from input, and the candidate id when body.currentCandidate exists.\n- No approval, authorization or readiness field, ever (DoD3).\n\nKeep the module at about 110 lines or fewer.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/contextPacket.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/contextPacket.ts"
+      ],
+      "note": "New module context/contextPacket.ts (~140 lines with doc comments). It is pure. It exports:\n- MANDATORY_SECTIONS (7 paths), plus the internal conditional task.requiredCheckSnapshot;\n- the budget constants DEFAULT 100000, MIN 1000 and MAX 250000;\n- readPacketBudgetChars: strict, refuses invalidInput('packetBudgetChars') and never clamps;\n- the PacketSection, PacketManifest and PacketInput types (status = Extract<SourceItemStatus> from C02);\n- buildPacketManifest.\nInternally it has an own-property path reader, servable() and omissions().\nProvenance ids are string|null: an odd shape gives null, never an invented id.\nSnapshot run (removed afterwards): the builder unit test is GREEN, the status/no-task test passes (a regression guard), and the 17 get_context cases are RED for the right reasons: ROLE_OMITTED is not exported, packetManifest is undefined, and packetBudgetChars is accepted.",
+      "startedAt": "2026-10-25T23:22:02.508Z",
+      "completedAt": "2026-10-25T23:23:21.411Z"
     },
     {
       "stepId": "step-3",
       "description": "Wire the manifest into packages/moe-daemon/src/tools/getContext.ts, turning step 1 GREEN.\n1. inputSchema: add an optional packetBudgetChars (integer, minimum MIN_PACKET_BUDGET_CHARS, maximum MAX_PACKET_BUDGET_CHARS) with a description.\n2. Extend the tool description by one sentence:\n   - default and full task reads include packetManifest: mandatory sections that are never role-trimmed or truncated, explicit omissions, limitations, provenance, and a budget that answers an overflow with an expand or restructure requirement;\n   - it never grants approval.\n3. Validate with readPacketBudgetChars right after readContextSessionId. That is BEFORE the status early return and before any write, so a bad value is refused in every view without stamping contextFetchedBy.\n4. `export` ROLE_OMITTED.\n5. Compute siblingsBeyondCap from the same lower-order filter that builds baseSiblings: max(0, length - MAX_EPIC_SIBLINGS). The served sibling list stays unchanged.\n6. Name the assembled object `body`.\n   - When a task exists: `const packet = { ...body, packetManifest: buildPacketManifest(body, { planRevision, roleOmitted: omitted, siblingsBeyondCap, commitsTotal: commits.length, rejectionsTotal: task.rejectionHistory?.length ?? 0, budgetChars }) }`. planRevision is read through the existing `decoded(unreadable, 'planRevision', () => decodeStoredPlanRevision(task))` guard, so an unreadable value is served as null and never thrown.\n   - Pass `packet` to servedContextIdentity unchanged, so the manifest falls under the F06 digest.\n   - The no-task path still returns body. view:'status' is untouched.\n   - Every existing key, value and order stays as it is: legacy readers see one additive key.\nDo not touch startStep, the attempt store or the wrappers.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "note": "getContext.ts wired, +29/-10:\n- ROLE_OMITTED is exported.\n- New packetBudgetChars schema input (integer, min/max from the constants) and a one-sentence description extension.\n- readPacketBudgetChars runs right after readContextSessionId, before the status return and any write.\n- The lower-order sibling filter is hoisted into lowerOrder to compute siblingsBeyondCap. The served list is unchanged.\n- packet → body. With a task: packet = {...body, packetManifest}. planRevision comes through the decoded() guard and the packet is passed to servedContextIdentity, so it is digested. The no-task path returns body.\nSnapshot /tmp/moe-c01-gate.Bu6bw5: getContextPacket.test.ts 19/19 GREEN, tsc --noEmit exit 0.",
+      "startedAt": "2026-10-25T23:23:22.244Z",
+      "completedAt": "2026-10-25T23:23:55.463Z"
     },
     {
       "stepId": "step-4",
       "description": "Gate, run once and fresh: `cd packages/moe-daemon && npm test` (the full suite, because get_context is a shared protocol surface), plus `npx tsc --noEmit`. Supply the npm test command, exit 0 and its output tail to moe.complete_task.\n\nRun it in a Linux snapshot, never in the shared checkout: its node_modules is a Windows install and fails on the rolldown native binding.\n\nRecipe (Serena memory gotcha-linux-vitest-reuse-native-node-modules):\n1. SNAP=$(mktemp -d /tmp/moe-c01-gate.XXXXXX).\n2. `git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json | tar -x -C \"$SNAP\"`.\n3. Symlink the DIRECTORY /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules into place. If it is gone, run `npm ci` in a separate scratch copy, after checking that the lockfile matches HEAD.\n4. Copy the three task files over and cmp them against the worktree.\n5. Run with every MOE_* variable unset: `env -i HOME=\"$HOME\" PATH=\"<linux node bin>:/usr/bin:/bin\" TMPDIR=/tmp bash -c 'cd packages/moe-daemon && npm test'`.\n\nExpect 0 failures. Fix any existing get_context test that breaks with systematic-debugging, never by loosening a legacy expectation. The manifest is additive, so a failure means a real regression. That is the error handling for this gate. Record file/test counts and the snapshot path in the step note. rm -rf the snapshot afterwards, checking the prefix first.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate run fresh in snapshot /tmp/moe-c01-gate.w1nteT:\n- Setup: git archive of HEAD b9ebc4a (whole repo), the 3 owned files overlaid and cmp-equal, and the native node_modules symlinked (lockfile equal to HEAD modulo CR). Run under env -i with Linux node v24.21.0 and no MOE_*.\n- `cd packages/moe-daemon && npm test`: exit 0, Test Files 166 passed (166), Tests 4198 passed | 14 skipped (4212), 21.78s.\n- `npx tsc --noEmit`: exit 0.\n- No legacy get_context test broke.\n- Log: /tmp/moe-c01-npmtest.log.\nI'm keeping the snapshot for step-5 mutation probes and will remove it afterwards.",
+      "startedAt": "2026-10-25T23:23:56.288Z",
+      "completedAt": "2026-10-25T23:24:33.573Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review: load adversarial-self-review and review `git diff -- packages/moe-daemon`. Check each of these:\n- Can a mandatory section ever be shortened, dropped or role-trimmed? Is mandatoryChars measured on what is actually served?\n- Does the path reader resist prototype-chain names?\n- Are omissions reported only when real, with exact counts?\n- Is the manifest deterministic for unchanged state (sorted sections and limitations)? Is it inside the F06 digest?\n- Is packetBudgetChars refused strictly, never clamped, before any write?\n- Is view:'status' byte-identical?\n- Is there no approval, readiness or authorization field, and does nothing read the manifest as approval?\n- What is the token cost? The manifest carries only paths, codes and counts, never duplicated content.\n- Error handling: no throw from the builder on odd shapes (it treats them as missing). The only refusal is the input validation.\n- Scope:\n  - only the three planned files changed;\n  - no .moe edits and no git writes;\n  - no forbidden-pattern tokens;\n  - net LOC 400 or less including tests (`git diff --numstat`).\n\nFix findings with a focused test. If anything changed, re-run the step-4 gate fresh and supply that output. The completion summary states the manifest contract for C04-C11 (keys, statuses, reasons, limitations, budget constants) and that docs are C11's.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getContextPacket.test.ts",
+        "packages/moe-daemon/src/context/contextPacket.ts",
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "note": "Adversarial review of `git diff -- packages/moe-daemon`:\n- Scope: only the 3 planned files. Net 365 LOC (+375/-10) including tests. No .moe edits, no git writes, no forbidden tokens.\n- Mandatory sections are measured on the same body objects that are served, and the builder never mutates them.\n- The own-property reader ignores inherited names.\n- Sections are sorted and limitations come in a fixed order. The manifest is inside the F06 digest (sha test).\n- packetBudgetChars is validated before getTask, the status return and any write.\n- The status view and the no-task path are unchanged.\n- The manifest key set is fixed with no approval field, and nothing reads it.\nFindings fixed with tests:\n- Added a tool-level unreadable planRevision test (planRevision -1 gives provenance null plus 'plan-revision-unreadable', and get_context does not throw).\n- Added the budget boundary at the builder (equal is within, one under is expand).\nMutation probes, 17/17 killed:\n- own-inherited, taskRails-empty-served, drop-contract-mandatory, blank-string-served;\n- no-budget-validation, clamp-budget, restructure-never, within-strict-lt;\n- siblings-after-cap, siblings-ignore-trim, comments-truncated-ignored, complete-ignores-omissions;\n- no-unreadable-limitation, planRevision-unguarded, chat-count-all;\n- manifest-outside-digest, digest-body-only.\nBaseline 20/20 before and after.\nTheoretical only: a hand-edited contract nested deep enough to overflow JSON.stringify would throw in the builder. The MCP transport's own stringify of the response fails the same way, so this is not a new failure mode.\nGate re-run fresh in snapshot /tmp/moe-c01-gate.1xkrxH (removed), HEAD f178123 plus the 3 cmp-equal owned files (no peer commit touched them):\n- npm test exit 0, 166 files, 4199 passed / 14 skipped;\n- tsc exit 0.",
+      "startedAt": "2026-10-25T23:24:34.488Z",
+      "completedAt": "2026-10-25T23:27:06.255Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,7 +109,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:25.001Z",
-  "updatedAt": "2026-10-25T22:58:42.461Z",
+  "updatedAt": "2026-10-25T23:27:38.416Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7",
     "task-35584de27bb24c38a3cf508aeba5550c",
@@ -89,12 +118,14 @@
   "metrics": {
     "firstClaimAt": "2026-10-24T17:52:01.175Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-bb003851",
     "architect-6e3edf85",
-    "architect-4c57a52b"
+    "architect-4c57a52b",
+    "worker-7d158765"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -120,8 +151,9 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-b03c0c7744e84955a7a069255a124ef7.json",
-    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+    "packages/moe-daemon/src/tools/getContextPacket.test.ts",
+    "packages/moe-daemon/src/context/contextPacket.ts",
+    "packages/moe-daemon/src/tools/getContext.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -134,7 +166,13 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-25T22:58:42.376Z",
   "planningNotes": {
@@ -150,5 +188,15 @@
       "packages/moe-daemon/src/util/chatPayload.ts"
     ]
   },
-  "planApprovedAt": "2026-10-25T22:58:42.461Z"
+  "planApprovedAt": "2026-10-25T22:58:42.461Z",
+  "workStartedAt": "2026-10-25T23:18:36.156Z",
+  "reviewStartedAt": "2026-10-25T23:27:38.414Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": " ✓ src/util/chatPayload.test.ts (4 tests) 3ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  166 passed (166)\n      Tests  4199 passed | 14 skipped (4213)\n   Start at  01:26:24\n   Duration  23.07s (tests 89%, import 6%, transform 5%)\n\n(Linux snapshot: git archive HEAD f178123 + the 3 owned files cmp-equal, native node_modules, env -i without MOE_*; npx tsc --noEmit exit 0)",
+    "reportedAt": "2026-10-25T23:27:38.414Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C01 delivered (plan rev 1, 5/5 steps). 3 files, net +365 LOC including tests (+375/-10).\n\nContract for C04-C11:\n- Default and full task reads carry a top-level `packetManifest`, appended before servedContextIdentity so it is inside the F06 packetId digest. view:\"status\" and the no-task path are unchanged.\n- Keys: exactly {version:1, provenance, sections, complete, limitations, budget}. There is no approval, authorization or readiness field.\n- provenance: {task:{id, planRevision|null}, epic:{id}|null, project:{id}, candidate?:{id}}. The ids are string|null.\n- sections[]: {path, mandatory, status served|truncated|omitted|missing (C02 SourceItemStatus subset), reason?, count?}, sorted by path.\n  - Mandatory: project.globalRails, allRails, task.description, task.definitionOfDone, task.taskRails, task.implementationPlan, task.executionContract. task.requiredCheckSnapshot counts as mandatory when present.\n  - A mandatory section that is absent or null is missing/'not-set'; a blank string or empty array is missing/'empty'.\n  - Optional sections are listed only when not served in full: role-trim; comments and chat 'compacted'; commits, epicSiblings and rejectionHistory 'capped', each with its exact count.\n- complete: every section is served.\n- limitations: 'no-repository-source' (until C10), plus 'plan-revision-unreadable'.\n- budget: {limitChars, mandatoryChars, status within|overflow, requirement expand|restructure}.\n  - New input packetBudgetChars, default 100000, safe integer 1000..250000. Anything else is refused INVALID_INPUT before any write in every view; it is never clamped.\n  - Nothing is ever truncated.\n\nDoD evidence:\n1. Role trimming: all 5 caller kinds in both views serve every mandatory path toStrictEqual to the stored value, and no ROLE_OMITTED path is mandatory.\n2. Budget: an overflow at 1000 gives expand, and 30x9000 at MAX gives restructure. The description and plan are served byte-equal.\n3. Approval: on a strict row (rev 4, approved 3), a recorded read "
 }
