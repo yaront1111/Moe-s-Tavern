@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:33:35.214Z",
-  "updatedAt": "2026-10-26T08:36:40.065Z",
+  "updatedAt": "2026-10-26T08:45:34.743Z",
   "dependsOn": [
     "task-502c00a50db340c9941cae20eeef1021"
   ],
@@ -115,11 +115,14 @@
     "firstClaimAt": "2026-10-26T06:00:40.774Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T08:45:34.742Z",
+    "wallClockMs": 9893968
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -157,7 +160,50 @@
   },
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/tests/local-runner-bridge.test.mjs"
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+    ".moe/tasks/task-23a5563cea384d56abb8da1551435455.json",
+    ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json",
+    ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json"
   ],
-  "completionSummary": "CQ-R08c delivered in scripts/local-runner/guest-supervisor.py (+200/-13) and scripts/tests/local-runner-bridge.test.mjs (+203/-3): 419 changed lines; rail #12 allows 450. I applied the architect's validated prototype, reviewed every line and added tests.\n\nSupervisor:\n- One selector loop holds the child pipes, the host stream (in_fd; EOF→74) and the agent socket.\n- Bridge.open checks the directory (an lstat'd dir owned by the euid with no group/other write), replaces only a stale socket, binds AF_UNIX, chmods 0666 and records the inode.\n- accept checks the SO_PEERCRED uid against moe-agent and the 8-connection cap before any read.\n- Agent requests must have the exact R08a shape and are relayed under supervisor ids 1,2,…. Replies are rebuilt under the agent's own id and go only to the requester.\n- A host frame with an unknown, answered, malformed or unencodable id gives 76 after killpg+reap, with no observation.\n- An agent fault drops only that connection. 8 in flight per connection and 64 pending in total; anything past those gets BRIDGE_BUSY and is not relayed.\n- UTF-8 encode_frame with backslashreplace and allow_nan=False; R08b's ASCII frames are unchanged.\n- close() unlinks the socket only while the inode is still ours.\n\nDoD:\n1. I1 (real SO_PEERCRED on Linux): the refused peer gets 0 bytes, the bridge lives on, and nothing is relayed.\n2. I2: both connections use id 7, the host sees ids 1/2, and each reply is byte-exact. I3: 15 bad host inputs each give 76, child dead.\n3. I4: 22 bad agent frames each close only their own connection, and the kept connection still round-trips. I5 covers both bounds, connections past the cap, and dropped orphan answers.\n4. Replies are rebuilt and never raw. I6 pins socket.* to AF_UNIX/SOCK_STREAM/SOL_SOCKET/SO_PEERCRED/socket.\n5. Fresh run above: 30/30.\n\nWorker additions:\n- I6 spawn-failure-after-bind case: nothing is left at the path.\n- The socket-surface probe; a create_connection mutant fails it.\n- I5 waits for the freed answer bef"
+  "completionSummary": "CQ-R08c delivered in scripts/local-runner/guest-supervisor.py (+200/-13) and scripts/tests/local-runner-bridge.test.mjs (+203/-3): 419 changed lines; rail #12 allows 450. I applied the architect's validated prototype, reviewed every line and added tests.\n\nSupervisor:\n- One selector loop holds the child pipes, the host stream (in_fd; EOF→74) and the agent socket.\n- Bridge.open checks the directory (an lstat'd dir owned by the euid with no group/other write), replaces only a stale socket, binds AF_UNIX, chmods 0666 and records the inode.\n- accept checks the SO_PEERCRED uid against moe-agent and the 8-connection cap before any read.\n- Agent requests must have the exact R08a shape and are relayed under supervisor ids 1,2,…. Replies are rebuilt under the agent's own id and go only to the requester.\n- A host frame with an unknown, answered, malformed or unencodable id gives 76 after killpg+reap, with no observation.\n- An agent fault drops only that connection. 8 in flight per connection and 64 pending in total; anything past those gets BRIDGE_BUSY and is not relayed.\n- UTF-8 encode_frame with backslashreplace and allow_nan=False; R08b's ASCII frames are unchanged.\n- close() unlinks the socket only while the inode is still ours.\n\nDoD:\n1. I1 (real SO_PEERCRED on Linux): the refused peer gets 0 bytes, the bridge lives on, and nothing is relayed.\n2. I2: both connections use id 7, the host sees ids 1/2, and each reply is byte-exact. I3: 15 bad host inputs each give 76, child dead.\n3. I4: 22 bad agent frames each close only their own connection, and the kept connection still round-trips. I5 covers both bounds, connections past the cap, and dropped orphan answers.\n4. Replies are rebuilt and never raw. I6 pins socket.* to AF_UNIX/SOCK_STREAM/SOL_SOCKET/SO_PEERCRED/socket.\n5. Fresh run above: 30/30.\n\nWorker additions:\n- I6 spawn-failure-after-bind case: nothing is left at the path.\n- The socket-surface probe; a create_connection mutant fails it.\n- I5 waits for the freed answer bef",
+  "commits": [
+    {
+      "sha": "d25886169e8d2c7a6c3b6cb153d753a3c8c26d4b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T08:22:31Z",
+      "paths": [
+        ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+        ".moe/tasks/task-23a5563cea384d56abb8da1551435455.json",
+        ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json",
+        ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T08:37:17.889Z",
+      "treeId": "2be5527055a24c362db3ad0e0338a827bebce3c3",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T08:22:31Z",
+    "at": "2026-10-26T08:37:17.889Z"
+  },
+  "completedAt": "2026-10-26T08:45:34.742Z",
+  "reviewCompletedAt": "2026-10-26T08:45:34.742Z",
+  "reviewSummary": "Reviewed completion commit d258861 (on moe/work-2026-10-24; later HEAD e7f31ce does not touch scripts/). Size: py +200/-13 and test +203/-3, 419 lines, within rail #12 (450); only the 2 plan files plus wrapper board JSON. S1-S8 not weakened: the only change is RELAY passing in_fd.\nRe-ran in a git-archive snapshot of d258861, env -i HOME+PATH, Linux node 24.21.0, python3 3.12.3, uid 1000:\n- DoD cmd `node --test scripts/tests/local-runner-bridge.test.mjs`: exit 0, 30/30, 0 skipped.\n- CI local-runner line on the full snapshot: exit 0, 243 pass, 1 old macOS skip.\n- Windows node.exe on a Windows-temp copy: 15 pass, 15 skipped (win32 reason).\nDoD:\n1. accept checks the cap and SO_PEERCRED uid before setblocking, registration or recv (I1).\n2. Supervisor ids from 1; pending maps id to the conn object, never an fd; replies are rebuilt under the agent id (I2). An unknown or answered id gives 76 after killpg+reap, with no observation (I3).\n3. Agent faults drop only that conn (I4). BRIDGE_BUSY at 8 per conn and 64 total, unrelayed (I5).\n4. Only rebuilt frames cross; the AST probe pins socket.* to AF_UNIX/SOCK_STREAM/SOL_SOCKET/SO_PEERCRED.\n5. Fresh run above.\nMy own mutation probes, all killed (14/14): uid check removed; ucred pid read instead of uid; unconditional unlink; no dir check; dir mode ignored; cap and total bound off by one; ensure_ascii; stale socket kept; error extra keys; CODE unchecked; drop not marking closed; allow_nan; no chmod. No __pycache__, temp dirs or child processes left (pid 1372168 is the architect's older harness).\nNotes, not blocking:\n- macOS was not run here; it is covered only by CI.\n- I5's orphan-answer step relies on the stdin answers being handled before d's request; low flake risk.\n- An agent that half-closes loses its owed answers, so the R10 shim must not half-close.",
+  "requiredCheckAtDone": null
 }
