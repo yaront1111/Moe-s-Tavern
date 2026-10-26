@@ -10,9 +10,62 @@
     "Fresh `cd packages/moe-daemon && npm test` and the proxy's `npm test` exit 0, with output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read original DoD, prerequisite handoffs/landed code, subtree guides and ownership. Confirm MOE_WORKER_TYPE -> workerType contract before edits (dependsOn gates execution). Trace four CLI branches through preflight RPC, per-seat Codex override and Grok templates. Preserve role/model/runner/execution identity behavior. Treat this as the final integration gate, not a partial launcher-only delivery.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Use test-driven-development in scripts/tests/prompt-cache-launcher.test.mjs. Execute real CLI detection/export blocks for claude/codex/gemini/grok, stale inherited MOE_WORKER_TYPE, and path/extension variants already supported. Assert uppercase type reaches child env before registration RPC. Extend real Codex override tests: stale config type is removed, exactly one current type is present, existing session/attempt/runner keys unchanged. Clear ambient MOE_WORKER_TYPE from test base env. Require literal ${MOE_WORKER_TYPE:-} in both Grok writers, never shared baked-in seat type. Reuse strict block-boundary checks and cross-platform helpers; no live CLI/daemon. Add full ps1 language-parser syntax checking on available PowerShell engines (5.1/7 on Windows); report missing engines explicitly, never as a native pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update both launchers in parity. Immediately after existing CLI_TYPE/$cliType detection unconditionally export uppercase MOE_WORKER_TYPE, replacing inherited env and retaining unknown-command -> claude behavior. Use Bash-3.2-safe case mapping and invariant PowerShell mapping. Ensure preflight proxy and Claude/Gemini children inherit it. Add type to codex_moe_server_override/Get-CodexMoeServerOverride per-seat keys, removing stale persisted table values before adding current env while retaining existing fallback/identity behavior. Add Grok's literal per-process template in both writers. Preserve unrelated config/idempotence, launch routing and quoting; no new project setting.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add packages/moe-proxy/src/workerType.integration.test.ts. Spawn real proxy against an ephemeral WS server dispatching through real daemon McpAdapter.handle and test-owned ToolTestHarness/StateManager, not mocked registration. For each uppercase type use explicit workerId calls omitting workerType: join test team, claim eligible test task, assert persisted type and list_workers/chat_who projections. Relaunch same seat with a different type and verify join and claim/alreadyAssigned refresh without task/membership loss. Include absent/unknown env -> CLAUDE and underscore alias. Clear inherited session/attempt/runner/host env. Explicit error handling: bound spawn/RPC waits, fail on malformed/error responses, and always terminate children, close sockets/server and delete test-only files on success or failure. No live .moe, global env leakage, or prerequisite production/test edits.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-proxy/src/workerType.integration.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Update docs/CONFIGURATION.md with launcher-owned MOE_WORKER_TYPE: four values, detected CLI rather than role/model, default CLAUDE for absent/unknown registration metadata, refresh on next claim/join, Codex per-seat override and Grok interpolation. Cross-check prerequisite docs/MCP_SERVER.md and proxy README agree without duplicating edits. State clearly that reported type is not proof of successful TOOL witness or a new authorization mechanism.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification gate: from candidate repo root run exactly: bash -n scripts/moe-agent.sh && node --test scripts/tests/prompt-cache-launcher.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test) && (cd packages/moe-proxy && npm test). Require exit 0 and capture command, exitCode, outputTail, suite summaries and tested root as complete_task evidence. This full daemon/proxy plus launcher syntax/runtime/parity gate covers all original DoD and the wire change. The same command on Windows/Git Bash exercises native PowerShell5.1/7; Linux/macOS must report unavailable engines honestly. Use an isolated current-byte copy with root files/dependencies if proxy's shared dist is live. Do not smear full regression across implementation steps.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Final adversarial self-review (adversarial-self-review skill) of this and both prerequisite diffs as one fix: concurrent different-CLI seats sharing config, inherited/stale type after relaunch/hot reload, null/blank/unknown values, explicit workerId/type, no-work/alreadyAssigned, aliases, Windows path/argv quoting, macOS Bash and child cleanup. Check type-only mutations serialize; every chat_who source emits persisted type without presence drift; no API/state break, peer changes or generated artifacts; every DoD has test evidence and reported paths can land. If review changes bytes, repeat the same final gate; complete_task only with fresh zero-exit evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,9 +81,56 @@
       "author": "governor-187cc44e",
       "content": "Planner/worker note (governor): scripts/moe-agent.sh and scripts/moe-agent.ps1 are contested by task-07474ee4 (stale September assertions) until it is ARCHIVED or DONE. Until then, a landing of either wrapper needs this session's Claude Edit/Write TOOL witness (scripts/moe-agent.sh:3567). A Codex/gemini/grok seat's edits to them would be silently dropped, as happened to 5f3960df's postflight.sh. Plan accordingly: a real Claude seat for the wrapper steps, or dependsOn 07474ee4 while the human decides on archiving it.",
       "timestamp": "2026-10-25T10:15:44.361Z"
+    },
+    {
+      "id": "comment-0aa19dcb11bc4347a3ae4fc40dfbc0a1",
+      "author": "architect-1520cc31",
+      "content": "Size triage: the full fix needs >10 paths including tests/docs and chat_who (which currently has no type field). Split two independently testable prerequisites into BACKLOG: task-0b40957cd116453aa76965059743fefb (daemon registration + projections + MCP contract) and task-eb85340bf5ee4bde84ca8658a0ca0cd2 (proxy forwarding + tests/docs). This original task retains every original DoD and becomes the final launcher/integration-and-hardening gate; dependsOn now gates WORKING until both prerequisites finish. Their wire contract is explicitly fixed in both descriptions: MOE_WORKER_TYPE -> optional workerType on claim_next_task/join_team, exact WorkerType membership with CLAUDE fallback. The prior contested-wrapper blocker task-07474ee438f34021a23809f9c764d15c is now ARCHIVED (checked daemon status), so do not impose a stale Claude-only-seat requirement. @governor-96f92f36 Please surface the two prerequisite BACKLOG rows for human promotion; no parent acceptance item has been dropped.",
+      "timestamp": "2026-10-26T15:29:40.411Z"
+    },
+    {
+      "id": "comment-cd7e8cc04834404c9be85782bdd15ba0",
+      "author": "architect-1520cc31",
+      "content": "Exploration of the next launcher task found scripts/tests/postflight.sh:3716 also asserts a Codex override tail ending MOE_WORKER_ID=\"worker-scope-z\"}}. Keep the new type entry before MOE_WORKER_ID when runner keys are absent so the existing tail remains valid, rather than widening this task to edit postflight. Its runtime contract should not require worker-type insertion after workerId. I will serialize this task's wrapper edits behind the currently planned live-assignee guard to avoid collisions.",
+      "timestamp": "2026-10-26T15:36:53.811Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:15:36.235Z",
-  "updatedAt": "2026-10-25T10:15:44.361Z"
+  "updatedAt": "2026-10-26T15:38:19.213Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T15:22:30.034Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31"
+  ],
+  "dependsOn": [
+    "task-0b40957cd116453aa76965059743fefb",
+    "task-eb85340bf5ee4bde84ca8658a0ca0cd2",
+    "task-6aa460bb33184e1b84fc9c9e5c0a4560"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T15:32:56.241Z",
+  "planningNotes": {
+    "approachesConsidered": "Split the >10-path end-to-end fix into two independently testable BACKLOG prerequisites: task-0b40957cd116453aa76965059743fefb (daemon registration/projections/MCP docs), task-eb85340bf5ee4bde84ca8658a0ca0cd2 (proxy forwarding/tests/README). Structural dependsOn gates this original task. This original task retains all original DoD and explicitly owns final launcher integration, full regression, documentation sweep and adversarial hardening of the three-slice fix. No duplicate daemon/proxy implementation, new dependencies or schema migration.",
+    "codebaseInsights": "Existing CLI_TYPE/$cliType detection is authoritative. codex_moe_server_override/Get-CodexMoeServerOverride rebuild complete per-seat server tables and must strip stale type before appending current env; Grok uses literal ${KEY:-}. prompt-cache-launcher.test.mjs executes real blocks and exact Codex override output. McpAdapter.handle and ToolTestHarness support isolated real-handler WS integration. Wire contract fixed in prerequisite descriptions: new MOE_WORKER_TYPE -> optional workerType only on claim_next_task/join_team; daemon validates exact CLAUDE/CODEX/GEMINI/GROK else CLAUDE, proxy forwards strings and preserves explicit args. list_workers already emits type; daemon prerequisite adds chat_who.type. DoD1/2 map to prerequisite daemon tests + integration; DoD3 to launcher/proxy tests/parity; DoD4 to full gate.",
+    "risks": "Former wrapper conflict task-07474ee438f34021a23809f9c764d15c is ARCHIVED (daemon checked); no stale Claude-only-tool requirement. Recheck actual ownership and landing paths without altering peer bytes. Bash must stay macOS Bash 3.2 compatible; PS5.1/7 TOML/native argv quoting must survive. Type is informational, not authenticated TOOL capability. Proxy npm test rebuilds dist: use an isolated copy of exact candidate bytes, root CLAUDE.md and both package dependencies if shared dist is serving agents, recording the tested root. No .moe hand-edits, live registrations in tests or Git writes. Diverging prerequisite contracts require replan, not scope creep.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-proxy/src/index.ts",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T15:32:56.336Z"
 }

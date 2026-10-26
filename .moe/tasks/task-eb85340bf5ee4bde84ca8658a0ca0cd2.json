@@ -1,0 +1,33 @@
+{
+  "id": "task-eb85340bf5ee4bde84ca8658a0ca0cd2",
+  "epicId": "epic-be924fb8",
+  "title": "fix: forward launcher worker type through the MCP proxy",
+  "description": "Proxy prerequisite for task-bdf6db6f65b04a009c88c1e49aed3848; consume the optional workerType registration contract from task-0b40957cd116453aa76965059743fefb. Deliver MOE_WORKER_TYPE -> workerType injection ONLY on claim_next_task/join_team, after alias resolution, including explicit-workerId calls made by wrapper preflight. Match injectWorkerId's conservative defaults: leave any caller-owned workerType key unchanged, no-op for unset/blank env or malformed messages, never throw, never alter unrelated tools or tools/list. Forward nonblank strings verbatim; daemon owns the uppercase allowlist and CLAUDE fallback. Include a separate mutation boolean in index.ts serialization so type-only mutation reaches the wire. Preserve runner/execution identity guards. Own src/utils.ts, src/index.ts, a new src/workerType.test.ts (helper cases plus subprocess wire test against ephemeral WebSocket server), vitest.config.ts (blank ambient MOE_WORKER_TYPE), and README.md. No launcher changes and no daemon/schema edits. Root verification: (cd packages/moe-proxy && npm test). Use test-owned temporary projects and cleanup child processes/sockets/timeouts, never the live .moe. npm test rebuilds dist: perform it on an isolated copy of current bytes if this shared checkout's dist is serving active agents.",
+  "definitionOfDone": [
+    "Tests inject workerType for claim_next_task and join_team (canonical and alias forms), including calls with explicit workerId and absent workerType.",
+    "Explicit workerType keys remain unchanged; unset/blank environment, malformed/null/array message shapes, tools/list, and unrelated tools remain untouched; unknown nonblank values reach daemon validation unchanged.",
+    "A spawned real proxy's WebSocket request contains type when it is the only mutation, and preserves existing workerId/runner/execution identity semantics.",
+    "Proxy tests blank inherited MOE_WORKER_TYPE unless a fixture deliberately sets it, clean temporary resources on failure, and README documents scope/defaults/ownership.",
+    "Fresh (cd packages/moe-proxy && npm test) exits 0 with completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-bdf6db6f65b04a009c88c1e49aed3848",
+  "dependsOn": [
+    "task-0b40957cd116453aa76965059743fefb"
+  ],
+  "priority": "MEDIUM",
+  "order": 15.9,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T15:28:49.626Z",
+  "updatedAt": "2026-10-26T15:28:49.626Z"
+}

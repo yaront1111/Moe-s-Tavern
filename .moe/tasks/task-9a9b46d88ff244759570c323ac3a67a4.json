@@ -1,0 +1,30 @@
+{
+  "id": "task-9a9b46d88ff244759570c323ac3a67a4",
+  "epicId": "epic-be924fb8",
+  "title": "fix: expose commit-scope assignee protection to launchers",
+  "description": "Producer prerequisite split from task-6aa460bb33184e1b84fc9c9e5c0a4560, which retains both wrapper implementations, twin postflight scenarios, scripts/CLAUDE.md and the final integration/hardening gate. Add an additive boolean assigneeProtected to moe.get_commit_scope: false for explicitly unassigned task; otherwise true if its assigned worker record exists and status is not DEAD, OR listAttempts(state, task.id) contains a phase != closed attempt belonging to that same assigned worker. A stale lastActivityAt is not proof of death: do not use assigneeAlive/presence timeout as permission to land source. Preserve existing assigneeAlive and all scope output/attribution behavior. Error handling stays read-only/fail-closed for malformed records. Add matching response controls to the single shared postflight-fake-proxy.js, defaulting to today's caller-as-assignee behavior, plus standalone fixture tests. New proposed fixture envs FAKE_SCOPE_ASSIGNEE (explicit foreign ID or empty for unassigned), FAKE_SCOPE_ASSIGNEE_PROTECTED (0/1), FAKE_SCOPE_OWNERSHIP_MODE (omit/malformed to exercise older/bad replies). Omit means omit the new protection field only, not break legacy output. No launcher, baseline, commit ledger schema or task-state changes. Own five files: src/tools/getCommitScope.ts, its .test.ts, docs/MCP_SERVER.md, scripts/tests/postflight-fake-proxy.js, new scripts/tests/postflight-owner-scope.test.mjs. Verification from root: node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test).",
+  "definitionOfDone": [
+    "get_commit_scope returns boolean assigneeProtected without removing/changing existing fields, documented in docs/MCP_SERVER.md alongside live-assignee protection semantics.",
+    "Daemon tests cover own/foreign caller, fresh and stale non-DEAD owner, DEAD/missing owner with matching running/finalizing/reconciling attempts, closed/foreign-worker/other-task attempts, and unassigned tasks.",
+    "Missing/dead owner with no matching open attempt is unprotected; status freshness alone never makes a registered non-DEAD owner unprotected; output is caller-independent and ignores old foreign attempts.",
+    "Shared fake proxy supports normal/foreign/unassigned and missing/malformed protection-field fixtures while unchanged invocations retain existing semantics, proven by new standalone Node tests.",
+    "Fresh node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-6aa460bb33184e1b84fc9c9e5c0a4560",
+  "priority": "MEDIUM",
+  "order": 229.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T15:36:53.728Z",
+  "updatedAt": "2026-10-26T15:36:53.728Z"
+}

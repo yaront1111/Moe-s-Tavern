@@ -1,0 +1,30 @@
+{
+  "id": "task-0b40957cd116453aa76965059743fefb",
+  "epicId": "epic-be924fb8",
+  "title": "fix: record reported worker type at daemon registration",
+  "description": "Daemon prerequisite split from task-bdf6db6f65b04a009c88c1e49aed3848; original task remains the launcher/integration gate with its DoD unchanged. Deliver optional workerType on claim_next_task and join_team, validate against existing WorkerType values CLAUDE/CODEX/GEMINI/GROK, and create/refresh worker.type rather than hardcoding CLAUDE. Normalize only by exact uppercase membership: missing, unknown or malformed input uses CLAUDE (no new rejection). Refresh an existing seat on valid claim invocations before normal alreadyAssigned/no-work/governor return paths, without changing assignment, attempt or presence rules; do not create a worker on an otherwise refused/empty claim just to refresh type. join_team must validate team/worker before changing state; rejoin updates type without resetting current task, status or membership. chat_who currently omits type: add type to every returned online entry (cursor, waiting, both), preserving fields/filtering; list_workers already projects w.type. Own claimNextTask.ts, joinTeam.ts, chatWho.ts, one new workerType.test.ts, docs/MCP_SERVER.md. No launchers, proxy, schema migration or global worker-store refactor. Keep duplication to the tiny allowlist rather than expanding the schema surface. Verification from repository root: (cd packages/moe-daemon && npx tsc --noEmit && npm test). Original final integration task re-runs daemon and proxy suites together.",
+  "definitionOfDone": [
+    "claim_next_task and join_team expose optional workerType and table-driven tests persist CLAUDE, CODEX, GEMINI, GROK for newly registered seats.",
+    "Tests prove an existing seat refreshes type on claim/resume/no-work and rejoin; join preserves currentTaskId/status; missing/unknown/non-string values fall back to CLAUDE without failing solely on type.",
+    "Tests prove invalid team IDs and invalid claim statuses/runner identity retain existing failure/no-assignment behavior; a denied claim never creates a new worker merely for type.",
+    "list_workers and every chat_who source branch expose the persisted type, covered by mutation-resistant tests without changing presence/membership semantics.",
+    "docs/MCP_SERVER.md documents the optional field, fallback/refresh semantics and additive chat_who output; fresh (cd packages/moe-daemon && npx tsc --noEmit && npm test) exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-bdf6db6f65b04a009c88c1e49aed3848",
+  "priority": "MEDIUM",
+  "order": 15.8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T15:28:17.007Z",
+  "updatedAt": "2026-10-26T15:28:17.007Z"
+}
