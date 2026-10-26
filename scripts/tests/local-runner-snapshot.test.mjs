@@ -38,10 +38,10 @@ test('S1 validateImportPath returns portable relative paths unchanged', () => {
 });
 
 test('S2 unsafe or non-portable paths are refused with SNAPSHOT_PATH_INVALID', () => {
-  const invisible = ['\u200c', '\u200d', '\u200e', '\u200f', '\u202a', '\u202e', '\u206a', '\u206f', '\ufeff', '\u200b', '\u2060'];
+  const invisible = ['\u200c', '\u200d', '\u200e', '\u200f', '\u202a', '\u202e', '\u206a', '\u206f', '\ufeff', '\u200b', '\u2060', '\u061c'];
   const invalid = [
     42, null, undefined, '', '/etc/x', 'a//b', 'a/', './a', 'a/./b', '../a', 'a/..', 'a\\b', 'C:/x',
-    ...[...'<>:"|?*'].map(c => `a${c}b`), 'a\u0000b', 'a\u001fb', 'a\u007fb', 'a\u0085b', ...invisible.map(c => `a${c}b`),
+    ...[...'<>:"|?*'].map(c => `a${c}b`), 'a\u0000b', 'a\u001fb', 'a\u007fb', 'a\u0085b', 'a\u009fb', ...invisible.map(c => `a${c}b`),
     'e\u0301', 'a\ud800', 'a.', 'a ', ' a', 'dir./x', 'dir /x',
     'con', 'PRN', 'aux', 'NUL', 'nul.txt', 'CON.tar.gz', 'COM1', 'LPT9.log', 'COM\u00b9', 'conin$', 'CONOUT$.x', 'a/com1/b', 'CON .txt', 'a/aux  .c',
     'GIT~1', 'PROGRA~1', 'GI7EBA~1', 'foo~2.txt', 'a/B~12/c', '~1', 'A~B~1',
@@ -115,6 +115,19 @@ test('S8 entry-count and byte limits are enforced before elements are read or ha
   refuses(() => validateImport(sparse), 'SNAPSHOT_LIMIT_EXCEEDED', 'count');
   const mib = new Uint8Array(1 << 20);
   refuses(() => validateImport(Array.from({ length: 257 }, (_, i) => file(`f${i}`, mib))), 'SNAPSHOT_LIMIT_EXCEEDED', 'bytes');
+  // Neither a real Array's own Symbol.species nor a Proxy's shifting length may carry the loop past the bounded count.
+  const traps = length => ({
+    get: (t, key) => (key === 'length' ? length : file(`p${String(key)}`)), has: () => true, set: () => true, defineProperty: () => true,
+  });
+  const species = [file('a')];
+  species.constructor = { [Symbol.species]: function Fake() { return new Proxy({}, traps(MAX_IMPORT_ENTRIES + 1)); } };
+  const growing = [];
+  Object.defineProperty(growing, 0, { get: () => { for (let i = 0; i < MAX_IMPORT_ENTRIES; i += 1) growing.push(file(`g${i}`)); return file('a'); } });
+  for (const [name, input] of [['species', species], ['growing', growing]]) assert.equal(validateImport(input).entries.length, 1, name);
+  let reads = 0;
+  for (const length of [{ valueOf: () => (reads++ === 0 ? 0 : MAX_IMPORT_ENTRIES + 1) }, -1, 0.5]) {
+    refuses(() => validateImport(new Proxy([], traps(length))), 'SNAPSHOT_INPUT_INVALID', `proxy length ${String(length)}`);
+  }
   class Entries extends Array {}
   for (const input of [undefined, null, {}, 'a', new Entries(), Object.setPrototypeOf([], null), { length: 0 }]) {
     refuses(() => validateImport(input), 'SNAPSHOT_INPUT_INVALID', label(input));
@@ -176,8 +189,10 @@ test('S9d the digest ignores input order and changes with any byte, path, execut
   }
 });
 
-test('S10 the module is pure and its fixed messages never echo input', () => {
+test('S10 the module is pure, ASCII-only, and its fixed messages never echo input', () => {
   const source = readFileSync(new URL('../local-runner/source-snapshot.mjs', import.meta.url), 'utf8');
+  // No literal bidi, invisible or lookalike code point can hide in the gate's source (Trojan Source, CVE-2021-42574).
+  assert.deepEqual([...source].filter(c => c.codePointAt(0) > 0x7f).map(c => c.codePointAt(0).toString(16)), [], 'non-ASCII source');
   assert.deepEqual(source.match(/^import .*$/gm), ["import { createHash } from 'node:crypto';"]);
   assert.deepEqual(source.match(/\bfrom\s*['"][^'"]*['"]/g), ["from 'node:crypto'"]);
   for (const banned of ['import(', 'require(', 'process.', 'node:fs', 'child_process']) assert.equal(source.includes(banned), false, banned);

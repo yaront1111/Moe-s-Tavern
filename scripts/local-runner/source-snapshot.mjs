@@ -1,8 +1,8 @@
 // Host-side import gate for candidate source bytes coming back from a guest: pure functions only, with no
 // filesystem, process, network or Git access, so any transport can call it. CQ-R09 (final) and CQ-R12 consume it;
 // it writes nothing and verified-local stays unavailable.
-// Path rules mirror checkPortablePath in packages/moe-daemon/src/benchmarks/workloadSnapshot.ts: FORBIDDEN_CHAR,
-// DEVICE_NAME, wellFormed and foldCase are copied verbatim, because that module is daemon TypeScript. Facts relied on:
+// Path rules mirror checkPortablePath in packages/moe-daemon/src/benchmarks/workloadSnapshot.ts, copied because that
+// module is daemon TypeScript: FORBIDDEN_CHAR, wellFormed and foldCase verbatim, DEVICE_NAME widened. Facts relied on:
 // - Git's verify_path refuses .git lookalikes: is_hfs_dotgit skips the HFS+-ignorable code points (U+200C-U+200F,
 //   U+202A-U+202E, U+206A-U+206F, U+FEFF) and is_ntfs_dotgit matches the 8.3 short-name alias GIT~1.
 // - NTFS strips a trailing dot or space from a name, so 'a.' and 'a ' alias 'a'.
@@ -35,9 +35,9 @@ const MESSAGES = {
 };
 // Backslash, drive/stream colon, Windows-reserved, C0/DEL/C1 control, bidi-control (ALM, LRM/RLM, LRE-RLO,
 // LRI-PDI), zero-width and BOM characters. Keep them escaped: literal ones in source are Trojan Source.
-const FORBIDDEN_CHAR = /[\\<>:"|?*\u0000-\u001f\u007f-\u009f؜​-‏‪-‮⁠-⁯﻿]/;
+const FORBIDDEN_CHAR = /[\\<>:"|?*\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
 // The daemon's rule plus ' *': like Git's is_valid_win32_path, 'CON .txt' is reserved too.
-const DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³]) *(?:\..*)?$/i;
+const DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]) *(?:\..*)?$/i;
 const FILE_KEYS = ['kind', 'path', 'executable', 'data'];
 const DELETE_KEYS = ['kind', 'path'];
 const VIEW_PROTOTYPES = [Uint8Array.prototype, Buffer.prototype];
@@ -148,13 +148,16 @@ function seal(items) {
 function admit(entries) {
   if (!Array.isArray(entries) || Object.getPrototypeOf(entries) !== Array.prototype) throw snapshotError('SNAPSHOT_INPUT_INVALID');
   const count = entries.length;
+  // A Proxy over an array passes the check above; only a real length may bound the loop below.
+  if (!Number.isInteger(count) || count < 0) throw snapshotError('SNAPSHOT_INPUT_INVALID');
   if (count > MAX_IMPORT_ENTRIES) throw snapshotError('SNAPSHOT_LIMIT_EXCEEDED');
-  const list = Array.prototype.slice.call(entries, 0, count);
   const items = [];
   let total = 0;
-  for (let index = 0; index < list.length; index += 1) {
+  // Each element is read once, by index, below the bounded count: no slice() or other copy that would honour the
+  // caller's own constructor[Symbol.species].
+  for (let index = 0; index < count; index += 1) {
     let item;
-    try { item = readEntry(list[index], total); } catch (error) {
+    try { item = readEntry(entries[index], total); } catch (error) {
       throw OWN_ERRORS.has(error) ? error : snapshotError('SNAPSHOT_ENTRY_INVALID');
     }
     if (item.kind === 'file') total += item.size;

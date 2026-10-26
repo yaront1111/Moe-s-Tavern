@@ -19,49 +19,74 @@
     {
       "stepId": "step-1",
       "description": "Write the test file first, then make it pass. Load test-driven-development.\n\nNew file: scripts/tests/local-runner-snapshot.test.mjs (LF). Conventions:\n- node:test + node:assert/strict.\n- Static import from '../local-runner/source-snapshot.mjs'.\n- Reuse the refuses(fn, code, label) helper idiom from local-runner-bridge.test.mjs.\n- Table-driven rows, each labelled.\n- NEVER write the double-underscore 'proto' key name anywhere: it is a global forbidden pattern, even inside test strings. Use 'constructor' or 'toString'.\n\nRows to cover:\n\n(1) validateImportPath accepts, returning the input unchanged:\n- 'src/a.ts', 'README', '.github/workflows/ci.yml'\n- '.gitignore', '.git-blame-ignore-revs', 'foo.git', '.moe-agent.json', '.claude-plugin/x'\n- 'x~y', 'file~2023-notes.md', 'ab~1cdef.txt', 'com10'\n- an NFC 'docs/caf\\u00e9.md'\n- a segment of exactly 255 UTF-8 bytes (multi-byte chars at the boundary)\n- a path of exactly 1024 bytes\n\n(2) SNAPSHOT_PATH_INVALID, one row per DoD class:\n- non-string, '', '/etc/x'\n- 'a//b', 'a/', './a', 'a/./b', '../a', 'a/..'\n- backslash and 'C:/x'\n- each of < > : \" | ? *\n- U+0000, U+001F, U+007F, U+0085\n- HFS+-ignorables U+200C, U+200D, U+200E, U+200F, U+202A, U+202E, U+206A, U+206F, U+FEFF, plus U+200B and U+2060\n- decomposed 'e\\u0301' (non-NFC) and a lone '\\uD800'\n- 'a.', 'a ', ' a'\n- device names: con, PRN, aux, NUL, nul.txt, CON.tar.gz, COM1, LPT9.log, COM\\u00b9, conin$, CONOUT$.x\n- 8.3 shapes: GIT~1, PROGRA~1, GI7EBA~1, foo~2.txt, a/B~12/c, ~1\n- a 256-byte segment and a 1025-byte path\n\n(3) SNAPSHOT_CONTROL_PATH, through BOTH validateImportPath AND file and delete entries:\n- '.git/config', 'a/.git/HEAD', '.GIT/x'\n- '.gitmodules', 'sub/.Moe/tasks/t.json', '.mcp.json', 'a/.MCP.JSON'\n- '.claude/settings.json', '.codex/c.toml', '.gemini/x', '.grok/x', '.worktrees/w/a'\n- '.git/CON' (control wins)\n\n(4) Lookalikes, refused by either code:\n- '.git.', '.git ', 'GIT~1/config', '.g\\u200cit'\n\n(5) SNAPSHOT_SYMLINK_DENIED:\n- {kind:'symlink', path:'a', target:'b'}\n- the same under '.git/x' with an escaping target '../..'\n\n(6) SNAPSHOT_ENTRY_INVALID:\n- non-plain entries: null, [], Object.create({}), a class instance\n- an unknown kind: 'dir', 'File'\n- a missing key\n- extra keys sha256, oid, size, mode or target on a file, and sha256 on a delete\n- a symbol key\n- executable 'true' or 1\n- data as a string, an ArrayBuffer, a DataView, an Int8Array, or number[]\n- data as a view whose buffer is detached\n\n(7) SNAPSHOT_PATH_COLLISION:\n- 'a.txt' twice\n- 'A.txt' with 'a.txt'\n- '\\u00df' with 'SS' (upper-then-lower fold)\n- a file and a delete on the same path\n- 'a' with 'a/b'; 'A' with 'a/b'; delete 'dir' with file 'dir/x'\n- control row: 'ab' plus 'a/b' is accepted\n\n(8) Limits:\n- a sparse array of length MAX_IMPORT_ENTRIES + 1 whose elements are throwing getters gives SNAPSHOT_LIMIT_EXCEEDED, which proves no element is read.\n- 257 file entries that reuse ONE 1 MiB buffer exceed MAX_IMPORT_BYTES and give SNAPSHOT_LIMIT_EXCEEDED, without allocating 257 MiB.\n- A non-array, or an Array subclass, gives SNAPSHOT_INPUT_INVALID.\n\n(9) Identity:\n- The manifest's size and sha256 equal an independent createHash over the original bytes.\n- A Uint8Array with an own byteLength getter that returns 0 still reports its real size.\n- Mutating the caller's buffer after the call changes neither data nor sha256, and manifest data !== the caller's view.\n- The manifest, its entries array and every entry are Object.isFrozen.\n- Entries are sorted by UTF-8 bytes: '\\uFF5E' sorts before '\\u{1F600}' (default JS sort would put the emoji first).\n- Shuffled input gives the same digest.\n- One changed byte, path, executable bit or kind (file to delete) changes the digest.\n- The digest equals one recomputed in the test from the documented framing, and a pinned hex literal for a fixed 2-entry input.\n- An empty array is accepted.\n\n(10) Purity and messages:\n- The test reads the module source: the only `import` is from 'node:crypto', with no `import(`, `require(`, `process.`, `node:fs` or `child_process`.\n- A refused path carrying a marker never appears in error.message.\n- snapshotError('nope') has code SNAPSHOT_INPUT_INVALID.\n\nRed: in the repo the run fails with ERR_MODULE_NOT_FOUND. For a meaningful red, run in a /tmp `git archive HEAD scripts` snapshot holding a placeholder module whose exports return their input; the assertions must fail (mem:gotcha-local-runner-tests).\n\nSize: QA's 400 changed-line limit applies, and R09a has no epic size exception. Keep this file at about 230 lines or less: rows over prose, one line per row.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/local-runner-snapshot.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "Round 2 (QA reject of 9a81f41). I added the RED rows QA asked for to scripts/tests/local-runner-snapshot.test.mjs (test file only, +9 lines):\n- S8 species row: a real Array [file('a')] with an own constructor = {[Symbol.species]: Fake}, where Fake returns a Proxy reporting length MAX_IMPORT_ENTRIES+1. It asserts entries.length === 1.\n- S8 proxy-length row: a Proxy over [] whose length is an object with a valueOf that returns 0 on the first read and MAX+1 afterwards. It passes Array.isArray and the prototype check, and expects SNAPSHOT_INPUT_INVALID. I added this row: it is the same DoD-5 bound bypass. Without a number check, a slice-only fix would still loop `index < count` and re-run valueOf.\n- S10 is extended and renamed: the module source must contain no code point above 0x7f, reported as hex on failure. This is stricter than \"only the DEVICE_NAME superscripts may remain\", because I will escape the superscripts too.\n\nRED against the 9a81f41 module (in /tmp/r09a-w2/snap, a git-archive snapshot plus the new test file):\n- S8 fails \"species: actual 10001, expected 1\".\n- With the species line removed, S8 fails \"Missing expected exception: proxy length\". Each row is independently red.\n- S10 fails \"non-ASCII source\".\n12/14 pass, 2 fail. The new test file is ASCII-only (grep count 0). No peer paths were touched.",
+      "startedAt": "2026-10-26T06:54:47.586Z",
+      "completedAt": "2026-10-26T06:57:08.055Z"
     },
     {
       "stepId": "step-2",
       "description": "New file scripts/local-runner/source-snapshot.mjs (LF, about 150 lines or less): dependency-free, pure ESM.\n\nImports and globals:\n- Its ONLY import is { createHash } from 'node:crypto'.\n- The Buffer global is allowed.\n- No fs, process, network, Git or dynamic import.\n\nHeader comment: what the gate is, and the external facts it relies on:\n- Git verify_path / is_hfs_dotgit / is_ntfs_dotgit (HFS+ ignorables, the GIT~1 short-name alias);\n- the NTFS trailing dot/space strip;\n- Win32 device names;\n- NFC.\nState that it mirrors the daemon's checkPortablePath in packages/moe-daemon/src/benchmarks/workloadSnapshot.ts (copy its FORBIDDEN_CHAR, DEVICE_NAME, wellFormed and foldCase rules verbatim; do NOT import TS). Document the v1 bounds and the digest framing.\n\nExports, all frozen:\n- MAX_IMPORT_PATH_BYTES = 1024\n- MAX_IMPORT_SEGMENT_BYTES = 255\n- MAX_IMPORT_ENTRIES = 10_000\n- MAX_IMPORT_BYTES = 268_435_456\n- CONTROL_SEGMENTS = ['.git','.gitmodules','.moe','.mcp.json','.claude','.codex','.gemini','.grok','.worktrees']\n- snapshotError(code): like bridgeError, with an unknown code giving SNAPSHOT_INPUT_INVALID.\n- validateImportPath, validateImport.\n\nMESSAGES is a fixed-text map that never echoes paths or bytes, with codes SNAPSHOT_INPUT_INVALID, SNAPSHOT_LIMIT_EXCEEDED, SNAPSHOT_ENTRY_INVALID, SNAPSHOT_SYMLINK_DENIED, SNAPSHOT_PATH_INVALID, SNAPSHOT_CONTROL_PATH and SNAPSHOT_PATH_COLLISION.\n\nvalidateImportPath(path) runs these checks, in this order, and returns path:\n1. A non-empty string within MAX_IMPORT_PATH_BYTES UTF-8 bytes. Reject a cheap `path.length > MAX` before Buffer.byteLength. Otherwise PATH_INVALID.\n2. If any '/'-segment, after foldCase, equals a CONTROL_SEGMENTS entry: CONTROL_PATH. This makes '.git/CON' a control refusal.\n3. Otherwise PATH_INVALID for any of:\n   - text that is not well-formed or not NFC;\n   - a FORBIDDEN_CHAR (backslash, colon, < > \" | ? *, C0/DEL/C1, U+061C, U+200B-U+200F, U+202A-U+202E, U+2060-U+206F, U+FEFF, kept escaped in source);\n   - a leading '/';\n   - an empty, '.' or '..' segment;\n   - a segment over MAX_IMPORT_SEGMENT_BYTES;\n   - a segment with a leading space, trailing space or trailing dot;\n   - a DEVICE_NAME on the folded segment;\n   - an 8.3 shape: the part before the first '.' is at most 8 chars and matches /^[^~]*~[0-9]+$/.\n\nvalidateImport(entries):\n1. Shape and count. A real Array (Array.isArray and prototype Array.prototype), else INPUT_INVALID. Check length > MAX_IMPORT_ENTRIES before reading any element (LIMIT_EXCEEDED). Then take a one-time Array.prototype.slice.call snapshot.\n2. Per entry, each property read exactly once:\n   - It must be a plain record (prototype Object.prototype or null), else ENTRY_INVALID.\n   - kind === 'symlink' gives SYMLINK_DENIED, checked before the key check.\n   - kind 'file' must have exactly the keys [kind,path,executable,data]; kind 'delete' exactly [kind,path]. Use Reflect.ownKeys, so a symbol key is refused. Anything else is ENTRY_INVALID.\n   - path goes through validateImportPath.\n   - A file needs a boolean executable, and data that is ArrayBuffer.isView with prototype Uint8Array.prototype or Buffer.prototype (else ENTRY_INVALID).\n   - Read the length through the INTRINSIC getter captured at load (Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),'byteLength').get), never data.byteLength.\n   - Enforce the running total against MAX_IMPORT_BYTES (LIMIT_EXCEEDED) BEFORE copying.\n   - Then copy at once with new Uint8Array(data) (internal-slot copy). A throw, for example from a detached buffer, is ENTRY_INVALID. A length mismatch is ENTRY_INVALID.\n   - Use only the copy from here on. Measuring and copying back to back, with no user code between, defeats spoofed byteLength and resizable-buffer growth.\n3. Collisions, using foldCase(path) = upper().lower(): a repeated folded path, or any folded ancestor prefix that is itself an entry, gives PATH_COLLISION.\n4. Only now hash each copy with sha256 (lowercase hex). size is copy.byteLength.\n5. Sort by Buffer.compare of the UTF-8 path bytes.\n6. digest = sha256 hex over: 'moe-source-snapshot-v1\\0', u32be(count), then for each entry: a kind byte (0x46 file / 0x44 delete), u32be(path byte length), the path bytes; a file adds an executable byte (1/0), u32be(size) and the 32 raw sha256 bytes.\n7. Return Object.freeze({ entries: Object.freeze([...]), digest }). A file entry is Object.freeze({kind,path,executable,size,sha256,data: copy}); a delete is Object.freeze({kind,path}). Document that `data` is the hashed private copy (a TypedArray cannot be frozen).\n\nError handling: every refusal is a snapshotError carrying a fixed code. An unexpected TypeError from a hostile input is caught at the per-entry boundary and becomes ENTRY_INVALID. Never return partial results.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/source-snapshot.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/source-snapshot.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "Both QA defects are fixed in scripts/local-runner/source-snapshot.mjs.\n\n(1) Species and count bound, in admit():\n- Array.prototype.slice.call is gone. The loop reads entries[index] once per index, for index < count.\n- count is read once, then must satisfy Number.isInteger(count) && count >= 0 (else SNAPSHOT_INPUT_INVALID), and is checked against MAX_IMPORT_ENTRIES before any element is read.\n- This also closes a variant QA did not name. A Proxy over [] passes Array.isArray and the prototype check, and reports length as an object whose valueOf returns 0 and then MAX+1. Against 9a81f41 it admitted 10001 entries; a slice-only fix would have re-run valueOf on every `index < count`.\n- QA's /tmp/qa-r09a-probe/species.mjs gives \"ADMITTED entries: 1\" (the real length) on the new module, against 30000 on 9a81f41.\n\n(2) Trojan Source:\n- FORBIDDEN_CHAR is now byte-identical to the daemon's workloadSnapshot.ts line 115 (diff empty), with escapes ؜​-‏‪-‮⁠-⁯﻿. od -c confirms ASCII backslash-u bytes.\n- I also escaped the DEVICE_NAME superscripts as ¹²³. `LC_ALL=C grep -nP '[^\\x00-\\x7f]'` now finds nothing in either file.\n- A sweep over every code point (/tmp/r09a-w2/tools/regex-equiv.mjs) finds 0 semantic differences between the old and new FORBIDDEN_CHAR and DEVICE_NAME.\n- The header comment no longer claims DEVICE_NAME is verbatim: it says \"FORBIDDEN_CHAR, wellFormed and foldCase verbatim, DEVICE_NAME widened\".\n\nTests (on top of step 1):\n- The S8 Proxy-length row loops over [shifting object, -1, 0.5], so each part of the guard has a killing row.\n- An S8 'growing' row: a real Array whose index-0 getter pushes 10000 more entries must still admit 1, which locks the read-count-once property.\n- S2 gains U+061C and U+009F. A mutant dropping ALM survived until then; this gap predates round 2.\n\nMutation sweep (/tmp/r09a-w2/tools/mutate.mjs on a /tmp copy): 15/15 killed. They cover guard removal, dropping count<0, typeof-only, re-reading length, the old slice, an off-by-one limit, a literal RLO or BOM, a wrong superscript, a dropped ALM, and the 009f/200b/2060/001f/007f range ends.\n\nShared-tree gate (env -i, nvm v24.21.0): 14/14 pass. No peer paths touched.",
+      "startedAt": "2026-10-26T06:57:10.956Z",
+      "completedAt": "2026-10-26T07:00:36.640Z"
     },
     {
       "stepId": "step-3",
       "description": "Edit .github/workflows/ci.yml, step 'Test local runner prerequisite bundles' (~line 236, in the 3-OS build-all-platforms matrix: ubuntu, windows, macos). Append ` scripts/tests/local-runner-snapshot.test.mjs` to its `run: node --test ...` line. Change nothing else.\n\nThen measure the whole task's size: `git diff --numstat -- .github/workflows/ci.yml` plus `wc -l` of the two new files. The total must be 400 changed lines or less (QA's default; R09a has no epic size exception). If it is over, tighten the comments and table rows; never drop a DoD row.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "note": "The one-line ci.yml change already landed in 9a81f41 and needs no round-2 edit.\n- `git log 9a81f41^..HEAD -- .github/workflows/ci.yml` shows only 9a81f41, and the working tree is clean for that file.\n- `git diff --numstat 9a81f41^ -- .github/workflows/ci.yml` gives 1/1.\n- Line 236 (Test local runner prerequisite bundles) names all four test files: local-runner.test.mjs, local-runner-bundle.test.mjs, local-runner-bridge.test.mjs and local-runner-snapshot.test.mjs.\n\nSize against the pre-task base:\n- source-snapshot.mjs: 176 lines (new)\n- local-runner-snapshot.test.mjs: 208 lines (new)\n- ci.yml: 1/1\n- Total: 386 changed lines, which is 400 or less.\n\nThe round-2 delta against 9a81f41 is +10/-7 in the module and +16/-3 in the tests. No files were modified in this step.",
+      "startedAt": "2026-10-26T07:00:39.773Z",
+      "completedAt": "2026-10-26T07:00:54.279Z"
     },
     {
       "stepId": "step-4",
       "description": "The ONE gate, fresh, as the DoD names it: from the repo root, run env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs. It must exit 0 with 0 failures and 0 skips. Supply its command, exit code and output tail to complete_task.\n\nThe test touches only the two new files and node builtins, so the shared tree is safe for it. Still cmp both files against what you wrote.\n\nCI also runs the step on Windows and macOS. Add native Windows evidence: run \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/local-runner-snapshot.test.mjs from the /mnt/d repo root with MOE_*/CLAUDE* stripped. It must exit 0 with the same pass count (pure tests, no win32 skips). macOS cannot be run here; say so.\n\nAlso report:\n- the size figure from step 3;\n- a grep showing the ci.yml run line now names all four local-runner test files.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-snapshot.test.mjs"
-      ]
+      ],
+      "note": "Fresh gate in the shared tree, from the repo root:\n`env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs` exited 0: tests 14, pass 14, fail 0, skipped 0, cancelled 0 (~263 ms). Log: /tmp/r09a-w2/gate-linux.log.\n\nBoth files cmp-equal the copies used for the 15/15 mutation sweep.\n\nNative Windows (\"/mnt/c/Program Files/nodejs/node.exe\" v24.16.0, from the /mnt/d repo root with every MOE_*/CLAUDE* var unset via env -u) exited 0 with the same 14/14 and 0 skips. Log: /tmp/r09a-w2/gate-win.log. macOS cannot be run here and was not run.\n\nThe size is 386 changed lines (176 + 208 + ci.yml 1/1), within 400. ci.yml:236 names all four local-runner test files.\n\nNo other file imports source-snapshot.mjs: a grep over scripts, packages/*/src, .github and moe-vscode/scripts finds only the module and its test, so this test file is the full regression surface. No files were modified in this step.",
+      "startedAt": "2026-10-26T07:00:59.594Z",
+      "completedAt": "2026-10-26T07:01:22.830Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of the diff, scoped to this security gate. Load adversarial-self-review.\n\nTry to get bytes past it:\n- a spoofed own byteLength, a resizable or detached ArrayBuffer, a Buffer subclass;\n- getters that mutate an earlier entry after it was measured;\n- symbol keys, a null-prototype entry, an Array subclass, a sparse array;\n- '.GIT', '.git.', 'GIT~1', ZWNJ, decomposed accents, 'ß'/'SS', ancestor or descendant pairs;\n- '.git/CON' (must be CONTROL_PATH);\n- an over-long path under .git (PATH_INVALID is accepted: bound first).\n\nAlso check:\n- No hashing happens before every bound and collision check has passed.\n- No message can echo input.\n- The framing is unambiguous (length-prefixed) and versioned.\n- The sort is by UTF-8 bytes, not UTF-16.\n- Only node:crypto is imported.\n- Nothing outside the three files changed: git diff --stat, peers excluded.\n\nFix any finding, then rerun step 4 before moe.complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/source-snapshot.mjs",
         "scripts/tests/local-runner-snapshot.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "note": "Adversarial pass over both new files, plus round-2 hardening. The only fix: I wrapped my over-long traps helper line in the test (165 to 3 lines). It is formatting only.\n\nExtra hostile probes (/tmp/r09a-w2/tools/edge.mjs, against the shared-tree module) all fail closed:\n- Revoked Proxy: INPUT_INVALID.\n- Cross-realm vm array: INPUT_INVALID, because its prototype differs.\n- A Proxy whose getPrototypeOf throws: INPUT_INVALID.\n- A Proxy with length 2^40: LIMIT_EXCEEDED.\n- A Float64Array, BigInt64Array or DataView with prototype swapped to Uint8Array.prototype: ENTRY_INVALID.\n- An Int8Array swapped the same way is admitted with its real size of 3 bytes and the same bit patterns. Its identity is still the copy, so nothing is spoofable.\n- A Proxy entry is admitted, with each trap read once and every value validated.\n\nCorrection to the round-1 handoff: the copy-length mismatch guard IS reachable from one thread, via the prototype-swapped wide TypedArray, not only through a growable SAB.\n\nRe-checked from round 1:\n- Control segments are checked before portability ('.git/CON' gives CONTROL_PATH), and the length bound comes first.\n- The symlink check precedes the key check.\n- The intrinsic byteLength is measured, then the bytes are copied with no user code between. Node 24's new Uint8Array(view) does not consult the buffer species (probed).\n- Hashing happens only in seal(), after refuseCollisions.\n- The framing is versioned and length-prefixed, and the sort is by Buffer.compare over UTF-8.\n- Messages are fixed, and node:crypto is the only import.\n\nBytes: both files are ASCII-only with no CR and no global forbidden patterns.\n\nFinal mutation sweep: 15/15 killed. The final test file against the 9a81f41 module fails S8 (species) and S10 (non-ASCII), with 12 passing.\n\nFresh gates after the fix:\n- Linux env -i nvm v24.21.0: exit 0, 14/14, 0 skipped.\n- Native Windows node.exe v24.16.0 with MOE_*/CLAUDE* unset: exit 0, 14/14, 0 skipped.\n- macOS was not run.\n\nSize: 176 + 210 + ci.yml 1/1 = 388 changed lines, within 400. My only paths are the module and its test; ci.yml is unchanged from 9a81f41. scripts/tests/moe-account-lease.test.mjs and scripts/tests/postflight.sh are peers' dirty paths, which I left untouched.",
+      "startedAt": "2026-10-26T07:01:26.380Z",
+      "completedAt": "2026-10-26T07:03:09.517Z"
     }
   ],
-  "planRevision": 12,
-  "status": "WORKING",
+  "planRevision": 22,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -74,23 +99,30 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:36:22.943Z",
-  "updatedAt": "2026-10-26T06:42:47.806Z",
+  "updatedAt": "2026-10-26T07:03:49.810Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T05:52:58.414Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
-    "qa-7c627d35"
+    "qa-7c627d35",
+    "worker-7d158765"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [
     {
       "item": "The module is pure and bounded. Its only import is node:crypto, asserted by a test that reads the source. Entry-count and total-byte limits are enforced before any hashing. The new test file is added to the CI local-runner step by a one-line ci.yml change.",
@@ -112,23 +144,20 @@
   },
   "planApprovedAt": "2026-10-26T06:00:10.972Z",
   "workStartedAt": "2026-10-26T06:12:46.689Z",
-  "reviewStartedAt": "2026-10-26T06:24:31.451Z",
+  "reviewStartedAt": "2026-10-26T07:03:49.808Z",
   "verification": {
     "command": "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-snapshot.test.mjs",
     "exitCode": 0,
-    "outputTail": "✔ S0 exports frozen v1 bounds and the operator control-segment list\n✔ S1 validateImportPath returns portable relative paths unchanged\n✔ S2 unsafe or non-portable paths are refused with SNAPSHOT_PATH_INVALID\n✔ S3 control paths are refused at any depth through paths, files and deletes\n✔ S4 control-path lookalikes are refused by either code\n✔ S5 every symlink entry is refused, wherever it points\n✔ S6 malformed entries and writer-declared identities are refused with SNAPSHOT_ENTRY_INVALID\n✔ S7 case-folded duplicates and ancestor paths collide\n✔ S8 entry-count and byte limits are enforced before elements are read or hashed (131ms)\n✔ S9 sizes and sha256 come from a private copy that the frozen manifest returns\n✔ S9b a later getter that grows or rewrites an earlier buffer cannot change its admitted identity\n✔ S9c entries sort by UTF-8 path bytes and the digest follows the documented framing\n✔ S9d the digest ignores input order and changes with any byte, path, executable bit or kind\n✔ S10 the module is pure and its fixed messages never echo input\nℹ tests 14\nℹ suites 0\nℹ pass 14\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 299.259361",
-    "reportedAt": "2026-10-26T06:24:31.451Z",
+    "outputTail": "✔ S0 exports frozen v1 bounds and the operator control-segment list (1.073291ms)\n✔ S1 validateImportPath returns portable relative paths unchanged (0.799504ms)\n✔ S2 unsafe or non-portable paths are refused with SNAPSHOT_PATH_INVALID (1.550083ms)\n✔ S3 control paths are refused at any depth through paths, files and deletes (0.275287ms)\n✔ S4 control-path lookalikes are refused by either code (0.162356ms)\n✔ S5 every symlink entry is refused, wherever it points (0.085625ms)\n✔ S6 malformed entries and writer-declared identities are refused with SNAPSHOT_ENTRY_INVALID (0.668762ms)\n✔ S7 case-folded duplicates and ancestor paths collide (0.94139ms)\n✔ S8 entry-count and byte limits are enforced before elements are read or hashed (139.084346ms)\n✔ S9 sizes and sha256 come from a private copy that the frozen manifest returns (12.141544ms)\n✔ S9b a later getter that grows or rewrites an earlier buffer cannot change its admitted identity (0.355315ms)\n✔ S9c entries sort by UTF-8 path bytes and the digest follows the documented framing (0.699715ms)\n✔ S9d the digest ignores input order and changes with any byte, path, executable bit or kind (1.200265ms)\n✔ S10 the module is pure, ASCII-only, and its fixed messages never echo input (20.73891ms)\nℹ tests 14\nℹ suites 0\nℹ pass 14\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 262.61173",
+    "reportedAt": "2026-10-26T07:03:49.808Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/local-runner-snapshot.test.mjs",
     "scripts/local-runner/source-snapshot.mjs",
-    ".github/workflows/ci.yml",
-    ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
-    ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
-    ".moe/tasks/task-7c2872e7052646b7a521cb7a8f01c546.json"
+    ".github/workflows/ci.yml"
   ],
-  "completionSummary": "CQ-R09a delivered: a pure host import gate in a new scripts/local-runner/source-snapshot.mjs (173 lines). Its only import is node:crypto.\n\nvalidateImportPath bounds the length first. It then refuses control segments at any depth after foldCase (CONTROL_PATH, so '.git/CON' is a control refusal). Then the portability rules give PATH_INVALID: the daemon checkPortablePath rules (FORBIDDEN_CHAR, wellFormed, NFC, segments, trailing dot/space), DEVICE_NAME plus ' *' as in Git's is_valid_win32_path, and 8.3 shapes.\n\nvalidateImport:\n- checks a real Array and the count before reading any element;\n- reads each property once; symlink is refused before the key check; exact keys via Reflect.ownKeys;\n- measures with the intrinsic %TypedArray% byteLength, bounds the total, then copies at once;\n- refuses collisions with a folded-segment trie (linear);\n- only then hashes, sorts by UTF-8 bytes and computes the versioned, length-prefixed digest;\n- returns a frozen manifest.\n\nTests: 14 table-driven tests in the new scripts/tests/local-runner-snapshot.test.mjs (195 lines), with a pinned digest recomputed independently from the framing. ci.yml gains one line (1/1).\n\nSize: 370 changed lines in total, within 400.\n\nVerification: 14/14 on Linux (env -i, nvm v24.21.0) and native Windows node.exe v24.16.0. macOS was not run. A mutation sweep of 31 mutants in /tmp left 0 survivors.\n\nPlan deviations are all tightenings: the trie, the 8.3 regex as a superset, DEVICE_NAME with ' *', and WeakSet re-coding of foreign throws. The daemon's DEVICE_NAME gap is filed as bug task-6f5032015e1947c0a7ba143a1c1f7709 (LOW). verified-local stays unavailable; no I/O, transport or Git changes.",
+  "completionSummary": "Round 2 fixes both QA defects in 9a81f41.\n\n(1) Species and count bound, in admit() of source-snapshot.mjs:\n- slice is gone. length is read once and must be Number.isInteger and >= 0 (else INPUT_INVALID). It is checked against MAX before any element is read, and the loop reads entries[index] once each, for index < count.\n- This also closes a Proxy-over-array variant: its object length lied after the first read, and 9a81f41 admitted 10001 entries.\n- QA's species.mjs now admits 1 entry (it admitted 30000).\n\n(2) Trojan Source:\n- FORBIDDEN_CHAR is byte-identical to daemon workloadSnapshot.ts:115.\n- The DEVICE_NAME superscripts are escaped too, so the module is pure ASCII: grep -P '[^\\x00-\\x7f]' finds nothing.\n- An all-code-point sweep finds 0 semantic differences between the old and new regexes.\n- The header no longer claims DEVICE_NAME is verbatim.\n\nTests:\n- S8 adds a species row, a 'growing' row (count read once) and Proxy lengths [object, -1, 0.5].\n- S10 asserts an ASCII-only source.\n- S2 adds U+061C and U+009F; a dropped-ALM mutant had survived before.\n- Against 9a81f41, S8 and S10 fail, and each new row fails on its own.\n- Mutation sweep: 15/15 killed.\n\nGate: Linux exit 0, 14/14; native Windows node v24.16.0, 14/14; macOS not run.\nSize: 176 + 210 + ci.yml 1/1 = 388 lines.\nPlan deviation: the plan's step 2 said to take a slice snapshot; QA's fix removes it.\nThe module is still I/O-free and verified-local stays unavailable. Peers' dirty paths were not touched.",
   "commits": [
     {
       "sha": "9a81f41c8b354b461ec7a8cd7848a83bda5dab42",
