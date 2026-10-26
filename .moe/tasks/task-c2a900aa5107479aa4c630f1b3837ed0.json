@@ -1,0 +1,29 @@
+{
+  "id": "task-c2a900aa5107479aa4c630f1b3837ed0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: declare_files cannot land a peer-contested path that was dirty at the landing session's pre-flight, so a governor's attribution of stranded bytes is silently held",
+  "description": "Observed 2026-10-26. V02 (task-23a5563c) worker completion b7a9bb5 reported `held=docs/MCP_SERVER.md(task-7a0b1881)`. Its +14/-4 doc hunk stayed dirty because parked peer 7a0b1881 (BLOCKED, unassigned) also declares the file. The governor verified the diff was V02's alone and ran `moe.declare_files {taskId: V02, paths: [docs/MCP_SERVER.md]}`, the remedy governor.md prescribes for stranded paths. The next landing would still have held it: QA had to make a byte-neutral Edit-tool touch so the path entered TOOL, and only then did QA checkpoint 66ef204 land it.\n\nMechanism (scripts/moe-agent.sh resolve_attribution, around line 3634, with a ps1 twin): for a path in MINE that is also in PEER, contested_policy 'skip-untouched' lands it only if `pk in TOOL` or `idle_clean` (clean at this session's pre-flight AND every contesting peer idle). DECLARED is consulted only after that check, so declare_files never overrides the hold. The safety reason is sound: a path that was dirty at pre-flight may carry the peer's unlanded hunks.\n\nThe gap: the documented remedy (scripts/CLAUDE.md: declare_files paths are \"committed regardless of baseline\"; governor.md cheat sheet: declare_files onto the owner \"so its next exit lands them\") silently does nothing for a contested path. The held= banner gives no hint, so the bytes strand until some session happens to touch them.\n\nOptions for the planner, not prescriptive: (a) let a declare_files entry land a contested path when every contesting peer is idle (the peer-idle signal already exists), keeping the hold for live peers; (b) keep the code as-is, but have the held= banner and the record_commit #governors alert name the working remedy (an editing-tool touch in the owner's next session, or finishing/unblocking the peer), and fix the docs. Whichever you choose, the two wrappers must match.",
+  "definitionOfDone": [
+    "A path the owner task declared via declare_files, contested only by idle peers, is either landed by the owner's next exit, or the held=/#governors output names the remedy that works. Which of the two is a recorded planning decision.",
+    "A path contested by a LIVE peer (active assignee, open attempt or recent attempt-phase change) is still held, as today. No change can land a live peer's in-flight hunks.",
+    "scripts/moe-agent.sh and scripts/moe-agent.ps1 behave identically. bash scripts/tests/postflight.sh and bash scripts/tests/parity-check.sh pass, with a regression case for a declared, dirty-at-pre-flight, idle-peer-contested path.",
+    "scripts/CLAUDE.md (Land on every exit) and docs/roles/governor.md describe declare_files' interaction with contested paths accurately."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 236.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T09:26:34.130Z",
+  "updatedAt": "2026-10-26T09:26:34.130Z"
+}

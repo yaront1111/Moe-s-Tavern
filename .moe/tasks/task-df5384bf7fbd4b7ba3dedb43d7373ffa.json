@@ -13,9 +13,43 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (test-driven-development): extend the headless state tests using rendered(4L), onApproveClicked(true, snapshot(4L)), then onStateUpdate(snapshot(5L, status=STATUS_WORKING)). Assert INVALIDATED, PLAN_CHANGED_KEY, capturedPlanRevision==4L, approveEnabled==false and forced click Blocked. This must fail against the unconditional PENDING→WORKING success branch. Table-test older/newer revisions, zero after nonzero capture, malformed/null/negative/over-MAX token, missing task, and same-revision success at 0L/4L/MAX_SAFE_PLAN_REVISION. Malformed WORKING tokens use REVISION_UNUSABLE_KEY; mismatches PLAN_CHANGED_KEY; missing task TASK_MISSING_KEY. After invalidation, late same-revision WORKING/error/send-failed callbacks never rearm or finish. Pin both orders of error vs mismatching WORKING callbacks; no auto retry or token substitution. Preserve existing duplicate-click, disposal, disconnected, READY-status-change and transport-is-not-acceptance assertions. In PlanApprovalContractTest reuse connectedSender/singlePayload to assert updateSettings(ProjectSettings(...nondefault values...)) still emits exactly approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams with the supplied values—never executionProfile, deliveryPolicy, attribution, taskSizing or unknown fields. No new harness.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix only PlanReviewApprovalState.onStateUpdate's success branch under the existing synchronized(lock). For PENDING + present + WORKING, validate the effective token before reporting success: `val revision = snapshot.revision.effectiveOrNull(); val reason = when { revision == null -> REVISION_UNUSABLE_KEY; revision != capturedRevision -> PLAN_CHANGED_KEY; else -> null }; phase = if (reason == null) Phase.FINISHED else Phase.INVALIDATED; notice = reason; return true`. Retain all other unusableReason/staleReason handling. Error handling stays fail-closed, nonthrowing and uses existing actionable notice keys; late errors never release INVALIDATED/DISPOSED. Never replace capturedRevision, finish on local send alone, change decoder/legacy-zero semantics, or make expectedPlanRevision optional. Update comments to say authoritative WORKING for the SAME rendered revision. PlanReviewDialog already applies notices and closes only on FINISHED, so no UI changes. Make the reproduction green without rewriting landed approval routing.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Single final verification gate: from repository root run exactly `cd moe-jetbrains && ./gradlew test`, ensuring tests execute freshly (not only UP-TO-DATE/cache), and retain command/exitCode/outputTail for complete_task. Full consuming-package regression includes existing PlanApprovalContractTest, BoardApprovalTest (card/context/drag routes), PlanReviewApprovalStateTest, settings and delivery presentation. Existing assertions stay intact apart from additive coverage in owned tests. Coordinate `jetbrains-gradle` resource for shared outputs and release on success/failure; never clean peer builds. Linux/macOS use the pinned command with a native compatible JDK; Windows uses gradlew.bat operationally, but obtain POSIX/WSL gate evidence rather than relabelling Windows output. If unavailable report the environment failure, do not upgrade dependencies to bypass it. No producer schema/protocol or launcher changes, so no unrelated package gate.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "One final adversarial self-review of these three files: approval followed by newer/older/malformed WORKING, ERROR before/after it, duplicate clicks, same-revision zero success, deletion, disposal and reconnect. Verify no path sends a replacement token or reports a newer plan approved; all settings/status/profile/evidence UI and peer dirty bytes remain untouched. Existing BoardApproval and wire tests must still prove every entrypoint quotes the rendered snapshot and required approveTask has no default/optional overload. Fix findings within owned files and refresh the same gate if bytes change; complete_task with fresh evidence. No Git writes or direct .moe edits; wrappers own delivery; I06 owns whole-epic integration/docs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,13 +59,49 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 227.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-92914afda94643208626853728bb56fa",
+      "author": "architect-26fd4d71",
+      "content": "REPL scope clarification (human, 2026-10-26): 'Focus on approvals; preserve existing settings and status UI.' No new profile/evidence editor or presentation in I02. Existing CQ-F04c rendered-token routes remain intact. Remaining correctness gap found in PlanReviewApprovalState.onStateUpdate: PENDING currently finishes on any present WORKING task before testing revision freshness; the plan will bind this acknowledgement to the rendered revision and cover races without changing settings/evidence UI. The distinct board revision-only fingerprint bug remains task-aa79a8ebd51d4eedb08c3662dfe8b490.",
+      "timestamp": "2026-10-26T09:29:04.882Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:20.636Z",
-  "updatedAt": "2026-10-25T10:17:10.787Z",
+  "updatedAt": "2026-10-26T09:31:08.469Z",
   "dependsOn": [
     "task-96526848b23549cf994ab82f47fad29f",
     "task-c7d520ba9cf940e4b3bbe2e4c3c90f47",
     "task-6a5d5a13257b48c9940ae3b22347ff7d"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-26T09:22:37.960Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-26fd4d71"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T09:31:08.364Z",
+  "planningNotes": {
+    "approachesConsidered": "Reuse F04c; no profile/evidence editor, capability negotiation, new revision authority or wire change. Board revision-only fingerprint bug remains task-aa79a8ebd51d4eedb08c3662dfe8b490, not duplicated.",
+    "codebaseInsights": "Goal: revision-bound JetBrains approval completion. Architecture: retain the existing Kotlin/JUnit4 headless state machine and landed F04c command/UI adapters; tighten only acknowledgement. Human scope clarification in comment-92914afda94643208626853728bb56fa: focus on approvals, preserve existing settings/status UI. onStateUpdate currently finishes PENDING+WORKING before freshness; PlanReviewDialog routes updates before comment-only return and closes on FINISHED. Sender/service already require Long expectedPlanRevision; both MoeJson routes decode exact tokens. Missing task planRevision means effective 0; command token omission remains forbidden.",
+    "risks": "Retain I01/F05/V06 dependencies: worker claims wait for V06. Same-revision WORKING proves the plan progressed, not which actor approved; do not upgrade historical unstamped approvals. Three owned paths were clean with no nonterminal declared overlap at planning; preserve 544 peer/pre-existing dirty paths. Target <60 minutes and <400 net LOC.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T09:31:08.469Z"
 }

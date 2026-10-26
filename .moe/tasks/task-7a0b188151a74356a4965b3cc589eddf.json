@@ -96,7 +96,7 @@
     }
   ],
   "planRevision": 30,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,14 +128,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:39:58.071Z",
-  "updatedAt": "2026-10-26T09:22:47.467Z",
+  "updatedAt": "2026-10-26T09:38:45.253Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T22:18:28.699Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
     "executedStepCount": 14,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T09:38:45.253Z",
+    "wallClockMs": 40816554
   },
   "contextFetchedBy": [
     "worker-3729a0d6",
@@ -287,7 +289,7 @@
     "sessionId": "qa-7c627d35@2026-10-26T08:00:47Z",
     "at": "2026-10-26T08:14:05.623Z"
   },
-  "reviewCompletedAt": "2026-10-26T07:32:09.261Z",
+  "reviewCompletedAt": "2026-10-26T09:38:45.253Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -314,5 +316,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Parked from REVIEW by QA in round 2. This is not a reject: the work passes on substance, but the size exception it needs is not approved yet.\n\n- Completion 4758ad1 is +843/-32 = 811 net non-board LOC, over the 400 net-LOC review cap. No project or epic rail waives size.\n- The worker filed an epic ADD_RAIL size exception scoped to this row as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f. It is still PENDING, and only a human can resolve it. Rejecting again would only burn a reopen.\n- The bytes are unchanged since 4758ad1: the round-2 commits 229e534 and e5f0216 are board-only. The per-file numstat equals the proposal text.\n\nQA re-ran every gate green from a pure git archive of e5f0216:\n- lease test: 39 pass, 1 skip.\n- parity-check.sh: PASS.\n- postflight.sh: PASS, with [accounts] ok.\n- Native Windows: node.exe 52 pass, 2 skip, including the ps1 lease-loop cases on powershell.exe and pwsh.exe plus the Git Bash cases. The PS 5.1 parse has 0 errors. parity-check.ps1: PASS.\n- DoD 1-4 all have evidence. The full evidence is in QA's round-2 comment on this task.\n\nTo resume:\n- Once the proposal is APPROVED, set_task_status REVIEW. The next QA checks the rail in allRails.epic and the unchanged bytes, then approves naming the size.\n- If it is REJECTED, set_task_status PLANNING so the architect splits the work.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-26T09:38:45.253Z",
+  "reviewSummary": "Round 3 (qa-7c627d35): APPROVED. Size waived by epic rail prop-f04ebf50 (human-approved 09:21:45Z): 4758ad1 is +843/-32 = 811 net non-board LOC (278 runtime+docs, 533 tests); numstat equals the rail text.\nBytes: HEAD = origin = 66ef204. 6 owned paths byte-equal 4758ad1. docs/MCP_SERVER.md differs only by peer 66ef204's V02 check-run hunks; this task's Account Rotation hunk is intact. 229e534/e5f0216/a7222fa are board-only. 4758ad1 is on moe/work-2026-10-24 and origin.\ntask.verification re-run from a pure git archive of 66ef204 (29 MOE_*/CLAUDE* unset, TIMEOUT 180, 09:27:58-09:37:19Z): lease test 40 tests, 39 pass, 1 skip; parity-check.sh PASS; postflight.sh PASS (frozen 73, [accounts] ok, scope 38, team join/heal ok); exit 0.\nNative Windows: node.exe 54 tests, 52 pass, 2 skip, incl. all 7 ps1 lease-loop cases on powershell.exe and pwsh.exe and 6 Git Bash cases. PS 5.1 ParseFile 0 errors; parity-check.ps1 PASS; BOM kept, 0 CR.\nOwn mutants: 4/5 killed (sh refusal keeps the lease; sh ignores retry sec; helper drops the git top-level key; helper skips the locked re-read). Survivor: a projects entry WITHOUT hasTrustDialogAccepted counted as trusted. No test pins that shape (the bug report's -p-only accounts), but the real helper handles it (probe: granted, then trusted; fields and mode 600 kept). Optional hardening, not a DoD gap.\nDoD1: an interactive leased seat gets MOE_ACCOUNT_TRUST_GRANTED, or MOE_ACCOUNT_UNTRUSTED plus one #general @governors line per account per lease loop naming account and project (never the folder), then waits and re-leases. It never launches into the dialog. DoD2: the headless guard returns before the helper (bytes unchanged in tests); the invariant amendment cites sign-off comment-99598cf0. DoD3: parity PASS; the lease test (4 engines) and postflight [accounts] cover the untrusted path; no daemon change. DoD4: both docs updated.\nPonytail: lean already; net: -0 lines possible. SCHEMA.md/registry.ts wording stays with task-fc9835fe.",
+  "requiredCheckAtDone": null
 }
