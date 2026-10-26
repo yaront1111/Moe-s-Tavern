@@ -129,7 +129,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:53.719Z",
-  "updatedAt": "2026-10-26T09:22:47.966Z",
+  "updatedAt": "2026-10-26T09:24:13.065Z",
   "dependsOn": [
     "task-bde8654052f648f9b209174c3708322b",
     "task-a00f45d35beb4a1b94ea65909723e69e"
@@ -202,7 +202,12 @@
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-23a5563cea384d56abb8da1551435455.json",
     ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
-    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json",
+    ".moe/epics/epic-be924fb8.json",
+    ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+    ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json"
   ],
   "completionSummary": "CQ-V02: CheckRun gains an outcome plus 4 optional REPORTED execution identities. Nothing is defaulted, inferred or backfilled.\n\nChanges:\n- schema.ts: `CheckOutcome` (6 values, each documented) and optional outcome / planRevision / environment / dispatchId / attemptId on CheckRun.\n- checkRunStore.ts:\n  - exports CHECK_OUTCOMES; the identities join RECORDED_FIELDS, so they are immutable and an identity-less row is never upgraded;\n  - conditional spreads mean an absent identity leaves no key, so the held-out payload's key set is unchanged;\n  - coherence: passed needs exit 0, code-failure a nonzero exit; null is refused;\n  - attemptId runs candidateStore's now-exported assertAttemptOfTask against the CANDIDATE's task, AFTER the replay, so a crash retry still replays. Referential only: reviewer or closed attempts are valid.\n- recordCheckRun.ts: 5 optional schema properties; outcome enum from a Record<CheckOutcome, true>.\n- policy.ts passedOn, the ONE shared predicate: only `passed`, or an absent outcome (legacy exit-code rule), can count; anything else fails closed even at exit 0.\n- docs/SCHEMA.md and docs/MCP_SERVER.md updated.\n\nDoD -> tests:\n(1) Distinct outcomes: checkRunStore.test 'records outcome X exactly as reported' x6, the CHECK_OUTCOMES assert, and 6 decoys in qaApprove.test 'does not accept %s as the required check'.\n(2) Provenance: 'infers no outcome…' at exit 0 and 1, the unchanged frozen key-set test, and the 'outcome (added to a run recorded without one)' changed row; 'accepts the one matching run on its own' and acceptance.test are UNCHANGED.\n(3) Producer vs reviewer attempt: \"binds a run to a reviewer's attempt while the candidate keeps its producer attempt\" plus the ATTEMPT_* refusals.\n(4) The gate above.\n\nSIZE: numstat over packages/ = +287/-39 = 248 net (<=400). Docs are +31/-5.\n\nSelf-review: 14 mutants, all killed (list in the step-6 note).\n\nScope: +candidateStore.test.ts, +2 export names. Also fixed a TS2322 that already existed at HEAD in checkRunS",
   "commits": [
@@ -238,18 +243,46 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "66ef2048427072030b52035b12fc60619f782002",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T09:16:54Z",
+      "paths": [
+        ".moe/epics/epic-be924fb8.json",
+        ".moe/tasks/task-23a5563cea384d56abb8da1551435455.json",
+        ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+        ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-d72fe292e1ea4dd2a4bcb9610ca5d18a.json",
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T09:24:13.065Z",
+      "treeId": "99ae719b0c5223e3d0950887d7290a617d8f4af1",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-7a0b188151a74356a4965b3cc589eddf"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/types/schema.ts",
-    "packages/moe-daemon/src/delivery/policy.ts"
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-26T09:01:25Z",
-    "at": "2026-10-26T09:16:29.492Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T09:16:54Z",
+    "at": "2026-10-26T09:24:13.065Z"
   },
   "declaredFiles": [
     "docs/MCP_SERVER.md"

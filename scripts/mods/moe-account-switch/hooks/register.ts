@@ -1,16 +1,25 @@
 import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 // An interactive Moe seat (the wrapper loads this mod only for a claude TUI
-// whose loop relaunches it) moves to the next Claude account the way a
-// headless worker does: its session ends and the wrapper leases again. The
-// daemon decides when. This mod marks submit_plan and chat_wait as calls the
-// session can act on (acceptsAccountSwitch), notices the accountSwitch a moe
-// reply carries, refuses new work after it, and runs /exit once the turn ends.
-// Inert outside a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID set by
-// scripts/moe-agent.{sh,ps1}). Fails open: an error leaves the call as it was.
+// whose loop relaunches it) ends its session when Moe says so, and the wrapper
+// relaunches it. Two triggers, both decided by the daemon:
+// - Account switch: the seat moves to the next Claude account the way a
+//   headless worker does. This mod marks submit_plan and chat_wait as calls the
+//   session can act on (acceptsAccountSwitch) and notices the accountSwitch a
+//   moe reply carries, or claude stopping at the usage limit. Needs a leased
+//   seat (MOE_WORKER_ID and MOE_ACCOUNT_ID set by scripts/moe-agent.{sh,ps1}).
+// - END_SESSION: the sessionHandoff a moe reply addresses to this seat
+//   (report_blocked freed it, or a claim_next_task/wait_for_task refusal over a
+//   resource-held task). A TUI cannot end itself, and the next task needs a
+//   fresh wrapper pre-flight. Needs only MOE_WORKER_ID and a session that draws
+//   on a surface (never a -p run).
+// Either way the mod refuses new work and runs /exit once the main turn ends.
+// Fails open: an error leaves the call as it was.
 
 export const MARK = 'ACCOUNT-SWITCH:'
+export const ENDED = 'END-SESSION:'
 export const EXIT_DELAY_MS = 10_000
+const ENDED_FALLBACK = 'End your turn now: Moe relaunches this seat.'
 
 const MOE_TOOL = /^mcp__.+__moe_([a-z_]+)$/
 /** The daemon switches a seat between tasks only when the call says the session can end itself. */
@@ -28,28 +37,45 @@ function textOf(r: ToolCallResult): string | undefined {
   return r.result.map(block => (typeof block?.text === 'string' ? block.text : '')).join('')
 }
 
-/** The instruction of a moe reply that tells this seat to switch accounts, if it does. */
-export function switchInstruction(tool: string, r: ToolCallResult): string | undefined {
-  if (r.deny !== undefined) return undefined
+/** A moe reply's JSON, unless the call was refused or failed. */
+function replyOf(r: ToolCallResult): unknown {
+  if (r.deny !== undefined || r.isError) return undefined
   const text = textOf(r)
-  if (r.isError) {
-    // start_step refuses with the instruction as its error message.
-    return tool === 'start_step' && text?.includes(MARK) ? text.slice(text.indexOf(MARK)) : undefined
-  }
-  if (!SIGNALS.has(tool) || !text) return undefined
-  let reply: unknown
+  if (!text) return undefined
   try {
-    reply = JSON.parse(text)
+    return JSON.parse(text)
   } catch {
     return undefined
   }
+}
+
+/** The instruction of a moe reply that tells this seat to switch accounts, if it does. */
+export function switchInstruction(tool: string, r: ToolCallResult): string | undefined {
+  if (r.deny !== undefined) return undefined
+  if (r.isError) {
+    const text = textOf(r)
+    // start_step refuses with the instruction as its error message.
+    return tool === 'start_step' && text?.includes(MARK) ? text.slice(text.indexOf(MARK)) : undefined
+  }
+  if (!SIGNALS.has(tool)) return undefined
   // Top level only: a chat message quoting the phrase sits under messages[].
-  const instruction = (reply as { accountSwitch?: { instruction?: unknown } } | null)?.accountSwitch?.instruction
+  const instruction = (replyOf(r) as { accountSwitch?: { instruction?: unknown } } | null | undefined)?.accountSwitch?.instruction
   return typeof instruction === 'string' && instruction.startsWith(MARK) ? instruction : undefined
 }
 
+/** The instruction of a moe reply that ends this seat's session, if it does. */
+export function endSessionInstruction(r: ToolCallResult, workerId: string): string | undefined {
+  // Top level only, as for accountSwitch.
+  const handoff = (replyOf(r) as { sessionHandoff?: unknown } | null | undefined)?.sessionHandoff
+  if (typeof handoff !== 'object' || handoff === null) return undefined
+  const { action, workerId: addressee, reason } = handoff as Record<string, unknown>
+  // A handoff the daemon addressed to another seat is not this session's to end.
+  if (action !== 'END_SESSION' || addressee !== workerId) return undefined
+  return `${ENDED} ${typeof reason === 'string' && reason.trim() ? reason.trim() : ENDED_FALLBACK}`
+}
+
 type Session = {
-  /** The switch instruction this session was given. */
+  /** The instruction that ends this session: an account switch or END_SESSION. */
   pending?: string
   /** The main loop's running turn. */
   turnId?: string
@@ -68,11 +94,13 @@ async function checkHardLimit($: EngineInterface, session: Session): Promise<voi
   }
 }
 
-async function exit($: EngineInterface): Promise<void> {
+async function exit($: EngineInterface, ended: boolean): Promise<void> {
   try {
     await $.command.run({ command: 'exit' })
   } catch {
-    $.ui.toast('Moe: this seat must restart on the next Claude account. Type /exit and Moe relaunches it.', { timeoutMs: 60_000 })
+    $.ui.toast(ended
+      ? 'Moe: this task session is over. Type /exit and Moe relaunches it.'
+      : 'Moe: this seat must restart on the next Claude account. Type /exit and Moe relaunches it.', { timeoutMs: 60_000 })
   }
 }
 
@@ -80,9 +108,12 @@ async function exit($: EngineInterface): Promise<void> {
 function leave($: EngineInterface, session: Session): void {
   if (!session.pending || session.exiting) return
   session.exiting = true
+  const ended = session.pending.startsWith(ENDED)
   const cause = session.pending.slice(MARK.length).trim().split('. ')[0]
-  $.ui.toast(`Moe: ${cause}. This session ends in ${EXIT_DELAY_MS / 1000} s and restarts on the next account.`, { timeoutMs: EXIT_DELAY_MS })
-  $.clock.after(EXIT_DELAY_MS, () => void exit($))
+  $.ui.toast(ended
+    ? `Moe: this task session is over. This session ends in ${EXIT_DELAY_MS / 1000} s and Moe relaunches it.`
+    : `Moe: ${cause}. This session ends in ${EXIT_DELAY_MS / 1000} s and restarts on the next account.`, { timeoutMs: EXIT_DELAY_MS })
+  $.clock.after(EXIT_DELAY_MS, () => void exit($, ended))
 }
 
 export const register: Register = on => {
@@ -95,14 +126,20 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const tool = MOE_TOOL.exec(e.tool)?.[1]
-    if (!tool || !(await isSeat($))) return next(e)
+    if (!tool) return next(e)
+    const workerId = await $.env.get('MOE_WORKER_ID')
+    if (!workerId) return next(e)
     if (session.pending && HELD.has(tool)) {
       // The model was told to end its turn and went on: end it here.
       if (e.agentId === undefined && session.turnId) void $.turn.abort({ turnId: session.turnId }).catch(() => undefined)
       return { deny: session.pending }
     }
-    const r = await next(MARKED.has(tool) ? ({ ...e, acceptsAccountSwitch: true } as typeof e) : e)
-    session.pending ??= switchInstruction(tool, r)
+    const leased = Boolean(await $.env.get('MOE_ACCOUNT_ID'))
+    const r = await next(leased && MARKED.has(tool) ? ({ ...e, acceptsAccountSwitch: true } as typeof e) : e)
+    if (leased) session.pending ??= switchInstruction(tool, r)
+    const ended = session.pending ? undefined : endSessionInstruction(r, workerId)
+    // A -p run draws on no surface, and its session ends with its turn anyway.
+    if (ended && (await $.session.surfaces()).length > 0) session.pending ??= ended
     return r
   }).catch(($, e, next) => next(e))
 
