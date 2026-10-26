@@ -1068,10 +1068,17 @@ fi
 # and no directory may reach the daemon. Three runs are sh-only: an account
 # signed in some other way (state=other; its email and org must go nowhere),
 # no rotation (the daemon answers rotation:false: nothing printed, env kept),
-# and an interactive seat (--mcp-config, and the --settings statusline that
-# writes the usage sample). ---
+# and an interactive seat (--mcp-config, the --settings statusline that writes
+# the usage sample, and Claude's folder trust: the headless runs leave both
+# account folders empty, the interactive run finds acct-1's .claude.json
+# without trust for the project and gets exactly that key set, every other key
+# kept and no secret from it printed or sent). ---
 ACCT_HOME="$TMP_DIR/acct-home"
 mkdir -p "$ACCT_HOME/acct-1" "$ACCT_HOME/acct-2"
+ACCT_SECRET='moe-postflight-secret-3c9e'
+ACCT_SEED="$TMP_DIR/acct-seed.json"
+printf '{"numStartups":7,"hasCompletedOnboarding":true,"oauthAccount":{"emailAddress":"%s@example.com","organizationName":"%s"},"projects":{"/elsewhere/trusted-project":{"allowedTools":[],"hasTrustDialogAccepted":true}},"userID":"u-postflight"}' \
+  "$ACCT_SECRET" "$ACCT_SECRET" > "$ACCT_SEED"
 ACCT_LOG="$TMP_DIR/acct-cli.log"
 ACCT_ARGV="$TMP_DIR/acct-argv.log"
 ACCT_PROBES="$TMP_DIR/acct-probes.log"
@@ -1137,9 +1144,9 @@ fi
 
 ACCT_CHECK="$TMP_DIR/accounts-check.cjs"
 cat > "$ACCT_CHECK" <<'ACCTJS'
-// One [accounts] run: node accounts-check.cjs <name> <exit> <wrapper out> <rpcs> <launches> <argv> <probes> <statusline> <home> <.mcp.json>
+// One [accounts] run: node accounts-check.cjs <name> <exit> <wrapper out> <rpcs> <launches> <argv> <probes> <statusline> <home> <.mcp.json> <seed>
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict'), cp = require('node:child_process');
-const [name, code, outFile, rpcFile, launchFile, argvFile, probeFile, statusFile, home, mcpFile] = process.argv.slice(2);
+const [name, code, outFile, rpcFile, launchFile, argvFile, probeFile, statusFile, home, mcpFile, seedFile] = process.argv.slice(2);
 const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
 const lines = (file) => read(file).split('\n').filter(Boolean);
 const out = read(outFile).replace(/\x1b\[[0-9;]*m/g, '');
@@ -1208,8 +1215,8 @@ try {
       assert.equal(leases.length, 1, 'expected one lease');
       assert.deepEqual(reports, [], 'nothing to report without a lease');
       break;
-    case 'interactive':
-      want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%');
+    case 'interactive': {
+      want('[account] MOE_ACCOUNT_LEASED account=acct-1 usage=12.5%', '[account] MOE_ACCOUNT_TRUST_GRANTED account=acct-1 project=');
       assert.deepEqual(lines(launchFile), [launch('acct-1')]);
       assert.ok(!argv.includes('--print'), 'expected the TUI');
       assert.equal(fs.realpathSync(native(after('--mcp-config') || '.')), fs.realpathSync(mcpFile), 'expected --mcp-config <project>/.mcp.json');
@@ -1217,7 +1224,20 @@ try {
       assert.deepEqual(lines(statusFile), ['Opus | acct-1 | 5h 91%']);
       assert.deepEqual(reports, [{ workerId: 'qa-accounts-interactive', accountId: 'acct-1', refused: false,
         windows: { five_hour: { percent: 91.5, resetsAt: reset } } }]);
+      // Claude's folder trust: under Git Bash the key is the Windows form of the project, so compare real paths.
+      const project = fs.realpathSync(path.dirname(mcpFile));
+      const isProject = (key) => { try { return fs.realpathSync(native(key)) === project; } catch { return false; } };
+      const others = (config) => ({ ...config, projects: Object.fromEntries(Object.entries(config.projects).filter(([key]) => !isProject(key))) });
+      const config = JSON.parse(read(path.join(home, 'acct-1', '.claude.json')));
+      const keys = Object.keys(config.projects).filter(isProject);
+      assert.ok(keys.length > 0 && keys.every((key) => config.projects[key].hasTrustDialogAccepted === true), `expected the project trusted: ${keys}`);
+      assert.deepEqual(others(config), others(JSON.parse(read(seedFile))), 'only the trust key may change');
+      assert.deepEqual(fs.readdirSync(path.join(home, 'acct-1')), ['.claude.json'], 'no lock or temp file left in acct-1');
+      for (const text of [process.env.ACCT_SECRET, 'example.com']) {
+        assert.ok(!out.includes(text) && !rpcText.includes(text), `'${text}' from .claude.json escaped`);
+      }
       break;
+    }
     default:
       throw new Error(`unknown run ${name}`);
   }
@@ -1254,14 +1274,24 @@ run_accounts() {
     >"$TMP_DIR/wrapper-accounts-$name.out" 2>&1
   code=$?
   set -e
-  ACCT_RESET="$ACCT_RESET" "$NODE_FOR_TEST" "$ACCT_CHECK" "$name" "$code" "$TMP_DIR/wrapper-accounts-$name.out" \
-    "$ACCT_RPCS" "$ACCT_LOG" "$ACCT_ARGV" "$ACCT_PROBES" "$ACCT_STATUS" "$ACCT_HOME" "$PROJECT_DIR/.mcp.json" || exit 1
+  ACCT_RESET="$ACCT_RESET" ACCT_SECRET="$ACCT_SECRET" "$NODE_FOR_TEST" "$ACCT_CHECK" "$name" "$code" "$TMP_DIR/wrapper-accounts-$name.out" \
+    "$ACCT_RPCS" "$ACCT_LOG" "$ACCT_ARGV" "$ACCT_PROBES" "$ACCT_STATUS" "$ACCT_HOME" "$PROJECT_DIR/.mcp.json" "$ACCT_SEED" || exit 1
 }
 run_accounts refused
 run_accounts signout FAKE_ACCT_MODE=signout
 run_accounts other FAKE_ACCT_MODE=other
 run_accounts wait FAKE_ACCT_MODE=fine FAKE_ACCOUNT_WAIT_ONCE=1
 run_accounts none FAKE_ACCOUNT_HOME=
+# A headless (-p) seat leaves the account folders untouched.
+for acct in acct-1 acct-2; do
+  if [ -n "$(ls -A "$ACCT_HOME/$acct")" ]; then
+    ls -A "$ACCT_HOME/$acct" >&2
+    echo "[accounts] a headless seat wrote into $acct's config folder" >&2
+    exit 1
+  fi
+done
+# Without a .claude.json the interactive seat would refuse acct-1 and wait.
+cp "$ACCT_SEED" "$ACCT_HOME/acct-1/.claude.json"
 run_accounts interactive FAKE_ACCT_MODE=fine
 rm -f "$ACCT_RPCS"
 echo "[accounts] ok"

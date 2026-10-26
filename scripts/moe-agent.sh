@@ -5952,9 +5952,13 @@ case "$LAUNCH_BACKOFF_MAX_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_MAX_SEC=900 ;; esa
 # claude launch the wrapper leases a subscription account from the daemon
 # (moe.lease_account) and runs claude under that account's config directory.
 # The directory, MOE_ACCOUNT_ID and MOE_ACCOUNT_SAMPLE_FILE reach only the CLI's
-# subshell (apply_account_env), with the token variables removed there. Nothing
-# here opens a file inside a config directory. Every failure mode launches
-# unrotated; only "every signed-in account is spent" waits, holding the task.
+# subshell (apply_account_env), with the token variables removed there. The
+# only file opened inside a config directory is an interactive seat's
+# .claude.json, where moe-account-lease.mjs `trust` sets this project's
+# folder-trust key (human sign-off 2026-10-26, task-7a0b1881): -p seats never
+# see Claude's trust dialog, a TUI on a never-trusted account would park at it.
+# Every other failure mode launches unrotated; "every signed-in account is
+# spent" and "the account could not be trusted" wait, holding the task.
 ACCOUNT_HELPER="$SCRIPT_DIR/moe-account-lease.mjs"
 ACCOUNT_SAMPLE_FILE="$SECURE_TEMP_DIR/account-sample.json"
 ACCOUNT_SETTINGS_FILE="$SECURE_TEMP_DIR/account-settings.json"
@@ -5978,11 +5982,25 @@ clear_account_lease() {
     rm -f "$ACCOUNT_SAMPLE_FILE" 2>/dev/null || true
 }
 
+# announce_account_untrusted ACCOUNT_ID REASON: best-effort #general line, the
+# announce_push_failure pattern. Never the config directory: no account folder
+# may reach the daemon.
+announce_account_untrusted() {
+    local msg="@governors $WORKER_ID: MOE_ACCOUNT_UNTRUSTED - account $1 does not trust project $PROJECT and Moe could not grant it ($2). The interactive seat waits instead of parking at Claude's folder-trust dialog. Fix: start claude once in $PROJECT under that account's folder (claude-accounts/$1) and accept the trust dialog."
+    if [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        moe_rpc chat_send \
+            "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
+                "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null)" \
+            > /dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 # Sets ACCOUNT_LEASED_ID and ACCOUNT_LEASED_DIR, or leaves them empty to launch
 # unrotated. moe-account-lease.mjs reads the reply and maps the directory to
 # this machine (a Windows path becomes its /mnt form under WSL).
 get_account_lease() {
-    local gate reply pick kind f1 f2 f3 rest why
+    local gate reply pick kind f1 f2 f3 rest why trust trust_sec trust_why escalated=" "
     if [ ! -f "$ACCOUNT_HELPER" ]; then
         account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (moe-account-lease.mjs is missing next to this wrapper) - launching without rotation."
         return 0
@@ -6009,7 +6027,31 @@ get_account_lease() {
             ACCOUNT_LEASED_DIR="$f3"
             if [ "$f2" = "?" ]; then f2=unknown; else f2="$f2%"; fi
             account_say "MOE_ACCOUNT_LEASED account=$f1 usage=$f2" "$GREEN"
-            return 0
+            # Only the TUI asks "Do you trust the files in this folder?"; claude
+            # runs after `cd "$PROJECT"`, so the launch directory is the project.
+            [ "$CLAUDE_INTERACTIVE" = true ] || return 0
+            trust=$("$NODE_CMD" "$ACCOUNT_HELPER" trust "$f3" "$PROJECT" 2>/dev/null) || trust=""
+            case "$trust" in
+                trusted) return 0 ;;
+                granted) account_say "MOE_ACCOUNT_TRUST_GRANTED account=$f1 project=$PROJECT" "$GREEN"; return 0 ;;
+                refused$'\t'*$'\t'*) ;;
+                *)
+                    clear_account_lease
+                    account_say "MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation."
+                    return 0
+                    ;;
+            esac
+            IFS=$'\t' read -r _ trust_sec trust_why <<< "$trust" || true
+            case "$trust_sec" in ''|*[!0-9]*) trust_sec=300 ;; esac
+            [ "$trust_sec" -ge 1 ] || trust_sec=300
+            clear_account_lease
+            account_say "MOE_ACCOUNT_UNTRUSTED account=$f1 project=$PROJECT ($trust_why) - not launching into Claude's folder-trust dialog; retry in ${trust_sec}s, the held task stays held. (Ctrl+C to stop)"
+            case "$escalated" in
+                *" $f1 "*) ;;
+                *) escalated="$escalated$f1 "; announce_account_untrusted "$f1" "$trust_why" ;;
+            esac
+            sleep "$trust_sec"
+            continue
         fi
         if [ "$kind" = wait ] && [ -n "$f2" ]; then
             case "$f1" in ''|*[!0-9]*) f1=60 ;; esac
@@ -7277,7 +7319,8 @@ $PROMPT_BODY"
     fi
     # Claude account rotation: a fresh lease for every claude launch. The check
     # above stays on the operator's own config directory; nothing reads inside
-    # an account's. A wait for a free account is not launch time, so the
+    # an account's except an interactive seat's folder-trust key (the lease
+    # sets it). A wait for a free or trusted account is not launch time, so the
     # launch timestamp is taken after the lease.
     clear_account_lease
     if [ "$MOE_SKIP_LAUNCH" != true ] && [ "$CLI_TYPE" = claude ]; then

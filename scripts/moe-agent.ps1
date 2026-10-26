@@ -5401,9 +5401,13 @@ if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [in
 # (moe.lease_account) and runs claude under that account's config directory.
 # The directory, MOE_ACCOUNT_ID and MOE_ACCOUNT_SAMPLE_FILE enter this process's
 # environment only around the spawn (Set-MoeAccountEnv / Restore-MoeAccountEnv),
-# with the token variables removed for that spawn. Nothing here opens a file
-# inside a config directory. Every failure mode launches unrotated; only "every
-# signed-in account is spent" waits, holding the task.
+# with the token variables removed for that spawn. The only file opened inside
+# a config directory is an interactive seat's .claude.json, where
+# moe-account-lease.mjs `trust` sets the launch directory's folder-trust key
+# (human sign-off 2026-10-26, task-7a0b1881): -p seats never see Claude's trust
+# dialog, a TUI on a never-trusted account would park at it. Every other
+# failure mode launches unrotated; "every signed-in account is spent" and "the
+# account could not be trusted" wait, holding the task.
 $accountHelper = Join-Path $PSScriptRoot 'moe-account-lease.mjs'
 $script:AccountSampleFile = Join-Path $env:TEMP "moe-account-sample-$Role-$myPid.json"
 $script:AccountSettingsFile = Join-Path $env:TEMP "moe-account-settings-$Role-$myPid.json"
@@ -5458,6 +5462,8 @@ function Get-MoeAccountLease {
         Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation." -ForegroundColor Yellow
         return
     }
+    # One #general line per account per call.
+    $escalated = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     while ($true) {
         $reply = Invoke-MoeRpc -Tool 'lease_account' -Args @{ workerId = $WorkerId }
         $replyJson = if ($null -ne $reply) { $reply | ConvertTo-Json -Depth 5 -Compress } else { '' }
@@ -5471,7 +5477,31 @@ function Get-MoeAccountLease {
             $script:AccountLeasedDir = $f[3]
             $usage = if ($f[2] -ceq '?') { 'unknown' } else { "$($f[2])%" }
             Write-Host "[account] MOE_ACCOUNT_LEASED account=$($f[1]) usage=$usage" -ForegroundColor Green
-            return
+            # Only the TUI asks "Do you trust the files in this folder?"; a ps1
+            # claude runs in this launcher's cwd, so that is the launch directory.
+            if (-not $claudeInteractive) { return }
+            $trust = Invoke-MoeAccountHelper -HelperArgs @('trust', $f[3], $projectPath, (Get-Location).ProviderPath)
+            if ($trust -ceq 'trusted') { return }
+            if ($trust -ceq 'granted') {
+                Write-Host "[account] MOE_ACCOUNT_TRUST_GRANTED account=$($f[1]) project=$projectPath" -ForegroundColor Green
+                return
+            }
+            $t = @("$trust" -split "`t")
+            if ($t[0] -cne 'refused' -or $t.Count -lt 3) {
+                Clear-MoeAccountLease
+                Write-Host "[account] MOE_ACCOUNT_LEASE_UNAVAILABLE (the account helper failed) - launching without rotation." -ForegroundColor Yellow
+                return
+            }
+            $trustSec = 0
+            if (-not [int]::TryParse($t[1], [ref]$trustSec) -or $trustSec -lt 1) { $trustSec = 300 }
+            Clear-MoeAccountLease
+            Write-Host "[account] MOE_ACCOUNT_UNTRUSTED account=$($f[1]) project=$projectPath ($($t[2])) - not launching into Claude's folder-trust dialog; retry in ${trustSec}s, the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
+            # Never the config directory: no account folder may reach the daemon.
+            if ($escalated.Add($f[1])) {
+                Send-MoeGeneralChat "@governors ${WorkerId}: MOE_ACCOUNT_UNTRUSTED - account $($f[1]) does not trust project $projectPath and Moe could not grant it ($($t[2])). The interactive seat waits instead of parking at Claude's folder-trust dialog. Fix: start claude once in $projectPath under that account's folder (claude-accounts/$($f[1])) and accept the trust dialog."
+            }
+            Start-Sleep -Seconds $trustSec
+            continue
         }
         if ($f[0] -ceq 'wait' -and $f.Count -ge 3) {
             $waitSec = 0
@@ -6433,11 +6463,12 @@ $mentionsJson
     }
     # Claude account rotation: a fresh lease for every claude launch. The check
     # above stays on the operator's own config directory; nothing reads inside
-    # an account's.
+    # an account's except an interactive seat's folder-trust key (the lease
+    # sets it).
     Clear-MoeAccountLease
     if (-not $moeSkipLaunch -and $cliType -eq 'claude') {
         Get-MoeAccountLease
-        # A wait for a free account is not launch time.
+        # A wait for a free or trusted account is not launch time.
         $script:CliLaunchedAt = Get-Date
     }
     if ($moeSkipLaunch) {
