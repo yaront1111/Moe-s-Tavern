@@ -73,7 +73,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T08:32:50.950Z",
-  "updatedAt": "2026-10-26T08:49:34.715Z",
+  "updatedAt": "2026-10-26T08:50:05.117Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T08:34:51.276Z",
     "plannedStepCount": 4,
@@ -127,7 +127,8 @@
     "packages/moe-daemon/src/state/candidateStore.test.ts",
     "packages/moe-daemon/src/tools/recordCandidate.ts",
     "packages/moe-daemon/src/tools/recordCandidate.test.ts",
-    ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json"
+    ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json",
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
   ],
   "completionSummary": "Review-only slice; NO bytes changed. QA: review landed dc13b0e (see git show dc13b0e), files clean vs HEAD. Numstat over the 5 files: schema.ts +6, candidateStore.ts +53/-5, candidateStore.test.ts +60/-1, recordCandidate.ts +11, recordCandidate.test.ts +17 = +147/-6, 141 net (<=400). Later commits F04/F05/F06/F08 touched them; behaviour holds at HEAD.\nDoD->test: (1) 'persists a valid protectedEntries list and hands out copies of it' incl []; (2) badEntries table (INVALID_INPUT naming protectedEntries[i], nothing written, 2001 bound); (3) 'treats protectedEntries as frozen' (undefined vs [] vs changed, identical replay idempotent, deep copies); (4) recordCandidate.test 'declares protectedEntries as a closed {path, oid} list and records it' + held-out acceptance record_candidate unchanged (3 files, 81 passed).\nSix mutation probes on scratch copies, all killed: (i) drop ascending check -> duplicate path + unsorted rows; (ii) case-insensitive oid regex -> uppercase oid row; (iii) ?? [] compare -> frozen test; (iv) shallow copy -> persists/copies test; (v) cap 2001 -> 2001-entries row; (vi) inputSchema property removed -> tool test.\nFull gate: tsc exit 0; npm test exit 0, 167 files, 4219 passed/16 skipped (a first run with inherited Windows PATH had 1 known env failure in accounts/cli.test.ts; Linux-only PATH rerun green). Self-review: no defects. Expect advisory NO-COMPLETION-COMMIT; point QA at dc13b0e.",
   "commits": [
@@ -145,14 +146,30 @@
       "treeId": "21d72fc90b4e82339a7489b48639b94906058ed1",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "8eec4a2148f3d7a6516b81e2da1de35fa747aff0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T08:47:02Z",
+      "paths": [
+        ".moe/tasks/task-a00f45d35beb4a1b94ea65909723e69e.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T08:50:05.117Z",
+      "treeId": "f61276ca03d1b96f0bb7c18de24ca437fd5f548b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-26T08:37:50Z",
-    "at": "2026-10-26T08:41:42.650Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T08:47:02Z",
+    "at": "2026-10-26T08:50:05.117Z"
   },
   "completedAt": "2026-10-26T08:49:34.715Z",
   "reviewCompletedAt": "2026-10-26T08:49:34.715Z",

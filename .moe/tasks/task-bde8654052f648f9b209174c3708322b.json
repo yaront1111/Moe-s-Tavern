@@ -57,7 +57,7 @@
     }
   ],
   "planRevision": 41,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,7 +89,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:52.496Z",
-  "updatedAt": "2026-10-26T08:49:36.279Z",
+  "updatedAt": "2026-10-26T09:01:21.582Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88",
     "task-db57e0148a9d47839c4159aab8a8c16d",
@@ -103,11 +103,14 @@
     "plannedDistinctFileCount": 4,
     "executedStepCount": 18,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T09:01:21.581Z",
+    "wallClockMs": 128212602
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-7c627d35"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -305,5 +308,9 @@
     }
   ],
   "priorBlockedReason": "QA substance review PASSED. The only open gate is the human decision on rail proposal prop-3f2fd69af5374943af7870804d03d6db (EPIC ADD_RAIL), which is PENDING with resolvedAt null. The cumulative diff is +467/-19 = net 448 under packages/ (dc13b0e +466/-19, then d8f2d6e +1), over the 400 cap. None of the epic's 7 rails waives size. So QA can neither approve nor usefully reject again: the worker already filed the exception, and landed bytes are not to be re-sliced. Same pattern as CQ-R07.\n\nQA evidence (qa-b0c1741e, 2026-10-25):\n- d8f2d6e is HEAD on moe/work-2026-10-24. It adds exactly the one assertion QA asked for, in test (e) at requiredChecks.delivery.test.ts:147, with LF endings. Its sha256 1bc0ace6… matches the shared tree.\n- On a fresh full-repo git archive of d8f2d6e (native Linux deps, lockfile equal, env -i):\n  - `cd packages/moe-daemon && npm test`: exit 0, 159 files, 3750 passed / 15 skipped.\n  - `npx tsc --noEmit`: exit 0.\n- QA's surviving mutant (drop the protectedChecksUnmeasured clause at deliveryProjection.ts:89) is now killed by (e): 1 failed / 71 passed. The original passes 72/72.\n- DoD 1-3 are unchanged since the reopen-1 review, and (b), (d) and (c) are green.\n\nGovernor/human:\n- When the proposal is APPROVED, return this task to REVIEW with unblock_worker resolveBlocks:true or set_task_status REVIEW. The next QA only confirms that the rail text covers dc13b0e + d8f2d6e (net 448), then approves.\n- If it is REJECTED, set PLANNING so the architect re-slices per QA's option (a).",
-  "reviewStartedAt": "2026-10-26T08:48:45.322Z"
+  "reviewStartedAt": "2026-10-26T08:48:45.322Z",
+  "completedAt": "2026-10-26T09:01:21.581Z",
+  "reviewCompletedAt": "2026-10-26T09:01:21.581Z",
+  "reviewSummary": "CQ-V01 APPROVED. This round is a review slice: 4 files of dc13b0e+d8f2d6e; no bytes changed.\n\nSIZE: `git show --numstat dc13b0e d8f2d6e`:\n- policy.ts +103/-8\n- deliveryProjection.ts +14/-5\n- getContext.ts +5\n- requiredChecks.delivery.test.ts +197+1\nTotal +320/-13 = 307 net, within 400. The other 5 files (141 net) are CQ-V01c, now DONE; 307+141 = 448.\n\nCOMMITS: dc13b0e, d8f2d6e and 2390184 are all on moe/work-2026-10-24. The 4 files are clean vs HEAD 8eec4a2 and cmp-equal to a fresh archive. getContext.ts was later edited by F06/C01; V01's lines at :16, :468-470 and :503 are intact.\n\nGATE: fresh full-repo git archive of 8eec4a2, native Linux deps (lock JSON equal), env -i, 0 MOE_*.\n- npm test run 1 exit 1: one unrelated timing flake, waitForTask.test.ts:344 (50ms waiter wait), at load 22 on 16 cores. Alone that file passed 10/10, 3 times.\n- Run 2 exit 0: 167 files, 4219 passed / 16 skipped.\n- tsc --noEmit exit 0.\n\nDoD: 1 = (b) :89; 2 = (d) :123 and :130; 3 = (c) :103 and :113; 4 = gate above.\n\nQA MUTANTS: 13, on a scratch copy, sha-verified after restore. 11 killed:\n- a removed file passes: (b):94\n- a stale snapshot fails open: (d):126\n- agent-reported runs count: (c):120\n- case-insensitive roots: (c):107\n- the lookup catch fails open: (e):155\n- DONE skips protected checks: (g):191\n- checkOwed ignores declared checks: (a):86\n- the projection drops changed / unapproved: (g):193, (d):127\n- getContext sends a null key: (d):137\n- no dedupe: :161\n\n2 SURVIVED, both defensive fail-closed branches for corrupted persisted state:\n- the validator-throw catch, which reports unapproved;\n- the protectedDrift duplicate-path guard, which reports unmeasured.\nAt runtime the real code fails closed on both, and 2 scratch tests kill both mutants. That is not a DoD gap; the tests are handed forward to CQ-V12 in a comment.",
+  "requiredCheckAtDone": null
 }

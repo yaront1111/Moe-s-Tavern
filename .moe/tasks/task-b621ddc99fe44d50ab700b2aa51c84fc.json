@@ -25,10 +25,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 120,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-c04ac0015b4343e2a9eb295323f30e97",
+      "author": "qa-7c627d35",
+      "content": "QA hand-forward from CQ-V01 (approved 2026-10-26). Two test gaps, non-blocking, for this hardening row. Both are defensive branches that handle corrupted persisted state: loadEntities reads task and candidate JSON raw, so neither the taskStore write validation nor candidateStore's record validation applies on load. The code is correct, and QA verified at runtime that it fails closed in both cases. But no test pins either branch, and a mutant that fails open passes the whole suite.\n\n1. delivery/policy.ts protectedCheckShortfall: the validateExecutionContract catch returns protected-checks-unapproved. Mutant: `return []` there. It survives, and a corrupt requiredChecks then reads as satisfied: checkOwed is true and no token is produced.\n   Proposed test, in requiredChecks.delivery.test.ts:\n   - `h.state.tasks.set('task-1', {...task(), executionContract: {requiredChecks: [{...defs[0], bogus: 1}, defs[1]]}})`\n   - expect missing() == ['protected-checks-unapproved']\n   - expect projection requiredCheckSatisfied false\n\n2. protectedDrift: the duplicate-path guard (`candidate.has(path)`) returns null, which yields unmeasured. Mutant: drop the guard. It survives, and the last duplicate wins.\n   Proposed test: a candidate with `[{path: e[0].path, oid: OID}, ...e]`, and again with the duplicate last. Expect ['protected-checks-unmeasured'] both times.\n\nBoth tests passed on the HEAD 8eec4a2 bytes (18/18) and killed their mutant, in a scratch copy only (/tmp/qa-v01-bin/extra-tests.ts.txt).",
+      "timestamp": "2026-10-26T09:01:02.090Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-26T08:33:05.706Z",
+  "updatedAt": "2026-10-26T09:01:02.090Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",
