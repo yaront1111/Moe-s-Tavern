@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:39:58.071Z",
-  "updatedAt": "2026-10-26T08:12:56.493Z",
+  "updatedAt": "2026-10-26T08:14:05.624Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T22:18:28.699Z",
     "plannedStepCount": 7,
@@ -197,7 +197,10 @@
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md",
     "docs/MCP_SERVER.md",
-    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+    ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json"
   ],
   "completionSummary": "Round 2 after the size-only reject (reopen 1). Following QA's route, the landed bytes are unchanged: the 7 owned paths equal completion 4758ad1 (git diff --quiet, no later commit touches them; HEAD 229e534 is a board-only checkpoint). The size exception is filed as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (ADD_RAIL, EPIC) and is still PENDING human review. It is scoped to this task and names 4758ad1 +843/-32 (net 811) with this numstat: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8.\n\nBehaviour, as in round 1:\n- `moe-account-lease.mjs trust` sets projects[<key>].hasTrustDialogAccepted in the leased account's .claude.json, under claude's .claude.json.lock, with tmp+rename and a read-back.\n- Both launchers run it for interactive leased claude seats only, printing MOE_ACCOUNT_TRUST_GRANTED.\n- When trust cannot be set, they print MOE_ACCOUNT_UNTRUSTED and post one #general @governors line per account, naming the account and project but never the folder. They then wait MOE_ACCOUNT_RETRY_SEC and re-lease.\n- Headless -p seats are unchanged. The invariant amendment cites sign-off comment-99598cf0.\n\nStep-7 adversarial review: no defect. Theoretical residuals only:\n- A stale lock from a killed helper gives a loud refusal until claude's 10 s stale rule clears it.\n- A kill mid-write leaves tmp debris.\n- claude's no-lock fallback could drop the key later.\n\nFresh gate, run 07:48:58Z-07:57:54Z on a pure git archive of HEAD with 27 MOE_*/CLAUDE* vars unset and TIMEOUT 180:\n- lease test: 40 tests, 39 pass, 1 skip\n- parity-check.sh PASS\n- postflight PASS (frozen 73, [accounts] ok, scope 38)\n- exit 0\n\nNative Windows, same snapshot:\n- node.exe: 54 tests, 52 pass, 2 skips. That covers the 7 ps1 cases on each of powershell.exe and pwsh.exe, plus the 6 Git Bash cases.\n- PS 5.1 ParseFile: 0 errors.\n- parity-check.ps1 PASS.\n- BOM kept, 0 CR.",
   "commits": [
@@ -253,6 +256,24 @@
       "treeId": "3ed22457fa52d0670bf1d22a35bbef3cea837f70",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "a7222fa47acb2d12eb65bb5833c15156f5fa06e4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T08:00:47Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T08:14:05.623Z",
+      "treeId": "ae2d0ba3b3fc2bdedc1976912bebccf6341ae106",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -262,9 +283,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3729a0d6@2026-10-26T07:46:27Z",
-    "at": "2026-10-26T08:00:25.741Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T08:00:47Z",
+    "at": "2026-10-26T08:14:05.623Z"
   },
   "reviewCompletedAt": "2026-10-26T07:32:09.261Z",
   "rejectionDetails": {

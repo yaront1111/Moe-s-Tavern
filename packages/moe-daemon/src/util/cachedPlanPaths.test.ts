@@ -6,11 +6,20 @@ import { cachedPlanRef, findCachedPlanPaths, type PlanPathGitRunner } from './ca
 
 const commit = 'a'.repeat(40);
 const blob = 'b'.repeat(40);
+const GIT = 'C:\\Program Files\\Git\\cmd\\git.exe';
 const execFileMock = vi.hoisted(() => vi.fn());
+const gitExecutableMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ execFile: execFileMock }));
+vi.mock('./gitExecutable.js', () => ({ gitExecutable: gitExecutableMock }));
 let root: string;
-beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-cached-path-')); });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); execFileMock.mockReset(); fs.rmSync(root, { recursive: true, force: true }); });
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-cached-path-'));
+  gitExecutableMock.mockReturnValue(GIT);
+});
+afterEach(() => {
+  vi.restoreAllMocks(); vi.unstubAllEnvs(); execFileMock.mockReset(); gitExecutableMock.mockReset();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 function runner(overrides: Partial<Record<'top' | 'config' | 'commit' | 'tree', string>> = {}) {
   return vi.fn<PlanPathGitRunner>(async args => {
@@ -220,5 +229,32 @@ describe('bounded raw Git reader', () => {
     now = 101;
     await expect(git.head('cat-file', ['cat-file'], 8)).rejects.toThrow('git cat-file: budget exhausted before the step started');
     expect(head).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('daemon git spawns use the resolved absolute git', () => {
+  const load = () => import('./cachedPlanPaths.js');
+  it('spawns exactly the shared executable from runGit, runGitHead and diskState', async () => {
+    execFileMock.mockImplementation((_f, _a, _o, cb) => cb(null, { stdout: 'ok' }));
+    const { runGit, runGitHead } = await load();
+    const { defaultGitRunner } = await import('./diskState.js');
+    await runGit(['cat-file'], root, 100);
+    await runGitHead(['cat-file'], root, 100, 8);
+    await defaultGitRunner(['status'], root);
+    expect(execFileMock.mock.calls.map(call => call[0])).toEqual([GIT, GIT, GIT]);
+    expect(execFileMock.mock.calls[2][1]).toEqual(['status']);
+    expect(execFileMock.mock.calls[2][2]).not.toHaveProperty('env');
+  });
+  it('treats a resolution miss like a spawn ENOENT and never falls back to a bare git', async () => {
+    const miss = Object.assign(new Error('git.com or git.exe not found in any fully qualified PATH entry'), { code: 'ENOENT' });
+    gitExecutableMock.mockImplementation(() => { throw miss; });
+    const { runGit, runGitHead } = await load();
+    const { computeDiskStateSignature } = await import('./diskState.js');
+    expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts']))
+      .toEqual({ miss: expect.stringContaining('git rev-parse --show-toplevel: ENOENT: ') });
+    expect(await computeDiskStateSignature(root)).toBeUndefined();
+    await expect(runGitHead(['cat-file'], root, 100, 8)).rejects.toBe(miss);
+    await expect(runGit(['cat-file'], root, 100)).rejects.toBe(miss);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });

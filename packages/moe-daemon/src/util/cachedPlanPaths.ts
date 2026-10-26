@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { promisify } from 'node:util';
 import { normalizeAffectedFile, pathKey } from './affectedFiles.js';
+import { gitExecutable } from './gitExecutable.js';
 
 const execFileAsync = promisify(execFile);
 const BUDGET_MS = 2000;
@@ -51,7 +52,7 @@ export const runGit: PlanPathGitRunner = async (args, cwd, timeout, maxBuffer = 
     // only this explicitly configured, canonical project for these read-only
     // commands (e.g. a Windows checkout retaining its previous owner's SID).
     // Never write Git config or broaden this to safe.directory=*.
-    const result = await execFileAsync('git', readOnlyGitArgs(cwd, args),
+    const result = await execFileAsync(gitExecutable(), readOnlyGitArgs(cwd, args),
       { cwd, env: readOnlyGitEnv(), timeout, maxBuffer, windowsHide: true });
     return result.stdout;
   } catch (error) {
@@ -73,7 +74,7 @@ export type GitHeadRunner = (args: string[], cwd: string, timeout: number, maxBy
 export const runGitHead: GitHeadRunner = async (args, cwd, timeout, maxBytes) => {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('maxBytes must be a positive safe integer');
   try {
-    const { stdout } = await execFileAsync('git', readOnlyGitArgs(cwd, args), {
+    const { stdout } = await execFileAsync(gitExecutable(), readOnlyGitArgs(cwd, args), {
       cwd, env: readOnlyGitEnv(), timeout, maxBuffer: maxBytes, windowsHide: true, encoding: 'buffer',
     });
     return { stdout, truncated: false, exitCode: 0, stderr: '' };
