@@ -110,7 +110,7 @@
     }
   ],
   "planRevision": 34,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -149,11 +149,17 @@
       "author": "worker-3729a0d6",
       "content": "Correction to the completion summary's last line. stats.filesModified lists 9 paths, not 10: getCommitScope.ts is absent because step 1 reported only the test file. Of those 9, the 8 besides getCommitScope.test.ts are byte-identical to HEAD 16342ca. They appear only because steps 2-6 sent an empty modifiedFiles, which falls back to affectedFiles. The only bytes changed this round are packages/moe-daemon/src/tools/getCommitScope.test.ts +25/-2.",
       "timestamp": "2026-10-26T03:29:06.658Z"
+    },
+    {
+      "id": "comment-a54bbf15921e41d1b0974ab5c9ada7e3",
+      "author": "qa-7c627d35",
+      "content": "QA round 2 (qa-7c627d35, 2026-10-26 03:31-03:43Z) on completion e5970fd. Verdict: the substance passes. Approval waits only on the size waiver (prop-a53405bd75df48729433b5cb849e2e4c, PENDING), so I parked the task from REVIEW.\n\nVerified:\n- e5970fd: recorded tree 07fc4516 matches; pushed, on origin/moe/work-2026-10-24. It is test-only: getCommitScope.test.ts +25/-2 plus this board JSON. `git diff 16342ca e5970fd` is empty for scripts/, docs/ and getCommitScope.ts.\n- Named gate from a git-archive snapshot of e5970fd scripts/ (cmp-equal), with MOE_*/CLAUDE* unset and TIMEOUT 180. `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`: EXIT=0, 03:33:15Z-03:41:41Z. Frozen 73, commit-scope 38, AF ok, PASS postflight.sh, PASS parity-check.sh.\n- Daemon, whole-repo e5970fd snapshot with native node_modules, env -i:\n  - getCommitScope.test.ts: 19/19.\n  - npm test: 166 files, 4206 passed | 14 skipped, EXIT 0.\n  - tsc --noEmit: 0. A strict tsc of the test file alone: 0.\n- My own getCommitScope.ts mutants: 12 of 12 red, each on its own pin.\n  - no-open-phase :487, no-slack :489, double-slack :490, parseable-only :492.\n  - ignore-attempts :486, idle-without-since :504.\n  - first-claimant-only, last-claimant-wins and and-not-or :523.\n  - ignore-assignee :440, missing-assignee-active :420, dead-counts :442.\n  - On 16342ca's test file the first four survive at 19/19, so the new fixtures are what kill them. Round-1 issues 1 and 2 are fixed.\n- postflight.ps1 and parity-check.ps1 were not re-run this round: the ps1 wrapper and harness are byte-identical to 16342ca, which QA ran green on PS 5.1 in round 1. The worker also re-ran both on 5.1 and pwsh 7.\n- Size: 801495d..e5970fd is +487/-35 = 452 net non-board LOC over 10 files, above the 400 cap. No project or epic rail waives it yet.\n\nNext QA, after the row is back in REVIEW:\n- Confirm the waiver is in the epic's epicRails, and that task.commits has no completion newer than e5970fd.\n- Rerun the named gate.\n- Approve, naming the size. Nothing else is outstanding.",
+      "timestamp": "2026-10-26T03:44:29.598Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T16:44:57.056Z",
-  "updatedAt": "2026-10-26T03:29:06.658Z",
+  "updatedAt": "2026-10-26T03:44:49.982Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T22:02:46.544Z",
     "plannedStepCount": 8,
@@ -207,11 +213,11 @@
   },
   "planApprovedAt": "2026-10-24T22:23:18.731Z",
   "workStartedAt": "2026-10-24T23:51:07.237Z",
-  "blockedReason": null,
+  "blockedReason": "QA review is complete and green. This row waits only on a human governance decision, not on code. Completion e5970fd (test-only: getCommitScope.test.ts +25/-2, pushed, on origin/moe/work-2026-10-24) fixes both round-1 test issues. QA's checks:\n- the named gate (bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh), re-run from a git-archive snapshot: EXIT=0 (frozen 73, scope 38, AF ok);\n- the daemon suite: 166 files, 4206 passed | 14 skipped;\n- 12 of 12 daemon mutants red, each on its own pin.\nOpen item: the delivered diff is 452 net non-board LOC (16342ca 464+/35- plus this round), over QA's 400-LOC cap, and no project or epic rail waives it. The waiver is epic ADD_RAIL proposal prop-a53405bd75df48729433b5cb849e2e4c, which is PENDING. Only a human can resolve rail proposals, from the IDE.\nNeeded:\n1. A human approves prop-a53405bd75df48729433b5cb849e2e4c and rejects the superseded prop-490aa256862c44cda49a96b5134390f6.\n2. A governor or human returns this row with set_task_status REVIEW. It is unassigned after this block, so a plain unblock_worker cannot reach it.\n3. The next QA approves on the evidence in QA's round-2 task comment.\nIf the proposal is rejected, use set_task_status PLANNING so the architect can split the task. No worker change is needed either way.",
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": null,
-  "blockedAt": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-26T03:44:49.982Z",
   "commits": [
     {
       "sha": "54914b3258acd07e425e9c483088a76023640b5c",
@@ -254,6 +260,22 @@
       "treeId": "c7ce8ddf31f07adcee60f9050c9677013f665dea",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "e5970fd33490b6fbaa11ed9358fbf800d20c1037",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T02:33:17Z",
+      "paths": [
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T03:29:34.473Z",
+      "treeId": "07fc451633548262c9149d8e5ed20e72015a49be",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -265,15 +287,15 @@
     "docs/CONFIGURATION.md",
     "docs/MCP_SERVER.md",
     "docs/TROUBLESHOOTING.md",
-    "docs/SCHEMA.md"
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-7c627d35@2026-10-26T02:16:37Z",
-    "at": "2026-10-26T02:33:52.161Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T02:33:17Z",
+    "at": "2026-10-26T03:29:34.473Z"
   },
   "reviewStartedAt": "2026-10-26T03:28:57.778Z",
   "verification": {
