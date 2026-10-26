@@ -18,6 +18,13 @@ const MAX_ROLE_CHARS = 64;
 const UNRESOLVED_PATHS_SHOWN = 20;
 /** #governors gets at most one commit alert per task per window; the task channel gets every line. */
 const GOVERNOR_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * An unexpanded shell reference: `${NAME…}`, `$(…)` or `$NAME` (PowerShell's
+ * `$env:NAME` too). MCP arguments are never shell-expanded, so a seat that
+ * copies `$MOE_SESSION_ID` into `sessionId` would record the template text as
+ * provenance. A real id (`<workerId>@<iso>` or `<workerId>@unknown`) has none.
+ */
+const UNEXPANDED_SHELL_REF_RE = /\$[{(A-Za-z_]/;
 
 // In-memory (resets on daemon restart, which is the conservative direction:
 // a restart re-alerts once rather than staying silent for up to a day).
@@ -117,7 +124,7 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
         status: { type: 'string', description: 'Task status the wrapper resolved at landing (REVIEW, DONE, BLOCKED, UNKNOWN, …).' },
         role: { type: 'string', description: 'Wrapper role: worker, architect, qa.' },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as recordedBy.' },
-        sessionId: { type: 'string', description: '<workerId>@<preflight-iso>, matching the commit\'s Moe-Session trailer.' },
+        sessionId: { type: 'string', description: '<workerId>@<preflight-iso>, matching the commit\'s Moe-Session trailer, or <workerId>@unknown. Pass the literal value: MCP arguments are not shell-expanded, so a $NAME or ${…} template is refused.' },
         cliExitCode: { type: 'number' },
         pushed: { type: 'boolean' },
         recoveredBy: { type: 'string', description: 'Worker that landed another task\'s lingering baseline (orphan recovery).' },
@@ -174,6 +181,11 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
       if (!role) throw missingRequired('role');
       const sessionId = readOptionalString(params.sessionId, 'sessionId', MAX_SHORT_STRING);
       if (!sessionId) throw missingRequired('sessionId');
+      if (UNEXPANDED_SHELL_REF_RE.test(sessionId)) {
+        throw invalidInput('sessionId', `${JSON.stringify(sessionId)} contains an unexpanded shell reference. `
+          + 'MCP arguments are not shell-expanded, so run `printenv MOE_SESSION_ID` in a shell and pass the printed value, '
+          + 'or pass `<workerId>@unknown` when it is unset');
+      }
 
       const sha = readOptionalString(params.sha, 'sha', 40);
       if (sha !== undefined && !SHA_RE.test(sha)) throw invalidInput('sha', 'must be 7-40 hex characters');

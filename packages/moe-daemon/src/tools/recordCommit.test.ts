@@ -354,4 +354,44 @@ describe('moe.record_commit', () => {
     // Nothing was written by the rejected calls.
     expect(h.state.getTask('task-1')!.commits).toBeUndefined();
   });
+
+  /** The refusal message for `sessionId`; fails the test when the call is accepted. */
+  async function sessionIdRefusal(sessionId: string): Promise<string> {
+    try {
+      await recordCommitTool(h.state).handler({ ...base, sessionId }, h.state);
+    } catch (err) {
+      return (err as Error).message;
+    }
+    throw new Error(`sessionId ${JSON.stringify(sessionId)} was accepted`);
+  }
+
+  it('refuses an unexpanded ${MOE_SESSION_ID} template as sessionId and names the remedy', async () => {
+    await seed();
+    // Observed on task 811a5c1b (2026-10-26): MCP arguments are never shell-expanded.
+    const message = await sessionIdRefusal('${MOE_SESSION_ID:-worker-061d418f@unknown}');
+    expect(message).toContain('[INVALID_INPUT] Invalid sessionId: "${MOE_SESSION_ID:-worker-061d418f@unknown}" contains an unexpanded shell reference');
+    expect(message).toContain('MCP arguments are not shell-expanded');
+    expect(message).toContain('run `printenv MOE_SESSION_ID` in a shell and pass the printed value');
+    expect(message).toContain('or pass `<workerId>@unknown` when it is unset');
+    const task = h.state.getTask('task-1')!;
+    expect(task.commits).toBeUndefined();
+    expect(task.lastCommitOutcome).toBeUndefined();
+  });
+
+  it('refuses a bare $MOE_SESSION_ID and the other unexpanded shell forms', async () => {
+    await seed();
+    for (const sessionId of ['$MOE_SESSION_ID', '${MOE_SESSION_ID}', '$(printenv MOE_SESSION_ID)', '$env:MOE_SESSION_ID', 'worker-x@$MOE_PREFLIGHT_ISO']) {
+      expect(await sessionIdRefusal(sessionId), sessionId).toContain('MCP arguments are not shell-expanded');
+    }
+    expect(h.state.getTask('task-1')!.commits).toBeUndefined();
+  });
+
+  it('accepts <workerId>@unknown and <workerId>@<iso> session ids', async () => {
+    await seed();
+    await record({ sessionId: 'worker-x@unknown' });
+    await record({ sessionId: 'worker-x@2026-10-26T15:02:30Z', sha: SHA_B });
+    const task = h.state.getTask('task-1')!;
+    expect(task.commits!.map((c) => c.sessionId)).toEqual(['worker-x@unknown', 'worker-x@2026-10-26T15:02:30Z']);
+    expect(task.lastCommitOutcome!.sessionId).toBe('worker-x@2026-10-26T15:02:30Z');
+  });
 });
