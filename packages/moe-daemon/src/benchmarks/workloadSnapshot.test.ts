@@ -427,6 +427,9 @@ describe('portable paths', () => {
     ['com9 device', 'com9'],
     ['superscript COM device', 'COM\u00b9.txt'],
     ['CONIN$ device', 'CONIN$'],
+    ['CON device with a space before the extension', 'CON .txt'],
+    ['nested aux device with spaces before the extension', 'a/aux  .c'],
+    ['COM1 device with a space before the extension', 'COM1 .log'],
     ['.git', '.git/config'],
     ['nested .GIT', 'x/.GIT/hooks/pre-commit'],
     ['git short name', 'GIT~1/config'],
@@ -497,6 +500,11 @@ describe('portable paths', () => {
       ['\u00e9'.repeat(32)]: 'two-byte segment of 64 bytes',
     };
     expect(ws.digestFiles(atBounds)).toBe(referenceDigest(atBounds));
+  });
+
+  it('accepts names that only begin with a device name', () => {
+    const files: Files = { 'con x': '', 'console.log': '' };
+    expect(ws.digestFiles(files)).toBe(referenceDigest(files));
   });
 
   it('rejects case-folded duplicates, file/directory conflicts and symbol keys', () => {

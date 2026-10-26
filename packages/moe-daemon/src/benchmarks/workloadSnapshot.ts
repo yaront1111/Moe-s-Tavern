@@ -113,7 +113,8 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 // Backslash, drive/stream colon, Windows-reserved, C0/DEL/C1 control, bidi-control (ALM, LRM/RLM, LRE-RLO,
 // LRI-PDI), zero-width and BOM characters. Keep them escaped: literal ones in source are Trojan Source.
 const FORBIDDEN_CHAR = /[\\<>:"|?*\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
-const DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i;
+// Like Git's is_valid_win32_path, spaces before the extension are skipped: 'CON .txt' is reserved too.
+const DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]) *(?:\..*)?$/i;
 
 const utf8Length = (s: string): number => Buffer.byteLength(s, 'utf8');
 /** True when the string has no lone surrogates (Node 18 lacks String.prototype.isWellFormed). */

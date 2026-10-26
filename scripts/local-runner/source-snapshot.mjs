@@ -2,7 +2,7 @@
 // filesystem, process, network or Git access, so any transport can call it. CQ-R09 (final) and CQ-R12 consume it;
 // it writes nothing and verified-local stays unavailable.
 // Path rules mirror checkPortablePath in packages/moe-daemon/src/benchmarks/workloadSnapshot.ts, copied because that
-// module is daemon TypeScript: FORBIDDEN_CHAR, wellFormed and foldCase verbatim, DEVICE_NAME widened. Facts relied on:
+// module is daemon TypeScript: FORBIDDEN_CHAR, DEVICE_NAME, wellFormed and foldCase verbatim. Facts relied on:
 // - Git's verify_path refuses .git lookalikes: is_hfs_dotgit skips the HFS+-ignorable code points (U+200C-U+200F,
 //   U+202A-U+202E, U+206A-U+206F, U+FEFF) and is_ntfs_dotgit matches the 8.3 short-name alias GIT~1.
 // - NTFS strips a trailing dot or space from a name, so 'a.' and 'a ' alias 'a'.
@@ -36,7 +36,7 @@ const MESSAGES = {
 // Backslash, drive/stream colon, Windows-reserved, C0/DEL/C1 control, bidi-control (ALM, LRM/RLM, LRE-RLO,
 // LRI-PDI), zero-width and BOM characters. Keep them escaped: literal ones in source are Trojan Source.
 const FORBIDDEN_CHAR = /[\\<>:"|?*\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/;
-// The daemon's rule plus ' *': like Git's is_valid_win32_path, 'CON .txt' is reserved too.
+// Like Git's is_valid_win32_path, spaces before the extension are skipped: 'CON .txt' is reserved too.
 const DEVICE_NAME = /^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]) *(?:\..*)?$/i;
 const FILE_KEYS = ['kind', 'path', 'executable', 'data'];
 const DELETE_KEYS = ['kind', 'path'];

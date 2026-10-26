@@ -101,7 +101,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:19:07.202Z",
-  "updatedAt": "2026-10-26T17:12:18.458Z",
+  "updatedAt": "2026-10-26T17:17:38.407Z",
   "contextFetchedBy": [
     "qa-b0c1741e",
     "architect-1520cc31",
@@ -149,7 +149,42 @@
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
+    ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json"
+  ],
+  "completionSummary": "Under the protected profile, Restart Daemon no longer signals a pid from a repository-supplied .moe/daemon.json without provenance.\n- MoeDaemonSupervisor: added stopDaemonForRestart(info): String? (null = continue, text = refusal) and a trailing processLookup (default ProcessHandle.of(pid).orElse(null)). Order: liveness, one profile read, capture the handle once. Under PROTECTED it requires activationRefusal(info)==null (verifyProvenance: per-project pid+start or a recorded supervisor parent), then destroys the captured handle, never re-resolved. PROTECTED fails closed on a provenance refusal, a lookup/destroy exception, or destroy()==false. The message is bounded: pid plus fixed text, never calls the process a Moe daemon, and says to identify and stop it, then Restart Daemon. LEGACY: best-effort destroy; errors are swallowed (now logged) and the restart continues.\n- Decided legacy change, tested in R3: pid<=0 is never looked up or signaled in either profile. An absent pid reads as 0, and kill(2) treats 0/-1 as process groups. On Windows/Linux ProcessHandle.of(0/-1) is already empty, so nothing changes there.\n- MoeProjectService.restartDaemon uses it. A refusal is logged and published, then it returns before deleting daemon.json, resetting backoff or connecting. readDaemonInfo is unchanged.\nTests (R1-R4 in RuntimeSelectionPolicyTest) drive the real restartDaemon with inert spy handles:\n- R1 protected refusals: unrecorded, stale start, other project, no start instant, blank projectPath, unreadable project.json. Each has 0 signals, daemon.json bytes kept, no start, no backoff reset, no retry.\n- R2: legacy, and a recorded supervisor and its child, each stopped once with one lookup.\n- R3: dead, vanished, 0, -1.\n- R4: lookup/destroy failures.\nRED was 4/29 failing before wiring; mutation probes killed 9/9.\nFiled: task-4f1e37f30ee548298b26e17c0b6ea84e (LOW): the daemon.json read has no size cap.\nNot certified: OS-atomic restart and port binding (CQ-R13).",
+  "commits": [
+    {
+      "sha": "2d8a20b0c45ad234c5b7320ccb2c2f4721021714",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T16:49:08Z",
+      "paths": [
+        ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
+        ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T17:17:38.407Z",
+      "treeId": "9129a92caa6d79695c4d1af37015afca64d54cfd",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
   ],
-  "completionSummary": "Under the protected profile, Restart Daemon no longer signals a pid from a repository-supplied .moe/daemon.json without provenance.\n- MoeDaemonSupervisor: added stopDaemonForRestart(info): String? (null = continue, text = refusal) and a trailing processLookup (default ProcessHandle.of(pid).orElse(null)). Order: liveness, one profile read, capture the handle once. Under PROTECTED it requires activationRefusal(info)==null (verifyProvenance: per-project pid+start or a recorded supervisor parent), then destroys the captured handle, never re-resolved. PROTECTED fails closed on a provenance refusal, a lookup/destroy exception, or destroy()==false. The message is bounded: pid plus fixed text, never calls the process a Moe daemon, and says to identify and stop it, then Restart Daemon. LEGACY: best-effort destroy; errors are swallowed (now logged) and the restart continues.\n- Decided legacy change, tested in R3: pid<=0 is never looked up or signaled in either profile. An absent pid reads as 0, and kill(2) treats 0/-1 as process groups. On Windows/Linux ProcessHandle.of(0/-1) is already empty, so nothing changes there.\n- MoeProjectService.restartDaemon uses it. A refusal is logged and published, then it returns before deleting daemon.json, resetting backoff or connecting. readDaemonInfo is unchanged.\nTests (R1-R4 in RuntimeSelectionPolicyTest) drive the real restartDaemon with inert spy handles:\n- R1 protected refusals: unrecorded, stale start, other project, no start instant, blank projectPath, unreadable project.json. Each has 0 signals, daemon.json bytes kept, no start, no backoff reset, no retry.\n- R2: legacy, and a recorded supervisor and its child, each stopped once with one lookup.\n- R3: dead, vanished, 0, -1.\n- R4: lookup/destroy failures.\nRED was 4/29 failing before wiring; mutation probes killed 9/9.\nFiled: task-4f1e37f30ee548298b26e17c0b6ea84e (LOW): the daemon.json read has no size cap.\nNot certified: OS-atomic restart and port binding (CQ-R13)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T16:49:08Z",
+    "at": "2026-10-26T17:17:38.407Z"
+  }
 }
