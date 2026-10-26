@@ -531,6 +531,10 @@ switch (tool) {
     //   FAKE_SCOPE_PEERS_ACTIVE=1                 another worker is active
     //                                             (every other open task is
     //                                             then held by a live peer)
+    //   FAKE_SCOPE_PEER_ACTIVE=0|1                every peerDeclared entry's
+    //                                             peerActive (1 = true); unset
+    //                                             omits the field, as a daemon
+    //                                             from before it does
     //   FAKE_SCOPE_ASSIGNED                       assignedWorkerId
     //   FAKE_SCOPE_DECLARED_FIELD=1               serve `declared` (the
     //                                             record's declaredFiles) as
@@ -575,6 +579,8 @@ switch (tool) {
       const [p, t] = ent.split(':');
       if (p && !peerDeclared.some((e) => e.path === p)) peerDeclared.push({ path: p, taskId: t || 'task-peer' });
     }
+    const peerActive = process.env.FAKE_SCOPE_PEER_ACTIVE;
+    if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
     const peersActive = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
     const alwaysInclude = [`.moe/tasks/${tid}.json`, '.moe/project.json', ...(peersActive ? [] : peerIds.map((id) => `.moe/tasks/${id}.json`))];
     ok({
@@ -4780,14 +4786,93 @@ EOF
     echo "[scenario AE] skipped: this host cannot create symlinks"
   fi
 
+  # Scenario AF -- the skip-untouched idle-peer exception (task-c2cb5cf7). An
+  # own contested path with no TOOL witness (a Bash-style write: FILE_CLI's
+  # FAKE_CLI_EXTRA_FILE) lands only when it was clean at this session's
+  # pre-flight AND every contesting task reports peerActive:false. Another
+  # worker stays active throughout (FAKE_SCOPE_PEERS_ACTIVE=1), so only the
+  # per-path flag can release a path.
+  #   AF1  idle peer, clean at pre-flight          -> lands, Moe-Contested trailer
+  #   AF2  live peer, clean at pre-flight          -> held, named in held=
+  #   AF3  idle peer, dirty at pre-flight (one of  -> both held, named in held=
+  #        the two rewritten during the session)
+  # K2's refused.txt covers the absent field (an older daemon): still held.
+  echo "[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle"
+  scope_af_ended() { # $1 = dir -- the session-ended chat line
+    grep -F 'worker session ended: task=task-postflight' "$1/.moe/messages/chan-general.jsonl" | tail -n1
+  }
+  for scope_af_run in 1 2; do
+    SCOPE_AF_DIR="$TMP_DIR/scope-af$scope_af_run"
+    scope_af_out="$TMP_DIR/scope-af$scope_af_run.out"
+    make_scope_project "$SCOPE_AF_DIR" '["owned-a.txt","contested.txt"]'
+    echo owned-a > "$SCOPE_AF_DIR/owned-a.txt"
+    set +e
+    FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='contested.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=$((scope_af_run - 1)) \
+      FAKE_CLI_EXTRA_FILE=contested.txt run_scope_wrapper "$SCOPE_AF_DIR" "$scope_af_out" "$FILE_CLI"
+    scope_af_code=$?
+    set -e
+    [ "$scope_af_code" -eq 0 ] || scope_fail "AF$scope_af_run" "wrapper exited with $scope_af_code" "$scope_af_out"
+    scope_af_files="$(committed_paths "$SCOPE_AF_DIR")"
+    scope_af_line="$(scope_af_ended "$SCOPE_AF_DIR")"
+    [ -n "$scope_af_line" ] || scope_fail "AF$scope_af_run" "no session-ended line in #general" "$scope_af_out"
+    if [ "$scope_af_run" = 1 ]; then
+      [ "$scope_af_files" = "contested.txt owned-a.txt " ] \
+        || scope_fail AF1 "an idle peer's clean contested path must land; got [$scope_af_files]" "$scope_af_out"
+      if grep -Fq '[skip] contested.txt' "$scope_af_out"; then
+        scope_fail AF1 "contested.txt must not be skipped" "$scope_af_out"
+      fi
+      git -C "$SCOPE_AF_DIR" log -1 --format=%B | grep -Fq 'Moe-Contested: contested.txt (task-peer)' \
+        || scope_fail AF1 "the completion must keep the Moe-Contested trailer" "$scope_af_out"
+      case "$scope_af_line" in
+        *' held='*) scope_fail AF1 "nothing was held, so no held= suffix; got [$scope_af_line]" "$scope_af_out" ;;
+      esac
+    else
+      [ "$scope_af_files" = "owned-a.txt " ] \
+        || scope_fail AF2 "a live peer's contested path must stay out; got [$scope_af_files]" "$scope_af_out"
+      grep -Fq '[skip] contested.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' "$scope_af_out" \
+        || scope_fail AF2 "expected '[skip] contested.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" "$scope_af_out"
+      git -C "$SCOPE_AF_DIR" status --porcelain | grep -qx '?? contested.txt' \
+        || scope_fail AF2 "contested.txt must stay untracked" "$scope_af_out"
+      case "$scope_af_line" in
+        *' held=contested.txt(task-peer)'*) : ;;
+        *) scope_fail AF2 "the session-ended line must name the held path; got [$scope_af_line]" "$scope_af_out" ;;
+      esac
+    fi
+  done
+  SCOPE_AF_DIR="$TMP_DIR/scope-af3"
+  make_scope_project "$SCOPE_AF_DIR" '["owned-a.txt","pre-untouched.txt","pre-touched.txt"]'
+  for scope_af_p in owned-a.txt pre-untouched.txt pre-touched.txt; do echo pre > "$SCOPE_AF_DIR/$scope_af_p"; done
+  set +e
+  FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='pre-untouched.txt:task-peer,pre-touched.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=0 \
+    FAKE_CLI_EXTRA_FILE=pre-touched.txt run_scope_wrapper "$SCOPE_AF_DIR" "$TMP_DIR/scope-af3.out" "$FILE_CLI"
+  scope_af_code=$?
+  set -e
+  [ "$scope_af_code" -eq 0 ] || scope_fail AF3 "wrapper exited with $scope_af_code" "$TMP_DIR/scope-af3.out"
+  scope_af_files="$(committed_paths "$SCOPE_AF_DIR")"
+  [ "$scope_af_files" = "owned-a.txt " ] \
+    || scope_fail AF3 "paths dirty at pre-flight must stay out even with an idle peer; got [$scope_af_files]" "$TMP_DIR/scope-af3.out"
+  for scope_af_p in pre-untouched.txt pre-touched.txt; do
+    grep -Fq "[skip] $scope_af_p MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)" "$TMP_DIR/scope-af3.out" \
+      || scope_fail AF3 "expected '[skip] $scope_af_p MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" "$TMP_DIR/scope-af3.out"
+    git -C "$SCOPE_AF_DIR" status --porcelain | grep -qx "?? $scope_af_p" \
+      || scope_fail AF3 "$scope_af_p must stay untracked" "$TMP_DIR/scope-af3.out"
+  done
+  scope_af_line="$(scope_af_ended "$SCOPE_AF_DIR")"
+  case "$scope_af_line" in
+    *' held=pre-touched.txt(task-peer),pre-untouched.txt(task-peer)'*) : ;;
+    *) scope_fail AF3 "the session-ended line must name both held paths; got [$scope_af_line]" "$TMP_DIR/scope-af3.out" ;;
+  esac
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AF] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=37
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=36
+  scope_expected_runs=38
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=37
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks)); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

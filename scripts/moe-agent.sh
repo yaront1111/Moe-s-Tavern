@@ -2511,6 +2511,10 @@ post_flight() {
         if [ -n "${LAND_SUMMARY_OUTCOME:-}" ] && [ "${LAND_SUMMARY_OUTCOME:-}" != "committed" ] && [ -n "${LAND_SUMMARY_CODE:-}" ]; then
             content="$content outcome=$LAND_SUMMARY_OUTCOME code=$LAND_SUMMARY_CODE"
         fi
+        # Own contested paths the landing held back (ps1 twin): visible before QA.
+        if [ -n "${LAND_SUMMARY_HELD:-}" ]; then
+            content="$content held=$LAND_SUMMARY_HELD"
+        fi
         if ! moe_rpc chat_send \
             "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" \
                 "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$content" 2>/dev/null)" \
@@ -3395,13 +3399,17 @@ PYEOF
 # 'solo' with no active peer; inferred=true, never promoted) > UNATTRIBUTED
 # (reported, never staged). LAND_EVIDENCE_FILE names the pre-flight evidence
 # (P rows, see baseline_path) of the session whose bytes land; '' = none.
+# LAND_PREFLIGHT_DIRTY names this session's whole pre-flight dirty snapshot
+# (the skip-untouched idle-peer exception); '' = none, the exception is off.
 LAND_EVIDENCE_FILE=""
+LAND_PREFLIGHT_DIRTY=""
 resolve_attribution() {
     local mode="$1" tid="$2" snap="$3" bfile="$4" ufile="$5" toolfile="$6" scopefile="$7" outdir="$8" override="${9:-}"
     mkdir -p "$outdir" 2>/dev/null || return 1
     MOE_LAND_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_LAND_CONTESTED="$CS_ATTR_CONTESTED" MOE_LAND_EXCLUDE="$CS_ATTR_EXCLUDE" \
     MOE_LAND_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_LAND_POLICY_OVERRIDE="$override" \
     MOE_LAND_BASE="${10:-}" MOE_LAND_INDEX="${11:-}" MOE_LAND_EVIDENCE="${LAND_EVIDENCE_FILE:-}" \
+    MOE_LAND_PREFLIGHT_DIRTY="${LAND_PREFLIGHT_DIRTY:-}" \
     MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" \
     $PYTHON_CMD - "$mode" "$tid" "$snap" "$bfile" "$ufile" "$toolfile" "$scopefile" "$outdir" 2>"$outdir/attr.err" <<'PYEOF'
 import json, os, re, subprocess, sys
@@ -3497,11 +3505,31 @@ ASSERTED = decl_set(scope.get('asserted'))
 DECLARED = decl_set(scope.get('declared')) if isinstance(scope.get('declared'), list) else None
 PLANNED = dict((k, v) for k, v in decl_set(scope.get('planned')).items() if k not in ASSERTED)
 PEER = {}
+# PEER_IDLE[k]: every entry for k reports peerActive as a JSON false. Absent,
+# null or anything else (an older daemon, the disk fallback) is active.
+PEER_IDLE = {}
 for ent in (scope.get('peerDeclared') or []):
     if isinstance(ent, dict):
         n = norm_decl(ent.get('path'))
         if n:
             PEER.setdefault(key(n), str(ent.get('taskId') or ''))
+            PEER_IDLE[key(n)] = PEER_IDLE.get(key(n), True) and (ent.get('peerActive') is False)
+# This session's whole pre-flight dirty snapshot (blob, xy, path rows) as a
+# key set; None = none (a recovery landing, a failed copy): no exception.
+PREFLIGHT_DIRTY = None
+pd_f = env.get('MOE_LAND_PREFLIGHT_DIRTY') or ''
+if pd_f and os.path.isfile(pd_f):
+    try:
+        with open(pd_f, encoding='utf-8', errors='surrogateescape') as fh:
+            pd_lines = fh.read().split('\n')
+        PREFLIGHT_DIRTY = set()
+        for line in pd_lines:
+            parts = line.rstrip('\r').split('\t')
+            p = norm_top('\t'.join(parts[2:])) if len(parts) >= 3 else None
+            if p:
+                PREFLIGHT_DIRTY.add(key(p))
+    except Exception:
+        PREFLIGHT_DIRTY = None
 peers_active = bool(scope.get('peersActive'))
 if override == 'never' or scope.get('fallback'):
     peers_active = True
@@ -3614,7 +3642,15 @@ for pk in sorted(S):
             # 'skip-untouched' (default since 2026-09-06): a contested path
             # lands only when THIS session's editing tools wrote it -- an
             # untouched one carries the PEER's unlanded hunks (ps1 twin).
-            if contested_policy == 'skip-untouched' and pk not in TOOL:
+            # Idle-peer exception: a path clean at this session's pre-flight,
+            # whose every contesting task has had no session since (no active
+            # assignee, open attempt or attempt phase change), holds only this
+            # session's bytes (a Bash or python edit leaves no TOOL witness).
+            # A path already dirty at pre-flight stays held even if this
+            # session rewrote it: it can carry the peer's earlier hunks.
+            idle_clean = PREFLIGHT_DIRTY is not None and pk not in PREFLIGHT_DIRTY \
+                and PEER_IDLE.get(pk) is True
+            if contested_policy == 'skip-untouched' and pk not in TOOL and not idle_clean:
                 skipped.append(('MOE_ATTR_CONTESTED_UNTOUCHED(%s)' % PEER[pk], p))
                 continue
         # Asserted only by history (filesModified, completed steps, prior
@@ -4058,6 +4094,33 @@ attr_print_skips() {
         echo "[skip] $rec MOE_ATTR_MISSING"
     done < "$1/missing"
     return 0
+}
+
+# attr_held_list ATTR_DIR -- the own contested paths a landing held back, as
+# `<path>(<peer>)` joined by ',', at most 5 then `,+<N> more` (ps1 twin:
+# Get-MoeHeldList). Feeds the session-ended line's held= suffix; an unreadable
+# file gives ''.
+attr_held_list() {
+    local rec code p peer crec out="" n=0
+    [ -r "$1/skipped" ] || return 0
+    while IFS= read -r -d '' rec; do
+        code="${rec%%"$MOE_TAB"*}"
+        p="${rec#*"$MOE_TAB"}"
+        case "$code" in
+            "MOE_ATTR_CONTESTED_UNTOUCHED("*")") peer="${code#MOE_ATTR_CONTESTED_UNTOUCHED(}"; peer="${peer%)}" ;;
+            MOE_ATTR_CONTESTED)
+                peer=""
+                while IFS= read -r -d '' crec; do
+                    [ "${crec#*"$MOE_TAB"}" = "$p" ] && { peer="${crec%%"$MOE_TAB"*}"; break; }
+                done 2>/dev/null < "$1/contested"
+                ;;
+            *) continue ;;
+        esac
+        n=$((n + 1))
+        [ "$n" -le 5 ] && out="${out:+$out,}$p($peer)"
+    done < "$1/skipped"
+    [ "$n" -gt 5 ] && out="$out,+$((n - 5)) more"
+    printf '%s' "$out"
 }
 
 # ---- temp index --------------------------------------------------------------
@@ -5244,10 +5307,14 @@ run_landing() {
     # bytes against the P rows ITS pre-flight persisted; every other landing
     # uses the evidence this session's own pre-flight kept in memory, never the
     # file, which a peer's pre-flight may have rewritten meanwhile.
+    # A recovery lands a dead session's bytes, whose window predates `since`:
+    # no pre-flight snapshot, so the idle-peer exception stays off.
     if [ "${LAND_RECOVERED:-false}" = true ]; then
         LAND_EVIDENCE_FILE="$work/BL.tsv"
+        LAND_PREFLIGHT_DIRTY=""
     else
         LAND_EVIDENCE_FILE="${MOE_PREFLIGHT_EVIDENCE:-}"
+        LAND_PREFLIGHT_DIRTY="${MOE_PREFLIGHT_DIRTY:-}"
     fi
     if ! baseline_read "$LAND_TASK_ID" "$work/B.tsv" "$work/U.tsv"; then
         bl_session="${MOE_SID:-}"
@@ -5267,7 +5334,7 @@ run_landing() {
             echo -e "${YELLOW}[WARN]${NC} git status failed; cannot attribute the working tree for task $LAND_TASK_ID -- nothing committed, baseline kept."
             record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "" "" "" "" || true
             MOE_LANDING_DONE=true
-            LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+            LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
             LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
             return 1
         fi
@@ -5284,11 +5351,13 @@ run_landing() {
         echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: attribution failed for task $LAND_TASK_ID ($(tail -n1 "$ATTR_DIR/attr.err" 2>/dev/null)); nothing committed, baseline kept."
         record_commit_rpc "failed" "$LAND_KIND" "" "" "$LAND_CODE" "" "" "" "" || true
         MOE_LANDING_DONE=true
-        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0
+        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
         LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
         return 1
     fi
     attr_print_skips "$ATTR_DIR"
+    local held
+    held="$(attr_held_list "$ATTR_DIR")" || held=""
     if [ "${ATTR_N_PREEXISTING:-0}" -gt 0 ]; then
         echo -e "${BLUE}[attribution]${NC} $ATTR_N_PREEXISTING pre-session dirty path(s) untouched"
     fi
@@ -5309,7 +5378,7 @@ run_landing() {
         # landing kind, sha = the rescue sha when one was parked.
         LAND_SUMMARY_SHA="${LAND_RESCUE_SHA:-none}"
         [ -n "$LAND_SUMMARY_SHA" ] || LAND_SUMMARY_SHA="none"
-        LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"
+        LAND_SUMMARY_KIND="$LAND_KIND"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"; LAND_SUMMARY_HELD="$held"
         LAND_SUMMARY_OUTCOME="failed"; LAND_SUMMARY_CODE="$LAND_CODE"
         return 4
     fi
@@ -5465,6 +5534,7 @@ run_landing() {
     LAND_SUMMARY_PATHS="$LAND_N_PATHS"
     LAND_SUMMARY_INFERRED="$LAND_N_INFERRED"
     LAND_SUMMARY_UNATTR="${ATTR_N_UNATTRIBUTED:-0}"
+    LAND_SUMMARY_HELD="$held"
     LAND_SUMMARY_OUTCOME="$LAND_OUTCOME"
     LAND_SUMMARY_CODE="${LAND_CODE:-}"
     if [ "$rc" -eq 3 ]; then return 3; fi
@@ -5687,6 +5757,12 @@ PYEOF
         MOE_PREFLIGHT_EVIDENCE="$(create_secure_temp)/preflight-evidence-$$.tsv"
         cp -f "$work/P-new.tsv" "$MOE_PREFLIGHT_EVIDENCE" 2>/dev/null || MOE_PREFLIGHT_EVIDENCE=""
     fi
+    # The whole dirty snapshot of THIS pre-flight, even when the P rows above
+    # were inherited: the skip-untouched idle-peer exception (resolve_attribution)
+    # lands a contested path only when it was clean here. A crashed session's
+    # unlanded bytes are dirty in it, so they stay held. '' = no exception.
+    MOE_PREFLIGHT_DIRTY="$(create_secure_temp)/preflight-dirty-$$.tsv"
+    cp -f "$spre" "$MOE_PREFLIGHT_DIRTY" 2>/dev/null || MOE_PREFLIGHT_DIRTY=""
     # A dead merge (B-new.tsv absent) must NOT write a header-only baseline:
     # an empty B reads as "everything changed since baseline" and re-arms the
     # MEASURED sweep the landing's fail-closed guard exists to prevent.
@@ -5793,6 +5869,7 @@ teardown_rescue() {
     if [ -z "$tool" ] || [ ! -f "$tool" ]; then tool="$work/tool.txt"; : > "$tool"; fi
     LAND_TOOL_FILE_EFFECTIVE="$tool"
     LAND_EVIDENCE_FILE="${MOE_PREFLIGHT_EVIDENCE:-}"
+    LAND_PREFLIGHT_DIRTY="${MOE_PREFLIGHT_DIRTY:-}"
     resolve_attribution "rescue" "$tid" "$work/S.tsv" "$work/B.tsv" "$work/U.tsv" "$tool" "$work/scope.json" "$ATTR_DIR" "never" || return 0
     LAND_OUTCOME=failed
     rescue_ref "teardown" "$ATTR_DIR/candidates" || true
@@ -6158,12 +6235,13 @@ while [ "$LOOP_RUNNING" = true ]; do
     MOE_GITDIR=""
     MOE_BASELINE_PATH=""
     MOE_PREFLIGHT_EVIDENCE=""
+    MOE_PREFLIGHT_DIRTY=""
     MOE_LANDING_DONE=""
     MOE_PREFLIGHT_NOTICE=""
     MOE_TOOL_WRITES_FILE="$(create_secure_temp)/tool-writes-$$.txt"
     : > "$MOE_TOOL_WRITES_FILE"
     LAND_STATUS=""
-    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""; LAND_SUMMARY_HELD=""
     POSTFLIGHT_SNAPSHOT=""
     read_commit_settings
 
@@ -7148,7 +7226,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         # where a `recovered` landing sets neither flag.
         MOE_LANDING_DONE=""
         LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
-        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""
+        LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="none"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_OUTCOME=""; LAND_SUMMARY_CODE=""; LAND_SUMMARY_HELD=""
         if [ -n "$MOE_PREFLIGHT_NOTICE" ]; then
             DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 

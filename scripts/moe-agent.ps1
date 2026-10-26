@@ -2200,6 +2200,8 @@ function Invoke-PostFlight {
             $llSha = if ($ll.Sha) { $ll.Sha } else { 'none' }
             $landingSummary = "commit=$llSha kind=$($ll.Kind) paths=$($ll.PathCount) inferred=$($ll.InferredCount) unattributed=$($ll.UnattributedCount)"
             if ($ll.Outcome -ne 'committed' -and $ll.Code) { $landingSummary += " outcome=$($ll.Outcome) code=$($ll.Code)" }
+            # Own contested paths the landing held back (sh twin): visible before QA.
+            if ($ll.Held) { $landingSummary += " held=$($ll.Held)" }
         }
         $content = "$Role session ended: task=$preflightTaskId (CLI exit=$exitCode) $landingSummary"
         try {
@@ -2243,6 +2245,8 @@ $script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal)
 $script:MoeToolHarvestSaturated = $false
 # This session's pre-flight P rows (Invoke-MoePreflightBaseline); $null = none.
 $script:MoePreflightEvidence = $null
+# This session's whole pre-flight dirty snapshot as a key set; $null = none.
+$script:MoePreflightDirty = $null
 
 function Get-MoePathKey([string]$Path) {
     if ($script:MoeCaseFoldPaths) { return $Path.ToLowerInvariant() }
@@ -3073,7 +3077,13 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
                 $n = ConvertTo-MoeNormalPath $pp
                 if (-not $n) { continue }
                 $k = Get-MoePathKey $n
-                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = [string]$pt } }
+                # Idle: every entry for the key reports peerActive as a JSON
+                # false. Absent or anything else (an older daemon) is active;
+                # disk-scope entries carry no Idle at all (sh twin: PEER_IDLE).
+                $pa2 = Get-MoeProp $e 'peerActive'
+                $idle = ($pa2 -is [bool]) -and ($pa2 -eq $false)
+                if (-not $scope.PeerDeclared.ContainsKey($k)) { $scope.PeerDeclared[$k] = @{ Path = $n; TaskId = [string]$pt; Idle = $idle } }
+                else { $scope.PeerDeclared[$k].Idle = ($scope.PeerDeclared[$k].Idle -and $idle) }
             }
         }
         return $scope
@@ -3447,7 +3457,8 @@ function Resolve-MoeAttribution {
         [Parameter(Mandatory = $true)][string]$TaskId,
         [string]$Mode = 'checkpoint',
         [string]$PolicyOverride = '',
-        $Evidence = $null
+        $Evidence = $null,
+        $PreflightDirty = $null
     )
     $rel = $Git.Rel
     if ($null -eq $B) { $B = @{} }
@@ -3471,9 +3482,11 @@ function Resolve-MoeAttribution {
     $planned = @{}
     foreach ($p in @($Scope.Planned)) { $tp = ConvertTo-MoeTopPath $p $rel; if ($tp) { $k = Get-MoePathKey $tp; if (-not $asserted.ContainsKey($k)) { $planned[$k] = $tp } } }
     $peer = @{}
+    $peerIdle = @{}
     foreach ($k in $Scope.PeerDeclared.Keys) {
         $tp = "$rel$($Scope.PeerDeclared[$k].Path)"
         $peer[(Get-MoePathKey $tp)] = $Scope.PeerDeclared[$k].TaskId
+        $peerIdle[(Get-MoePathKey $tp)] = ($Scope.PeerDeclared[$k].Idle -eq $true)
     }
     $mine = @{}
     foreach ($k in $asserted.Keys) { $mine[$k] = $asserted[$k] }
@@ -3551,7 +3564,14 @@ function Resolve-MoeAttribution {
                 # landings of exactly that shape tore the shared branch five
                 # times in one afternoon. Left dirty, it lands at the peer's
                 # exit or at this task's next session that edits it.
-                if ($contestedPolicy -eq 'skip-untouched' -and -not $Tool.ContainsKey($k)) {
+                # Idle-peer exception: a path clean at this session's pre-flight,
+                # whose every contesting task has had no session since (no active
+                # assignee, open attempt or attempt phase change), holds only this
+                # session's bytes (a Bash or python edit leaves no TOOL witness).
+                # A path already dirty at pre-flight stays held even if this
+                # session rewrote it: it can carry the peer's earlier hunks.
+                $idleClean = ($null -ne $PreflightDirty) -and -not $PreflightDirty.ContainsKey($k) -and ($peerIdle[$k] -eq $true)
+                if ($contestedPolicy -eq 'skip-untouched' -and -not $Tool.ContainsKey($k) -and -not $idleClean) {
                     $skipped += @{ Path = $p; Code = "MOE_ATTR_CONTESTED_UNTOUCHED($($peer[$k]))" }
                     continue
                 }
@@ -3629,6 +3649,25 @@ function Resolve-MoeAttribution {
         AssertedCount = $asserted.Count; PlannedCount = $planned.Count; ToolCount = $Tool.Count
         Undeclared = $undeclared; Own = @($own); AssertedForeignCount = $assertedForeign
     }
+}
+
+# The own contested paths a landing held back, as `<path>(<peer>)` joined by
+# ',', at most 5 then `,+<N> more` (sh twin: attr_held_list). Feeds the
+# session-ended line's held= suffix; a missing Skipped/Contested gives ''.
+function Get-MoeHeldList($Attr) {
+    $held = @()
+    foreach ($sk in @($Attr.Skipped)) {
+        if ($null -eq $sk) { continue }
+        if ($sk.Code -match '^MOE_ATTR_CONTESTED_UNTOUCHED\((.*)\)$') {
+            $held += "$($sk.Path)($($matches[1]))"
+        } elseif ($sk.Code -eq 'MOE_ATTR_CONTESTED') {
+            $c = @($Attr.Contested) | Where-Object { $null -ne $_ -and $_.Path -ceq $sk.Path } | Select-Object -First 1
+            $held += "$($sk.Path)($(if ($c) { $c.TaskId } else { '' }))"
+        }
+    }
+    $out = ($held | Select-Object -First 5) -join ','
+    if ($held.Count -gt 5) { $out += ",+$($held.Count - 5) more" }
+    return $out
 }
 
 # Today's branch-safety peel lifted into a helper. Returns the branch name the
@@ -3960,7 +3999,7 @@ function Invoke-MoeRescueRef {
                 $u = if ($bl) { $bl.U } else { @{} }
                 $scope = Get-MoeCommitScope $TaskId 'postflight' $Sid
                 $settings = Read-MoeCommitSettings
-                $Attr = Resolve-MoeAttribution -Git $Git -S $s -B $b -U $u -Tool $script:MoeToolWritten -Scope $scope -Settings $settings -TaskId $TaskId -Mode 'checkpoint' -PolicyOverride 'never' -Evidence $script:MoePreflightEvidence
+                $Attr = Resolve-MoeAttribution -Git $Git -S $s -B $b -U $u -Tool $script:MoeToolWritten -Scope $scope -Settings $settings -TaskId $TaskId -Mode 'checkpoint' -PolicyOverride 'never' -Evidence $script:MoePreflightEvidence -PreflightDirty $script:MoePreflightDirty
             }
             if ($Attr.Candidates.Count -eq 0) {
                 Write-Host "[rescue] nothing to rescue for task $TaskId (reason=$Reason)." -ForegroundColor Cyan
@@ -4374,7 +4413,7 @@ function Invoke-MoeLanding {
     $res = @{
         Outcome = 'pending'; Kind = $Kind; Sha = ''; Ref = ''; Code = ''; Branch = ''
         PathCount = 0; InferredCount = 0; SkippedCount = 0; UnattributedCount = 0
-        Pushed = $false; StopLoop = $false
+        Pushed = $false; StopLoop = $false; Held = ''
     }
     $recovered = ($Reason -eq 'recovered')
     $script:MoeFrozen=$null
@@ -4437,7 +4476,11 @@ function Invoke-MoeLanding {
         # meanwhile. Twin: run_landing.
         $evidence = $script:MoePreflightEvidence
         if ($recovered) { $evidence = if ($bl) { $bl.P } else { $null } }
-        $attr = Resolve-MoeAttribution -Git $Git -S $S -B $B -U $U -Tool $script:MoeToolWritten -Scope $scope -Settings $Settings -TaskId $TaskId -Mode $Kind -PolicyOverride $policyOverride -Evidence $evidence
+        # A recovery lands a dead session's bytes, whose window predates
+        # `since`: no pre-flight snapshot, so the idle-peer exception stays off.
+        $preflightDirty = if ($recovered) { $null } else { $script:MoePreflightDirty }
+        $attr = Resolve-MoeAttribution -Git $Git -S $S -B $B -U $U -Tool $script:MoeToolWritten -Scope $scope -Settings $Settings -TaskId $TaskId -Mode $Kind -PolicyOverride $policyOverride -Evidence $evidence -PreflightDirty $preflightDirty
+        $res.Held = Get-MoeHeldList $attr
         $blP = if ($bl) { $bl.P } else { $null }
         if ($attr.ForeignCount -gt 0) {
             Write-Host "[attribution] $($attr.ForeignCount) pre-session dirty path(s) untouched" -ForegroundColor Cyan
@@ -4948,6 +4991,14 @@ function Invoke-MoePreflightBaseline([hashtable]$Git, [hashtable]$Settings, [str
         # This session's landings judge against this copy, never the file a
         # peer's pre-flight may rewrite meanwhile (Invoke-MoeLanding, teardown).
         $script:MoePreflightEvidence = $pre
+        # The whole dirty snapshot of THIS pre-flight, even when the P rows above
+        # were inherited: the skip-untouched idle-peer exception
+        # (Resolve-MoeAttribution) lands a contested path only when it was clean
+        # here. A crashed session's unlanded bytes are dirty in it, so they stay
+        # held. Twin: MOE_PREFLIGHT_DIRTY in preflight_landing.
+        $dirty = @{}
+        foreach ($k in $sPre.Keys) { $dirty[$k] = $true }
+        $script:MoePreflightDirty = $dirty
         $head = ''
         $h = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', '-q', '--verify', 'HEAD')
         if ($h.Rc -eq 0 -and $h.Out.Count -gt 0) { $head = ($h.Out -join '').Trim() }
@@ -5637,6 +5688,7 @@ do {
     $script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal)
     $script:MoeToolHarvestSaturated = $false
     $script:MoePreflightEvidence = $null
+    $script:MoePreflightDirty = $null
     $script:MoeLastLanding = $null
 
     if ($AutoClaim) {

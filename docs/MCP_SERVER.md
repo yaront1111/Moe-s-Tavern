@@ -643,9 +643,13 @@ All seven are required; `additionalProperties` is `false`.
   touchedFiles: string[],
   inferredPaths: string[],
   unattributedPaths: string[],
-  peerDeclared: { path: string, taskId: string }[],   // the same union over every OTHER task with status ∉ {DONE, ARCHIVED} —
+  peerDeclared: { path: string, taskId: string, peerActive: boolean }[],   // the same union over every OTHER task with status ∉ {DONE, ARCHIVED} —
                               // except a peer that waits on this task (dependsOn ∪ blockedOnTaskIds, transitively) contributes its
-                              // asserted paths only: dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit
+                              // asserted paths only: dependsOn gates it from WORKING until this task is DONE, so its plan is intent, not an edit.
+                              // taskId is the first contributing task in id order; peerActive is an OR over EVERY contributing task: true when,
+                              // since `since − 120 s`, its assignee was active, it has a non-closed attempt, or an attempt changed phase (an
+                              // unparsable time counts as active); always true without `since`. Additive: a wrapper treats an absent field as
+                              // active. All false lets skip-untouched land an unwitnessed path that was clean at the session's pre-flight
   livePeerIds: string[],      // workers ≠ caller, not DEAD, lastActivityAt inside the window (or registered since `since`)
   activePeerIds: string[],
   peersActive: boolean,

@@ -17,71 +17,128 @@
     {
       "stepId": "step-1",
       "description": "SEAT CHECK FIRST, before any edit.\nSix plan files are declared by seatless nonterminal peers:\n- task-07474ee438f34021a23809f9c764d15c (PLANNING; plan + filesModified) declares scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight.sh, scripts/tests/postflight.ps1, docs/CONFIGURATION.md and docs/SCHEMA.md.\n- task-e92b2cb33f744bf18074fc87121f22df (BACKLOG; plan) declares moe-agent.sh and both postflight harnesses.\nThe wrapper that lands THIS session still runs the OLD attribution. Under attribution.contested=skip-untouched, each of those six files lands ONLY with a TOOL witness. So make every edit in this plan with the Edit/Write tools (task rail), never Bash heredocs, sed or python.\nA seat WITHOUT Edit/Write tools (codex/gemini/grok) must not edit anything. Call moe.report_blocked { blockedOnTaskIds: ['task-07474ee438f34021a23809f9c764d15c'], reason: 'needs an Edit/Write-capable seat: six plan files are contested by seatless peers; governor: unblock onto a Claude seat (resolveBlocks) or clear the stale contest' } and end the session.\n\nDaemon half: per-path peer activity in moe.get_commit_scope (packages/moe-daemon/src/tools/getCommitScope.ts, LF). Load test-driven-development: write this step's tests first and watch them fail.\nEach peerDeclared entry gains `peerActive: boolean`. A wrapper can then tell a contest by a task that cannot have written bytes during the landing session from one that may have.\n- Add a helper, e.g. `peerTaskActive(state, other, nowMs, sinceMs)`. It returns true when ANY of these holds:\n  - sinceMs is null (no window: stay conservative);\n  - other.assignedWorkerId names a worker for which the existing isPeerActive(worker, nowMs, sinceMs) is true. A DEAD worker gives false; a missing worker record is not active by itself.\n  - listAttempts(state, other.id) (state/attemptStore.ts) has an attempt whose phase is not 'closed';\n  - an attempt's lastPhaseAt is unparsable or >= sinceMs - LIVENESS_TIMEOUT_MS (a session that ran and closed inside the window).\n- Error handling: add no throw path. Every malformed or unparsable timestamp counts as active (fail closed). The tool stays read-only apart from the existing caller touch.\n- Peers loop (~88-108): call the helper once per peer task. peerActive is an OR over EVERY nonterminal task that contributes the path, not only the first claimant (whose id stays in taskId):\n  `const stored = peerSet.add(p); if (stored === null) continue; const entry = peerByKey.get(stored); if (entry) { entry.peerActive ||= active; continue; } peerByKey.set(stored, { path: stored, taskId: other.id, peerActive: active });`\n  PathSet.add returns the already-stored spelling for a known key, so the lookup hits. The waitsOnThis rule (asserted paths only) is unchanged.\n- livePeerIds, activePeerIds, peersActive and alwaysInclude are unchanged.\n- Add one clause on peerActive to the tool description. The field is additive: an older wrapper ignores it.\n\nTests (packages/moe-daemon/src/tools/getCommitScope.test.ts). Add peerActive to the ScopeResult peerDeclared type, and assert exact booleans per path with toBe(true) / toBe(false):\n(a) with since, an unassigned peer with no attempts -> false;\n(b) the peer's assignee active at since-60s -> true; last active at since-10min and registered before since -> false; a DEAD assignee -> false;\n(c) an unassigned peer with an open attempt (openAttempt) -> true; with an attempt closed (setAttemptPhase 'closed') inside the window -> true; with an attempt opened and closed long before since -> false. Control time with vi.useFakeTimers({ toFake: ['Date'] }) + vi.setSystemTime, and restore with vi.useRealTimers;\n(d) no since -> every entry true;\n(e) two peers declare one path, the lower id idle and the other active -> ONE entry with taskId = the lower id and peerActive true. With the activity swapped -> still true.\nRun `cd packages/moe-daemon && npx vitest run src/tools/getCommitScope.test.ts`.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/getCommitScope.ts",
         "packages/moe-daemon/src/tools/getCommitScope.test.ts"
       ],
-      "startedAt": "2026-10-24T23:51:07.237Z"
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Seat check: this session is a Claude CLI with Edit/Write, so no block. All edits were made with Edit. getCommitScope.ts: new peerTaskActive(state, other, nowMs, sinceMs). It is true when since is null, when the assignee isPeerActive, when an attempt is non-closed, or when an attempt's lastPhaseAt is unparsable or >= since-120s. A missing or DEAD assignee is not active by itself. No throw paths. Each peerDeclared entry gains peerActive, ORed over every contributing nonterminal task; the first claimant keeps taskId. The tool description has one new clause. Tests: a new describe 'peerDeclared[].peerActive' with 5 cases (a)-(e) asserting exact booleans. RED: 5 failed on the missing field. GREEN: 19/19 in getCommitScope.test.ts, run in a Linux-native snapshot (HEAD archive + the 2 owned files, native node_modules, env -i). tsc --noEmit exit 0.",
+      "startedAt": "2026-10-24T23:51:07.237Z",
+      "completedAt": "2026-10-26T01:38:33.166Z"
     },
     {
       "stepId": "step-2",
       "description": "Bash twin: the idle-peer exception in scripts/moe-agent.sh (LF). Edit/Write only, per step 1.\n\n1. Pre-flight evidence (preflight_landing, ~5630-5637).\n- Next to the MOE_PREFLIGHT_EVIDENCE copy, keep a private copy of THIS pre-flight's whole dirty snapshot (\"$spre\", rows of blob, xy, path) as MOE_PREFLIGHT_DIRTY=\"$(create_secure_temp)/preflight-dirty-$$.tsv\". A failed copy leaves it empty.\n- Keep it even when inherit_pre=1. The snapshot is always this session's, and a crashed session's unlanded bytes are dirty in it, so they stay held.\n- Reset MOE_PREFLIGHT_DIRTY=\"\" in the per-iteration block beside MOE_PREFLIGHT_EVIDENCE=\"\" (~6091).\n- MOE_PREFLIGHT_ISO (the `since` that commit_scope sends) is taken at the top of the iteration, before this snapshot, so the daemon's activity window covers it.\n\n2. Plumbing.\n- Declare LAND_PREFLIGHT_DIRTY=\"\" beside LAND_EVIDENCE_FILE=\"\" (~3348).\n- run_landing (~5193-5200): set it to \"\" when LAND_RECOVERED=true (a recovery lands a dead session's bytes, whose window predates `since`), else to \"${MOE_PREFLIGHT_DIRTY:-}\".\n- teardown_rescue (~5744): set it to \"${MOE_PREFLIGHT_DIRTY:-}\".\n- resolve_attribution: pass MOE_LAND_PREFLIGHT_DIRTY=\"${LAND_PREFLIGHT_DIRTY:-}\" into the python env. Keep the MOE_LAND_ prefix: parity-check compares the MOE_ATTR_/MOE_COMMIT_/MOE_CHECKPOINT_ code families, and MOE_LAND_* is sh-internal plumbing like MOE_LAND_EVIDENCE.\n\n3. Python (resolve_attribution, ~3349-3600).\n- PREFLIGHT_DIRTY = the set of key(norm_top(path)) over that file's rows, where path is the tab-joined parts[2:], exactly as S is read.\n- PREFLIGHT_DIRTY is None when the env is empty or the file is missing or unreadable. Error handling there is fail closed: the exception is off.\n- While building PEER, also build PEER_IDLE[k] = PEER_IDLE.get(k, True) and (ent.get('peerActive') is False). Only a JSON false is idle. Absent, null or anything else (an older daemon, the disk fallback, a duplicate entry) counts as active.\n- In the skip-untouched branch (~3564), skip as today UNLESS all three hold:\n  - PREFLIGHT_DIRTY is not None;\n  - pk not in PREFLIGHT_DIRTY (clean at this session's pre-flight);\n  - PEER_IDLE.get(pk) is True.\n  When all three hold, fall through to the existing MOE_ATTR_ASSERTED_FOREIGN check and the ASSERTED candidate. The path stays in `contested`, so write_commit_message still records `Moe-Contested: <path> (<peer>)`.\n- Rewrite the branch comment (ps1 twin) with the why. Every dirty byte at exit came from this session: the path was clean at its pre-flight, and no session of any contesting task ran since. A path that was already dirty at pre-flight stays held even if this session rewrote it, because it can carry the peer's earlier hunks.\n- The 'skip' and 'commit' policies are unchanged.\n\n4. Session-ended line (DoD 3).\n- In run_landing, assign LAND_SUMMARY_HELD wherever LAND_SUMMARY_PATHS is assigned (grep every site). Use \"\" on the early-failure returns.\n- On attributed landings, read \"$ATTR_DIR/skipped\" (NUL-separated code TAB path records).\n- Each MOE_ATTR_CONTESTED_UNTOUCHED(<peer>) record becomes `<path>(<peer>)`. A bare MOE_ATTR_CONTESTED (policy skip) takes its peer from \"$ATTR_DIR/contested\" (peer TAB path records).\n- Join the entries with ',', keep at most 5, then add `,+<N> more`.\n- post_flight (~2490): after the outcome/code suffix, append \" held=$LAND_SUMMARY_HELD\" when it is non-empty, e.g. `... unattributed=0 held=contested.txt(task-peer)`.\n- Error handling: an unreadable file gives an empty list and never fails the landing or the chat line.\n- The text must be identical to the ps1 twin.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "All edits made with the Edit tool (a TOOL witness).\n- preflight_landing copies this pre-flight's whole $spre to MOE_PREFLIGHT_DIRTY. It does so even when the P rows were inherited; a failed copy leaves it ''. It is reset per iteration.\n- run_landing sets LAND_PREFLIGHT_DIRTY to '' on LAND_RECOVERED, else to MOE_PREFLIGHT_DIRTY. teardown_rescue passes it too. resolve_attribution exports MOE_LAND_PREFLIGHT_DIRTY.\n- Python:\n  - PEER_IDLE is an AND over the entries, idle only on `peerActive is False`.\n  - PREFLIGHT_DIRTY is a key set read with an explicit try. None on a missing or unreadable file, so it fails closed; read_rows would have swallowed the error into an empty set.\n  - skip-untouched skips unless PREFLIGHT_DIRTY is not None, pk is not in it, and PEER_IDLE.get(pk) is True. Otherwise it falls through to ASSERTED_FOREIGN and the candidate. The contested record is kept, so the Moe-Contested trailer stays.\n- New attr_held_list (no assoc arrays, for bash 3) gives `<path>(<peer>)`, comma-joined, max 5 then `,+N more`. It reads MOE_ATTR_CONTESTED_UNTOUCHED(peer) records, and for a bare MOE_ATTR_CONTESTED it looks the peer up in the contested file.\n- run_landing computes held after attribution. LAND_SUMMARY_HELD is set at every LAND_SUMMARY_* site: '' on early failures and resets, held on gate-failed and final. post_flight appends ' held=...' after the outcome/code suffix.\n- bash -n OK. Behaviour is verified by the step-4 scenario AE.",
+      "startedAt": "2026-10-26T01:38:37.505Z",
+      "completedAt": "2026-10-26T01:40:56.101Z"
     },
     {
       "stepId": "step-3",
       "description": "PowerShell twin in scripts/moe-agent.ps1. The file is LF with a UTF-8 BOM; keep both. Verify afterwards:\n- `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints ef bb bf;\n- `git diff --stat` matches `git diff --ignore-cr-at-eol --stat` for this file.\nEdit/Write only.\n\n1. Invoke-MoePreflightBaseline (~4809-4847).\n- Set $script:MoePreflightDirty to a key set (hashtable key -> $true) of $sPre, this pre-flight's dirty snapshot.\n- Set it in BOTH branches, the inherited $bl.P one and the fresh P rows one, for the same reason as step 2.\n- Reset it to $null beside every `$script:MoePreflightEvidence = $null` (~2211, ~5513).\n\n2. Resolve-MoeAttribution (~3352) gets a new param, $PreflightDirty = $null.\n- Invoke-MoeLanding (~4335) passes $null when $recovered, else $script:MoePreflightDirty.\n- The Invoke-MoeRescueRef attribution call (~3860) passes $script:MoePreflightDirty.\n\n3. Get-MoeCommitScope (~2961-2992), rpc branch.\n- Give each PeerDeclared value an Idle flag: true only when the entry's peerActive is a [bool] equal to $false.\n- AND the flag across duplicate entries for one key (the dict keeps the first TaskId).\n- Get-MoeDiskScope entries get no Idle, so they count as active.\n- In Resolve-MoeAttribution, build $peerIdle with the same \"$rel\" + path -> Get-MoePathKey transform as $peer (~3388-3391).\n\n4. Contested branch (~3469).\n- Skip as today unless all three hold: $null -ne $PreflightDirty; -not $PreflightDirty.ContainsKey($k); $peerIdle[$k] -eq $true.\n- When they hold, fall through to the ASSERTED_FOREIGN check and the candidate.\n- Use the same comment as the sh twin.\n\n5. Held list.\n- Invoke-MoeLanding: add Held = '' to the $res initializer. Right after Resolve-MoeAttribution, set $res.Held from $attr.Skipped. MOE_ATTR_CONTESTED_UNTOUCHED(<peer>) becomes `<path>(<peer>)`; a bare MOE_ATTR_CONTESTED takes its peer from $attr.Contested. Use the same order, cap and `,+<N> more` as sh.\n- Invoke-PostFlight (~2160-2170): when Held is non-empty, append \" held=$($ll.Held)\" after the outcome/code suffix. The text must be identical to sh.\n- Error handling: a missing Skipped or Contested gives an empty Held.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "All edits were made with the Edit tool. The BOM (ef bb bf) is kept, the file has 0 CR, and `git diff --stat` equals the `--ignore-cr-at-eol` stat (58+/6-). PowerShell 5.1 ParseFile reports no errors.\n- Invoke-MoePreflightBaseline sets $script:MoePreflightDirty, a key set of $sPre, after the P-row branch, so inherited and fresh pre-flights alike get it. It is declared $null at script scope and reset to $null in the per-iteration block.\n- Get-MoeCommitScope (rpc) gives each PeerDeclared entry an Idle flag: ($pa2 -is [bool]) -and $false. Idle is ANDed across duplicate keys. Disk-scope entries carry no Idle.\n- Resolve-MoeAttribution gets a -PreflightDirty param and builds $peerIdle with the same \"$rel\"+path → Get-MoePathKey transform as $peer. The contested branch skips unless ($null -ne $PreflightDirty) -and -not ContainsKey -and ($peerIdle[$k] -eq $true); it uses the same comment as sh.\n- Invoke-MoeLanding passes $null when $recovered, else $script:MoePreflightDirty. Invoke-MoeRescueRef passes $script:MoePreflightDirty.\n- New Get-MoeHeldList, the twin of attr_held_list, produces the same format, cap and suffix. $res.Held is set right after attribution; the initializer has Held=''.\n- Invoke-PostFlight appends ' held=...' after the outcome/code suffix.\n- Residual: the held order follows each twin's existing skip order. sh uses sorted() on keys and ps1 uses Sort-Object, so mixed-case or punctuation paths may differ in order on the two twins.",
+      "startedAt": "2026-10-26T01:40:59.019Z",
+      "completedAt": "2026-10-26T01:42:31.019Z"
     },
     {
       "stepId": "step-4",
       "description": "Bash regression scenario AE in scripts/tests/postflight.sh (LF), after AD. Edit/Write only. Load test-driven-development: write AE before steps 2-3 are final, and record that it fails on the parent wrapper.\n\nFake proxy get_commit_scope (~520-590):\n- New knob FAKE_SCOPE_PEER_ACTIVE. Set to '0' or '1', it gives every peerDeclared entry (record-derived and FAKE_SCOPE_PEER_DECLARED) `peerActive: value === '1'`.\n- Unset, it omits the field, like a daemon older than the field. This keeps K2 unchanged (refused.txt: clean at pre-flight, unwitnessed, field absent, so still held), and every existing contested case too.\n- Document the knob in the comment list.\n\nScenario AE: ONE scenario with three runs.\n- Use make_scope_project, run_scope_wrapper, committed_paths and scope_fail.\n- FILE_CLI with FAKE_CLI_EXTRA_FILE is the unwitnessed (Bash-style) write.\n- Set FAKE_SCOPE_PEERS_ACTIVE=1 in every run, so only the per-path flag can release a path.\n\nAE1 (DoD 1)\n- Setup: make_scope_project <dir> '[\"owned-a.txt\",\"contested.txt\"]'; write owned-a.txt. contested.txt is absent at pre-flight.\n- Run with FAKE_SCOPE_PEER_DECLARED='contested.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=0 FAKE_CLI_EXTRA_FILE=contested.txt.\n- Expect: committed_paths is exactly 'contested.txt owned-a.txt '; no '[skip] contested.txt' line; `git log -1 --format=%B` contains 'Moe-Contested: contested.txt (task-peer)'; the 'worker session ended: task=task-postflight' line in .moe/messages/chan-general.jsonl has no ' held='.\n\nAE2 (DoD 2 live peer + DoD 3)\n- Same setup, with FAKE_SCOPE_PEER_ACTIVE=1.\n- Expect: committed exactly 'owned-a.txt '; '[skip] contested.txt MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'; contested.txt still untracked; the session-ended line contains 'held=contested.txt(task-peer)'.\n\nAE3 (DoD 2, dirty at pre-flight)\n- Setup: make_scope_project <dir> '[\"owned-a.txt\",\"pre-untouched.txt\",\"pre-touched.txt\"]'; write all three BEFORE the run.\n- Run with FAKE_SCOPE_PEER_DECLARED='pre-untouched.txt:task-peer,pre-touched.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=0 FAKE_CLI_EXTRA_FILE=pre-touched.txt (rewritten during the session, unwitnessed).\n- Expect: committed exactly 'owned-a.txt '; both paths skipped with MOE_ATTR_CONTESTED_UNTOUCHED(task-peer) and still untracked; the held= suffix names both.\n\nBump the exact-count check 36 -> 37 (or the number then present + 1, if b62c9fc7 landed another) and add AE to its list text.\n\nRED proof: run the harness against the parent wrapper (HEAD's scripts/moe-agent.sh in a scratch snapshot, with this step's harness). AE1 and AE2's held= assertion must fail; quote that in the complete_step note. AE3 passes on both by design; its proof is step 8's mutation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Scenario letter AE was already taken (symlinks, task-c532d223), so the new scenario is AF (AF1-AF3), placed after AE. The count is now 38, or 37 without symlinks. Fake proxy knob FAKE_SCOPE_PEER_ACTIVE=0|1 sets peerActive on every peerDeclared entry; unset omits the field, so K2 and every existing contested case are unchanged. Edited with Edit only. GREEN (snapshot of current scripts/, MOE_* unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180): '[scenario AF] ok', 'commit-scope scenarios run: 38', 'PASS postflight.sh', EXIT=0. RED (same snapshot with HEAD's moe-agent.sh): every scenario through AE passes, then 'SCENARIO AF1 FAILED: an idle peer's clean contested path must land; got [owned-a.txt ]', EXIT=1.",
+      "startedAt": "2026-10-26T01:42:36.553Z",
+      "completedAt": "2026-10-26T01:52:37.326Z"
     },
     {
       "stepId": "step-5",
       "description": "PowerShell scenario AE in scripts/tests/postflight.ps1 (LF), mirroring step 4. Edit/Write only.\n- Fake proxy get_commit_scope (knob docs ~95-101, handler ~539-565): add the same FAKE_SCOPE_PEER_ACTIVE knob, with the same omit-when-unset rule.\n- $createFileCmd (~1461) gains sh FILE_CLI's FAKE_CLI_EXTRA_FILE knob: one more .cmd line that, when FAKE_CLI_EXTRA_FILE is defined, writes 'extra' to that file under %MOE_PROJECT_PATH% (cmd path separator). It stays env-gated, so existing users are unchanged.\n- Write AE1-AE3 with New-ScopeProject, Invoke-GateWrapper -Command $createFileCmd, Assert-ScopeRun and Get-CommittedPaths (space-joined, no trailing space).\n  - Set and remove every env var in try/finally, as K2 does.\n  - Write the pre-flight dirt with Set-Content (only its presence matters).\n  - Read the chat from Join-Path $dir '.moe/messages/chan-general.jsonl'.\n  - The assertions are identical to step 4.\n- Bump the count check 36 -> 37 and add AE to its message.\n- RED proof against the parent moe-agent.ps1 on Windows PowerShell 5.1, as in step 4.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Scenario AF (AE is taken by the symlink scenario) mirrors postflight.sh AF1-AF3. Changes: the fake proxy knob FAKE_SCOPE_PEER_ACTIVE (documented; unset omits the field); one env-gated line in create-file.cmd for FAKE_CLI_EXTRA_FILE; env vars set and removed in try/finally. The count is now 37, or 38 with symlinks, and the message gains AF. Edited with Edit only; BOM and LF kept (0 CR). PS 5.1 ParseFile reports 0 errors. GREEN on Windows PowerShell 5.1 (snapshot byte-identical to the repo's scripts/, MOE_* unset, timeout 180, run from a D: cwd): 'PASS frozen candidate scenarios: 73', '[scenario AE] skipped: this host cannot create symlinks', '[scenario AF] ok', 'commit-scope scenarios run: 37', 'PASS postflight.ps1', EXIT=0. RED (the same snapshot with HEAD's moe-agent.ps1): every scenario through AD passes, then 'SCENARIO AF1 FAILED: an idle peer's clean contested path must land', EXIT=1. Gotcha: a /tmp (UNC) cwd breaks the frozen dirty-helper case on both HEAD and new code; run from /mnt/d (mem gotcha-qa-ps1-postflight-from-wsl).",
+      "startedAt": "2026-10-26T01:52:39.531Z",
+      "completedAt": "2026-10-26T02:01:07.276Z"
     },
     {
       "stepId": "step-6",
       "description": "Docs: describe the idle-peer exception and the new field. Edit/Write only: CONFIGURATION.md and SCHEMA.md are contested. All four files are LF. Change only the sentences that are affected.\n- docs/CONFIGURATION.md\n  - The `attribution.contested` table row (~176): skip-untouched also lands a contested path without a witness when both hold:\n    - the path was absent from the landing session's pre-flight dirty snapshot;\n    - every contesting task reports peerActive:false: no assignee active, no open attempt, and no attempt phase change since that pre-flight (120 s slack).\n  - The 'Under the default skip-untouched policy' paragraph (~367): replace 'A peer becoming idle or its CLI exiting does not by itself remove the declaration' with the exact rule. Cover:\n    - dirty-at-pre-flight paths stay held even when rewritten;\n    - recovery landings, an older daemon and the disk-fallback scope never use the exception;\n    - the Moe-Contested trailer;\n    - the session-ended `held=<path>(<task>)` suffix.\n- docs/MCP_SERVER.md get_commit_scope (~646): `peerDeclared: { path, taskId, peerActive }[]`, defining peerActive:\n  - an OR over every nonterminal task contributing the path;\n  - always true without `since`;\n  - additive, and a wrapper treats an absent field as active.\n- docs/TROUBLESHOOTING.md: the MOE_ATTR_CONTESTED_UNTOUCHED row (~538) says when it still fires, and that `held=` on the session-ended line names it.\n- docs/SCHEMA.md: the attribution.contested comment (~140) names the exception in one clause.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CONFIGURATION.md",
         "docs/MCP_SERVER.md",
         "docs/TROUBLESHOOTING.md",
         "docs/SCHEMA.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Edit only; all four files stay LF (0 CR).\n- CONFIGURATION.md: the attribution.contested row gains the exception clause (absent from the landing session's pre-flight dirty snapshot, and every contesting task peerActive:false: no assignee active, no open attempt, no attempt phase change, 120 s slack). The 'Under the default skip-untouched policy' paragraph replaces the old 'A peer becoming idle ... does not by itself remove the declaration' sentence with the exact rule: lands with its Moe-Contested trailer; dirty-at-pre-flight paths stay held even when rewritten; recovery, older-daemon and disk-fallback landings never use it; the session-ended line names held paths as held=<path>(task-<peer>), at most 5 then +N more, on completions and checkpoints. The paragraph tail is reflowed to its wrap width, wording unchanged.\n- MCP_SERVER.md: peerDeclared is {path, taskId, peerActive}[]. peerActive is an OR over every contributing task, always true without since, and additive (an absent field means active).\n- TROUBLESHOOTING.md: the MOE_ATTR_CONTESTED_UNTOUCHED row lists when the code still fires and the held= naming.\n- SCHEMA.md: one clause on the contested comment.\nThe daemon doc tests read these files. The full daemon suite ran on these exact bytes in the Linux snapshot: 166 files, 4206 passed | 14 skipped, EXIT=0.",
+      "startedAt": "2026-10-26T02:01:10.050Z",
+      "completedAt": "2026-10-26T02:01:25.474Z"
     },
     {
       "stepId": "step-7",
       "description": "Verification gate. Run it once, fresh, after steps 1-6.\nRun the harnesses from a SNAPSHOT of scripts/, never the live shared tree: peers edit the wrappers, and bash reads a running script lazily. `cp -R scripts <scratch>/` (a directory holding scripts/ is a complete harness root). Unset every MOE_* env var.\n1. NAMED COMMAND (the complete_task verification evidence): `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`. Run it in the snapshot root with MOE_POSTFLIGHT_TIMEOUT_SEC=180. Its 'commit-scope scenarios run: 37' line must appear.\n2. scripts/tests/postflight.ps1 and scripts/tests/parity-check.ps1 on Windows PowerShell 5.1. From WSL, copy the snapshot to /mnt/d/moe-scratch/<x>/ and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:/moe-scratch/<x>/scripts/tests/postflight.ps1'`, piping the output through tr -d '\\0'. Add pwsh where it is installed. If no PowerShell can run it, say so; never report a pass you did not run.\n3. Daemon. The wire shape changed, so run the full suite: `cd packages/moe-daemon && npx vitest run src/tools/getCommitScope.test.ts`, then `npm test`. Run them where node_modules matches the OS: natively on Windows, or from WSL via cmd.exe in packages/moe-daemon.\nSupply all three outputs to complete_task: the named command as the verification, the others in the summary. A failure outside this task's files must be shown to fail on a plain-HEAD copy before you call it pre-existing.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate after steps 1-6, run from snapshots. sha256 check: the repo bytes still equal the snapshot afterwards. MOE_*/CLAUDE*/ANTHROPIC* unset; MOE_POSTFLIGHT_TIMEOUT_SEC=180.\n(1) NAMED COMMAND `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`, run in /tmp/moe-c2cb-gate-sh:\n- 'PASS frozen candidate scenarios: 73'; '[scenario AE] ok' (symlinks work on WSL); '[scenario AF] ok'; 'commit-scope scenarios run: 38'; 'PASS postflight.sh'; 'PASS parity-check.sh'; EXIT=0.\n- The plan's 37 predates the discovery that letter AE was already taken: the existing 37 plus AF makes 38.\n(2) parity-check.ps1: PASS on Windows PowerShell 5.1 and on pwsh, both EXIT=0.\n(3) postflight.ps1, run from /mnt/d/moe-scratch/c2cb-gate:\n- PS 5.1: frozen 73; '[scenario AE] skipped: this host cannot create symlinks'; '[scenario AF] ok'; 'commit-scope scenarios run: 37'; 'PASS postflight.ps1'; EXIT=0.\n- pwsh: the same lines, 37 scenarios, PASS, EXIT=0.\n(4) Daemon, Linux-native snapshot (git archive HEAD plus the 10 owned files plus native node_modules):\n- `npx vitest run src/tools/getCommitScope.test.ts`: 19/19, EXIT=0.\n- `npm test`: Test Files 166 passed (166), Tests 4206 passed | 14 skipped (4220), EXIT=0.",
+      "startedAt": "2026-10-26T02:01:27.683Z",
+      "completedAt": "2026-10-26T02:13:58.318Z"
     },
     {
       "stepId": "step-8",
       "description": "Adversarial self-review with mutation proof (load adversarial-self-review), then complete_task.\n\nAttack:\n- Can a contested path now land when any contesting task had a session since pre-flight? Check an active assignee, an open attempt, an attempt closed inside the window, no since, an absent field, and the disk fallback.\n- Is the exception off for a recovery landing (LAND_RECOVERED / $recovered)?\n- Does a pre-flight that inherited a dead session's P rows judge 'clean' by this session's snapshot only?\n- Is MOE_PREFLIGHT_DIRTY / $script:MoePreflightDirty reset on every loop iteration?\n- Do the dirty set and the idle map use the same key() / Get-MoePathKey and REL prefix as PEER, on case-insensitive hosts and in nested projects?\n- Do paths with spaces, ',' or '(' break held=? Is the held= text identical across the twins?\n- What about two landings at once, or a daemon restart mid-landing?\n\nMutation proof, in a scratch copy and never the live tree, on BOTH twins:\n(1) drop the clean-at-pre-flight condition -> AE3 red;\n(2) treat an absent peerActive as idle -> K2 red; ignore peerActive entirely -> AE2 red;\n(3) remove the exception (old behaviour) -> AE1 red;\n(4) drop the held= suffix -> AE2 red;\n(5) daemon: first claimant only -> test (e) red; ignore attempts -> test (c) red; idle without since -> test (d) red.\nAdd a test case for any survivor. If any byte changed, rerun step 7's named command and submit THAT output.\n\nWrap-up:\n- Report every modified path in complete_step.modifiedFiles (the ten plan files).\n- Before complete_task, call `moe.get_commit_scope { taskId, phase: 'postflight' }`. Confirm that each contested file in peerDeclared was written with Edit/Write in THIS session (a TOOL witness).\n- A file finished any other way gets a byte-identical Edit round trip: sha256 equal, and for moe-agent.ps1 the BOM too.\n- No Git writes; no .moe edits.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "MUTATION PROOF. Each mutant ran in a scratch copy, never the live tree, through anchor-built K2+AF subset harnesses (D:/moe-scratch/c2cb-mut). The unmutated baseline was green on both twins.\n- (1) drop the clean-at-pre-flight condition: sh and ps1 both fail AF3 ('paths dirty at pre-flight must stay out', got owned-a + pre-touched + pre-untouched).\n- (2a) absent peerActive treated as idle: sh and ps1 fail K2 (refused.txt landed).\n- (2b) peerActive ignored: K2 red first; AF-only, AF2 red on both twins.\n- (3) old behaviour: AF1 red on both twins.\n- (4) no held= suffix: AF2 red on both twins (the line lacks held=).\n- (5) daemon (Linux snapshot, 19 tests): first claimant only fails only test (e); ignore attempts fails only test (c); idle without since fails only test (d). none before and after: 19/19.\n- Survivor: passing the snapshot on a recovery landing (both twins) is equivalent in the current flow. The per-iteration reset (sh 6238, ps1 5691) empties the snapshot, and the recovery runs before this pre-flight's snapshot is taken. So the explicit guard is defence in depth, unpinned and documented. A test would need contrived state.\nATTACK REVIEW:\n- Activity checks: an active assignee, an open attempt, a close inside the window, no since and an unparsable time are each active, daemon-side. Absent, null or disk-fallback entries are active wrapper-side: sh `is False`, ps1 `-is [bool] -and -eq $false`.\n- Clean is judged only by THIS pre-flight's own snapshot ($spre/$sPre), even when P rows were inherited.\n- `since` is this iteration's pre-flight ISO, set before the snapshot. A failed snapshot, copy or read gives None/$null, so the exception is off (fail closed).\n- Same key() / Get-MoePathKey top-relative key space as S and PEER.\n- ps1 @{} maps are case-insensitive, like $S and $peer. Duplicates AND their Idle, so they fail closed.\n- held= text is identical across twins; it is display-only, so ',' or '(' in a path is cosmetic. Order follows each twin's existing skip order (sh sorted, ps1 Sort-Object), which may differ for mixed case.\n- Race: the scope is fetched about 1 s before the snapshot. A peer would have to go from idle to writing inside that window; a claim or heartbeat makes it active.\n- Attempt records are never deleted by the daemon.\n- listAttempts is in-memory, O(tasks x attempts) per scope call.\nWRAP-UP: get_commit_scope postflight reports 10/10 files asserted and none in peerDeclared (07474ee4 is archived, e92b2cb3 is done). Every edit was made with Edit/Write in this session. moe-agent.ps1 and postflight.ps1 keep the BOM, 0 CR. No Git writes, no .moe edits. The live daemon still runs the pre-change build (no peerActive yet), so wrappers keep holding contested paths until it is rebuilt. No bytes changed after the step-7 gate.",
+      "startedAt": "2026-10-26T02:14:00.744Z",
+      "completedAt": "2026-10-26T02:14:47.334Z"
     }
   ],
-  "planRevision": 2,
-  "status": "WORKING",
+  "planRevision": 17,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,19 +165,27 @@
       "author": "architect-26ba32c3",
       "content": "Dependency change (architect-26ba32c3, 2026-10-25), per the rail 'Serialize overlapping affectedFiles through explicit dependencies'. dependsOn was [b62c9fc7] and is now [b62c9fc7, a9824bc1, 076a0bd3, ab6aac94]. Your step 6 plans edits to docs/MCP_SERVER.md, docs/TROUBLESHOOTING.md and docs/SCHEMA.md, which overlap:\n- F04 task-076a0bd3 (WORKING): its uncommitted Plan-approval block is in MCP_SERVER.md.\n- task-a9824bc1 (WORKING, LOW docs fix, which itself waits on F04): the MCP_SERVER.md protocol and submit_plan notes, plus the TROUBLESHOOTING.md rail entry.\n- task-ab6aac94 (REVIEW): its 1000->10000 lines are in SCHEMA.md.\n\nEffect: get_commit_scope now counts only your ASSERTED paths (board json only) against those tasks' landings, so your plan-declared docs no longer contest them. Your WORKING claim also waits until all three are DONE, which serializes your docs edits after theirs. Your block on 07474ee4 and your plan are unchanged.",
       "timestamp": "2026-10-25T08:40:37.249Z"
+    },
+    {
+      "id": "comment-7b440873828047218e06f9291d4815dc",
+      "author": "worker-7d158765",
+      "content": "Addendum (the stored completionSummary was cut short):\n- One mutant survived the mutation run: the recovery-landing guard. In sh, `LAND_PREFLIGHT_DIRTY=\"\"` on recovery; in ps1, `$recovered -> $null`. It is an equivalent mutant: the per-iteration MOE_PREFLIGHT_DIRTY / $script:MoePreflightDirty reset runs before any recovery landing. I kept the guard as defence in depth and left it unpinned on purpose.\n- The LIVE daemon still runs the old build, which does not emit peerDeclared[].peerActive. Until it is rebuilt and restarted, both wrappers treat the absent field as active and keep holding unwitnessed contested paths (fail-closed by design, see K2). So the old behaviour you see live is expected.\n- Residuals:\n  - held= order follows each twin's skip sort, so it can differ between the twins for mixed-case paths.\n  - A path containing ',' or '(' only makes the held= line ambiguous to read.\n  - There is about a 1 s window between the scope fetch and the dirty snapshot.\n  - listAttempts costs O(tasks x attempts) per get_commit_scope call.\n- Scenario naming: the new scenario is AF, because letter AE was already the symlink scenario. Expected counts: postflight.sh 38 (37 without symlinks), postflight.ps1 37 on a symlink-less Windows host (38 with symlinks).\n- Run the PS harness from a /mnt/d cwd, not /tmp (see gotcha-qa-ps1-postflight-from-wsl).",
+      "timestamp": "2026-10-26T02:16:04.737Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T16:44:57.056Z",
-  "updatedAt": "2026-10-25T23:08:57.077Z",
+  "updatedAt": "2026-10-26T02:16:04.737Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T22:02:46.544Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 10
+    "plannedDistinctFileCount": 10,
+    "executedStepCount": 8
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
-    "worker-9cda703c"
+    "worker-9cda703c",
+    "worker-7d158765"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -129,7 +194,16 @@
   "planSizeWarnings": [
     "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T22:23:18.610Z",
   "planningNotes": {
@@ -172,8 +246,16 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-b62c9fc7524a482aa6948ebe38ac3318.json",
-    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "docs/CONFIGURATION.md",
+    "docs/MCP_SERVER.md",
+    "docs/TROUBLESHOOTING.md",
+    "docs/SCHEMA.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -181,5 +263,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-9cda703c@2026-10-24T23:50:16Z",
     "at": "2026-10-24T23:51:44.705Z"
-  }
+  },
+  "reviewStartedAt": "2026-10-26T02:15:06.644Z",
+  "verification": {
+    "command": "bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh  (snapshot root /tmp/moe-c2cb-gate-sh, MOE_* unset, MOE_POSTFLIGHT_TIMEOUT_SEC=180)",
+    "exitCode": 0,
+    "outputTail": "PASS frozen candidate scenarios: 73\n...\n[scenario AD] ok\n[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING\n[scenario AE] ok\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\ncommit-scope scenarios run: 38\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\nPASS parity-check.sh\nEXIT=0",
+    "reportedAt": "2026-10-26T02:15:06.644Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Idle-peer exception to the skip-untouched contested skip. Both wrappers now land an own asserted contested path with no TOOL witness (a Bash or python edit) only when two things hold. First, the path was absent from THIS session's pre-flight dirty snapshot (sh MOE_PREFLIGHT_DIRTY, ps1 $script:MoePreflightDirty; reset every iteration; off for recovery landings). Second, every peerDeclared entry for the path reports peerActive === false; absent, null or the disk fallback count as active.\nDaemon: get_commit_scope peerDeclared[].peerActive is an OR over every contributing nonterminal task. A task counts as active when since is missing, its assignee isPeerActive, it has a non-closed attempt, or an attempt's lastPhaseAt is unparsable or at/after since-120s. A landing that still holds an own contested path appends held=<path>(<peer>) to the #general session-ended line, at most 5 then +N more, identical in both twins. Docs: CONFIGURATION, MCP_SERVER, TROUBLESHOOTING, SCHEMA.\nTests:\n- The scenario is AF, not AE: letter AE was already taken by the symlink scenario. AF1 idle + clean lands; AF2 live peer is held with held=; AF3 dirty at pre-flight (touched and untouched) is held. K2 covers the absent field.\n- Counts: sh 38 (37 without symlinks); ps1 37 on this host (38 with symlinks).\n- RED on HEAD's wrappers: sh and PS 5.1 both fail AF1 'an idle peer's clean contested path must land'.\n- Five daemon tests; RED before the change: 5 failed.\nGate (fresh snapshots):\n- named sh command EXIT 0;\n- parity-check.ps1 PASS on 5.1 and pwsh;\n- postflight.ps1 PASS on 5.1 and pwsh (frozen 73, 37 scenarios, AE skipped: no symlinks);\n- daemon getCommitScope 19/19; npm test 166 files, 4206 passed | 14 skipped.\nMutation proof, both twins: dropping the clean check reddens AF3; absent-as-idle reddens K2; ignoring peerActive reddens K2 and AF2; the old rule reddens AF1; dropping held= reddens AF2. Daemon: first claimant only reddens (e), ignoring attempts reddens (c), idle without since reddens (d)."
 }

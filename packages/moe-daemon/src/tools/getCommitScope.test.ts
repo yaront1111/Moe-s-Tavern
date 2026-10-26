@@ -3,6 +3,7 @@ import { ToolTestHarness } from './toolTestHarness.js';
 import { getCommitScopeTool } from './getCommitScope.js';
 import { getTools } from './index.js';
 import { pathKey } from '../util/affectedFiles.js';
+import { openAttempt, setAttemptPhase } from '../state/attemptStore.js';
 
 interface ScopeResult {
   taskId: string;
@@ -18,7 +19,7 @@ interface ScopeResult {
   touchedFiles: string[];
   inferredPaths: string[];
   unattributedPaths: string[];
-  peerDeclared: { path: string; taskId: string }[];
+  peerDeclared: { path: string; taskId: string; peerActive: boolean }[];
   livePeerIds: string[];
   activePeerIds: string[];
   peersActive: boolean;
@@ -393,5 +394,111 @@ describe('moe.get_commit_scope', () => {
     await expect(getCommitScopeTool(h.state).handler({}, h.state)).rejects.toThrow('Missing required field: taskId');
     await expect(scope({ phase: 'midflight' })).rejects.toThrow('phase');
     await expect(scope({ since: 'not-a-date' })).rejects.toThrow('since');
+  });
+
+  describe('peerDeclared[].peerActive', () => {
+    // A wrapper releases a contested path only on a JSON false here: the
+    // contesting task cannot have written bytes during the landing session.
+    afterEach(() => { vi.useRealTimers(); });
+
+    const flags = (result: ScopeResult) =>
+      new Map(result.peerDeclared.map((e) => [pathKey(e.path), { taskId: e.taskId, peerActive: e.peerActive }]));
+
+    function peerTask(id: string, path: string, assignedWorkerId: string | null = null): void {
+      h.createTask({ id, status: 'PLANNING', assignedWorkerId, declaredFiles: [path] });
+    }
+
+    it('is false for an unassigned peer with no attempts when since is given', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+      peerTask('task-idle', 'src/idle.ts');
+      await h.state.load();
+
+      const since = new Date(Date.now() - 5 * 60_000).toISOString();
+      const byPath = flags(await scope({ workerId: 'worker-1', since }));
+      expect(byPath.get(pathKey('src/idle.ts'))).toEqual({ taskId: 'task-idle', peerActive: false });
+    });
+
+    it('follows the assignee: active since since-120s is true; older, DEAD or missing is false', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+      const now = Date.now();
+      const sinceMs = now - 5 * 60_000;
+      const hourAgo = new Date(now - 60 * 60_000).toISOString();
+      peerTask('task-a', 'src/a.ts', 'worker-recent');
+      peerTask('task-b', 'src/b.ts', 'worker-old');
+      peerTask('task-c', 'src/c.ts', 'worker-dead');
+      peerTask('task-d', 'src/d.ts', 'worker-missing');
+      h.createWorker({ id: 'worker-recent', status: 'IDLE', lastActivityAt: new Date(sinceMs - 60_000).toISOString(), startedAt: hourAgo });
+      h.createWorker({ id: 'worker-old', status: 'IDLE', lastActivityAt: new Date(sinceMs - 10 * 60_000).toISOString(), startedAt: hourAgo });
+      h.createWorker({ id: 'worker-dead', status: 'DEAD', lastActivityAt: new Date(now).toISOString(), startedAt: hourAgo });
+      await h.state.load();
+
+      const byPath = flags(await scope({ workerId: 'worker-1', since: new Date(sinceMs).toISOString() }));
+      expect(byPath.get(pathKey('src/a.ts'))?.peerActive).toBe(true);
+      expect(byPath.get(pathKey('src/b.ts'))?.peerActive).toBe(false);
+      expect(byPath.get(pathKey('src/c.ts'))?.peerActive).toBe(false);
+      expect(byPath.get(pathKey('src/d.ts'))?.peerActive).toBe(false);
+    });
+
+    it('follows the attempts: open or changed phase inside the window is true; closed long before since is false', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+      peerTask('task-open', 'src/open.ts');
+      peerTask('task-recent', 'src/recent.ts');
+      peerTask('task-stale', 'src/stale.ts');
+      await h.state.load();
+
+      const now = Date.now();
+      const attempt = (taskId: string) =>
+        openAttempt(h.state, { taskId, workerId: 'worker-gone', runnerId: 'worker-gone', workspace: h.testDir });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(now - 60 * 60_000);
+      await setAttemptPhase(h.state, (await attempt('task-stale')).id, 'closed');
+      vi.setSystemTime(now - 60_000);
+      await attempt('task-open');
+      await setAttemptPhase(h.state, (await attempt('task-recent')).id, 'closed');
+      vi.useRealTimers();
+
+      const byPath = flags(await scope({ workerId: 'worker-1', since: new Date(now - 5 * 60_000).toISOString() }));
+      expect(byPath.get(pathKey('src/open.ts'))?.peerActive).toBe(true);
+      expect(byPath.get(pathKey('src/recent.ts'))?.peerActive).toBe(true);
+      expect(byPath.get(pathKey('src/stale.ts'))?.peerActive).toBe(false);
+    });
+
+    it('is true for every entry when no since is given', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+      peerTask('task-idle', 'src/idle.ts');
+      peerTask('task-gone', 'src/gone.ts', 'worker-missing');
+      await h.state.load();
+
+      const result = await scope({ workerId: 'worker-1' });
+      expect(result.peerDeclared.map((e) => [e.path, e.peerActive])).toEqual([
+        ['src/gone.ts', true],
+        ['src/idle.ts', true],
+      ]);
+    });
+
+    it('ORs over every task contributing a path, keeping the first claimant as taskId', async () => {
+      for (const activeId of ['task-p2', 'task-p1']) {
+        h.cleanup();
+        h.init();
+        h.setupMoeFolder();
+        h.createEpic();
+        h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
+        peerTask('task-p1', 'src/shared.ts', activeId === 'task-p1' ? 'worker-live' : null);
+        peerTask('task-p2', './src/shared.ts', activeId === 'task-p2' ? 'worker-live' : null);
+        h.createWorker({ id: 'worker-live', status: 'CODING', lastActivityAt: new Date().toISOString() });
+        await h.state.load();
+
+        const result = await scope({ workerId: 'worker-1', since: new Date(Date.now() - 5 * 60_000).toISOString() });
+        expect(result.peerDeclared).toEqual([{ path: 'src/shared.ts', taskId: 'task-p1', peerActive: true }]);
+      }
+    });
   });
 });

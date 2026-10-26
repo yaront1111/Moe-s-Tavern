@@ -97,7 +97,10 @@ try {
     #   FAKE_SCOPE_PEER_DECLARED         "path:taskId,..." overriding the peer
     #                                    union read from the other records
     #   FAKE_SCOPE_PEERS_ACTIVE=1        another worker is live (livePeerIds)
-    #   FAKE_SCOPE_ASSIGNED              assignedWorkerId reported by the scope
+    #   FAKE_SCOPE_PEER_ACTIVE=0|1       every peerDeclared entry's peerActive
+    #                                    (1 = true); unset omits the field,
+    #                                    as a daemon from before it does
+    #   FAKE_SCOPE_ASSIGNED             assignedWorkerId reported by the scope
     #   FAKE_SCOPE_DECLARED_FIELD=1      serve `declared` (the record's
     #                                    declaredFiles) as the current daemon
     #                                    does; unset models a daemon from
@@ -554,6 +557,8 @@ switch (tool) {
         for (const p of [...os.asserted, ...os.planned, ...strList(other.touchedFiles)]) peerDeclared.push({ path: p, taskId: other.id });
       }
     }
+    const peerActive = process.env.FAKE_SCOPE_PEER_ACTIVE;
+    if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
     const peersActive = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
     ok({
       taskId,
@@ -1461,8 +1466,12 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
     # File-creating fake CLIs. The ps1 claude launch does NOT cd into the
     # project (it binds via MOE_PROJECT_PATH), so every path is written via
     # %MOE_PROJECT_PATH% — a relative path would land in the harness cwd.
+    # create-file.cmd also writes FAKE_CLI_EXTRA_FILE when set (a Bash-style,
+    # unwitnessed write of a peer-declared path).
     $createFileCmd = Join-Path $tempRoot 'create-file.cmd'
-    Set-Content -Path $createFileCmd -Encoding ASCII -Value "@echo off`r`necho new> `"%MOE_PROJECT_PATH%\session-new.txt`"`r`nexit /b 0`r`n"
+    Set-Content -Path $createFileCmd -Encoding ASCII -Value ("@echo off`r`necho new> `"%MOE_PROJECT_PATH%\session-new.txt`"`r`n" +
+        "if defined FAKE_CLI_EXTRA_FILE echo extra> `"%MOE_PROJECT_PATH%\%FAKE_CLI_EXTRA_FILE%`"`r`n" +
+        "exit /b 0`r`n")
     $createPeerCmd = Join-Path $tempRoot 'create-peer.cmd'
     Set-Content -Path $createPeerCmd -Encoding ASCII -Value "@echo off`r`necho new> `"%MOE_PROJECT_PATH%\session-new.txt`"`r`necho peer> `"%MOE_PROJECT_PATH%\peer-plan.txt`"`r`nexit /b 0`r`n"
     # Rewrites the task's OWN board record and a peer's record mid-session
@@ -4095,13 +4104,75 @@ if (mode === 'link') fs.symlinkSync('crlf-copy.txt', f, 'file');
                     Write-Host '[scenario AE] skipped: this host cannot create symlinks'
                 }
 
+                # Scenario AF — the skip-untouched idle-peer exception
+                # (task-c2cb5cf7; same fixture as postflight.sh). An own
+                # contested path with no TOOL witness (a Bash-style write:
+                # create-file.cmd's FAKE_CLI_EXTRA_FILE) lands only when it was
+                # clean at this session's pre-flight AND every contesting task
+                # reports peerActive:false. Another worker stays active
+                # throughout (FAKE_SCOPE_PEERS_ACTIVE=1), so only the per-path
+                # flag can release a path.
+                #   AF1  idle peer, clean at pre-flight   -> lands, Moe-Contested trailer
+                #   AF2  live peer, clean at pre-flight   -> held, named in held=
+                #   AF3  idle peer, dirty at pre-flight   -> both held, named in held=
+                #        (one of the two rewritten during the session)
+                # K2's refused.txt covers the absent field (an older daemon): still held.
+                Write-Host '[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle'
+                function Get-ScopeAFEnded([string]$dir) {
+                    return "$(Get-Content -Path (Join-Path $dir '.moe\messages\chan-general.jsonl') | Where-Object { $_ -like '*worker session ended: task=task-postflight*' } | Select-Object -Last 1)"
+                }
+                $afRuns = @(
+                    @{ Name = 'AF1'; Files = @('owned-a.txt', 'contested.txt'); Pre = @('owned-a.txt'); Peers = 'contested.txt:task-peer'; Active = '0'; Extra = 'contested.txt' },
+                    @{ Name = 'AF2'; Files = @('owned-a.txt', 'contested.txt'); Pre = @('owned-a.txt'); Peers = 'contested.txt:task-peer'; Active = '1'; Extra = 'contested.txt' },
+                    @{ Name = 'AF3'; Files = @('owned-a.txt', 'pre-untouched.txt', 'pre-touched.txt'); Pre = @('owned-a.txt', 'pre-untouched.txt', 'pre-touched.txt')
+                       Peers = 'pre-untouched.txt:task-peer,pre-touched.txt:task-peer'; Active = '0'; Extra = 'pre-touched.txt' }
+                )
+                foreach ($af in $afRuns) {
+                    $afName = $af.Name
+                    $afDir = Join-Path $tempRoot "scope-$($afName.ToLower())"
+                    $afOut = Join-Path $tempRoot "scope-$($afName.ToLower()).out"
+                    New-ScopeProject $afDir $af.Files
+                    foreach ($f in $af.Pre) { Set-Content -Path (Join-Path $afDir $f) -Value 'pre' }
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = $af.Peers
+                    $env:FAKE_SCOPE_PEER_ACTIVE = $af.Active
+                    $env:FAKE_CLI_EXTRA_FILE = $af.Extra
+                    try {
+                        Assert-ScopeRun $afName (Invoke-GateWrapper $afDir $afOut -Command $createFileCmd) $afOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE', 'FAKE_CLI_EXTRA_FILE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $afPaths = Get-CommittedPaths $afDir
+                    $afText = Get-Content -Raw -Path $afOut
+                    $afStatus = @(& git -C $afDir status --porcelain 2>$null)
+                    $afLine = Get-ScopeAFEnded $afDir
+                    if (-not $afLine) { Write-Host $afText; throw "SCENARIO $afName FAILED: no session-ended line in #general" }
+                    if ($afName -eq 'AF1') {
+                        if ($afPaths -ne 'contested.txt owned-a.txt') { Write-Host $afText; throw "SCENARIO AF1 FAILED: an idle peer's clean contested path must land; got [$afPaths]" }
+                        if ($afText.Contains('[skip] contested.txt')) { Write-Host $afText; throw 'SCENARIO AF1 FAILED: contested.txt must not be skipped' }
+                        if ((@(& git -C $afDir log -1 --format=%B 2>$null) -join "`n") -notlike '*Moe-Contested: contested.txt (task-peer)*') { throw 'SCENARIO AF1 FAILED: the completion must keep the Moe-Contested trailer' }
+                        if ($afLine -like '* held=*') { throw "SCENARIO AF1 FAILED: nothing was held, so no held= suffix; got [$afLine]" }
+                        continue
+                    }
+                    if ($afPaths -ne 'owned-a.txt') { Write-Host $afText; throw "SCENARIO $afName FAILED: a live peer's or a pre-flight-dirty contested path must stay out; got [$afPaths]" }
+                    $afHeld = @($af.Peers -split ',' | ForEach-Object { $_.Split(':')[0] })
+                    foreach ($p in $afHeld) {
+                        if (-not $afText.Contains("[skip] $p MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)")) { Write-Host $afText; throw "SCENARIO $afName FAILED: expected '[skip] $p MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'" }
+                        if ($afStatus -notcontains "?? $p") { throw "SCENARIO $afName FAILED: $p must stay untracked" }
+                    }
+                    $afWant = if ($afName -eq 'AF2') { ' held=contested.txt(task-peer)' } else { ' held=pre-touched.txt(task-peer),pre-untouched.txt(task-peer)' }
+                    if (-not $afLine.Contains($afWant)) { throw "SCENARIO $afName FAILED: the session-ended line must name the held path(s) [$afWant]; got [$afLine]" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AF] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 36
-                if ($symlinksOk) { $scopeExpectedRuns = 37 }
+                $scopeExpectedRuns = 37
+                if ($symlinksOk) { $scopeExpectedRuns = 38 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks)); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
