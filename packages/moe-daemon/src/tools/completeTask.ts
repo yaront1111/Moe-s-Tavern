@@ -5,6 +5,7 @@ import { assertWorkerHoldsTask, assertAllStepsCompleted, assertVerificationEvide
 import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
 import { currentAttempt, setAttemptPhase } from '../state/attemptStore.js';
 import { assertCompletionEvidenceEligible, assertExecutionAuthorized } from '../util/executionAuthorization.js';
+import { assertExecutionProfileReady, resolveTaskExecutionProfile } from '../delivery/executionProfile.js';
 import type { ExecutionAttempt } from '../types/schema.js';
 
 /**
@@ -177,6 +178,9 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       assertAllStepsCompleted(task);
       const verification = assertVerificationEvidence(params.verification);
       if (strict) assertCompletionEvidenceEligible(task, strict, 'moe.complete_task');
+      // The store's WORKING->REVIEW backstop runs this same check, but only
+      // after the attempt is finalizing: refuse here so a retry gets the same answer.
+      assertExecutionProfileReady(resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot));
       // Runs with the other assertions, BEFORE updateTask: a rejection must
       // leave the task untouched in WORKING rather than half-completed.
       const branchPolicy = await checkBranchPolicy(state, task.id, params.currentBranch);

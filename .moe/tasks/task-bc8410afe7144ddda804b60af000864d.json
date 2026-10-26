@@ -1,0 +1,30 @@
+{
+  "id": "task-bc8410afe7144ddda804b60af000864d",
+  "epicId": "epic-5d9f6c0a3b0a4a6882d2a74387a3f56d",
+  "title": "bug: stale comments/docs left after CQ-F (approvedPlanRevision, launcher stamping, submit_plan requiredChecks)",
+  "description": "Comment/doc drift found in CQ-F12's epic sweep (no behavior change needed):\n1) packages/moe-daemon/src/types/schema.ts:802-803 says an absent approvedPlanRevision includes \"an omitted-token human approval\", but CQ-F04b deleted that path (token-free human approvals are refused INVALID_INPUT).\n2) scripts/moe-agent.sh:1352,6273 and moe-agent.ps1:1157,5711 say moe-proxy stamps identity only onto get_context/start_step; since CQ-F12a it also stamps complete_step/complete_task (a wrapper edit hot-reloads the fleet, so land it deliberately).\n3) docs/MCP_SERVER.md submit_plan executionContract listing (~line 311) omits the ninth field requiredChecks (CQ-V01a; EXECUTION_CONTRACT_FIELDS in state/validators.ts).",
+  "definitionOfDone": [
+    "The three stale statements match the code at HEAD",
+    "F12b drift test (src/util/executionContractDocs.test.ts) and parity-check.sh stay green"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-72184c6505cc41e8b6066732011ffb70"
+  ],
+  "priority": "LOW",
+  "order": 235.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T10:43:25.554Z",
+  "updatedAt": "2026-10-26T10:43:25.554Z"
+}

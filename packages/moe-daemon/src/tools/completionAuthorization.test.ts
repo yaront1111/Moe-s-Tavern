@@ -166,11 +166,14 @@ describe('completion authorization (CQ-F08)', () => {
         .toEqual(['affectedFiles', 'completedAt', 'description', 'modifiedFiles', 'status', 'stepId']);
     });
 
-    it('passes complete_task on current evidence through to the readiness backstop', async () => {
+    it('refuses complete_task at the readiness gate before any write, so a retry gets the same refusal', async () => {
       await seed();
       await finish();
       expect(evidence()?.map((e) => [e.stepId, e.planRevision])).toEqual([['step-1', 3], ['step-2', 3]]);
-      await expect(tools.task()).rejects.toMatchObject({ codeName: 'EXECUTION_PROFILE_NOT_READY' });
+      await refused('task', {}, 'EXECUTION_PROFILE_NOT_READY');
+      await refused('task', {}, 'EXECUTION_PROFILE_NOT_READY');
+      expect(getAttempt(h.state, attempt.id)?.phase).toBe('running');
+      expect(task()).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-s' });
     });
 
     it("keeps a superseded attempt's evidence but refuses to count it", async () => {

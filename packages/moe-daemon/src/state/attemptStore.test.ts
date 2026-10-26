@@ -11,6 +11,8 @@ import {
   openAttempt,
   reconcileRunningAttempts,
   recordAttemptPresence,
+  recordContextReceipt,
+  recordStepCompletion,
   setAttemptPhase,
   type OpenAttemptParams,
 } from './attemptStore.js';
@@ -355,6 +357,56 @@ describe('attemptStore', () => {
     expect(hinted.processStartedAt).toBe('2026-09-11T00:00:00.000Z');
     expect(hinted.host).toBe('box-1');
     expect(readAttempt('attempt-b')).toEqual(hinted);
+  });
+
+  // ---------------------------------------------------------------------------
+  // recordStepCompletion guards (CQ-F08 evidence; the tools refuse first)
+  // ---------------------------------------------------------------------------
+
+  describe('recordStepCompletion', () => {
+    const record = (over: Partial<{ attemptId: string; workerId: string; stepId: string }> = {}) =>
+      recordStepCompletion(h.state, { attemptId: 'attempt-a', workerId: 'worker-1', stepId: 'step-1', planRevision: 2, ...over });
+    async function refusedBeforeWrite(codeName: string, over: Parameters<typeof record>[0] = {}) {
+      const before = fs.existsSync(attemptFile('attempt-a')) ? fs.readFileSync(attemptFile('attempt-a'), 'utf8') : null;
+      const write = vi.spyOn(h.state, 'writeEntity');
+      const err = await record(over).then(() => null, (e: { codeName?: string; context?: Record<string, unknown> }) => e);
+      expect(err).toMatchObject({ codeName });
+      expect(write).not.toHaveBeenCalled();
+      expect(fs.existsSync(attemptFile('attempt-a')) ? fs.readFileSync(attemptFile('attempt-a'), 'utf8') : null).toBe(before);
+      return err!;
+    }
+
+    it('refuses an unknown attempt with ATTEMPT_NOT_FOUND', async () => {
+      await refusedBeforeWrite('ATTEMPT_NOT_FOUND');
+    });
+
+    it.each(['reconciling', 'finalizing', 'closed'] as const)('refuses a %s attempt with ATTEMPT_NOT_RUNNING', async (phase) => {
+      await openAttempt(h.state, { ...base, id: 'attempt-a' });
+      await setAttemptPhase(h.state, 'attempt-a', phase);
+      expect((await refusedBeforeWrite('ATTEMPT_NOT_RUNNING')).context).toMatchObject({ phase });
+    });
+
+    it("refuses another worker's call with NOT_ALLOWED", async () => {
+      await openAttempt(h.state, { ...base, id: 'attempt-a' });
+      await refusedBeforeWrite('NOT_ALLOWED', { workerId: 'worker-2' });
+    });
+
+    it('appends in call order and carries every other field over unchanged', async () => {
+      await openAttempt(h.state, { ...base, id: 'attempt-a' });
+      await recordContextReceipt(h.state, {
+        attemptId: 'attempt-a', workerId: 'worker-1', sessionId: 'session-1', packetId: `sha256:${'a'.repeat(64)}`,
+        planRevision: 2, approvedPlanRevision: 2, view: 'default',
+      });
+      const before = getAttempt(h.state, 'attempt-a')!;
+      const first = await record();
+      first.length = 0; // a detached copy
+      await record({ stepId: 'step-2' });
+      const { stepCompletions, ...rest } = getAttempt(h.state, 'attempt-a')!;
+      expect(rest).toEqual(before);
+      expect(stepCompletions?.map((e) => [e.stepId, e.planRevision])).toEqual([['step-1', 2], ['step-2', 2]]);
+      expect(stepCompletions?.every((e) => /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(e.completedAt))).toBe(true);
+      expect(readAttempt('attempt-a').stepCompletions).toEqual(stepCompletions);
+    });
   });
 });
 
