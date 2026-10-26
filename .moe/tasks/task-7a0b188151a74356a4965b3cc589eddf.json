@@ -84,17 +84,20 @@
     {
       "stepId": "step-7",
       "description": "Adversarial self-review of the whole diff (load adversarial-self-review). Check:\n- Lock: no path deletes a lock this call did not create; finally always releases ours; a kill while holding it is recovered by claude's 10s stale rule.\n- Atomicity: tmp and rename in the same folder; the tmp is cleaned on every failure; the file mode is preserved.\n- Content: no line can print .claude.json content, a path from it, or an env value; the escalation never carries the config dir.\n- Scope: only interactive leased claude seats; headless and unrotated launches behave exactly as before; only the trust key changes, and every other key round-trips.\n- Keys: correct for WSL/Linux, native (D:/...), Git Bash (MSYS-converted args), a project nested in a git repo (the toplevel key is what claude's dialog writes), and trailing slashes.\n- Loop: a refusal clears the lease, waits once per iteration, escalates once per account per call, and Ctrl+C still ends it; a helper crash launches unrotated.\n- Parity: identical lines and codes in sh/ps1; ps1 BOM kept; PowerShell 5.1 syntax only.\n- No real account folder was touched while testing.\nFix any finding, then rerun step 6 before moe.complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-account-lease.mjs",
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "note": "I re-read the whole 4758ad1 diff this session as an attacker: the helper, both launchers, the docs, the lease test and postflight. I found no real defect and changed no bytes; the 7 owned paths still equal 4758ad1 (git diff --quiet). The shared tree's other dirty paths belong to peers and were left alone.\n\nChecklist:\n- Lock: takeLock returns 'held' only after this call's own mkdir. Only that path reaches the finally rmdir. EEXIST waits up to 2 s, any other error gives the rewrite refusal. A foreign lock is never removed.\n- Atomicity: the tmp file is `.claude.json.moe-<pid>.tmp` in the same folder, opened 'wx' and chmod'd to the original mode. The rename retries EPERM/EBUSY/EACCES 5x50 ms, and the tmp is removed on every failure. The original is untouched unless the rename succeeds.\n- Privacy: the helper prints one of three shapes with fixed reasons; no file content, path or env value. The escalation names the account id, the project and a relative `claude-accounts/<id>` hint, never the config dir. No forbidden patterns in the added lines.\n- Scope (sh): the guard `[ \"$CLAUDE_INTERACTIVE\" = true ]` matches the TUI branch exactly, since PRINT_ARGS is empty iff CLAUDE_INTERACTIVE=true (moe-agent.sh:7824).\n- Scope (ps1): the guard uses $claudeInteractive. Headless seats return before the helper runs.\n- Launch dir: the sh TUI runs `(cd \"$PROJECT\" && ...)`. The ps1 claude launches (moe-agent.ps1:7210-7226) have no Push-Location, so (Get-Location).ProviderPath is claude's cwd. $projectPath is a PathInfo, but [string[]]$HelperArgs turns it into its Path.\n- Keys: covered for WSL/Linux, native D:/, Git Bash (MSYS-converted argv), a nested repo (git top-level), a trailing slash and a lowercase drive.\n- Loop: a refusal clears the lease, prints UNTRUSTED, escalates once per account per call, sleeps, then re-leases. Ctrl+C behaves as in MOE_ACCOUNT_WAIT. A helper failure launches unrotated. Every new sh command is set -e safe.\n\nTheoretical residuals (no change):\n1. A helper killed between mkdir and rmdir leaves a stale .claude.json.lock. Trust calls then refuse loudly ('locked' plus #general) until a claude run clears it under proper-lockfile's 10 s stale rule.\n2. If the helper held the lock over 10 s (a suspended process or a very slow fs), claude could take it over, and our finally would then rmdir claude's lock. The normal hold is milliseconds.\n3. A kill between the tmp write and the rename leaves tmp debris.\n4. claude's no-lock fallback could drop the key later, and the TUI would ask once.\n5. ps1: a non-FileSystem location, or a PSDrive/UNC project path, gets the loud 'outside' refusal.\n6. sh and ps1 parse the retry seconds differently only above 2^31, which matches the existing MOE_ACCOUNT_WAIT path.\n\nFresh gate run in this session, 07:48:58Z to 07:57:54Z: a pure git archive of HEAD 229e534, owned paths == 4758ad1, 27 MOE_*/CLAUDE* vars unset, TIMEOUT 180.\n- Lease test: 40 tests, 39 pass, 1 skip.\n- parity-check.sh PASS.\n- postflight PASS: frozen 73, [accounts] ok, scope 38. GATE_EXIT=0.\n\nNative Windows, same snapshot, 07:58Z:\n- node.exe: 54 tests, 52 pass, 2 skips. Every lease-loop case passes: the 7 ps1 cases on powershell.exe and on pwsh.exe, and the 6 Git Bash cases.\n- PS 5.1.26100 ParseFile: 0 errors.\n- parity-check.ps1 PASS.\n- BOM kept, 0 CR.\n\nTemp dirs removed after a prefix check.",
+      "startedAt": "2026-10-26T07:48:39.745Z",
+      "completedAt": "2026-10-26T07:58:44.657Z"
     }
   ],
-  "planRevision": 28,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3729a0d6",
+  "planRevision": 30,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -119,12 +122,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:39:58.071Z",
-  "updatedAt": "2026-10-26T07:45:09.657Z",
+  "updatedAt": "2026-10-26T07:59:39.977Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T22:18:28.699Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 13,
+    "executedStepCount": 14,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -145,7 +148,8 @@
     "step-3",
     "step-4",
     "step-5",
-    "step-6"
+    "step-6",
+    "step-7"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T05:48:35.795Z",
@@ -171,12 +175,12 @@
     "task-7c2872e7052646b7a521cb7a8f01c546"
   ],
   "workStartedAt": "2026-10-26T06:38:46.945Z",
-  "reviewStartedAt": "2026-10-26T07:18:41.333Z",
+  "reviewStartedAt": "2026-10-26T07:59:39.975Z",
   "verification": {
-    "command": "env -u MOE_PROJECT_PATH -u MOE_WORKER_ID -u CLAUDE_CONFIG_DIR <and every other MOE_*/CLAUDE* var> MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash -c 'node --test scripts/tests/moe-account-lease.test.mjs && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'  # run from a Linux snapshot: git archive HEAD 2dcddc3 + the 7 owned files (cmp-identical to the worktree)",
+    "command": "env -u <each of the 27 MOE_*/CLAUDE* vars in the seat env> MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash -c 'node --test scripts/tests/moe-account-lease.test.mjs && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'  # run from a pure `git archive HEAD` (229e534) snapshot in /tmp; the 7 owned paths are cmp-identical to the worktree and git-diff-identical to completion 4758ad1",
     "exitCode": 0,
-    "outputTail": "2026-10-26T07:07:40Z\nGNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)\nv24.21.0\n...\nℹ tests 40\nℹ pass 39\nℹ fail 0\nℹ skipped 1\nPASS parity-check.sh\n...\nPASS frozen candidate scenarios: 73\n[accounts] ok\n[hot reload] a changed wrapper restarts once per edit and re-registers\n...\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\ncommit-scope scenarios run: 38\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\nGATE_EXIT=0\n2026-10-26T07:16:39Z",
-    "reportedAt": "2026-10-26T07:18:41.333Z",
+    "outputTail": "SNAP=/tmp/moe-7a0b-gate.F5jmfs\nHEAD=229e5342a525b2d0ff5644eb9554ce1a9a263b0c\n7 owned paths: worktree == 4758ad1 == snapshot\nunset: 54 args\n2026-10-26T07:48:58Z\nGNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)\nv24.21.0\n...\nℹ tests 40\nℹ pass 39\nℹ fail 0\nℹ skipped 1\nℹ duration_ms 2180.322669\nPASS parity-check.sh\n...\nPASS frozen candidate scenarios: 73\n[accounts] ok\n...\n[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING\n[scenario AE] ok\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\ncommit-scope scenarios run: 38\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\nGATE_EXIT=0\n2026-10-26T07:57:54Z",
+    "reportedAt": "2026-10-26T07:59:39.975Z",
     "source": "agent-reported"
   },
   "filesModified": [
@@ -186,11 +190,9 @@
     "scripts/tests/postflight.sh",
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md",
-    "docs/MCP_SERVER.md",
-    ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
-    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
+    "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "An interactive claude seat that rotation moves onto an account without folder trust no longer parks silently at Claude's trust dialog.\n\nHow it works now:\n- A new `trust` subcommand in scripts/moe-account-lease.mjs sets projects[<key>].hasTrustDialogAccepted in that account's .claude.json.\n- Keys covered: the launch dir, its realpath and its git top-level, plus the Windows D:/ forms.\n- The write happens under claude's own .claude.json.lock (mkdir, waits up to 2 s, never removes a foreign lock). It re-reads under the lock, uses tmp+rename with the original mode, and reads the file back. Every other key round-trips.\n- Output is trusted | granted | refused\\t<sec>\\t<fixed reason>.\n\nWrapper behaviour (both launchers):\n- sh get_account_lease and its ps1 twin Get-MoeAccountLease run the trust step for interactive leased claude seats only.\n- granted prints MOE_ACCOUNT_TRUST_GRANTED.\n- A refusal clears the lease and prints MOE_ACCOUNT_UNTRUSTED. It sends one #general @governors escalation per account per call, naming the account and project and never the config dir. It then waits MOE_ACCOUNT_RETRY_SEC and re-leases.\n- A helper failure prints MOE_ACCOUNT_LEASE_UNAVAILABLE and launches unrotated.\n- Headless -p seats are unchanged (byte-identical test, and postflight checks the account folders stay empty).\n\nSign-off: the invariant is amended with human sign-off (comment-99598cf0e7f64f2ca2db4a0886087a3e) in scripts/CLAUDE.md and docs/MCP_SERVER.md.\n\nTests:\n- moe-account-lease.test.mjs: helper unit tests, plus real-function lease-loop tests on bash, powershell.exe, pwsh.exe and Git Bash.\n- postflight [accounts]: the interactive run is seeded with a secret marker. It checks the grant, the deep-equal seed, and that the secret never appears. The cut-down RED run against the old wrapper fails with \"expected MOE_ACCOUNT_TRUST_GRANTED\".\n\nEvidence:\n- Linux snapshot gate: 40 tests / 39 pass / 1 skip; parity PASS; frozen 73; [accounts] ok; postflight PASS; exit 0.\n- Native Windows: node.ex",
+  "completionSummary": "Round 2 after the size-only reject (reopen 1). Following QA's route, the landed bytes are unchanged: the 7 owned paths equal completion 4758ad1 (git diff --quiet, no later commit touches them; HEAD 229e534 is a board-only checkpoint). The size exception is filed as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (ADD_RAIL, EPIC) and is still PENDING human review. It is scoped to this task and names 4758ad1 +843/-32 (net 811) with this numstat: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8.\n\nBehaviour, as in round 1:\n- `moe-account-lease.mjs trust` sets projects[<key>].hasTrustDialogAccepted in the leased account's .claude.json, under claude's .claude.json.lock, with tmp+rename and a read-back.\n- Both launchers run it for interactive leased claude seats only, printing MOE_ACCOUNT_TRUST_GRANTED.\n- When trust cannot be set, they print MOE_ACCOUNT_UNTRUSTED and post one #general @governors line per account, naming the account and project but never the folder. They then wait MOE_ACCOUNT_RETRY_SEC and re-lease.\n- Headless -p seats are unchanged. The invariant amendment cites sign-off comment-99598cf0.\n\nStep-7 adversarial review: no defect. Theoretical residuals only:\n- A stale lock from a killed helper gives a loud refusal until claude's 10 s stale rule clears it.\n- A kill mid-write leaves tmp debris.\n- claude's no-lock fallback could drop the key later.\n\nFresh gate, run 07:48:58Z-07:57:54Z on a pure git archive of HEAD with 27 MOE_*/CLAUDE* vars unset and TIMEOUT 180:\n- lease test: 40 tests, 39 pass, 1 skip\n- parity-check.sh PASS\n- postflight PASS (frozen 73, [accounts] ok, scope 38)\n- exit 0\n\nNative Windows, same snapshot:\n- node.exe: 54 tests, 52 pass, 2 skips. That covers the 7 ps1 cases on each of powershell.exe and pwsh.exe, plus the 6 Git Bash cases.\n- PS 5.1 ParseFile: 0 errors.\n- parity-check.ps1 PASS.\n- BOM kept, 0 CR.",
   "commits": [
     {
       "sha": "4758ad13111f7394606a6df6fde4ca7bd1c574d3",
@@ -214,6 +216,21 @@
       "treeId": "f3be92d6fde5ed98a8054faeec3761c23d37b07d",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "229e5342a525b2d0ff5644eb9554ce1a9a263b0c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T07:32:19Z",
+      "paths": [
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T07:45:56.220Z",
+      "treeId": "00fb73fdab7f0fb6249724d9f98acc0588e831f7",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -222,11 +239,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-7c627d35@2026-10-26T07:19:18Z",
-    "at": "2026-10-26T07:33:11.457Z"
+    "sessionId": "worker-3729a0d6@2026-10-26T07:32:19Z",
+    "at": "2026-10-26T07:45:56.220Z"
   },
   "reviewCompletedAt": "2026-10-26T07:32:09.261Z",
   "rejectionDetails": {
