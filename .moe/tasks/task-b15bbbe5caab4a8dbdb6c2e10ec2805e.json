@@ -85,7 +85,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:37.708Z",
-  "updatedAt": "2026-10-26T00:39:34.937Z",
+  "updatedAt": "2026-10-26T00:40:09.583Z",
   "dependsOn": [
     "task-3c54775146c946208dd90a94e2e9caac",
     "task-35584de27bb24c38a3cf508aeba5550c",
@@ -144,7 +144,8 @@
     "scripts/tests/prompt-cache-launcher.test.mjs",
     "scripts/moe-agent.sh",
     "scripts/tests/postflight.sh",
-    ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json"
+    ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json",
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
   ],
   "completionSummary": "CQ-F10 is delivered, plan rev 1, 4/4 steps. Net LOC 115.\n\nmoe-agent.sh (+30/-10):\n- pin_attempt_identity exports a blank pair, verifies into locals, and assigns both only on success. A failure leaves both blank, never half, stale or unverified.\n- The loop-top reset exports the blank pair.\n- Pre-flight get_context args are {taskId,sessionId} when MOE_SESSION_ID is set, else {taskId}.\n- New moe_rpc_unserved (MOE_SESSION_ID blanked) serves the post-flight and adoption reads, so they mint no receipt.\n- The codex override filters the 3 keys and emits the non-empty ones in the order SESSION, ATTEMPT_ID, GENERATION, before MOE_WORKER_ID.\n- The grok table gets 3 `KEY = \"${KEY:-}\"` lines after MOE_RUNNER_HOST.\n\nTests (prompt-cache-launcher, sh only, +105/-13):\n- T1: sid set/unset, exact args, payload intact (packetManifest, servedContext, future field).\n- T2: fresh, resume refresh, stale and foreign pins, via a child's env.\n- T3: exact codex override string.\n- T4: no identity in the stable prefix.\n- T5: grok lines, call sites, and the helper restoring the sid.\nRED first: 8 fail. 11 mutants killed.\n\nScope growth, postflight.sh (+4/-1): the loop-land-twice fake reused a CLOSED attempt on claims 2-3, which the old pin tolerated by keeping an unverified pair. The real openAttempt persists a running record before replying. The fixture now reopens a closed record when claimLimit>1. Old and new wrappers pass; no assertion was loosened.\n\nGates (seat MOE_* unset): DoD 38/38; bash -n OK; parity PASS; postflight.sh PASS (frozen 73, commit-scope 37); usage-launcher 9/9.\n\nFor F11 (ps1):\n- Mirror the contract and order above.\n- Use Invoke-MoeRpcUnserved at $ctxResp and $adoptResp.\n- Extend T1-T5 to the ps1 engines.\n- Apply the same fixture fix in postflight.ps1.\n- Then add MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION to parity-check.{sh,ps1}.\n- Note: sh emits the non-empty codex keys; F11 planned both-or-neither. Both fail closed.\n\nDocs (scripts/CLAUDE.md) are left for F11 or the epic-final ",
   "commits": [
@@ -165,14 +166,30 @@
       "treeId": "62e780312c230b095b37314a8ce2bd3cc378cb61",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5c6c5e67ed391ebe7c0fcd4e28a75a7e3325075c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T00:27:11Z",
+      "paths": [
+        ".moe/tasks/task-b15bbbe5caab4a8dbdb6c2e10ec2805e.json",
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T00:40:09.583Z",
+      "treeId": "0401f6c719ceefcf9aeb3d2c8928148bf4ce125b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3729a0d6@2026-10-26T00:00:37Z",
-    "at": "2026-10-26T00:26:55.736Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T00:27:11Z",
+    "at": "2026-10-26T00:40:09.583Z"
   },
   "completedAt": "2026-10-26T00:39:34.937Z",
   "reviewCompletedAt": "2026-10-26T00:39:34.937Z",

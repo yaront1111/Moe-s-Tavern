@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -126,7 +126,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:25.001Z",
-  "updatedAt": "2026-10-26T00:39:34.028Z",
+  "updatedAt": "2026-10-26T00:52:20.780Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7",
     "task-35584de27bb24c38a3cf508aeba5550c",
@@ -138,7 +138,9 @@
     "plannedDistinctFileCount": 3,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T00:52:20.780Z",
+    "wallClockMs": 111619605
   },
   "contextFetchedBy": [
     "worker-7d158765",
@@ -349,7 +351,7 @@
     "packages/moe-daemon/src/context/contextPacket.ts",
     "packages/moe-daemon/src/tools/getContext.ts"
   ],
-  "reviewCompletedAt": "2026-10-26T00:08:00.951Z",
+  "reviewCompletedAt": "2026-10-26T00:52:20.780Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
@@ -394,5 +396,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-26T00:52:20.780Z",
+  "reviewSummary": "QA approve, CQ-C01 reopen #1. The delivery gap is fixed.\nDelivery: 1bf084c (contextPacket.ts, test), cf3e866 (getContext.ts), 06520da (sibling fix and test), and completion 0d51981. All are on moe/work-2026-10-24 and origin. HEAD blobs equal the worktree, no peer commits touch the 3 files, and only those 3 non-.moe files changed: +387/-10, net 377.\nGate (QA re-run): pure git archive with no overlay, blobs checked, native node_modules (lockfile equal), env -i with 0 MOE_*.\n- On 0d51981, `cd packages/moe-daemon && npm test` exit 0: 166/166 files, 4201 passed | 14 skipped (4215). getContextPacket 22/22. tsc --noEmit exit 0.\n- Tip 5c6c5e6 (same daemon tree) gives the same result. Both match the worker's verification.\nDoD:\n1. No ROLE_OMITTED path is mandatory. 5 callers x 2 views serve the mandatory paths toStrictEqual stored state.\n2. Overflow gives expand or restructure with the description and plan served byte-equal. packetBudgetChars is refused before any write in every view.\n3. Manifest keys are exactly the 6 contract keys, packetId digests the manifest, and strict start_step is still PLAN_REVISION_NOT_APPROVED.\n4. Verified as above.\nMutation probes (snapshot only): 10/10 killed (clamp, validation after status, declared siblings, inherited props, budget boundary, comment count, empty taskRails, manifest outside digest, description truncation, role-trim drop). Baseline 22/22 restored.\nRails: no forbidden tokens, wrapper-only Git writes, verified-local is a test fixture only, status and no-task views unchanged. Docs are handed forward to C11 (task-4e0264fc, architect comment).\nPonytail (non-blocking): contextPacket.ts L18/L108/L113, the one-element CONDITIONAL_SECTIONS list could be a const string. net: -1 lines possible.",
+  "requiredCheckAtDone": null
 }
