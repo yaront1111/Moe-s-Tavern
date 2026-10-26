@@ -57,19 +57,29 @@
     {
       "stepId": "step-4",
       "description": "One final verification gate (regression-check and verification-before-completion): acquire Moe resource jetbrains-gradle first and release it in all outcomes. From the repository root run this exact command freshly, with the existing platform-compatible package dependencies/JDK available:\n```bash\nbash -c 'set -e; cfg=$(mktemp -d); trap \"rm -rf -- \\\"$cfg\\\"\" EXIT; export CLAUDE_CONFIG_DIR=\"$cfg\"; claude plugin test scripts/mods/moe-account-switch; node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/prompt-cache-launcher.test.mjs; bash scripts/tests/parity-check.sh; bash scripts/tests/postflight.sh; (cd packages/moe-daemon && npm test); (cd packages/moe-proxy && npm test); (cd packages/moe-claude-plugin && npm test); (cd moe-jetbrains && ./gradlew --no-daemon test --rerun-tasks); npm run lint'\n```\nExpect every command to exit 0, including the complete plugin suite with its new skipped-StopFailure regression, both launcher integration harnesses, full daemon/proxy/Claude-plugin suites and fresh JetBrains tests. Save the complete output and supply this exact command, actual exitCode and useful outputTail in complete_task.verification; keep the plugin-test pass output in the step evidence even if later suites fill the tail. The only real claude invocation uses the owned temporary empty config and makes no paid model request. Do not silently skip suites, use stale evidence, or modify unrelated foreign dirt to make the gate green. Native Windows uses Git Bash for this exact command; sh/ps1 loading is unchanged and existing launcher tests cover the platform paths.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-24T21:29:12.240Z"
+      "note": "Exact step-4 command exit 0 (native Windows Git Bash, 05:20:17Z–06:47:56Z, log /tmp/moe-account-switch-05e1-gate3.log, clean copy …gate3.clean.log). Ran at the root of a hermetic snapshot of HEAD 1c9cb93 (git archive + robocopy of the 3 packages' node_modules + fresh daemon/proxy dist build + throwaway git init), not the shared checkout: a live peer (worker-3729a0d6, task-7c2872e7) was mid-edit on scripts/tests/parity-check.{sh,ps1} and a first attempt in the shared tree failed parity-check on its not-yet-created postflight-fake-proxy.js (foreign, untouched). My 3 delivered paths are byte-identical to HEAD (git diff --quiet). Results: claude plugin test 26/26 pass; node --test launcher 82/82; parity-check PASS; postflight PASS (frozen candidate 73/73, [accounts] ok, commit-scope 37); daemon 166 files, 4203 passed/18 skipped/0 failed (the prior baselineRun U1/U3 failures are fixed by task-7148c250); proxy 84/84; claude-plugin 13/13; gradlew --no-daemon test --rerun-tasks BUILD SUCCESSFUL (:test executed); npm run lint OK. Resource jetbrains-gradle acquired before and released after; snapshot removed; no held-out/owned processes remain. No source edits this session.",
+      "startedAt": "2026-10-24T21:29:12.240Z",
+      "completedAt": "2026-10-26T06:48:48.259Z"
     },
     {
       "stepId": "step-5",
       "description": "Final and only adversarial self-review: load adversarial-self-review and inspect the complete owned diff plus the landed Stability & Hardening epic's relevant lifecycle/integration changes, not the shared checkout's unrelated dirt. Trace a swallowed StopFailure, any exhausted window, every missing-seat guard, subagent-only ends, empty readings, env/usage exceptions, already-pending daemon signals, and racing/repeated events through to one delayed exit; ensure original completion output and one downstream invocation are preserved on errors. Confirm no account secrets/config access, no security-plugin ordering workaround, no generated types/tsconfig changes, and no MCP/persisted-state contract changes. Check docs do not misrepresent automated tests as live evidence. Fix only task-owned findings and refresh the same gate if code changes; then complete_task with fresh verification and exact modified paths for QA (no git writes; the wrapper lands the bytes).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/mods/moe-account-switch/hooks/register.ts",
+        "scripts/mods/moe-account-switch/hooks/register.test.ts",
+        "docs/plans/2026-10-20-claude-account-rotation.md"
+      ],
+      "note": "Adversarial review of the owned diff (3 paths, already landed in checkpoint e5b63b8; byte-identical to HEAD) found nothing to fix; no code changed this session, so the step-4 gate stands. Traced: swallowed StopFailure -> main turn.complete -> checkHardLimit (any window >=100) -> leave -> one toast + one 10 s timer/exit, completion result returned unchanged. Guards: pending set -> no usage read (daemon accountSwitch still exits); missing MOE_WORKER_ID/MOE_ACCOUNT_ID -> isSeat false, no read; subagent (agentId set) -> hook branch skipped; empty/[0,99.9] readings -> no exit. Failures: env/usage throw happens before any state mutation, so the replay-safe .catch(next(e)) returns the already-computed downstream result with one downstream invocation, and a later check still works (tested). Races: single-threaded, ??= after the await keeps a concurrently delivered daemon instruction, leave's exiting flag allows one toast/timer for StopFailure+completion in either order and repeated completions (tested). Theoretical, not fixed: an account with extra-usage overage may rotate at 100% when it could have continued, and a hard-limit-ended turn can rotate mid-task (both documented; same policy as the existing StopFailure trigger and daemon spent-at-100%). Confirmed: no config-dir/secret access, no security-plugin ordering workaround, no generated types/tsconfig edits (the two untracked mod tsconfig.json files are pre-existing foreign dirt, untouched), no MCP/persisted-state/launcher change. Docs state the incident is user-reported and the evidence is automated mock-clock coverage, with live end-to-end left to a person.",
+      "startedAt": "2026-10-26T06:48:50.653Z",
+      "completedAt": "2026-10-26T06:49:01.193Z"
     }
   ],
-  "planRevision": 8,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -113,17 +123,18 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T17:58:46.581Z",
-  "updatedAt": "2026-10-26T05:14:28.067Z",
+  "updatedAt": "2026-10-26T06:49:53.751Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T21:19:49.038Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-473624b4",
     "worker-9cda703c",
-    "worker-e8965f51"
+    "worker-e8965f51",
+    "worker-7d158765"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -132,7 +143,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-24T21:24:03.980Z",
@@ -195,16 +208,9 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
-    ".moe/tasks/task-5f3960df261a47b5b8b95afb7e67a4fa.json",
-    ".moe/tasks/task-84c2da018ce74995b609805dab4fe7da.json",
-    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json",
-    ".moe/tasks/task-e4adf15c84f0433a9457ea5e8968c3de.json",
-    "docs/plans/2026-10-20-claude-account-rotation.md",
     "scripts/mods/moe-account-switch/hooks/register.test.ts",
     "scripts/mods/moe-account-switch/hooks/register.ts",
-    ".moe/tasks/task-6a742a093a37429c9467b23c3bc13d63.json",
-    ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json"
+    "docs/plans/2026-10-20-claude-account-rotation.md"
   ],
   "unattributedPaths": [
     "2026-10-24-ai-code-quality-and-context.md"
@@ -214,5 +220,14 @@
     "kind": "checkpoint",
     "sessionId": "worker-e8965f51@2026-10-25T10:45:41Z",
     "at": "2026-10-25T12:02:53.649Z"
-  }
+  },
+  "reviewStartedAt": "2026-10-26T06:49:53.748Z",
+  "verification": {
+    "command": "bash -c 'set -e; export CLAUDE_CONFIG_DIR=$(mktemp -d); claude plugin test scripts/mods/moe-account-switch; node --test scripts/tests/moe-account-lease.test.mjs scripts/tests/prompt-cache-launcher.test.mjs; bash scripts/tests/parity-check.sh; bash scripts/tests/postflight.sh; (cd packages/moe-daemon && npm test); (cd packages/moe-proxy && npm test); (cd packages/moe-claude-plugin && npm test); (cd moe-jetbrains && ./gradlew --no-daemon test --rerun-tasks); npm run lint'",
+    "exitCode": 0,
+    "outputTail": "Run used the exact 518-char gate (incl. trap cleanup; the command field is capped at 500) on a snapshot of HEAD 1c9cb9339f1ec54c0779add6e54b1e2ef8a6b1bb, native Windows Git Bash, MOE_POSTFLIGHT_TIMEOUT_SEC=400. START UTC 2026-10-26T05:20:17Z\n(pass) a swallowed StopFailure still rotates at main completion [31.62ms]\nRan 26 tests across 1 file. [0.75s]  (claude plugin test: 26 pass / 0 fail)\nℹ tests 82 / ℹ pass 82 / ℹ fail 0  (node --test launcher + lease)\nPASS parity-check.sh\nPASS frozen candidate scenarios: 73\n[accounts] ok\nPASS postflight.sh\ndaemon: Test Files 166 passed (166); Tests 4203 passed | 18 skipped (4221)\nproxy: Test Files 3 passed (3); Tests 84 passed (84)\nclaude-plugin: Test Files 2 passed (2); Tests 13 passed (13)\njetbrains: BUILD SUCCESSFUL in 1m (:test executed, --rerun-tasks)\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 29 lines (max 40)\nOK: docs/roles/qa.md has 32 lines (max 40)\nEND UTC 2026-10-26T06:47:56Z rc=0",
+    "reportedAt": "2026-10-26T06:49:53.748Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "An interactive seat now rotates at a hard usage limit even when an earlier plugin swallows classic.StopFailure. A new checkHardLimit helper in scripts/mods/moe-account-switch/hooks/register.ts runs on every main-loop turn.complete. It marks the session for the delayed /exit when any $.session.usage() window is at 100% or more. It requires a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID), skips subagent ends, and fails open: a usage or env error leaves the completed turn and session as they were. StopFailure reuses the same helper; the 10 s delay, the daemon accountSwitch path and the held-tool policy are unchanged, and leave()'s exiting guard keeps it to one toast and one exit. hooks/register.test.ts has 26 tests, including the swallowed-StopFailure case (prepended inline plugin), completion without StopFailure, mixed and over-100 windows, below-100 and empty readings, missing seat env, subagent ends, usage and env failures, a pending daemon instruction, and repeated or racing events. The TDD red run (10 behavioural failures on the old code) is in /tmp/moe-account-switch-red.log. The design record docs/plans/2026-10-20-claude-account-rotation.md now separates the user-reported incident and the automated mock-clock evidence from a live end-to-end check, which is left to a person. The three delivered paths landed in checkpoint e5b63b885 and are byte-identical to HEAD 1c9cb93. This session changed no source files. Verification: the exact 518-character step-4 gate ran on a clean snapshot of HEAD 1c9cb93 and exited 0. The `verification.command` field is capped at 500 characters, so it is submitted without the `trap ... EXIT` temp-config cleanup, which does not change what is tested. A first attempt in the shared checkout failed only on a live peer's half-finished edit to scripts/tests/parity-check.{sh,ps1}. Log: /tmp/moe-account-switch-05e1-gate3.log. The adversarial self-review found nothing to fix."
 }
