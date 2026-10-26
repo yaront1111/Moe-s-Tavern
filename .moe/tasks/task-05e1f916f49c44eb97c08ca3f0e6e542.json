@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,18 +123,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T17:58:46.581Z",
-  "updatedAt": "2026-10-26T06:49:53.751Z",
+  "updatedAt": "2026-10-26T06:53:53.858Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T21:19:49.038Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T06:53:53.857Z",
+    "wallClockMs": 120844819
   },
   "contextFetchedBy": [
     "architect-473624b4",
     "worker-9cda703c",
     "worker-e8965f51",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -205,21 +208,41 @@
       "treeId": "db4bbf44b68d98de1985a342021bdf15190debdd",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "16cd5c752b46973ce4ee2d4d0bd29bc0b75cefed",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T05:16:25Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-cd4ed3c69c3e4b2f9245d4a4fb475732.json"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T06:50:20.193Z",
+      "treeId": "5ed34bc6542542f7a2ff82e7e5b32fe573649b75",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/mods/moe-account-switch/hooks/register.test.ts",
     "scripts/mods/moe-account-switch/hooks/register.ts",
-    "docs/plans/2026-10-20-claude-account-rotation.md"
+    "docs/plans/2026-10-20-claude-account-rotation.md",
+    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-cd4ed3c69c3e4b2f9245d4a4fb475732.json"
   ],
   "unattributedPaths": [
     "2026-10-24-ai-code-quality-and-context.md"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-e8965f51@2026-10-25T10:45:41Z",
-    "at": "2026-10-25T12:02:53.649Z"
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T05:16:25Z",
+    "at": "2026-10-26T06:50:20.193Z"
   },
   "reviewStartedAt": "2026-10-26T06:49:53.748Z",
   "verification": {
@@ -229,5 +252,9 @@
     "reportedAt": "2026-10-26T06:49:53.748Z",
     "source": "agent-reported"
   },
-  "completionSummary": "An interactive seat now rotates at a hard usage limit even when an earlier plugin swallows classic.StopFailure. A new checkHardLimit helper in scripts/mods/moe-account-switch/hooks/register.ts runs on every main-loop turn.complete. It marks the session for the delayed /exit when any $.session.usage() window is at 100% or more. It requires a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID), skips subagent ends, and fails open: a usage or env error leaves the completed turn and session as they were. StopFailure reuses the same helper; the 10 s delay, the daemon accountSwitch path and the held-tool policy are unchanged, and leave()'s exiting guard keeps it to one toast and one exit. hooks/register.test.ts has 26 tests, including the swallowed-StopFailure case (prepended inline plugin), completion without StopFailure, mixed and over-100 windows, below-100 and empty readings, missing seat env, subagent ends, usage and env failures, a pending daemon instruction, and repeated or racing events. The TDD red run (10 behavioural failures on the old code) is in /tmp/moe-account-switch-red.log. The design record docs/plans/2026-10-20-claude-account-rotation.md now separates the user-reported incident and the automated mock-clock evidence from a live end-to-end check, which is left to a person. The three delivered paths landed in checkpoint e5b63b885 and are byte-identical to HEAD 1c9cb93. This session changed no source files. Verification: the exact 518-character step-4 gate ran on a clean snapshot of HEAD 1c9cb93 and exited 0. The `verification.command` field is capped at 500 characters, so it is submitted without the `trap ... EXIT` temp-config cleanup, which does not change what is tested. A first attempt in the shared checkout failed only on a live peer's half-finished edit to scripts/tests/parity-check.{sh,ps1}. Log: /tmp/moe-account-switch-05e1-gate3.log. The adversarial self-review found nothing to fix."
+  "completionSummary": "An interactive seat now rotates at a hard usage limit even when an earlier plugin swallows classic.StopFailure. A new checkHardLimit helper in scripts/mods/moe-account-switch/hooks/register.ts runs on every main-loop turn.complete. It marks the session for the delayed /exit when any $.session.usage() window is at 100% or more. It requires a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID), skips subagent ends, and fails open: a usage or env error leaves the completed turn and session as they were. StopFailure reuses the same helper; the 10 s delay, the daemon accountSwitch path and the held-tool policy are unchanged, and leave()'s exiting guard keeps it to one toast and one exit. hooks/register.test.ts has 26 tests, including the swallowed-StopFailure case (prepended inline plugin), completion without StopFailure, mixed and over-100 windows, below-100 and empty readings, missing seat env, subagent ends, usage and env failures, a pending daemon instruction, and repeated or racing events. The TDD red run (10 behavioural failures on the old code) is in /tmp/moe-account-switch-red.log. The design record docs/plans/2026-10-20-claude-account-rotation.md now separates the user-reported incident and the automated mock-clock evidence from a live end-to-end check, which is left to a person. The three delivered paths landed in checkpoint e5b63b885 and are byte-identical to HEAD 1c9cb93. This session changed no source files. Verification: the exact 518-character step-4 gate ran on a clean snapshot of HEAD 1c9cb93 and exited 0. The `verification.command` field is capped at 500 characters, so it is submitted without the `trap ... EXIT` temp-config cleanup, which does not change what is tested. A first attempt in the shared checkout failed only on a live peer's half-finished edit to scripts/tests/parity-check.{sh,ps1}. Log: /tmp/moe-account-switch-05e1-gate3.log. The adversarial self-review found nothing to fix.",
+  "completedAt": "2026-10-26T06:53:53.857Z",
+  "reviewCompletedAt": "2026-10-26T06:53:53.857Z",
+  "reviewSummary": "APPROVED. Reviewed commits, not the dirty tree: code is in checkpoint e5b63b885 (in task.commits, ancestor of HEAD, on origin); completion commit 16cd5c7 is board JSON only. Mod dir and design doc are identical at e5b63b885 and HEAD. Diff: 3 files, +179/-17.\n\nDoD1: checkHardLimit() runs on every main-loop turn.complete before leave(); any usage window >=100 sets the existing ACCOUNT-SWITCH instruction. Engine types confirm turn.complete fires on API-error stops and .catch next() is replay-safe. The swallowed-StopFailure test (prepended plugin eats the event): bottom stub hit 0 times, completion unchanged, no exit at 10s-1ms, one exit and toast at +1.\nDoD2: tests cover subagent end, each missing seat env, windows [0,99.9] and [] (no exit), [99.9,100] and [0,101] (exit). The 9 original tests are kept and pass.\nDoD3: 26 tests; the worker's red log shows 10 failures on old code. Assertions are exact.\nFail-open rail: usage/env throw tests keep the completion result, run downstream once, and a later check still works. Racing/repeated events give one timer/toast/exit. No MCP/schema/state change.\n\nRe-ran, all rc 0: `claude plugin test scripts/mods/moe-account-switch` with empty temp CLAUDE_CONFIG_DIR (26 pass/0 fail); `node --test` lease + launcher (55 pass, 1 skipped on Linux); parity-check.sh; `npm run lint`.\nNOT re-run: postflight, daemon/proxy/claude-plugin vitest, JetBrains gradle (about 88 min). The change touches only the mod, one doc and board JSON, and nothing in those suites references the mod. I audited the worker's gate log instead (/tmp/moe-account-switch-05e1-gate3.clean.log, rc=0 on a HEAD snapshot): worker-verified, not QA-reproduced.\n\nResidual (documented): live exit/relaunch at a real limit unverified (real-account tests prohibited); a hard-limit turn can rotate mid-task, like the existing StopFailure trigger.",
+  "requiredCheckAtDone": null
 }
