@@ -10,9 +10,12 @@
 // RECORDING ONLY. This module never executes the command, never authenticates
 // the reporter and never fabricates a candidate. `source` is DECLARED
 // provenance: `runner-observed` is what the caller says, not something the
-// daemon saw. Recording checks shape, that the candidate exists and that the
-// reported tree is the candidate's; whether a stored run satisfies any gate is
-// decided later, by policy.
+// daemon saw. Recording checks shape, that the candidate exists, that the
+// reported tree is the candidate's and that a named attempt is one of the
+// candidate's task; whether a stored run satisfies any gate is decided later,
+// by policy. The optional execution identities (outcome, planRevision,
+// environment, dispatchId, attemptId) are REPORTED too; an absent one leaves no
+// key, so a report without them stores exactly the pre-identity shape.
 //
 // IMMUTABLE BY CONSTRUCTION. This module has NO update and NO delete function,
 // and that absence is the rule, not an oversight: a later caller cannot misuse
@@ -30,11 +33,11 @@
 // anywhere. No activity row and no emit: there is no consumer yet.
 
 import type { StateManager } from './StateManager.js';
-import type { CheckRun, CheckRunSource } from '../types/schema.js';
+import type { Candidate, CheckOutcome, CheckRun, CheckRunSource } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
-import { caseVariantId, getCandidate, renderGot, SHA_RE } from './candidateStore.js';
+import { assertAttemptOfTask, caseVariantId, getCandidate, hasControlChar, renderGot, SHA_RE } from './candidateStore.js';
 
 /** The most output a check run keeps: the END of the log, counted in UTF-8 BYTES, not characters. */
 export const MAX_CHECK_LOG_BYTES = 16384;
@@ -44,10 +47,22 @@ const MAX_COMMAND_CHARS = 500;
 /** The only two sources a report may declare. A third value is refused, never coerced or defaulted. */
 const SOURCES: readonly CheckRunSource[] = ['runner-observed', 'agent-reported'];
 
-/** Every recorded field besides the id, which the lookup itself matches, and createdAt, which is the daemon's. */
-const RECORDED_FIELDS = ['candidateId', 'treeSha', 'command', 'exitCode', 'outputTail', 'runnerId', 'source'] as const;
+/** Every outcome a report may declare. A value outside it is refused, never coerced. */
+export const CHECK_OUTCOMES: readonly CheckOutcome[] = ['passed', 'code-failure', 'infra-failure', 'timeout', 'skipped', 'inconclusive'];
+const MAX_ENVIRONMENT_CHARS = 255;
 
-export interface RecordCheckRunParams {
+/** The optional execution identities. Absent ones are never defaulted or inferred. */
+const IDENTITY_FIELDS = ['outcome', 'planRevision', 'environment', 'dispatchId', 'attemptId'] as const;
+
+/** Every recorded field besides the id, which the lookup itself matches, and createdAt, which is the daemon's. */
+const RECORDED_FIELDS = [
+  'candidateId', 'treeSha', 'command', 'exitCode', 'outputTail', 'runnerId', 'source', ...IDENTITY_FIELDS,
+] as const;
+
+/** Each identity is optional: only `undefined` means absent, and a null is refused. */
+type CheckRunIdentities = Pick<CheckRun, (typeof IDENTITY_FIELDS)[number]>;
+
+export interface RecordCheckRunParams extends CheckRunIdentities {
   /** Optional. Reuse a crashed report's id so its retry is idempotent; omit it for a generated id. */
   id?: string;
   candidateId: string;
@@ -87,12 +102,12 @@ function requireEntityRef(field: string, value: unknown): string {
   return validateEntityId(text, field);
 }
 
-function readOptionalId(value: unknown): string | undefined {
+function readOptionalId(field: string, value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.trim() === '') {
-    throw invalidInput('id', `must be a non-blank string when supplied (got ${renderGot(value)})`);
+    throw invalidInput(field, `must be a non-blank string when supplied (got ${renderGot(value)})`);
   }
-  return validateEntityId(value, 'id');
+  return validateEntityId(value, field);
 }
 
 function requireTreeSha(value: unknown): string {
@@ -131,6 +146,55 @@ function requireSource(value: unknown): CheckRunSource {
   return text as CheckRunSource;
 }
 
+/** Coherent with the exit code: `passed` needs 0 and `code-failure` a nonzero code; the rest take it as reported. */
+function readOutcome(value: unknown, exitCode: number): CheckOutcome | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !CHECK_OUTCOMES.includes(value as CheckOutcome)) {
+    throw invalidInput('outcome', `must be one of ${CHECK_OUTCOMES.join(', ')} when supplied (got ${renderGot(value)})`);
+  }
+  if (value === 'passed' && exitCode !== 0) throw invalidInput('outcome', `passed requires exitCode 0 (got ${exitCode})`);
+  if (value === 'code-failure' && exitCode === 0) throw invalidInput('outcome', 'code-failure requires a nonzero exitCode (got 0)');
+  return value as CheckOutcome;
+}
+
+function readPlanRevision(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw invalidInput('planRevision', `must be a safe integer of at least 1 when supplied (got ${renderGot(value)})`);
+  }
+  return value;
+}
+
+/** Opaque and kept verbatim: never trimmed or parsed, so it compares exactly. */
+function readEnvironment(value: unknown): string | undefined {
+  const field = 'environment';
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw invalidInput(field, `must be a non-blank string when supplied (got ${renderGot(value)})`);
+  }
+  if (value.length > MAX_ENVIRONMENT_CHARS) {
+    throw invalidInput(field, `must be ${MAX_ENVIRONMENT_CHARS} characters or fewer (got ${value.length})`);
+  }
+  if (hasControlChar(value)) throw invalidInput(field, 'must not contain control characters');
+  return value;
+}
+
+/** The identities a report supplied, and ONLY those: an absent one leaves no key at all. */
+function readIdentities(fields: RawCheckRunParams, exitCode: number): CheckRunIdentities {
+  const outcome = readOutcome(fields.outcome, exitCode);
+  const planRevision = readPlanRevision(fields.planRevision);
+  const environment = readEnvironment(fields.environment);
+  const dispatchId = readOptionalId('dispatchId', fields.dispatchId);
+  const attemptId = readOptionalId('attemptId', fields.attemptId);
+  return {
+    ...(outcome !== undefined ? { outcome } : {}),
+    ...(planRevision !== undefined ? { planRevision } : {}),
+    ...(environment !== undefined ? { environment } : {}),
+    ...(dispatchId !== undefined ? { dispatchId } : {}),
+    ...(attemptId !== undefined ? { attemptId } : {}),
+  };
+}
+
 /**
  * The END of a log, bounded in UTF-8 BYTES — counting characters would overshoot
  * for any multibyte log. Encoding first normalizes malformed input
@@ -160,8 +224,8 @@ export function validateCheckRunParams(raw: unknown): ValidCheckRunParams {
     throw invalidInput('checkRun', `must be an object (got ${renderGot(raw)})`);
   }
   const fields = raw as RawCheckRunParams;
-  const id = readOptionalId(fields.id);
-  return {
+  const id = readOptionalId('id', fields.id);
+  const report: ValidCheckRunParams = {
     ...(id !== undefined ? { id } : {}),
     candidateId: requireEntityRef('candidateId', fields.candidateId),
     treeSha: requireTreeSha(fields.treeSha),
@@ -171,6 +235,7 @@ export function validateCheckRunParams(raw: unknown): ValidCheckRunParams {
     runnerId: requireEntityRef('runnerId', fields.runnerId),
     source: requireSource(fields.source),
   };
+  return { ...report, ...readIdentities(fields, report.exitCode) };
 }
 
 const copy = (checkRun: CheckRun): CheckRun => ({ ...checkRun });
@@ -215,7 +280,7 @@ export function listCheckRunsForCandidate(state: StateManager, candidateId: stri
  * truncation or case folding. Text is all the daemon can compare — it never
  * runs git, so it cannot tell that two spellings name one tree.
  */
-function assertTreeOfCandidate(state: StateManager, input: ValidCheckRunParams): void {
+function assertTreeOfCandidate(state: StateManager, input: ValidCheckRunParams): Candidate {
   const candidate = getCandidate(state, input.candidateId);
   if (!candidate) {
     const { candidateId } = input;
@@ -230,6 +295,7 @@ function assertTreeOfCandidate(state: StateManager, input: ValidCheckRunParams):
       'CHECK_RUN_TREE_MISMATCH'
     );
   }
+  return candidate;
 }
 
 /**
@@ -255,7 +321,11 @@ function replayOrRefuse(stored: CheckRun, incoming: ValidCheckRunParams): CheckR
  * and normalize without coercing; require the candidate (CANDIDATE_NOT_FOUND);
  * require its exact tree (CHECK_RUN_TREE_MISMATCH); replay or refuse a same-id
  * report (CHECK_RUN_IMMUTABLE); refuse an id that differs from a stored one only
- * by case (CHECK_RUN_ID_CASE_COLLISION); then persist BEFORE publishing. createdAt
+ * by case (CHECK_RUN_ID_CASE_COLLISION); require a named attemptId to be an
+ * attempt of the candidate's task (ATTEMPT_NOT_FOUND / ATTEMPT_ID_TASK_MISMATCH:
+ * referential integrity only, so a reviewer's attempt or a closed producer
+ * attempt is valid); then persist BEFORE publishing. The attempt check follows
+ * the replay, so an identical crash retry still gets its stored run. createdAt
  * is the daemon's clock, never the caller's. A failed write propagates to the caller.
  */
 export async function recordCheckRun(
@@ -263,7 +333,7 @@ export async function recordCheckRun(
   params: RecordCheckRunParams
 ): Promise<RecordCheckRunResult> {
   const input = validateCheckRunParams(params);
-  assertTreeOfCandidate(state, input);
+  const candidate = assertTreeOfCandidate(state, input);
   const id = input.id ?? generateId('check');
   const stored = state.checkRuns.get(id);
   if (stored) return { checkRun: replayOrRefuse(stored, input), duplicate: true };
@@ -280,17 +350,11 @@ export async function recordCheckRun(
     );
   }
 
-  const checkRun: CheckRun = {
-    id,
-    candidateId: input.candidateId,
-    treeSha: input.treeSha,
-    command: input.command,
-    exitCode: input.exitCode,
-    outputTail: input.outputTail,
-    runnerId: input.runnerId,
-    source: input.source,
-    createdAt: new Date().toISOString(),
-  };
+  if (input.attemptId !== undefined) assertAttemptOfTask(state, input.attemptId, candidate.taskId);
+
+  // input is the validated report: the recorded fields only, an absent identity leaving no key.
+  const { id: _requestedId, ...recorded } = input;
+  const checkRun: CheckRun = { id, ...recorded, createdAt: new Date().toISOString() };
   // writeEntity validates the id against path traversal, creates .moe/checks
   // itself and writes atomically (temp file + rename).
   await state.writeEntity('checks', checkRun.id, checkRun);

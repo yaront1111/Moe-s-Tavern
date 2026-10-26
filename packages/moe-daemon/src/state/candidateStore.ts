@@ -115,7 +115,7 @@ function requireSha(field: string, value: unknown): string {
 }
 
 /** True when the text holds a C0 control character (0x00-0x1f) or DEL (0x7f). */
-function hasControlChar(text: string): boolean {
+export function hasControlChar(text: string): boolean {
   for (let i = 0; i < text.length; i += 1) {
     const code = text.charCodeAt(i);
     if (code < 0x20 || code === 0x7f) return true;
@@ -273,9 +273,10 @@ function replayOrRefuse(stored: Candidate, incoming: RecordCandidateParams): Can
  * the task. This is referential integrity only. Whether the attempt is still
  * CURRENT is decided by the fencing guard (util/enforcement.ts
  * assertAttemptCurrent), which the tool runs before reaching this store;
- * repeating that check here would be a second fencing implementation.
+ * repeating that check here would be a second fencing implementation. The
+ * check-run store reuses it for a run's optional attemptId, with no fencing.
  */
-function assertAttemptOfTask(state: StateManager, attemptId: string, taskId: string): void {
+export function assertAttemptOfTask(state: StateManager, attemptId: string, taskId: string): void {
   const attempt = getAttempt(state, attemptId);
   if (!attempt) {
     throw new MoeError(MoeErrorCode.NOT_FOUND, `Attempt not found: ${attemptId}`, { attemptId }, 'ATTEMPT_NOT_FOUND');

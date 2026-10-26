@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { CheckRunSource } from '../types/schema.js';
+import type { CheckOutcome, CheckRunSource } from '../types/schema.js';
 import { MAX_CHECK_LOG_BYTES, recordCheckRun, validateCheckRunParams } from '../state/checkRunStore.js';
 
 // =============================================================================
@@ -23,7 +23,8 @@ import { MAX_CHECK_LOG_BYTES, recordCheckRun, validateCheckRunParams } from '../
 //
 // No ownership, status or attempt gate: the runner reports after complete_task,
 // when QA may already hold the task and the attempt may be closed. The candidate
-// and its tree are the binding. NOT `blocking`: dispatch serializes every
+// and its tree are the binding; an optional attemptId is checked for referential
+// integrity only (an attempt of the candidate's task). NOT `blocking`: dispatch serializes every
 // non-blocking tool under the state mutex, and the store's same-id
 // check-then-write relies on exactly that.
 // =============================================================================
@@ -32,6 +33,10 @@ const TOOL_NAME = 'moe.record_check_run';
 
 /** Exhaustive by type: a CheckRunSource missing here, or an extra key, fails to compile. */
 const SOURCES: Record<CheckRunSource, true> = { 'runner-observed': true, 'agent-reported': true };
+/** Exhaustive by type, like SOURCES. */
+const OUTCOMES: Record<CheckOutcome, true> = {
+  passed: true, 'code-failure': true, 'infra-failure': true, timeout: true, skipped: true, inconclusive: true,
+};
 
 export function recordCheckRunTool(_state: StateManager): ToolDefinition {
   return {
@@ -42,7 +47,9 @@ export function recordCheckRunTool(_state: StateManager): ToolDefinition {
       'source (runner-observed | agent-reported) is DECLARED provenance: required, never defaulted, never inferred from workerId. The daemon never runs the command and does not authenticate the reporter. ' +
       'Bound before anything is written: candidateId must exist (CANDIDATE_NOT_FOUND) and treeSha must be exactly its tree (CHECK_RUN_TREE_MISMATCH). ' +
       'Immutable: a same-id report that differs after normalization is refused (CHECK_RUN_IMMUTABLE), while an identical one returns the stored run with duplicate:true and writes nothing, so supply your own id and reuse it to retry after a crash. ' +
-      `outputTail keeps its final ${MAX_CHECK_LOG_BYTES} UTF-8 bytes. Other refusals: INVALID_INPUT / MISSING_REQUIRED. No ownership, status or attempt gate.`,
+      'The execution identities (outcome, planRevision, environment, dispatchId, attemptId) are optional, REPORTED provenance; only outcome passed, or a legacy report without an outcome at exit 0, can ever satisfy a gate. ' +
+      'attemptId must name an attempt of the candidate\'s task (ATTEMPT_NOT_FOUND / ATTEMPT_ID_TASK_MISMATCH), the reviewer\'s included. ' +
+      `outputTail keeps its final ${MAX_CHECK_LOG_BYTES} UTF-8 bytes. Other refusals: INVALID_INPUT / MISSING_REQUIRED. No ownership, status or attempt fencing gate.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -78,6 +85,28 @@ export function recordCheckRunTool(_state: StateManager): ToolDefinition {
           type: 'string',
           enum: Object.keys(SOURCES),
           description: 'Where the result says it came from. Required, never defaulted or inferred: declared provenance, not proof that the command ran.',
+        },
+        outcome: {
+          type: 'string',
+          enum: Object.keys(OUTCOMES),
+          description: 'Optional: how the run ended. passed requires exitCode 0 and code-failure a nonzero one. Never inferred from exitCode.',
+        },
+        planRevision: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Optional: the task plan revision the check ran under, as reported.',
+        },
+        environment: {
+          type: 'string',
+          description: 'Optional opaque execution-environment identity (e.g. an image digest): at most 255 chars, no control characters, kept verbatim.',
+        },
+        dispatchId: {
+          type: 'string',
+          description: 'Optional: the dispatch request this run answers (letters, digits, - and _; at most 128 chars).',
+        },
+        attemptId: {
+          type: 'string',
+          description: 'Optional: the attempt the check ran under, the producer\'s or a reviewer\'s. Must belong to the candidate\'s task.',
         },
         workerId: {
           type: 'string',

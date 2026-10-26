@@ -31,11 +31,17 @@
       "author": "qa-7c627d35",
       "content": "QA hand-forward from CQ-V01 (approved 2026-10-26). Two test gaps, non-blocking, for this hardening row. Both are defensive branches that handle corrupted persisted state: loadEntities reads task and candidate JSON raw, so neither the taskStore write validation nor candidateStore's record validation applies on load. The code is correct, and QA verified at runtime that it fails closed in both cases. But no test pins either branch, and a mutant that fails open passes the whole suite.\n\n1. delivery/policy.ts protectedCheckShortfall: the validateExecutionContract catch returns protected-checks-unapproved. Mutant: `return []` there. It survives, and a corrupt requiredChecks then reads as satisfied: checkOwed is true and no token is produced.\n   Proposed test, in requiredChecks.delivery.test.ts:\n   - `h.state.tasks.set('task-1', {...task(), executionContract: {requiredChecks: [{...defs[0], bogus: 1}, defs[1]]}})`\n   - expect missing() == ['protected-checks-unapproved']\n   - expect projection requiredCheckSatisfied false\n\n2. protectedDrift: the duplicate-path guard (`candidate.has(path)`) returns null, which yields unmeasured. Mutant: drop the guard. It survives, and the last duplicate wins.\n   Proposed test: a candidate with `[{path: e[0].path, oid: OID}, ...e]`, and again with the duplicate last. Expect ['protected-checks-unmeasured'] both times.\n\nBoth tests passed on the HEAD 8eec4a2 bytes (18/18) and killed their mutant, in a scratch copy only (/tmp/qa-v01-bin/extra-tests.ts.txt).",
       "timestamp": "2026-10-26T09:01:02.090Z"
+    },
+    {
+      "id": "comment-25efc22196af40a5b82819ccf0485c64",
+      "author": "worker-7d158765",
+      "content": "Hand-forward from CQ-V02 (Candidate execution binding):\n- CheckRun now carries an optional REPORTED `outcome` (passed | code-failure | infra-failure | timeout | skipped | inconclusive). policy.ts passedOn counts only `passed`, or an absent outcome at exit 0.\n- state/deliveryProjection.ts checkFor still projects only {command, exitCode, source} into `latestCheckRun`, so an exit-0 infra-failure/timeout/skipped/inconclusive run looks like a pass in the IDE board.\n- Display only: gating is fail-closed through the shared predicate. No reporter sends outcome yet; the wrappers' payloads are identity-less.\n- V02 left projection/client exposure out of scope by plan. Consider adding `outcome` to latestCheckRun (and the JetBrains/VS Code renderers) when a consumer starts sending it.",
+      "timestamp": "2026-10-26T09:14:48.580Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-26T09:01:02.090Z",
+  "updatedAt": "2026-10-26T09:14:48.581Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",

@@ -255,7 +255,13 @@ function passedOn(state: StateManager, current: Candidate | undefined, command: 
   return listCheckRunsForCandidate(state, current.id).some((run) =>
     run.candidateId === current.id && run.treeSha === current.treeSha &&
     typeof run.command === 'string' && run.command.trim() === command &&
-    run.exitCode === 0 && run.source === 'runner-observed');
+    run.exitCode === 0 && run.source === 'runner-observed' &&
+    // A recorded outcome other than passed never satisfies, even at exit 0: infra
+    // failure, timeout, skipped, inconclusive, or an incoherent or unrecognised
+    // stored value (fail closed). A row WITHOUT an outcome predates outcomes, or
+    // came from a reporter that does not classify, and keeps the exit-code rule:
+    // the explicit legacy compatibility. The legacy policy never reaches here.
+    (run.outcome === undefined || run.outcome === 'passed'));
 }
 
 /** True for a path that is, or lies under, one of the protected paths. Exact and case-sensitive, like git. */

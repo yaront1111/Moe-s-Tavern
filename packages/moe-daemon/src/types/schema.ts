@@ -1400,6 +1400,21 @@ export interface Review {
  */
 export type CheckRunSource = 'runner-observed' | 'agent-reported';
 
+/** How a check run ended, as REPORTED. Only `passed` can ever count toward a gate. */
+export type CheckOutcome =
+  /** Ran to completion and passed (exit 0). */
+  | 'passed'
+  /** Ran to completion and the code under test failed (nonzero exit). */
+  | 'code-failure'
+  /** The runner or environment failed, which says nothing about the code. */
+  | 'infra-failure'
+  /** Stopped at its time budget. */
+  | 'timeout'
+  /** Never ran. */
+  | 'skipped'
+  /** Ran, but the result cannot be judged. */
+  | 'inconclusive';
+
 /**
  * One reported command result for one candidate; persisted at
  * .moe/checks/<id>.json (daemon sole-writer, via state/checkRunStore.ts only).
@@ -1428,6 +1443,24 @@ export interface CheckRun {
   /** The runner the report names. Reported, not authenticated. */
   readonly runnerId: string;
   readonly source: CheckRunSource;
+  // Execution identities. REPORTED like treeSha: shape-validated, never
+  // authenticated. ABSENT on every row recorded before they existed and on any
+  // report that omits them; such a row is an unclassified legacy report. Nothing
+  // defaults, infers (no outcome from exitCode) or backfills them, and no stored
+  // row is rewritten.
+  /** How the run ended. `passed` requires exit 0, `code-failure` a nonzero exit. */
+  readonly outcome?: CheckOutcome;
+  /** The Task.planRevision the reporter ran under. */
+  readonly planRevision?: number;
+  /** Opaque execution-environment identity (e.g. an image or toolchain digest): compared exactly, never parsed. */
+  readonly environment?: string;
+  /** The dispatch request this run answers. */
+  readonly dispatchId?: string;
+  /**
+   * The ExecutionAttempt the check ran under: the producer's or a REVIEWER's.
+   * Distinct from Candidate.attemptId, which is always the producer.
+   */
+  readonly attemptId?: string;
   /**
    * Daemon clock when the run was first recorded. Every NEW record is stamped
    * with it, and a caller can never supply it. Optional ONLY so rows written

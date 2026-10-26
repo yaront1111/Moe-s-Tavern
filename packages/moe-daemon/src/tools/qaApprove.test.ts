@@ -1432,6 +1432,11 @@ describe('delivery policy — evaluateDeliveryEvidence', () => {
     ['a pass naming the current candidate on a tree it does not have', OTHER_TREE_PASS],
     ['a pass of a command that is not the required gate', OTHER_COMMAND_PASS],
     ['an agent-reported pass on the right candidate, tree and command', AGENT_REPORTED_PASS],
+    // Exit 0, runner-observed, on the current candidate, tree and command: only the recorded outcome is wrong.
+    ...(['infra-failure', 'timeout', 'skipped', 'inconclusive'] as const).map((outcome): [string, { id: string } & Record<string, unknown>] =>
+      [`an exit-0 run whose outcome is ${outcome}`, run(`check-P-current-${outcome}`, { outcome })]),
+    ['an incoherent stored code-failure at exit 0 (fixture rows bypass validation)', run('check-P-current-incoherent', { outcome: 'code-failure' })],
+    ['an unrecognised stored outcome PASSED', run('check-P-current-unrecognised', { outcome: 'PASSED' })],
   ])('does not accept %s as the required check', async (_label, decoy) => {
     const task = await seedPrerequisite({ checks: [decoy] });
 
@@ -1444,6 +1449,12 @@ describe('delivery policy — evaluateDeliveryEvidence', () => {
 
   it('accepts the one matching run on its own: current candidate, its tree, the gate command, exit 0, runner-observed', async () => {
     const task = await seedPrerequisite({ checks: [RUNNER_PASS] });
+
+    expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
+  });
+
+  it('accepts a matching run whose recorded outcome is passed', async () => {
+    const task = await seedPrerequisite({ checks: [run('check-P-current-classified-pass', { outcome: 'passed' })] });
 
     expect(evaluateDeliveryEvidence(h.state, task)).toEqual({ policy: 'local-branch', satisfied: true, missingEvidence: [] });
   });

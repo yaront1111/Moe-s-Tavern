@@ -1240,10 +1240,24 @@ interface CheckRun {
   readonly outputTail: string;   // The END of the output, at most 16384 UTF-8 BYTES; "" when none was sent
   readonly runnerId: string;     // The runner the report names: reported, not authenticated
   readonly source: 'runner-observed' | 'agent-reported';
+  // Optional execution identities: REPORTED, absent on rows recorded without them (no key at all)
+  readonly outcome?: CheckOutcome;   // How the run ended; see Outcomes below
+  readonly planRevision?: number;    // The Task.planRevision the reporter ran under; a safe integer >= 1
+  readonly environment?: string;     // Opaque execution-environment identity (e.g. an image digest):
+                                     // non-blank, at most 255 chars, no control characters, kept verbatim
+  readonly dispatchId?: string;      // The dispatch request this run answers; [A-Za-z0-9_-]{1,128}
+  readonly attemptId?: string;       // The ExecutionAttempt the check ran under: the producer's or a
+                                     // REVIEWER's. Distinct from Candidate.attemptId (always the producer)
   readonly createdAt?: string;   // ISO 8601, the daemon's clock at first record (never the caller's).
                                  // Optional only so rows written before the field existed still load
 }
+
+type CheckOutcome = 'passed' | 'code-failure' | 'infra-failure' | 'timeout' | 'skipped' | 'inconclusive';
 ```
+
+**Outcomes.** `passed`: ran to completion and passed (exit 0). `code-failure`: ran to completion and the code under test failed (nonzero exit). `infra-failure`: the runner or environment failed, which says nothing about the code. `timeout`: stopped at its time budget. `skipped`: never ran. `inconclusive`: ran, but the result cannot be judged. Recording enforces coherence: `passed` requires `exitCode` 0 and `code-failure` a nonzero one; every other outcome takes the exit code as reported. Only `passed` can ever satisfy a gate: a run with any other recorded outcome, or an incoherent or unrecognised stored one, never counts, even at exit 0.
+
+**Provenance and compatibility.** The five identities are *reported*, like `treeSha`: shape-validated, never authenticated. A row without them, recorded before they existed or by a reporter that sends none, is an unclassified legacy report, and policy judges it by the exit-code rule alone. Nothing is defaulted, inferred (no `outcome` from `exitCode`) or backfilled, no stored row is rewritten, and an identity-less report stores exactly the pre-identity key set. No `schemaVersion` bump.
 
 **Provenance.** `source` is *declared* provenance. The daemon never executes the command and does not authenticate whoever reports it, so `runner-observed` is a claim about where the result came from — not proof that the command ran, and not a verified identity. There is no third value and no default. `runnerId` is likewise only what the report says.
 
@@ -1260,10 +1274,11 @@ interface CheckRun {
 3. `treeSha` is not exactly the candidate's tree: `-32002` `CHECK_RUN_TREE_MISMATCH`, with `context.candidateId`, `context.expectedTreeSha` and `context.actualTreeSha`.
 4. The id already holds a different run: `-32002` `CHECK_RUN_IMMUTABLE`, with `context.checkRunId` and `context.differingFields`.
 5. The id differs from a stored run's id only by case: `-32002` `CHECK_RUN_ID_CASE_COLLISION`, with `context.checkRunId` (the stored id) and `context.requestedId`.
+6. A supplied `attemptId` names no attempt: `-32001` `ATTEMPT_NOT_FOUND`; or an attempt of another task than the candidate's: `-32002` `ATTEMPT_ID_TASK_MISMATCH`. This is referential integrity only, with no phase or fencing gate: a reviewer's attempt and a closed producer attempt are both valid. It follows the same-id checks, so an identical crash retry still returns its stored run.
 
 A failed write reaches the caller as an error, and the run is published nowhere.
 
-**Recording is not eligibility.** Recording checks shape, that the candidate exists, and that the reported tree is the candidate's. Whether a stored run satisfies a gate — its command, its exit code, its source — is decided later, by policy. Loading never re-checks or repairs a row: a historical row with no `createdAt`, or with a tree or command no gate would accept, loads unchanged.
+**Recording is not eligibility.** Recording checks shape, that the candidate exists, that the reported tree is the candidate's, and that a supplied `attemptId` is an attempt of the candidate's task. Whether a stored run satisfies a gate — its command, its exit code, its outcome, its source — is decided later, by policy. Loading never re-checks or repairs a row: a historical row with no `createdAt`, or with a tree or command no gate would accept, loads unchanged.
 
 **Queries.** Runs are listed per candidate: rows without a `createdAt` first, then by `createdAt`, then by `id`, so ties are deterministic. Every read, and the record `recordCheckRun` returns, is a copy: editing it cannot change the stored run.
 
@@ -1877,6 +1892,7 @@ function generateId(prefix: string): string {
 - `command` must be a non-blank string of at most 500 characters, stored verbatim
 - `exitCode` must be a safe integer; zero, positive and negative values are all accepted
 - `source` must be exactly `runner-observed` or `agent-reported`, with no default
+- `outcome`, `planRevision`, `environment`, `dispatchId` and `attemptId` are optional. When present: `outcome` is one of the six values (`passed` needs `exitCode` 0, `code-failure` a nonzero one); `planRevision` a safe integer >= 1; `environment` non-blank, at most 255 chars, without control characters; `dispatchId` and `attemptId` match `[A-Za-z0-9_-]{1,128}`, and `attemptId` names an attempt of the candidate's task (`ATTEMPT_NOT_FOUND` / `ATTEMPT_ID_TASK_MISMATCH`). Only `undefined` is absent: a `null` is refused `INVALID_INPUT`. Each is a recorded field, so a same-id report that adds, drops or changes one is `CHECK_RUN_IMMUTABLE`
 - `outputTail` is optional and, when present, must be a string. It is stored as its final 16384 UTF-8 bytes, beginning on a whole character
 - An absent required field (`undefined` or `null`) is refused `MISSING_REQUIRED`; a present value of the wrong type or shape is refused `INVALID_INPUT`, never coerced. A `null` `id` or `outputTail` counts as present and is refused `INVALID_INPUT`, as is a report that is not an object
 - `createdAt` is always the daemon's clock; a caller cannot set it

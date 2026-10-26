@@ -254,8 +254,10 @@ describe('candidateStore', () => {
     expect(Object.keys(store).sort()).toEqual([
       'REVISION_RE',
       'SHA_RE',
+      'assertAttemptOfTask',
       'caseVariantId',
       'getCandidate',
+      'hasControlChar',
       'listCandidatesForAttempt',
       'listCandidatesForTask',
       'recordCandidate',
