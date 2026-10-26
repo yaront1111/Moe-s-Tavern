@@ -10,10 +10,44 @@
     "cd packages/moe-daemon && npm test exits 0"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-4c57a52b",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the failing tests first, then make the one-line fix.\n\n(a) In src/tools/createEpic.test.ts, add `describe('epicRails: same rule as update_epic, refuse never truncate')`. Import fs, path and MAX_EPIC_RAIL_CHARS from '../state/validators.js'. Helpers:\n- `persisted()` = JSON.stringify of the sorted `h.state.epics` keys plus every `.moe/epics` file name with its content.\n- An event list built with `h.state.subscribe(e => types.push(e.type))`.\n- A beforeEach that creates `existing = await h.state.createEpic({ title: 'Existing', epicRails: ['kept'] })` and only then snapshots `persisted()`.\n\nEvery refusal asserts BOTH codeName and field with `rejects.toMatchObject({ codeName: 'INVALID_INPUT', context: { field } })`. Do not pass a nested object to toThrowError: it matches context exactly and fails.\n\nC1 oversized:\n- `expect(MAX_EPIC_RAIL_CHARS).toBe(10000)`.\n- `h.state.createEpic({ title: 'E', epicRails: ['ok', 'x'.repeat(MAX + 1)] })` rejects with field 'epicRails[1]'.\n- `createEpicTool(h.state).handler({ title: 'E', epicRails: ['y'.repeat(MAX + 1)] }, h.state)` rejects with field 'epicRails[0]'.\n- Afterwards `persisted()` is byte-identical to the snapshot and the event list has no 'EPIC_CREATED'.\n\nC2 lossless round-trip through the tool handler:\n- rails = ['a'.repeat(1000), 'b'.repeat(1500) (the original repro), 'c'.repeat(MAX - 2) + '🚀' (exactly MAX units, with a surrogate pair at the end), '  keep\\tspaces and ünïcödé 🚀  '].\n- Assert that `rails.slice(0, 3).map(r => r.length)` equals [1000, 1500, 10000].\n- Three reads must each `toEqual(rails)`: `result.epic.epicRails`; `JSON.parse` of `.moe/epics/<id>.json` → `.epicRails`; and `h.state.getEpic(id)!.epicRails` after `await h.state.load()`. load() replaces the epics map from disk.\n\nC3 `it.each` over refused shapes, each with its expected field:\n- ['ok', 42] → 'epicRails[1]'\n- ['ok', ''] → 'epicRails[1]'\n- ['ok', '  \\t '] → 'epicRails[1]'\n- ['ok', 'bad\\u0000rail'] → 'epicRails[1]'\n- ['ok', 'bad\\nrail'] → 'epicRails[1]'\n- ['ok', 'bad\\rrail'] → 'epicRails[1]'\n- 101 entries (`rail ${i}`) → 'epicRails'\n- the bare string 'one rail' → 'epicRails'\n- null → 'epicRails'\n\nFor each case:\n- createEpic rejects with INVALID_INPUT and that field.\n- `persisted()` is unchanged and no EPIC_CREATED event fires.\n- Parity guard: `h.state.updateEpic(existing.id, { epicRails: bad })` rejects, and its error `.context` (field and reason) `toEqual`s the create error's `.context`. `existing` still holds ['kept'].\n\nC4 characterization:\n- Exactly 100 entries are stored in order.\n- `createEpic({ title })` and `createEpic({ title, epicRails: [] })` both store `[]`, keeping the legacy default.\n\nRun `npx vitest run src/tools/createEpic.test.ts` and confirm that C1, C2 and C3 FAIL on the current code. C4 passes before and after the fix.\n\n(b) In src/state/StateManager.ts createEpic (~line 1253), replace `sanitizeStringArray(input.epicRails, 100, 1000)` with `validateEpicUpdates({ epicRails: input.epicRails }).epicRails ?? []`. Add a short comment: same rule as updateEpic, refuse and never truncate.\n- validateEpicUpdates is already imported. It IS the update_epic path (validators.ts:543-545 → `validateStringArrayValue(…, 100, MAX_EPIC_RAIL_CHARS, false)`), so create and update cannot drift.\n- `{ epicRails: undefined }` passes rejectUnknownFields and returns no epicRails key, so the result is [].\n- Remove the now-unused `sanitizeStringArray,` from the '../util/sanitize.js' import. Nothing else in the file uses it.\n- Leave the title/description/architectureNotes/status/order handling and sanitize.ts untouched.\n- Do NOT edit validators.ts: WORKING task-cd2e4477 declares it.\n- The net line delta must be ≤ 0, so `wc -l src/state/StateManager.ts` stays ≤ 1497. stateModules.test.ts requires `split('\\n').length < 1500`, and HEAD is 1497.\n\nError handling: the refusal is a MoeError with code INVALID_INPUT (`invalidInput()` in util/errors.ts). It is thrown synchronously before writeEntity, the epics map update, appendActivity and emit, so a refused create writes, emits and logs nothing. Do not catch or wrap it in createEpic; callers already surface it. MCP returns the INVALID_INPUT error, and WS CREATE_EPIC sends an ERROR frame with codeName.\n\nRe-run the focused file. It must be all green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createEpic.test.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/SCHEMA.md, section '### Epic rail limits' (~lines 375-383). Edit only this section.\n\n(1) Make the first sentence cover creation. Start it with: \"Epic creation (`moe.create_epic`, and the IDE create-epic form) and every epic update (`moe.update_epic`, and the apply step of an approved EPIC rail proposal) accept at most 100 `epicRails` entries…\". Keep the 10000 UTF-16 code-unit wording. Change \"never truncated\" to \"never truncated or dropped\", and \"the whole update fails\" to \"the whole create or update fails\".\n\n(2) Replace the stale last bullet (\"`moe.create_epic` still shortens over-long `epicRails` entries silently; tracked as `task-6b607b1278914531a75bfe16decf3199`.\") with: \"On `moe.create_epic`, an absent `epicRails` creates the epic with no rails. `null`, a non-array, more than 100 entries, or any refused entry fails the call, and no epic is created. Blank and non-string entries are refused, not silently dropped. The IDE create-epic forms already trim each line and drop blank lines before sending (JetBrains CreateEpicDialog, VS Code media/epicDetail.js), so their payloads are unaffected.\"\n\nLine 330 (the Epic interface comment) is already correct; leave it. Do not touch docs/MCP_SERVER.md. Its create_epic section states no limits, and three in-flight tasks declare it. Use plain, short sentences.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regression gate, run once: `cd packages/moe-daemon && npm test` must exit 0 (DoD 4). The suite includes the stateModules.test.ts line budget and the existing epic-rail tests in proposeRail.test.ts and validators.test.ts.\n\nEnvironment notes:\n- From WSL, the shared tree's node_modules is Windows-native, so vitest fails with rolldown 'Cannot find native binding'. Never npm install or run vitest in the shared tree.\n- Run the same command in a hermetic snapshot instead: `git archive HEAD`, copy your 3 changed files over it and cmp them against the worktree, then symlink a native-Linux node_modules DIRECTORY. Running on Windows Node via cmd.exe also works.\n- Unset MOE_* env vars before running, because agent-session env leaks into tests.\n- Also run `npx tsc --noEmit`; it must exit 0. TS7 tsc is win32-only here, so from WSL use `cmd.exe /c \"npx tsc --noEmit\"` in packages/moe-daemon.\n- Capture the exit code immediately. Do not append commands that mask it.\n\nThe fresh `npm test` output is the complete_task verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review of your own diff. Load the adversarial-self-review skill first.\n\nMutation probes: run them on a scratch copy, never the shared tree, and run only createEpic.test.ts. Each must be killed:\n- M1: restore `sanitizeStringArray(input.epicRails, 100, 1000)`. C1, C2 and C3 fail.\n- M2: `validateStringArrayValue(input.epicRails, 'epicRails', 100, MAX_EPIC_RAIL_CHARS)` with the default truncate=true. C1 fails.\n- M3: `input.epicRails == null ? [] : …`. The C3 null case fails.\n- M4: a 1000 cap at create. C2 fails.\n- M5: drop the `?? []`. C4 fails.\nReport each probe's failing-test count in the completion summary.\n\nChecklist:\n- Both callers refuse before any write, event or activity entry. The moe.create_epic tool passes params straight through. WS CREATE_EPIC passes the raw payload, and its outer catch already turns a MoeError into an ERROR frame with codeName.\n- No other createEpic field behavior changed.\n- `git diff --stat` touches exactly StateManager.ts, createEpic.test.ts and docs/SCHEMA.md.\n- `wc -l` of StateManager.ts is ≤ 1497.\n- No .moe hand edits; peer and pre-existing dirty bytes are untouched.\n\nIf this review changes any byte, re-run step 3's command and use that fresh output for complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/createEpic.test.ts",
+        "docs/SCHEMA.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -37,11 +71,34 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:00:47.902Z",
-  "updatedAt": "2026-10-26T16:06:24.658Z",
+  "updatedAt": "2026-10-26T16:38:19.767Z",
   "metrics": {
-    "firstClaimAt": "2026-10-26T16:01:18.722Z"
+    "firstClaimAt": "2026-10-26T16:01:18.722Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-4c57a52b"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T16:38:19.638Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) CHOSEN: route createEpic's epicRails through `validateEpicUpdates({ epicRails })`. This is the exact code path update_epic uses (validateStringArrayValue with 100 items, MAX_EPIC_RAIL_CHARS and truncate=false), so the two cannot drift. It needs no new import, is a one-line change, and removing the unused sanitizeStringArray import keeps it line-neutral against StateManager's 1500-line budget. (2) Call validateStringArrayValue directly with MAX_EPIC_RAIL_CHARS. It works, but it repeats the update rule's arguments (drift risk) and needs another import. (3) Extract a shared validateEpicRails helper in validators.ts. Rejected because WORKING task-cd2e4477 declares validators.ts (contested path). (4) Cap rails at 1000 at create time, reading DoD 1 literally. Rejected: that '1000' predates task-ab6aac94's human-approved raise to 10000, and the description says to reuse MAX_EPIC_RAIL_CHARS. A 1000 cap would refuse rails that update_epic and propose_rail accept, including the approved 1650-unit rail. See architect comment-e786d3cb.",
+    "codebaseInsights": "createEpic has two callers. tools/createEpic.ts passes params straight through. WebSocketServer CREATE_EPIC passes the raw plugin payload, and the outer catch at ~line 1131 turns a thrown MoeError into an ERROR frame with codeName. Both IDE create forms already trim lines and drop blanks: JetBrains CreateEpicDialog.kt:77-81 and VS Code media/epicDetail.js getRails. validateStringValue refuses non-strings, blank or whitespace-only text, NUL, \\r and \\n; it allows tabs and keeps whitespace and Unicode (trim:false). StateManager.load() replaces this.epics from disk (loadEntities), so `await h.state.load()` is a real reload. h.state.epics is public, and h.state.subscribe exists. No in-flight task declares StateManager.ts or createEpic.test.ts. docs/SCHEMA.md is serialized behind REVIEW task-fc9835fe via dependsOn. docs/SCHEMA.md 'Epic rail limits' is the doc of record; MCP_SERVER.md states no rail limits for create_epic or update_epic.",
+    "risks": "(a) Line budget: stateModules.test.ts fails at split('\\n').length ≥ 1500. HEAD is 1497 by wc -l, so keep the net delta ≤ 0. (b) WSL: the shared node_modules is Windows-native. Use a snapshot with native Linux modules, or cmd.exe, and never npm install in the shared tree. (c) Matchers: use rejects.toMatchObject for codeName/context.field, not toThrowError with a nested object. (d) The C3 parity guard must compare the full error context (field and reason) between create and update, not just 'it threw'. (e) Behavior change, intended and documented: blank, non-string, >100, null or non-array epicRails used to be silently dropped or defaulted and are now refused. The IDE forms never send those. (f) Do not touch validators.ts, sanitize.ts or MCP_SERVER.md, and never hand-edit .moe.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/createEpic.test.ts",
+      "packages/moe-daemon/src/tools/proposeRail.test.ts",
+      "packages/moe-daemon/src/state/stateModules.test.ts",
+      "docs/SCHEMA.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T16:38:19.767Z"
 }

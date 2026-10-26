@@ -390,6 +390,14 @@ export interface Epic {
   epicRails: string[];
   status: EpicStatus;
   order: number;
+  /**
+   * The epic's designated final (integration-and-hardening) task, set or
+   * cleared with moe.update_epic. It counts only while it names an existing,
+   * non-ARCHIVED task of this epic; otherwise isEpicFinalTask
+   * (delivery/policy.ts) falls back to the highest `order`. Optional, so epic
+   * files written before it existed load unchanged.
+   */
+  finalTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }

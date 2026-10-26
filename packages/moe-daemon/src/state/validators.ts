@@ -512,7 +512,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
 
 export function validateEpicUpdates(updates: Partial<Epic>): Partial<Epic> {
   const input = requirePlainObject(updates, 'updates');
-  rejectUnknownFields(input, ['title', 'description', 'architectureNotes', 'epicRails', 'status', 'order'], 'epic update');
+  rejectUnknownFields(input, ['title', 'description', 'architectureNotes', 'epicRails', 'status', 'order', 'finalTaskId'], 'epic update');
 
   const sanitized: Partial<Epic> = {};
   if (input.title !== undefined) {
@@ -548,6 +548,13 @@ export function validateEpicUpdates(updates: Partial<Epic>): Partial<Epic> {
   }
   if (input.order !== undefined) {
     sanitized.order = validateIntegerValue(input.order, 'order', 0, Number.MAX_SAFE_INTEGER);
+  }
+  if (input.finalTaskId !== undefined) {
+    // Shape only. moe.update_epic checks the id names a live task of this epic;
+    // isEpicFinalTask ignores a designation that stops doing so. Blank clears:
+    // an undefined value drops the key when the epic is written.
+    const finalTaskId = validateStringValue(input.finalTaskId, 'finalTaskId', { maxLength: 200, allowEmpty: true, trim: true });
+    sanitized.finalTaskId = finalTaskId === '' ? undefined : finalTaskId;
   }
   return sanitized;
 }
@@ -593,6 +600,9 @@ export function epicUpdatedActivityPayload(epic: Epic, updates: Partial<Epic>): 
   }
   if (Object.prototype.hasOwnProperty.call(updates, 'epicRails')) {
     payload.epicRailsCount = epic.epicRails.length;
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, 'finalTaskId')) {
+    payload.finalTaskId = epic.finalTaskId ?? null;
   }
 
   return payload;

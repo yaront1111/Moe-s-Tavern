@@ -7,10 +7,44 @@
     "checkPortablePath refuses 'CON .txt', 'a/aux  .c' and 'COM1 .log' while still accepting 'con x' and 'console.log', proven by test rows in the workloadSnapshot tests"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2c9d5121",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development). Edit only packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts.\n\n(a) In describe('portable paths'), BAD_PATHS: directly after the row `['CONIN$ device', 'CONIN$'],` add exactly these three rows. The middle one has TWO spaces; do not let an editor collapse them.\n    ['CON device with a space before the extension', 'CON .txt'],\n    ['nested aux device with spaces before the extension', 'a/aux  .c'],\n    ['COM1 device with a space before the extension', 'COM1 .log'],\nThe existing it.each already refuses each row in every placement: initialFiles, assessmentFiles, source.paths and a direct digestFiles call. It asserts the INVALID_INPUT code and the field each time.\n\n(b) Directly after it('accepts paths exactly at the length and depth bounds', ...), add:\n  it('accepts names that only begin with a device name', () => {\n    const files: Files = { 'con x': '', 'console.log': '' };\n    expect(ws.digestFiles(files)).toBe(referenceDigest(files));\n  });\nThis test guards against over-widening. It fails if the rule becomes `(?:[ .].*)?$` (refuses 'con x') or prefix-only (refuses 'console.log'). Both mutants were killed in the architect prototype.\n\nRed proof: run it in the isolated snapshot described in step 3, never in /mnt/d. With HEAD's workloadSnapshot.ts and this test file, `npx vitest run src/benchmarks/workloadSnapshot.test.ts` must fail exactly the three new rows; the acceptance test passes. The architect prototype at HEAD 981784e gave 3 failed, 152 passed. Record the result in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make the daemon rule identical to the local-runner gate, and make the comments in both files say so. These are regex and comment edits only, in LF and pure ASCII.\n\n(a) packages/moe-daemon/src/benchmarks/workloadSnapshot.ts:116. Replace the DEVICE_NAME line with a byte-for-byte copy of scripts/local-runner/source-snapshot.mjs line 40. The copy adds ' *' before the optional extension. It also spells the superscripts as ¹²³ escapes, which are the same code points with the same semantics, and leaves the daemon module pure ASCII. Put this comment line directly above it:\n// Like Git's is_valid_win32_path, spaces before the extension are skipped: 'CON .txt' is reserved too.\n\nError handling: unchanged by design, and nothing new to add.\n- A newly refused segment takes the existing branch in checkPortablePath: invalidInput(field, `${shown} uses a Windows device name`).\n- That is the same INVALID_INPUT code and field the callers already handle. `shown` is the quoted, printable-ASCII form of the path, so no raw input reaches an error message or log.\n- Add no new error code, message or try/catch.\n\n(b) scripts/local-runner/source-snapshot.mjs, comments only. Do not touch line 40 or any other line.\n- Line 5: change '...: FORBIDDEN_CHAR, wellFormed and foldCase verbatim, DEVICE_NAME widened. Facts relied on:' to '...: FORBIDDEN_CHAR, DEVICE_NAME, wellFormed and foldCase verbatim. Facts relied on:'.\n- Line 39: replace \"// The daemon's rule plus ' *': like Git's is_valid_win32_path, 'CON .txt' is reserved too.\" with the same comment line as in (a).\nIts S10 test scans this source file. Keep the file ASCII, and never write import(, require(, process., node:fs, child_process or a `from '...'` phrase, even in a comment.\n\nRead-only checks in the shared tree:\n- `diff <(sed -n 40p scripts/local-runner/source-snapshot.mjs) <(grep '^const DEVICE_NAME' packages/moe-daemon/src/benchmarks/workloadSnapshot.ts)` prints nothing.\n- The same holds for the comment lines: `sed -n 39p` against `grep -B1 '^const DEVICE_NAME' ... | head -1`.\n- `LC_ALL=C grep -nP '[^\\x00-\\x7f]'` finds nothing in either file.\n- `git diff --numstat` over the three task files shows about +12/-3. The prototype measured ts 2/1, test 8/0 and mjs 2/2.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts",
+        "scripts/local-runner/source-snapshot.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once. The exact command, run from the snapshot's repo root, is:\n`(cd packages/moe-daemon && npx vitest run src/benchmarks/) && node --test scripts/tests/local-runner-snapshot.test.mjs`\nIt must exit 0. Its fresh output tail is the complete_task verification evidence.\n\nScope: get_context shows isEpicFinal:true only because the live daemon still uses the highest-order rule (mem decision-epic-final-designation, task-cd2e447728224044abe7fa669d42f7fb). This epic's integration-and-hardening task is CQ-R13 (task-f4811a729f9e436ba129a65c12d348c1). workloadSnapshot.ts is test-only benchmark scaffolding, and every importer is in src/benchmarks. So that folder plus the local-runner snapshot test is the complete regression surface. settings.qualityGate and deliveryPolicy are unset, so no wrapper gate or required check applies.\n\nWhere to run it:\n- Never run vitest or npm install in the shared checkout. Its node_modules is a Windows install, and vitest writes node_modules/.vite.\n- On a Linux/WSL seat:\n  - `git archive HEAD` the WHOLE repo into a fresh temp dir. A partial archive fails non-routineWorkloads.test.ts with ENOENT on docs/plans/2026-10-24-ai-code-quality-and-context.md.\n  - Copy ONLY the three task files over it and cmp them against the worktree.\n  - Symlink packages/moe-daemon/node_modules (the directory itself) to the native Linux install, after checking package-lock equality modulo CR (mem gotcha-linux-vitest-reuse-native-node-modules).\n  - Run with `env -i HOME=\"$HOME\" PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin`, so no MOE_* variable or Windows PATH leaks in (mem gotcha-daemon-linux-snapshot-gate).\n- On a Windows-native seat: use a %TEMP% copy with robocopied node_modules (mem pattern-qa-windows-native-vitest-from-wsl).\n\nExpected:\n- benchmarks: 7 files, 304 passed + 6 skipped. HEAD gives 300 + 6; the six skips are the pre-existing baselineRun E1-E6.\n- local-runner-snapshot: 14/14.\n\nIn the same snapshot, also run:\n- `npx tsc --noEmit` for the package;\n- the test-file typecheck `npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule --types node src/benchmarks/workloadSnapshot.test.ts` (mem gotcha-daemon-tests-not-type-checked).\nBoth must exit 0. Record the counts and both exit codes in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff. Load adversarial-self-review first.\n\nMutation probes run only in a scratch copy of the step-3 snapshot, against src/benchmarks/workloadSnapshot.test.ts:\n(1) Drop ' *' from the daemon regex. The three new rows must fail.\n(2) Over-widen it to `(?:[ .].*)?$`. The acceptance test must fail on 'con x'.\n(3) Make it prefix-only, `/^(?:con|...|lpt[...])/i`. The acceptance test must fail on 'console.log'.\n(4) Change the ¹ escape to ´. The existing 'superscript COM device' row must fail. The byte-identical diff from step 2 guards ² and ³.\n\nAlso check:\n- The semantics match Git's is_valid_win32_path. A device name followed by any spaces and then '.', ':' or the end of the segment is reserved. Anything else ('con x', 'console.log', 'com10') is not. FORBIDDEN_CHAR already refuses ':', and the segment rule already refuses a trailing space, so the regex needs no ':' branch.\n- Error handling: each new refusal surfaces as the existing INVALID_INPUT with the quoted path. Nothing throws a different error type or echoes raw input.\n- The change only refuses more. No workload digest changes, and step 3's benchmark run shows that no corpus fixture is now refused.\n- grep confirms that nothing outside packages/moe-daemon/src/benchmarks imports workloadSnapshot.\n- Only the three task files changed. Peers' dirty paths were not touched.\n\nIf anything changed, rerun the step-3 command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts",
+        "packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts",
+        "scripts/local-runner/source-snapshot.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -22,11 +56,32 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T06:23:44.455Z",
-  "updatedAt": "2026-10-26T16:05:03.284Z",
+  "updatedAt": "2026-10-26T16:40:27.464Z",
   "metrics": {
-    "firstClaimAt": "2026-10-26T16:05:00.789Z"
+    "firstClaimAt": "2026-10-26T16:05:00.789Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-2c9d5121"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T16:40:27.326Z",
+  "planningNotes": {
+    "approachesConsidered": "(a) Insert only ' *' and leave the literal superscripts and source-snapshot.mjs as they are. Rejected because source-snapshot.mjs would then describe a divergence that no longer exists: its header says 'DEVICE_NAME widened' and line 39 says \"The daemon's rule plus ' *'\". That file is a security gate, and QA already enforced the accuracy of its comments in R09a. With a byte-identical line, 'verbatim' is true and parity can be checked with a one-line diff.\n(b) Share one rule between the two modules. Rejected: source-snapshot.mjs must stay dependency-free pure ESM (S10 allows only node:crypto), and the daemon module is TypeScript.\n(c) A cross-package test that asserts the two lines match. Rejected: it would couple the daemon's tests to scripts/.\n(d) The full daemon npm test. Not needed: the module is test-only, and every importer is in src/benchmarks.\nThe architect prototype in a scratch snapshot measured +12/-3 over 3 files.\n- RED at HEAD 981784e: 3 failed, 152 passed.\n- GREEN: benchmarks 7 files, 304 passed + 6 skipped (HEAD 300 + 6). local-runner-snapshot 14/14.\n- Package tsc and test-file tsc both exited 0.\n- Over-widened and prefix-only mutants were both killed by the acceptance test.",
+    "codebaseInsights": "- checkPortablePath (workloadSnapshot.ts:188) tests DEVICE_NAME against foldCase(segment) for every '/'-segment. It guards the file-map keys (initialFiles, assessmentFiles, digestFiles) and source.paths.\n- On a refusal it throws invalidInput(field, '<quoted path> uses a Windows device name'), so error handling is already in place. The BAD_PATHS it.each asserts INVALID_INPUT in all four placements. referenceDigest in the test file is an independent digest oracle.\n- FORBIDDEN_CHAR already refuses ':', and the segment rule refuses leading or trailing spaces and a trailing dot. So ' *' is the only gap against Git's is_valid_win32_path.\n- Both files are LF. After the change, both are pure ASCII.\n- isEpicFinal:true comes from the old highest-order rule. The epic's real final task is CQ-R13.",
+    "risks": "- The shared node_modules is Windows-native. Run vitest only in an isolated snapshot of the WHOLE repo: a partial archive fails non-routineWorkloads.test.ts with ENOENT (seen while prototyping).\n- S10 in local-runner-snapshot.test.mjs scans source-snapshot.mjs. A non-ASCII character or a banned substring (import(, require(, process., node:fs, child_process, from '...') in a comment fails it.\n- 'a/aux  .c' has two spaces. Copy the ¹²³ escapes exactly: only the step-2 diff guards ² and ³.\n- QA may read isEpicFinal:true as needing a full-epic gate. Step 3 explains why it does not.\n- The checkout is shared: report only the three files and never touch peers' dirty paths.",
+    "keyFiles": [
+      "packages/moe-daemon/src/benchmarks/workloadSnapshot.ts",
+      "packages/moe-daemon/src/benchmarks/workloadSnapshot.test.ts",
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/tests/local-runner-snapshot.test.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T16:40:27.463Z"
 }

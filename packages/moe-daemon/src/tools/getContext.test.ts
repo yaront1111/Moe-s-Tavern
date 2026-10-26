@@ -5,6 +5,9 @@ import { fileURLToPath } from 'url';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { getContextTool } from './getContext.js';
 import { getTools } from './index.js';
+import { updateEpicTool } from './updateEpic.js';
+import { setTaskStatusTool } from './setTaskStatus.js';
+import { createTaskTool } from './createTask.js';
 import type { Task, TaskCommit, TaskVerification } from '../types/schema.js';
 
 describe('moe.get_context', () => {
@@ -503,6 +506,158 @@ describe('moe.get_context dependency surface + isEpicFinal', () => {
     expect(result.task.blockedReason).toBe('waiting on task-dep111');
     expect(result.task.blockedOnTaskIds).toEqual(['task-dep111']);
     expect(result.task.blockedFromStatus).toBe('WORKING');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic-final follows the epic's designated final task (Epic.finalTaskId), not
+// the board position: `order` is a per-column sort position that drags,
+// set_task_status moves and create_task rewrite. An epic with no valid
+// designation falls back to the highest order, ties counting.
+// ---------------------------------------------------------------------------
+describe('moe.get_context isEpicFinal follows the designated final task', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  const read = async (taskId: string) => (await getContextTool(h.state).handler({ taskId }, h.state) as {
+    task: { isEpicFinal: boolean };
+  }).task.isEpicFinal;
+  const finals = async (ids: string[]): Promise<Record<string, boolean>> => {
+    const out: Record<string, boolean> = {};
+    for (const id of ids) out[id] = await read(id);
+    return out;
+  };
+  const designate = (finalTaskId: string, epicId = 'epic-1') =>
+    updateEpicTool(h.state).handler({ epicId, finalTaskId }, h.state);
+  const seedThree = async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-a', status: 'BACKLOG', order: 1 });
+    h.createTask({ id: 'task-b', status: 'WORKING', order: 2 });
+    h.createTask({ id: 'task-final', status: 'BACKLOG', order: 3 });
+    await h.state.load();
+  };
+  const ROWS = ['task-a', 'task-b', 'task-final'];
+  const ONLY_FINAL = { 'task-a': false, 'task-b': false, 'task-final': true };
+
+  it('a designated final task stays epic-final across board drags, set_task_status moves and new rows', async () => {
+    await seedThree();
+    await designate('task-final');
+
+    // (1) A JetBrains board drag: UPDATE_TASK {status, order} at the column end.
+    await h.state.updateTask('task-b', { order: 3.5 });
+    expect(await finals(ROWS)).toEqual(ONLY_FINAL);
+
+    // (2) A set_task_status move, then the board's end-of-column order.
+    await setTaskStatusTool(h.state).handler({ taskId: 'task-a', status: 'PLANNING' }, h.state);
+    await h.state.updateTask('task-a', { order: 4.5 });
+    expect(h.state.getTask('task-a')).toMatchObject({ status: 'PLANNING', order: 4.5 });
+    expect(await finals(ROWS)).toEqual(ONLY_FINAL);
+
+    // (3) REORDER_TASK to the end of a column.
+    expect((await h.state.reorderTask('task-b', 'task-a', null)).order).toBe(5.5);
+    expect(await finals(ROWS)).toEqual(ONLY_FINAL);
+
+    // (4) create_task appends at the epic's max order + 1.
+    const created = await createTaskTool(h.state).handler({ epicId: 'epic-1', title: 'late bug row' }, h.state) as { task: Task };
+    expect(created.task.order).toBe(6.5);
+    expect(await finals([...ROWS, created.task.id])).toEqual({ ...ONLY_FINAL, [created.task.id]: false });
+  });
+
+  it('without a designation the same drag moves epic-final to the dragged row (the fallback drifts)', async () => {
+    await seedThree();
+    expect(await finals(ROWS)).toEqual(ONLY_FINAL);
+
+    await h.state.updateTask('task-b', { order: 3.5 });
+
+    expect(await finals(ROWS)).toEqual({ 'task-a': false, 'task-b': true, 'task-final': false });
+  });
+
+  it.each<[string, unknown]>([
+    ['a missing task', 'task-gone'],
+    ['a task of another epic', 'task-far'],
+    ['an ARCHIVED task', 'task-zomb'],
+    ['a hand-edited null', null],
+    ['a hand-edited number', 42],
+  ])('ignores a stored designation naming %s and falls back to the highest order, ties counting', async (_label, finalTaskId) => {
+    h.setupMoeFolder();
+    h.createEpic({ finalTaskId: finalTaskId as string });
+    h.createEpic({ id: 'epic-2' });
+    h.createTask({ id: 'task-low', order: 1 });
+    h.createTask({ id: 'task-tie-a', order: 4 });
+    h.createTask({ id: 'task-tie-b', order: 4 });
+    h.createTask({ id: 'task-zomb', order: 9, status: 'ARCHIVED' });
+    h.createTask({ id: 'task-far', epicId: 'epic-2', order: 0 });
+    await h.state.load();
+
+    expect(await finals(['task-low', 'task-tie-a', 'task-tie-b', 'task-zomb', 'task-far'])).toEqual({
+      'task-low': false,
+      'task-tie-a': true,
+      'task-tie-b': true,
+      // An ARCHIVED row is outside the max but still compares its own order.
+      'task-zomb': true,
+      'task-far': true,
+    });
+  });
+
+  it('clearing the designation with update_epic "" restores the highest-order fallback', async () => {
+    await seedThree();
+    await designate('task-a');
+    expect(await finals(ROWS)).toEqual({ 'task-a': true, 'task-b': false, 'task-final': false });
+
+    await designate('');
+
+    expect(h.state.getEpic('epic-1')?.finalTaskId).toBeUndefined();
+    expect(await finals(ROWS)).toEqual(ONLY_FINAL);
+  });
+
+  it('projects epic.finalTaskId only when a task is designated', async () => {
+    await seedThree();
+    const epicOf = async () => (await getContextTool(h.state).handler({ taskId: 'task-a' }, h.state) as {
+      epic: Record<string, unknown>;
+    }).epic;
+
+    expect(Object.prototype.hasOwnProperty.call(await epicOf(), 'finalTaskId')).toBe(false);
+    await designate('task-final');
+    expect((await epicOf()).finalTaskId).toBe('task-final');
+  });
+
+  // The six CQ epics' non-ARCHIVED rows on the 2026-10-26 board, as [label, order].
+  // Drags and late bug rows had pushed the highest order past every hardening row
+  // except I06 and M06, so the fallback flagged the wrong row in four epics.
+  const CQ_EPICS: Array<{ epic: string; final: string; highest: string; rows: Array<[string, number]> }> = [
+    { epic: 'CQ-F', final: 'F12', highest: 'bug-bc84', rows: [['F04', 40], ['F05', 50], ['F07', 70], ['F08', 80], ['F09', 90], ['F10', 100], ['F11', 110], ['F06', 221.5], ['F03', 225.5], ['bug-a982', 226.5], ['F04c', 230.1], ['F04d', 230.2], ['F04e', 230.3], ['F04b', 230.5], ['bug-aa79', 233.5], ['F12a', 234.2], ['F12b', 234.3], ['F12', 234.5], ['bug-bc84', 249.5]] },
+    { epic: 'CQ-R', final: 'R13', highest: 'bug-6f50', rows: [['R03', 30], ['R04', 40], ['R05', 50], ['R06', 60], ['R07', 70], ['R09a', 85], ['R10', 100], ['R11', 110], ['R12', 120], ['R13', 130], ['R08a', 222.2], ['R08b', 222.3], ['R08c', 222.4], ['R08', 222.5], ['R01', 226.5], ['bug-ab6a', 227.5], ['bug-333f', 229.5], ['R09', 235.5], ['bug-6b60', 236.5], ['bug-c42d', 237.5], ['bug-d72f', 238.5], ['bug-6f50', 248.5]] },
+    { epic: 'CQ-V', final: 'V12', highest: 'V06', rows: [['V07', 70], ['V08', 80], ['V09', 90], ['V10', 100], ['V11', 110], ['V12', 120], ['V02', 225.5], ['V03', 226.5], ['V01a', 227.3], ['V01b', 227.4], ['V01c', 227.45], ['V01', 227.5], ['V04', 242.5], ['V05', 243.5], ['V06', 244.5]] },
+    { epic: 'CQ-C', final: 'C11', highest: 'C06', rows: [['C07', 70], ['C08', 80], ['C09', 90], ['C10', 100], ['C11', 110], ['C01', 221.5], ['C02', 222.5], ['C02b', 223.5], ['C03', 224.5], ['C04', 239.5], ['C05', 240.5], ['C06', 241.5]] },
+    { epic: 'CQ-I', final: 'I06', highest: 'I06', rows: [['I02', 227.5], ['I03', 228.5], ['I01', 228.5], ['I04', 245.5], ['I05', 246.5], ['I06', 247.5]] },
+    { epic: 'CQ-M', final: 'M06', highest: 'M06', rows: [['M03', 30], ['M04', 40], ['M01e', 217.5], ['M01f', 218.5], ['M01', 219.5], ['bug-9c86', 220.5], ['M04b', 223.5], ['M04c', 224.5], ['M05', 229.5], ['M06', 230.5]] },
+  ];
+  const cqEpicId = (epic: string) => `epic-${epic.toLowerCase()}`;
+  const cqTaskId = (label: string) => `task-cq-${label.toLowerCase()}`;
+
+  it('designated CQ hardening rows are epic-final and every sibling is not', async () => {
+    h.setupMoeFolder();
+    for (const cq of CQ_EPICS) {
+      h.createEpic({ id: cqEpicId(cq.epic), title: cq.epic });
+      for (const [label, order] of cq.rows) h.createTask({ id: cqTaskId(label), epicId: cqEpicId(cq.epic), order });
+    }
+    await h.state.load();
+
+    for (const cq of CQ_EPICS) {
+      // The bug: before a designation the highest-order row is final.
+      expect(await read(cqTaskId(cq.highest)), `${cq.epic} ${cq.highest} before designation`).toBe(true);
+      if (cq.highest !== cq.final) {
+        expect(await read(cqTaskId(cq.final)), `${cq.epic} ${cq.final} before designation`).toBe(false);
+      }
+
+      await designate(cqTaskId(cq.final), cqEpicId(cq.epic));
+
+      for (const [label] of cq.rows) {
+        expect(await read(cqTaskId(label)), `${cq.epic} ${label}`).toBe(label === cq.final);
+      }
+    }
   });
 });
 

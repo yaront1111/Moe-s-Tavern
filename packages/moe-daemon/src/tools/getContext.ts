@@ -14,6 +14,7 @@ import { routingInfo } from '../util/routing.js';
 import { currentAttempt, readContextSessionId, recordContextReceipt } from '../state/attemptStore.js';
 import { decodeStoredPlanRevision } from '../state/taskStore.js';
 import { readRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
+import { isEpicFinalTask } from '../delivery/policy.js';
 import {
   buildPacketManifest, MAX_PACKET_BUDGET_CHARS, MIN_PACKET_BUDGET_CHARS, readPacketBudgetChars,
 } from '../context/contextPacket.js';
@@ -416,20 +417,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
             .sort((a, b) => a.order - b.order)
         : [];
       const epicSiblings = [...baseSiblings, ...declaredExtras].map(siblingEntry);
-      // Epic-final = highest `order` among the epic's non-ARCHIVED tasks (ties
-      // count; missing epicId defaults to final — gate on the safe side). Same
-      // rule the agent wrapper computes via list_tasks; the wrapper prefers
-      // this daemon-provided value when present.
-      const isEpicFinal = task
-        ? !task.epicId
-          ? true
-          : (task.order ?? 0) >= Math.max(
-              (task.order ?? 0),
-              ...Array.from(state.tasks.values())
-                .filter((t) => t.epicId === task.epicId && t.status !== 'ARCHIVED')
-                .map((t) => (typeof t.order === 'number' && Number.isFinite(t.order) ? t.order : 0))
-            )
-        : undefined;
+      // Epic-final: the epic's designated final task, else the highest-order
+      // fallback (isEpicFinalTask, the one rule the delivery policy shares).
+      // The wrapper prefers this daemon-provided value when present.
+      const isEpicFinal = task ? isEpicFinalTask(state, task) : undefined;
 
       // Record ownership bookkeeping so start_step can enforce context-fetched ordering.
       if (task && callerWorkerId) {
@@ -487,7 +478,8 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               title: epic.title,
               description: epic.description,
               architectureNotes: epic.architectureNotes,
-              epicRails: epic.epicRails
+              epicRails: epic.epicRails,
+              ...(typeof epic.finalTaskId === 'string' && epic.finalTaskId ? { finalTaskId: epic.finalTaskId } : {})
             }
           : null,
         task: task

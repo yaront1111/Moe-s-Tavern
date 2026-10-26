@@ -194,13 +194,27 @@ export function completionCommitsForReview(
 }
 
 /**
- * Epic-final exactly as get_context computes it (tools/getContext.ts), which is
- * what the wrapper uses to decide whether an epicFinal-scoped gate runs: the
- * highest `order` among the epic's non-ARCHIVED tasks, ties counting, and a task
- * without an epic counting as final. A test pins the two against each other.
+ * The one epic-final rule. get_context's `task.isEpicFinal` (which the wrapper
+ * uses to decide whether an epicFinal-scoped gate runs), requiredCheckCommand and
+ * qa_approve's requiredCheckAtDone snapshot all call it; a test pins get_context
+ * against it.
+ *
+ * - A task without an epic is final.
+ * - The epic's designated final task (`epic.finalTaskId`, set with
+ *   moe.update_epic) is the only final task, while the designation names an
+ *   existing, non-ARCHIVED task of the same epic.
+ * - Otherwise the highest `order` among the epic's non-ARCHIVED tasks, ties
+ *   counting. That fallback drifts: `order` is a per-column sort position that
+ *   board drags, set_task_status moves and create_task's max+1 rewrite, which is
+ *   why the designation exists.
  */
 export function isEpicFinalTask(state: StateManager, task: Task): boolean {
   if (!task.epicId) return true;
+  const designated = state.getEpic(task.epicId)?.finalTaskId;
+  if (typeof designated === 'string' && designated !== '') {
+    const final = state.getTask(designated);
+    if (final && final.epicId === task.epicId && final.status !== 'ARCHIVED') return task.id === designated;
+  }
   const own = task.order ?? 0;
   const orders = Array.from(state.tasks.values())
     .filter((t) => t.epicId === task.epicId && t.status !== 'ARCHIVED')
