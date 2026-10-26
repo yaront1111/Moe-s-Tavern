@@ -1,5 +1,6 @@
 package com.moe.util
 
+import com.google.gson.Gson
 import com.intellij.openapi.project.Project as IdeaProject
 import com.moe.model.DaemonInfo
 import com.moe.model.MoeState
@@ -559,6 +560,173 @@ class RuntimeSelectionPolicyTest {
         }
     }
 
+    @Test
+    fun `R1 a protected restart signals no process this IDE did not start for the project`() {
+        val (project, root, node) = protectedFixture()
+        val self = ProcessHandle.current()
+        val noStart = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(ProcessHandle.Info::class.java)) { _, _, _ ->
+            Optional.empty<Any>()
+        } as ProcessHandle.Info
+        val refused = restartRefusal(self.pid(), NOT_STARTED_HERE)
+        val spy = SignalSpy()
+        mapOf<String, () -> Unit>(
+            "unrecorded" to {},
+            "pid reused since it was recorded" to {
+                RuntimeSelectionPolicy.remember(project.path, SpawnRecord(self.pid(), T0, supervisor = true)) { ProcessFacts(it, T0, null) }
+            },
+            "recorded for another project" to { RuntimeSelectionPolicy.recordProtectedSpawn(temporaryFolder.newFolder().path, self) },
+            "spawned without a start instant" to { RuntimeSelectionPolicy.recordProtectedSpawn(project.path, fakeHandle(self.pid()) { noStart }) }
+        ).forEach { (label, setup) ->
+            RuntimeSelectionPolicy.resetForTest()
+            setup()
+            restart(project, root, node, self.pid(), spy::handle).assertRefused(label, refused)
+        }
+        // Discovery skips its project check for a blank projectPath; provenance still decides.
+        restart(project, root, node, self.pid(), spy::handle, projectPath = "").assertRefused("blank projectPath", refused)
+        writeProjectJson(project, """{"settings":""")
+        restart(project, root, node, self.pid(), spy::handle, profile = { RuntimeSelectionPolicy.profile(project.path) })
+            .assertRefused("unreadable project.json", refused)
+        assertEquals(emptyList<Long>(), spy.destroyed)
+    }
+
+    @Test
+    fun `R2 restart stops a recorded protected daemon, or a legacy one, exactly once and starts a fresh one`() {
+        val (project, root, node) = protectedFixture()
+        val self = ProcessHandle.current()
+        val legacy = SignalSpy()
+        restart(project, root, node, self.pid(), legacy::handle, profile = { RuntimeProfile.LEGACY }).assertProceeded("legacy, unrecorded")
+        assertEquals("legacy still signals the live pid daemon.json names", listOf(self.pid()), legacy.destroyed)
+
+        RuntimeSelectionPolicy.recordProtectedSpawn(project.path, self)
+        val supervisor = SignalSpy()
+        restart(project, root, node, self.pid(), supervisor::handle).assertProceeded("recorded supervisor")
+        // One lookup: the captured handle is the one destroyed, never a second resolution of the pid.
+        assertEquals(listOf(self.pid()), supervisor.lookedUp)
+        assertEquals(listOf(self.pid()), supervisor.destroyed)
+        // `sort` waits on stdin: daemon.json names the `_run` child of the recorded `start` supervisor.
+        val child = ProcessBuilder("sort").start()
+        try {
+            val daemon = SignalSpy()
+            restart(project, root, node, child.pid(), daemon::handle).assertProceeded("child of the recorded supervisor")
+            assertEquals(listOf(child.pid()), daemon.lookedUp)
+            assertEquals(listOf(child.pid()), daemon.destroyed)
+        } finally {
+            child.destroyForcibly().waitFor()
+        }
+    }
+
+    @Test
+    fun `R3 a dead, vanished or non-positive pid is never signaled and its daemon json is cleaned up`() {
+        val (project, root, node) = protectedFixture()
+        val pid = ProcessHandle.current().pid()
+        val spy = SignalSpy()
+        restart(project, root, node, pid, spy::handle, alive = false).assertProceeded("dead")
+        val vanished = mutableListOf<Long>()
+        restart(project, root, node, pid, { vanished += it; null }).assertProceeded("vanished before its handle was taken")
+        assertEquals(listOf(pid), vanished)
+        // A daemon.json without a pid reads as 0, and kill(2) takes 0 and -1 as process groups: neither is a daemon.
+        listOf(RuntimeProfile.PROTECTED, RuntimeProfile.LEGACY).forEach { profile ->
+            listOf(0L, -1L).forEach { restart(project, root, node, it, spy::handle, profile = { profile }).assertProceeded("$profile pid $it") }
+        }
+        assertEquals(emptyList<Long>(), spy.lookedUp)
+        assertEquals(emptyList<Long>(), spy.destroyed)
+    }
+
+    @Test
+    fun `R4 lookup and signal failures stop a protected restart and are ignored by a legacy one`() {
+        val (project, root, node) = protectedFixture()
+        val pid = ProcessHandle.current().pid()
+        RuntimeSelectionPolicy.recordProtectedSpawn(project.path, ProcessHandle.current())
+        listOf(RuntimeProfile.PROTECTED, RuntimeProfile.LEGACY).forEach { profile ->
+            val check: Restart.(String) -> Unit = {
+                if (profile == RuntimeProfile.PROTECTED) assertRefused(it, restartRefusal(pid, STOP_FAILED)) else assertProceeded(it)
+            }
+            restart(project, root, node, pid, { throw SecurityException("lookup") }, { profile }).check("$profile lookup throws")
+            listOf<Pair<String, () -> Boolean>>(
+                "destroy throws" to { throw SecurityException("signal") },
+                "destroy returns false" to { false }
+            ).forEach { (label, destroy) ->
+                val spy = SignalSpy(destroy)
+                restart(project, root, node, pid, spy::handle, { profile }).check("$profile $label")
+                assertEquals("$profile $label", listOf(pid), spy.destroyed)
+            }
+        }
+    }
+
+    /** What one Restart Daemon left: daemon.json before and after, starts, statuses, spawn attempts and retry timer. */
+    private data class Restart(
+        val before: String, val after: String?, val started: List<List<String>>,
+        val statuses: List<Pair<Boolean, String>>, val spawnAttempts: Int, val reconnect: Any?
+    )
+
+    /**
+     * The real Restart Daemon on [project] while daemon.json names [pid], through a supervisor that looks
+     * processes up with [lookup] and has spent its spawn attempts, so only a backoff reset starts a daemon.
+     */
+    private fun restart(
+        project: File, root: File, node: File, pid: Long, lookup: (Long) -> ProcessHandle?,
+        profile: () -> RuntimeProfile = { RuntimeProfile.PROTECTED }, alive: Boolean = true, projectPath: String = project.path
+    ): Restart {
+        val metadata = File(project, ".moe/daemon.json").apply { writeText(Gson().toJson(DaemonInfo(1, pid.toInt(), "now", projectPath))) }
+        val before = metadata.readText()
+        val started = mutableListOf<List<String>>()
+        val supervisor = supervisorFor(project, { root }, { node.path }, profile = profile, started = started, alive = { alive }, lookup = lookup)
+        SPAWN_ATTEMPTS.setInt(supervisor, Int.MAX_VALUE)
+        lateinit var outcome: Restart
+        withService(project) { service, _, statuses ->
+            MoeProjectService::class.java.getDeclaredField("daemonSupervisor").apply { isAccessible = true }.set(service, supervisor)
+            service.restartDaemon()
+            outcome = Restart(before, metadata.takeIf { it.exists() }?.readText(), started.toList(), statuses.toList(),
+                SPAWN_ATTEMPTS.getInt(supervisor), service.field("reconnectFuture"))
+        }
+        return outcome
+    }
+
+    /** Nothing after a refusal: daemon.json byte for byte, no start, no backoff reset, no retry. */
+    private fun Restart.assertRefused(label: String, message: String) {
+        assertEquals(label, before, after)
+        assertEquals(label, emptyList<List<String>>(), started)
+        assertEquals(label, listOf(false to "Disconnected", false to message), statuses)
+        assertEquals(label, Int.MAX_VALUE, spawnAttempts)
+        assertNull(label, reconnect)
+    }
+
+    /** A restart that went on: daemon.json deleted, the backoff reset and exactly one daemon started. */
+    private fun Restart.assertProceeded(label: String) {
+        assertNull(label, after)
+        assertEquals(label, 1, started.size)
+        assertEquals(label, 1, spawnAttempts)
+        assertEquals(label, listOf(false to "Disconnected", false to "Starting daemon..."), statuses.take(2))
+    }
+
+    /** Inert stand-ins for the processes daemon.json names: lookups and destroys are recorded, and reach no process. */
+    private class SignalSpy(private val destroy: () -> Boolean = { true }) {
+        val lookedUp = CopyOnWriteArrayList<Long>()
+        val destroyed = CopyOnWriteArrayList<Long>()
+
+        fun handle(pid: Long): ProcessHandle {
+            lookedUp += pid
+            return Proxy.newProxyInstance(SignalSpy::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { proxy, method, args ->
+                when (method.name) {
+                    "destroy" -> {
+                        destroyed += pid
+                        destroy()
+                    }
+                    "pid" -> pid
+                    "isAlive" -> true
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "equals" -> proxy === args?.firstOrNull()
+                    "toString" -> "SignalSpy($pid)"
+                    else -> throw UnsupportedOperationException(method.name)
+                }
+            } as ProcessHandle
+        }
+    }
+
+    private fun restartRefusal(pid: Long, reason: String) =
+        "Protected execution profile: Restart Daemon did not stop pid $pid, which .moe/daemon.json names: $reason. " +
+            "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
+
     /** A loopback daemon endpoint and a service on a project rooted at [dir], both torn down after [test]. */
     private fun withService(dir: File, test: (MoeProjectService, Int, List<Pair<Boolean, String>>) -> Unit) {
         MoeProjectRegistry.clearDaemonRefCountsForTest()
@@ -639,10 +807,12 @@ class RuntimeSelectionPolicyTest {
         profile: () -> RuntimeProfile = { RuntimeProfile.PROTECTED },
         started: MutableList<List<String>> = mutableListOf(),
         statuses: MutableList<Pair<Boolean, String>> = mutableListOf(),
-        dirs: MutableList<File?> = mutableListOf()
+        dirs: MutableList<File?> = mutableListOf(),
+        alive: (Int) -> Boolean = { false },
+        lookup: (Long) -> ProcessHandle? = { null }
     ) = MoeDaemonSupervisor(
-        project.path, "Test Project", { connected, message -> statuses += connected to message }, { _, _ -> false }, { false },
-        { pb -> started += pb.command().toList(); dirs += pb.directory(); IdleProcess() }, { wsl }, profile, root, node
+        project.path, "Test Project", { connected, message -> statuses += connected to message }, { _, _ -> false }, alive,
+        { pb -> started += pb.command().toList(); dirs += pb.directory(); IdleProcess() }, { wsl }, profile, root, node, lookup
     )
 
     /** A started process that never runs; without [handle] it has none, so it is never recorded. */
@@ -723,5 +893,8 @@ class RuntimeSelectionPolicyTest {
         private const val MIB = 1 shl 20
         private val T0: Instant = Instant.parse("2026-01-01T00:00:00Z")
         private val T1: Instant = T0.plusSeconds(60)
+        private const val NOT_STARTED_HERE = "this IDE did not start it from the installed Moe runtime"
+        private const val STOP_FAILED = "the stop request failed"
+        private val SPAWN_ATTEMPTS = MoeDaemonSupervisor::class.java.getDeclaredField("daemonSpawnAttempts").apply { isAccessible = true }
     }
 }

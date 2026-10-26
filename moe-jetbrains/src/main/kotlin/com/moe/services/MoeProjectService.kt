@@ -656,11 +656,11 @@ class MoeProjectService @JvmOverloads constructor(
         if (base != null) {
             val info = daemonSupervisor.readDaemonInfo()
             if (info != null) {
-                // Kill existing daemon if alive
-                if (daemonSupervisor.isProcessAlive(info.pid)) {
-                    try {
-                        ProcessHandle.of(info.pid.toLong()).ifPresent { it.destroy() }
-                    } catch (_: Exception) {}
+                // A refusal keeps daemon.json and starts nothing: the user must identify and stop that process first.
+                daemonSupervisor.stopDaemonForRestart(info)?.let {
+                    log.warn(it)
+                    publishStatus(false, it)
+                    return
                 }
                 try {
                     File(base, ".moe/daemon.json").delete()

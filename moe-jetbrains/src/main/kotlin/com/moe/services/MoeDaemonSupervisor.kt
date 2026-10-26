@@ -32,7 +32,8 @@ class MoeDaemonSupervisor(
     private val wslAgentsEnabled: () -> Boolean = { false },
     private val profile: () -> RuntimeProfile = { RuntimeSelectionPolicy.profile(basePath) },
     private val installedRoot: () -> File? = { RuntimeSelectionPolicy.installedRoot() },
-    private val nodeExecutable: (() -> String?)? = null
+    private val nodeExecutable: (() -> String?)? = null,
+    private val processLookup: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) }
 ) {
     private val log = Logger.getInstance(MoeDaemonSupervisor::class.java)
     private val gson = Gson()
@@ -162,6 +163,40 @@ class MoeDaemonSupervisor(
     /** Under PROTECTED, why the daemon [info] names must not be activated; null when it may be. */
     fun activationRefusal(info: DaemonInfo): String? =
         if (profile() == RuntimeProfile.PROTECTED) RuntimeSelectionPolicy.verifyProvenance(basePath, info.pid.toLong()) else null
+
+    /**
+     * Stops the daemon [info] names so Restart Daemon can start a fresh one: null when the restart may go
+     * on, else the refusal to show. daemon.json is repository content, so its pid is no authority to signal
+     * a process: under PROTECTED only a process activation would accept is stopped, and any failure refuses.
+     * LEGACY keeps the historical best-effort signal.
+     */
+    fun stopDaemonForRestart(info: DaemonInfo): String? {
+        // An absent pid reads as 0, and kill(2) takes 0 and -1 as process groups: neither names a daemon.
+        if (info.pid <= 0 || !isProcessAlive(info.pid)) return null
+        val isProtected = profile() == RuntimeProfile.PROTECTED
+        return try {
+            // Captured once and destroyed as captured, never re-resolved from the pid: the JDK checks the
+            // handle's start time before signaling, which guards against a process reusing the pid.
+            val target = processLookup(info.pid.toLong()) ?: return null
+            if (!isProtected) {
+                target.destroy()
+                return null
+            }
+            when {
+                activationRefusal(info) != null -> restartRefusal(info.pid, "this IDE did not start it from the installed Moe runtime")
+                target.destroy() -> null
+                else -> restartRefusal(info.pid, "the stop request failed")
+            }
+        } catch (ex: Exception) {
+            log.warn("Restart Daemon could not stop pid ${info.pid}: ${ex.message}")
+            if (isProtected) restartRefusal(info.pid, "the stop request failed") else null
+        }
+    }
+
+    // The pid comes from the repository, so the refusal never calls that process a Moe daemon.
+    private fun restartRefusal(pid: Int, reason: String) =
+        "Protected execution profile: Restart Daemon did not stop pid $pid, which .moe/daemon.json names: $reason. " +
+            "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
 
     internal sealed interface ProtectedDaemonCommand {
         data class Ready(val command: List<String>) : ProtectedDaemonCommand
