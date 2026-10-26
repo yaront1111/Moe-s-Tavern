@@ -55,7 +55,7 @@
     }
   ],
   "planRevision": 7,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -68,16 +68,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:10:35.890Z",
-  "updatedAt": "2026-10-26T06:28:12.926Z",
+  "updatedAt": "2026-10-26T06:44:34.857Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T05:49:03.722Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-26T06:44:34.857Z",
+    "wallClockMs": 3331135
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-7c627d35"
   ],
   "tier": "light",
   "effort": "medium",
@@ -144,5 +147,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-26T06:25:43Z",
     "at": "2026-10-26T06:28:12.926Z"
-  }
+  },
+  "completedAt": "2026-10-26T06:44:34.857Z",
+  "reviewCompletedAt": "2026-10-26T06:44:34.857Z",
+  "reviewSummary": "Reviewed completion commit adc10b7 (on moe/work-2026-10-24, pushed). Diff: scripts/tests/taskless-handoff.test.mjs only, +4/-2 (2-line comment, anchor line, variable rename shCurate->shPreflightContext at its one use in render()); the only other path is the task's own .moe/tasks json. Every assertion, other anchor and both launchers are byte-identical (git diff --stat adc10b7^ adc10b7 -- scripts docs shows just the test file). Checked the new anchor is code, not prose: scripts/moe-agent.sh:6630 `if [ -z \"$PREFLIGHT_TASK_CHANNEL\" ] && [ -n \"$PREFLIGHT_CONTEXT\" ] && [ -n \"$PYTHON_CMD\" ]; then`, and the slice ends before the outer `fi` ahead of `# 6.`, so it is balanced if/fi plus the pass-through comment. DoD 1: re-ran the CI \"Test agent runtime discovery\" command (all 11 files) && bash scripts/tests/parity-check.sh in a fresh `git archive HEAD scripts docs` snapshot (taskless-handoff.test.mjs cmp-identical to worktree), env -i, node v24.21.0: exit 0, 172 tests / 171 pass / 1 skipped / 0 fail, PASS parity-check.sh. DoD 3 (loud guard): in the scratch copy I altered the anchor ($PREFLIGHT_TASK_CHANNEL -> $PREFLIGHT_TASK_CHANNEL_X) -> test exit 1 with \"AssertionError: missing prompt boundaries: <the anchor> / ...\", 0 pass / 1 fail; scratch dir deleted. DoD 4: test-only, no launcher/docs change, parity passes. DoD 2: no assertion dropped, so no removal needing justification. Not run: native Windows node.exe (worker reported 106/106) and a native Git Bash seat run; the worker also disclosed that the Git Bash run was not done. Rails: no build/test freeze; size ~6 LOC, far under the cap. No complexity findings.",
+  "requiredCheckAtDone": null
 }
