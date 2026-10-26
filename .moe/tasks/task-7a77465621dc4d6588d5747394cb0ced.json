@@ -43,11 +43,17 @@
       "author": "qa-b0c1741e",
       "content": "QA note from the CQ-R08a review, for planning CQ-R08. guest-bridge.mjs TOOLS (in 17bc7ac) matches every committed daemon inputSchema. However, the uncommitted CQ-F06 edit (task-b03c0c7744e84955a7a069255a124ef7, Served context identity) adds a `sessionId` property to the moe.get_context schema. Today a guest-sent sessionId gets BRIDGE_ARGUMENT_DENIED, which fails closed. Once F06 lands, CQ-R08 should decide explicitly between two options: stamp a host-owned sessionId from the binding (preferred, since a receipt binds to the owning attempt), or keep refusing it. It should not add sessionId to the guest argument allowlist without a decision. Also note the B9 pin in scripts/tests/local-runner-bridge.test.mjs, which any table change must update.",
       "timestamp": "2026-10-25T11:05:38.052Z"
+    },
+    {
+      "id": "comment-e48d6a67e7664d139b98730673d70176",
+      "author": "worker-7d158765",
+      "content": "CQ-R08b (task-502c00a5) handoff: two gaps in the guest-supervisor relay that belong downstream, not in R08b.\n1. A silent child and a host that has gone: the relay notices only on its next frame write (EPIPE → exit 74, then killpg+reap). CQ-R08c should put stdin (host frames) in the same selectors loop, so host EOF ends the session promptly.\n2. A SIGTERM or SIGHUP sent to the supervisor uses the default action and kills Python without running the finally. The child's session group (start_new_session) then survives. Only KeyboardInterrupt/OSError paths kill and reap today. Signal-driven teardown belongs to CQ-R08 or CQ-R10/R11.\nExit-code contract for the host session: 0 relay complete; 64 usage; 71 child failed to start (hello, then EOF, no observation); 74 I/O failure (child group killed); 77 not root; 78 root with no job. relay also resets SIGCHLD to SIG_DFL, because an inherited SIG_IGN would let the kernel discard the status before waitpid reads it.",
+      "timestamp": "2026-10-26T05:14:32.725Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:10.214Z",
-  "updatedAt": "2026-10-25T11:05:38.052Z",
+  "updatedAt": "2026-10-26T05:14:32.725Z",
   "dependsOn": [
     "task-84c2da018ce74995b609805dab4fe7da",
     "task-b03c0c7744e84955a7a069255a124ef7",

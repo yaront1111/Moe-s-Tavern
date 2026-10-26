@@ -54,7 +54,7 @@
     }
   ],
   "planRevision": 7,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T12:00:51.376Z",
-  "updatedAt": "2026-10-26T05:03:46.132Z",
+  "updatedAt": "2026-10-26T05:14:27.979Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T04:44:10.404Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-26T05:14:27.978Z",
+    "wallClockMs": 1817574
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-7c627d35"
   ],
   "tier": "light",
   "effort": "high",
@@ -159,5 +162,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-26T05:00:57Z",
     "at": "2026-10-26T05:03:46.132Z"
-  }
+  },
+  "completedAt": "2026-10-26T05:14:27.978Z",
+  "reviewCompletedAt": "2026-10-26T05:14:27.978Z",
+  "reviewSummary": "Approved. Reviewed completion commit b93702d (on moe/work-2026-10-24, recorded, pushed). Test-only: packages/moe-daemon/src/benchmarks/baselineRun.test.ts +17/-4, LF; baselineRun.ts and all timeouts untouched; working tree byte-identical to the commit.\n\nChange: U1 symlink case split into it.runIf(canSymlink)('U1 never follows a receipt symlink'). canSymlink is true on non-win32 with no probe, so Linux can't silently skip. On win32 it probes with a temp symlink, maps only EPERM to false, rethrows anything else, rmSync in finally. U3 timeout is skipIf(win32), since terminateTree uses POSIX process groups.\n\nRe-run by me, fresh:\n(A) Linux snapshot of HEAD + this test, vitest run src/benchmarks/baselineRun.test.ts --reporter=verbose: exit 0, 14 passed | 6 skipped (E1-E6 skip only because the archive has no dist). Link test, U3 timeout and both U5 show ✓. tsc --noEmit on the test file: exit 0. Red proof: in a throwaway copy, readUsageReceipts also accepting symlinks makes 'U1 never follows a receipt symlink' fail. Copy deleted.\n(B) Native Windows node.exe from a Windows temp copy: exit 0, 10 passed | 10 skipped (link test, U3 timeout, U5 x2, E1-E6 skipped). Held-out node procs 0 before and after; matching temp dirs 1 before and after (foreign debris, untouched). My copies removed.\n\nDoD: native U1 EPERM and U3 timeout no longer fail, via explicit guards matching the POSIX-only driver contract; POSIX keeps real symlink and timeout coverage with fresh passes and no leaked process on the Windows path; targeted native and POSIX output plus modified path reproduced.\n\nNot run: the link test can't execute on this non-elevated host, so the privileged-Windows path is reasoned (libuv reports reparse points as DT_LINK, so Dirent.isFile() is false), not run. Full daemon suite not re-run; the change is one test file. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
