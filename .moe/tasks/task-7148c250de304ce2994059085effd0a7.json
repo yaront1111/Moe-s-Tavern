@@ -86,7 +86,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T12:00:51.376Z",
-  "updatedAt": "2026-10-26T05:14:27.979Z",
+  "updatedAt": "2026-10-26T05:14:54.967Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T04:44:10.404Z",
     "plannedStepCount": 3,
@@ -135,7 +135,10 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/benchmarks/baselineRun.test.ts",
-    ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json"
+    ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+    ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+    ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
   ],
   "completionSummary": "Test-only fix in packages/moe-daemon/src/benchmarks/baselineRun.test.ts (git diff --stat: 1 file, +17/-4; LF; baselineRun.ts untouched). U1 symlink case split into it.runIf(canSymlink)('U1 never follows a receipt symlink'); canSymlink = non-win32 (no probe, so Linux can't skip) or a win32 probe that maps only EPERM to false and rethrows anything else, with rmSync in finally. U3 timeout test is skipIf(win32) because terminateTree uses POSIX process groups. (A) Linux snapshot, fresh: exit 0, 14 passed | 6 skipped (E1-E6 skip because the archive has no dist); link test, U3 timeout and both U5 show ✓; tsc --noEmit exit 0. Red proof in a throwaway copy: changing the readUsageReceipts filter to also accept symlinks makes 'U1 never follows a receipt symlink' fail. (B) native Windows node, fresh: exit 0, 10 passed | 10 skipped; link, U3 timeout, U5 and E1-E6 skipped; held-out processes 0 before and after; temp dirs unchanged (1 before and after, the foreign moe-workload-assessment debris). Snapshot and Windows temp copies removed. Modified path: packages/moe-daemon/src/benchmarks/baselineRun.test.ts.",
   "commits": [
@@ -154,14 +157,32 @@
       "treeId": "9b4d7b8aee72545f6b71b8cfe593ceb2648c3b29",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "286c89797ac3b1a91724854db9ea839fb82efe54",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T05:12:02Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-c2cb5cf717794c169bda13934e4ee877.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T05:14:54.967Z",
+      "treeId": "5fb5e13e845660dfa4027e5a1280043d524f09e4",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3729a0d6@2026-10-26T05:00:57Z",
-    "at": "2026-10-26T05:03:46.132Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T05:12:02Z",
+    "at": "2026-10-26T05:14:54.967Z"
   },
   "completedAt": "2026-10-26T05:14:27.978Z",
   "reviewCompletedAt": "2026-10-26T05:14:27.978Z",

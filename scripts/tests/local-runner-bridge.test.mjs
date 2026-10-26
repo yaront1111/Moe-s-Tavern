@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import {
   MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, parseGuestFrame, scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
@@ -201,3 +206,189 @@ test('B15 bridgeArgv is the one fixed supervisor command for an owned instance n
     refuses(() => bridgeArgv(bad), 'BRIDGE_INPUT_INVALID', String(bad));
   }
 });
+
+// CQ-R08b: the real guest supervisor under the host's python3, decoded with the R08a decoder and parseGuestFrame.
+const NO_GUEST = process.platform === 'win32' && 'the guest supervisor runs only in the Linux guest (POSIX python3)';
+const SUPERVISOR = fileURLToPath(new URL('../local-runner/guest-supervisor.py', import.meta.url));
+// -B: both IDE bundlers copy scripts/local-runner wholesale, so a __pycache__ there would ship.
+const LOAD = `import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location('moe_supervisor', sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+`;
+const harness = (code, ...args) => spawnSync('python3', ['-I', '-B', '-c', LOAD + code, SUPERVISOR, ...args],
+  { maxBuffer: 64 << 20, timeout: 60_000 });
+const RELAY = "sys.exit(m.relay(['python3', '-I', '-c', *sys.argv[2:]]))";
+const relay = (child, ...args) => harness(RELAY, child, ...args);
+const b64 = bytes => Buffer.from(bytes).toString('base64');
+const WRITE = 'import base64, os, sys\nos.write(1, base64.b64decode(sys.argv[1]))\nos.write(2, base64.b64decode(sys.argv[2]))\n';
+
+// Every frame must decode within MAX_GUEST_FRAME_BYTES and pass parseGuestFrame: hello, output frames, one exit.
+function session(run) {
+  assert.equal(run.status, 0, String(run.error ?? run.stderr));
+  const decoder = createFrameDecoder();
+  const frames = decoder.push(run.stdout).map(parseGuestFrame);
+  decoder.end();
+  assert.deepEqual(frames[0], HELLO);
+  const outputs = frames.slice(1, -1);
+  assert.deepEqual(outputs.filter(frame => frame.kind !== 'output'), []);
+  const exit = frames.at(-1);
+  assert.equal(exit.kind, 'observation');
+  const bytes = stream => Buffer.concat(outputs.filter(frame => frame.stream === stream).map(frame => frame.data));
+  return { exit, outputs, stdout: bytes('stdout'), stderr: bytes('stderr') };
+}
+
+test('S1 child bytes shaped like frames reach the host only as byte-exact output frames', { skip: NO_GUEST }, () => {
+  const out = Buffer.concat([encodeFrame(HELLO), encodeFrame(REQUEST), encodeFrame(EXIT), header(5).subarray(0, 2)]);
+  const err = Buffer.concat([encodeFrame(EXIT), encodeFrame(HELLO), header(MAX_GUEST_FRAME_BYTES + 1)]);
+  const { exit, stdout, stderr } = session(relay(WRITE, b64(out), b64(err)));
+  assert.deepEqual(stdout, out);
+  assert.deepEqual(stderr, err);
+  assert.deepEqual(exit, EXIT);
+});
+
+test('S2 the exit observation comes only from waitpid', { skip: NO_GUEST }, () => {
+  const forged = session(relay('import base64, os, sys\nos.write(1, base64.b64decode(sys.argv[1]))\nos._exit(7)\n', b64(encodeFrame(EXIT))));
+  assert.deepEqual(forged.stdout, encodeFrame(EXIT));
+  assert.deepEqual(forged.exit, { ...EXIT, code: 7 });
+  const killed = session(relay('import os, signal\nos.kill(os.getpid(), signal.SIGKILL)\n'));
+  assert.deepEqual(killed.exit, { ...EXIT, code: null, signal: 'SIGKILL' });
+  // An invoker's inherited SIGCHLD=SIG_IGN would let the kernel discard the status before waitpid reads it.
+  const ignored = session(harness(`import signal\nsignal.signal(signal.SIGCHLD, signal.SIG_IGN)\n${RELAY}`, 'import os\nos._exit(7)\n'));
+  assert.deepEqual(ignored.exit, { ...EXIT, code: 7 });
+  const run = harness(`out = [m.exit_observation(s) for s in (7 << 8, 9, 40)]
+try:
+    m.exit_observation(0x137f)
+except ValueError:
+    out.append('ValueError')
+print(json.dumps(out))`);
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(JSON.parse(run.stdout), [{ ...EXIT, code: 7 }, { ...EXIT, code: null, signal: 'SIGKILL' },
+    { ...EXIT, code: null, signal: 'SIG40' }, 'ValueError']);
+});
+
+test('S3 large interleaved output is split into ordered whole frames within the guest limit', { skip: NO_GUEST }, () => {
+  const counters = offset => {
+    const bytes = Buffer.alloc(1 << 20);
+    for (let i = 0; i < bytes.length / 4; i += 1) bytes.writeUInt32BE(offset + i, i * 4);
+    return bytes;
+  };
+  const { exit, outputs, stdout, stderr } = session(relay(`import struct, sys
+data = [b''.join(struct.pack('>I', base + i) for i in range(1 << 18)) for base in (0, 1 << 31)]
+for at in range(0, 1 << 20, 3000):
+    for stream, chunk in zip((sys.stdout.buffer, sys.stderr.buffer), data):
+        stream.write(chunk[at:at + 3000])
+        stream.flush()
+`));
+  assert.deepEqual(exit, EXIT);
+  assert.ok(stdout.equals(counters(0)) && stderr.equals(counters(2 ** 31)));
+  for (const stream of ['stdout', 'stderr']) assert.ok(outputs.filter(frame => frame.stream === stream).length > 1, stream);
+  // A body of exactly the limit encodes; one byte more is refused.
+  const run = harness(`def size(n):
+    try:
+        return len(m.encode_frame({'a': 'x' * n}))
+    except ValueError:
+        return 'ValueError'
+print(json.dumps([m.MAX_GUEST_FRAME_BYTES, m.OUTPUT_CHUNK_BYTES, size(m.MAX_GUEST_FRAME_BYTES - 8), size(m.MAX_GUEST_FRAME_BYTES - 7)]))`);
+  const [max, chunk, ...sizes] = JSON.parse(run.stdout);
+  assert.deepEqual([max, ...sizes], [MAX_GUEST_FRAME_BYTES, MAX_GUEST_FRAME_BYTES + 4, 'ValueError']);
+  // Pipe capacity caps real reads at 64 KiB, so only this bound catches a raised chunk size.
+  assert.ok(encodeFrame({ kind: 'output', stream: 'stderr', data: b64(Buffer.alloc(chunk)) }, MAX_GUEST_FRAME_BYTES).length > chunk);
+  // write_frame finishes a frame across partial writes.
+  const trickle = harness("real = os.write\nos.write = lambda fd, data: real(fd, bytes(data[:3]))\nm.write_frame(1, m.exit_observation(7 << 8))");
+  assert.deepEqual(trickle.stdout, encodeFrame({ ...EXIT, code: 7 }));
+});
+
+test('S4 the child gets /dev/null stdin and no inherited descriptor', { skip: NO_GUEST }, () => {
+  const run = harness(`os.set_inheritable(os.dup(1), True)\n${RELAY}`, `import json, os
+def held(fd):
+    try:
+        os.fstat(fd)
+    except OSError:
+        return False
+    return True
+print(json.dumps({'devnull': os.path.samestat(os.fstat(0), os.stat(os.devnull)), 'extra': [fd for fd in range(3, 256) if held(fd)]}))
+`);
+  assert.deepEqual(JSON.parse(session(run).stdout), { devnull: true, extra: [] });
+});
+
+test('S5 a child that cannot start gives EX_OSERR after hello alone, and a dead stdout gives EX_IOERR', { skip: NO_GUEST }, () => {
+  const run = harness("sys.exit(m.relay(['/nonexistent/moe-child']))");
+  assert.equal(run.status, 71, String(run.stderr));
+  const decoder = createFrameDecoder();
+  assert.deepEqual(decoder.push(run.stdout).map(parseGuestFrame), [HELLO]);
+  decoder.end();
+  const closed = harness("r, w = os.pipe()\nos.close(r)\nsys.exit(m.relay(['/nonexistent/moe-child'], w))");
+  assert.equal(closed.status, 74, String(closed.stderr));
+  assert.equal(closed.stdout.length, 0);
+});
+
+test('S6 a host that vanishes mid-stream gets EX_IOERR and the whole child process group is killed', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const child = `import os, signal, time
+signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+grandchild = os.fork()
+if grandchild == 0:
+    time.sleep(60)
+    os._exit(0)
+os.write(1, b'%d %d\\n' % (os.getpid(), grandchild))
+while True:
+    try:
+        os.write(1, bytes(65536))
+    except OSError:
+        time.sleep(60)
+`;
+  const proc = spawn('python3', ['-I', '-B', '-c', LOAD + RELAY, SUPERVISOR, child], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = once(proc, 'exit');
+  const pids = [];
+  const gone = pid => { try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; } };
+  try {
+    const decoder = createFrameDecoder();
+    for await (const chunk of proc.stdout) {
+      const output = decoder.push(chunk).map(parseGuestFrame).find(frame => frame.kind === 'output');
+      if (output) {
+        pids.push(...output.data.toString('latin1').split('\n')[0].split(' ').map(Number));
+        break;
+      }
+    }
+    assert.equal(pids.length, 2);
+    assert.ok(pids.every(pid => Number.isSafeInteger(pid) && pid > 1), String(pids));
+    assert.deepEqual(await exited, [74, null]);
+    // The orphaned grandchild may briefly be an unreaped zombie of init.
+    for (let waited = 0; waited < 5000 && !pids.every(gone); waited += 100) await sleep(100);
+    assert.deepEqual(pids.filter(pid => !gone(pid)), []);
+  } finally {
+    for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+const IMPORT_ROOTS = `import ast, json, sys
+tree = ast.parse(open(sys.argv[1], 'rb').read())
+roots = set()
+for node in ast.walk(tree):
+    if isinstance(node, ast.Import):
+        roots.update(alias.name.split('.')[0] for alias in node.names)
+    elif isinstance(node, ast.ImportFrom):
+        roots.add('.' if node.level else node.module.split('.')[0])
+print(json.dumps({'roots': sorted(roots), 'outside': sorted(roots - set(sys.stdlib_module_names))}))
+`;
+
+test('S7 the supervisor is an isolated stdlib-only script whose CLI accepts only bridge', { skip: NO_GUEST }, () => {
+  assert.equal(readFileSync(SUPERVISOR, 'latin1').split('\n')[0], '#!/usr/bin/python3 -I');
+  const { roots, outside } = JSON.parse(spawnSync('python3', ['-I', '-B', '-c', IMPORT_ROOTS, SUPERVISOR]).stdout);
+  assert.ok(roots.includes('subprocess'), String(roots));
+  assert.deepEqual(outside, []);
+  for (const args of [[], ['relay'], ['bridge', 'x'], ['BRIDGE']]) {
+    const run = spawnSync('python3', ['-I', SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
+  }
+  for (const [code, status] of [["['bridge'], geteuid=lambda: 0", 78], ["['relay'], geteuid=lambda: 0", 64], ["['bridge'], geteuid=lambda: 1000", 77]]) {
+    const run = harness(`sys.exit(m.main(${code}))`);
+    assert.deepEqual([run.status, run.stdout.length], [status, 0], `${code} ${run.stderr}`);
+  }
+});
+
+test('S8 bridge mode refuses a non-root euid without writing a frame',
+  { skip: NO_GUEST || (process.getuid() === 0 && 'the euid refusal needs a non-root test user') }, () => {
+    const run = spawnSync('python3', ['-I', SUPERVISOR, 'bridge']);
+    assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
+  });

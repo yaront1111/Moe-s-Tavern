@@ -14,10 +14,88 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-4c57a52b",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RELAY CORE, TESTS FIRST (load test-driven-development). Create scripts/local-runner/guest-supervisor.py and append supervisor tests S1-S4 to scripts/tests/local-runner-bridge.test.mjs. Write the tests first and watch them fail: the .py is absent, so each spawn fails, while B1-B15 stay green.\n\nSUPERVISOR FILE\nUse LF line endings only. A CR after -I breaks the shebang; .gitattributes already forces eol=lf.\n- Line 1 is exactly `#!/usr/bin/python3 -I`. A short header follows. It says guest-bootstrap.mjs buildUserData installs these bytes at GUEST_LAYOUT.supervisor; guest-bridge.mjs is the protocol source of truth; this process is the ONLY writer of its stdout. It also gives the exit-code table: 0, 64, 71, 74, 77, 78 (steps 2-3).\n- Imports are stdlib only: base64, json, os, selectors, signal, struct, subprocess, sys. Use Python 3.9-compatible syntax: the guest runs 3.12, but a host test python3 may be older.\n- Constants: PROTOCOL = 1. MAX_GUEST_FRAME_BYTES = 262144, mirroring guest-bridge.mjs. OUTPUT_CHUNK_BYTES = 65536; base64 grows it to 87,384 bytes plus a 45-byte JSON envelope, far inside the limit.\n- encode_frame(value): json.dumps(value, separators=(',', ':')), which is ASCII by default. Raise ValueError when the body exceeds MAX_GUEST_FRAME_BYTES. Prefix struct.pack('>I', len(body)).\n- write_frame(fd, value): loop os.write over a memoryview until every byte is written, handling partial writes, so each frame is whole.\n- exit_observation(status) is pure:\n  - WIFSIGNALED gives {kind:'observation', type:'exit', code: None, signal: signal.Signals(n).name}. When the number has no name (Linux real-time signals such as 40), signal is 'SIG%d' % n.\n  - WIFEXITED gives code WEXITSTATUS and signal None.\n  - Any other status raises ValueError.\n- relay(argv, out_fd=1) -> int:\n  1. Write hello {kind:'hello', protocol:1} FIRST.\n  2. Start subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=PIPE, stderr=PIPE, start_new_session=True). close_fds keeps its default True, and the default restore_signals gives the child SIGPIPE back.\n  3. Run ONE single-threaded selectors.DefaultSelector loop over the two pipe fds, with no thread. os.read(fd, OUTPUT_CHUNK_BYTES): non-empty data becomes write_frame {kind:'output', stream:'stdout'|'stderr', data: base64.b64encode(chunk).decode('ascii')}; b'' unregisters the fd. Never send an empty data frame, which guest-bridge rejects.\n  4. After EOF on both pipes: status = os.waitpid(child.pid, 0)[1]. This is the ONLY source of the exit frame. Set child.returncode = os.waitstatus_to_exitcode(status) so subprocess never reaps again.\n  5. Write exit_observation(status) and return 0.\n- Never call print or write to sys.stdout.\n\nTESTS\nAppend after B15 in the B1-B15 style: compact, table-driven, node:assert/strict. Reuse the existing HELLO, REQUEST, EXIT and header(); do not redeclare them. Add the needed node: imports.\n- Define `const NO_GUEST = process.platform === 'win32' && 'the guest supervisor runs only in the Linux guest (POSIX python3)'` and put `{ skip: NO_GUEST }` on every S test. If python3 is missing on a non-win32 host, the tests must FAIL, not skip.\n- Loader harness. Bridge mode needs root and has no job source yet, so tests import the REAL file: spawnSync('python3', ['-I', '-B', '-c', LOAD + code, SUPERVISOR, ...args], { maxBuffer: 64 MiB, timeout: 60 s }). LOAD runs importlib.util.spec_from_file_location('moe_supervisor', sys.argv[1]), then module_from_spec and exec_module.\n  - -B is mandatory: both IDE bundlers copy scripts/local-runner wholesale, so a __pycache__ there would ship.\n  - Children are ['python3', '-I', '-c', code, ...args]. Pass bytes as base64 argv, because the child's stdin is /dev/null.\n- session(run) helper:\n  - assert run.status === 0;\n  - decode stdout with createFrameDecoder(), whose default bound is MAX_GUEST_FRAME_BYTES; map parseGuestFrame over EVERY frame; call end();\n  - assert frames[0] deep-equals HELLO, the last frame is the only observation, and every frame between is output;\n  - return { exit, stdout, stderr }, with each stream's bytes joined by Buffer.concat.\n  Every test then proves that every frame is valid and inside the limit.\n- S1 (DoD 1): the child writes to stdout encodeFrame(HELLO) + encodeFrame(REQUEST) + encodeFrame(EXIT) + the first 2 bytes of a header, and to stderr encodeFrame(EXIT) + encodeFrame(HELLO) + header(MAX_GUEST_FRAME_BYTES + 1). Assert each stream's bytes deep-equal what the child wrote, and exit is code 0, signal null.\n- S2 (DoD 2):\n  - a child that writes encodeFrame(EXIT) (code 0) and then calls os._exit(7) yields exit {code: 7, signal: null};\n  - a child that SIGKILLs itself yields {code: null, signal: 'SIGKILL'};\n  - through the harness, exit_observation on raw statuses 7 << 8, 9 and 40 gives code 7, 'SIGKILL' and 'SIG40'.\n- S3 (DoD 3): the child writes 1 MiB of 32-bit big-endian counters to stdout and 1 MiB of counters offset by 2^31 to stderr, in alternating 3000-byte flushed writes. Assert:\n  - each stream's bytes are exact (JS builds the same buffers);\n  - each stream has more than one output frame;\n  - the harness-read m.MAX_GUEST_FRAME_BYTES equals MAX_GUEST_FRAME_BYTES;\n  - encodeFrame of an output frame carrying m.OUTPUT_CHUNK_BYTES bytes succeeds at MAX_GUEST_FRAME_BYTES. Pipe capacity caps real reads at 64 KiB, so only this assertion catches a raised chunk size.\n- S4 child isolation: the harness first runs os.set_inheritable(os.dup(1), True), simulating an invoker that leaked a duplicate of the host stream, then calls relay. The child prints JSON {devnull: os.path.samestat(os.fstat(0), os.stat(os.devnull)), extra: [the fds in 3..255 that os.fstat accepts]}. Assert {devnull: true, extra: []}.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "RED first: S1-S4 failed with FileNotFoundError on the absent .py while B1-B15 stayed green. GREEN: new guest-supervisor.py (shebang `#!/usr/bin/python3 -I`, stdlib only, encode_frame/write_frame/exit_observation/relay with one selectors loop, waitpid-only exit frame). Gate env (env -i, Linux node 24.21.0): 19/19 pass, 0 skipped; no scripts/local-runner/__pycache__. S2 also checks a stopped status raises ValueError. Shared checkout has 534 unrelated dirty paths from other sessions; untouched.",
+      "startedAt": "2026-10-26T05:03:02.433Z",
+      "completedAt": "2026-10-26T05:05:03.746Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "ERROR HANDLING: FAIL CLOSED ON SPAWN AND OUTPUT FAILURE, with tests, in relay():\n- If writing hello raises OSError, return os.EX_IOERR (74) before any child exists.\n- If Popen raises OSError (a missing or non-executable program), return os.EX_OSERR (71). Hello was already written. Never fabricate an observation and write no further frame.\n- After spawn, any OSError returns os.EX_IOERR. That covers EPIPE or ECONNRESET on a frame write (CPython ignores SIGPIPE, so a gone host raises BrokenPipeError) and a failed pipe read.\n- Structure it as try / except OSError / finally with a `reaped` flag. On EVERY path that leaves the child unreaped (KeyboardInterrupt or any other exception included), the finally does:\n  1. os.killpg(child.pid, signal.SIGKILL), suppressing ProcessLookupError only. The unreaped leader keeps the group id from being reused.\n  2. os.waitpid(child.pid, 0).\n  It never signals after reaping, and it always closes both pipe file objects.\n\nTESTS (appended, `{ skip: NO_GUEST }`)\n- S5: relay(['/nonexistent/moe-child']) gives status 71, and the decoded stdout is exactly [HELLO].\n- S6, async with { timeout: 30_000 }:\n  - spawn (not spawnSync) the harness with stdio ['ignore', 'pipe', 'inherit'], and attach once(proc, 'exit') BEFORE reading;\n  - the child sets SIGPIPE to SIG_IGN; forks a grandchild that sleeps 60 s; writes `<pid> <grandchild pid>\\n`; then loops os.write(1, 64 KiB), and on OSError sleeps 60 s, so only a kill ends it;\n  - read frames until the first output frame, parse both pids, and break out of the for-await, which destroys the read end;\n  - assert exit code 74;\n  - poll process.kill(pid, 0) every 100 ms for up to 5 s until ESRCH on BOTH pids, because the grandchild may briefly be an unreaped zombie of init;\n  - in finally, SIGKILL both pids and ignore errors.\n  An architect prototype showed that os.kill in place of os.killpg leaves the grandchild alive, so this test kills that mutant.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "RED: S5 failed on the FileNotFoundError traceback (status 1) and S6 on a non-74 exit. GREEN: relay now returns 74 when the hello write fails (before any spawn), 71 when Popen raises OSError (hello alone, no observation), and 74 on any OSError after spawn. A try/finally with a `reaped` flag runs killpg(SIGKILL), suppressing ProcessLookupError only, then waitpid on every unreaped path, never signals after reaping, and always closes both pipes. pump()/reap() helpers keep relay under 50 lines. S5 also covers the hello-write EPIPE path: a closed-reader pipe gives 74 with empty stdout. Gate env: 21/21 pass, 0 skipped; no __pycache__.",
+      "startedAt": "2026-10-26T05:05:38.307Z",
+      "completedAt": "2026-10-26T05:06:05.171Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "CLI ENTRY AND EUID GATE, with tests. Add main(argv, geteuid=os.geteuid) and `if __name__ == '__main__': sys.exit(main(sys.argv[1:]))`.\n\nOrder:\n1. argv != ['bridge'] returns os.EX_USAGE (64).\n2. geteuid() != 0 returns os.EX_NOPERM (77).\n3. Otherwise return os.EX_CONFIG (78), with a comment: the job a bridge session runs comes from the CQ-R10/R11 job tables, so until one exists a root bridge fails closed.\n\nRules:\n- No path here writes to stdout. One fixed stderr line is optional.\n- bridgeArgv passes exactly `bridge`; accept nothing else. Add no test or relay CLI mode; tests reach relay only through the loader.\n- geteuid is injectable from Python only, like `digest` in guest-bootstrap.mjs, never from argv or the environment.\n\nTESTS (appended)\n- S7 (DoD 4), `{ skip: NO_GUEST }`:\n  - the file's first line, split on '\\n' so a CR fails, is exactly '#!/usr/bin/python3 -I';\n  - a `python3 -I -B -c` ast walk of the file lists the import roots; assert the list is non-empty, includes 'subprocess', and every root is in sys.stdlib_module_names;\n  - spawnSync('python3', ['-I', SUPERVISOR, ...args]) for [], ['relay'], ['bridge', 'x'] and ['BRIDGE'] gives status 64 with stdout length 0;\n  - through the harness, m.main(['bridge'], geteuid=lambda: 0) gives 78, and m.main(['relay'], geteuid=lambda: 0) gives 64, both with empty stdout.\n- S8 (DoD 4): skip with a visible reason when process.getuid() === 0, using `{ skip: NO_GUEST || (process.getuid() === 0 && 'the euid refusal needs a non-root test user') }`. Otherwise spawnSync python3 -I SUPERVISOR bridge gives status 77 and stdout length 0.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "RED: S7 failed with status 0 instead of 64 because there was no main, and S8 the same way. GREEN: main(argv, geteuid=os.geteuid) returns 64 unless argv == ['bridge'], 77 for a non-root euid, and otherwise 78 (no job source until CQ-R10/R11). The `__main__` guard calls sys.exit(main(sys.argv[1:])), and no path writes stdout. S7 checks the shebang, that the ast import roots are inside sys.stdlib_module_names, the four 64 cases, and harness main() giving 78, 64 and 77 (injected euid 1000, so the euid check is still covered when the runner is root). S8 checks real non-root `bridge` gives 77. Gate env as uid 1000: 23/23 pass, 0 skipped; no __pycache__.",
+      "startedAt": "2026-10-26T05:06:23.289Z",
+      "completedAt": "2026-10-26T05:06:44.419Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY, ONCE. Run fresh from the repo root in the local-runner gate environment (Serena gotcha-local-runner-tests): env -i HOME=\"$HOME\" PATH=<Linux node 24 bin>:/usr/local/bin:/usr/bin:/bin. Linux python3 must resolve from /usr/bin. The command is\n  node --test scripts/tests/local-runner-bridge.test.mjs\nIt must exit 0 with 23 tests (B1-B15 and S1-S8), 0 failures and 0 skipped as a non-root Linux user. That output is the complete_task evidence.\n\nAlso run these checks; they are not the evidence:\n- Windows node from the repo root, `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/local-runner-bridge.test.mjs`: B1-B15 pass and S1-S8 are skipped with the win32 reason, as windows-latest CI will show.\n- Read-only: scripts/local-runner/__pycache__ does not exist.\n- guest-bridge.mjs, every other scripts/local-runner file, scripts/tests/local-runner.test.mjs and .github/workflows/ci.yml are byte-identical to HEAD (git diff --quiet on those paths).\n- The slice is well under the 400-net-LOC review limit: aim for about 110 runtime lines and 170 test lines; check with wc -l and git diff --numstat.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Fresh gate run: env -i, Linux node v24.21.0, python3 from /usr/bin, uid 1000. `node --test scripts/tests/local-runner-bridge.test.mjs` exit 0: 23 tests, 23 pass, 0 fail, 0 skipped. Windows node.exe: exit 0, 15 pass, 8 skipped (S1-S8, each with the 'Linux guest (POSIX python3)' reason). No scripts/local-runner/__pycache__. guest-bridge.mjs, local-runner.test.mjs and ci.yml are byte-identical to HEAD, and git status under scripts/local-runner and scripts/tests shows only my two paths. Size: 113 runtime + 179 test = 292 net LOC, under 400. No files changed in this step.",
+      "startedAt": "2026-10-26T05:06:47.912Z",
+      "completedAt": "2026-10-26T05:07:00.602Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW (load adversarial-self-review). Read the diff as a hostile child process and as a host that vanishes mid-stream.\n\nMutation probes: run them in a /tmp `git archive HEAD | tar -x` snapshot with your two files copied in, never in the shared checkout. Confirm each mutant turns a test red:\n- raw passthrough of child bytes;\n- hello written after spawn;\n- an observation built from child data, or written before EOF and waitpid;\n- stdin not DEVNULL;\n- close_fds=False;\n- killpg replaced by kill;\n- start_new_session dropped (S6 hangs until its timeout);\n- OUTPUT_CHUNK_BYTES raised to 196608 or more;\n- the 'SIG%d' fallback removed;\n- the euid check removed, or switched to os.getuid (the injected-geteuid case catches it).\nFor any survivor, either show it is equivalent and give the reason, or add the missing assertion.\n\nAlso confirm:\n- nothing writes to fd 1 except write_frame (grep for print( and sys.stdout);\n- the diff contains no globalRails.forbiddenPatterns entry, in Python and test strings alike. The JS eval-call pattern also matches Python's literal_eval call, and the double-underscore proto key counts too;\n- every exception path either returns a documented exit code or kills and reaps the child;\n- no __pycache__ exists anywhere under scripts/.\nIf any byte changed, re-run step 4's command and submit that fresh output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial review found one real defect, fixed test-first. An inherited SIGCHLD=SIG_IGN (it survives exec) let the kernel auto-reap the child: waitpid raised ECHILD, and the finally reap then raised ChildProcessError (exit 1, no observation). relay now resets SIGCHLD to SIG_DFL; a new S2 case shows it was red before the fix.\nMutation sweep, 21 mutants, in a /tmp git-archive snapshot (never the shared tree). All 10 planned mutants went red: raw passthrough, hello after spawn, observation constant or before EOF, stdin inherited, close_fds=False, killpg→kill (S6), start_new_session dropped (S6 timeout), chunk 196608 (S3), SIG%d fallback removed (S2), euid check removed (S7/S8), euid→os.getuid (S7). So did the extras: SIGCHLD reset removed, empty frame, reaped flag removed, 74→0, 71→1, hello OSError unhandled, argv prefix match.\nTwo survivors were fixed with test-only assertions in S3: the encode_frame limit guard (exact-limit body encodes, +1 refused) and the partial-write loop (an os.write that trickles 3 bytes still yields byte-exact frames). Final sweep: 21/21 killed.\nChecks: no print( or sys.stdout writes; no forbiddenPatterns in either diff; no __pycache__ under scripts/; LF only. Every exception path either returns a documented code or kills (killpg) and reaps the child.\nOut of scope, commented on CQ-R08 task-7a774656: host EOF while the child is silent (CQ-R08c stdin in the selector), and SIGTERM/SIGHUP teardown.\nFresh gate re-run after the byte changes: exit 0, 23/23, 0 skipped. Windows node: 15 pass, 8 skipped. Size: 115 runtime + 191 test = 306 net LOC.",
+      "startedAt": "2026-10-26T05:07:02.663Z",
+      "completedAt": "2026-10-26T05:14:39.910Z"
+    }
+  ],
+  "planRevision": 11,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -32,11 +110,55 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:33:26.853Z",
-  "updatedAt": "2026-10-25T23:10:00.404Z",
+  "updatedAt": "2026-10-26T05:15:06.894Z",
   "metrics": {
-    "firstClaimAt": "2026-10-25T23:09:57.694Z"
+    "firstClaimAt": "2026-10-25T23:09:57.694Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-4c57a52b"
-  ]
+    "architect-4c57a52b",
+    "worker-7d158765"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T05:02:00.316Z",
+  "planningNotes": {
+    "approachesConsidered": "- A single-threaded selectors loop instead of one reader thread per stream. write_frame stays the only writer without a lock, so frames cannot interleave. Backpressure is natural: a slow host blocks os.write, the pipes fill, and the child blocks.\n- subprocess.Popen instead of os.posix_spawn. Popen closes every inherited fd >= 3 (close_fds), restores SIGPIPE in the child, raises exec failure as OSError, and start_new_session gives a killable process group. posix_spawn has no close-all.\n- EOF on both pipes, then waitpid, instead of pidfd or SIGCHLD wakeups. It is portable to macOS, which CI runs, and all output precedes the observation. The trade-off: a descendant that keeps a pipe open delays the observation until it exits. Job-tree teardown belongs to CQ-R10/R11.\n- Tests import the real file with importlib under python3 -I -B, instead of a test/relay CLI mode or an env/argv bypass of the euid gate. The production CLI accepts only `bridge` (bridgeArgv), which needs root and has no job until R10/R11.\n- A root bridge with no job fails closed with EX_CONFIG rather than inventing a job source, which is out of scope.\n- A prototype in the architect scratchpad (2026-10-26) passed every planned test on Linux python3 3.12.3 against the real guest-bridge.mjs decoder. It also showed that the close_fds=False and killpg-to-kill mutants are caught.",
+    "codebaseInsights": "- guest-bridge.mjs (R08a, 17bc7ac) is the wire contract.\n  - A frame is a 4-byte big-endian length plus UTF-8 JSON of one plain object; a guest body is at most 262144 bytes.\n  - Output data must be NON-EMPTY canonical base64. Python base64.b64encode matches Node's round trip.\n  - An observation needs both the code and signal keys, with exactly one of them null. code is 0-255 and signal matches /^SIG[A-Z0-9]{1,15}$/.\n  - parseGuestFrame returns output data as a Buffer, never parsed.\n- guest-bootstrap.mjs buildUserData installs the supervisor bytes (MAX_SUPERVISOR_BYTES 262144) at /opt/moe/bin/moe-supervisor as root:root 0500, and guest-readiness compares its sha256. That wiring is out of scope.\n- bridgeArgv is `exec --no-map-working-directory <name> -- sudo -n /opt/moe/bin/moe-supervisor bridge`.\n- Both IDE bundlers copy scripts/local-runner wholesale, minus test patterns. The .py ships automatically, and any __pycache__ would ship too.\n- ci.yml build-all-platforms runs local-runner-bridge.test.mjs on ubuntu, windows and macos ('Test local runner prerequisite bundles'). Use portable APIs only: no /proc, pidfd or SO_PEERCRED here.",
+    "risks": "- A CR in the shebang breaks `-I`.\n- Importing the file without -B creates scripts/local-runner/__pycache__, which then ships in the bundles.\n- Mixing Popen with our own waitpid: set child.returncode after reaping.\n- Never killpg after reaping, because the pgid could be reused. Use the reaped flag.\n- A grandchild can linger briefly as a zombie, so poll for ESRCH.\n- Attach the 'exit' listener before reading stdout.\n- Pipe capacity caps every read at 64 KiB, so only S3's constant assertion catches a raised chunk size.\n- Exit codes are a contract for the CQ-R08 host session: 0 relay complete; 64 usage; 71 child failed to start (hello, then EOF, with no observation); 74 I/O failure (child group killed); 77 not root; 78 root with no job.\n- For CQ-R08c: add the agent socket, its connections and stdin (host frames) to the SAME selector loop, and keep write_frame as the only stdout writer.\n- The global forbiddenPatterns apply to Python and test strings too: the JS eval-call pattern (Python's literal_eval call contains it) and the double-underscore proto key.\n- Do not edit guest-bridge.mjs, local-runner.test.mjs or ci.yml.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T05:02:00.412Z",
+  "workStartedAt": "2026-10-26T05:03:02.433Z",
+  "reviewStartedAt": "2026-10-26T05:15:06.892Z",
+  "verification": {
+    "command": "node --test scripts/tests/local-runner-bridge.test.mjs",
+    "exitCode": 0,
+    "outputTail": "(env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin; python3=/usr/bin/python3 3.12.3; uid 1000; repo root)\n✔ B1 ✔ B2 ✔ B3 ✔ B4 ✔ B5 ✔ B6 ✔ B7 ✔ B8 ✔ B9 ✔ B10 ✔ B11 ✔ B12 ✔ B13 ✔ B14 ✔ B15 ✔ S1 ✔ S2 ✔ S3 ✔ S4 ✔ S5 ✔ S6 ✔ S7 ✔ S8\nℹ tests 23\nℹ suites 0\nℹ pass 23\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 915.315926\nexit=0",
+    "reportedAt": "2026-10-26T05:15:06.892Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "completionSummary": "CQ-R08b delivered: new scripts/local-runner/guest-supervisor.py (115 lines; LF; `#!/usr/bin/python3 -I`; stdlib only) and tests S1-S8 appended to scripts/tests/local-runner-bridge.test.mjs (+191). Net 306 LOC. guest-bridge.mjs, local-runner.test.mjs and ci.yml are untouched.\n\nSupervisor: hello first; Popen with stdin=DEVNULL, piped stdout/stderr, start_new_session=True and close_fds; one selectors loop with write_frame as the only stdout writer, which loops over partial writes. Child bytes go out only as base64 output frames of at most 64 KiB; empty reads unregister the fd. After EOF on both pipes, waitpid alone produces the exit observation (SIG%d fallback for unnamed signals). Exit codes: 0 done, 64 usage, 71 spawn failed (hello only), 74 I/O failure, 77 not root, 78 root bridge with no job. On every unreaped path the finally runs killpg(SIGKILL) then reaps. main() accepts only ['bridge'], with geteuid injectable from Python only.\n\nDoD:\n1. S1: hello, request, observation and partial or oversize headers on stdout and stderr come back byte-exact, only inside output frames.\n2. S2: a forged exit-0 followed by exit 7 yields exactly one observation, code 7. SIGKILL yields signal SIGKILL with a null code. Raw statuses check 7, SIGKILL, SIG40 and ValueError.\n3. Every frame decodes within MAX_GUEST_FRAME_BYTES and passes parseGuestFrame (session()). S3 covers 2×1 MiB of interleaved counters, ordered and split, plus the chunk bound, the exact-limit boundary and partial-write completion.\n4. S7/S8: shebang, stdlib-only imports by ast walk, the 64 cases, root gives 78, and non-root bridge gives 77 with empty stdout.\n5. Fresh run above: 23/23, 0 skipped. Windows node: 15 pass, 8 skipped with the win32 reason.\n\nBeyond plan: relay resets SIGCHLD to SIG_DFL, because an inherited SIG_IGN broke waitpid; this was red-tested. Mutation sweep in a /tmp snapshot: 21/21 killed, including all 10 planned probes. Out-of-scope gaps (host EOF while the child is silent → CQ-R08c stdin; SIGTERM/"
 }
