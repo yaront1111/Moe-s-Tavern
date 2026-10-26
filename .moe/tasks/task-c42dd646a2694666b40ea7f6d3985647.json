@@ -13,43 +13,72 @@
     {
       "stepId": "step-1",
       "description": "Add restart regressions to RuntimeSelectionPolicyTest using its existing service/project/status fixtures and a proposed injected supervisor ProcessHandle resolver returning inert spy handles. Cover PROTECTED unrecorded PID, stale start/PID reuse, another project's record, empty daemon.json projectPath, missing start information and malformed-profile fail-closed selection: zero destroy calls. Cover a recorded supervisor/direct child allowed exactly once, dead/absent process allowing stale metadata cleanup, and LEGACY unrecorded live PID preserving its prior signal/cleanup/reconnect semantics. Exercise real service.restartDaemon on refusal: metadata bytes preserved, refusal status visible, no new process start or retry/backoff reset. Test resolver/signal exceptions and destroy=false under protected vs legacy; never call destroy on the test JVM or any external process.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Added restart regressions R1-R4 to RuntimeSelectionPolicyTest (+172/-3). They drive the real service.restartDaemon() through a reflection-injected supervisor (the same pattern G4 uses) whose new processLookup returns inert SignalSpy proxies. destroy is only recorded and never reaches a process.\n- R1 PROTECTED refusals, zero destroys: unrecorded, pid reused (stale start), another project's record, spawn without a start instant, blank daemon.json projectPath, unreadable project.json (real profile).\n- R2: LEGACY unrecorded live pid signaled once and restarted. PROTECTED recorded supervisor and its direct child (a real `sort` child, spy-signaled) each stopped exactly once.\n- R3: dead, vanished, and pid 0/-1 under both profiles: no lookup, no signal, stale daemon.json removed, restart goes on.\n- R4: lookup throws, destroy throws, destroy=false. PROTECTED refuses, LEGACY continues.\nA refusal asserts daemon.json bytes kept, nothing started, statuses exactly [Disconnected, refusal], spawn attempts untouched (preset to Int.MAX_VALUE), no reconnect timer.\nTests pin the restart-refusal text. supervisorFor gained trailing alive/lookup params (defaults unchanged for existing tests).\nRED: these reference the step-2 supervisor parameter, so they compile only after step 2. The meaningful RED run (supervisor API present, service not yet wired) is done in step 2.\nEvery test pid is the test JVM's own (the JDK refuses to destroy the current process), its own `sort` child, or 0/-1, so even the pre-fix path cannot signal an external process.\nDirty peer paths in the shared checkout left untouched.",
+      "startedAt": "2026-10-26T16:51:00.747Z",
+      "completedAt": "2026-10-26T17:02:48.177Z"
     },
     {
       "stepId": "step-2",
       "description": "Move only the restart PID-signal operation into a small supervisor method (proposed stopDaemonForRestart(info): String?, null = may continue, string = refusal). Add an optional trailing ProcessHandle lookup constructor dependency defaulting to ProcessHandle.of(pid).orElse(null), consistent with current probes. Preserve the existing live/dead decision; capture a live target handle once, require activationRefusal(info)==null under the protected profile immediately before signaling, then destroy that captured handle rather than resolving the PID again. Missing/dead handle is no signal. Under PROTECTED a provenance refusal or lookup/signal error/false destroy fails closed with a bounded actionable reason; error handling must not fall through to cleanup or reconnect. LEGACY keeps the old best-effort signal behavior, including continuing after signal failure. Do not use argv, repo metadata ownership claims, killSpawnedDaemon fallback or a new trust mechanism. Keep a short why-comment explaining repository metadata is not authority.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "MoeDaemonSupervisor: added a trailing constructor dependency, processLookup: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) }, and stopDaemonForRestart(info): String? (null = continue, string = refusal), +33 lines.\nOrder of the method:\n1. The existing liveness decision (isProcessAlive), plus a non-positive pid guard.\n2. Read the profile once.\n3. Capture the handle once.\n4. Under PROTECTED, require activationRefusal(info) == null (that is, RuntimeSelectionPolicy.verifyProvenance) right before signaling.\n5. destroy() the captured handle, never re-resolving the pid. The JDK handle carries its start time, so a process that took over the pid is never signaled.\nFail-closed handling under PROTECTED: a null handle means no signal (continue). Provenance refusal, a lookup or destroy exception, or destroy()==false return a bounded refusal (pid plus fixed text, never exception text). The text never calls the process a Moe daemon and says to identify/stop it yourself, then Restart Daemon.\nLEGACY: best-effort destroy, exceptions swallowed (now logged), always continues. Same as before.\nExplicit legacy decision, tested in R3: pid <= 0 is never looked up or signaled under either profile. An absent pid deserializes to 0, and kill(2) treats 0/-1 as process groups (the JDK would signal the IDE's own group on macOS for pid 0). On Windows/Linux, ProcessHandle.of(0/-1) is already empty, so behavior there is unchanged.\nNo argv, no killSpawnedDaemon fallback, no new trust mechanism.\nRED run (focused, under the jetbrains-gradle lease): `MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun --tests com.moe.util.RuntimeSelectionPolicyTest\"` exit 1. 29 tests, 4 failed (R1-R4), 0 errors. Each failed for the right reason, because the service is not yet wired:\n- R1: unrecorded protected pid, daemon.json deleted (expected kept).\n- R4: protected lookup-throws restart proceeded.\n- R2/R3: the old service ignores the supervisor lookup (spy never asked).",
+      "startedAt": "2026-10-26T17:02:50.871Z",
+      "completedAt": "2026-10-26T17:04:09.796Z"
     },
     {
       "stepId": "step-3",
       "description": "Route restartDaemon through that supervisor stop method and remove its direct ProcessHandle.destroy path. After existing disconnect, if a stop refusal is returned, publishStatus(false, reason) and return before deleting daemon.json, resetting spawn/reconnect state or calling connect. Otherwise retain current stale-file deletion/backoff/reconnect flow. Missing or malformed metadata must never supply a signal target; preserve readDaemonInfo compatibility rather than changing global discovery rules. Keep UI guidance clear that an unverified process must be independently identified/stopped; no claim that a PID read from the repo is the daemon. Extend the tests from step 1 to pin the real service wiring and allowed branch; no test-only alternate restart implementation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "MoeProjectService.restartDaemon now routes through daemonSupervisor.stopDaemonForRestart(info) (+5/-5). The direct ProcessHandle.of(pid).destroy() path is gone, so the service has no ProcessHandle signal site left.\nOn refusal, after the existing disconnect(), it calls log.warn and publishStatus(false, reason), then returns. It returns before deleting daemon.json, resetSpawnBackoff, the reconnectAttempts reset and connect(). Otherwise the stale-file deletion, backoff reset and reconnect flow is unchanged.\nreadDaemonInfo is unchanged (global discovery compatibility kept). A blank projectPath still reads, but provenance decides (R1 row). Missing or malformed metadata never supplies a target: unreadable or absent daemon.json gives null, and pid<=0 gives no lookup.\nTests: SignalSpy now also records lookups. R2 asserts exactly one lookup and one destroy per allowed restart, pinning that the checked handle is the destroyed handle. R3 uses the spy's lookup record.\nAll tests go through the real service.restartDaemon wiring. There is no test-only restart implementation.\nGREEN (focused, lease held): `MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun --tests com.moe.util.RuntimeSelectionPolicyTest\"` exit 0. 29 tests, 0 failures, 0 errors, fresh XML 17:05:39Z (compileTestKotlin re-ran).\nMutation probes, 9/9 killed by the intended tests, sources sha-restored:\n- M1 service falls through after a refusal: R1, R4.\n- M2 re-resolve the pid for destroy: R2.\n- M3 no pid<=0 guard: R3.\n- M4 destroy=false accepted: R4.\n- M5 legacy does not signal: R2, R4.\n- M6 protected swallows errors: R4.\n- M7 provenance skipped: R1.\n- M8 backoff reset on refusal: R1, R4.\n- M9 vanished pid refused: R3.\nSize so far: supervisor +36/-1, service +5/-5, test +176/-3.",
+      "startedAt": "2026-10-26T17:04:10.961Z",
+      "completedAt": "2026-10-26T17:07:30.484Z"
     },
     {
       "stepId": "step-4",
       "description": "Single verification gate: acquire jetbrains-gradle lease and from repository root run exactly `(cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\")`; release lease even on failure. This is the native-Windows equivalent of the task's ./gradlew test on this WSL host without Java. Require :test actually executes, fresh XML contains the new protected/legacy restart tests, and zero test failures/errors. Supply fresh command/exitCode/outputTail to complete_task. No daemon/proxy regression for this Kotlin-only mid-epic task. Tests use fake signal targets and temporary metadata on all platforms, not OS kill commands.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Single verification gate run under the jetbrains-gradle lease (acquired 17:03:20Z, released after the run). Command, from the repo root: `(cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\")`. This is the native-Windows form of `cd moe-jetbrains && ./gradlew test`; this WSL host has no Java.\nResult: EXIT=0, BUILD SUCCESSFUL in 8s. `> Task :test` executed (not UP-TO-DATE). :compileKotlin re-ran on the restored, unmutated sources.\nFresh XML, all timestamps at or after the 17:07:41Z start: 21 classes, 306 tests, 0 skipped, 0 failures, 0 errors. The baseline at CQ-R01 was 280; the board/contract tasks since then plus R1-R4 add up to 306.\nR1-R4 (protected and legacy restart) are present in TEST-com.moe.util.RuntimeSelectionPolicyTest.xml.\nNo daemon/proxy suites were run: this is a Kotlin-only mid-epic task. The tests use spy handles and temporary metadata only, with no OS kill commands.",
+      "startedAt": "2026-10-26T17:07:31.634Z",
+      "completedAt": "2026-10-26T17:08:13.888Z"
     },
     {
       "stepId": "step-5",
       "description": "Final adversarial self-review once with adversarial-self-review: trace every restart signal and refusal path; verify forged metadata including blank projectPath cannot authorize protected kill, PID/start/project identity is checked by existing policy, captured handle is not replaced after authorization, and failed signals cannot continue protected cleanup. Check repeated/concurrent restart, dead-process disappearance, malformed settings, null/missing metadata and exact legacy behavior. Inspect both service and supervisor tests against production wiring, not an unused helper. This does not certify OS-atomic restart/port binding or enable verified-local; those CQ-R13 concerns remain. If review changes code, rerun the same gate before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "note": "Adversarial self-review of this task's diff only (supervisor, service and test). No behavior defects found. Two comment-only edits so the comments no longer overclaim: the supervisor comment now describes the JDK start-time check instead of \"never\", and the R2 comment says the captured handle is the one destroyed. Because bytes changed, the same gate was re-run under a fresh lease (17:10:34Z, released): `(cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\")` EXIT=0. :compileKotlin, :compileTestKotlin and :test executed. 21 classes, 306 tests, 0 skipped/failures/errors, no XML older than 17:10:39Z, R1-R4 present. git diff --check is clean, LF endings.\nTraced and confirmed:\n- Forged metadata cannot authorize a protected kill. A blank projectPath reads but provenance is keyed to this project's basePath, never info.projectPath (R1). A mismatched projectPath is deleted by discovery and never signaled. Missing or malformed JSON, or a missing projectPath (Gson null, NPE caught), returns null. An absent pid reads as 0 and is guarded. A non-int pid is a Gson error and returns null.\n- PID, start and project identity come from the existing verifyProvenance (unrecorded, stale-start, other-project and no-start rows in R1).\n- The captured handle is the destroyed handle, one lookup (R2; mutant M2 killed).\n- Failed or false signals refuse before cleanup (R4; M1, M4, M6 killed). An Error from lookup/destroy unwinds out of restartDaemon before any cleanup.\n- Legacy is unchanged except the explicit, tested pid<=0 guard plus a warn log (R2/R3/R4).\n- No test reaches the default lookup. Pids used are the JVM's own, its `sort` child, or 0/-1.\n- The service tests drive the production restartDaemon and supervisor method.\nTheoretical, left as is:\n(a) verifyProvenance reads fresh facts by pid. A reuse between capture and check is caught by the JDK start-time check on destroy (false, so PROTECTED refuses). Unknown start times also fail provenance.\n(b) Two concurrent restarts: the second can briefly publish \"the stop request failed\" after the first stopped the daemon; fail-closed and transient.\n(c) A recorded daemon exiting between lookup and check gets the \"did not start it\" refusal; a retry proceeds.\n(d) Pre-existing: restart kills only the `_run` pid, not a live `start` supervisor (same as legacy; CQ-R13 owns restart atomicity and port binding).\nFiled out of scope: task-4f1e37f30ee548298b26e17c0b6ea84e (LOW, dependsOn this task): readDaemonInfo has no size cap on a repository-supplied daemon.json.",
+      "startedAt": "2026-10-26T17:08:14.955Z",
+      "completedAt": "2026-10-26T17:11:33.398Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 11,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -72,21 +101,29 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:19:07.202Z",
-  "updatedAt": "2026-10-26T16:07:17.218Z",
+  "updatedAt": "2026-10-26T17:12:18.458Z",
   "contextFetchedBy": [
     "qa-b0c1741e",
-    "architect-1520cc31"
+    "architect-1520cc31",
+    "worker-3729a0d6"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-26T16:04:04.307Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T16:07:17.130Z",
   "planningNotes": {
@@ -99,5 +136,20 @@
       "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
     ]
   },
-  "planApprovedAt": "2026-10-26T16:07:17.218Z"
+  "planApprovedAt": "2026-10-26T16:07:17.218Z",
+  "workStartedAt": "2026-10-26T16:51:00.747Z",
+  "reviewStartedAt": "2026-10-26T17:12:18.455Z",
+  "verification": {
+    "command": "(cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\")  (= cd moe-jetbrains && ./gradlew test; this WSL host has no Java, so Gradle runs through Windows cmd.exe; run under the jetbrains-gradle lease)",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\n> Task :compileJava NO-SOURCE\n> Task :classes UP-TO-DATE\n> Task :jar UP-TO-DATE\n> Task :composedJar UP-TO-DATE\n> Task :prepareTestSandbox UP-TO-DATE\n> Task :prepareTest\n> Task :compileTestKotlin\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :test\n\nBUILD SUCCESSFUL in 14s\n11 actionable tasks: 4 executed, 7 up-to-date\nEXIT=0\n\nFresh JUnit XML (all timestamps >= gate start 2026-10-26T17:10:39Z): classes=21 tests=306 skipped=0 failures=0 errors=0; RuntimeSelectionPolicyTest R1-R4 present (R1 0.502s, R2 0.294s, R3 0.519s, R4 0.582s).",
+    "reportedAt": "2026-10-26T17:12:18.455Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+  ],
+  "completionSummary": "Under the protected profile, Restart Daemon no longer signals a pid from a repository-supplied .moe/daemon.json without provenance.\n- MoeDaemonSupervisor: added stopDaemonForRestart(info): String? (null = continue, text = refusal) and a trailing processLookup (default ProcessHandle.of(pid).orElse(null)). Order: liveness, one profile read, capture the handle once. Under PROTECTED it requires activationRefusal(info)==null (verifyProvenance: per-project pid+start or a recorded supervisor parent), then destroys the captured handle, never re-resolved. PROTECTED fails closed on a provenance refusal, a lookup/destroy exception, or destroy()==false. The message is bounded: pid plus fixed text, never calls the process a Moe daemon, and says to identify and stop it, then Restart Daemon. LEGACY: best-effort destroy; errors are swallowed (now logged) and the restart continues.\n- Decided legacy change, tested in R3: pid<=0 is never looked up or signaled in either profile. An absent pid reads as 0, and kill(2) treats 0/-1 as process groups. On Windows/Linux ProcessHandle.of(0/-1) is already empty, so nothing changes there.\n- MoeProjectService.restartDaemon uses it. A refusal is logged and published, then it returns before deleting daemon.json, resetting backoff or connecting. readDaemonInfo is unchanged.\nTests (R1-R4 in RuntimeSelectionPolicyTest) drive the real restartDaemon with inert spy handles:\n- R1 protected refusals: unrecorded, stale start, other project, no start instant, blank projectPath, unreadable project.json. Each has 0 signals, daemon.json bytes kept, no start, no backoff reset, no retry.\n- R2: legacy, and a recorded supervisor and its child, each stopped once with one lookup.\n- R3: dead, vanished, 0, -1.\n- R4: lookup/destroy failures.\nRED was 4/29 failing before wiring; mutation probes killed 9/9.\nFiled: task-4f1e37f30ee548298b26e17c0b6ea84e (LOW): the daemon.json read has no size cap.\nNot certified: OS-atomic restart and port binding (CQ-R13)."
 }

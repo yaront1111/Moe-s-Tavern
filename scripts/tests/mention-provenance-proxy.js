@@ -118,7 +118,7 @@ switch (tool) {
     ok({ team: { id: 'team-provenance', name: args.name || 'Provenance' } });
     break;
   case 'join_team':
-    ok({ success: true });
+    ok({ team: { id: args.teamId, name: 'Provenance', memberIds: [args.workerId] } });
     break;
   case 'chat_channels':
     ok({ channels: mode === 'cross-channel'

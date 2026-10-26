@@ -1474,7 +1474,7 @@ function Test-MoeSeatTeamless {
     return [bool]($Team -and $Role -ne 'governor' -and -not $script:teamJoined)
 }
 
-# Invoke-MoeTeamJoinRetry
+# Invoke-MoeTeamJoinRetry [-Force]
 # The startup join is one shot. A seat it left SOLO (the team was full, or the
 # daemon did not answer) stayed solo until someone relaunched it: raising the
 # team's maxSize or freeing a seat changed nothing, and the seat logged
@@ -1482,14 +1482,23 @@ function Test-MoeSeatTeamless {
 # claim_next_task skipped every epic+status a live worker held. So a claiming
 # seat re-runs the join (and the create, if that never answered) before each
 # claim until the daemon accepts it; join_team is idempotent for a member.
+# -Force re-joins even a seat the wrapper believes joined, governors included:
+# the daemon may have pruned the seat's record (stale) or left it DEAD (a hot
+# reload deregisters), and chat then refuses it as an unknown sender. A join
+# re-registers it. Only an answer listing this seat as a member counts.
 # Returns $true once joined. Twin: moe-agent.sh retry_team_join.
 function Invoke-MoeTeamJoinRetry {
-    if ($script:teamJoined) { return $true }
-    if (-not $Team -or $Role -eq 'governor') { return $false }
+    param([switch]$Force)
+    if ($script:teamJoined -and -not $Force) { return $true }
+    if (-not $Team -or ($Role -eq 'governor' -and -not $Force)) { return $false }
+    $wasJoined = $script:teamJoined
     $previousError = $script:teamJoinLastError
     $failure = ''
+    $script:teamJoined = $false
     if (-not $script:teamId) {
-        $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + (ConvertTo-Json @{ name = $Team } -Compress) + '}}'
+        # enter_governance requires a role-bound governor team (see the startup create).
+        $createArgs = if ($Role -eq 'governor') { @{ name = $Team; role = 'governor' } } else { @{ name = $Team } }
+        $createRpc = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.create_team","arguments":' + (ConvertTo-Json $createArgs -Compress) + '}}'
         $created = Invoke-MoeRpcRaw -RpcJson $createRpc
         try { $script:teamId = [string](($created.result.content[0].text | ConvertFrom-Json -ErrorAction Stop).team.id) } catch { $script:teamId = '' }
         if (-not $script:teamId) {
@@ -1499,28 +1508,40 @@ function Invoke-MoeTeamJoinRetry {
     if (-not $failure) {
         $joinRpc = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"moe.join_team","arguments":' + (ConvertTo-Json @{ teamId = $script:teamId; workerId = $WorkerId } -Compress) + '}}'
         $joined = Invoke-MoeRpcRaw -RpcJson $joinRpc
+        $joinedTeam = $null
+        try { $joinedTeam = ($joined.result.content[0].text | ConvertFrom-Json -ErrorAction Stop).team } catch { $joinedTeam = $null }
         if ($joined -and $joined.PSObject.Properties['error'] -and $joined.error) {
             $failure = [string]$joined.error.message
             if (-not $failure) { $failure = 'refused' }
         } elseif ($null -eq $joined) {
             $failure = 'no answer'
+        } elseif ($joined.result.isError -eq $true) {
+            $failure = 'MCP daemon refusal'
+        } elseif (-not $joinedTeam -or [string]$joinedTeam.id -cne $script:teamId -or @($joinedTeam.memberIds) -cnotcontains $WorkerId) {
+            $failure = 'the moe.join_team answer does not list this seat as a member'
         } else {
             $script:teamJoined = $true
             $script:teamJoinLastError = ''
             $script:teamContext = "You are part of team '$Team' (id: $($script:teamId), role: $Role). Team members can work in parallel on the same epic."
-            Write-Host "[OK] Worker $WorkerId joined team '$Team' on retry; this seat is no longer teamless." -ForegroundColor Green
+            # A healthy seat's forced re-join each pre-flight stays quiet.
+            if (-not $wasJoined) { Write-Host "[OK] Worker $WorkerId joined team '$Team' on retry; this seat is no longer teamless." -ForegroundColor Green }
             return $true
         }
     }
     $script:teamJoinLastError = $failure
+    # A team deleted under the seat: drop its id so the next retry re-creates it by name.
+    if ($failure.StartsWith('Team not found: ')) { $script:teamId = '' }
     # Warn when the refusal changes, not on every poll: the per-poll banners
     # already name a teamless seat.
     if ($failure -ne $previousError) {
-        Write-Host "[WARN] moe.join_team retry refused: $failure - this seat is still TEAMLESS; the wrapper retries before the next claim." -ForegroundColor Yellow
+        if ($Force) {
+            Write-Host "[WARN] MOE_SEAT_UNREGISTERED worker=$WorkerId team=$Team - moe.join_team: $failure; this seat's chat stays unread until a pre-flight join succeeds." -ForegroundColor Yellow
+        } else {
+            Write-Host "[WARN] moe.join_team retry refused: $failure - this seat is still TEAMLESS; the wrapper retries before the next claim." -ForegroundColor Yellow
+        }
     }
     return $false
 }
-
 
 # Immutable claim tokens belong to the runner, not the mutable CLI context.
 function Test-MoeGeneration($Value) {
@@ -5727,9 +5748,15 @@ do {
     if ($AutoClaim) {
         Write-Host "Pre-flight: joining chat, claiming task, loading context..." -ForegroundColor Cyan
 
+        # Re-register before any chat call. A pruned or DEAD worker record makes
+        # chat refuse this seat's reply as an unknown sender and keeps no read
+        # cursor, so a mention would relaunch it in vain on every idle pass.
+        # While the join fails the seat reads no chat; its mentions stay unread.
+        $seatRegistered = Invoke-MoeTeamJoinRetry -Force
+
         # Resolve #general channel id (chat tools take channel id, not name)
         $generalChannelId = $null
-        $channelsResp = Invoke-MoeRpc -Tool "chat_channels" -Args @{}
+        $channelsResp = if ($seatRegistered) { Invoke-MoeRpc -Tool "chat_channels" -Args @{} } else { $null }
         if ($channelsResp -and $channelsResp.channels) {
             foreach ($c in $channelsResp.channels) {
                 if ($c.name -eq "general") { $generalChannelId = $c.id; break }
@@ -5767,8 +5794,6 @@ do {
             # chat_wait loop).
             $claim = [pscustomobject]@{ hasNext = $false }
         } else {
-            # A seat the startup join left teamless re-joins before it claims.
-            if (-not $teamJoined) { [void](Invoke-MoeTeamJoinRetry) }
             $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args $claimRpcArgs
             # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
             # empty queue: say so, or the [no-task] banner below reads as "no work".
@@ -5792,7 +5817,7 @@ do {
         # channels. Ask the daemon for its routed backlog (loop guard intact).
         # This SHORT poll fits the proxy's 2s stdin-EOF grace; never use the
         # normal long-poll default here. Governors own their live chat waiter.
-        if ($Role -ne 'governor') {
+        if ($Role -ne 'governor' -and $seatRegistered) {
             $preflightRoutedUnread = Invoke-MoeRpc -Tool "chat_wait" -Args @{ workerId = $WorkerId; channels = @(); timeoutMs = 1000 }
         }
         # Does anything ALREADY unread tag this worker? moe.wait_for_task only
@@ -7603,5 +7628,11 @@ $mentionsJson
 # worker id. The runner identity (<pid>@<start token>) belongs to the process,
 # so it survives the reload and a held attempt can still reattach afterwards.
 if ($script:MoeWrapperRelaunchRequested) { $global:MoeWrapperReload = $true }
+# A one-shot run that ends teamless says so in its exit code instead of
+# looking like an idle seat; a looping seat keeps re-joining each pre-flight.
+if (-not $loopEnabled -and $moeSkipLaunch -and (Test-MoeSeatTeamless)) {
+    Write-Host "MOE_SEAT_UNREGISTERED worker=$WorkerId team=$Team - this one-shot run ends without a team (moe.join_team: $teamJoinLastError); exit 1."
+    exit 1
+}
 # Explicit, so the supervisor never reads a stale native exit code.
 exit 0

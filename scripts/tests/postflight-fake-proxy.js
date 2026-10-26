@@ -315,7 +315,8 @@ switch (tool) {
       process.exit(0);
     }
     fs.writeFileSync(path.join(moe, 'team-joined'), String(joinN));
-    ok({ success: true }); break;
+    // The daemon answers with the team; the wrappers accept only a member list naming them.
+    ok({ team: { id: args.teamId, name: 'Smoke', memberIds: [args.workerId] } }); break;
   }
   case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
   case 'chat_join': ok({ success: true }); break;

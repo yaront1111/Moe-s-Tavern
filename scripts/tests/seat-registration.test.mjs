@@ -51,9 +51,11 @@ process.stdin.on('end', () => {
     save();
     if (outcome === 'silent') return;
     if (outcome === 'error') return refuse('Team Workers is full (max 1 members)');
+    if (outcome === 'gone') return refuse('Team not found: ' + args.teamId);
     if (outcome === 'isError') return reply({ result: { isError: true, content: [{ type: 'text', text: 'refused' }] } });
     if (outcome === 'malformed') return ok({ success: true });
     if (outcome === 'foreign') return ok({ team: { id: args.teamId, memberIds: ['worker-other'] } });
+    if (outcome === 'unlisted') return ok({ team: { id: args.teamId, memberIds: args.workerId + '-2' } });
     return ok({ team: { id: args.teamId, memberIds: [args.workerId] } });
   }
   if (tool === 'chat_channels') return ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] });
@@ -244,16 +246,56 @@ for (const engine of ENGINES) {
     assert.equal(run.states[0].registered, 'true');
     assert.equal(run.fake.record, 'live');
   });
-  for (const outcome of ['error', 'isError', 'malformed', 'foreign', 'silent']) {
+  for (const outcome of ['error', 'isError', 'malformed', 'foreign', 'unlisted', 'silent']) {
     t(`a refused re-join (${outcome}) reads no chat and launches nothing; the next pre-flight recovers`, () => {
       const run = runSeat(engine, { joins: [outcome, 'ok'] });
       assert.deepEqual(run.states, [
         { registered: 'false', joined: 'false', mentions: 0, skip: 'true' },
         { registered: 'true', joined: 'true', mentions: 1, skip: 'false' },
       ]);
-      assert.deepEqual(tools(run, 1), ['join_team', 'join_team'], 'the refused join resets the team id: create_team? no, rejoin');
+      assert.deepEqual(tools(run, 1), ['join_team'], 'one join per pre-flight, then no chat call at all');
+      assert.equal(run.fake.cursor, 'msg-1', 'the mention is read only once the seat is registered');
     });
   }
+  t('repeated refusals warn once, and the recovery is announced once', () => {
+    const run = runSeat(engine, { joins: ['error', 'error', 'ok', 'ok'], iterations: 4 });
+    assert.deepEqual(run.states.map((s) => s.registered), ['false', 'false', 'true', 'true']);
+    assert.equal(count(run.out, 'MOE_SEAT_UNREGISTERED'), 1, run.out);
+    assert.equal(count(run.out, "this seat's chat stays unread until a pre-flight join succeeds"), 1);
+    assert.equal(count(run.out, 'no longer teamless'), 1, run.out);
+    assert.match(run.out, /MOE_SEAT_UNREGISTERED worker=worker-fixture team=Workers - moe\.join_team: Team Workers is full/);
+    assert.match(run.out, /Worker worker-fixture joined team 'Workers' on retry; this seat is no longer teamless\./);
+  });
+  t('a seat whose team was deleted re-creates it by name on the next pre-flight', () => {
+    const run = runSeat(engine, { joins: ['gone', 'ok'] });
+    assert.deepEqual(tools(run, 1), ['join_team']);
+    assert.deepEqual(tools(run, 2).slice(0, 3), ['create_team', 'join_team', 'chat_channels']);
+    assert.deepEqual(run.states.map((s) => s.registered), ['false', 'true']);
+  });
+  for (const outcome of ['noid', 'silent']) {
+    t(`a seat whose team cannot be created (${outcome}) never joins or reads chat`, () => {
+      const run = runSeat(engine, { teamId: '', creates: [outcome], iterations: 1 });
+      assert.deepEqual(tools(run), ['create_team']);
+      assert.deepEqual(run.states, [{ registered: 'false', joined: 'false', mentions: 0, skip: 'true' }]);
+    });
+  }
+  t('a one-shot run that cannot register exits 1 instead of idling', () => {
+    const run = runSeat(engine, { joins: ['error'], iterations: 1, loop: false, status: 1 });
+    assert.deepEqual(tools(run), ['join_team']);
+    assert.match(run.out, /MOE_SEAT_UNREGISTERED worker=worker-fixture team=Workers - this one-shot run ends without a team \(moe\.join_team: Team Workers is full \(max 1 members\)\); exit 1\./);
+  });
+  t('a one-shot run that registers exits 0', () => {
+    const run = runSeat(engine, { iterations: 1, loop: false });
+    assert.deepEqual(run.replies, ['ok']);
+  });
+  t('the cached (unforced) retry of a joined seat calls nothing', () => {
+    const body = engine.ext === 'sh'
+      ? 'if retry_team_join; then echo "@@ cached ok"; fi; break'
+      : "if (Invoke-MoeTeamJoinRetry) { '@@ cached ok' }; break";
+    const run = runSeat(engine, { body, iterations: 1 });
+    assert.deepEqual(run.rpcs, []);
+    assert.match(run.out, /^@@ cached ok$/m);
+  });
 }
 
 function fileURLToPathSafe(rel) {

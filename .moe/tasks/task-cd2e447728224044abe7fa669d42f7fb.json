@@ -114,7 +114,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:51:12.686Z",
-  "updatedAt": "2026-10-26T16:47:40.051Z",
+  "updatedAt": "2026-10-26T16:48:36.110Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:22:43.932Z",
     "plannedStepCount": 6,
@@ -166,6 +166,43 @@
       "treeId": "a2f5e296c6137aeaab8d8af5cf508be743196bca",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "4137865a60e6645743fb083723882d6791c4a689",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T16:37:43Z",
+      "paths": [
+        ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+        ".moe/tasks/task-6f3725e6ae56471c982fc39492ca2069.json",
+        ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+        ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+        "docs/skills/moe-planning/SKILL.md",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/updateEpic.test.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T16:48:36.110Z",
+      "treeId": "d16503c3ebf6f14b382bfc15ef18cfe6dc23d37f",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-72184c6505cc41e8b6066732011ffb70"
+        },
+        {
+          "path": "packages/moe-daemon/src/types/schema.ts",
+          "taskId": "task-bc8410afe7144ddda804b60af000864d"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -178,14 +215,21 @@
     "packages/moe-daemon/src/tools/getContext.test.ts",
     "docs/MCP_SERVER.md",
     "docs/skills/moe-planning/SKILL.md",
-    "packages/moe-daemon/src/generated/skillFiles.ts"
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+    ".moe/tasks/task-6f3725e6ae56471c982fc39492ca2069.json",
+    ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+    ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "scripts/tests/mention-provenance-proxy.js",
+    "scripts/tests/postflight-fake-proxy.js"
+  ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-2c9d5121@2026-10-26T15:43:11Z",
-    "at": "2026-10-26T16:07:08.946Z"
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T16:37:43Z",
+    "at": "2026-10-26T16:48:36.110Z"
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -231,5 +275,12 @@
     "reportedAt": "2026-10-26T16:47:40.047Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Epic-final now follows an explicit, persisted designation instead of board order.\n\n- Epic.finalTaskId (optional) is set or cleared with moe.update_epic { epicId, finalTaskId }; \"\" clears it. The tool rejects, before any write, an id naming no task, a task of another epic, or an ARCHIVED task (`Invalid finalTaskId: ...`). validateEpicUpdates shape-checks the value (string, max 200, trimmed), and the activity payload records it.\n- delivery/policy.ts isEpicFinalTask is the single rule. No epic means final. A valid designation (existing, same epic, not ARCHIVED) makes only that task final. Otherwise the old highest-order fallback applies unchanged, so undesignated epics and the pin test are unaffected.\n- get_context now calls isEpicFinalTask (the inline copy is deleted) and projects epic.finalTaskId. requiredCheckCommand, deliveryProjection and qa_approve's requiredCheckAtDone follow it too. Wrapper scripts are untouched.\n- Tests:\n  - DoD-1: a UPDATE_TASK order drag, set_task_status plus end-of-column order, reorderTask and create_task never move the flag.\n  - An undesignated control shows the drift.\n  - The fallback ignores a missing, other-epic, ARCHIVED, null or numeric designation.\n  - Clearing restores the fallback, and the projection is covered.\n  - DoD-2: a frozen 2026-10-26 fixture of all six CQ epics (84 rows). F12/R13/V12/C11/I06/M06 read true and every sibling false once designated; before that, the bug reproduces (bug-bc84, bug-6f50, V06, C06).\n  - Mutation checks kill each guard.\n- Docs: docs/MCP_SERVER.md (get_context, create_epic, update_epic), and the moe-planning skill \"Where the gate goes\" with regenerated generated/skillFiles.ts (only the moe-planning entry and its sha changed).\n\nLive CQ designations are follow-up task-6a612b08446e4e3cad10bf9cc44cecf6: the IDE-bundled daemon rejects finalTaskId until the plugin is rebuilt and restarted, so a live get_context still shows the old answer until then. The remaining docs sweep is task-ec99ee714f174553b91ea0"
+  "completionSummary": "Epic-final now follows an explicit, persisted designation instead of board order.\n\n- Epic.finalTaskId (optional) is set or cleared with moe.update_epic { epicId, finalTaskId }; \"\" clears it. The tool rejects, before any write, an id naming no task, a task of another epic, or an ARCHIVED task (`Invalid finalTaskId: ...`). validateEpicUpdates shape-checks the value (string, max 200, trimmed), and the activity payload records it.\n- delivery/policy.ts isEpicFinalTask is the single rule. No epic means final. A valid designation (existing, same epic, not ARCHIVED) makes only that task final. Otherwise the old highest-order fallback applies unchanged, so undesignated epics and the pin test are unaffected.\n- get_context now calls isEpicFinalTask (the inline copy is deleted) and projects epic.finalTaskId. requiredCheckCommand, deliveryProjection and qa_approve's requiredCheckAtDone follow it too. Wrapper scripts are untouched.\n- Tests:\n  - DoD-1: a UPDATE_TASK order drag, set_task_status plus end-of-column order, reorderTask and create_task never move the flag.\n  - An undesignated control shows the drift.\n  - The fallback ignores a missing, other-epic, ARCHIVED, null or numeric designation.\n  - Clearing restores the fallback, and the projection is covered.\n  - DoD-2: a frozen 2026-10-26 fixture of all six CQ epics (84 rows). F12/R13/V12/C11/I06/M06 read true and every sibling false once designated; before that, the bug reproduces (bug-bc84, bug-6f50, V06, C06).\n  - Mutation checks kill each guard.\n- Docs: docs/MCP_SERVER.md (get_context, create_epic, update_epic), and the moe-planning skill \"Where the gate goes\" with regenerated generated/skillFiles.ts (only the moe-planning entry and its sha changed).\n\nLive CQ designations are follow-up task-6a612b08446e4e3cad10bf9cc44cecf6: the IDE-bundled daemon rejects finalTaskId until the plugin is rebuilt and restarted, so a live get_context still shows the old answer until then. The remaining docs sweep is task-ec99ee714f174553b91ea0",
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/updateEpic.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/delivery/policy.ts",
+    "packages/moe-daemon/src/tools/getContext.ts"
+  ]
 }

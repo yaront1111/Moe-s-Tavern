@@ -2066,7 +2066,7 @@ seat_is_teamless() {
     [ -n "$TEAM" ] && [ "$ROLE" != "governor" ] && [ "$TEAM_JOINED" != true ]
 }
 
-# retry_team_join
+# retry_team_join [force]
 # The startup join is one shot. A seat it left SOLO (the team was full, or the
 # daemon did not answer) stayed solo until someone relaunched it: raising the
 # team's maxSize or freeing a seat changed nothing, and the seat logged
@@ -2074,13 +2074,20 @@ seat_is_teamless() {
 # claim_next_task skipped every epic+status a live worker held. So a claiming
 # seat re-runs the join (and the create, if that never answered) before each
 # claim until the daemon accepts it; join_team is idempotent for a member.
+# `force` re-joins even a seat the wrapper believes joined, governors included:
+# the daemon may have pruned the seat's record (stale) or left it DEAD (a hot
+# reload deregisters), and chat then refuses it as an unknown sender. A join
+# re-registers it. Only an answer listing this seat as a member counts.
 # Returns 0 once joined. Twin: moe-agent.ps1 Invoke-MoeTeamJoinRetry.
 retry_team_join() {
-    [ "$TEAM_JOINED" = true ] && return 0
-    [ -n "$TEAM" ] && [ "$ROLE" != "governor" ] && [ -n "$PYTHON_CMD" ] || return 1
-    local previous_error="$TEAM_JOIN_LAST_ERROR" failure="" rpc_args rpc_out rpc_err
+    local force="${1:-}"
+    [ "$TEAM_JOINED" = true ] && [ "$force" != force ] && return 0
+    [ -n "$TEAM" ] && { [ "$ROLE" != "governor" ] || [ "$force" = force ]; } && [ -n "$PYTHON_CMD" ] || return 1
+    local was_joined="$TEAM_JOINED" previous_error="$TEAM_JOIN_LAST_ERROR" failure="" rpc_args rpc_out rpc_rc
+    TEAM_JOINED=false
     if [ -z "$TEAM_ID" ]; then
-        rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'name':sys.argv[1]}))" "$TEAM" 2>/dev/null) || return 1
+        # enter_governance requires a role-bound governor team (see the startup create).
+        rpc_args=$($PYTHON_CMD -c "import json,sys; a={'name':sys.argv[1]}; a.update({'role':'governor'} if sys.argv[2]=='governor' else {}); print(json.dumps(a))" "$TEAM" "$ROLE" 2>/dev/null) || return 1
         if rpc_out=$(moe_rpc create_team "$rpc_args" 2>/dev/null); then
             TEAM_ID=$($PYTHON_CMD -c "
 import json, sys
@@ -2096,18 +2103,20 @@ except Exception:
     fi
     if [ -z "$failure" ]; then
         rpc_args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'teamId':sys.argv[1],'workerId':sys.argv[2]}))" "$TEAM_ID" "$WORKER_ID" 2>/dev/null) || return 1
-        # moe_rpc prints the tool's answer on stdout and the JSON-RPC error on
-        # stderr; keep only the error.
-        if rpc_err=$(moe_rpc join_team "$rpc_args" 2>&1 >/dev/null); then
-            TEAM_JOINED=true
-            TEAM_JOIN_LAST_ERROR=""
-            TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
-            echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM' on retry; this seat is no longer teamless."
-            return 0
-        fi
+        # moe_rpc prints the tool's answer on stdout and the JSON-RPC error on stderr.
+        rpc_rc=0; rpc_out=$(moe_rpc join_team "$rpc_args" 2>&1) || rpc_rc=$?
         failure=$($PYTHON_CMD -c "
 import json, sys
+rc, team_id, worker_id = sys.argv[1:4]
 raw = sys.stdin.read().strip()
+if rc == '0':
+    try:
+        team = json.loads(raw)['team']
+        ok = team['id'] == team_id and isinstance(team['memberIds'], list) and worker_id in team['memberIds']
+    except Exception:
+        ok = False
+    print('' if ok else 'the moe.join_team answer does not list this seat as a member')
+    sys.exit(0)
 msg = ''
 for line in reversed([l for l in raw.splitlines() if l.strip()]):
     try:
@@ -2117,17 +2126,30 @@ for line in reversed([l for l in raw.splitlines() if l.strip()]):
     msg = (e.get('message') if isinstance(e, dict) else str(e)) or ''
     break
 print(msg or raw[:200] or 'no answer')
-" <<< "$rpc_err" 2>/dev/null || echo "no answer")
+" "$rpc_rc" "$TEAM_ID" "$WORKER_ID" <<< "$rpc_out" 2>/dev/null || echo "unreadable moe.join_team answer")
+        if [ -z "$failure" ]; then
+            TEAM_JOINED=true
+            TEAM_JOIN_LAST_ERROR=""
+            TEAM_CONTEXT="You are part of team '$TEAM' (id: $TEAM_ID, role: $ROLE). Team members can work in parallel on the same epic."
+            # A healthy seat's forced re-join each pre-flight stays quiet.
+            [ "$was_joined" = true ] || echo -e "${GREEN}[OK]${NC} Worker $WORKER_ID joined team '$TEAM' on retry; this seat is no longer teamless."
+            return 0
+        fi
     fi
     TEAM_JOIN_LAST_ERROR="$failure"
+    # A team deleted under the seat: drop its id so the next retry re-creates it by name.
+    case "$failure" in "Team not found: "*) TEAM_ID="" ;; esac
     # Warn when the refusal changes, not on every poll: the per-poll banners
     # already name a teamless seat.
     if [ "$failure" != "$previous_error" ]; then
-        echo -e "${YELLOW}[WARN]${NC} moe.join_team retry refused: $failure - this seat is still TEAMLESS; the wrapper retries before the next claim."
+        if [ "$force" = force ]; then
+            echo -e "${YELLOW}[WARN]${NC} MOE_SEAT_UNREGISTERED worker=$WORKER_ID team=$TEAM - moe.join_team: $failure; this seat's chat stays unread until a pre-flight join succeeds."
+        else
+            echo -e "${YELLOW}[WARN]${NC} moe.join_team retry refused: $failure - this seat is still TEAMLESS; the wrapper retries before the next claim."
+        fi
     fi
     return 1
 }
-
 
 # Candidate evidence is pinned outside the CLI's mutable context projection.
 # Reading the existing store does not claim, repair or write an attempt.
@@ -6290,9 +6312,17 @@ while [ "$LOOP_RUNNING" = true ]; do
     if [ "$AUTO_CLAIM" = true ]; then
         echo -e "${BLUE}Pre-flight: joining chat, claiming task, loading context...${NC}"
 
+        # Re-register before any chat call. A pruned or DEAD worker record makes
+        # chat refuse this seat's reply as an unknown sender and keeps no read
+        # cursor, so a mention would relaunch it in vain on every idle pass.
+        # While the join fails the seat reads no chat; its mentions stay unread.
+        SEAT_REGISTERED=false
+        if retry_team_join force; then SEAT_REGISTERED=true; fi
+
         # 0. Resolve #general channel id (chat tools take id, not name)
         GENERAL_CHANNEL_ID=""
-        CHANNELS_RESP=$(moe_rpc chat_channels "{}" 2>/dev/null || echo "")
+        CHANNELS_RESP=""
+        [ "$SEAT_REGISTERED" != true ] || CHANNELS_RESP=$(moe_rpc chat_channels "{}" 2>/dev/null || echo "")
         if [ -n "$CHANNELS_RESP" ]; then
             GENERAL_CHANNEL_ID=$($PYTHON_CMD -c "
 import json, sys
@@ -6342,8 +6372,6 @@ except Exception:
             fi
             CLAIM_RESULT='{"hasNext":false}'
         else
-            # A seat the startup join left teamless re-joins before it claims.
-            [ "$TEAM_JOINED" = true ] || retry_team_join || true
             CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
             # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
             # empty queue: say so, or the [no-task] banner below reads as "no work".
@@ -6373,7 +6401,7 @@ except Exception:
         # channels. Ask the daemon for its routed backlog (loop guard intact).
         # This SHORT poll fits the proxy's 2s stdin-EOF grace; never use the
         # normal long-poll default here. Governors own their live chat waiter.
-        if [ "$ROLE" != "governor" ]; then
+        if [ "$ROLE" != "governor" ] && [ "$SEAT_REGISTERED" = true ]; then
             PREFLIGHT_ROUTED_UNREAD=$(moe_rpc chat_wait \
                 "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1],'channels':[],'timeoutMs':1000}))" "$WORKER_ID" 2>/dev/null)" \
                 2>/dev/null || echo "")
@@ -8603,3 +8631,10 @@ except Exception:
         break
     fi
 done
+
+# A one-shot run that ends teamless says so in its exit code instead of
+# looking like an idle seat; a looping seat keeps re-joining each pre-flight.
+if [ "$LOOP_ENABLED" = false ] && [ "${MOE_SKIP_LAUNCH:-}" = true ] && seat_is_teamless; then
+    echo "MOE_SEAT_UNREGISTERED worker=$WORKER_ID team=$TEAM - this one-shot run ends without a team (moe.join_team: $TEAM_JOIN_LAST_ERROR); exit 1."
+    exit 1
+fi

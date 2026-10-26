@@ -1,0 +1,31 @@
+{
+  "id": "task-4f1e37f30ee548298b26e17c0b6ea84e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: readDaemonInfo reads a repository-supplied .moe/daemon.json with no size cap",
+  "description": "MoeDaemonSupervisor.readDaemonInfo runs gson.fromJson(file.readText()) on every connect, retry and restart, and getDaemonInfo does the same, with no size bound. A repository that commits a multi-hundred-MB .moe/daemon.json can exhaust the IDE heap (OutOfMemoryError is not caught). RuntimeSelectionPolicy caps project.json at 1 MiB for the same untrusted-repository reason. Found in the task-c42dd646a2694666b40ea7f6d3985647 review, whose plan kept readDaemonInfo unchanged.",
+  "definitionOfDone": [
+    "readDaemonInfo returns null for a daemon.json above a small fixed cap without reading the whole file, under every profile",
+    "A JetBrains unit test covers an oversize daemon.json and a normal one",
+    "A fresh `cd moe-jetbrains && ./gradlew test` exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c42dd646a2694666b40ea7f6d3985647"
+  ],
+  "priority": "LOW",
+  "order": 249.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T17:11:20.389Z",
+  "updatedAt": "2026-10-26T17:11:20.389Z"
+}
