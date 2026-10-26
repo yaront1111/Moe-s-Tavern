@@ -66,9 +66,10 @@ for (const [ext, engine] of engines) {
       const source = read(ext);
       let script;
       if (ext === 'ps1') {
+        const fetch = between(source, '                if ($preflightTaskId) {\n                    $preflightContext', '                # alreadyAssigned carries no chatChannel');
         const project = between(source, '        $ctxJson = if ($preflightContext) {', '        $pendingJson =');
         const inject = between(source, '        $dynamicContext += @"\n# Pre-flight Complete', '        # JIT reminder:');
-        script = `\ufeff$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n$preflightContext=[IO.File]::ReadAllText($env:MOE_CONTEXT_FIXTURE) | ConvertFrom-Json\n$dynamicContext=''\n$Role='${role}'\n$WorkerId='worker-context'\n$preflightTaskId='task-context'\n$generalCount=0\n$taskCount=0\n$mentionsCount=0\n$memTotal=0\n$memTaskLine='none'\n$memRecentLine='none'\n$pendingJson='{}'\n${project}\n${inject}\n[Console]::Write($dynamicContext)`;
+        script = `\ufeff$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\nfunction Invoke-MoeRpc { param([Parameter(Mandatory)][string]$Tool, [object]$Args) [IO.File]::WriteAllText($env:MOE_ARGS_FILE, ($Args | ConvertTo-Json -Compress)); [IO.File]::ReadAllText($env:MOE_CONTEXT_FIXTURE) | ConvertFrom-Json }\nfunction Get-PlanProgressMark { $null }\n$preflightContext=$null\n$dynamicContext=''\n$Role='${role}'\n$WorkerId='worker-context'\n$preflightTaskId='task-context'\n$generalCount=0\n$taskCount=0\n$mentionsCount=0\n$memTotal=0\n$memTaskLine='none'\n$memRecentLine='none'\n$pendingJson='{}'\n${fetch}\n${project}\n${inject}\n[Console]::Write($dynamicContext)`;
       } else {
         const project = between(source, '                # 5. Fetch context for the claimed task', '                # 6. Read task channel backlog');
         const inject = between(source, '        DYNAMIC_CONTEXT="# Pre-flight Complete', '        # JIT reminder:');
@@ -79,7 +80,7 @@ for (const [ext, engine] of engines) {
       const argsFile = path.join(dir, 'args.json');
       const { MOE_SESSION_ID: _seat, ...baseEnv } = process.env;
       // A fresh process asks for the full default read: sessionId only when the seat has one.
-      for (const sessionId of ext === 'sh' ? ['worker-context@2026-10-26T00:00:00Z', undefined] : [undefined]) {
+      for (const sessionId of ['worker-context@2026-10-26T00:00:00Z', undefined]) {
         const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
           encoding: 'utf8', timeout: 20000,
           env: { ...baseEnv, ...(sessionId ? { MOE_SESSION_ID: sessionId } : {}),
@@ -91,10 +92,8 @@ for (const [ext, engine] of engines) {
         assert.ok(injected, 'launch must inject the claimed task context');
         assert.deepEqual(JSON.parse(injected[1]), context,
           'launchers must preserve the daemon-scoped payload, including source scope, architecture and review evidence');
-        if (ext === 'sh') {
-          assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')),
-            { taskId: 'task-context', ...(sessionId ? { sessionId } : {}) }, 'no view, delta or base-packet field');
-        }
+        assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')),
+          { taskId: 'task-context', ...(sessionId ? { sessionId } : {}) }, 'no view, delta or base-packet field');
       }
     });
   }
@@ -204,6 +203,87 @@ for (const [ext, engine] of engines) {
       + `${helper}\nmoe_rpc_unserved get_context '{"taskId":"t"}'\nprintf '[%s]' "$MOE_SESSION_ID"`, { MOE_SESSION_ID: 'seat-sid' });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.equal(result.stdout, '[get_context {"taskId":"t"}][][MOE_SESSION_ID=][seat-sid]');
+  });
+}
+
+// The PowerShell twin (CQ-F11): the same contract on powershell.exe 5.1 and pwsh 7.
+const runPs = (engine, dir, name, script, env = {}) => {
+  const file = path.join(dir, name);
+  writeFileSync(file, `﻿$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n${script}`);
+  const { MOE_SESSION_ID: _s, MOE_ATTEMPT_ID: _a, MOE_ATTEMPT_GENERATION: _g, ...base } = process.env;
+  return spawnSync(engine, ['-NoProfile', '-File', file], { encoding: 'utf8', timeout: 20000, env: { ...base, ...env } });
+};
+
+for (const [ext, engine] of engines) {
+  if (ext !== 'ps1') continue;
+  for (const [label, claim, open, previous, ok, pair] of attemptCases) {
+    test(`${engine}: attempt identity ${label} exports a verified pair or none`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe attempt '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      mkdirSync(path.join(dir, '.moe', 'attempts'), { recursive: true });
+      writeFileSync(path.join(dir, '.moe', 'attempts', `${open.id}.json`), JSON.stringify(open));
+      const source = read('ps1');
+      const fns = between(source, 'function Test-MoeGeneration($Value) {', '# A daemon restart parked')
+        + between(source, 'function Get-MoeProp($Obj, [string]$Name) {', '# Emits the strings one by one');
+      const prior = previous ? `$env:MOE_ATTEMPT_ID='${previous[0]}'; $env:MOE_ATTEMPT_GENERATION='${previous[1]}'; $script:MoeAttemptId='${previous[0]}'; $script:MoeAttemptGeneration=${previous[1]}\n` : '';
+      const result = runPs(engine, dir, 'pin.ps1', `$projectPath=$env:MOE_TEST_DIR\n$WorkerId='w'\n${fns}\n${prior}`
+        + `Set-MoeAttemptIdentity ($env:MOE_TEST_CLAIM | ConvertFrom-Json) 'task-t' 6>$null\n`
+        + `[Console]::Write("$env:MOE_ATTEMPT_ID|$env:MOE_ATTEMPT_GENERATION|$script:MoeAttemptId|$script:MoeAttemptGeneration")`,
+      { MOE_TEST_DIR: dir, MOE_TEST_CLAIM: JSON.stringify(claim) });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(result.stdout, ok ? `${pair.join('|')}|${pair.join('|')}` : '|||', 'never half, stale or unverified');
+    });
+  }
+
+  test(`${engine}: each iteration starts without the previous task's attempt pair`, t => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'moe reset '));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const reset = between(read('ps1'), '    $script:MoeAttemptId = ""; $script:MoeAttemptGeneration = $null', '\n');
+    const result = runPs(engine, dir, 'reset.ps1', `${reset}\n[Console]::Write("[$($null -eq $env:MOE_ATTEMPT_ID)][$($null -eq $env:MOE_ATTEMPT_GENERATION)]")`,
+      { MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout, '[True][True]');
+  });
+
+  test(`${engine}: Codex override carries the seat's execution identity before its worker id`, t => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'moe codex identity '));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const config = path.join(dir, 'config.toml');
+    writeFileSync(config, '[mcp_servers.moe]\ncommand = "node"\nargs = ["proxy.js"]\n\n[mcp_servers.moe.env]\nMOE_PROJECT_PATH = "/p"\nMOE_SESSION_ID = "old"\n');
+    const fn = between(read('ps1'), 'function Get-CodexMoeServerOverride(', '\nfunction Get-MoeInstallPath');
+    const script = `${fn}\n[Console]::Write((Get-CodexMoeServerOverride $env:MOE_TEST_CONFIG 'w'))`;
+    const runner = { MOE_TEST_CONFIG: config, MOE_SESSION_ID: 'w@2026-10-26T00:00:00Z', MOE_RUNNER_PROCESS_STARTED_AT: '2026-10-26T00:00:00.000Z', MOE_RUNNER_HOST: 'host-a' };
+    const head = "mcp_servers.moe={command='node',args=['proxy.js'],env={MOE_PROJECT_PATH='/p',MOE_SESSION_ID='w@2026-10-26T00:00:00Z',";
+    const tail = "MOE_WORKER_ID='w',MOE_RUNNER_PROCESS_STARTED_AT='2026-10-26T00:00:00.000Z',MOE_RUNNER_HOST='host-a'}}";
+    for (const [pair, expected] of [
+      [{ MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' }, head + "MOE_ATTEMPT_ID='attempt-a',MOE_ATTEMPT_GENERATION='2'," + tail],
+      [{ MOE_ATTEMPT_ID: 'attempt-a' }, head + tail],
+      [{}, head + tail],
+    ]) {
+      const result = runPs(engine, dir, 'override.ps1', script, { ...runner, ...pair });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(result.stdout, expected, 'both or neither of the pair');
+    }
+  });
+
+  test(`${engine}: wrapper-only context reads are never served as the session's context`, t => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'moe unserved '));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const source = read('ps1');
+    for (const key of ['MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION']) {
+      assert.ok(source.includes(`'${key} = "\${${key}:-}"'`), `grok env table must expand ${key} per process`);
+    }
+    assert.equal(source.match(/Invoke-MoeRpc -Tool "get_context"/g).length, 1, 'only the pre-flight read is served to the CLI');
+    assert.ok(source.includes('$ctxResp = Invoke-MoeRpcUnserved -Tool "get_context" -Args @{ taskId = $preflightTaskId }'));
+    assert.ok(source.includes('$adoptResp = Invoke-MoeRpcUnserved -Tool "get_context" -Args @{ workerId = $WorkerId }'));
+    const helper = between(source, 'function Invoke-MoeRpcUnserved {', '\n}\n') + '\n}';
+    const result = runPs(engine, dir, 'unserved.ps1', 'function Invoke-MoeRpc { param([Parameter(Mandatory)][string]$Tool, [object]$Args) '
+      + `[Console]::Write("[$Tool][$($Args.taskId)][$($null -eq $env:MOE_SESSION_ID)]"); if ($Tool -ceq 'boom') { throw 'boom' }; 'reply' }\n${helper}\n`
+      + `[Console]::Write((Invoke-MoeRpcUnserved -Tool 'get_context' -Args @{ taskId = 't' }))\n`
+      + `try { Invoke-MoeRpcUnserved -Tool 'boom' -Args @{} } catch { [Console]::Write('[caught]') }\n[Console]::Write("[$env:MOE_SESSION_ID]")`,
+    { MOE_SESSION_ID: 'seat-sid' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout, '[get_context][t][True]reply[boom][][True][caught][seat-sid]');
   });
 }
 

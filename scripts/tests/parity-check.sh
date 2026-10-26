@@ -228,6 +228,12 @@ for prose in 'Runner identity: processStartedAt=' 'Runner identity unavailable (
   require_both "runner reattach prose" "$prose"
 done
 
+# Execution identity: the env names moe-proxy stamps onto the CLI's
+# get_context/start_step, exported by both wrappers.
+for lit in MOE_SESSION_ID MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION; do
+  require_both "execution identity" "$lit"
+done
+
 # Hot reload: the restart announcement an operator sees, the deregister reason
 # both postflight hot-reload cases assert, and the refusal of changed bytes that
 # do not parse, spelled identically in both.

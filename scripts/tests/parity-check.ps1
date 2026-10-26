@@ -105,6 +105,9 @@ $required = [ordered]@{
     # identically in both.
     'runner reattach' = @('reattach_attempt', 'processStartedAt', 'attempt-reconciling', 'reattachRequired', '[reattach]', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')
     'runner reattach prose' = @('Runner identity: processStartedAt=', 'Runner identity unavailable (', 'claims carry no processStartedAt/host, so this seat cannot reattach after a daemon restart.', 'is running again after a daemon restart.', 'moe.reattach_attempt refused for attempt', '; not retrying it.', 'moe.reattach_attempt got no answer for attempt', '; retrying later.', 'heartbeat asks for reattachment (', 'but this seat owns no reconciling attempt this wrapper can reattach; nothing to reattach.')
+    # Execution identity: the env names moe-proxy stamps onto the CLI's
+    # get_context/start_step, exported by both wrappers.
+    'execution identity' = @('MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION')
     # Hot reload: the restart announcement an operator sees, the deregister
     # reason both postflight hot-reload cases assert, and the refusal of changed
     # bytes that do not parse, spelled identically in both.

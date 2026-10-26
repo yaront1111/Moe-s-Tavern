@@ -219,7 +219,9 @@ function Grant-GrokFolderTrust {
 
 # This seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $ConfigPath
-# (.codex/config.toml) plus MOE_WORKER_ID and, when set, the seat's runner
+# (.codex/config.toml) plus, when set, the seat's execution identity
+# (MOE_SESSION_ID and the MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair, both or
+# neither, which moe-proxy stamps), then MOE_WORKER_ID and the seat's runner
 # identity (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP
 # server only the env its table names. The override must be a complete
 # server definition: codex 0.163 TUI bootstrap rejects a partial dotted one
@@ -237,12 +239,15 @@ function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
         if ($s.StartsWith('[')) { $section = $s; continue }
         if (-not $s -or $s.StartsWith('#') -or -not $s.Contains('=')) { continue }
         $key, $value = $s.Split('=', 2) | ForEach-Object { $_.Trim() }
-        if ($key -in @('MOE_WORKER_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')) { continue }
+        if ($key -in @('MOE_WORKER_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION')) { continue }
         if (-not $value.Contains("'") -and -not $value.Contains('\')) { $value = $value.Replace('"', "'") }
         if ($section -eq '[mcp_servers.moe]') { $server += "$key=$value" }
         elseif ($section -eq '[mcp_servers.moe.env]') { $envPairs += "$key=$value" }
     }
     if (-not ($server | Where-Object { $_.StartsWith('command=') })) { return $fallback }
+    $sid = $env:MOE_SESSION_ID; $aid = $env:MOE_ATTEMPT_ID; $gen = $env:MOE_ATTEMPT_GENERATION
+    if ($sid -and -not $sid.Contains("'")) { $envPairs += "MOE_SESSION_ID='$sid'" }
+    if ($aid -and $gen -and -not "$aid$gen".Contains("'")) { $envPairs += "MOE_ATTEMPT_ID='$aid'", "MOE_ATTEMPT_GENERATION='$gen'" }
     $envPairs += "MOE_WORKER_ID='$WorkerId'"
     foreach ($key in @('MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')) {
         $value = [Environment]::GetEnvironmentVariable($key)
@@ -1148,6 +1153,11 @@ $serenaTomlBlock
         # only; empty (unset, to the proxy) for a worker or a human run.
         $grokRunnerStartedLine = 'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"'
         $grokRunnerHostLine = 'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"'
+        # The seat's execution identity, which moe-proxy stamps onto
+        # get_context/start_step; empty (unset, to the proxy) outside a task.
+        $grokSessionIdLine = 'MOE_SESSION_ID = "${MOE_SESSION_ID:-}"'
+        $grokAttemptIdLine = 'MOE_ATTEMPT_ID = "${MOE_ATTEMPT_ID:-}"'
+        $grokAttemptGenerationLine = 'MOE_ATTEMPT_GENERATION = "${MOE_ATTEMPT_GENERATION:-}"'
         # Grok drops any MCP tool whose name contains a dot (it namespaces
         # tools as <server>__<tool> and validates the result), so the daemon's
         # moe.<name> tools all vanish - the server shows as connected with 0
@@ -1180,6 +1190,9 @@ $serenaTomlBlock
             $grokWorkerIdLine,
             $grokRunnerStartedLine,
             $grokRunnerHostLine,
+            $grokSessionIdLine,
+            $grokAttemptIdLine,
+            $grokAttemptGenerationLine,
             ($grokToolNameStyleLine + $grokDaemonHostLine)
         ) -join "`n")
 
@@ -1434,6 +1447,20 @@ function Invoke-MoeRpc {
     return $null
 }
 
+# A wrapper-only read the CLI is never served: without MOE_SESSION_ID the
+# spawned moe-proxy stamps no sessionId, so it mints no receipt. The seat's
+# value comes back even when the call throws. Twin: moe_rpc_unserved.
+function Invoke-MoeRpcUnserved {
+    param(
+        [Parameter(Mandatory = $true)][string]$Tool,
+        [object]$Args
+    )
+    $sessionId = $env:MOE_SESSION_ID
+    Remove-Item Env:MOE_SESSION_ID -ErrorAction SilentlyContinue
+    try { return Invoke-MoeRpc -Tool $Tool -Args $Args }
+    finally { if ($sessionId) { $env:MOE_SESSION_ID = $sessionId } }
+}
+
 # Test-MoeClaimNoTeam CLAIM: $true when a claim answer is the daemon's
 # NO_TEAM_MEMBERSHIP refusal (claimNextTask.ts noTeamMembershipRefusal): the
 # seat is SOLO and every claimable candidate sits in an epic+status a live
@@ -1516,18 +1543,23 @@ function Read-MoeAttempt([string]$TaskId, [string]$AttemptId = '', $Generation =
         Write-Host "[WARN] $script:MoeAttemptReadError" -ForegroundColor Yellow; return $null
     }
 }
+# Exported for the CLI's moe-proxy, which stamps the pair onto start_step. The
+# pair moves together: only an identity verified against the store is kept.
+# Twin: pin_attempt_identity.
 function Set-MoeAttemptIdentity($Claim, [string]$TaskId) {
     $script:MoeAttemptId = ''; $script:MoeAttemptGeneration = $null
+    Remove-Item Env:MOE_ATTEMPT_ID, Env:MOE_ATTEMPT_GENERATION -ErrorAction SilentlyContinue
     $id = Get-MoeProp $Claim 'attemptId'; $g = Get-MoeProp $Claim 'generation'
     if ($null -eq $id -and $null -eq $g -and (Get-MoeProp $Claim 'alreadyAssigned')) {
         $a = Read-MoeAttempt $TaskId
         if ($a) { $id = $a.id; $g = $a.generation }
     }
-    if ($id -isnot [string] -or $id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or -not (Test-MoeGeneration $g)) {
+    if ($id -isnot [string] -or $id -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or -not (Test-MoeGeneration $g) -or -not (Read-MoeAttempt $TaskId $id $g)) {
         Write-Host '[WARN] Missing/stale attempt identity; candidate completion will fail closed.' -ForegroundColor Yellow
         return
     }
     $script:MoeAttemptId = $id; $script:MoeAttemptGeneration = $g
+    $env:MOE_ATTEMPT_ID = $id; $env:MOE_ATTEMPT_GENERATION = [string]$g
 }
 # A daemon restart parked this seat's attempt in `reconciling`: present its id
 # and generation with THIS process's identity so it runs again instead of being
@@ -5554,7 +5586,8 @@ do {
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     $script:MoeFrozen=$null; $script:MoeLandingResult=$null; $script:MoeFinalizeDone=$false
     $script:MoeEvidenceUnavailable=''; $script:MoeAttemptReadError=''
-    $script:MoeAttemptId = ""; $script:MoeAttemptGeneration = $null
+    # The env pair too: no CLI inherits a previous task's attempt (the ps1 hot-reload supervisor keeps env).
+    $script:MoeAttemptId = ""; $script:MoeAttemptGeneration = $null; Remove-Item Env:MOE_ATTEMPT_ID, Env:MOE_ATTEMPT_GENERATION -ErrorAction SilentlyContinue
     $script:MoeRunnerId = "runner-" + [guid]::NewGuid().ToString("N")
     $preflightTaskId = ""
     # Per-task launch hint from claim_next_task (reset so a tier never leaks into the next task).
@@ -5591,6 +5624,7 @@ do {
     # delivery can read it from nowhere else (no preflight scope.json when
     # settings.autoCommit is false). Twin: moe-agent.sh MOE_SID / MOE_SESSION_ID.
     $moeSid = "$WorkerId@" + (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    # moe-proxy (CQ-F09) also stamps it, with the attempt pair, onto the CLI's get_context/start_step.
     $env:MOE_SESSION_ID = $moeSid
     $moeGit = $null
     $moeSettings = $null
@@ -5876,8 +5910,11 @@ do {
                         }
                     }
                 }
+                # The one context read the CLI is served: it names this session, so the daemon records its receipt.
                 if ($preflightTaskId) {
-                    $preflightContext = Invoke-MoeRpc -Tool "get_context" -Args @{ taskId = $preflightTaskId }
+                    $preflightContextArgs = @{ taskId = $preflightTaskId }
+                    if ($env:MOE_SESSION_ID) { $preflightContextArgs.sessionId = $env:MOE_SESSION_ID }
+                    $preflightContext = Invoke-MoeRpc -Tool "get_context" -Args $preflightContextArgs
                     $script:PreflightProgressMark = Get-PlanProgressMark -Context $preflightContext -TaskId $preflightTaskId
                 }
                 # alreadyAssigned carries no chatChannel — recover it from the
@@ -7210,7 +7247,7 @@ $mentionsJson
         # which only moves the same silent cliff further out.
         $statusLookupError = $null
         try {
-            $ctxResp = Invoke-MoeRpc -Tool "get_context" -Args @{ taskId = $preflightTaskId }
+            $ctxResp = Invoke-MoeRpcUnserved -Tool "get_context" -Args @{ taskId = $preflightTaskId }
             $matched = if ($ctxResp) { $ctxResp.task } else { $null }
             if (-not $matched -or -not $matched.id) {
                 $statusLookupError = "get_context returned no task"
@@ -7369,7 +7406,7 @@ $mentionsJson
         # claim_next_task would CLAIM one, so it must never be used here.
         $adoptedTaskId = ""
         try {
-            $adoptResp = Invoke-MoeRpc -Tool "get_context" -Args @{ workerId = $WorkerId }
+            $adoptResp = Invoke-MoeRpcUnserved -Tool "get_context" -Args @{ workerId = $WorkerId }
             if ($adoptResp -and $adoptResp.task -and $adoptResp.task.PSObject.Properties['id'] -and $adoptResp.task.id) {
                 $adoptedTaskId = [string]$adoptResp.task.id
             }
