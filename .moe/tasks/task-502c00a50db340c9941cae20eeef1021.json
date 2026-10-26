@@ -94,7 +94,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,16 +110,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:33:26.853Z",
-  "updatedAt": "2026-10-26T05:15:06.894Z",
+  "updatedAt": "2026-10-26T05:22:36.674Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T23:09:57.694Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T05:22:36.674Z",
+    "wallClockMs": 22358980
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -158,7 +161,45 @@
   },
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/tests/local-runner-bridge.test.mjs"
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+    ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+    ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json"
   ],
-  "completionSummary": "CQ-R08b delivered: new scripts/local-runner/guest-supervisor.py (115 lines; LF; `#!/usr/bin/python3 -I`; stdlib only) and tests S1-S8 appended to scripts/tests/local-runner-bridge.test.mjs (+191). Net 306 LOC. guest-bridge.mjs, local-runner.test.mjs and ci.yml are untouched.\n\nSupervisor: hello first; Popen with stdin=DEVNULL, piped stdout/stderr, start_new_session=True and close_fds; one selectors loop with write_frame as the only stdout writer, which loops over partial writes. Child bytes go out only as base64 output frames of at most 64 KiB; empty reads unregister the fd. After EOF on both pipes, waitpid alone produces the exit observation (SIG%d fallback for unnamed signals). Exit codes: 0 done, 64 usage, 71 spawn failed (hello only), 74 I/O failure, 77 not root, 78 root bridge with no job. On every unreaped path the finally runs killpg(SIGKILL) then reaps. main() accepts only ['bridge'], with geteuid injectable from Python only.\n\nDoD:\n1. S1: hello, request, observation and partial or oversize headers on stdout and stderr come back byte-exact, only inside output frames.\n2. S2: a forged exit-0 followed by exit 7 yields exactly one observation, code 7. SIGKILL yields signal SIGKILL with a null code. Raw statuses check 7, SIGKILL, SIG40 and ValueError.\n3. Every frame decodes within MAX_GUEST_FRAME_BYTES and passes parseGuestFrame (session()). S3 covers 2×1 MiB of interleaved counters, ordered and split, plus the chunk bound, the exact-limit boundary and partial-write completion.\n4. S7/S8: shebang, stdlib-only imports by ast walk, the 64 cases, root gives 78, and non-root bridge gives 77 with empty stdout.\n5. Fresh run above: 23/23, 0 skipped. Windows node: 15 pass, 8 skipped with the win32 reason.\n\nBeyond plan: relay resets SIGCHLD to SIG_DFL, because an inherited SIG_IGN broke waitpid; this was red-tested. Mutation sweep in a /tmp snapshot: 21/21 killed, including all 10 planned probes. Out-of-scope gaps (host EOF while the child is silent → CQ-R08c stdin; SIGTERM/"
+  "completionSummary": "CQ-R08b delivered: new scripts/local-runner/guest-supervisor.py (115 lines; LF; `#!/usr/bin/python3 -I`; stdlib only) and tests S1-S8 appended to scripts/tests/local-runner-bridge.test.mjs (+191). Net 306 LOC. guest-bridge.mjs, local-runner.test.mjs and ci.yml are untouched.\n\nSupervisor: hello first; Popen with stdin=DEVNULL, piped stdout/stderr, start_new_session=True and close_fds; one selectors loop with write_frame as the only stdout writer, which loops over partial writes. Child bytes go out only as base64 output frames of at most 64 KiB; empty reads unregister the fd. After EOF on both pipes, waitpid alone produces the exit observation (SIG%d fallback for unnamed signals). Exit codes: 0 done, 64 usage, 71 spawn failed (hello only), 74 I/O failure, 77 not root, 78 root bridge with no job. On every unreaped path the finally runs killpg(SIGKILL) then reaps. main() accepts only ['bridge'], with geteuid injectable from Python only.\n\nDoD:\n1. S1: hello, request, observation and partial or oversize headers on stdout and stderr come back byte-exact, only inside output frames.\n2. S2: a forged exit-0 followed by exit 7 yields exactly one observation, code 7. SIGKILL yields signal SIGKILL with a null code. Raw statuses check 7, SIGKILL, SIG40 and ValueError.\n3. Every frame decodes within MAX_GUEST_FRAME_BYTES and passes parseGuestFrame (session()). S3 covers 2×1 MiB of interleaved counters, ordered and split, plus the chunk bound, the exact-limit boundary and partial-write completion.\n4. S7/S8: shebang, stdlib-only imports by ast walk, the 64 cases, root gives 78, and non-root bridge gives 77 with empty stdout.\n5. Fresh run above: 23/23, 0 skipped. Windows node: 15 pass, 8 skipped with the win32 reason.\n\nBeyond plan: relay resets SIGCHLD to SIG_DFL, because an inherited SIG_IGN broke waitpid; this was red-tested. Mutation sweep in a /tmp snapshot: 21/21 killed, including all 10 planned probes. Out-of-scope gaps (host EOF while the child is silent → CQ-R08c stdin; SIGTERM/",
+  "commits": [
+    {
+      "sha": "1c9cb9339f1ec54c0779add6e54b1e2ef8a6b1bb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T05:02:00Z",
+      "paths": [
+        ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-7148c250de304ce2994059085effd0a7.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T05:15:53.728Z",
+      "treeId": "ddde9ab954012bb00eba17dbc24760e887f76b07",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/guest-supervisor.py"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T05:02:00Z",
+    "at": "2026-10-26T05:15:53.728Z"
+  },
+  "completedAt": "2026-10-26T05:22:36.674Z",
+  "reviewCompletedAt": "2026-10-26T05:22:36.674Z",
+  "reviewSummary": "APPROVED CQ-R08b. Reviewed completion commit 1c9cb93 on moe/work-2026-10-24; working-tree bytes equal it. 306 net LOC (guest-supervisor.py +115 new, bridge test +191). guest-bridge.mjs, local-runner.test.mjs and ci.yml unchanged.\n\nRe-ran:\n(1) task.verification in a /tmp git-archive snapshot (env -i, Linux node 24.21.0, python3 3.12.3, uid 1000): exit 0, 23/23, 0 skipped, no __pycache__.\n(2) Full CI local-runner line: exit 0, 222 pass, 1 pre-existing macOS-smoke skip. The bundle test passes with the new .py.\n(3) Windows node.exe: 15 pass; S1-S8 skip with the win32 reason.\n(4) My own mutation sweep, 18/18 killed: raw passthrough, hello after spawn, constant observation, observation before EOF, stdin inherited, close_fds=False, killpg→kill, SIGCHLD reset dropped, chunk 196608, SIG%d fallback, euid→getuid or removed, argv prefix, limit >=, single write, empty frame, 71→0, stderr mislabel.\n\nDoD:\n1. S1: frames in child bytes come back byte-exact, only inside output frames.\n2. S2: forged exit-0 then exit 7 gives one observation, code 7. SIGKILL gives signal SIGKILL, code null.\n3. Every frame passes the decoder and parseGuestFrame; S3 shows split, ordered, whole frames and the limit boundary.\n4. Shebang is -I with LF; stdlib only; argv gives 64; non-root bridge gives 77 with empty stdout.\n5. Evidence reproduces.\n\nNo forbiddenPatterns and no print/sys.stdout. Every exception path returns a sysexit code or kills the group and reaps.\n\nNot blocking (deferred to R08c/R08/R10, as the worker commented): SIGTERM teardown; host EOF while the child is silent; a descendant holding the pipes. The macOS and Ubuntu CI legs weren't run locally.",
+  "requiredCheckAtDone": null
 }
