@@ -73,7 +73,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:20.636Z",
-  "updatedAt": "2026-10-26T10:05:06.060Z",
+  "updatedAt": "2026-10-26T10:09:10.999Z",
   "dependsOn": [
     "task-96526848b23549cf994ab82f47fad29f",
     "task-c7d520ba9cf940e4b3bbe2e4c3c90f47"
@@ -108,12 +108,15 @@
     "firstClaimAt": "2026-10-26T09:22:37.960Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-26T10:09:10.999Z",
+    "wallClockMs": 2793039
   },
   "contextFetchedBy": [
     "architect-26fd4d71",
     "governor-96f92f36",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -153,7 +156,48 @@
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json",
+    ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json"
+  ],
+  "completionSummary": "CQ-I02 delivered (plan rev 1, 4/4 steps). The JetBrains plan-review approval machine now binds its success acknowledgement to the rendered revision. PlanReviewApprovalState.onStateUpdate used to finish a PENDING approval on ANY present WORKING task before comparing revisions, so a newer plan already working was reported as the reviewer's approval. Now PENDING+WORKING validates the effective token first: malformed/null/negative/over-MAX -> REVISION_UNUSABLE_KEY, any other revision (older, newer, zero-after-nonzero, legacy-missing-after-nonzero) -> PLAN_CHANGED_KEY and INVALIDATED (latched, capturedRevision never replaced, no retry or token substitution), same revision -> FINISHED. A deleted task stays TASK_MISSING_KEY. Late WORKING/error/send-failed callbacks after INVALIDATED or DISPOSED are no-ops. One production file changed (+13/-4); dialog/board/command/decoder/legacy-zero and settings/status UI untouched. Existing CQ-F04c routing already sends the rendered Long token from every entrypoint (dialog PlanReviewDialog:464, card/context/drag via BoardApproval:35; approveTask has no default or overload).\nTests (+228): 15 new PlanReviewApprovalStateTest cases (mismatch/older/reset/legacy-missing/unusable table/missing task/same-revision success at 0,1,4,MAX/late same-revision update/late errors/both error-vs-WORKING orders/duplicate click/disposal) and 1 PlanApprovalContractTest case pinning updateSettings(non-default ProjectSettings) to exactly approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams with the supplied values. RED first: 7 failures, all Phase expected INVALIDATED but was FINISHED; the other new tests are guards passing on existing behaviour.\nVerification: WSL has no JDK, so the POSIX pinned `./gradlew test` was not runnable; ran the governor-cited Windows equivalent under the jetbrains-gradle lease (released): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, BUILD SUCCESSFUL, ",
+  "commits": [
+    {
+      "sha": "43ce5cb372dfdbe454046500f5aaf55b93e2ae76",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T10:00:04Z",
+      "paths": [
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json",
+        ".moe/tasks/task-df5384bf7fbd4b7ba3dedb43d7373ffa.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T10:06:14.059Z",
+      "treeId": "cc5d57394f5511175cb066a06b5072f43c1826a3",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt"
   ],
-  "completionSummary": "CQ-I02 delivered (plan rev 1, 4/4 steps). The JetBrains plan-review approval machine now binds its success acknowledgement to the rendered revision. PlanReviewApprovalState.onStateUpdate used to finish a PENDING approval on ANY present WORKING task before comparing revisions, so a newer plan already working was reported as the reviewer's approval. Now PENDING+WORKING validates the effective token first: malformed/null/negative/over-MAX -> REVISION_UNUSABLE_KEY, any other revision (older, newer, zero-after-nonzero, legacy-missing-after-nonzero) -> PLAN_CHANGED_KEY and INVALIDATED (latched, capturedRevision never replaced, no retry or token substitution), same revision -> FINISHED. A deleted task stays TASK_MISSING_KEY. Late WORKING/error/send-failed callbacks after INVALIDATED or DISPOSED are no-ops. One production file changed (+13/-4); dialog/board/command/decoder/legacy-zero and settings/status UI untouched. Existing CQ-F04c routing already sends the rendered Long token from every entrypoint (dialog PlanReviewDialog:464, card/context/drag via BoardApproval:35; approveTask has no default or overload).\nTests (+228): 15 new PlanReviewApprovalStateTest cases (mismatch/older/reset/legacy-missing/unusable table/missing task/same-revision success at 0,1,4,MAX/late same-revision update/late errors/both error-vs-WORKING orders/duplicate click/disposal) and 1 PlanApprovalContractTest case pinning updateSettings(non-default ProjectSettings) to exactly approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams with the supplied values. RED first: 7 failures, all Phase expected INVALIDATED but was FINISHED; the other new tests are guards passing on existing behaviour.\nVerification: WSL has no JDK, so the POSIX pinned `./gradlew test` was not runnable; ran the governor-cited Windows equivalent under the jetbrains-gradle lease (released): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, BUILD SUCCESSFUL, "
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T10:00:04Z",
+    "at": "2026-10-26T10:06:14.059Z"
+  },
+  "completedAt": "2026-10-26T10:09:10.999Z",
+  "reviewCompletedAt": "2026-10-26T10:09:10.999Z",
+  "reviewSummary": "QA CQ-I02 approved. Reviewed completion commit 43ce5cb (on moe/work-2026-10-24; `git diff HEAD -- moe-jetbrains/src` empty, so gated bytes = reviewed bytes). Diff +241/-4 in 3 files, under 400 LOC; no tests deleted or weakened. Re-ran the gate under the jetbrains-gradle lease (released). WSL has no JDK, so the POSIX `./gradlew test` was not runnable; ran the Windows equivalent: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` -> exit 0, BUILD SUCCESSFUL, :test executed; result XMLs stamped 10:08:29Z (this run): 21 suites, 295 tests, 0 fail/err/skip (PlanReviewApprovalStateTest 46, PlanApprovalContractTest 18, BoardApprovalTest 18). Windows output, not POSIX evidence. DoD: (1) approveTask(taskId, expectedPlanRevision: Long) has no default/overload; only callers are PlanReviewDialog:464 (captured revision) and BoardApproval:35 (card/context/drag). (2) onStateUpdate now compares snapshot.revision.effectiveOrNull() to capturedRevision before PENDING+WORKING can reach FINISHED: null -> REVISION_UNUSABLE_KEY, other revision -> PLAN_CHANGED_KEY, both latch INVALIDATED; capturedRevision never reassigned; late callbacks after INVALIDATED/DISPOSED are no-ops; inside existing synchronized(lock). 15 new state tests cover newer/older/reset/legacy-missing/unusable/missing task, same revision at 0/1/4/MAX, error-vs-WORKING orders, duplicate click, disposal. (3) New UPDATE_SETTINGS test pins payload to exactly approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams; no settings/status UI touched, per the human's REPL scope note. (4) Fresh gate re-reproduced. Notes: profile/evidence status UI was dropped by the REPL clarification and needs its own owner; board fingerprint bug stays with task-aa79a8eb. Not verified: real IDE sandbox interaction (headless JUnit only).",
+  "requiredCheckAtDone": null
 }
