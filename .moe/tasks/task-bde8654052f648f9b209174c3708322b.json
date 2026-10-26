@@ -89,7 +89,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:52.496Z",
-  "updatedAt": "2026-10-26T08:48:45.325Z",
+  "updatedAt": "2026-10-26T08:49:36.279Z",
   "dependsOn": [
     "task-bf86954dc6bc43279d96d77cf0ebff88",
     "task-db57e0148a9d47839c4159aab8a8c16d",
@@ -150,7 +150,9 @@
     "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/state/deliveryProjection.ts",
     "packages/moe-daemon/src/tools/getContext.ts",
-    "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
+    "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+    ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+    ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
   ],
   "completionSummary": "CQ-V01 reopen #2 (size-only). This round changes NO bytes. It splits REVIEW SCOPE over the landed dc13b0e + d8f2d6e; nothing is reverted or re-landed.\n\n(a) The 9 daemon files:\n- V01 (this row, 4 files): delivery/policy.ts, state/deliveryProjection.ts, tools/getContext.ts, delivery/requiredChecks.delivery.test.ts.\n- CQ-V01c (task-a00f45d3, 5 files): types/schema.ts, state/candidateStore.ts and its test, tools/recordCandidate.ts and its test.\n\n(b) git show --numstat dc13b0e d8f2d6e: policy.ts +103/-8, requiredChecks.delivery.test.ts +197 (+1 in d8f2d6e), deliveryProjection.ts +14/-5, getContext.ts +5. Total +320/-13 = 307 net. V01c is 141 net; the two sum to 448.\n\n(c) DoD to test, in requiredChecks.delivery.test.ts:\n- DoD1: (b) :89\n- DoD2: (d) :123 and :130\n- DoD3: (c) :103 and :113-121\n- Fail-closed unmeasured: (e) :143 and :152; QA's assertion is at :147.\nMutation probes on HEAD bytes, all killed:\n- (i) drop the unmeasured clause: (e) :147\n- (ii) ignore candidate-added paths: (c) :107 and (g) :191\n- (iii) raw snapshot in policy: (d) :126; in getContext: (d) :137\n- (iv) cross-command pass: (c) :120, x4\n\n(d) Gate, re-run fresh on a full-repo archive of HEAD cdb4f16. Its daemon tree e1bfdc6e is the same as at 15a272a. Native Linux deps, env -i, 0 MOE_* vars. npm test exit 0: 167 files, 4219 passed, 16 skipped (all pre-existing, none in V01 files). tsc --noEmit exit 0.\n\nSelf-review: no defects. Out-of-scope notes:\n- record_check_run's source is caller-declared. This predates V01, and CQ-V03 owns authenticating it.\n- The legacy policy skips protected checks, by design.\n- An IDE executionContract edit makes the snapshot stale. The policy then fails closed (protected-checks-unapproved) and get_context omits the overlay, but C01's manifest doesn't flag the omission. Candidate for V12/C11.\n\nQA: qa_approve will warn NO-COMPLETION-COMMIT. That warning is advisory; review dc13b0e and d8f2d6e.",
   "commits": [
@@ -232,6 +234,22 @@
       "treeId": "a37b427fe47e741aae05f1bf09bb8af446b84c91",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "23901841952824d15120d1c35fbd020358af1cea",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T08:40:31Z",
+      "paths": [
+        ".moe/tasks/task-10e201f9cdec49578c71981cd4799551.json",
+        ".moe/tasks/task-bde8654052f648f9b209174c3708322b.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T08:49:36.279Z",
+      "treeId": "745aceb3b1bec7a2558e942daaa00c37c8fa81b5",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -247,9 +265,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-3729a0d6@2026-10-26T08:34:34Z",
-    "at": "2026-10-26T08:39:58.757Z"
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T08:40:31Z",
+    "at": "2026-10-26T08:49:36.279Z"
   },
   "rejectionDetails": {
     "issues": [

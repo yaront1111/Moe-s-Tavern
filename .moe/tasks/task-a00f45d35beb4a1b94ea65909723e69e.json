@@ -60,7 +60,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -73,16 +73,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T08:32:50.950Z",
-  "updatedAt": "2026-10-26T08:41:42.650Z",
+  "updatedAt": "2026-10-26T08:49:34.715Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T08:34:51.276Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-26T08:49:34.715Z",
+    "wallClockMs": 883439
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "standard",
   "effort": "high",
@@ -150,5 +153,9 @@
     "kind": "completion",
     "sessionId": "worker-7d158765@2026-10-26T08:37:50Z",
     "at": "2026-10-26T08:41:42.650Z"
-  }
+  },
+  "completedAt": "2026-10-26T08:49:34.715Z",
+  "reviewCompletedAt": "2026-10-26T08:49:34.715Z",
+  "reviewSummary": "Review-only slice of landed dc13b0e (on moe/work-2026-10-24); the 5 files are byte-identical to HEAD. Completion commit 8cabb0c carries only the task JSON.\nSIZE: numstat of dc13b0e over the 5 files = schema.ts +6, candidateStore.ts +53/-5, candidateStore.test.ts +60/-1, recordCandidate.ts +11, recordCandidate.test.ts +17 = +147/-6, 141 net (<=400).\nDIFF READ: readProtectedEntries refuses non-array, >2000, non-object/extra-key/missing-key entries, non-normalized/traversal/control-char paths, non-lowercase-40-hex oids, and non-strictly-ascending UTF-8 order, all before writeEntity (nothing written). replayOrRefuse compares canonical JSON of ?? null, so absent != []. copy() deep-maps entries. The key is stored only via conditional spread, so the held-out payload gains no key. inputSchema is closed ({path,oid}, additionalProperties false) and optional.\nDoD: (1) 'persists a valid protectedEntries list and hands out copies', incl []; (2) badEntries table, 13 rows incl the 2001 bound, each asserts INVALID_INPUT + field index + no files written; (3) 'treats protectedEntries as frozen' (undefined/[]/changed refused as CANDIDATE_IMMUTABLE, identical replay duplicate:true, bytes unchanged); (4) recordCandidate.test schema+record case, and held-out acceptance.test passes unchanged.\nRE-RAN in an isolated Linux snapshot of HEAD (MOE_* unset, Linux-only PATH): candidateStore+recordCandidate+acceptance = 3 files, 81 passed; tsc --noEmit exit 0; npm test exit 0, 167 files, 4219 passed / 16 skipped, matching the worker. Two independent mutation probes on scratch bytes (restored, cmp-identical): absent==[] killed by the frozen test; dropping the already-normalized check killed by the './' and backslash rows.\nNOT re-run: the worker's other four probes (ordering, oid case, shallow copy, cap 2001).\nResidual risk: none found. Entries are runner-reported and never verified by design (V03 authenticates runners). An advisory NO-COMPLETION-COMMIT is expected: the bytes are in dc13b0e.",
+  "requiredCheckAtDone": null
 }
