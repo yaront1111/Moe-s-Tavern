@@ -106,7 +106,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -123,16 +123,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T09:42:51.863Z",
-  "updatedAt": "2026-10-26T10:26:10.164Z",
+  "updatedAt": "2026-10-26T10:29:49.139Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T09:47:26.926Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-26T10:29:49.139Z",
+    "wallClockMs": 2542213
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "standard",
   "effort": "high",
@@ -182,7 +185,48 @@
     "docs/MCP_SERVER.md",
     "docs/SCHEMA.md",
     "docs/PLAN_APPROVAL_FRESHNESS.md",
-    "docs/CONFIGURATION.md"
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json"
   ],
-  "completionSummary": "CQ-F12b delivered: docs only plus drift test (executionContractDocs.test.ts, 12 tests, none skipped; first RED 11 failed). MCP_SERVER.md: get_context sessionId/servedContext/receiptStatus/packetId (comment-412119fd), shared proxy identity paragraph and the two refusal codes (3228d389), start_step strict entry (e4992d04), complete_step/complete_task strict completion and EXECUTION_EVIDENCE_INELIGIBLE (0de6f303), approval CAS token rules, durable-authorization wording, SPEED/TURBO stamp, withhold, restart re-arm (b83aef8d, eee23c5e, 8e824b16). SCHEMA.md: Task listing, corrected planRevision materiality and stale omission sentence (b41f072c, dc06d662), new approvedPlanRevision and executionContract subsections, snapshot Consumers fix, ExecutionAttempt contextReceipt/stepCompletions, validation bounds. PLAN_APPROVAL_FRESHNESS.md: Boundaries, consumption section, evidence map (78686731, dc06d662). CONFIGURATION.md: MOE_SESSION_ID and attempt-pair env rows, executionProfile row, SPEED/TURBO lines. Deviation: contract has 9 fields at HEAD (requiredChecks from CQ-V01a), documented minimally. Readiness ordering left to CQ-F12. verified-local stays unavailable."
+  "completionSummary": "CQ-F12b delivered: docs only plus drift test (executionContractDocs.test.ts, 12 tests, none skipped; first RED 11 failed). MCP_SERVER.md: get_context sessionId/servedContext/receiptStatus/packetId (comment-412119fd), shared proxy identity paragraph and the two refusal codes (3228d389), start_step strict entry (e4992d04), complete_step/complete_task strict completion and EXECUTION_EVIDENCE_INELIGIBLE (0de6f303), approval CAS token rules, durable-authorization wording, SPEED/TURBO stamp, withhold, restart re-arm (b83aef8d, eee23c5e, 8e824b16). SCHEMA.md: Task listing, corrected planRevision materiality and stale omission sentence (b41f072c, dc06d662), new approvedPlanRevision and executionContract subsections, snapshot Consumers fix, ExecutionAttempt contextReceipt/stepCompletions, validation bounds. PLAN_APPROVAL_FRESHNESS.md: Boundaries, consumption section, evidence map (78686731, dc06d662). CONFIGURATION.md: MOE_SESSION_ID and attempt-pair env rows, executionProfile row, SPEED/TURBO lines. Deviation: contract has 9 fields at HEAD (requiredChecks from CQ-V01a), documented minimally. Readiness ordering left to CQ-F12. verified-local stays unavailable.",
+  "commits": [
+    {
+      "sha": "5a585819a7a217cb4f96d072cb1c1de18a5bcad0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T10:18:02Z",
+      "paths": [
+        ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/PLAN_APPROVAL_FRESHNESS.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T10:26:57.368Z",
+      "treeId": "977327f8149449b0f3a332d6db73efa173229e0e",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T10:18:02Z",
+    "at": "2026-10-26T10:26:57.368Z"
+  },
+  "completedAt": "2026-10-26T10:29:49.139Z",
+  "reviewCompletedAt": "2026-10-26T10:29:49.139Z",
+  "reviewSummary": "APPROVED. Commit 5a58581 (completion, on moe/work-2026-10-24 = HEAD) checked via git show; docs + new test net +228 LOC (<400). Re-ran verification myself from a fresh `git archive HEAD` Linux snapshot (native node_modules, env -i): `cd packages/moe-daemon && npx vitest run src/util/executionContractDocs.test.ts` = 12 passed, 0 skipped; with taskTimeBudgetDocs/daemonGitDocs/qaCommitPolicy = 41 passed. Traced doc claims to source: receiptStatus precedence/packetId/record-failed (getContext.ts:140-190), sessionId rule (attemptStore.ts:385), strict entry order + codeNames (executionAuthorization.ts:41-118), complete_step evidence-before-write (completeStep.ts:51-102), complete_task ordering + EXECUTION_EVIDENCE_INELIGIBLE (completeTask.ts:176-179), proxy tool table and both refusal codes (proxy utils.ts:252-345), SPEED withhold/restart re-arm/TURBO stamp (submitPlan.ts:84-176, 585-597), timer cancel only after approval write (taskStore.ts:745-757), launcher env rows (moe-agent.sh). SCHEMA: approvedPlanRevision/executionContract/contextReceipt/stepCompletions, planRevision materiality (taskStore.ts approvalPlanSurface/derivePlanRevision) and bounds (validators.ts) match; the disclosed nine-field deviation (requiredChecks) is correct. FRESHNESS/CONFIGURATION: stale lines gone (grep clean). The drift test anchors on the real EXECUTION_CONTRACT_FIELDS import, scopes assertions per section, section() throws on a missing heading, no skipIf. Scope is docs + test only, 0 CR, no forbidden tokens. Out of scope/unverified: readiness-order wording left to CQ-F12; verified-local still documented unavailable. Non-blocking notes for F12: MCP_SERVER submit_plan executionContract param list omits requiredChecks (CQ-V); the schema.ts approvedPlanRevision comment still says 'omitted-token human approval'. No candidateId was supplied in context.",
+  "requiredCheckAtDone": null
 }
