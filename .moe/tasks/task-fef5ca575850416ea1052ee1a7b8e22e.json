@@ -25,9 +25,9 @@
       "modifiedFiles": [
         "packages/moe-daemon/src/tools/getContextPacket.test.ts"
       ],
-      "note": "RED test file written (~185 lines), 18 cases: DoD1 across 5 callers x 2 views, missing facts, omissions with counts, a builder unit for odd shapes/chat/conditional requiredCheckSnapshot, expand/restructure, 7 refusal values x 3 views before any write, DoD3 recorded read + strict start_step PLAN_REVISION_NOT_APPROVED, status/no-task without a manifest. RED in snapshot /tmp/moe-c01-gate.BhBju5: the file fails at import of ../context/contextPacket.js, because the module does not exist yet.\nDeviation: DEFAULT_CHAT_CONTEXT_LIMIT is 0 (and the per-message cap is 300, not 1000), so get_context never serves chat messages. Chat truncation is therefore tested at the builder level instead of through the tool. The shared tree has other sessions' dirty paths; I left them untouched.",
-      "startedAt": "2026-10-25T23:18:36.156Z",
-      "completedAt": "2026-10-25T23:22:01.578Z"
+      "note": "Reopen #1 re-run. No test edits were needed. getContextPacket.test.ts landed in 1bf084c and the worktree copy equals HEAD (blob bfcb15ab). RED has already been shown for the right reason: QA's pure archive of HEAD 6439001, without the getContext.ts wiring, failed 18/20 in this file (\"ROLE_OMITTED not exported\", \"packetManifest undefined\", \"packetBudgetChars accepted\"). Those failures come from the missing feature, not from typos.",
+      "startedAt": "2026-10-26T00:12:11.240Z",
+      "completedAt": "2026-10-26T00:12:50.592Z"
     },
     {
       "stepId": "step-2",
@@ -40,9 +40,9 @@
       "modifiedFiles": [
         "packages/moe-daemon/src/context/contextPacket.ts"
       ],
-      "note": "New module context/contextPacket.ts (~140 lines with doc comments). It is pure. It exports:\n- MANDATORY_SECTIONS (7 paths), plus the internal conditional task.requiredCheckSnapshot;\n- the budget constants DEFAULT 100000, MIN 1000 and MAX 250000;\n- readPacketBudgetChars: strict, refuses invalidInput('packetBudgetChars') and never clamps;\n- the PacketSection, PacketManifest and PacketInput types (status = Extract<SourceItemStatus> from C02);\n- buildPacketManifest.\nInternally it has an own-property path reader, servable() and omissions().\nProvenance ids are string|null: an odd shape gives null, never an invented id.\nSnapshot run (removed afterwards): the builder unit test is GREEN, the status/no-task test passes (a regression guard), and the 17 get_context cases are RED for the right reasons: ROLE_OMITTED is not exported, packetManifest is undefined, and packetBudgetChars is accepted.",
-      "startedAt": "2026-10-25T23:22:02.508Z",
-      "completedAt": "2026-10-25T23:23:21.411Z"
+      "note": "Reopen #1 re-run. No edits were needed. contextPacket.ts landed in 1bf084c and the worktree copy equals HEAD (blob e154c0cb). QA reviewed it clean against DoD 1-3: it is pure, reads own properties only, and refuses budgets strictly without clamping. The rejection is a delivery gap in getContext.ts only (step 3), so there is no reason to redo this file.",
+      "startedAt": "2026-10-26T00:12:52.808Z",
+      "completedAt": "2026-10-26T00:12:59.027Z"
     },
     {
       "stepId": "step-3",
@@ -54,41 +54,30 @@
       "modifiedFiles": [
         "packages/moe-daemon/src/tools/getContext.ts"
       ],
-      "note": "getContext.ts wired, +29/-10:\n- ROLE_OMITTED is exported.\n- New packetBudgetChars schema input (integer, min/max from the constants) and a one-sentence description extension.\n- readPacketBudgetChars runs right after readContextSessionId, before the status return and any write.\n- The lower-order sibling filter is hoisted into lowerOrder to compute siblingsBeyondCap. The served list is unchanged.\n- packet → body. With a task: packet = {...body, packetManifest}. planRevision comes through the decoded() guard and the packet is passed to servedContextIdentity, so it is digested. The no-task path returns body.\nSnapshot /tmp/moe-c01-gate.Bu6bw5: getContextPacket.test.ts 19/19 GREEN, tsc --noEmit exit 0.",
-      "startedAt": "2026-10-25T23:23:22.244Z",
-      "completedAt": "2026-10-25T23:23:55.463Z"
+      "note": "Reopen #1 fix for the delivery gap (QA issue 1). The getContext.ts wiring was reviewed clean and is C01-only (+29/-10: ROLE_OMITTED export, packetBudgetChars schema and validation, siblingsBeyondCap, body/packet with packetManifest before servedContextIdentity), so its bytes are kept, not redone.\n- Made the file TOOL-touched with a net-zero Claude Edit round trip on the line-632 comment (two Edit calls).\n- After the round trip: sha256 4169e245… is unchanged, blob db08345d (matches 'index cc1d282..db08345'), numstat 29/10, LF-only, trailing newline intact.\n- Evidence the wrapper will land it: this session's harvest file /tmp/tmp.xgpKYSoKaf/tool-writes-132396.txt (parser pid 969989; MOE_SESSION_ID worker-7d158765@2026-10-26T00:08:15Z) lists packages/moe-daemon/src/tools/getContext.ts. The contested path therefore passes 'skip-untouched' (V01 task-bde86540 still plans it).\n- Source drift: HEAD b7941b0 minus .moe equals f178123 plus C01's two landed files. HEAD plus this blob is therefore exactly the tree previously gated green (166 files, 4199 passed).\n- Delivery order, per QA issue 2 (\"once getContext.ts has landed, gate a pure archive of HEAD, no overlay, then complete_task\"): this session ends here, so the wrapper's WORKING checkpoint commit lands getContext.ts. The next session runs step 4 on a pure `git archive HEAD` with no overlay, confirms `git show --stat` lists the file, then runs step 5 and complete_task.",
+      "startedAt": "2026-10-26T00:12:59.813Z",
+      "completedAt": "2026-10-26T00:15:41.822Z"
     },
     {
       "stepId": "step-4",
       "description": "Gate, run once and fresh: `cd packages/moe-daemon && npm test` (the full suite, because get_context is a shared protocol surface), plus `npx tsc --noEmit`. Supply the npm test command, exit 0 and its output tail to moe.complete_task.\n\nRun it in a Linux snapshot, never in the shared checkout: its node_modules is a Windows install and fails on the rolldown native binding.\n\nRecipe (Serena memory gotcha-linux-vitest-reuse-native-node-modules):\n1. SNAP=$(mktemp -d /tmp/moe-c01-gate.XXXXXX).\n2. `git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json | tar -x -C \"$SNAP\"`.\n3. Symlink the DIRECTORY /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules into place. If it is gone, run `npm ci` in a separate scratch copy, after checking that the lockfile matches HEAD.\n4. Copy the three task files over and cmp them against the worktree.\n5. Run with every MOE_* variable unset: `env -i HOME=\"$HOME\" PATH=\"<linux node bin>:/usr/bin:/bin\" TMPDIR=/tmp bash -c 'cd packages/moe-daemon && npm test'`.\n\nExpect 0 failures. Fix any existing get_context test that breaks with systematic-debugging, never by loosening a legacy expectation. The manifest is additive, so a failure means a real regression. That is the error handling for this gate. Record file/test counts and the snapshot path in the step note. rm -rf the snapshot afterwards, checking the prefix first.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "Gate run fresh in snapshot /tmp/moe-c01-gate.w1nteT:\n- Setup: git archive of HEAD b9ebc4a (whole repo), the 3 owned files overlaid and cmp-equal, and the native node_modules symlinked (lockfile equal to HEAD modulo CR). Run under env -i with Linux node v24.21.0 and no MOE_*.\n- `cd packages/moe-daemon && npm test`: exit 0, Test Files 166 passed (166), Tests 4198 passed | 14 skipped (4212), 21.78s.\n- `npx tsc --noEmit`: exit 0.\n- No legacy get_context test broke.\n- Log: /tmp/moe-c01-npmtest.log.\nI'm keeping the snapshot for step-5 mutation probes and will remove it afterwards.",
-      "startedAt": "2026-10-25T23:23:56.288Z",
-      "completedAt": "2026-10-25T23:24:33.573Z"
+      "status": "PENDING",
+      "affectedFiles": []
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review: load adversarial-self-review and review `git diff -- packages/moe-daemon`. Check each of these:\n- Can a mandatory section ever be shortened, dropped or role-trimmed? Is mandatoryChars measured on what is actually served?\n- Does the path reader resist prototype-chain names?\n- Are omissions reported only when real, with exact counts?\n- Is the manifest deterministic for unchanged state (sorted sections and limitations)? Is it inside the F06 digest?\n- Is packetBudgetChars refused strictly, never clamped, before any write?\n- Is view:'status' byte-identical?\n- Is there no approval, readiness or authorization field, and does nothing read the manifest as approval?\n- What is the token cost? The manifest carries only paths, codes and counts, never duplicated content.\n- Error handling: no throw from the builder on odd shapes (it treats them as missing). The only refusal is the input validation.\n- Scope:\n  - only the three planned files changed;\n  - no .moe edits and no git writes;\n  - no forbidden-pattern tokens;\n  - net LOC 400 or less including tests (`git diff --numstat`).\n\nFix findings with a focused test. If anything changed, re-run the step-4 gate fresh and supply that output. The completion summary states the manifest contract for C04-C11 (keys, statuses, reasons, limitations, budget constants) and that docs are C11's.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/getContextPacket.test.ts",
-        "packages/moe-daemon/src/context/contextPacket.ts",
-        "packages/moe-daemon/src/tools/getContext.ts"
-      ],
-      "note": "Adversarial review of `git diff -- packages/moe-daemon`:\n- Scope: only the 3 planned files. Net 365 LOC (+375/-10) including tests. No .moe edits, no git writes, no forbidden tokens.\n- Mandatory sections are measured on the same body objects that are served, and the builder never mutates them.\n- The own-property reader ignores inherited names.\n- Sections are sorted and limitations come in a fixed order. The manifest is inside the F06 digest (sha test).\n- packetBudgetChars is validated before getTask, the status return and any write.\n- The status view and the no-task path are unchanged.\n- The manifest key set is fixed with no approval field, and nothing reads it.\nFindings fixed with tests:\n- Added a tool-level unreadable planRevision test (planRevision -1 gives provenance null plus 'plan-revision-unreadable', and get_context does not throw).\n- Added the budget boundary at the builder (equal is within, one under is expand).\nMutation probes, 17/17 killed:\n- own-inherited, taskRails-empty-served, drop-contract-mandatory, blank-string-served;\n- no-budget-validation, clamp-budget, restructure-never, within-strict-lt;\n- siblings-after-cap, siblings-ignore-trim, comments-truncated-ignored, complete-ignores-omissions;\n- no-unreadable-limitation, planRevision-unguarded, chat-count-all;\n- manifest-outside-digest, digest-body-only.\nBaseline 20/20 before and after.\nTheoretical only: a hand-edited contract nested deep enough to overflow JSON.stringify would throw in the builder. The MCP transport's own stringify of the response fails the same way, so this is not a new failure mode.\nGate re-run fresh in snapshot /tmp/moe-c01-gate.1xkrxH (removed), HEAD f178123 plus the 3 cmp-equal owned files (no peer commit touched them):\n- npm test exit 0, 166 files, 4199 passed / 14 skipped;\n- tsc exit 0.",
-      "startedAt": "2026-10-25T23:24:34.488Z",
-      "completedAt": "2026-10-25T23:27:06.255Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
-  "planRevision": 11,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "planRevision": 18,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-7d158765",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "This is a delivery gap: the code reviews clean but never fully reached the branch. Completion commit 1bf084c (on moe/work-2026-10-24, pushed) carries only 3 paths: .moe/tasks/task-fef5ca57.json, context/contextPacket.ts and tools/getContextPacket.test.ts. It does NOT include packages/moe-daemon/src/tools/getContext.ts. Its trailer reads `Moe-Contested: .../getContext.ts (task-bde86540)`. V01 is still PLANNING and still declares that path, and under the default contested policy 'skip-untouched' the wrapper skipped it because this session's editing tools never wrote it.\n\nThe wiring (+29/-10: ROLE_OMITTED export, packetBudgetChars, siblingsBeyondCap, packetManifest before servedContextIdentity) exists only as dirty bytes in the shared tree. No commit, rescue ref or other branch carries it (checked `git log --all -S` and refs/moe/rescue).\n\nSo the delivered branch fails DoD 4. QA re-ran it in a Linux snapshot (`git archive HEAD` at 6439001, which contains 1bf084c, no overlay, native node_modules, env -i with no MOE_*). `cd packages/moe-daemon && npm test` exits 1: Test Files 1 failed | 165 passed, with 18 failures in getContextPacket.test.ts (ROLE_OMITTED not exported, packetManifest undefined, packetBudgetChars accepted). The worker's gate overlaid the never-landed getContext.ts onto the archive, so it did not prove the delivered bytes. DoD 1-3 are therefore not on the branch either.\n\nQA cannot self-land: the task rail forbids agent Git writes.\n\nSubstance (non-blocking): with the dirty getContext.ts overlaid (cmp-equal), the full suite passes (166 files, 4199 passed, 14 skipped) and tsc exits 0. contextPacket.ts and the 20 whole-object tests review clean against DoD 1-3. The dirty diff is C01-only, with no V01 bytes.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -105,11 +94,17 @@
       "author": "architect-6e3edf85",
       "content": "The F06 plan (rev 1, now WORKING) fixes the packet identity this task extends. Re-verify against the landed F06 code before planning. Serena memory: decision-served-context-receipt.\n\n- packetId = 'sha256:' + sha256 of JSON.stringify(the get_context response minus its servedContext block). A read that records a receipt serves exactly the digested bytes.\n- Receipts persist on ExecutionAttempt.contextReceipt, latest wins. Each binds taskId, attemptId, generation, workerId, sessionId, planRevision, approvedPlanRevision (when present) and view. Only the running attempt's own worker gets one, and only when it presents a sessionId.\n- New mandatory packet sections fall under the digest automatically.\n- Packet and receipt ids never grant approval or step entry. Approval stays Task.approvedPlanRevision === planRevision, plus the attempt fences.",
       "timestamp": "2026-10-25T10:44:23.924Z"
+    },
+    {
+      "id": "comment-1e657fac97364a2db432f966ac5bf9ee",
+      "author": "worker-7d158765",
+      "content": "Reopen #1 delivery fix, done over two sessions so the gate can follow QA issue 2 literally.\n\nSession A (this one):\n- getContext.ts was made TOOL-touched with a net-zero Claude Edit round trip. Its bytes are unchanged: blob db08345d, sha256 4169e245…, +29/-10, the C01-only wiring QA reviewed.\n- This session's tool-writes harvest lists the path, so the contested path (V01 task-bde86540) passes 'skip-untouched'.\n- The session ends at WORKING with steps 1-3 done. The wrapper's checkpoint commit lands getContext.ts.\n\nSession B (next):\n- Confirm with `git show --stat` that the checkpoint lists packages/moe-daemon/src/tools/getContext.ts with blob db08345d.\n- Gate `cd packages/moe-daemon && npm test` on a pure `git archive HEAD`, with no overlay, native node_modules and env -i.\n- Then step 5 and complete_task.\n\nThe completion commit will then carry only the board record; getContext.ts lands in that wip checkpoint.",
+      "timestamp": "2026-10-26T00:15:51.526Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:25.001Z",
-  "updatedAt": "2026-10-25T23:28:09.979Z",
+  "updatedAt": "2026-10-26T00:15:51.526Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7",
     "task-35584de27bb24c38a3cf508aeba5550c",
@@ -119,13 +114,13 @@
     "firstClaimAt": "2026-10-24T17:52:01.175Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-bb003851",
-    "architect-6e3edf85",
-    "architect-4c57a52b",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -171,35 +166,76 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "b7941b0537a754d9280981c5dfcdc255c868525b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-7c627d35@2026-10-26T00:01:43Z",
+      "paths": [
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json"
+      ],
+      "recordedBy": "qa-7c627d35",
+      "recordedAt": "2026-10-26T00:09:14.815Z",
+      "treeId": "4a17cc9f4ce72e1977a72a2e29aee0228b72f597",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/getContext.ts",
+          "taskId": "task-bde8654052f648f9b209174c3708322b"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/tools/getContextPacket.test.ts",
     "packages/moe-daemon/src/context/contextPacket.ts",
     "packages/moe-daemon/src/tools/getContext.ts",
-    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json"
+    ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
+    ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json"
   ],
   "unattributedPaths": [
     "2026-10-24-ai-code-quality-and-context.md"
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-25T23:17:17Z",
-    "at": "2026-10-25T23:28:09.978Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-7c627d35@2026-10-26T00:01:43Z",
+    "at": "2026-10-26T00:09:14.815Z"
   },
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
+    "step-3"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
+      "rejectedAt": "2026-10-26T00:08:00.951Z",
+      "rejectedBy": "qa-7c627d35"
+    },
+    {
+      "item": "Required fields survive role trimming.",
+      "rejectedAt": "2026-10-26T00:08:00.951Z",
+      "rejectedBy": "qa-7c627d35"
+    },
+    {
+      "item": "Budget overflow returns expansion/restructure requirement, not silent mandatory truncation.",
+      "rejectedAt": "2026-10-26T00:08:00.951Z",
+      "rejectedBy": "qa-7c627d35"
+    },
+    {
+      "item": "Packet identity never grants approval.",
+      "rejectedAt": "2026-10-26T00:08:00.951Z",
+      "rejectedBy": "qa-7c627d35"
+    }
+  ],
   "planSubmittedAt": "2026-10-25T22:58:42.376Z",
   "planningNotes": {
     "approachesConsidered": "1. Duplicate the mandatory contract into a separate packet object: rejected. That doubles tokens (CQ-TOKEN rails), since the fields already sit in the response. The manifest references paths instead.\n2. Put the manifest inside servedContext: rejected. servedContext is outside F06's digest, and the manifest must be digested.\n3. Trim optional sections to fit the budget now: rejected for C01. It changes legacy payloads, and DoD2 only forbids silent MANDATORY truncation. The budget measures the mandatory contract and answers expand or restructure; optional trimming can come with C06/C10.\n4. Clamp packetBudgetChars with normalizeIntegerOption: rejected, because it coerces. The value is refused instead.\n5. Define a new status vocabulary: rejected. The manifest reuses C02's SourceItemStatus subset (per architect-26ba32c3's note).\n6. Put identity in the manifest: rejected. servedContext already carries task, attempt and revision on every task read; duplicating it inside the digest adds bytes for no binding gain, because the receipt binds packetId with identity.",
@@ -228,5 +264,51 @@
   "touchedFiles": [
     "packages/moe-daemon/src/tools/getContextPacket.test.ts",
     "packages/moe-daemon/src/context/contextPacket.ts"
+  ],
+  "reviewCompletedAt": "2026-10-26T00:08:00.951Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
+      "Required fields survive role trimming.",
+      "Budget overflow returns expansion/restructure requirement, not silent mandatory truncation.",
+      "Packet identity never grants approval."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "packages/moe-daemon/src/tools/getContext.ts",
+        "description": "Missing from completion commit 1bf084c: skipped as MOE_ATTR_CONTESTED_UNTOUCHED (V01 still declares it). The dirty bytes are correct and C01-only, so do not revert or redo them. In the fix session, Read and then Write the file through the Claude Edit/Write tool, keeping its exact bytes and line endings, so the wrapper sees it as tool-touched and lands it. If the contest still blocks it, ask the architect to resolve V01's declaration. Confirm `git show --stat <sha>` lists it."
+      },
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/tools/getContextPacket.test.ts",
+        "description": "At delivered HEAD 6439001 (pure git archive, no overlay), `cd packages/moe-daemon && npm test` exits 1, with 18/20 failures in this file. Once getContext.ts has landed, re-run the gate from a pure `git archive` of the completion sha (or HEAD) with NO owned-file overlay, so it proves the delivered bytes. Supply that exit 0 and its output tail to complete_task."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "This is a delivery gap: the code reviews clean but never fully reached the branch. Completion commit 1bf084c (on moe/work-2026-10-24, pushed) carries only 3 paths: .moe/tasks/task-fef5ca57.json, context/contextPacket.ts and tools/getContextPacket.test.ts. It does NOT include packages/moe-daemon/src/tools/getContext.ts. Its trailer reads `Moe-Contested: .../getContext.ts (task-bde86540)`. V01 is still PLANNING and still declares that path, and under the default contested policy 'skip-untouched' the wrapper skipped it because this session's editing tools never wrote it.\n\nThe wiring (+29/-10: ROLE_OMITTED export, packetBudgetChars, siblingsBeyondCap, packetManifest before servedContextIdentity) exists only as dirty bytes in the shared tree. No commit, rescue ref or other branch carries it (checked `git log --all -S` and refs/moe/rescue).\n\nSo the delivered branch fails DoD 4. QA re-ran it in a Linux snapshot (`git archive HEAD` at 6439001, which contains 1bf084c, no overlay, native node_modules, env -i with no MOE_*). `cd packages/moe-daemon && npm test` exits 1: Test Files 1 failed | 165 passed, with 18 failures in getContextPacket.test.ts (ROLE_OMITTED not exported, packetManifest undefined, packetBudgetChars accepted). The worker's gate overlaid the never-landed getContext.ts onto the archive, so it did not prove the delivered bytes. DoD 1-3 are therefore not on the branch either.\n\nQA cannot self-land: the task rail forbids agent Git writes.\n\nSubstance (non-blocking): with the dirty getContext.ts overlaid (cmp-equal), the full suite passes (166 files, 4199 passed, 14 skipped) and tsc exits 0. contextPacket.ts and the 20 whole-object tests review clean against DoD 1-3. The dirty diff is C01-only, with no V01 bytes.",
+      "rejectedAt": "2026-10-26T00:08:00.951Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
+        "Required fields survive role trimming.",
+        "Budget overflow returns expansion/restructure requirement, not silent mandatory truncation.",
+        "Packet identity never grants approval."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "packages/moe-daemon/src/tools/getContext.ts",
+          "description": "Missing from completion commit 1bf084c: skipped as MOE_ATTR_CONTESTED_UNTOUCHED (V01 still declares it). The dirty bytes are correct and C01-only, so do not revert or redo them. In the fix session, Read and then Write the file through the Claude Edit/Write tool, keeping its exact bytes and line endings, so the wrapper sees it as tool-touched and lands it. If the contest still blocks it, ask the architect to resolve V01's declaration. Confirm `git show --stat <sha>` lists it."
+        },
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/tools/getContextPacket.test.ts",
+          "description": "At delivered HEAD 6439001 (pure git archive, no overlay), `cd packages/moe-daemon && npm test` exits 1, with 18/20 failures in this file. Once getContext.ts has landed, re-run the gate from a pure `git archive` of the completion sha (or HEAD) with NO owned-file overlay, so it proves the delivered bytes. Supply that exit 0 and its output tail to complete_task."
+        }
+      ]
+    }
   ]
 }

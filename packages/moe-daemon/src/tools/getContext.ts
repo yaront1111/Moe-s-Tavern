@@ -15,6 +15,9 @@ import { currentAttempt, readContextSessionId, recordContextReceipt } from '../s
 import { decodeStoredPlanRevision } from '../state/taskStore.js';
 import { readRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 import {
+  buildPacketManifest, MAX_PACKET_BUDGET_CHARS, MIN_PACKET_BUDGET_CHARS, readPacketBudgetChars,
+} from '../context/contextPacket.js';
+import {
   readExecutionPolicySnapshot,
   resolveExecutionProfile,
   resolveTaskExecutionProfile,
@@ -27,7 +30,7 @@ import {
  */
 // Default-view trims per role (view:"full" is never trimmed). routing is the
 // planner's model/effort catalog: only architects and governors choose from it.
-const ROLE_OMITTED: Record<string, string[]> = {
+export const ROLE_OMITTED: Record<string, string[]> = {
   qa: ['task.epicSiblings', 'planningNotes', 'routing'],
   worker: ['routing'],
 };
@@ -199,7 +202,7 @@ import {
 export function getContextTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_context',
-    description: 'Read the working context for one task: project settings and global/epic/task rails, the epic, the task (plan and steps, definitionOfDone, executionContract when set, recent comments, verification, commits), its assigned worker, recent chat, planningNotes and a nextAction hint. Read-only. Fetch it after claiming and before planning, implementing or reviewing. Includes `routing` (the model catalog, efforts and tier defaults the architect picks from at submit_plan). Trimmed per role by default (a QA caller does not get task.epicSiblings, planningNotes or routing; a worker does not get routing; the response lists what was left out in `omitted`). That default is the complete read for the role: pass view:"full" only if you need a left-out section (any role may). view:"status" is a lighter delivery poll that does not count as having read the context. With a task, the default and view:"full" reads end with `servedContext`: the task\'s planRevision and approvedPlanRevision, its open attempt\'s attemptId and generation, and receiptStatus. Pass `sessionId` and such a read by the worker owning the task\'s running attempt records a durable served-context receipt (receiptId, and packetId: the sha256 of the payload without servedContext). A receipt records what was served to whom, never approval.',
+    description: 'Read the working context for one task: project settings and global/epic/task rails, the epic, the task (plan and steps, definitionOfDone, executionContract when set, recent comments, verification, commits), its assigned worker, recent chat, planningNotes and a nextAction hint. Read-only. Fetch it after claiming and before planning, implementing or reviewing. Includes `routing` (the model catalog, efforts and tier defaults the architect picks from at submit_plan). Trimmed per role by default (a QA caller does not get task.epicSiblings, planningNotes or routing; a worker does not get routing; the response lists what was left out in `omitted`). That default is the complete read for the role: pass view:"full" only if you need a left-out section (any role may). view:"status" is a lighter delivery poll that does not count as having read the context. With a task, the default and view:"full" reads end with `servedContext`: the task\'s planRevision and approvedPlanRevision, its open attempt\'s attemptId and generation, and receiptStatus. Pass `sessionId` and such a read by the worker owning the task\'s running attempt records a durable served-context receipt (receiptId, and packetId: the sha256 of the payload without servedContext). A receipt records what was served to whom, never approval. Those reads also carry `packetManifest`: the mandatory sections (rails, description, definitionOfDone, plan, executionContract), never role-trimmed or truncated and listed as missing when unset, each explicit omission with its reason and count, limitations, provenance, and a budget measured against packetBudgetChars that answers an overflow with an expand or restructure requirement; it never grants approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -217,6 +220,10 @@ export function getContextTool(_state: StateManager): ToolDefinition {
           type: 'number',
           description: 'Maximum chars per task comment (default: 1000, max: 10000; 0 returns full comment content).'
         },
+        packetBudgetChars: {
+          type: 'integer', minimum: MIN_PACKET_BUDGET_CHARS, maximum: MAX_PACKET_BUDGET_CHARS,
+          description: `Character budget packetManifest measures the mandatory sections against (default 100000, ${MIN_PACKET_BUDGET_CHARS} to ${MAX_PACKET_BUDGET_CHARS}; anything else is refused). Never truncates: an overflow is reported with requirement expand or restructure.`
+        },
         sessionId: {
           type: 'string',
           description: 'The receiving session\'s incarnation exactly as its runner names it, e.g. the agent wrapper\'s MOE_SESSION_ID `<workerId>@<preflight-iso>`; the daemon never derives it. With it, a default or view:"full" read by the worker that owns the task\'s running attempt records a durable served-context receipt on that attempt; view:"status" never does. Non-blank, at most 255 chars, no NUL or line breaks; anything else is refused.'
@@ -232,6 +239,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
         commentsLimit?: number;
         commentsMaxChars?: number;
         sessionId?: unknown;
+        packetBudgetChars?: unknown;
       };
       const taskId = params.taskId || process.env.MOE_TASK_ID || '';
       const callerWorkerId = params.workerId || process.env.MOE_WORKER_ID || '';
@@ -245,6 +253,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       // Presented by the caller only (never process.env), and refused in every
       // view before any write: a malformed id must not stamp contextFetchedBy.
       const sessionId = readContextSessionId(params.sessionId);
+      const budgetChars = readPacketBudgetChars(params.packetBudgetChars);
 
       let task = taskId ? state.getTask(taskId) : null;
       let epic = task ? state.getEpic(task.epicId) : null;
@@ -389,13 +398,14 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       };
       // Prerequisites in the same epic (lower order), nearest first, bounded —
       // plus EVERY declared dependency target regardless of order/epic/cap.
-      const baseSiblings = task
-        ? Array.from(state.tasks.values())
-            .filter((t) => t.epicId === task.epicId && t.id !== task.id && t.order < task.order)
-            .sort((a, b) => b.order - a.order)
-            .slice(0, MAX_EPIC_SIBLINGS)
-            .sort((a, b) => a.order - b.order)
+      const lowerOrder = task
+        ? Array.from(state.tasks.values()).filter((t) => t.epicId === task.epicId && t.id !== task.id && t.order < task.order)
         : [];
+      const siblingsBeyondCap = Math.max(0, lowerOrder.length - MAX_EPIC_SIBLINGS);
+      const baseSiblings = lowerOrder
+        .sort((a, b) => b.order - a.order)
+        .slice(0, MAX_EPIC_SIBLINGS)
+        .sort((a, b) => a.order - b.order);
       const baseSiblingIds = new Set(baseSiblings.map((t) => t.id));
       const declaredExtras = task
         ? Array.from(declaredTargetIds)
@@ -463,7 +473,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const omitted = (callerRole && ROLE_OMITTED[callerRole]) || [];
       const trimForQa = callerRole === 'qa';
 
-      const packet = {
+      const body = {
         project: {
           id: state.project.id,
           name: state.project.name,
@@ -618,7 +628,16 @@ export function getContextTool(_state: StateManager): ToolDefinition {
           ? { omitted, omittedHint: `Left out for the ${callerRole} role, whose work does not read them; this is the complete read for the role. Pass view:"full" only if you need one of these sections.` }
           : {}),
       };
-      if (!task) return packet;
+      if (!task) return body;
+      // Appended before servedContextIdentity, so F06's packetId digest covers it.
+      const packet = {
+        ...body,
+        packetManifest: buildPacketManifest(body, {
+          planRevision: decoded([], 'planRevision', () => decodeStoredPlanRevision(task)),
+          roleOmitted: omitted, siblingsBeyondCap, commitsTotal: commits.length,
+          rejectionsTotal: Array.isArray(task.rejectionHistory) ? task.rejectionHistory.length : 0, budgetChars,
+        }),
+      };
       const view = params.view === 'full' ? 'full' : 'default';
       const served = await servedContextIdentity(state, task, packet, { view, workerId: callerWorkerId, sessionId });
       return { ...served.packet, servedContext: served.servedContext };
