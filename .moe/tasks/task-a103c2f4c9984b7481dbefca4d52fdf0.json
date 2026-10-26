@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -95,16 +95,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T08:09:12.856Z",
-  "updatedAt": "2026-10-26T09:56:55.204Z",
+  "updatedAt": "2026-10-26T10:02:17.594Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T09:22:27.691Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T10:02:17.594Z",
+    "wallClockMs": 2389903
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-7c627d35"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -156,7 +159,72 @@
     "scripts/mods/moe-account-switch/.claude-plugin/plugin.json",
     "scripts/CLAUDE.md",
     "docs/MCP_SERVER.md",
+    "docs/CONFIGURATION.md",
+    ".moe/tasks/task-23a5563cea384d56abb8da1551435455.json",
+    ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+    ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+    ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+    ".moe/tasks/task-9ef257f58b7f4c4191f206f67bf3d865.json",
+    ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json",
+    ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json",
+    ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+    ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json"
+  ],
+  "completionSummary": "An interactive claude seat whose wrapper loop relaunches it now ends its session on the daemon's END_SESSION handoff. It uses the existing moe-account-switch path: the pending instruction, the refusal of claim_next_task/wait_for_task/chat_wait/start_step with the main turn aborted, and /exit 10 s after the main turn ends.\n\nregister.ts:\n- endSessionInstruction(r, workerId) reads a top-level sessionHandoff from a successful reply, only when action==='END_SESSION' and workerId===MOE_WORKER_ID. The reason is trimmed, else 'End your turn now: Moe relaunches this seat.'\n- It needs only MOE_WORKER_ID, so it works on an unrotated seat. MOE_ACCOUNT_ID still gates acceptsAccountSwitch and switchInstruction.\n- It requires a non-empty $.session.surfaces(), so it never acts in a -p run.\n- The first signal wins (??=). The toasts and the failed-/exit fallback name the kind.\n- It fails open through the replay-safe .catch(next).\n- checkHardLimit and StopFailure are unchanged.\n\nOther files:\n- register.test.ts: 22 new tests (exit, refusal, ignored shapes, no seat id, -p, subagent, fail-open, first-wins, failed /exit, reason fallback). The existing bodies are unchanged apart from one rename.\n- plugin.json: description only.\n- Docs: scripts/CLAUDE.md; docs/MCP_SERVER.md, where the stale claim_next_task BLOCKED-hold text, written before 512e4aa3, now matches blockedHoldGuidance; and the docs/CONFIGURATION.md opt-out row.\n\nResults:\n- Red run 39/9 on the old code. Green: 48/48 plus launcher 19/19.\n- Mutations M1-M9, plus M10 (the seat-id gate), all killed.\n- Net 258 LOC.\n\nAccepted edge: a governor that calls report_blocked on an UNASSIGNED row gets END_SESSION addressed to itself, so its TUI is relaunched. The daemon told that seat to end, and its state lives on the board.\n\nResidual: no live TUI exit/relaunch test. Watch the next real report_blocked from an interactive architect.",
+  "commits": [
+    {
+      "sha": "b850c68708be1dac74b3891eaed6230623eeb9ce",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T09:44:44Z",
+      "paths": [
+        ".moe/tasks/task-23a5563cea384d56abb8da1551435455.json",
+        ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-6be626cfe5744ee29deeb2bb1b59468e.json",
+        ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
+        ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+        ".moe/tasks/task-9ef257f58b7f4c4191f206f67bf3d865.json",
+        ".moe/tasks/task-a103c2f4c9984b7481dbefca4d52fdf0.json",
+        ".moe/tasks/task-b5f743bc50544d838422ce365616240e.json",
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+        ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json",
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "scripts/CLAUDE.md",
+        "scripts/mods/moe-account-switch/.claude-plugin/plugin.json",
+        "scripts/mods/moe-account-switch/hooks/register.test.ts",
+        "scripts/mods/moe-account-switch/hooks/register.ts"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T09:57:29.956Z",
+      "treeId": "db3598f0d6e7a6cd89d850fa3dcd6fa266d934f6",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/mods/moe-account-switch/hooks/register.test.ts",
+    "scripts/mods/moe-account-switch/hooks/register.ts",
+    "scripts/mods/moe-account-switch/.claude-plugin/plugin.json",
+    "scripts/CLAUDE.md",
+    "docs/MCP_SERVER.md",
     "docs/CONFIGURATION.md"
   ],
-  "completionSummary": "An interactive claude seat whose wrapper loop relaunches it now ends its session on the daemon's END_SESSION handoff. It uses the existing moe-account-switch path: the pending instruction, the refusal of claim_next_task/wait_for_task/chat_wait/start_step with the main turn aborted, and /exit 10 s after the main turn ends.\n\nregister.ts:\n- endSessionInstruction(r, workerId) reads a top-level sessionHandoff from a successful reply, only when action==='END_SESSION' and workerId===MOE_WORKER_ID. The reason is trimmed, else 'End your turn now: Moe relaunches this seat.'\n- It needs only MOE_WORKER_ID, so it works on an unrotated seat. MOE_ACCOUNT_ID still gates acceptsAccountSwitch and switchInstruction.\n- It requires a non-empty $.session.surfaces(), so it never acts in a -p run.\n- The first signal wins (??=). The toasts and the failed-/exit fallback name the kind.\n- It fails open through the replay-safe .catch(next).\n- checkHardLimit and StopFailure are unchanged.\n\nOther files:\n- register.test.ts: 22 new tests (exit, refusal, ignored shapes, no seat id, -p, subagent, fail-open, first-wins, failed /exit, reason fallback). The existing bodies are unchanged apart from one rename.\n- plugin.json: description only.\n- Docs: scripts/CLAUDE.md; docs/MCP_SERVER.md, where the stale claim_next_task BLOCKED-hold text, written before 512e4aa3, now matches blockedHoldGuidance; and the docs/CONFIGURATION.md opt-out row.\n\nResults:\n- Red run 39/9 on the old code. Green: 48/48 plus launcher 19/19.\n- Mutations M1-M9, plus M10 (the seat-id gate), all killed.\n- Net 258 LOC.\n\nAccepted edge: a governor that calls report_blocked on an UNASSIGNED row gets END_SESSION addressed to itself, so its TUI is relaunched. The daemon told that seat to end, and its state lives on the board.\n\nResidual: no live TUI exit/relaunch test. Watch the next real report_blocked from an interactive architect."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T09:44:44Z",
+    "at": "2026-10-26T09:57:29.956Z"
+  },
+  "completedAt": "2026-10-26T10:02:17.594Z",
+  "reviewCompletedAt": "2026-10-26T10:02:17.594Z",
+  "reviewSummary": "Reviewed b850c68 (on moe/work-2026-10-24, pushed; the tree matches it). Net 240 non-board LOC.\n\nChecks:\n- task.verification re-run fresh: exit 0. Plugin 48/48, launcher 19/19.\n- tsc (TS 6): register.ts is clean. Only the 2 baseline errors that already exist at HEAD remain in the test file.\n\nDoD:\n(1) END_SESSION runs /exit 10 s after the main turn ends, through the existing leave/exit path (T1 unrotated report_blocked; T2 leased held claim). The daemon shapes match: reportBlocked.ts:475 and blockedHoldGuidance return a top-level sessionHandoff, and waitForTask.ts:364 shares the refusal.\n(2) The 4 tools are refused and the turn is aborted for the rest of the session (T3).\n(3) No exit in these cases:\n- -p runs: a surfaces() check (documented as empty under -p, never rejects; T6), and the wrapper loads the mod only for interactive looped seats.\n- subagent turns (T7).\n- non-END_SESSION, other-seat, chat-quoted or isError replies (T4).\n- no seat id (T5).\nThe 26 existing tests are unchanged apart from one rename, and green. Unrotated seats work, gated on MOE_WORKER_ID only. It fails open (replay-safe .catch; T8).\n(4) The tests assert exact values. scripts/CLAUDE.md, MCP_SERVER.md (whose BLOCKED-hold text is corrected to match the code) and CONFIGURATION.md are accurate.\n\nNon-blocking:\n(a) A governor that calls report_blocked on an unassigned, not-yet-BLOCKED row gets END_SESSION and its TUI relaunches. This was disclosed; a fix would be daemon-side.\n(b) The comments above the wrapper's mod-load block mention only the account switch. The wrappers were deliberately left untouched.\n(c) No live TUI relaunch test: watch the next real report_blocked from an interactive architect.",
+  "requiredCheckAtDone": null
 }
