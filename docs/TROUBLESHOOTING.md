@@ -816,6 +816,33 @@ seat; it then moves at its next launch, as before. A `--no-loop`/`-NoLoop` or on
 the mod. If a seat leaves the toast `Type /exit and Moe relaunches it.` and keeps running, the claude build could not
 run `/exit` from the mod. Exit it by hand.
 
+### An interactive seat will not launch: `MOE_ACCOUNT_UNTRUSTED`
+
+**Symptom:** an interactive claude seat prints `[account] MOE_ACCOUNT_UNTRUSTED account=<id> project=<project> (<reason>) -
+not launching into Claude's folder-trust dialog; retry in <n>s, the held task stays held.` and launches nothing.
+#general gets one `@governors` line per account per lease loop, naming the account and the project, never the folder.
+When Moe did set the trust it prints `MOE_ACCOUNT_TRUST_GRANTED account=<id> project=<project>` instead and launches;
+an account that already trusts the project is quiet.
+
+**Cause:** an interactive claude stops at "Do you trust the files in this folder?" until the launch directory is
+trusted in the leased account's `.claude.json` (`claude -p` never asks). Before an interactive launch the wrapper helper
+`scripts/moe-account-lease.mjs trust` sets `projects[<key>].hasTrustDialogAccepted` there. `MOE_ACCOUNT_UNTRUSTED` means
+it could not, and `<reason>` is one of these:
+- `no .claude.json in the account folder`
+- `the account's .claude.json is not a regular file`
+- `the account's .claude.json is over 16 MiB`
+- `the account's .claude.json is not a JSON object`
+- `the account's .claude.json is locked by another claude`
+- `the account's .claude.json could not be rewritten`
+- `the trust entry did not read back`
+- `the launch directory is outside the project`
+
+The seat does not launch into the dialog. It waits `MOE_ACCOUNT_RETRY_SEC` (default 300) with the task held, then leases
+again. Headless `-p` seats never run this step.
+
+**Fix:** start claude once in the project under that account (its folder is `claude-accounts/<id>` next to the account
+list) and accept the trust dialog. The next lease finds the project trusted and launches.
+
 ### `MOE_ACCOUNT_WAIT retry_in=…`
 
 **Symptom:** a claude seat prints `[account] MOE_ACCOUNT_WAIT retry_in=<s>s next_reset=<iso> - every signed-in
