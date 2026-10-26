@@ -698,8 +698,9 @@ describe('stampExecutionIdentity', () => {
       expect(stampExecutionIdentity(msg, FULL)).toBe(true);
       expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1', ...IDENTITY });
     }
-    for (const name of ['moe.claim_next_task', 'moe.complete_step', 'moe.complete_task', 'moe.heartbeat',
-      'moe.get_activity_log', 'moe.reattach_attempt', 'constructor', 'toString', 'hasOwnProperty']) {
+    for (const name of ['moe.claim_next_task', 'moe.heartbeat', 'moe.complete_steps', 'moe.complete', 'moe.qa_approve',
+      'moe.submit_plan', 'moe.report_blocked', 'moe.get_activity_log', 'moe.reattach_attempt', 'constructor', 'toString',
+      'hasOwnProperty']) {
       const msg = call(name);
       expect(stampExecutionIdentity(msg, FULL)).toBe(false);
       expect(msg.params.arguments).toEqual({ taskId: 't1', stepId: 's1' });
@@ -712,5 +713,90 @@ describe('stampExecutionIdentity', () => {
       expect(stampExecutionIdentity(shape, FULL)).toBe(false);
       expect(JSON.stringify(shape)).toBe(before);
     }
+  });
+
+  // CQ-F12a: the completion tools carry the same attempt + session groups as start_step.
+  describe.each([
+    ['complete_step', { taskId: 't1', stepId: 's1' }],
+    ['complete_task', { taskId: 't1' }],
+  ])('%s', (tool, base) => {
+    const msgFor = (name: string, extra: Record<string, unknown> = {}) => call(name, { ...base, ...extra });
+
+    it('stamps the full identity under every spelling, with generation a number', () => {
+      const aliased = msgFor(`moe_${tool}`);
+      expect(resolveToolCallName(aliased, new Map())).toBe(true);
+      for (const msg of [msgFor(`moe.${tool}`), msgFor(`moe_${tool}`), msgFor(tool), aliased]) {
+        expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+        expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+        expect(typeof (msg.params.arguments as { generation: unknown }).generation).toBe('number');
+      }
+    });
+
+    it('stamps only sessionId from a session-only env', () => {
+      const msg = msgFor(`moe.${tool}`);
+      expect(stampExecutionIdentity(msg, { MOE_SESSION_ID: SESSION })).toBe(true);
+      expect(msg.params.arguments).toEqual({ ...base, sessionId: SESSION });
+    });
+
+    it('is the legacy passthrough when the session carries no identity, even for presented fields', () => {
+      for (const env of [{}, { MOE_SESSION_ID: '', MOE_ATTEMPT_ID: '  ', MOE_ATTEMPT_GENERATION: '' }]) {
+        for (const extra of [{}, { attemptId: 'x' }, { generation: '7' }]) {
+          const msg = msgFor(`moe.${tool}`, extra);
+          expect(stampExecutionIdentity(msg, env)).toBe(false);
+          expect(msg.params.arguments).toEqual({ ...base, ...extra });
+        }
+      }
+    });
+
+    it('accepts presented values equal to the env and completes the rest', () => {
+      for (const presented of [IDENTITY, { attemptId: 'attempt-0123' }, { generation: 7 }, { sessionId: SESSION }]) {
+        const msg = msgFor(`moe.${tool}`, presented);
+        expect(stampExecutionIdentity(msg, FULL)).toBe(true);
+        expect(msg.params.arguments).toEqual({ ...base, ...IDENTITY });
+      }
+    });
+
+    it('refuses a substituted field under every spelling without coercing, mutating or echoing', () => {
+      const cases: Array<Record<string, unknown>> = [
+        { attemptId: 'attempt-other' }, { attemptId: null }, { generation: '7' }, { generation: 8 },
+        { generation: null }, { sessionId: `${SESSION} ` },
+      ];
+      for (const presented of cases) {
+        for (const name of [`moe.${tool}`, `moe_${tool}`, tool]) {
+          const msg = msgFor(name, presented);
+          const result = stampExecutionIdentity(msg, FULL);
+          expect(result).toEqual(refusal(-32003, 'EXECUTION_IDENTITY_SUBSTITUTED'));
+          expect(msg.params.arguments).toEqual({ ...base, ...presented });
+          expect(messageOf(result)).not.toContain('attempt-');
+        }
+      }
+    });
+
+    it('refuses a partial attempt env without mutating', () => {
+      for (const env of [{ MOE_SESSION_ID: SESSION, MOE_ATTEMPT_ID: 'attempt-0123' },
+        { MOE_SESSION_ID: SESSION, MOE_ATTEMPT_GENERATION: '7', MOE_ATTEMPT_ID: ' ' }]) {
+        const msg = msgFor(`moe.${tool}`);
+        expect(stampExecutionIdentity(msg, env)).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+        expect(msg.params.arguments).toEqual(base);
+      }
+    });
+
+    it('refuses a malformed env value, adding nothing and echoing nothing', () => {
+      const cases: Array<[Record<string, string>, string]> = [
+        ...['0', '07', '1e3', '9007199254740992']
+          .map((g): [Record<string, string>, string] => [{ ...FULL, MOE_ATTEMPT_GENERATION: g }, g]),
+        [{ ...FULL, MOE_ATTEMPT_ID: `a b${MARK}` }, `a b${MARK}`],
+        [{ ...FULL, MOE_SESSION_ID: `${MARK}\nx` }, `${MARK}\nx`],
+        [{ ...FULL, MOE_SESSION_ID: MARK + 'x'.repeat(256 - MARK.length) }, MARK + 'x'.repeat(256 - MARK.length)],
+      ];
+      for (const [env, bad] of cases) {
+        const msg = msgFor(`moe.${tool}`);
+        const result = stampExecutionIdentity(msg, env);
+        expect(result).toEqual(refusal(-32602, 'EXECUTION_IDENTITY_INVALID'));
+        expect(msg.params.arguments).toEqual(base);
+        expect(messageOf(result)).not.toContain(bad.trim());
+        expect(messageOf(result)).not.toContain(MARK);
+      }
+    });
   });
 });

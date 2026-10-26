@@ -250,7 +250,10 @@ type GroupRead = IdentityFields | string | null;
 
 /** The tools that carry the session's execution identity, under every spelling. */
 const EXECUTION_IDENTITY_TOOLS = new Map<string, readonly IdentityGroup[]>();
-for (const [tool, groups] of [['get_context', ['session']], ['start_step', ['attempt', 'session']]] as const) {
+for (const [tool, groups] of [
+  ['get_context', ['session']], ['start_step', ['attempt', 'session']],
+  ['complete_step', ['attempt', 'session']], ['complete_task', ['attempt', 'session']],
+] as const) {
   for (const name of [`moe.${tool}`, `moe_${tool}`, tool]) EXECUTION_IDENTITY_TOOLS.set(name, groups);
 }
 
@@ -293,8 +296,9 @@ const GROUP_READERS: Record<IdentityGroup, (env: Record<string, string | undefin
 };
 
 /**
- * CQ-F09: stamp the session's execution identity onto moe.get_context
- * (sessionId) and moe.start_step (attemptId, generation, sessionId). The
+ * CQ-F09, CQ-F12a: stamp the session's execution identity onto moe.get_context
+ * (sessionId) and onto moe.start_step, moe.complete_step and moe.complete_task
+ * (attemptId, generation, sessionId). The
  * runner (the wrapper's env), never the CLI caller, owns that identity: the
  * same transport as injectRunnerIdentity, except the caller can never
  * override it. A presented field must equal the env value exactly, and a

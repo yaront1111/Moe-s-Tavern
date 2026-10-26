@@ -49,6 +49,31 @@ Send JSON-RPC 2.0 messages via stdin:
 - `MOE_PROJECT_PATH` - Project path (required)
 - `MOE_DAEMON_HOST` - Daemon host (default: 127.0.0.1)
 - `MOE_DAEMON_PORT` - Daemon port (default: read from .moe/daemon.json)
+- `MOE_SESSION_ID` - The session id the proxy stamps onto the identity tools (see Execution identity)
+- `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION` - The execution attempt the proxy stamps onto the identity tools; set both or neither
+
+## Execution identity
+
+The runner, never the CLI caller, owns the session's execution identity. `scripts/moe-agent.{sh,ps1}` export the three variables above for the seat, and the proxy stamps their values onto the tools below. A blank value counts as unset.
+
+| Env value | Rule |
+|-----------|------|
+| `MOE_SESSION_ID` | At most 255 characters, no NUL, CR or LF. Sent verbatim as `sessionId`. |
+| `MOE_ATTEMPT_ID` + `MOE_ATTEMPT_GENERATION` | Both or neither. `attemptId` matches `[A-Za-z0-9_-]{1,128}`. `generation` is a positive safe integer in plain decimal digits (no sign, no leading zero), sent as a JSON number. |
+
+| Tool | Stamped fields |
+|------|----------------|
+| `moe.get_context` | `sessionId` |
+| `moe.start_step`, `moe.complete_step`, `moe.complete_task` | `attemptId`, `generation`, `sessionId` |
+
+This holds under every spelling (`moe.x`, `moe_x` and bare `x`) and covers no other tool. A field whose env group is absent is not stamped, and a value the caller presents for it reaches the daemon untouched.
+
+A presented field must equal the stamped env value exactly (`===`: `"7"` does not match `7`). Anything else is refused before the call is forwarded, and nothing is mutated or echoed:
+
+- `EXECUTION_IDENTITY_SUBSTITUTED` (JSON-RPC `-32003`): a presented `attemptId`, `generation` or `sessionId` differs from the session's value. Omit the field so the proxy supplies it.
+- `EXECUTION_IDENTITY_INVALID` (`-32602`): the env group a tool carries is malformed or partial, or the check hit an unexpected error (it fails closed). A broken attempt group refuses only the tools that carry it, so `moe.get_context` still gets its `sessionId`.
+
+The error carries `error.data = { tool, codeName }`. A JSON-RPC batch is fenced per element, and one refusal drops the whole frame. With no identity env the proxy is the legacy proxy: it adds nothing, the daemon decides, and the line is forwarded byte-for-byte unless another step (alias rename, `workerId` or runner identity) already rewrote it.
 
 ## MCP Tools
 
