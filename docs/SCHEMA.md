@@ -1639,7 +1639,7 @@ type ActivityEventType =
   | 'TASK_BLOCK_PARKED'    // reserved: deferred unassigned-BLOCKED park sweep (settings.parkUnassignedBlocked), never emitted yet
   | 'TASK_COMMIT_RECORDED' // moe.record_commit persisted a landing outcome (commit appended, or refused/failed/nothing recorded)
   | 'TASK_FILES_DECLARED'  // moe.declare_files unioned paths into task.declaredFiles
-  | 'TASK_DEPENDENCIES_SET' // moe.set_task_dependencies replaced task.dependsOn
+  | 'TASK_DEPENDENCIES_SET' // moe.set_task_dependencies replaced or edited task.dependsOn (a no-op edit records nothing)
   | 'TASK_PRIORITY_SET'    // moe.set_task_priority changed task.priority
   
   // Worker

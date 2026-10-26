@@ -1352,31 +1352,36 @@ same rules.
 
 ### moe.set_task_dependencies
 
-Architect/governor escape hatch: replace a task's `dependsOn` list so a mis-declared dependency can never permanently withhold a row from WORKING claims. `dependsOn` is normally declared at `moe.create_task`; this tool edits it after the fact.
+Architect/governor escape hatch: replace or edit a task's `dependsOn` list so a mis-declared dependency can never permanently withhold a row from WORKING claims. `dependsOn` is normally declared at `moe.create_task`; this tool edits it after the fact.
 
-**Parameters:**
+**Parameters:** pass `dependsOn` (replace) or `addDependsOn`/`removeDependsOn` (edit in place), never both.
 ```typescript
 {
   taskId: string,
-  dependsOn: string[],   // full replacement, not a union; [] clears. Existing task ids, deduped, capped at 20, no cycles
-  workerId?: string      // caller (auto-injected by proxy); role must resolve to architect or governor
+  dependsOn?: string[],        // full replacement, not a union; [] clears. Existing task ids, deduped, capped at 20, no cycles
+  addDependsOn?: string[],     // ids to add to the list in force when the call runs; already-listed ids are left as is. Same validation as dependsOn
+  removeDependsOn?: string[],  // ids to drop from that list; an id not listed (or no longer on the board) is ignored
+  workerId?: string            // caller (auto-injected by proxy); role must resolve to architect or governor
 }
 ```
 
-**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[NOT_ALLOWED]` when the caller acts as neither architect nor governor (team role, else the `architect-`/`governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
+**Errors:** `[INVALID_INPUT]` for a non-array, a non-string entry, an unknown id, a self-dependency, more than 20 ids after the edit, an id in both `addDependsOn` and `removeDependsOn`, `dependsOn` combined with an edit, or an id that would close a dependency cycle (`would close a dependency cycle: task-A → task-B → task-A` — the walk follows `dependsOn ∪ blockedOnTaskIds` transitively, ignoring edges out of `DONE`/`ARCHIVED` rows); `[MISSING_REQUIRED]` when neither mode is given; `[NOT_ALLOWED]` when the caller acts as neither architect nor governor (team role, else the `architect-`/`governor-` id prefix — see `moe.amend_plan_step`); `[NOT_FOUND]` for an unknown `taskId`. Nothing is written on any error.
 
 **Returns:**
 ```typescript
 {
   success: true, taskId,
   dependsOn: string[],           // the list now in force
-  previousDependsOn: string[],   // what it replaced
+  previousDependsOn: string[],   // what it replaced or edited
+  added?: string[],              // edit mode only: ids this call added
+  removed?: string[],            // edit mode only: ids this call removed
   dependsOnUnmet: number,        // how many of the new targets are not yet DONE/ARCHIVED (0 = claimable now)
   message: string
 }
 ```
 
 **Notes:**
+- **Use the edit mode when other seats edit the same row**, for example when several seats each register their task on one verification-batch row. A read followed by a `dependsOn` replacement loses whatever another seat added between the read and the write; `addDependsOn`/`removeDependsOn` apply to the list in force when the call runs (tool handlers run under the daemon's state mutex), so concurrent registrations keep each other's ids. An edit that changes nothing writes nothing: no activity event and no chat line.
 - `dependsOn` gates **WORKING-status claims only** (`claim_next_task`/`wait_for_task`): the task is not offered for execution until every target is `DONE`/`ARCHIVED`. Planning proceeds regardless, and a missing/deleted id counts as satisfied — a deleted prerequisite can never wedge its dependents.
 - Withheld rows are explainable: `moe.list_tasks` rows carry `dependsOnUnmet`.
 - **Cycles are rejected**, not stored: a `dependsOn` cycle (A→B then B→A, directly or through a longer chain) would leave every member claim-gated forever with nothing — no sweep, no alert, no wrapper path — ever looking at it. This tool is the hard-validation escape hatch, so it throws and names the path; `create_task` and `report_blocked` apply the same check advisorily (drop + warning).
