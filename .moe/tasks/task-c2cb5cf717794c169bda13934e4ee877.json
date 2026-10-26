@@ -110,12 +110,12 @@
     }
   ],
   "planRevision": 34,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Behaviour is correct and every gate re-runs green on completion 16342ca. It is pushed and on origin/moe/work-2026-10-24. The checks, all run by QA from git-archive snapshots of 16342ca with MOE_* unset:\n- named `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`: EXIT=0 (frozen 73, scope 38, AF ok);\n- postflight.ps1 on PS 5.1: EXIT=0 (frozen 73, scope 37, AE skipped: no symlinks);\n- parity-check.ps1: PASS;\n- daemon getCommitScope 19/19, and npm test: 166 files passed;\n- RED reproduced via the K2+AF subset: the parent moe-agent.sh and moe-agent.ps1 both fail AF1 'an idle peer's clean contested path must land', and the new wrappers pass.\n\nRejected for two reasons, both fixable in one round without new behaviour.\n\n(1) DoD 2 / task rail 'never weaken the live-peer skips' is not mutation-proven for the quiet-build signal. Deleting `if (attempt.phase !== 'closed') return true;` in peerTaskActive leaves all 19 tests green. That line is the only thing keeping a long quiet build active: an attempt opened before since−120s that never changed phase, whose assignee's lastActivityAt is stale. lastPhaseAt only moves on a phase change. A future deletion would silently let a wrapper land over a live peer's hunks. The 120 s attempt slack is unpinned too.\n\n(2) Size: 464+/35− = 429 net non-board LOC, over the 400 cap, and no project or epic rail waives it. Use the rail-exception route, not a re-slice of landed bytes.\n\nSee the issues for the exact fixes.",
+  "reopenReason": "Human approved the size-exception rail prop-a53405bd75df48729433b5cb849e2e4c at 04:43:49Z (the superseded prop-490aa256 was approved too; both waive the same 400-LOC cap for this task only). QA's round-2 review on e5970fd was green on every gate, and the waiver was the only open item. Next QA: approve on the round-2 evidence in the task comment, naming the 452 net LOC size in the summary per the rail.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
@@ -159,14 +159,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-24T16:44:57.056Z",
-  "updatedAt": "2026-10-26T03:45:41.393Z",
+  "updatedAt": "2026-10-26T05:09:33.775Z",
   "metrics": {
     "firstClaimAt": "2026-10-24T22:02:46.544Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 10,
     "executedStepCount": 16,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T05:09:33.775Z",
+    "wallClockMs": 112007231
   },
   "contextFetchedBy": [
     "worker-3729a0d6",
@@ -213,11 +215,11 @@
   },
   "planApprovedAt": "2026-10-24T22:23:18.731Z",
   "workStartedAt": "2026-10-24T23:51:07.237Z",
-  "blockedReason": "QA review is complete and green. This row waits only on a human governance decision, not on code. Completion e5970fd (test-only: getCommitScope.test.ts +25/-2, pushed, on origin/moe/work-2026-10-24) fixes both round-1 test issues. QA's checks:\n- the named gate (bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh), re-run from a git-archive snapshot: EXIT=0 (frozen 73, scope 38, AF ok);\n- the daemon suite: 166 files, 4206 passed | 14 skipped;\n- 12 of 12 daemon mutants red, each on its own pin.\nOpen item: the delivered diff is 452 net non-board LOC (16342ca 464+/35- plus this round), over QA's 400-LOC cap, and no project or epic rail waives it. The waiver is epic ADD_RAIL proposal prop-a53405bd75df48729433b5cb849e2e4c, which is PENDING. Only a human can resolve rail proposals, from the IDE.\nNeeded:\n1. A human approves prop-a53405bd75df48729433b5cb849e2e4c and rejects the superseded prop-490aa256862c44cda49a96b5134390f6.\n2. A governor or human returns this row with set_task_status REVIEW. It is unassigned after this block, so a plain unblock_worker cannot reach it.\n3. The next QA approves on the evidence in QA's round-2 task comment.\nIf the proposal is rejected, use set_task_status PLANNING so the architect can split the task. No worker change is needed either way.",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-26T03:44:49.982Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "54914b3258acd07e425e9c483088a76023640b5c",
@@ -333,7 +335,7 @@
     "docs/SCHEMA.md",
     "docs/MCP_SERVER.md"
   ],
-  "reviewCompletedAt": "2026-10-26T02:33:06.860Z",
+  "reviewCompletedAt": "2026-10-26T05:09:33.775Z",
   "rejectionDetails": {
     "failedDodItems": [
       "A contested path is still skipped when the contesting peer's assignee was active since pre-flight, or when the path was already dirty at pre-flight and untouched by this session (existing postflight contested cases stay green)."
@@ -380,5 +382,9 @@
         }
       ]
     }
-  ]
+  ],
+  "priorBlockedReason": "QA review is complete and green. This row waits only on a human governance decision, not on code. Completion e5970fd (test-only: getCommitScope.test.ts +25/-2, pushed, on origin/moe/work-2026-10-24) fixes both round-1 test issues. QA's checks:\n- the named gate (bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh), re-run from a git-archive snapshot: EXIT=0 (frozen 73, scope 38, AF ok);\n- the daemon suite: 166 files, 4206 passed | 14 skipped;\n- 12 of 12 daemon mutants red, each on its own pin.\nOpen item: the delivered diff is 452 net non-board LOC (16342ca 464+/35- plus this round), over QA's 400-LOC cap, and no project or epic rail waives it. The waiver is epic ADD_RAIL proposal prop-a53405bd75df48729433b5cb849e2e4c, which is PENDING. Only a human can resolve rail proposals, from the IDE.\nNeeded:\n1. A human approves prop-a53405bd75df48729433b5cb849e2e4c and rejects the superseded prop-490aa256862c44cda49a96b5134390f6.\n2. A governor or human returns this row with set_task_status REVIEW. It is unassigned after this block, so a plain unblock_worker cannot reach it.\n3. The next QA approves on the evidence in QA's round-2 task comment.\nIf the proposal is rejected, use set_task_status PLANNING so the architect can split the task. No worker change is needed either way.",
+  "completedAt": "2026-10-26T05:09:33.775Z",
+  "reviewSummary": "QA round 3 (qa-7c627d35, 04:48-05:09Z). Approved under the human-approved epic size-exception rail (prop-a53405bd and prop-490aa256, both APPROVED by HUMAN 04:43:49Z). SIZE: 801495d..e5970fd is +487/-35 = 452 net non-board LOC over 10 files: 16342ca 464+/35- (per-file counts equal the rail) plus e5970fd test-only +25/-2.\nDelivery: completions 16342ca and e5970fd. Trees c7ce8ddf and 07fc4516 match the records; both are on a freshly fetched origin/moe/work-2026-10-24. Nothing later touches the 10 files (git diff e5970fd b24ae05 is empty). 6cb0714 is QA's board-only checkpoint.\nRe-run on cmp-verified git-archive snapshots of e5970fd, MOE_*/CLAUDE* unset, TIMEOUT 180:\n- named `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`: EXIT=0 (04:49:40-04:58:39Z), frozen 73, scope 38, K2+AF ok.\n- PS 5.1: postflight.ps1 EXIT=0 (frozen 73, scope 37, AE skipped: no symlinks, AF ok); parity-check.ps1 PASS.\n- daemon: getCommitScope 19/19; npm test 166 files, 4206 passed | 14 skipped; tsc 0; strict tsc of the test file 0.\n- CI node --test: importee-guard group 60/60. Usage group 127 pass, 1 skip; its one failure, taskless-handoff.test.mjs, is pre-existing and unrelated (same on parent 801495d and HEAD b24ae05; cfd38038 dropped its anchor).\nMutants:\n- 12/12 getCommitScope.ts mutants red on their own assertions (open-phase, slack x2, isFinite, attempts, no-since, OR x3, assignee, missing, DEAD).\n- Wrapper K2+AF subsets on sh and PS 5.1: the control passes; dropping the clean-at-pre-flight check makes AF3 red; treating peerActive:true as idle makes AF2 red while K2 stays green.\nDoD 1: AF1 on both twins. DoD 2: AF2/AF3/K2 plus the peerActive tests. DoD 3: held= asserted in AF2/AF3, absent in AF1. DoD 4: RED on the parent (QA round 1) plus the fresh gates. A quiet build stays active (task-quiet pin).\nPonytail, non-blocking: the bash attr_held_list re-parses the skipped and contested files that resolve_attribution's python already holds. net: -15 lines possible.",
+  "requiredCheckAtDone": null
 }

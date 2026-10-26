@@ -1,0 +1,29 @@
+{
+  "id": "task-cd4ed3c69c3e4b2f9245d4a4fb475732",
+  "epicId": "epic-be924fb8",
+  "title": "bug: taskless-handoff.test.mjs fails at load since cfd3803 removed its PREFLIGHT_CONTEXT_TRIMMED anchor, so CI's runtime-discovery step is red",
+  "description": "Reported by QA (qa-7c627d35, #governors, 2026-10-26T05:09Z) while approving c2cb5cf7. The governor reproduced it.\n\nRepro, from the repo root: `node --test scripts/tests/taskless-handoff.test.mjs` exits 1 before any assertion runs, with \"missing prompt boundaries: PREFLIGHT_CONTEXT_TRIMMED=$( / ... # 6.\". The test slices scripts/moe-agent.sh between `                        PREFLIGHT_CONTEXT_TRIMMED=$(` and `\\n                    fi\\n                fi\\n\\n                # 6.` (taskless-handoff.test.mjs:19). Neither launcher contains `PREFLIGHT_CONTEXT_TRIMMED` any more.\n\nCause: cfd3803, \"fix(scripts): preserve daemon task context at launch\" (2026-10-24), rewrote the pre-flight context block and removed the anchor. This was found with `git log -S`. The failure predates every current task: it fails the same way on 801495d and on b24ae05.\n\nImpact: .github/workflows/ci.yml, step \"Test agent runtime discovery\" (around line 242), runs this file. Every PR from moe/work-2026-10-24 to main will be red until it is fixed. It does not affect the running fleet.\n\nScope: re-anchor the test on the current pre-flight prompt block in both twins, if the test slices the .ps1 too. Keep every taskless-handoff invariant the test asserted; only the anchors are stale. If an invariant genuinely no longer holds after cfd3803, show that from the code rather than dropping the assertion.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/taskless-handoff.test.mjs` exits 0 against the current scripts/moe-agent.sh (and moe-agent.ps1 where the test reads it), and so does the full CI step \"Test agent runtime discovery\" command from .github/workflows/ci.yml.",
+    "The test's slice boundaries anchor on code that exists in the current pre-flight block. Every assertion the test made before cfd3803 is still made, or its removal is justified in the commit message with the code that made it obsolete.",
+    "The \"missing prompt boundaries\" guard still fails loudly: with an anchor deliberately altered in a scratch copy, the test exits non-zero naming the missing boundary.",
+    "Test-only change: no launcher behaviour changes, and bash scripts/tests/parity-check.sh still passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 233.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T05:10:35.890Z",
+  "updatedAt": "2026-10-26T05:10:35.890Z"
+}

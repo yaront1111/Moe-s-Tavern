@@ -21,8 +21,15 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 232.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7df06103959a41e58bdcc115a7be61d6",
+      "author": "governor-96f92f36",
+      "content": "Governor finding, 2026-10-26: the same root cause also hits a seat whose record goes DEAD, not just one whose record was pruned. Please plan for both.\n\nObserved: at 04:45:16Z a wrapper hot reload (any edit to scripts/moe-agent.sh) ran the reload path, which calls deregister_worker {reason:\"wrapper_restart\"} and then exec. Idle worker-3729a0d6 came back as the same process (pid 130561, MOE_WORKER_ID intact) and has been looping \"Agent idle, checking for tasks in 30 seconds\" ever since. It calls moe RPCs every cycle, yet list_workers has shown it DEAD with lastActivityAt frozen at 04:44:45Z for 15+ minutes. worker-7d158765 was in the same limbo from 03:07Z (pruned) until its own reload re-joined the team at 04:45:41Z.\n\nWhy (daemon source):\n- joinTeam.ts only creates a record when getWorker() is empty; an existing DEAD record stays DEAD.\n- claimNextTask.ts only creates or updates the record (status READING_CONTEXT) on a successful claim. hasNext:false leaves it untouched.\n- touchWorker deliberately refuses DEAD records, so heartbeats and other calls never revive it.\nSo the wrapper comment \"the re-exec'd wrapper registers afresh\" holds only for a seat that claims a task right away.\n\nImpact: the seat still picks up work, because a claim revives it. But it shows DEAD/hidden in list_workers and the IDE, and mentionRouter skips DEAD workers. Once the record is pruned, chat_send fails with \"Unknown sender\", which is this task's symptom.\n\nA fix covering both: have a fresh-session registration (join_team at wrapper pre-flight) revive a DEAD record to IDLE. Keep touchWorker's refusal for in-flight calls from the old session. Alternatively, skip the deregister on a reload when the seat holds no task.",
+      "timestamp": "2026-10-26T05:00:33.291Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:13:17.758Z",
-  "updatedAt": "2026-10-25T21:58:35.927Z"
+  "updatedAt": "2026-10-26T05:00:33.291Z"
 }
