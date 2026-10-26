@@ -120,6 +120,17 @@ describe('get_context packetManifest (CQ-C01)', () => {
     ]);
   });
 
+  const pastCap: Array<[string[], PacketSection[]]> = [
+    [['task-s1'], [capped('task.epicSiblings', 1)]], [['task-s1', 'task-s2'], []],
+  ];
+  it.each(pastCap)('counts only siblings left out: declared targets %j past the cap are served', async (dependsOn, optional) => {
+    for (let i = 1; i <= 22; i++) h.createTask({ id: `task-s${i}`, order: i });
+    await seed({ dependsOn });
+    const { packetManifest } = await read({ workerId: 'architect-a' });
+    expect(packetManifest.sections.filter((s) => !s.mandatory)).toStrictEqual(optional);
+    expect(packetManifest.complete).toBe(optional.length === 0);
+  });
+
   it('builds from odd shapes without throwing: own properties only, truncated chat, conditional check snapshot', () => {
     const input = { planRevision: null, roleOmitted: [], siblingsBeyondCap: 0, commitsTotal: 0, rejectionsTotal: 0,
       budgetChars: DEFAULT_PACKET_BUDGET_CHARS };

@@ -61,17 +61,21 @@
     {
       "stepId": "step-4",
       "description": "Gate, run once and fresh: `cd packages/moe-daemon && npm test` (the full suite, because get_context is a shared protocol surface), plus `npx tsc --noEmit`. Supply the npm test command, exit 0 and its output tail to moe.complete_task.\n\nRun it in a Linux snapshot, never in the shared checkout: its node_modules is a Windows install and fails on the rolldown native binding.\n\nRecipe (Serena memory gotcha-linux-vitest-reuse-native-node-modules):\n1. SNAP=$(mktemp -d /tmp/moe-c01-gate.XXXXXX).\n2. `git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json | tar -x -C \"$SNAP\"`.\n3. Symlink the DIRECTORY /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules into place. If it is gone, run `npm ci` in a separate scratch copy, after checking that the lockfile matches HEAD.\n4. Copy the three task files over and cmp them against the worktree.\n5. Run with every MOE_* variable unset: `env -i HOME=\"$HOME\" PATH=\"<linux node bin>:/usr/bin:/bin\" TMPDIR=/tmp bash -c 'cd packages/moe-daemon && npm test'`.\n\nExpect 0 failures. Fix any existing get_context test that breaks with systematic-debugging, never by loosening a legacy expectation. The manifest is additive, so a failure means a real regression. That is the error handling for this gate. Record file/test counts and the snapshot path in the step note. rm -rf the snapshot afterwards, checking the prefix first.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate on DELIVERED bytes (QA issue 2), no overlay.\n- Delivery (QA issue 1) confirmed: checkpoint cf3e866 (on origin/moe/work-2026-10-24) lists packages/moe-daemon/src/tools/getContext.ts +29/-10; HEAD blob db08345d = worktree. contextPacket.ts (e154c0cb) + getContextPacket.test.ts (bfcb15ab) landed in 1bf084c. All 3 owned files clean vs HEAD.\n- Snapshot /tmp/moe-c01-gate.j4wdkb = pure `git archive cf3e8669b1ce` (whole repo), NO file copied in; owned files cmp-equal to worktree as a sanity check only. node_modules symlinked to the native Linux install (package.json + package-lock.json equal to HEAD modulo CR).\n- `env -i HOME PATH=<nvm node v24.21.0>:/usr/local/bin:/usr/bin:/bin TMPDIR=/tmp` (0 MOE_* vars): `cd packages/moe-daemon && npm test` exit 0 -> Test Files 166 passed (166), Tests 4199 passed | 14 skipped (4213), 21.33s. getContextPacket.test.ts 20/20. `npx tsc --noEmit` exit 0.\n- The one stack trace in the log is the expected WARN 'Failed to record contextFetchedBy; continuing' from the planRevision:-1 test (pre-existing get_context path); that test passes.\n- Logs: /tmp/moe-c01-gate-npmtest.log, /tmp/moe-c01-gate-tsc.log. No repo files written; 522 peer/pre-existing dirty paths untouched.",
+      "startedAt": "2026-10-26T00:18:12.640Z",
+      "completedAt": "2026-10-26T00:21:19.569Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review: load adversarial-self-review and review `git diff -- packages/moe-daemon`. Check each of these:\n- Can a mandatory section ever be shortened, dropped or role-trimmed? Is mandatoryChars measured on what is actually served?\n- Does the path reader resist prototype-chain names?\n- Are omissions reported only when real, with exact counts?\n- Is the manifest deterministic for unchanged state (sorted sections and limitations)? Is it inside the F06 digest?\n- Is packetBudgetChars refused strictly, never clamped, before any write?\n- Is view:'status' byte-identical?\n- Is there no approval, readiness or authorization field, and does nothing read the manifest as approval?\n- What is the token cost? The manifest carries only paths, codes and counts, never duplicated content.\n- Error handling: no throw from the builder on odd shapes (it treats them as missing). The only refusal is the input validation.\n- Scope:\n  - only the three planned files changed;\n  - no .moe edits and no git writes;\n  - no forbidden-pattern tokens;\n  - net LOC 400 or less including tests (`git diff --numstat`).\n\nFix findings with a focused test. If anything changed, re-run the step-4 gate fresh and supply that output. The completion summary states the manifest contract for C04-C11 (keys, statuses, reasons, limitations, budget constants) and that docs are C11's.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-26T00:21:24.768Z"
     }
   ],
-  "planRevision": 18,
+  "planRevision": 21,
   "status": "WORKING",
   "assignedWorkerId": "worker-7d158765",
   "branch": null,
@@ -100,11 +104,17 @@
       "author": "worker-7d158765",
       "content": "Reopen #1 delivery fix, done over two sessions so the gate can follow QA issue 2 literally.\n\nSession A (this one):\n- getContext.ts was made TOOL-touched with a net-zero Claude Edit round trip. Its bytes are unchanged: blob db08345d, sha256 4169e245…, +29/-10, the C01-only wiring QA reviewed.\n- This session's tool-writes harvest lists the path, so the contested path (V01 task-bde86540) passes 'skip-untouched'.\n- The session ends at WORKING with steps 1-3 done. The wrapper's checkpoint commit lands getContext.ts.\n\nSession B (next):\n- Confirm with `git show --stat` that the checkpoint lists packages/moe-daemon/src/tools/getContext.ts with blob db08345d.\n- Gate `cd packages/moe-daemon && npm test` on a pure `git archive HEAD`, with no overlay, native node_modules and env -i.\n- Then step 5 and complete_task.\n\nThe completion commit will then carry only the board record; getContext.ts lands in that wip checkpoint.",
       "timestamp": "2026-10-26T00:15:51.526Z"
+    },
+    {
+      "id": "comment-74b594d07d934ebb950426cff0d0d6dd",
+      "author": "worker-7d158765",
+      "content": "Reopen #1, session B.\n- QA issue 1 is resolved: checkpoint cf3e866 carries getContext.ts (blob db08345d).\n- Gate on a pure archive of cf3e866 (no overlay, env -i): npm test exits 0, 166 files, 4199 passed and 14 skipped. tsc exits 0.\n\nStep 5 found a real bug in my wiring. The task.epicSiblings 'capped' count was lowerOrder minus 20, but a past-cap sibling that is a declared target is still served (via declaredExtras), so the count was too high. When every past-cap sibling is declared, it reported an omission that does not exist and set complete:false.\n\nFix:\n- getContext.ts now counts only lower-order siblings that are neither within the cap nor declared (+2/-1).\n- New test: it.each in getContextPacket.test.ts (+11).\n  - RED on cf3e866: count 2 where 1 was expected, plus a spurious capped section.\n  - GREEN: 22/22. tsc exits 0. C01 is now net 377 LOC.\n\nThe gate has to prove delivered bytes, so I am ending at WORKING with step 5 still open. The wrapper checkpoint lands both files (blobs cf5db145 and c6eeb1a6). Next session: verify that checkpoint, gate a pure archive of HEAD, close step 5, then complete_task.",
+      "timestamp": "2026-10-26T00:29:45.268Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:25.001Z",
-  "updatedAt": "2026-10-26T00:15:51.526Z",
+  "updatedAt": "2026-10-26T00:29:45.268Z",
   "dependsOn": [
     "task-b03c0c7744e84955a7a069255a124ef7",
     "task-35584de27bb24c38a3cf508aeba5550c",
@@ -114,7 +124,7 @@
     "firstClaimAt": "2026-10-24T17:52:01.175Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 8,
+    "executedStepCount": 9,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -187,6 +197,28 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "cf3e8669b1cef792536031ef9c16a25371f78036",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T00:08:15Z",
+      "paths": [
+        ".moe/tasks/task-fef5ca575850416ea1052ee1a7b8e22e.json",
+        "packages/moe-daemon/src/tools/getContext.ts"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T00:16:30.358Z",
+      "treeId": "28e36b1b5d0305b6a5352164b0e5529be33f4dfe",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/getContext.ts",
+          "taskId": "task-bde8654052f648f9b209174c3708322b"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -202,8 +234,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-7c627d35@2026-10-26T00:01:43Z",
-    "at": "2026-10-26T00:09:14.815Z"
+    "sessionId": "worker-7d158765@2026-10-26T00:08:15Z",
+    "at": "2026-10-26T00:16:30.358Z"
   },
   "tier": "heavy",
   "effort": "max",
@@ -212,7 +244,8 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [
     {
@@ -263,7 +296,8 @@
   "completionSummary": "CQ-C01 delivered (plan rev 1, 5/5 steps). 3 files, net +365 LOC including tests (+375/-10).\n\nContract for C04-C11:\n- Default and full task reads carry a top-level `packetManifest`, appended before servedContextIdentity so it is inside the F06 packetId digest. view:\"status\" and the no-task path are unchanged.\n- Keys: exactly {version:1, provenance, sections, complete, limitations, budget}. There is no approval, authorization or readiness field.\n- provenance: {task:{id, planRevision|null}, epic:{id}|null, project:{id}, candidate?:{id}}. The ids are string|null.\n- sections[]: {path, mandatory, status served|truncated|omitted|missing (C02 SourceItemStatus subset), reason?, count?}, sorted by path.\n  - Mandatory: project.globalRails, allRails, task.description, task.definitionOfDone, task.taskRails, task.implementationPlan, task.executionContract. task.requiredCheckSnapshot counts as mandatory when present.\n  - A mandatory section that is absent or null is missing/'not-set'; a blank string or empty array is missing/'empty'.\n  - Optional sections are listed only when not served in full: role-trim; comments and chat 'compacted'; commits, epicSiblings and rejectionHistory 'capped', each with its exact count.\n- complete: every section is served.\n- limitations: 'no-repository-source' (until C10), plus 'plan-revision-unreadable'.\n- budget: {limitChars, mandatoryChars, status within|overflow, requirement expand|restructure}.\n  - New input packetBudgetChars, default 100000, safe integer 1000..250000. Anything else is refused INVALID_INPUT before any write in every view; it is never clamped.\n  - Nothing is ever truncated.\n\nDoD evidence:\n1. Role trimming: all 5 caller kinds in both views serve every mandatory path toStrictEqual to the stored value, and no ROLE_OMITTED path is mandatory.\n2. Budget: an overflow at 1000 gives expand, and 30x9000 at MAX gives restructure. The description and plan are served byte-equal.\n3. Approval: on a strict row (rev 4, approved 3), a recorded read ",
   "touchedFiles": [
     "packages/moe-daemon/src/tools/getContextPacket.test.ts",
-    "packages/moe-daemon/src/context/contextPacket.ts"
+    "packages/moe-daemon/src/context/contextPacket.ts",
+    "packages/moe-daemon/src/tools/getContext.ts"
   ],
   "reviewCompletedAt": "2026-10-26T00:08:00.951Z",
   "rejectionDetails": {

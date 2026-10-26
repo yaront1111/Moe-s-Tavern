@@ -401,12 +401,13 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       const lowerOrder = task
         ? Array.from(state.tasks.values()).filter((t) => t.epicId === task.epicId && t.id !== task.id && t.order < task.order)
         : [];
-      const siblingsBeyondCap = Math.max(0, lowerOrder.length - MAX_EPIC_SIBLINGS);
       const baseSiblings = lowerOrder
         .sort((a, b) => b.order - a.order)
         .slice(0, MAX_EPIC_SIBLINGS)
         .sort((a, b) => a.order - b.order);
       const baseSiblingIds = new Set(baseSiblings.map((t) => t.id));
+      // Left out by the cap; a declared target past it is still served below.
+      const siblingsBeyondCap = lowerOrder.filter((t) => !baseSiblingIds.has(t.id) && !declaredTargetIds.has(t.id)).length;
       const declaredExtras = task
         ? Array.from(declaredTargetIds)
             .filter((id) => id !== task.id && !baseSiblingIds.has(id))
