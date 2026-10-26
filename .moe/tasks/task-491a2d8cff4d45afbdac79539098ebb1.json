@@ -103,7 +103,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:36:22.943Z",
-  "updatedAt": "2026-10-26T06:24:31.454Z",
+  "updatedAt": "2026-10-26T06:25:11.417Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T05:52:58.414Z",
     "plannedStepCount": 5,
@@ -151,7 +151,41 @@
   "filesModified": [
     "scripts/tests/local-runner-snapshot.test.mjs",
     "scripts/local-runner/source-snapshot.mjs",
-    ".github/workflows/ci.yml"
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
+    ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json"
   ],
-  "completionSummary": "CQ-R09a delivered: a pure host import gate in a new scripts/local-runner/source-snapshot.mjs (173 lines). Its only import is node:crypto.\n\nvalidateImportPath bounds the length first. It then refuses control segments at any depth after foldCase (CONTROL_PATH, so '.git/CON' is a control refusal). Then the portability rules give PATH_INVALID: the daemon checkPortablePath rules (FORBIDDEN_CHAR, wellFormed, NFC, segments, trailing dot/space), DEVICE_NAME plus ' *' as in Git's is_valid_win32_path, and 8.3 shapes.\n\nvalidateImport:\n- checks a real Array and the count before reading any element;\n- reads each property once; symlink is refused before the key check; exact keys via Reflect.ownKeys;\n- measures with the intrinsic %TypedArray% byteLength, bounds the total, then copies at once;\n- refuses collisions with a folded-segment trie (linear);\n- only then hashes, sorts by UTF-8 bytes and computes the versioned, length-prefixed digest;\n- returns a frozen manifest.\n\nTests: 14 table-driven tests in the new scripts/tests/local-runner-snapshot.test.mjs (195 lines), with a pinned digest recomputed independently from the framing. ci.yml gains one line (1/1).\n\nSize: 370 changed lines in total, within 400.\n\nVerification: 14/14 on Linux (env -i, nvm v24.21.0) and native Windows node.exe v24.16.0. macOS was not run. A mutation sweep of 31 mutants in /tmp left 0 survivors.\n\nPlan deviations are all tightenings: the trie, the 8.3 regex as a superset, DEVICE_NAME with ' *', and WeakSet re-coding of foreign throws. The daemon's DEVICE_NAME gap is filed as bug task-6f5032015e1947c0a7ba143a1c1f7709 (LOW). verified-local stays unavailable; no I/O, transport or Git changes."
+  "completionSummary": "CQ-R09a delivered: a pure host import gate in a new scripts/local-runner/source-snapshot.mjs (173 lines). Its only import is node:crypto.\n\nvalidateImportPath bounds the length first. It then refuses control segments at any depth after foldCase (CONTROL_PATH, so '.git/CON' is a control refusal). Then the portability rules give PATH_INVALID: the daemon checkPortablePath rules (FORBIDDEN_CHAR, wellFormed, NFC, segments, trailing dot/space), DEVICE_NAME plus ' *' as in Git's is_valid_win32_path, and 8.3 shapes.\n\nvalidateImport:\n- checks a real Array and the count before reading any element;\n- reads each property once; symlink is refused before the key check; exact keys via Reflect.ownKeys;\n- measures with the intrinsic %TypedArray% byteLength, bounds the total, then copies at once;\n- refuses collisions with a folded-segment trie (linear);\n- only then hashes, sorts by UTF-8 bytes and computes the versioned, length-prefixed digest;\n- returns a frozen manifest.\n\nTests: 14 table-driven tests in the new scripts/tests/local-runner-snapshot.test.mjs (195 lines), with a pinned digest recomputed independently from the framing. ci.yml gains one line (1/1).\n\nSize: 370 changed lines in total, within 400.\n\nVerification: 14/14 on Linux (env -i, nvm v24.21.0) and native Windows node.exe v24.16.0. macOS was not run. A mutation sweep of 31 mutants in /tmp left 0 survivors.\n\nPlan deviations are all tightenings: the trie, the 8.3 regex as a superset, DEVICE_NAME with ' *', and WeakSet re-coding of foreign throws. The daemon's DEVICE_NAME gap is filed as bug task-6f5032015e1947c0a7ba143a1c1f7709 (LOW). verified-local stays unavailable; no I/O, transport or Git changes.",
+  "commits": [
+    {
+      "sha": "9a81f41c8b354b461ec7a8cd7848a83bda5dab42",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T06:11:42Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
+        ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+        "scripts/local-runner/source-snapshot.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T06:25:11.417Z",
+      "treeId": "dd48dd3e5445410af3732869f8ea83357f7e5415",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-snapshot.test.mjs",
+    "scripts/local-runner/source-snapshot.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T06:11:42Z",
+    "at": "2026-10-26T06:25:11.417Z"
+  }
 }

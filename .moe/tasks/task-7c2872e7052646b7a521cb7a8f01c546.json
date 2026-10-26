@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -105,16 +105,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:43:34.952Z",
-  "updatedAt": "2026-10-26T06:10:35.749Z",
+  "updatedAt": "2026-10-26T06:36:40.487Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:04:27.551Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-26T06:36:40.487Z",
+    "wallClockMs": 73932936
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-7c627d35"
   ],
   "dependsOn": [
     "task-5f3960df261a47b5b8b95afb7e67a4fa",
@@ -160,7 +163,59 @@
     "scripts/tests/postflight-fake-proxy.js",
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
+    "docs/DEVELOPMENT.md",
+    ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+    ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
+    ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+    ".moe/tasks/task-7c2872e7052646b7a521cb7a8f01c546.json",
+    ".moe/tasks/task-cd4ed3c69c3e4b2f9245d4a4fb475732.json",
+    ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json"
+  ],
+  "completionSummary": "Both postflight harnesses now run ONE shared fake proxy, the new file scripts/tests/postflight-fake-proxy.js. postflight.sh `cp`s it to \"$FAKE_PROXY\" and postflight.ps1 `Copy-Item -ErrorAction Stop`s it to $fakeProxy. Their private copies (sh heredoc, ps1 here-string) are deleted. A missing source fails either harness with rc 1 (tested on bash, PS 5.1 and pwsh 7).\n\nDoD 1: classification comment-ed0ace77. H1-H20 are all SHARED, each following the daemon tool it fakes, so there are ZERO engine-specific branches. FAKE_SCOPE_ASSERTED, FAKE_SCOPE_PLANNED and FAKE_SCOPE_ASSIGNED were dropped because nothing set them. The sh scenarios Mb, M2b-e, M3d and AB2 had only their fixture id renamed (task-blocked to task-resume); no assertion changed. Correction to H8: the scope knob docs are at the get_commit_scope handler.\n\nDoD 2: a new group in parity-check.sh (last) and parity-check.ps1 (section 6). It fails when:\n- the shared file is missing or lacks its marker line;\n- a harness embeds the marker;\n- an install line is missing;\n- a harness writes its own proxy.\nRED on the old tree: 7 failures. RED on scratch copies with a private body re-injected into postflight.ps1, and separately into postflight.sh: rc 1 from both checkers on all 3 engines, naming that harness. Probes for a comment-only install line, a Copy-Item of another file and a missing file are also rc 1.\n\nDoD 3: the fresh sh gate passed (rc 0, frozen 73, scope 38). pwsh 7.6.8 and PS 5.1 passed parity and postflight (frozen 73, scope 37, AE skipped: no symlinks), matching c2cb5cf7.\n\nDoD 4: DEVELOPMENT.md:218 names the shared file and the parity enforcement. Its 27-knob list exactly matches the env vars the proxy reads.\n\nscripts/moe-agent.sh and scripts/moe-agent.ps1 are untouched, as are peers' paths. The diff is +105/-1111 plus the new file (34801 B).\n\nResiduals (theoretical): a private body without the marker, wired to a different path; runtime edits of the copy are allowed by design.",
+  "commits": [
+    {
+      "sha": "2c85b5835b1194b0771fe891c4b9b927242e227e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T05:09:51Z",
+      "paths": [
+        ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+        ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
+        ".moe/tasks/task-502c00a50db340c9941cae20eeef1021.json",
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json",
+        ".moe/tasks/task-7c2872e7052646b7a521cb7a8f01c546.json",
+        ".moe/tasks/task-cd4ed3c69c3e4b2f9245d4a4fb475732.json",
+        ".moe/tasks/task-fc9835feb5c64caab19b736797408b8e.json",
+        "docs/DEVELOPMENT.md",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T06:11:08.779Z",
+      "treeId": "c88578286cfc20b62b47f159f5c78bd820db1475",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
     "docs/DEVELOPMENT.md"
   ],
-  "completionSummary": "Both postflight harnesses now run ONE shared fake proxy, the new file scripts/tests/postflight-fake-proxy.js. postflight.sh `cp`s it to \"$FAKE_PROXY\" and postflight.ps1 `Copy-Item -ErrorAction Stop`s it to $fakeProxy. Their private copies (sh heredoc, ps1 here-string) are deleted. A missing source fails either harness with rc 1 (tested on bash, PS 5.1 and pwsh 7).\n\nDoD 1: classification comment-ed0ace77. H1-H20 are all SHARED, each following the daemon tool it fakes, so there are ZERO engine-specific branches. FAKE_SCOPE_ASSERTED, FAKE_SCOPE_PLANNED and FAKE_SCOPE_ASSIGNED were dropped because nothing set them. The sh scenarios Mb, M2b-e, M3d and AB2 had only their fixture id renamed (task-blocked to task-resume); no assertion changed. Correction to H8: the scope knob docs are at the get_commit_scope handler.\n\nDoD 2: a new group in parity-check.sh (last) and parity-check.ps1 (section 6). It fails when:\n- the shared file is missing or lacks its marker line;\n- a harness embeds the marker;\n- an install line is missing;\n- a harness writes its own proxy.\nRED on the old tree: 7 failures. RED on scratch copies with a private body re-injected into postflight.ps1, and separately into postflight.sh: rc 1 from both checkers on all 3 engines, naming that harness. Probes for a comment-only install line, a Copy-Item of another file and a missing file are also rc 1.\n\nDoD 3: the fresh sh gate passed (rc 0, frozen 73, scope 38). pwsh 7.6.8 and PS 5.1 passed parity and postflight (frozen 73, scope 37, AE skipped: no symlinks), matching c2cb5cf7.\n\nDoD 4: DEVELOPMENT.md:218 names the shared file and the parity enforcement. Its 27-knob list exactly matches the env vars the proxy reads.\n\nscripts/moe-agent.sh and scripts/moe-agent.ps1 are untouched, as are peers' paths. The diff is +105/-1111 plus the new file (34801 B).\n\nResiduals (theoretical): a private body without the marker, wired to a different path; runtime edits of the copy are allowed by design."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T05:09:51Z",
+    "at": "2026-10-26T06:11:08.779Z"
+  },
+  "completedAt": "2026-10-26T06:36:40.487Z",
+  "reviewCompletedAt": "2026-10-26T06:36:40.487Z",
+  "reviewSummary": "Reviewed completion 2c85b58 (moe/work-2026-10-24, pushed). Ran from `git archive 2c85b58 scripts docs` snapshots (owned-file sha256 = commit = live), MOE_*/CLAUDE* unset, TIMEOUT 180, no retries:\n- bash 5.2.21: parity-check.sh + postflight.sh rc 0 (frozen 73, scope 38).\n- pwsh 7.6.8 and PS 5.1.26100: parity-check.ps1 rc 0, postflight.ps1 rc 0 (frozen 73, scope 37; AE and AD link variant skipped, no symlinks).\n\nDoD1: diffed both f1bc264 bodies against postflight-fake-proxy.js. H1-H20 of comment-ed0ace77 hold, all follow the daemon (BLOCKED hold uses moe.report_blocked, as claimEligibility.ts:248), with zero engine-specific branches. Outside the heredoc, the sh change is exactly the task-blocked to task-resume rename (mechanical sed of the old file equals the new); ps1 changes only the Copy-Item and comments. No assertion changed. The dropped FAKE_SCOPE_ASSERTED/PLANNED/ASSIGNED are set nowhere, and no knob lost its reader. A BOM record parses.\n\nDoD2: my own RED on scratch copies: private body in ps1, private body in sh, Add-Content and `>>` after the copy all exit 1 on bash, PS 5.1 and pwsh 7, naming the harness. Pre-task tree: 7 fails.\n\nDoD4: DEVELOPMENT.md:218 knob list equals the proxy's 27 env reads.\n\nRails: moe-agent.{sh,ps1} untouched. Diff is net negative (+105/-1111, new 556-line file).\n\nNote: a runtime `sed -i` edit of the copy still passes both checkers. The plan allows this and no harness does it; possible later hardening.",
+  "requiredCheckAtDone": null
 }
