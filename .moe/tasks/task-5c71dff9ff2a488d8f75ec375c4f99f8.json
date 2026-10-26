@@ -111,7 +111,7 @@
     }
   ],
   "planRevision": 15,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -137,7 +137,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:53:40.118Z",
-  "updatedAt": "2026-10-25T23:25:52.348Z",
+  "updatedAt": "2026-10-26T00:00:36.764Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e"
   ],
@@ -145,12 +145,15 @@
     "firstClaimAt": "2026-10-25T10:58:56.406Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-26T00:00:36.764Z",
+    "wallClockMs": 46900358
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
     "architect-2c9d5121",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-7c627d35"
   ],
   "commits": [
     {
@@ -190,6 +193,22 @@
       "treeId": "81c5815a16c56a8cbf1f3ed249a29979c00fc296",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "f178123c0c863ba6724fcdda78c2e6c788239887",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-25T23:21:17Z",
+      "paths": [
+        ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+        ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-25T23:26:16.444Z",
+      "treeId": "4496b4ea1ec40df3dc88925c0cf53ccc29cdb953",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -198,14 +217,16 @@
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1",
     "scripts/tests/parity-check.sh",
-    "scripts/tests/parity-check.ps1"
+    "scripts/tests/parity-check.ps1",
+    ".moe/tasks/task-5c71dff9ff2a488d8f75ec375c4f99f8.json",
+    ".moe/tasks/task-c619879ed9a643139c184fd5cb1ee888.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-3729a0d6@2026-10-25T22:31:49Z",
-    "at": "2026-10-25T23:21:13.032Z"
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-25T23:21:17Z",
+    "at": "2026-10-25T23:26:16.444Z"
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -256,5 +277,9 @@
     "reportedAt": "2026-10-25T23:25:52.346Z",
     "source": "agent-reported"
   },
-  "completionSummary": "The wrapper hot reload now parses the changed on-disk wrapper before it restarts. Bytes that fail are refused once per hash. The seat stays registered and keeps serving the bytes it has already parsed.\n\nsh (scripts/moe-agent.sh):\n- The restart check runs `bash -n \"$MOE_WRAPPER_PATH\"`. It is guarded with `|| RC=$?` so set -e cannot end the seat.\n- On failure it records MOE_WRAPPER_REFUSED_HASH and prints one stderr line: `[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: <first bash -n line>`. It then falls through: no sidecar stop, deregister, temp removal or exec.\n- The change test skips a hash already refused. Parseable bytes take the old restart body unchanged.\n\nps1 (scripts/moe-agent.ps1):\n- Same logic through Parser::ParseFile. The reason is `line N: <msg>`; a catch yields `ParseFile failed: ...`, so a failed check refuses rather than reloads.\n- The supervisor catch comment is updated.\n\nTests:\n- postflight.sh and postflight.ps1 each gain a `[hot reload refused]` arm. An unparseable append must give exactly one refusal line with the parser's reason, no deregister (and one process on ps1). The next parseable append must then reload exactly once.\n- The existing `[hot reload]` arm is unchanged and green.\n- Both parity checkers register MOE_WRAPPER_RELOAD_REFUSED plus the refusal prose. The negative proof shows the checks fail when the emitter is deleted.\n\nRED: both pre-fix wrappers deregistered on unparseable bytes (RPC sequence 'cr').\n\nGate: the full chain, rc 0. sh ran 37 scenarios; PS 5.1 and pwsh 7 ran 36 each (no symlink rights on this host). Parity re-ran fresh at completion: PASS on all three engines.\n\nMutants M1 (no memo), M2 (always refuse) and M3 (no emitter) were killed on bash, PS 5.1 and pwsh 7; see comment dc236500.\n\nResiduals:\n- Bytes that change between the check and the exec/`&` are not re-checked.\n- A torn write that happens to parse is not caught.\n- A transie"
+  "completionSummary": "The wrapper hot reload now parses the changed on-disk wrapper before it restarts. Bytes that fail are refused once per hash. The seat stays registered and keeps serving the bytes it has already parsed.\n\nsh (scripts/moe-agent.sh):\n- The restart check runs `bash -n \"$MOE_WRAPPER_PATH\"`. It is guarded with `|| RC=$?` so set -e cannot end the seat.\n- On failure it records MOE_WRAPPER_REFUSED_HASH and prints one stderr line: `[WARN] MOE_WRAPPER_RELOAD_REFUSED: wrapper source changed on disk but does not parse; staying on the current bytes until it changes again: <first bash -n line>`. It then falls through: no sidecar stop, deregister, temp removal or exec.\n- The change test skips a hash already refused. Parseable bytes take the old restart body unchanged.\n\nps1 (scripts/moe-agent.ps1):\n- Same logic through Parser::ParseFile. The reason is `line N: <msg>`; a catch yields `ParseFile failed: ...`, so a failed check refuses rather than reloads.\n- The supervisor catch comment is updated.\n\nTests:\n- postflight.sh and postflight.ps1 each gain a `[hot reload refused]` arm. An unparseable append must give exactly one refusal line with the parser's reason, no deregister (and one process on ps1). The next parseable append must then reload exactly once.\n- The existing `[hot reload]` arm is unchanged and green.\n- Both parity checkers register MOE_WRAPPER_RELOAD_REFUSED plus the refusal prose. The negative proof shows the checks fail when the emitter is deleted.\n\nRED: both pre-fix wrappers deregistered on unparseable bytes (RPC sequence 'cr').\n\nGate: the full chain, rc 0. sh ran 37 scenarios; PS 5.1 and pwsh 7 ran 36 each (no symlink rights on this host). Parity re-ran fresh at completion: PASS on all three engines.\n\nMutants M1 (no memo), M2 (always refuse) and M3 (no emitter) were killed on bash, PS 5.1 and pwsh 7; see comment dc236500.\n\nResiduals:\n- Bytes that change between the check and the exec/`&` are not re-checked.\n- A torn write that happens to parse is not caught.\n- A transie",
+  "completedAt": "2026-10-26T00:00:36.764Z",
+  "reviewCompletedAt": "2026-10-26T00:00:36.764Z",
+  "reviewSummary": "APPROVED. Code is in checkpoint b9ebc4a; completion f178123 has only board JSONs. Both on moe/work-2026-10-24, pushed. Diff: 6 script files, +215/-51 = 164 net LOC, mostly re-indent. Live, HEAD and b9ebc4a match the worker's gated sha256 for all 6 files.\n\nRe-ran the step-6 chain fresh from git archive f178123 scripts/ (all MOE_*/CLAUDE_CONFIG_DIR unset), 23:28-23:59Z, rc 0:\n- sh, TIMEOUT 180: frozen 73, [hot reload] ok, [hot reload refused] ok, commit-scope 37, PASS postflight.sh, PASS parity-check.sh.\n- PS 5.1 and pwsh 7 each: frozen 73, both hot-reload arms ok (1 process), commit-scope 36 (AD/AE skipped: no symlink rights), PASS postflight.ps1, PASS parity-check.ps1.\n\nOwn RED/GREEN, sh arm-only harness: pre-fix wrapper exits 1 'restart with no edit behind it (cr)'; fix exits 0.\n\nDoD:\n(1) sh: bash -n guarded by || under set -e. On failure: memo hash, WARN line with bash's reason, fall through; no sidecar stop, deregister, rm or exec. ps1: ParseFile in try/catch with a never-empty reason, so a failed parse call refuses. Parseable bytes still reload.\n(2) Both harnesses have the refused arm: ^c+rc+$, exactly 1 refusal, reason pinned, 1 restart, 1 process on ps1. Old arm unchanged and green.\n(3) Needles in both checkers, PASS on 3 engines; unique to sh:6059 and ps1:5521.\n(4) Fresh postflight green on all engines.\nEncoding: BOMs kept, 0 CR in all 6. Rails: tests present, no MCP or .moe change.\nResiduals, documented: TOCTOU window; a torn write that parses; a transient check failure refuses (fail-safe); the old unreachable sh echo. Complexity: minimal.",
+  "requiredCheckAtDone": null
 }
