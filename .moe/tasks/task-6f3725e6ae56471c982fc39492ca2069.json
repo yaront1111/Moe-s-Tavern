@@ -17,48 +17,79 @@
     {
       "stepId": "step-1",
       "description": "Tests first (test-driven-development) in moe-vscode/tests/plan-review.test.cjs, reusing ONLY the existing harness: openOn, makeTask, pushUpdate (setTasks + emitState + flushTimers), h.setTasks, h.emitState, h.flushTimers, h.settle, h.webview.click / notice / approveDisabled, h.emitError, h.infoMessages / warnMessages / errorMessages, h.approveCalls, h.panelDisposeCount. Add one new section right after '(I) the one authoritative success path', titled '(I2) success is bound to the reviewed revision'. Do not edit, rename, reorder or weaken any existing test. Keep it table-driven: about 130 added lines (LOC budget in step 5).\n\nUnless stated otherwise, each case opens a fresh panel on makeTask({ planRevision: 4 }), clicks approveBtn, settles, and first asserts h.approveCalls deepEqual [[TASK_ID, <token>]].\n1. Mismatch table: WORKING arrives at a revision other than the reviewed one. Rows: newer 5; older 3; zero-after-nonzero 0; legacy-missing-after-nonzero, i.e. makeTask({ planRevision: undefined, status: 'WORKING' }), effective 0. For each row, pushUpdate the WORKING task, settle, then assert:\n   - h.infoMessages deepEqual [] (never 'Plan approved') and h.panelDisposeCount is 0;\n   - h.warnMessages has exactly one entry; it matches /not confirmed/i and contains both the current revision number and the reviewed 4 (word-boundary regexes);\n   - h.webview.notice() matches /reopen/i and h.webview.approveDisabled() is true;\n   - another h.webview.click('approveBtn') leaves h.approveCalls at length 1;\n   - a later pushUpdate of WORKING at revision 4 still leaves h.infoMessages [] (no late success after invalidation).\n2. Unusable table: WORKING carries a present but malformed revision. Rows: -1, 1.5, '4' (string), null, NaN, Number.MAX_SAFE_INTEGER + 1. Same assertions as table 1, except the single warning only has to match /not confirmed/i. Never coerce '4'.\n3. Same-revision success table. Rows: tokens 0, 4 and Number.MAX_SAFE_INTEGER (open on makeTask({ planRevision: t })), plus a legacy row that opens on makeTask({ planRevision: undefined }) (seed 0) and pushes a WORKING task that also has no planRevision. For each row assert:\n   - h.approveCalls[0][1] === the expected token (0 for the legacy row);\n   - h.infoMessages deepEqual ['Plan approved'] and h.warnMessages deepEqual [];\n   - h.panelDisposeCount is 1.\n4. Coalesced burst. After the click, run h.setTasks(WORKING at 4); h.emitState(); h.setTasks(WORKING at 5); h.emitState(); then h.flushTimers() and settle. Expect ['Plan approved'] exactly once, no warning, and one dispose. This pins that a worker's step start, which bumps the revision inside the 200ms render debounce, cannot hide an approval the daemon already confirmed.\n5. Error before WORKING. Call h.emitError({ operation: 'APPROVE_TASK', message: 'plan revision mismatch', codeName: 'PLAN_REVISION_MISMATCH', context: { taskId: TASK_ID, expectedPlanRevision: 4, currentPlanRevision: 5 } }), settle, then pushUpdate(WORKING at 5). Expect exactly one error toast, no warning, no info, no dispose, and Approve disabled.\n6. WORKING before error. pushUpdate(WORKING at 5) and settle, then send a correlated non-stale h.emitError({ operation: 'APPROVE_TASK', message: 'Cannot approve task in WORKING status', context: { taskId: TASK_ID } }) and settle. Expect no info, no dispose, Approve still disabled, and a forced click that sends nothing: a late error never releases the latch.\n\nBefore step 2, run `cd moe-vscode && node --test tests/plan-review.test.cjs` and record the RED tests in the step note. Tables 1 and 2 and case 6 must fail against today's any-WORKING success branch, which reports 'Plan approved' and disposes. Cases 3, 4 and 5 are guards that pass both before and after the fix. Case 4 passes today but fails a naive fix that compares inside the debounce timer. If a case expected red passes, fix the test, never the expectation. No new harness, no new dependency, no sleeps: fake timers only.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/plan-review.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/plan-review.test.cjs"
+      ],
+      "note": "Added section (I2) to plan-review.test.cjs (+137 lines, no existing test touched). RED run before the fix: `node --test tests/plan-review.test.cjs` = 50 tests, 39 pass, 11 fail. The 11 failures are exactly the expected ones: mismatch table (newer, older, zero-after-nonzero, legacy-missing-after-nonzero), unusable table (-1, 1.5, '4', null, NaN, MAX+1), and 'a late error after a mismatched WORKING never releases the latch'. They fail because the old any-WORKING branch shows 'Plan approved' and warns nothing. Guards pass before and after: same-revision success table (0, 4, MAX_SAFE_INTEGER, legacy), coalesced burst, error-before-WORKING. 568 peer/pre-existing dirty paths elsewhere untouched.",
+      "startedAt": "2026-10-26T16:31:02.013Z",
+      "completedAt": "2026-10-26T16:31:56.787Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix only moe-vscode/src/panels/PlanReviewPanel.ts so that success is bound to the reviewed revision. This mirrors I02's PlanReviewApprovalState.onStateUpdate.\n\n(a) Add a module-private helper next to isPlanRevision. Do not export it:\n    function effectivePlanRevision(task: Task): number | undefined { const raw: unknown = task.planRevision; if (raw === undefined) { return 0; } return isPlanRevision(raw) ? raw : undefined; }\n   An absent field is the legacy effective 0, which is exactly how the daemon reads it. A present malformed value is unusable and is never coerced. Leave seedRevisionAttribute, isPlanRevision and showApprovalRefusal byte-identical: TaskDetailPanel imports them, and peer vm harnesses load this module.\n\n(b) Add `private settlePendingApproval(): void`. It is now the ONLY success path, and its comment says success means WORKING at the SAME revision the human approved. Logic:\n   - Return when disposed or when pendingApprovalRevision is undefined, before any task lookup.\n   - Find the task; return unless it exists with status 'WORKING'.\n   - If effectivePlanRevision(task) === pending: clear pending, call showInformationMessage('Plan approved'), dispose(), and return.\n   - Otherwise (another revision, or an unusable one): showWarningMessage. For a numeric revision the text is `Plan approval not confirmed: work started on plan revision ${current}, not revision ${pending} that you reviewed.`. For an unusable one it is `Plan approval not confirmed: work started on a plan whose revision is unreadable.`. Then call `void this.reportApprovalFailure(true, <same text>)`, which clears pending synchronously and latches the page with its existing stale notice.\n   - Never assign the new revision to pending, never retry, and never read a token from the cache for sending.\n\n(c) Call it from the onStateChanged subscription on EVERY state event, before the render debounce: `this.client.onStateChanged(() => { this.settlePendingApproval(); this.debouncedUpdate(); })`. debouncedUpdate already returns when disposed. MoeDaemonClient applies each daemon frame to currentState before firing, so the first WORKING frame at the reviewed revision is seen even when a later frame (a step start that bumps planRevision) lands within the 200ms debounce.\n\n(d) Delete the old any-WORKING branch inside the debounce timer. The timer keeps only the taskRemoved path and postTaskUpdate. Move the 'ONLY authoritative completion' comment to the new method.\n\nKeep the existing error handling unchanged: handleClientError, handleConnectionChange, the duplicate-click gate, contentOutOfSync and the approvePending/approveFailed control messages. Do not change media/planReview.js: its stale approveFailed already latches the page for good, and a later non-stale failure keeps it latched. Add no imports (the vm test harnesses use strict require maps). Make step 1 green without editing any test, keep LF line endings, and aim for about +30/-8 lines.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/panels/PlanReviewPanel.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "note": "PlanReviewPanel.ts: added module-private effectivePlanRevision (absent -> 0, malformed -> undefined) beside isPlanRevision; added private settlePendingApproval() as the only success path (same-revision WORKING -> 'Plan approved' + dispose; other/unreadable revision -> warning + reportApprovalFailure(true) latch, never adopts the new revision); onStateChanged now calls it on every event before debouncedUpdate; removed the old any-WORKING branch from the debounce timer. No imports added, seedRevisionAttribute/isPlanRevision/showApprovalRefusal untouched. GREEN: tests/plan-review.test.cjs 50/50 (was 39/50). Diff +43/-9 in the panel (a bit over the +30/-8 target, from comments and the two message strings).",
+      "startedAt": "2026-10-26T16:31:59.003Z",
+      "completedAt": "2026-10-26T16:32:16.243Z"
     },
     {
       "stepId": "step-3",
       "description": "Pin DoD 2 (wire defaults do not weaken strict settings) in a NEW file, moe-vscode/tests/settings-wire.test.cjs. The name must end in .test.cjs so that `node --test tests/*.test.cjs` collects it. These are guard tests that should pass against today's code; their value comes from the mutation proof below. This step edits no production file. If a case fails on today's code, stop and report it in the step note; never loosen the assertion.\n\nHarness: inline, about 70 lines, modelled on tests/plan-approval-client.test.cjs and tests/plan-review.test.cjs. No shared helper file and no new dependency.\n- Transpile src/services/MoeDaemonClient.ts and src/panels/SettingsPanel.ts with ts.transpileModule (CommonJS, ES2020, esModuleInterop). Read media/settings.js raw.\n- Use a fresh vm context per test. SettingsPanel.currentPanel is static, so reusing a context would hit reveal.\n- Require maps throw on any unexpected name. The client gets vscode; ws (a constructor stub with OPEN 1 that throws if constructed); child_process (throws on spawn); fs; path; net. The panel gets vscode only.\n- Use one plain top-level vscode object, not a strict Proxy: esModuleInterop's __importStar probes it. It provides:\n  - EventEmitter (the recording emitter);\n  - ViewColumn.One and Uri.joinPath;\n  - workspace.getConfiguration, whose get returns false (keeps autoConnect off, so no reconnect timers);\n  - window.createOutputChannel;\n  - window.createWebviewPanel, returning a fake panel. Its webview has cspSource, an identity asWebviewUri, an html field, and an onDidReceiveMessage that captures the handler. The panel counts onDidDispose, reveal and dispose calls;\n  - recorders for showInformationMessage and showErrorMessage.\n- Construct the REAL client with `new MoeDaemonClient('extension')`. Inject `client['ws'] = { readyState: 1, send: frame => frames.push(JSON.parse(frame)), close() {} }` and set `client['_connectionState'] = 'connected'`. Deliver the snapshot through `client['handleMessage'](JSON.stringify({ type: 'STATE_SNAPSHOT', payload }))`, then open with `SettingsPanel.createOrShow('ext', client, client.currentState)`, exactly as extension.ts does.\n- Build the page realm from the HTML the panel emitted:\n  - collect input, select and button opening tags by id; getElementById returns null for any id not in that HTML, and never auto-creates elements;\n  - an input's value is its value attribute, decoded from the five escapeHtml entities (decode the ampersand last);\n  - the checkbox is checked only if its opening tag carries the checked attribute;\n  - the select's value is the option marked selected, else the first option (browser default);\n  - elements record click listeners, and acquireVsCodeApi().postMessage forwards to the captured panel handler.\n- Assert on frames JSON-parsed in the test realm, which avoids cross-realm deepEqual failures. Dispose the client in finally. Every harness failure (missing id, missing handler, unexpected require) throws a clear test error.\n\nFixture STORED: the six form keys with non-default values: approvalMode 'CONTROL'; speedModeDelayMs 4500; an agentCommand containing a double quote, an ampersand and a less-than sign; autoCreateBranch false; branchPattern 'moe/{taskId}-x'; a commitPattern containing an apostrophe. Add these strict and unrelated keys: executionProfile 'observe', deliveryPolicy 'local-branch', qualityGate 'npm test', qualityGateScope 'everyTask', consolidationBranch 'moe/work-*', autoCommit false, checkpointCommits false, checkpointPush false, commitBoardState false, commitHooks true, attribution { undeclared: 'never', contested: 'skip' }, taskSizing { maxSteps: 6 }, appendOnlyFiles ['CHANGELOG.md'], refusalCascadeAutoBacklog false, enableAgentTeams true, chatEnabled false, chatMaxAgentHops 2, columnLimits { WORKING: 2 }. FORM_KEYS = agentCommand, approvalMode, autoCreateBranch, branchPattern, commitPattern, speedModeDelayMs.\n\nCases:\n- S1, an unedited save writes back exactly the stored form values. Click saveBtn. Expect exactly one frame of type 'UPDATE_SETTINGS', Object.keys(payload).sort() deepEqual to FORM_KEYS, and every value strictly equal to STORED[key] (speedModeDelayMs is the number 4500). No other STORED key may appear in the payload. Expect the info toast 'Settings saved.' and one panel dispose.\n- S2, a table over approvalMode CONTROL, SPEED and TURBO. An unedited save sends the stored mode unchanged, so the form can neither weaken CONTROL nor rewrite another mode.\n- S3, a snapshot with no project at all. The form defaults reach the wire as approvalMode 'CONTROL' (the strictest mode), speedModeDelayMs 2000, agentCommand 'claude', autoCreateBranch true, branchPattern 'moe/{epicId}/{taskId}' and commitPattern 'feat({epicId}): {taskTitle}'. The key set is exactly FORM_KEYS, so no default for executionProfile, deliveryPolicy or any other strict key is invented.\n- S4, user edits reach the wire as typed: approvalMode SPEED; delay '3000'; agentCommand '  grok  ', trimmed to 'grok'; autoCreateBranch checked; branchPattern edited with surrounding spaces, then trimmed. The untouched commitPattern stays STORED's value, and the key set is still FORM_KEYS.\n- S5, a table over a delay of '', 'abc' and '0'. The payload carries the number 2000, never 0, NaN or null; a 0ms delay would make SPEED approve instantly.\n\nMutation proof: use a scratch copy outside the repo with the same moe-vscode/{media,src/panels,src/services,tests} layout, run with NODE_PATH=<repo>/moe-vscode/node_modules, apply one exact replacement per mutant with a count==1 assert, then delete the scratch dir.\n- m1: change SettingsPanel's approvalMode fallback from 'CONTROL' to 'TURBO'. S3 goes red.\n- m2: add `executionProfile: 'legacy',` to the save object. S1, S3 and S4 go red.\n- m3: change settings.js `|| 2000` to `|| 0`. S5 goes red.\n- m4: make MoeDaemonClient.updateSettings send `{ ...(this.state?.project?.settings ?? {}), ...settings }`. S1 goes red.\nRecord each mutant's red test names in the step note. Budget about 170 lines for this file.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/settings-wire.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/settings-wire.test.cjs",
+        "moe-vscode/tests/plan-review.test.cjs",
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "note": "New moe-vscode/tests/settings-wire.test.cjs (198 lines): real MoeDaemonClient + SettingsPanel + raw media/settings.js in fresh vm contexts, page realm built only from the emitted HTML. 9 tests (S1, S2 x3 modes, S3, S4, S5 x3 delays), all GREEN on today's code; no production file changed in this step. Mutation proof in a scratch copy under /tmp (NODE_PATH=repo node_modules, one exact replacement each with count==1 assert, scratch deleted afterwards): m1 (approvalMode fallback CONTROL->TURBO) RED: S3. m2 (executionProfile added to save object) RED: S1, S2 x3, S3, S4, S5 x3 (every test that runs savedPayload's key-set check). m3 (settings.js || 2000 -> || 0) RED: S5 x3. m4 (updateSettings spreads stored settings) RED: S1, S2 x3, S4, S5 x3 (S3 stays green by design, there is no stored project). All four mutants killed. Size trim also touched step 1/2 files: plan-review.test.cjs same-revision table compressed to [label, planRevision] rows (137 -> 133 lines, same cases), PlanReviewPanel.ts subscription comment made a one-liner (+41/-9). LOC total now 41+9+133+198 = 381 net changed lines, under QA's 400 cap but over the 360 target.",
+      "startedAt": "2026-10-26T16:32:18.929Z",
+      "completedAt": "2026-10-26T16:35:32.078Z"
     },
     {
       "stepId": "step-4",
       "description": "Single verification gate, run once after steps 1-3. From the repository root, run exactly `cd moe-vscode && npm test && npm run compile` fresh, and keep the command, exitCode and outputTail for complete_task.\n- Expect node:test totals of the previous 134 plus every new test (about 26), with 0 failed, cancelled or skipped, and tsc exit 0.\n- This covers DoD 3: the daemon-start startup tests, the existing approval-paths, plan-approval-client, plan-review and task-* suites, and the typecheck all stay green.\n- Linux, macOS and WSL run the command as written. On Windows cmd, use `cmd /d /c \"cd moe-vscode && npm test && npm run compile\"`.\n- moe-vscode/node_modules must already be installed. Do not reinstall or upgrade packages to get around an environment failure; report it instead.\n- compile writes only moe-vscode/dist, which is gitignored.\n- This is a VS Code-only change with no shared schema, protocol or daemon edit, so no other package suite is required here. I06 owns whole-epic integration and docs.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate run fresh from repo root: `cd moe-vscode && npm test && npm run compile` exit 0. node:test totals tests 160, pass 160, fail 0, cancelled 0, skipped 0 (134 baseline + 17 plan-review I2 + 9 settings-wire = 160). tsc -p ./ exit 0. No file changed in this step; moe-vscode/dist is gitignored.",
+      "startedAt": "2026-10-26T16:35:35.290Z",
+      "completedAt": "2026-10-26T16:35:45.622Z"
     },
     {
       "stepId": "step-5",
       "description": "One final adversarial self-review (adversarial-self-review skill), limited to the three owned files. Check:\n1. An approval followed by a newer, older, zero, legacy-missing or malformed WORKING never shows 'Plan approved', never closes the panel, and never re-arms.\n2. A same-revision WORKING (0, 4, MAX_SAFE_INTEGER, legacy-missing) closes exactly once, even when a later revision lands inside the debounce.\n3. Both error/WORKING orders, duplicate clicks, a disconnect while pending, and dispose mid-flight still behave as the existing tests say.\n4. The per-event path costs nothing when no approval is pending: it returns early, before any task lookup.\n5. No token is ever read from cached state for sending.\n6. DoD 1 audit: run `grep -n -E \"approveTask|updateTaskStatus\\(|APPROVE_TASK\" -r moe-vscode/src moe-vscode/media`. Confirm every approval-capable route is still the F04d set (detail Approve and Next, board card, board drag and epic sweep, plan review), each with a covering test in approval-paths.test.cjs or plan-review.test.cjs. Report any new route instead of fixing it here.\n7. The settings payload is still exactly the six form keys.\n\nSize: `git diff --numstat -- moe-vscode` plus `wc -l` of the new test file must stay under 400 net changed lines, which is QA's review cap with tests counted; the target is 360 or fewer. Compress tables before dropping any enumerated case.\n\nIf any byte changes after step 4, re-run the mutants from steps 1-3, then re-run the step 4 command and use that fresh output.\n\nRules: no Git writes and no direct .moe edits. Do not edit media/planReview.js, SettingsPanel.ts, settings.js or MoeDaemonClient.ts. Leave peer and pre-existing dirty bytes untouched. Finish with complete_task and the fresh gate output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/panels/PlanReviewPanel.ts",
         "moe-vscode/tests/plan-review.test.cjs",
         "moe-vscode/tests/settings-wire.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/tests/plan-review.test.cjs",
+        "moe-vscode/tests/settings-wire.test.cjs"
+      ],
+      "note": "Adversarial self-review of the three owned files, no byte changed after the step-4 gate (the size trims all landed before the mutant runs and the gate). 1) Mismatch/unusable WORKING after an approval: warns once, reportApprovalFailure(true) clears pending synchronously and latches the page; the new revision is never adopted and nothing re-arms (covered by 10 I2 table tests incl. the late same-revision push). 2) Same-revision WORKING at 0, 4, MAX_SAFE_INTEGER and legacy-missing closes once; the coalesced 4-then-5 burst still succeeds because the check runs per state event before the debounce. 3) Existing G/H/J tests (refused send, correlated refusal, disconnect while pending, dispose, listener release) still green; an error before or after WORKING never releases the latch. 4) settlePendingApproval returns on disposed/no-pending before any findTask. 5) The cache is only compared against, never used to build a token. 6) DoD 1 route audit via grep: approveTask callers are TaskDetailPanel:255 (approveRendered), BoardViewProvider:79 and PlanReviewPanel:325; the two updateTaskStatus calls in TaskDetailPanel (prev/next) route AWAITING_APPROVAL Next through approveRendered, and BoardViewProvider.updateTaskStatus refuses AWAITING_APPROVAL->WORKING; this is still the F04d set, no new route, each covered in approval-paths.test.cjs/plan-review.test.cjs. 7) S1 pins the settings payload to exactly the six form keys. Theoretical, not fixed: the new warning toast is unawaited like the neighbouring toasts; a WORKING mismatch followed by a correlated refusal yields two toasts by design. Out of scope, already noted in the plan: SettingsPanel shows 'Settings saved.' even when the send fails. Size: git diff --numstat 41+9 (panel) + 133 (plan-review) + 198 (settings-wire) = 381 net changed lines, under QA's 400 cap but over the 360 target.",
+      "startedAt": "2026-10-26T16:35:47.984Z",
+      "completedAt": "2026-10-26T16:36:13.088Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3729a0d6",
+  "planRevision": 11,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,14 +108,15 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:27.077Z",
-  "updatedAt": "2026-10-26T16:04:42.297Z",
+  "updatedAt": "2026-10-26T16:36:29.178Z",
   "dependsOn": [
     "task-df5384bf7fbd4b7ba3dedb43d7373ffa"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-26T15:22:26.533Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
@@ -110,28 +142,51 @@
       "treeId": "aaa63f296852e03b3a9db81e85e5f1510234f6c7",
       "status": "PLANNING",
       "pushed": true
+    },
+    {
+      "sha": "8f9c11e938e95559a76bc07d96f7408229dfa1f2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-4c57a52b@2026-10-26T15:41:38Z",
+      "paths": [
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+        ".moe/tasks/task-6f3725e6ae56471c982fc39492ca2069.json",
+        ".moe/tasks/task-aa79a8ebd51d4eedb08c3662dfe8b490.json",
+        ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json"
+      ],
+      "recordedBy": "architect-4c57a52b",
+      "recordedAt": "2026-10-26T16:07:06.017Z",
+      "treeId": "8c92a26fcfef9d927319a9e5da779eb86873a1da",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
-    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
-    ".moe/tasks/task-6f3725e6ae56471c982fc39492ca2069.json",
-    ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
-    ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
-    ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json"
+    "moe-vscode/tests/plan-review.test.cjs",
+    "moe-vscode/src/panels/PlanReviewPanel.ts",
+    "moe-vscode/tests/settings-wire.test.cjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "architect-4c57a52b@2026-10-26T15:22:22Z",
-    "at": "2026-10-26T15:41:04.069Z"
+    "sessionId": "architect-4c57a52b@2026-10-26T15:41:38Z",
+    "at": "2026-10-26T16:07:06.017Z"
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T16:00:52.103Z",
   "planningNotes": {
@@ -151,5 +206,15 @@
       "packages/moe-daemon/src/state/taskStore.ts"
     ]
   },
-  "planApprovedAt": "2026-10-26T16:00:52.190Z"
+  "planApprovedAt": "2026-10-26T16:00:52.190Z",
+  "workStartedAt": "2026-10-26T16:31:02.013Z",
+  "reviewStartedAt": "2026-10-26T16:36:29.174Z",
+  "verification": {
+    "command": "cd moe-vscode && npm test && npm run compile",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 160\nℹ suites 0\nℹ pass 160\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 1044.486218\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./",
+    "reportedAt": "2026-10-26T16:36:29.174Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-I04 delivered (plan rev 1, 5/5 steps). VS Code plan review now binds its success acknowledgement to the rendered revision, mirroring I02. PlanReviewPanel used to show 'Plan approved' and close on ANY WORKING task while an approval was pending. Now a new private settlePendingApproval() (called on every state event, before the 200ms render debounce) succeeds only on WORKING at the SAME revision the human approved (absent field = legacy 0, via module-private effectivePlanRevision); WORKING at another or unreadable revision warns 'Plan approval not confirmed...' and latches the page via reportApprovalFailure(true), never adopting the new revision or retrying. The old any-WORKING branch is gone from the debounce timer. Production diff: PlanReviewPanel.ts +41/-9, no imports, seedRevisionAttribute/isPlanRevision/showApprovalRefusal untouched. DoD 1: approve routes already carry the rendered revision since CQ-F04d (TaskDetailPanel Approve/Next, board card/drag/sweep, plan review); step-5 grep audit found no new route. DoD 2: new tests/settings-wire.test.cjs (9 tests; real client + SettingsPanel + raw settings.js) pins the save payload to exactly the six form keys, CONTROL default with no project, delay '', 'abc', '0' -> 2000, edits as typed; mutation proof killed all four mutants (approvalMode fallback TURBO, extra executionProfile key, '|| 0', client spreading stored settings). Tests: plan-review.test.cjs +17 I2 cases (mismatch, unusable, same-revision, coalesced burst, both error orders); RED first = 11 failures against the old branch, GREEN after. Verification: `cd moe-vscode && npm test && npm run compile` exit 0 twice (160/160 node tests = 134 baseline + 26 new, 0 failed/cancelled/skipped; tsc exit 0). Size: 41+9+133+198 = 381 net changed lines (under the 400 cap, over the 360 target). Not done by design: no CLIENT_HELLO, no profile/evidence UI (I05/V06), SettingsPanel still shows 'Settings saved.' on a failed send (separate bug, noted in the plan)."
 }

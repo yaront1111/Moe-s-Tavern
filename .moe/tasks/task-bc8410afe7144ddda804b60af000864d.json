@@ -8,9 +8,48 @@
     "F12b drift test (src/util/executionContractDocs.test.ts) and parity-check.sh stay green"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Extend executionContractDocs.test.ts first. In the moe.submit_plan parameter block compare documented executionContract property names against imported EXECUTION_CONTRACT_FIELDS, not an occurrence elsewhere in MCP_SERVER. Assert requiredChecks object-array shape and distinct bound wording. Read schema.ts and each launcher via repoRoot, normalize CRLF, and pin bounded comments around approvedPlanRevision plus execution-identity/pin/preflight blocks: no present-tense omitted-token approval claim, session on all four named tools, attempt pair only on start_step/complete_step/complete_task. Keep existing F12b tests unchanged; missing file/section error handling must throw, never skip or match unrelated nearby prose. Guard exact behaviors, not entire prose paragraphs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Correct only the approvedPlanRevision documentation comment in schema.ts: absence can be historical unchecked/legacy approval or relaxed set_task_status; current human approvals require expectedPlanRevision and omission is INVALID_INPUT; historical rows are never backfilled. In MCP_SERVER.md's submit_plan executionContract listing add requiredChecks with the existing ProtectedCheckDefinition fields id/command/configs/scripts/assertionRoots and document <=20 definitions separately from <=50-item string lists (reuse/link the existing schema details). No type declarations, validators or runtime behavior changes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update BOTH launchers' stale identity comments at Grok env generation, attempt-pinning header and MOE_SESSION_ID preflight export. State sessionId is stamped on get_context/start_step/complete_step/complete_task; attemptId+generation only on the last three. Reference CQ-F09/F12a where useful, preserving unset behavior. Only comment text changes: no exported values, interpolation, quoting, Python/PowerShell code or line-ending conversion. Keep twins semantically equivalent and tell the operator in the completion note that delivery of wrapper comments can trigger normal hot reload; do not restart services yourself.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single final verification gate from repository root: `bash -n scripts/moe-agent.sh && powershell.exe -NoProfile -NonInteractive -Command '$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){$errors; exit 1}' && bash scripts/tests/parity-check.sh && node --test scripts/tests/prompt-cache-launcher.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) && (cd packages/moe-proxy && npm test) && npm run lint`. Run against a stable full candidate snapshot with docs and all declared files present, native dependencies and clean MOE_* test environment; do not rebuild/delete dist under live proxies. Native Windows PowerShell parses the PS1 twin; Bash and Node tests cover Unix/Git Bash. Require all new drift cases and full daemon/proxy suites pass, and supported Windows launcher branches actually execute (not blanket skipped). Capture fresh command/exitCode/outputTail for complete_task. Schema executable types and wire shapes are unchanged, but this epic-final follow-up retains the daemon/proxy integration suites rather than a test-file-only gate.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review once: trace the three statements to the current approval validator, proxy identity map and execution-contract validator, then inspect the whole CQ-F documentation flow for contradictory approval/receipt/evidence claims. Within this task every launcher/schema diff must be comment-only; MCP listing must distinguish requiredChecks objects from checkRefs strings. Ensure tests fail if any one corrected statement regresses and are scoped to owning sections. Preserve historical unstamped approvals, rendered-token CAS, protected fail-closed behavior and existing full-epic tests. Record any unrelated new defects rather than growing this scope; rerun the same gate if review makes fixes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -19,12 +58,41 @@
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
-    "task-72184c6505cc41e8b6066732011ffb70"
+    "task-72184c6505cc41e8b6066732011ffb70",
+    "task-c2a900aa5107479aa4c630f1b3837ed0"
   ],
   "priority": "LOW",
   "order": 249.5,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T10:43:25.554Z",
-  "updatedAt": "2026-10-26T15:19:33.065Z"
+  "updatedAt": "2026-10-26T16:09:53.849Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T16:07:37.010Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T16:09:53.754Z",
+  "planningNotes": {
+    "approachesConsidered": "Comment/reference correction only, plus regression guards in the existing F12b drift test. No runtime/wire/schema shape changes. F12 completion is landed/merged and supplies the code, although REVIEW keeps the dependency gate. Added c2a900aa dependency serializes these wrapper/docs edits behind the previously planned wrapper chain; do not edit before claim eligibility.",
+    "codebaseInsights": "approvedPlanRevision comment retains omitted-token language; current WS/MCP approval rejects omission. Proxy EXECUTION_IDENTITY_TOOLS maps get_context to session only and the three progression tools to session+attempt. Both launchers have three related comment sites, including the pin_attempt_identity/Pin-AttemptIdentity header. EXECUTION_CONTRACT_FIELDS has nine members; requiredChecks is a ProtectedCheckDefinition[] capped at 20, not one of the <=50 string lists. executionContractDocs.test currently guards SCHEMA.md's field list but not submit_plan's parameter block.",
+    "risks": "Wrapper comments still trigger hot reload; coordinate the final delivery, never manually restart the fleet. Preserve peer bytes and use wrappers for Git. Do not misstate attempt identity on get_context or revive token-free approval compatibility. Required-check metadata is approval material, never evidence/readiness. isEpicFinal is true, so include fresh full daemon/proxy plus launcher contract gates, and an epic-scope doc/adversarial sweep without expanding implementation scope.",
+    "keyFiles": [
+      "packages/moe-daemon/src/types/schema.ts",
+      "docs/MCP_SERVER.md",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "packages/moe-daemon/src/util/executionContractDocs.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T16:09:53.849Z"
 }

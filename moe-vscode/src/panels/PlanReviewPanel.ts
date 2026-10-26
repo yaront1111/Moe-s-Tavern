@@ -98,6 +98,7 @@ export class PlanReviewPanel implements vscode.Disposable {
         // Live updates: subscribe to state changes
         this.disposables.push(
             this.client.onStateChanged(() => {
+                this.settlePendingApproval(); // every event, before the render debounce
                 this.debouncedUpdate();
             })
         );
@@ -139,16 +140,36 @@ export class PlanReviewPanel implements vscode.Disposable {
                 return;
             }
 
-            // The ONLY authoritative completion: the daemon moved this task on.
-            if (this.pendingApprovalRevision !== undefined && task.status === 'WORKING') {
-                this.pendingApprovalRevision = undefined;
-                vscode.window.showInformationMessage('Plan approved');
-                this.dispose();
-                return;
-            }
-
             void this.postTaskUpdate(task);
         }, 200);
+    }
+
+    /**
+     * The ONLY authoritative completion: the daemon moved this task on to WORKING
+     * at the SAME revision the human approved. WORKING at another revision, or at
+     * an unreadable one, is not this approval: warn and latch the page. The new
+     * revision is never adopted as the pending token and nothing is retried.
+     */
+    private settlePendingApproval(): void {
+        const pending = this.pendingApprovalRevision;
+        if (this.disposed || pending === undefined) { return; }
+
+        const task = this.findTask();
+        if (!task || task.status !== 'WORKING') { return; }
+
+        const current = effectivePlanRevision(task);
+        if (current === pending) {
+            this.pendingApprovalRevision = undefined;
+            vscode.window.showInformationMessage('Plan approved');
+            this.dispose();
+            return;
+        }
+
+        const message = current === undefined
+            ? 'Plan approval not confirmed: work started on a plan whose revision is unreadable.'
+            : `Plan approval not confirmed: work started on plan revision ${current}, not revision ${pending} that you reviewed.`;
+        vscode.window.showWarningMessage(message);
+        void this.reportApprovalFailure(true, message);
     }
 
     /**
@@ -309,7 +330,7 @@ export class PlanReviewPanel implements vscode.Disposable {
         }
 
         // A successful send only means bytes left the socket. Approval is finished
-        // only when the daemon says so (see debouncedUpdate / handleClientError).
+        // only when the daemon says so (see settlePendingApproval / handleClientError).
         this.pendingApprovalRevision = token;
         await this.postControl({ type: 'approvePending' });
     }
@@ -795,6 +816,17 @@ export async function showApprovalRefusal(
  */
 export function isPlanRevision(value: unknown): value is number {
     return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * The revision a task is at, read the way the daemon reads it: an absent field is
+ * the legacy effective 0, a present malformed value is unusable (undefined) and
+ * is never coerced.
+ */
+function effectivePlanRevision(task: Task): number | undefined {
+    const raw: unknown = task.planRevision;
+    if (raw === undefined) { return 0; }
+    return isPlanRevision(raw) ? raw : undefined;
 }
 
 /**

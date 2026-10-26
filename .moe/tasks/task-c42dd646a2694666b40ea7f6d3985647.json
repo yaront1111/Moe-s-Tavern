@@ -9,9 +9,47 @@
     "A fresh `cd moe-jetbrains && ./gradlew test` exits 0"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "BACKLOG",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add restart regressions to RuntimeSelectionPolicyTest using its existing service/project/status fixtures and a proposed injected supervisor ProcessHandle resolver returning inert spy handles. Cover PROTECTED unrecorded PID, stale start/PID reuse, another project's record, empty daemon.json projectPath, missing start information and malformed-profile fail-closed selection: zero destroy calls. Cover a recorded supervisor/direct child allowed exactly once, dead/absent process allowing stale metadata cleanup, and LEGACY unrecorded live PID preserving its prior signal/cleanup/reconnect semantics. Exercise real service.restartDaemon on refusal: metadata bytes preserved, refusal status visible, no new process start or retry/backoff reset. Test resolver/signal exceptions and destroy=false under protected vs legacy; never call destroy on the test JVM or any external process.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Move only the restart PID-signal operation into a small supervisor method (proposed stopDaemonForRestart(info): String?, null = may continue, string = refusal). Add an optional trailing ProcessHandle lookup constructor dependency defaulting to ProcessHandle.of(pid).orElse(null), consistent with current probes. Preserve the existing live/dead decision; capture a live target handle once, require activationRefusal(info)==null under the protected profile immediately before signaling, then destroy that captured handle rather than resolving the PID again. Missing/dead handle is no signal. Under PROTECTED a provenance refusal or lookup/signal error/false destroy fails closed with a bounded actionable reason; error handling must not fall through to cleanup or reconnect. LEGACY keeps the old best-effort signal behavior, including continuing after signal failure. Do not use argv, repo metadata ownership claims, killSpawnedDaemon fallback or a new trust mechanism. Keep a short why-comment explaining repository metadata is not authority.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Route restartDaemon through that supervisor stop method and remove its direct ProcessHandle.destroy path. After existing disconnect, if a stop refusal is returned, publishStatus(false, reason) and return before deleting daemon.json, resetting spawn/reconnect state or calling connect. Otherwise retain current stale-file deletion/backoff/reconnect flow. Missing or malformed metadata must never supply a signal target; preserve readDaemonInfo compatibility rather than changing global discovery rules. Keep UI guidance clear that an unverified process must be independently identified/stopped; no claim that a PID read from the repo is the daemon. Extend the tests from step 1 to pin the real service wiring and allowed branch; no test-only alternate restart implementation.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Single verification gate: acquire jetbrains-gradle lease and from repository root run exactly `(cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\")`; release lease even on failure. This is the native-Windows equivalent of the task's ./gradlew test on this WSL host without Java. Require :test actually executes, fresh XML contains the new protected/legacy restart tests, and zero test failures/errors. Supply fresh command/exitCode/outputTail to complete_task. No daemon/proxy regression for this Kotlin-only mid-epic task. Tests use fake signal targets and temporary metadata on all platforms, not OS kill commands.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review once with adversarial-self-review: trace every restart signal and refusal path; verify forged metadata including blank projectPath cannot authorize protected kill, PID/start/project identity is checked by existing policy, captured handle is not replaced after authorization, and failed signals cannot continue protected cleanup. Check repeated/concurrent restart, dead-process disappearance, malformed settings, null/missing metadata and exact legacy behavior. Inspect both service and supervisor tests against production wiring, not an unused helper. This does not certify OS-atomic restart/port binding or enable verified-local; those CQ-R13 concerns remain. If review changes code, rerun the same gate before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,7 +61,7 @@
     "task-3b760109c42544ab892199b3d5534b77"
   ],
   "priority": "MEDIUM",
-  "order": 230.5,
+  "order": 237.5,
   "comments": [
     {
       "id": "comment-e5fe7fa64a044c0db59fd34aa5b76782",
@@ -34,8 +72,32 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:19:07.202Z",
-  "updatedAt": "2026-10-25T13:49:31.992Z",
+  "updatedAt": "2026-10-26T16:07:17.218Z",
   "contextFetchedBy": [
-    "qa-b0c1741e"
-  ]
+    "qa-b0c1741e",
+    "architect-1520cc31"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-26T16:04:04.307Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "tier": "heavy",
+  "effort": "max",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T16:07:17.130Z",
+  "planningNotes": {
+    "approachesConsidered": "Reuse the landed RuntimeSelectionPolicy provenance via MoeDaemonSupervisor.activationRefusal; do not add another trust registry or infer ownership from daemon.json/argv. Preserve LEGACY behavior as the task permits; protect PROTECTED restart and surface refusal. Encapsulate only the existing PID-signal operation in the supervisor so tests can safely inject a ProcessHandle resolver. Three files, no schema/wire changes; CQ-R13 retains broader recovery/provenance work.",
+    "codebaseInsights": "restartDaemon currently disconnects, reads repo metadata, checks isProcessAlive, destroys ProcessHandle.of(pid), deletes metadata, resets backoff and connects. activationRefusal already calls verifyProvenance only under PROTECTED; its per-project pid/start records reject reused/unowned processes. RuntimeSelectionPolicyTest has real service/fake Project/status fixtures and supervisor injection, plus current-process provenance tests. Existing supplier constructor seam patterns in MoeDaemonSupervisor make safe spy handles possible without ever killing a real process.",
+    "risks": "Security boundary: refusal must return BEFORE metadata removal, reset/reconnect or any signal fallback. Capture target handle once before provenance check and destroy that handle, never resolve a new pid afterward. Liveness is not provenance. No source/config mutation or arbitrary PID termination in tests. Empty projectPath must not bypass provenance. No unsupported auto-replacement or stronger isolation claim. Preserve legacy swallowed-signal-error behavior deliberately. Windows processes use parent/supervisor provenance, not unavailable argv.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T16:07:17.218Z"
 }
