@@ -443,30 +443,53 @@ describe('moe.get_commit_scope', () => {
       expect(byPath.get(pathKey('src/d.ts'))?.peerActive).toBe(false);
     });
 
-    it('follows the attempts: open or changed phase inside the window is true; closed long before since is false', async () => {
+    it('follows the attempts: open, unparsable, or a phase change at/after since-120s is true; an older close is false', async () => {
       h.setupMoeFolder();
       h.createEpic();
       h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });
       peerTask('task-open', 'src/open.ts');
+      peerTask('task-quiet', 'src/quiet.ts');
       peerTask('task-recent', 'src/recent.ts');
+      peerTask('task-slack', 'src/slack.ts');
+      peerTask('task-late', 'src/late.ts');
       peerTask('task-stale', 'src/stale.ts');
+      peerTask('task-corrupt', 'src/corrupt.ts');
       await h.state.load();
 
       const now = Date.now();
+      const sinceMs = now - 5 * 60_000;
       const attempt = (taskId: string) =>
         openAttempt(h.state, { taskId, workerId: 'worker-gone', runnerId: 'worker-gone', workspace: h.testDir });
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(now - 60 * 60_000);
       await setAttemptPhase(h.state, (await attempt('task-stale')).id, 'closed');
+      // A hand-edited close whose lastPhaseAt does not parse fails closed.
+      const corrupt = await setAttemptPhase(h.state, (await attempt('task-corrupt')).id, 'closed');
+      h.state.attempts.set(corrupt.id, { ...corrupt, lastPhaseAt: 'garbage' });
+      // A quiet long build: open for an hour with no phase change, so only its
+      // open phase keeps it active; its lastPhaseAt is outside the window.
+      await attempt('task-quiet');
+      const slack = await attempt('task-slack');
+      const late = await attempt('task-late');
+      // The 120 s slack before since, as for worker-recent above: a close at
+      // since-60s counts, one at since-180s does not.
+      vi.setSystemTime(sinceMs - 180_000);
+      await setAttemptPhase(h.state, late.id, 'closed');
+      vi.setSystemTime(sinceMs - 60_000);
+      await setAttemptPhase(h.state, slack.id, 'closed');
       vi.setSystemTime(now - 60_000);
       await attempt('task-open');
       await setAttemptPhase(h.state, (await attempt('task-recent')).id, 'closed');
       vi.useRealTimers();
 
-      const byPath = flags(await scope({ workerId: 'worker-1', since: new Date(now - 5 * 60_000).toISOString() }));
+      const byPath = flags(await scope({ workerId: 'worker-1', since: new Date(sinceMs).toISOString() }));
       expect(byPath.get(pathKey('src/open.ts'))?.peerActive).toBe(true);
+      expect(byPath.get(pathKey('src/quiet.ts'))?.peerActive).toBe(true);
       expect(byPath.get(pathKey('src/recent.ts'))?.peerActive).toBe(true);
+      expect(byPath.get(pathKey('src/slack.ts'))?.peerActive).toBe(true);
+      expect(byPath.get(pathKey('src/late.ts'))?.peerActive).toBe(false);
       expect(byPath.get(pathKey('src/stale.ts'))?.peerActive).toBe(false);
+      expect(byPath.get(pathKey('src/corrupt.ts'))?.peerActive).toBe(true);
     });
 
     it('is true for every entry when no since is given', async () => {
