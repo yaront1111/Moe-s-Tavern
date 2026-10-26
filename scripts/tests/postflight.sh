@@ -105,542 +105,8 @@ printf '{"id":"proj-smoke","name":"postflight-smoke","settings":{"autoCommit":fa
 : > "$PROJECT_DIR/.moe/messages/chan-general.jsonl"
 
 FAKE_PROXY="$TMP_DIR/fake-proxy.js"
-cat > "$FAKE_PROXY" <<'JS'
-const fs = require('fs');
-const path = require('path');
-const raw = fs.readFileSync(0, 'utf8').trim();
-const req = raw ? JSON.parse(raw) : { id: 1, params: { name: '', arguments: {} } };
-const tool = String(req.params?.name || '').replace(/^moe\./, '');
-const args = req.params?.arguments || {};
-const project = process.env.MOE_PROJECT_PATH || process.cwd();
-const moe = path.join(project, '.moe');
-function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); }
-function ok(payload) {
-  process.stdout.write(JSON.stringify({
-    jsonrpc: '2.0',
-    id: req.id || 1,
-    result: { content: [{ type: 'text', text: JSON.stringify(payload) }] }
-  }) + '\n');
-}
-
-// Candidate/check/finalize recorder: reject invalid payloads instead of green
-// mocks accepting arbitrary calls. This fixture never calls the live daemon.
-const assert = require('node:assert/strict');
-const rpcLog = path.join(moe, 'evidence-rpcs.jsonl');
-const appendRpc = () => fs.appendFileSync(rpcLog, JSON.stringify({tool,args}) + '\n');
-function readRows(file) {
-  try { return fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse); }
-  catch (e) { if (e.code === 'ENOENT') return []; throw e; }
-}
-function attemptFixture() {
-  const id = 'attempt-postflight', generation = 7;
-  const taskId = process.env.FAKE_CLAIM_MODE === 'resume' ? 'task-resume' : 'task-postflight';
-  ensureDir(path.join(moe, 'attempts'));
-  const file = path.join(moe, 'attempts', id + '.json');
-  // openAttempt records the runner's pair exactly as the claim sent it.
-  // FAKE_ATTEMPT_PHASE=reconciling: a daemon restart parked the attempt before
-  // the wrapper pinned it (the window a resume after a restart lands in).
-  // A FAKE_CLAIM_LIMIT loop claims again after a landing closed the attempt:
-  // like openAttempt, that claim persists a running attempt before it answers.
-  const reopen = claimLimit > 1 && fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).phase === 'closed';
-  if (!fs.existsSync(file) || reopen) fs.writeFileSync(file, JSON.stringify({
-    id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
-    phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
-    ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host})
-  }));
-  if (process.env.FROZEN_MODE === 'claim-missing' || process.env.FAKE_CLAIM_TOKENS === 'missing') return {};
-  return {attemptId: id, generation: process.env.FROZEN_MODE === 'claim-malformed' ? '7' : generation};
-}
-const safeId = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
-const sha = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
-function candidateReply() {
-  let payload;
-  const a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',args.attemptId+'.json'),'utf8'));
-  assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
-  assert.equal(args.generation,a.generation); assert.notEqual(a.phase,'closed');
-  assert.ok(safeId(args.id)); assert.ok(sha(args.treeSha)); assert.ok(sha(args.baseRevision));
-  assert.match(args.deliveryTarget,/^refs\/heads\/.+/);
-  const {generation,workerId,...candidate} = args;
-  payload = {success:true,candidate:{...candidate,createdAt:new Date().toISOString()},duplicate:false};
-  ensureDir(path.join(moe,'candidates'));
-  const file = path.join(moe,'candidates',args.id+'.json');
-  if (fs.existsSync(file)) {
-    payload.candidate = JSON.parse(fs.readFileSync(file,'utf8')); payload.duplicate = true;
-    for (const key of Object.keys(candidate)) assert.deepEqual(payload.candidate[key],candidate[key]);
-  } else fs.writeFileSync(file,JSON.stringify(payload.candidate));
-  return payload;
-}
-function checkReply() {
-  let payload;
-  const c = JSON.parse(fs.readFileSync(path.join(moe,'candidates',args.candidateId+'.json'),'utf8'));
-  assert.equal(args.treeSha,c.treeSha); assert.ok(safeId(args.id)); assert.ok(safeId(args.runnerId));
-  const tip = require('node:child_process').spawnSync('git',['-C',project,'rev-parse','--verify',c.deliveryTarget],{encoding:'utf8'});
-  if(tip.status===0) assert.equal(tip.stdout.trim(),c.baseRevision,'CheckRun must persist before CAS');
-
-  assert.equal(args.source,'runner-observed'); assert.ok(Number.isSafeInteger(args.exitCode));
-  assert.ok(typeof args.command === 'string' && args.command.trim() && args.command.length <= 500);
-  assert.ok(typeof args.outputTail === 'string' && Buffer.byteLength(args.outputTail,'utf8') <= 16384);
-  assert.ok(!args.outputTail.includes('\ufffd'));
-  const {workerId,...checkRun} = args;
-  payload = {success:true,checkRun:{...checkRun,createdAt:new Date().toISOString()},duplicate:false};
-  ensureDir(path.join(moe,'checks'));
-  fs.writeFileSync(path.join(moe,'checks',args.id+'.json'),JSON.stringify(payload.checkRun));
-  return payload;
-}
-function finalizeReply() {
-  let payload;
-  const mode = process.env.FAKE_EVIDENCE_MODE || '';
-  const file = path.join(moe,'attempts',args.attemptId+'.json');
-  const a = JSON.parse(fs.readFileSync(file,'utf8'));
-  assert.equal(args.taskId,a.taskId); assert.equal(args.workerId,a.workerId);
-  assert.equal(args.generation,a.generation); assert.ok(safeId(args.runnerId));
-  assert.ok(['finalizing','closed'].includes(a.phase));
-  assert.ok(['landed','nothing-to-commit','rescued','failed'].includes(args.outcome));
-  if (args.outcome === 'landed') {
-    assert.ok(sha(args.landedRevision));
-    const rows = readRows(rpcLog);
-    assert.ok(rows.some(r => r.tool === 'record_commit' && r.args.outcome === 'committed'
-      && r.args.kind === 'completion' && r.args.sha === args.landedRevision));
-  } else assert.equal(args.landedRevision,undefined);
-  a.phase = 'closed'; fs.writeFileSync(file,JSON.stringify(a));
-  payload = {success:true,taskId:a.taskId,attemptId:a.id,generation:a.generation,phase:'closed',
-    outcome:args.outcome,landedRevision:args.landedRevision || null};
-  if (mode === 'finalize-loss' || (mode === 'finalize-loss-once'
-    && readRows(rpcLog).filter(r=>r.tool === tool).length === 1)) return null;
-  return payload;
-}
-// receiptStore.ts in miniature: one receipt per candidate, an identical replay
-// writes nothing (duplicate), a differing one is DELIVERY_RECEIPT_CONFLICT.
-function receiptReply() {
-  assert.ok(safeId(args.candidateId));
-  assert.ok(typeof args.target === 'string' && args.target && args.target === args.target.trim() && args.target.length <= 255
-    && [...args.target].every(ch => ch.charCodeAt(0) > 31 && ch.charCodeAt(0) !== 127));
-  for (const key of ['targetBefore','targetAfter','landedRevision']) assert.ok(sha(args[key]), key);
-  const receipt = {candidateId:args.candidateId,target:args.target,targetBefore:args.targetBefore,
-    targetAfter:args.targetAfter,landedRevision:args.landedRevision,pushResult:args.pushResult ?? null};
-  if (receipt.pushResult !== null) assert.ok(typeof receipt.pushResult === 'string' && receipt.pushResult.trim() && receipt.pushResult.length <= 2000);
-  const file = path.join(moe,'receipts',args.candidateId+'.json');
-  if (fs.existsSync(file)) {
-    const stored = JSON.parse(fs.readFileSync(file,'utf8'));
-    const differing = Object.keys(receipt).filter(key => stored[key] !== receipt[key]);
-    if (differing.length) throw Object.assign(new Error('receipt differs in '+differing.join(', ')),{codeName:'DELIVERY_RECEIPT_CONFLICT'});
-    return {success:true,receipt:stored,duplicate:true};
-  }
-  assert.ok(fs.existsSync(path.join(moe,'candidates',args.candidateId+'.json')),'CANDIDATE_NOT_FOUND');
-  ensureDir(path.join(moe,'receipts'));
-  fs.writeFileSync(file,JSON.stringify({id:'receipt-'+args.candidateId,...receipt}));
-  return {success:true,receipt:{id:'receipt-'+args.candidateId,...receipt},duplicate:false};
-}
-// reattachAttempt.ts in miniature: the attempt id, generation, recorded process
-// start time and host must all match exactly (nothing recorded never matches),
-// and only a reconciling or already-running attempt returns to running.
-// FAKE_REATTACH_REFUSE=1 refuses even a matching identity, as a stranger's.
-function reattachReply() {
-  for (const key of ['taskId','workerId','runnerId','attemptId','processStartedAt','host'])
-    assert.ok(typeof args[key] === 'string' && args[key].trim(), key);
-  assert.ok(Number.isSafeInteger(args.generation) && args.generation > 0, 'generation');
-  const file = path.join(moe,'attempts',args.attemptId+'.json');
-  if (!fs.existsSync(file)) throw Object.assign(new Error('Attempt not found: '+args.attemptId),{codeName:'ATTEMPT_NOT_FOUND'});
-  const a = JSON.parse(fs.readFileSync(file,'utf8'));
-  if (a.taskId !== args.taskId) throw Object.assign(new Error('Attempt '+a.id+' belongs to '+a.taskId),{codeName:'ATTEMPT_ID_TASK_MISMATCH'});
-  const field = process.env.FAKE_REATTACH_REFUSE === '1' ? 'processStartedAt'
-    : ['generation','processStartedAt','host'].find(key => a[key] === undefined || a[key] !== args[key]);
-  if (field) throw Object.assign(new Error('Attempt '+a.id+' does not match the presented identity ('+field+' differs)'),{codeName:'ATTEMPT_IDENTITY_MISMATCH'});
-  if (!['reconciling','running'].includes(a.phase)) throw Object.assign(new Error('Attempt '+a.id+' is in phase '+a.phase),{codeName:'ATTEMPT_NOT_REATTACHABLE'});
-  a.phase = 'running'; fs.writeFileSync(file,JSON.stringify(a));
-  return {success:true,attemptId:a.id,taskId:a.taskId,generation:a.generation,phase:'running'};
-}
-// Teardown arms hold ONE call until the supervisor has interrupted the wrapper:
-// the post-flight landing's get_commit_scope (teardown-scope: no outcome yet), or
-// the completion's ledger row once it reached one (teardown-landed: a branch CAS,
-// teardown-nothing: nothing to commit). A proxy the interrupt kills never got its
-// call through, so a held call is logged only once its hold is over.
-function holdForInterrupt() {
-  const mode = process.env.FAKE_EVIDENCE_MODE, ready = path.join(moe, 'gate-ready');
-  const scope = mode === 'teardown-scope' && tool === 'get_commit_scope' && args.phase === 'postflight';
-  const ledger = tool === 'record_commit' && args.kind === 'completion'
-    && args.outcome === {'teardown-landed': 'committed', 'teardown-nothing': 'nothing'}[mode];
-  if (!(scope || ledger) || fs.existsSync(ready)) return;
-  fs.writeFileSync(ready, 'ready');
-  for (let i = 0; i < 1200 && !fs.existsSync(ready + '.sent'); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-}
-// receipt-ledger-replay: the FIRST committed completion row is never recorded;
-// the supervisor hard-kills the wrapper tree while its landing waits on it (a
-// crash between update-ref and record_commit), so no log shows the call.
-function holdLedgerForCrash() {
-  const held = path.join(moe, 'ledger-held');
-  if (process.env.FAKE_EVIDENCE_MODE !== 'receipt-ledger-replay' || tool !== 'record_commit' || args.outcome !== 'committed'
-    || args.kind !== 'completion' || fs.existsSync(held)) return;
-  fs.writeFileSync(held, 'held');
-  for (let i = 0; i < 1200; i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  process.exit(1);
-}
-function evidenceRpc() {
-  appendRpc();
-  if (['record_commit','deregister_worker','add_comment'].includes(tool)) return false;
-  const refusal = (message, codeName) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,
-    error:{code:-32002,message,data:{codeName:codeName || 'FIXTURE_REFUSED'}}}) + '\n');
-  const mode = process.env.FAKE_EVIDENCE_MODE || '';
-  if (mode === tool + '-refuse') { refusal('fixture persistence refused'); return true; }
-  if (mode === tool + '-null') { ok(null); return true; }
-  if (mode === tool + '-malformed') { ok({success:true}); return true; }
-  if (tool === 'record_delivery_receipt' && mode === 'receipt-refused') { refusal('fixture receipt refused'); return true; }
-  if (tool === 'record_delivery_receipt' && mode === 'receipt-conflict') { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
-  // receipt-replay, receipt-rebase-replay, receipt-foreign-replay: the FIRST
-  // receipt is never answered; the supervisor hard-kills the wrapper tree while
-  // it waits (acceptance case 6's crash).
-  const held = path.join(moe, 'receipt-held');
-  if (['receipt-replay','receipt-rebase-replay','receipt-foreign-replay'].includes(mode) && tool === 'record_delivery_receipt' && !fs.existsSync(held)) {
-    fs.writeFileSync(held, 'held');
-    for (let i = 0; i < 1200; i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-    process.exit(1);
-  }
-  try {
-    const payload = tool === 'record_candidate' ? candidateReply() : tool === 'record_check_run' ? checkReply()
-      : tool === 'record_delivery_receipt' ? receiptReply() : tool === 'reattach_attempt' ? reattachReply() : finalizeReply();
-    if (payload !== null) ok(payload);
-  } catch(e) { refusal(e.message, e.codeName); }
-  return true;
-}
-holdForInterrupt();
-holdLedgerForCrash();
-if (['record_candidate','record_check_run','record_delivery_receipt','finalize_attempt','record_commit','deregister_worker','add_comment','reattach_attempt'].includes(tool)) {
-  if (evidenceRpc()) process.exit(0);
-}
-// claimNextTask.ts readProcessIdentity in miniature: the runner's pair is
-// both-or-neither, non-blank, bounded (200 / 255) and free of control
-// characters, and a refused claim assigns nobody. Every claim is logged with
-// the pair it sent.
-if (tool === 'claim_next_task') {
-  appendRpc();
-  const bad = [['processStartedAt', 200], ['host', 255]].find(([key, max]) => args[key] !== undefined && !(typeof args[key] === 'string'
-    && args[key].trim() && args[key].length <= max && [...args[key]].every(ch => ch.charCodeAt(0) > 31 && ch.charCodeAt(0) !== 127)));
-  if (bad || (args.processStartedAt === undefined) !== (args.host === undefined)) {
-    console.log(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32602,message:'Invalid '+(bad ? bad[0] : 'runner identity: send processStartedAt and host together'),
-      data:{tool:'moe.claim_next_task',codeName:'INVALID_INPUT'}}}));
-    process.exit(0);
-  }
-}
-// FAKE_HEARTBEAT_REATTACH mirrors heartbeat.ts's reattach-required answer: `1`
-// reads the caller's attempt (attempt-reconciling while a restart has it parked,
-// a plain ack otherwise); `other` alternates the two reasons that name no
-// attempt. FAKE_HEARTBEAT_ATTEMPT names the attempt the seat's current task
-// holds (default attempt-postflight). .moe/heartbeat-count counts the pings.
-if (tool === 'heartbeat' && process.env.FAKE_HEARTBEAT_REATTACH) {
-  const counter = path.join(moe, 'heartbeat-count');
-  const n = Number(fs.existsSync(counter) ? fs.readFileSync(counter, 'utf8') : 0) + 1;
-  fs.writeFileSync(counter, String(n));
-  const reattach = (reason, a) => ({ok:false,reattachRequired:true,reason,reattachWith:'moe.reattach_attempt',...(a ? {attemptId:a.id,phase:a.phase} : {})});
-  let a = null;
-  try { a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',(process.env.FAKE_HEARTBEAT_ATTEMPT || 'attempt-postflight')+'.json'),'utf8')); } catch {}
-  if (process.env.FAKE_HEARTBEAT_REATTACH === 'other') ok(reattach(n % 2 ? 'no-worker-record' : 'no-open-attempt'));
-  else ok(a && a.workerId === args.workerId && a.phase === 'reconciling' ? reattach('attempt-reconciling', a) : {ok:true});
-  process.exit(0);
-}
-// FAKE_CLAIM_MODE=finalizing: claimNextTask.ts refuses a seat whose own attempt
-// is still finalizing (ATTEMPT_FINALIZING); with none, nothing is claimable.
-if (tool === 'claim_next_task' && process.env.FAKE_CLAIM_MODE === 'finalizing') {
-  const dir = path.join(moe, 'attempts');
-  const open = (fs.existsSync(dir) ? fs.readdirSync(dir) : []).map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return {}; } })
-    .find(a => a.workerId === args.workerId && a.phase === 'finalizing');
-  if (open) process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32002,message:'Attempt '+open.id+' is still finalizing',
-    data:{tool:'moe.claim_next_task',codeName:'ATTEMPT_FINALIZING'}}}) + '\n');
-  else ok({ hasNext: false });
-  process.exit(0);
-}
-// FAKE_CLAIM_ONCE=1: only the first claim hands out the task. Every later claim
-// answers idle and leaves .moe/second-claim, the proof that a --loop wrapper
-// went on claiming after its post-flight instead of stopping.
-// FAKE_CLAIM_LIMIT=N: the same, but the first N claims hand out the task.
-let claimOnceIdle = false;
-const claimLimit = process.env.FAKE_CLAIM_ONCE === '1' ? 1 : Number(process.env.FAKE_CLAIM_LIMIT || 0);
-if (tool === 'claim_next_task' && claimLimit > 0) {
-  const claimCount = path.join(moe, 'claim-count');
-  const claimN = Number(fs.existsSync(claimCount) ? fs.readFileSync(claimCount, 'utf8') : 0) + 1;
-  fs.writeFileSync(claimCount, String(claimN));
-  if (claimN > claimLimit) { claimOnceIdle = true; fs.writeFileSync(path.join(moe, 'second-claim'), String(claimN)); }
-}
-if (tool === 'claim_next_task' && !claimOnceIdle && !['idle','blocked','noteam','noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) attemptFixture();
-if (tool === 'get_context' && args.taskId) {
-  const countFile = path.join(moe,'context-count');
-  const count = Number(fs.existsSync(countFile) ? fs.readFileSync(countFile,'utf8') : 0) + 1;
-  fs.writeFileSync(countFile,String(count));
-  const file = path.join(moe,'attempts','attempt-postflight.json');
-  if (count > 1 && ['REVIEW','DONE','ARCHIVED'].includes(process.env.FAKE_TASK_STATUS) && fs.existsSync(file)) {
-    const a = JSON.parse(fs.readFileSync(file,'utf8'));
-    if (a.phase === 'running') { a.phase = 'finalizing'; fs.writeFileSync(file,JSON.stringify(a)); }
-  }
-}
-
-switch (tool) {
-  case 'create_team': ok({ team: { id: 'team-smoke', name: args.name || 'Smoke' } }); break;
-  case 'join_team': {
-    // FAKE_JOIN_FULL=1: refused the way teamStore refuses a join to a full team.
-    // FAKE_JOIN_FULL_UNTIL=N: only the first N joins are refused, as when a seat
-    // frees up (or maxSize is raised) after the wrapper launched. .moe/join-count
-    // counts every join; .moe/team-joined marks an accepted one.
-    ensureDir(moe);
-    const joinCount = path.join(moe, 'join-count');
-    const joinN = Number(fs.existsSync(joinCount) ? fs.readFileSync(joinCount, 'utf8') : 0) + 1;
-    fs.writeFileSync(joinCount, String(joinN));
-    if (process.env.FAKE_JOIN_FULL === '1' || joinN <= Number(process.env.FAKE_JOIN_FULL_UNTIL || 0)) {
-      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32000,message:'Team Smoke is full (max 10 members)',data:{tool:'moe.join_team'}}}) + '\n');
-      process.exit(0);
-    }
-    fs.writeFileSync(path.join(moe, 'team-joined'), String(joinN));
-    ok({ success: true }); break;
-  }
-  case 'chat_channels': ok({ channels: [{ id: 'chan-general', name: 'general', type: 'general' }] }); break;
-  case 'chat_join': ok({ success: true }); break;
-  case 'chat_read': {
-    // FAKE_MENTION=1 models one unread message tagging the caller. The record
-    // is also appended to the store the wrapper re-reads bodies from, so the
-    // mention passes provenance instead of degrading to a delivery marker.
-    if (process.env.FAKE_MENTION === '1' && args.channel === 'chan-general') {
-      const msg = { id: 'msg-fake-1', channel: 'chan-general', sender: 'human', content: 'ping', mentions: [args.workerId || 'all'], timestamp: new Date().toISOString() };
-      const dir = path.join(moe, 'messages');
-      ensureDir(dir);
-      fs.appendFileSync(path.join(dir, 'chan-general.jsonl'), JSON.stringify(msg) + '\n');
-      ok({ messages: [msg], cursor: null, truncated: 0 });
-      break;
-    }
-    ok({ messages: [], cursor: null, truncated: 0 });
-    break;
-  }
-  case 'get_pending_questions': ok({ count: 0, tasks: [] }); break;
-  case 'claim_next_task': {
-    if (claimOnceIdle) { ok({ hasNext: false }); break; }
-    if (process.env.FAKE_CLAIM_MODE === 'resume') {
-      // One-task-per-worker guard shape (claimNextTask.ts): the worker already
-      // holds an active task from a CLI session that died mid-task.
-      ok({
-        hasNext: false,
-        alreadyAssigned: { taskId: 'task-resume', title: 'Resume smoke', status: 'REVIEW' },
-        nextAction: { tool: 'moe.get_context', args: { taskId: 'task-resume' }, reason: 'One task per worker: you already hold task-resume (REVIEW).' },
-        // FAKE_CLAIM_LAUNCH: the per-task tier hint (claimNextTask.ts launch).
-        ...(process.env.FAKE_CLAIM_LAUNCH ? { launch: JSON.parse(process.env.FAKE_CLAIM_LAUNCH) } : {})
-      });
-    } else if (process.env.FAKE_CLAIM_MODE === 'blocked') {
-      // The BLOCKED hold: the daemon parked this worker's task via
-      // report_blocked; the wrapper must suppress the relaunch and idle --
-      // after landing any lingering baseline for it.
-      ok({
-        hasNext: false,
-        alreadyAssigned: { taskId: 'task-blocked', title: 'Blocked smoke', status: 'BLOCKED', blockedReason: 'waiting on a peer' },
-        nextAction: { tool: 'moe.wait_for_task', reason: 'One task per worker: you already hold task-blocked (BLOCKED).' }
-      });
-    } else if (process.env.FAKE_CLAIM_MODE === 'noteam'
-      || (process.env.FAKE_CLAIM_MODE === 'noteam-until-joined' && !fs.existsSync(path.join(moe, 'team-joined')))) {
-      // claimNextTask.ts noTeamMembershipRefusal: a SOLO seat whose every
-      // candidate sits in an epic+status a live worker already holds.
-      // noteam-until-joined: the same until a join is accepted, then idle.
-      ok({ hasNext: false, code: 'NO_TEAM_MEMBERSHIP', nextAction: { tool: 'moe.join_team', args: { workerId: args.workerId }, reason: 'Worker belongs to no team.' } });
-    } else if (['idle', 'noteam-until-joined'].includes(process.env.FAKE_CLAIM_MODE)) {
-      // Nothing claimable and nothing held: the board state that used to make
-      // the wrapper launch a CLI and tell it to claim itself.
-      ok({ hasNext: false });
-    } else {
-      ok({ ...attemptFixture(), hasNext: true, task: { id: 'task-postflight', title: 'Postflight smoke', status: 'WORKING', chatChannel: 'chan-task' } });
-    }
-    break;
-  }
-  case 'get_context': {
-    // Mirrors getContext.ts: the task projection carries NO epicId and NO order
-    // (the resolved epic comes back alongside it instead). Daemons before the
-    // explicit-taskId NOT_FOUND fix let an unresolvable taskId fall back to the
-    // CALLER's currentTaskId rather than erroring -- so a stale id silently
-    // answered with a different task.
-    // 'empty'    => daemon answered but carried no task.
-    // 'mismatch' => the pre-fix fallback: some OTHER task comes back.
-    if (!args.taskId) {
-      const adopted = process.env.FAKE_ADOPTED_TASK_ID;
-      ok(adopted ? { task: { id: adopted, status: 'WORKING' }, project: {}, epic: {} } : { project: {}, epic: {} });
-      break;
-    }
-    if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }
-    const ctxTaskId = process.env.FAKE_GET_CONTEXT_FAIL === 'mismatch'
-      ? 'task-someone-elses'
-      : (args.taskId || 'task-postflight');
-    const ctxPayload = {
-      task: {
-        id: ctxTaskId,
-        status: process.env.FAKE_TASK_STATUS || 'WORKING',
-        reopenCount: 0,
-        implementationPlan: [],
-        definitionOfDone: []
-      },
-      project: {}, epic: { id: 'epic-1', title: 'Smoke epic' }, nextAction: { tool: 'moe.start_step' }
-    };
-    // FAKE_CTX_IS_EPIC_FINAL=true|false models the newer daemon that computes
-    // epic-final board-side; unset = an old daemon that doesn't serve the
-    // field. FAKE_CTX_IS_EPIC_FINAL_AT=top places it top-level (beside the
-    // epic) instead of on the task projection -- the wrapper accepts both.
-    const fakeIef = process.env.FAKE_CTX_IS_EPIC_FINAL;
-    if (fakeIef === 'true' || fakeIef === 'false') {
-      const iefVal = fakeIef === 'true';
-      if (process.env.FAKE_CTX_IS_EPIC_FINAL_AT === 'top') ctxPayload.isEpicFinal = iefVal;
-      else ctxPayload.task.isEpicFinal = iefVal;
-    }
-    ok(ctxPayload);
-    break;
-  }
-  case 'list_tasks': {
-    const epicTasks = [
-      { id: 'task-postflight', status: process.env.FAKE_TASK_STATUS || 'WORKING', reopenCount: 0, epicId: 'epic-1', order: 1 },
-      ...(process.env.FAKE_SIBLING_ORDER
-        ? [{ id: 'task-sibling', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-1', order: Number(process.env.FAKE_SIBLING_ORDER) }]
-        : [])
-    ];
-    // An epic-scoped query asks about one epic's siblings, so it is bounded by
-    // construction and always answers in full.
-    if (args.epicId) { ok({ tasks: epicTasks.filter((t) => t.epicId === args.epicId) }); break; }
-    // FAKE_LIST_TASKS_TRUNCATED models the real daemon behaviour that made the
-    // production auto-commit path inert: an UNSCOPED list_tasks is capped at
-    // DEFAULT_TASK_LIST_LIMIT and, once the project outgrows one page, the
-    // just-completed task is simply not in the rows that come back.
-    if (process.env.FAKE_LIST_TASKS_TRUNCATED === '1') {
-      ok({
-        tasks: [{ id: 'task-other', status: 'BACKLOG', reopenCount: 0, epicId: 'epic-other', order: 1 }],
-        pagination: { limit: 1, offset: 0, returned: 1, total: 2, hasMore: true }
-      });
-      break;
-    }
-    ok({ tasks: epicTasks });
-    break;
-  }
-  case 'chat_send': {
-    const dir = path.join(moe, 'messages');
-    ensureDir(dir);
-    fs.appendFileSync(path.join(dir, `${args.channel}.jsonl`), JSON.stringify({ sender: args.workerId, content: args.content }) + '\n');
-    ok({ success: true });
-    break;
-  }
-  case 'heartbeat': {
-    fs.appendFileSync(path.join(moe, 'heartbeat.log'), `${new Date().toISOString()} ${args.workerId}\n`);
-    ok({ ok: true });
-    break;
-  }
-  case 'get_commit_scope': {
-    // Mirrors getCommitScope.ts over the on-disk records: ASSERTED =
-    // filesModified ∪ COMPLETED steps' (modifiedFiles ?? affectedFiles) ∪
-    // declaredFiles ∪ touchedFiles; PLANNED = every step's affectedFiles ∪
-    // newFiles ∪ modifiedFiles (∪ inferredPaths) − ASSERTED; PEER = the same
-    // union over every other record not DONE/ARCHIVED. Knobs:
-    //   FAKE_SCOPE_ASSERTED / FAKE_SCOPE_PLANNED  comma lists, appended
-    //   FAKE_SCOPE_PEER_DECLARED                  path:taskId,... appended
-    //   FAKE_SCOPE_PEERS_ACTIVE=1                 another worker is active
-    //                                             (every other open task is
-    //                                             then held by a live peer)
-    //   FAKE_SCOPE_PEER_ACTIVE=0|1                every peerDeclared entry's
-    //                                             peerActive (1 = true); unset
-    //                                             omits the field, as a daemon
-    //                                             from before it does
-    //   FAKE_SCOPE_ASSIGNED                       assignedWorkerId
-    //   FAKE_SCOPE_DECLARED_FIELD=1               serve `declared` (the
-    //                                             record's declaredFiles) as
-    //                                             the current daemon does;
-    //                                             unset models a daemon from
-    //                                             before the field, whose
-    //                                             asserted paths all land
-    //                                             regardless of the baseline
-    // Pre-flight answers with the record's own status (the FAKE_TASK_STATUS
-    // knob models the status the task reaches AFTER the CLI ran).
-    const tid = args.taskId || 'task-postflight';
-    const tasksDir = path.join(moe, 'tasks');
-    const readTask = (id) => { try { return JSON.parse(fs.readFileSync(path.join(tasksDir, `${id}.json`), 'utf8')); } catch { return null; } };
-    const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && x) : []);
-    const steps = (t) => (Array.isArray(t?.implementationPlan) ? t.implementationPlan : []);
-    const tiers = (t) => {
-      const asserted = new Set();
-      for (const s of steps(t)) if (s && s.status === 'COMPLETED') for (const p of list(s.modifiedFiles || s.affectedFiles)) asserted.add(p);
-      for (const p of [...list(t?.filesModified), ...list(t?.declaredFiles), ...list(t?.touchedFiles)]) asserted.add(p);
-      const planned = new Set();
-      for (const s of steps(t)) for (const p of [...list(s?.affectedFiles), ...list(s?.newFiles), ...list(s?.modifiedFiles)]) if (!asserted.has(p)) planned.add(p);
-      for (const p of list(t?.inferredPaths)) if (!asserted.has(p)) planned.add(p);
-      return { asserted: [...asserted], planned: [...planned] };
-    };
-    const csv = (name) => (process.env[name] || '').split(',').map((s) => s.trim()).filter(Boolean);
-    const own = readTask(tid);
-    const mine = tiers(own || {});
-    const asserted = [...new Set([...mine.asserted, ...csv('FAKE_SCOPE_ASSERTED')])];
-    const planned = [...new Set([...mine.planned, ...csv('FAKE_SCOPE_PLANNED')])].filter((p) => !asserted.includes(p));
-    const peerDeclared = [];
-    const peerIds = [];
-    let recordFiles = [];
-    try { recordFiles = fs.readdirSync(tasksDir).filter((f) => f.endsWith('.json')).sort(); } catch {}
-    for (const f of recordFiles) {
-      const t = readTask(f.replace(/\.json$/, ''));
-      if (!t || !t.id || t.id === tid || t.status === 'DONE' || t.status === 'ARCHIVED') continue;
-      peerIds.push(t.id);
-      const pt = tiers(t);
-      for (const p of [...pt.asserted, ...pt.planned]) if (!peerDeclared.some((e) => e.path === p)) peerDeclared.push({ path: p, taskId: t.id });
-    }
-    for (const ent of csv('FAKE_SCOPE_PEER_DECLARED')) {
-      const [p, t] = ent.split(':');
-      if (p && !peerDeclared.some((e) => e.path === p)) peerDeclared.push({ path: p, taskId: t || 'task-peer' });
-    }
-    const peerActive = process.env.FAKE_SCOPE_PEER_ACTIVE;
-    if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
-    const peersActive = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
-    const alwaysInclude = [`.moe/tasks/${tid}.json`, '.moe/project.json', ...(peersActive ? [] : peerIds.map((id) => `.moe/tasks/${id}.json`))];
-    ok({
-      taskId: tid,
-      title: own?.title || 'Postflight smoke',
-      status: args.phase === 'preflight' ? (own?.status || 'WORKING') : (process.env.FAKE_TASK_STATUS || own?.status || 'WORKING'),
-      epicId: 'epic-1',
-      reopenCount: 0,
-      assignedWorkerId: process.env.FAKE_SCOPE_ASSIGNED || args.workerId || null,
-      assigneeAlive: true,
-      asserted, planned,
-      ...(process.env.FAKE_SCOPE_DECLARED_FIELD === '1' ? { declared: list(own?.declaredFiles) } : {}),
-      touchedFiles: list(own?.touchedFiles), inferredPaths: list(own?.inferredPaths), unattributedPaths: list(own?.unattributedPaths),
-      peerDeclared,
-      livePeerIds: peersActive ? ['worker-peer'] : [],
-      activePeerIds: peersActive ? ['worker-peer'] : [],
-      peersActive,
-      alwaysInclude,
-      excludePrefixes: [],
-      policy: { autoCommit: true, checkpointCommits: true, checkpointPush: true, commitBoardState: true, commitHooks: false, undeclared: 'solo', contested: 'commit' }
-    });
-    break;
-  }
-  case 'record_commit': {
-    // The daemon ledger: one JSON line per landing outcome, asserted on by
-    // the scope scenarios (kind, paths, inferredPaths, unattributedPaths).
-    fs.appendFileSync(path.join(moe, 'record_commit.jsonl'), JSON.stringify(args) + '\n');
-    ok({ success: true, taskId: args.taskId, kind: args.kind, outcome: args.outcome, commitCount: 1, filesModified: args.paths || [], addedPaths: args.paths || [] });
-    break;
-  }
-  case 'declare_files': ok({ success: true, taskId: args.taskId, declaredFiles: args.paths || [], addedPaths: args.paths || [] }); break;
-  case 'deregister_worker': {
-    // The EXIT-trap deregister; scenario W proves it still runs after the
-    // teardown rescue.
-    fs.appendFileSync(path.join(moe, 'deregister.log'), `${new Date().toISOString()} ${args.workerId} ${args.reason || ''}\n`);
-    ok({ success: true });
-    break;
-  }
-  case 'lease_account':
-  case 'report_account_usage': {
-    // leaseAccount.ts in miniature, for the [accounts] scenario: no rotation
-    // without FAKE_ACCOUNT_HOME; with FAKE_ACCOUNT_WAIT_ONCE the first lease
-    // finds every account spent; otherwise the first of acct-1, acct-2 that no
-    // report refused or signed out. Every call is logged.
-    const log = path.join(moe, 'account-rpcs.jsonl');
-    const rows = readRows(log);
-    fs.appendFileSync(log, JSON.stringify({ tool, args }) + '\n');
-    if (tool === 'report_account_usage') { ok({ recorded: true, blockedUntil: null, peakPercent: null }); break; }
-    const home = process.env.FAKE_ACCOUNT_HOME;
-    const spent = { rotation: true, accountId: null, retryAt: new Date(Date.now() + 3600000).toISOString(), retryInSec: 3600, switchAtPercent: 90 };
-    if (!home) { ok({ rotation: false, reason: null }); break; }
-    if (process.env.FAKE_ACCOUNT_WAIT_ONCE && !rows.some(r => r.tool === 'lease_account')) { ok(spent); break; }
-    const parked = new Set(rows.filter(r => r.tool === 'report_account_usage' && (r.args.refused === true || r.args.signIn)).map(r => r.args.accountId));
-    const id = ['acct-1', 'acct-2'].find(a => !parked.has(a));
-    ok(id ? { rotation: true, accountId: id, label: id, configDir: path.join(home, id), peakPercent: id === 'acct-1' ? 12.5 : null, switchAtPercent: 90 } : spent);
-    break;
-  }
-  default: ok({ success: true });
-}
-JS
+# The fake daemon+proxy both postflight harnesses share (knobs at its handlers).
+cp "$ROOT_DIR/scripts/tests/postflight-fake-proxy.js" "$FAKE_PROXY"
 
 FROZEN_SUITE="$TMP_DIR/frozen-candidate.cjs"
 cat > "$FROZEN_SUITE" <<'FROZENJS'
@@ -3015,21 +2481,21 @@ EOF
   # with NO CLI relaunch burned on it.
   SCOPE_MB_DIR="$TMP_DIR/scope-mb"
   make_scope_project "$SCOPE_MB_DIR" '["ignored.txt"]'
-  write_task_record "$SCOPE_MB_DIR" '["owned-a.txt"]' BLOCKED '[]' task-blocked
+  write_task_record "$SCOPE_MB_DIR" '["owned-a.txt"]' BLOCKED '[]' task-resume
   echo owned-a > "$SCOPE_MB_DIR/owned-a.txt"
   mkdir -p "$SCOPE_MB_DIR/.git/moe/baseline"
-  printf '#moe-baseline v1 task=task-blocked at=2026-01-01T00:00:00Z head= landed=0\n' > "$SCOPE_MB_DIR/.git/moe/baseline/task-blocked.tsv"
+  printf '#moe-baseline v1 task=task-resume at=2026-01-01T00:00:00Z head= landed=0\n' > "$SCOPE_MB_DIR/.git/moe/baseline/task-resume.tsv"
   set +e
   FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_MB_DIR" "$TMP_DIR/scope-mb.out" /bin/true worker worker-scope-mb
   scope_mb_code=$?
   set -e
   [ "$scope_mb_code" -eq 0 ] || scope_fail M "blocked-hold wrapper exited with $scope_mb_code" "$TMP_DIR/scope-mb.out"
-  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-mb.out"; then
+  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-mb.out"; then
     scope_fail M "the BLOCKED hold must recover the held task's baseline before idling" "$TMP_DIR/scope-mb.out"
   fi
-  scope_mb_subject="$(git -C "$SCOPE_MB_DIR" log --pretty=%s --fixed-strings --grep='Moe-Task: task-blocked' | head -n1)"
+  scope_mb_subject="$(git -C "$SCOPE_MB_DIR" log --pretty=%s --fixed-strings --grep='Moe-Task: task-resume' | head -n1)"
   case "$scope_mb_subject" in
-    "wip(task-blocked): Blocked smoke [status=BLOCKED role=worker cli-exit=0] recovered") : ;;
+    "wip(task-resume): Resume smoke [status=BLOCKED role=worker cli-exit=0] recovered") : ;;
     *) scope_fail M "expected the exact recovered BLOCKED wip subject; got [$scope_mb_subject]" "$TMP_DIR/scope-mb.out" ;;
   esac
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
@@ -3146,20 +2612,20 @@ EOF
   # is the ONLY git actor -- so the dirty bytes and the baseline are observable
   # directly after the run instead of inferred from commit subjects.
   SCOPE_M2B_DIR="$TMP_DIR/scope-m2b"
-  make_m2_project "$SCOPE_M2B_DIR" task-blocked BLOCKED
-  write_live_marker "$SCOPE_M2B_DIR" task-blocked "$M2_LIVE_PID" "$M2_LIVE_START"
+  make_m2_project "$SCOPE_M2B_DIR" task-resume BLOCKED
+  write_live_marker "$SCOPE_M2B_DIR" task-resume "$M2_LIVE_PID" "$M2_LIVE_START"
   set +e
   FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2B_DIR" "$TMP_DIR/scope-m2b.out" /bin/true worker worker-scope-m2b
   scope_m2b_code=$?
   set -e
   [ "$scope_m2b_code" -eq 0 ] || scope_fail M2 "(b) wrapper exited with $scope_m2b_code" "$TMP_DIR/scope-m2b.out"
-  if grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2b.out"; then
+  if grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m2b.out"; then
     scope_fail M2 "(b) the idle path recovered a LIVE owner's baseline" "$TMP_DIR/scope-m2b.out"
   fi
-  if ! grep -Fq "MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-blocked pid=$M2_LIVE_PID host=$M2_HOST worker=worker-owner reason=live" "$TMP_DIR/scope-m2b.out"; then
+  if ! grep -Fq "MOE_CHECKPOINT_SKIPPED_LIVE_OWNER task=task-resume pid=$M2_LIVE_PID host=$M2_HOST worker=worker-owner reason=live" "$TMP_DIR/scope-m2b.out"; then
     scope_fail M2 "(b) expected the named skip line on the idle path" "$TMP_DIR/scope-m2b.out"
   fi
-  m2_subjects "$SCOPE_M2B_DIR" task-blocked "$TMP_DIR/m2b-subjects.txt"
+  m2_subjects "$SCOPE_M2B_DIR" task-resume "$TMP_DIR/m2b-subjects.txt"
   if [ -s "$TMP_DIR/m2b-subjects.txt" ]; then
     cat "$TMP_DIR/m2b-subjects.txt" >&2
     scope_fail M2 "(b) no commit at all may be landed for a live owner's task" "$TMP_DIR/scope-m2b.out"
@@ -3169,8 +2635,8 @@ EOF
     cat "$TMP_DIR/m2b-status.txt" >&2
     scope_fail M2 "(b) impl.txt must still be present AND unstaged so the real owner can land it" "$TMP_DIR/scope-m2b.out"
   fi
-  [ -f "$SCOPE_M2B_DIR/.git/moe/baseline/task-blocked.tsv" ] || scope_fail M2 "(b) the baseline must be left intact on a skip" "$TMP_DIR/scope-m2b.out"
-  if ! grep -Fq ' landed=0' "$SCOPE_M2B_DIR/.git/moe/baseline/task-blocked.tsv"; then
+  [ -f "$SCOPE_M2B_DIR/.git/moe/baseline/task-resume.tsv" ] || scope_fail M2 "(b) the baseline must be left intact on a skip" "$TMP_DIR/scope-m2b.out"
+  if ! grep -Fq ' landed=0' "$SCOPE_M2B_DIR/.git/moe/baseline/task-resume.tsv"; then
     scope_fail M2 "(b) a skip must not mark the live owner's baseline landed" "$TMP_DIR/scope-m2b.out"
   fi
 
@@ -3184,23 +2650,23 @@ EOF
   kill "$M2_DEAD_PID" 2>/dev/null || true
   wait "$M2_DEAD_PID" 2>/dev/null || true
   SCOPE_M2C_DIR="$TMP_DIR/scope-m2c"
-  make_m2_project "$SCOPE_M2C_DIR" task-blocked BLOCKED
-  write_live_marker "$SCOPE_M2C_DIR" task-blocked "$M2_DEAD_PID" "$M2_DEAD_START"
+  make_m2_project "$SCOPE_M2C_DIR" task-resume BLOCKED
+  write_live_marker "$SCOPE_M2C_DIR" task-resume "$M2_DEAD_PID" "$M2_DEAD_START"
   set +e
   FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2C_DIR" "$TMP_DIR/scope-m2c.out" /bin/true worker worker-scope-m2c
   scope_m2c_code=$?
   set -e
   [ "$scope_m2c_code" -eq 0 ] || scope_fail M2 "(c) wrapper exited with $scope_m2c_code" "$TMP_DIR/scope-m2c.out"
-  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2c.out"; then
+  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m2c.out"; then
     scope_fail M2 "(c) a crashed owner's baseline MUST still be recovered" "$TMP_DIR/scope-m2c.out"
   fi
-  scope_m2c_sha="$(git -C "$SCOPE_M2C_DIR" log --format=%H --fixed-strings --grep='Moe-Task: task-blocked' | head -n1)"
+  scope_m2c_sha="$(git -C "$SCOPE_M2C_DIR" log --format=%H --fixed-strings --grep='Moe-Task: task-resume' | head -n1)"
   [ -n "$scope_m2c_sha" ] || scope_fail M2 "(c) the crash recovery landed no commit" "$TMP_DIR/scope-m2c.out"
   scope_m2c_files="$(git -C "$SCOPE_M2C_DIR" show --pretty=format: --name-only "$scope_m2c_sha" | sed '/^$/d' | sort | tr '\n' ' ')"
-  if [ "$scope_m2c_files" != ".moe/tasks/task-blocked.json impl.txt " ]; then
+  if [ "$scope_m2c_files" != ".moe/tasks/task-resume.json impl.txt " ]; then
     scope_fail M2 "(c) the crash recovery must carry EXACTLY the own record + impl.txt; got [$scope_m2c_files]" "$TMP_DIR/scope-m2c.out"
   fi
-  if [ -f "$SCOPE_M2C_DIR/.git/moe/baseline/task-blocked.live" ]; then
+  if [ -f "$SCOPE_M2C_DIR/.git/moe/baseline/task-resume.live" ]; then
     scope_fail M2 "(c) a stale marker must be deleted once its process is proven gone" "$TMP_DIR/scope-m2c.out"
   fi
 
@@ -3211,14 +2677,14 @@ EOF
     echo "[scenario M2] (d) SKIPPED: this platform exposes no process start token, so the probe is identity-only by design"
   else
     SCOPE_M2D_DIR="$TMP_DIR/scope-m2d"
-    make_m2_project "$SCOPE_M2D_DIR" task-blocked BLOCKED
-    write_live_marker "$SCOPE_M2D_DIR" task-blocked "$M2_LIVE_PID" "${M2_LIVE_START}999"
+    make_m2_project "$SCOPE_M2D_DIR" task-resume BLOCKED
+    write_live_marker "$SCOPE_M2D_DIR" task-resume "$M2_LIVE_PID" "${M2_LIVE_START}999"
     set +e
     FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M2D_DIR" "$TMP_DIR/scope-m2d.out" /bin/true worker worker-scope-m2d
     scope_m2d_code=$?
     set -e
     [ "$scope_m2d_code" -eq 0 ] || scope_fail M2 "(d) wrapper exited with $scope_m2d_code" "$TMP_DIR/scope-m2d.out"
-    if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2d.out"; then
+    if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m2d.out"; then
       scope_fail M2 "(d) a recycled process id must NOT be mistaken for the owner" "$TMP_DIR/scope-m2d.out"
     fi
   fi
@@ -3226,8 +2692,8 @@ EOF
   # M2-e: BACK-COMPATIBILITY. Every task in flight when this change lands has a
   # baseline and no marker; those must keep recovering exactly as today.
   SCOPE_M2E_DIR="$TMP_DIR/scope-m2e"
-  make_m2_project "$SCOPE_M2E_DIR" task-blocked BLOCKED
-  if [ -e "$SCOPE_M2E_DIR/.git/moe/baseline/task-blocked.live" ]; then
+  make_m2_project "$SCOPE_M2E_DIR" task-resume BLOCKED
+  if [ -e "$SCOPE_M2E_DIR/.git/moe/baseline/task-resume.live" ]; then
     echo "fixture error: the no-marker case must have no marker" >&2
     exit 1
   fi
@@ -3236,7 +2702,7 @@ EOF
   scope_m2e_code=$?
   set -e
   [ "$scope_m2e_code" -eq 0 ] || scope_fail M2 "(e) wrapper exited with $scope_m2e_code" "$TMP_DIR/scope-m2e.out"
-  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m2e.out"; then
+  if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m2e.out"; then
     scope_fail M2 "(e) a baseline with NO marker must recover exactly as before" "$TMP_DIR/scope-m2e.out"
   fi
 
@@ -3387,8 +2853,8 @@ EOF
   # id on every poll, so a recovery must set the flag itself (keeping the dead
   # session's header session), or every later poll replays it.
   SCOPE_M3D_DIR="$TMP_DIR/scope-m3d"
-  make_m2_project "$SCOPE_M3D_DIR" task-blocked BLOCKED
-  m3d_bl="$SCOPE_M3D_DIR/.git/moe/baseline/task-blocked.tsv"
+  make_m2_project "$SCOPE_M3D_DIR" task-resume BLOCKED
+  m3d_bl="$SCOPE_M3D_DIR/.git/moe/baseline/task-resume.tsv"
   { printf '%s session=worker-dead@2026-09-17T18:59:00Z\n' "$(head -n1 "$m3d_bl")"; tail -n +2 "$m3d_bl"; } > "$m3d_bl.new"
   mv -f "$m3d_bl.new" "$m3d_bl"
   set +e
@@ -3396,16 +2862,16 @@ EOF
   scope_m3d_code=$?
   set -e
   [ "$scope_m3d_code" -eq 0 ] || scope_fail M3 "(d) run 1 exited with $scope_m3d_code" "$TMP_DIR/scope-m3d-1.out"
-  grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-blocked' "$TMP_DIR/scope-m3d-1.out" \
+  grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-m3d-1.out" \
     || scope_fail M3 "(d) run 1 must recover the dead session's baseline" "$TMP_DIR/scope-m3d-1.out"
-  m3_header "$SCOPE_M3D_DIR" task-blocked "$TMP_DIR/m3d-after-1.txt"
+  m3_header "$SCOPE_M3D_DIR" task-resume "$TMP_DIR/m3d-after-1.txt"
   echo again > "$SCOPE_M3D_DIR/impl.txt"
   set +e
   FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_M3D_DIR" "$TMP_DIR/scope-m3d-2.out" /bin/true worker worker-scope-m3d
   scope_m3d_code=$?
   set -e
   [ "$scope_m3d_code" -eq 0 ] || scope_fail M3 "(d) run 2 exited with $scope_m3d_code" "$TMP_DIR/scope-m3d-2.out"
-  m2_subjects "$SCOPE_M3D_DIR" task-blocked "$TMP_DIR/m3d-subjects.txt"
+  m2_subjects "$SCOPE_M3D_DIR" task-resume "$TMP_DIR/m3d-subjects.txt"
   git -C "$SCOPE_M3D_DIR" status --porcelain > "$TMP_DIR/m3d-status.txt" 2>/dev/null || : > "$TMP_DIR/m3d-status.txt"
   if grep -Fq 'MOE_CHECKPOINT_RECOVERED' "$TMP_DIR/scope-m3d-2.out" \
     || [ "$(wc -l < "$TMP_DIR/m3d-subjects.txt" | tr -d '[:space:]')" != "1" ] \
@@ -4589,7 +4055,7 @@ EOF
   echo peer-dirty > "$SCOPE_AB2_DIR/peer-mod.txt"
   scope_ab2_head="$(git -C "$SCOPE_AB2_DIR" rev-parse HEAD)"
   set +e
-  FAKE_CLAIM_MODE=blocked FAKE_MENTION=1 FAKE_ADOPTED_TASK_ID=task-blocked MOE_TASKLESS_WAIT_SEC=5 \
+  FAKE_CLAIM_MODE=blocked FAKE_MENTION=1 FAKE_ADOPTED_TASK_ID=task-resume MOE_TASKLESS_WAIT_SEC=5 \
     run_scope_wrapper "$SCOPE_AB2_DIR" "$TMP_DIR/scope-ab2.out" "$FILE_CLI" worker worker-scope-ab2
   scope_ab2_code=$?
   set -e
@@ -4597,7 +4063,7 @@ EOF
   [ "$scope_ab2_code" -eq 0 ] || scope_fail AB2 "wrapper exited with $scope_ab2_code" "$TMP_DIR/scope-ab2.out"
   [ -f "$SCOPE_AB2_DIR/session-new.txt" ] \
     || scope_fail AB2 "the notification-only session was never launched, so the retained path was not exercised" "$TMP_DIR/scope-ab2.out"
-  grep -Fq 'MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-blocked worker=worker-scope-ab2 binding=retained' "$TMP_DIR/scope-ab2.out" \
+  grep -Fq 'MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE task=task-resume worker=worker-scope-ab2 binding=retained' "$TMP_DIR/scope-ab2.out" \
     || scope_fail AB2 "the retained hold must still refuse under the named code with binding=retained" "$TMP_DIR/scope-ab2.out"
   if [ "$(git -C "$SCOPE_AB2_DIR" rev-parse HEAD)" != "$scope_ab2_head" ]; then
     scope_fail AB2 "the refusal still moved the branch -- nothing may land without a baseline" "$TMP_DIR/scope-ab2.out"

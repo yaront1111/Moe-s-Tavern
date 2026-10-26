@@ -10,9 +10,34 @@
     "Test-only change: no launcher behaviour changes, and bash scripts/tests/parity-check.sh still passes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Re-anchor the stale slice in scripts/tests/taskless-handoff.test.mjs. It is a test-only, one-file change; keep LF line endings.\n\nCause, verified by the architect 2026-10-26: cfd3803 deleted the sh pre-flight trim block (PREFLIGHT_CONTEXT_TRIMMED=$(python ...)) and replaced it with a comment. get_context is now passed through intact. Of the test's four between() anchors, only line 19's `shCurate` is gone. psContext ('    $dynamicContext = \"\"' to '    # -------- Pre-flight baseline'), psBody and shPrompt still match. The ps1 curation that used to sit inside psContext is now its pass-through code, so it still renders.\n\nFix:\n1. Replace line 19 with: const shPreflightContext = between(sh, '                    if [ -z \"$PREFLIGHT_TASK_CHANNEL\" ] && [ -n \"$PREFLIGHT_CONTEXT\" ] && [ -n \"$PYTHON_CMD\" ]; then', '\\n                fi\\n\\n                # 6.');\n   - This is the post-fetch pre-flight region: the chatChannel recovery block plus the pass-through comment, ending before the outer `fi`, so the slice is a balanced if/fi.\n   - The anchor is a code line, not prose.\n2. Rename the variable at its one use in render() (`script = setup + shPreflightContext + '\\n' + shPrompt + ...`).\n3. Add a 2-line comment saying why the region is still rendered: it was the curation block until cfd3803, and rendering it keeps any future curation there under the comment-retention assertions.\n\nDo NOT drop the slice. Do NOT change any assertion, any other anchor, or either launcher.\n\nThe architect prototyped exactly this in a HEAD archive copy:\n- Linux: node --test scripts/tests/taskless-handoff.test.mjs gives 44/44 pass.\n- Native Windows node.exe (Git Bash, powershell.exe and pwsh.exe engines) gives 106/106 pass.\n\nLoud-guard proof (DoD 3), run in a throwaway copy only: change that anchor line in the COPY's moe-agent.sh (e.g. $PREFLIGHT_TASK_CHANNEL -> $PREFLIGHT_TASK_CHANNEL_X). The test must exit 1 with 'missing prompt boundaries: <the anchor>'. The architect observed exactly this. Delete the copy afterwards.\n\nError handling: the existing between() assert stays the only failure path for a stale anchor. Keep its message unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The ONE gate, run fresh in a snapshot of HEAD plus this task's file only. Do not run it in the shared tree: task-7a0b1881 is editing scripts/tests/moe-account-lease.test.mjs, one of the files in this CI step, right now.\n1. S=$(mktemp -d /tmp/moe-cd4e-gate.XXXXXX)\n2. git -C /mnt/d/projexts/moes archive HEAD scripts docs | tar -x -C \"$S\"\n3. cp /mnt/d/projexts/moes/scripts/tests/taskless-handoff.test.mjs \"$S/scripts/tests/\" and cmp it against the worktree.\n4. cd \"$S\" && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin bash -c 'node --test scripts/tests/agent-runtime.test.mjs scripts/tests/taskless-handoff.test.mjs scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-receipt.test.mjs scripts/tests/usage-session.test.mjs scripts/tests/usage-report.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/usage-attribution.test.mjs scripts/tests/resume-progress.test.mjs scripts/tests/moe-account-lease.test.mjs && bash scripts/tests/parity-check.sh'\n\nThis is CI's 'Test agent runtime discovery' step (.github/workflows/ci.yml ~line 242) plus parity. It must exit 0. The architect saw 172 tests, 171 pass, 1 skipped, 0 fail on 2026-10-26; the counts can grow if HEAD moves. This command is the complete_task verification.\n\nAlso record native Windows evidence in the summary:\n- Copy $S's scripts/ and docs/ into a mktemp dir under /mnt/c/Users/Yaron/AppData/Local/Temp.\n- From that cwd, with MOE_*/CLAUDE* stripped, run \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-handoff.test.mjs. It must exit 0 with 106 pass (mem:pattern-qa-windows-native-vitest-from-wsl for the cwd and env rules).\n- From a native Git Bash seat, run it with its own node.\n\nRemove both temp dirs after checking their prefixes. The summary must name exactly one modified path: scripts/tests/taskless-handoff.test.mjs.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of the one-line diff. Load adversarial-self-review.\n\nCheck:\n- The new slice is syntactically balanced bash under /bin/bash and Git Bash. It runs harmlessly in every render(), including taskless cases with PREFLIGHT_TASK_ID empty: the chatChannel python prints '' and a missing python falls through to `|| echo \"\"`.\n- Every pre-existing assertion is byte-identical (git diff shows only the anchor line, the rename and the comment).\n- The anchor is code, not prose.\n- The loud guard was proven.\n- No launcher, parity or docs file changed (git diff --stat).\n\nFix any finding, then rerun step 2 before moe.complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/taskless-handoff.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,5 +50,33 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:10:35.890Z",
-  "updatedAt": "2026-10-26T05:10:35.890Z"
+  "updatedAt": "2026-10-26T05:52:37.676Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T05:49:03.722Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T05:52:37.575Z",
+  "planningNotes": {
+    "approachesConsidered": "Chosen: re-anchor the sh slice on the current post-fetch pre-flight region. It anchors on the chatChannel-recovery `if` code line and ends before the outer `fi`. The region stays rendered, so any future curation reintroduced there is still caught by the comment-retention assertions; that preserves the protection the original slice gave.\nRejected:\n- Deleting the slice: simpler, but a reintroduced curation step between the fetch and `# 6.` would then go untested.\n- Anchoring on the pass-through comment: prose churns more than code.\n- Including the `# 5.` fetch block: it needs moe_rpc and plan_progress_mark stubs, making the test more brittle.",
+    "codebaseInsights": "- cfd3803 (2026-10-24, 'preserve daemon task context at launch') removed both launchers' get_context field allowlists. sh deleted its python trim (PREFLIGHT_CONTEXT_TRIMMED). ps1's $ctxJson block now passes the payload through, still inside the psContext slice.\n- The test's render() executes real launcher slices: bash runs setup + sh slice + shPrompt; ps1 runs setup + psContext + psBody.\n- CI step 'Test agent runtime discovery' runs 11 node:test files, including moe-account-lease.test.mjs.\n- Measured with the fix: Linux CI step 172 tests, 171 pass, 1 skip, 0 fail. Native Windows taskless-handoff 106/106.",
+    "risks": "- The shared checkout has 500+ foreign dirty paths, and task-7a0b1881 is editing moe-account-lease.test.mjs (part of this CI step). Gate in a HEAD snapshot with only this file overlaid.\n- Git Bash has no python3; render() sets PYTHON_CMD=python on Windows and the block tolerates a missing interpreter.\n- Anchors are whitespace-exact (20 and 16 spaces); copy them exactly.",
+    "keyFiles": [
+      "scripts/tests/taskless-handoff.test.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T05:52:37.676Z"
 }

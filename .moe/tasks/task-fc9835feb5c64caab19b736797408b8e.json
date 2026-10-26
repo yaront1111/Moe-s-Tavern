@@ -1,0 +1,32 @@
+{
+  "id": "task-fc9835feb5c64caab19b736797408b8e",
+  "epicId": "epic-be924fb8",
+  "title": "docs: state the interactive folder-trust exception wherever Moe still says it never opens a file inside a Claude config folder",
+  "description": "Follow-up to task-7a0b188151a74356a4965b3cc589eddf. That task lets scripts/moe-account-lease.mjs set `projects[<key>].hasTrustDialogAccepted` in an interactive seat's leased account `.claude.json`; a human signed off on 2026-10-26 (see that task's comments). It updates scripts/CLAUDE.md and docs/MCP_SERVER.md \"Claude Account Rotation\" itself. Three other places still state the old absolute rule and become false once it lands:\n- docs/SCHEMA.md, the `claude-accounts/<id>/` entry: \"Moe ... never opens a file inside it\".\n- packages/moe-daemon/src/accounts/registry.ts, the header comment (\"nothing here, or anywhere in Moe, opens a file inside it\") and the accountConfigDir doc comment (\"it never reads inside it\").\n- docs/TROUBLESHOOTING.md \"Claude Account Rotation Issues\" has no entry for the new MOE_ACCOUNT_TRUST_GRANTED / MOE_ACCOUNT_UNTRUSTED codes.\n\nThe daemon-only statements stay true and must NOT change: docs/ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md, state/accountStore.ts. Take the exact wording (refusal reasons, codes, remedy) from the landed helper and scripts/CLAUDE.md. Do not paraphrase them.",
+  "definitionOfDone": [
+    "docs/SCHEMA.md (claude-accounts/<id>/ entry) and packages/moe-daemon/src/accounts/registry.ts (header comment and accountConfigDir comment) state the one exception: for an interactive claude seat, the wrapper helper scripts/moe-account-lease.mjs sets projects[<key>].hasTrustDialogAccepted in that account's .claude.json; the daemon and the accounts CLI still open nothing inside the folder.",
+    "docs/TROUBLESHOOTING.md 'Claude Account Rotation Issues' lists MOE_ACCOUNT_TRUST_GRANTED and MOE_ACCOUNT_UNTRUSTED, every refusal reason the landed helper prints (verbatim), and the remedy (start claude once in the project under that account and accept the trust dialog).",
+    "The daemon-only statements (docs/ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md, src/state/accountStore.ts) are unchanged; git grep -n 'opens a file inside' shows no remaining absolute claim about all of Moe.",
+    "cd packages/moe-daemon && npx tsc --noEmit exits 0 (comment-only daemon change) and npm run lint passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7a0b188151a74356a4965b3cc589eddf"
+  ],
+  "priority": "MEDIUM",
+  "order": 234.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T05:45:52.197Z",
+  "updatedAt": "2026-10-26T05:45:52.197Z"
+}

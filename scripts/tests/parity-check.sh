@@ -7,6 +7,8 @@
 # find the same spelling regardless of which wrapper ran. This greps both files
 # for the full vocabulary and fails on ANY asymmetry (a code present in one
 # wrapper and absent from the other, or a fixed-list item missing from either).
+# It also requires both postflight harnesses to install the ONE shared fake
+# proxy, scripts/tests/postflight-fake-proxy.js (the last group).
 # Twin: scripts/tests/parity-check.ps1.
 set -euo pipefail
 
@@ -279,6 +281,41 @@ done
 # BOM-less script as ANSI and cannot parse moe-agent.ps1's non-ASCII text.
 [ "$(head -c3 "$PS1" | od -An -tx1 | tr -d ' \n')" = efbbbf ] \
   || fail "moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)"
+
+# Postflight fake proxy: both smoke tests run ONE shared fixture,
+# scripts/tests/postflight-fake-proxy.js (their private embedded copies once
+# drifted apart). Each harness must copy it to its temp proxy path, and neither
+# may write a proxy of its own or embed one: a body is recognised by the
+# fixture's request-parsing line, which only the shared file may carry.
+PROXY_JS="$ROOT_DIR/scripts/tests/postflight-fake-proxy.js"
+PF_SH="$ROOT_DIR/scripts/tests/postflight.sh"
+PF_PS1="$ROOT_DIR/scripts/tests/postflight.ps1"
+PROXY_MARKER="const tool = String(req.params?.name || '').replace(/^moe\./, '');"
+if [ ! -f "$PROXY_JS" ]; then
+  fail "postflight fake proxy: scripts/tests/postflight-fake-proxy.js is missing"
+elif ! grep -Fq -- "$PROXY_MARKER" "$PROXY_JS"; then
+  fail "postflight fake proxy: postflight-fake-proxy.js lost its request-parsing line"
+fi
+for pf in "$PF_SH" "$PF_PS1"; do
+  [ -f "$pf" ] || { fail "postflight fake proxy: $(basename "$pf") is missing"; continue; }
+  if grep -Fq -- "$PROXY_MARKER" "$pf"; then
+    fail "postflight fake proxy: $(basename "$pf") embeds a private fake-proxy body"
+  fi
+done
+if [ -f "$PF_SH" ]; then
+  grep -Eq '^[[:space:]]*cp "\$ROOT_DIR/scripts/tests/postflight-fake-proxy\.js" "\$FAKE_PROXY"[[:space:]]*$' "$PF_SH" \
+    || fail "postflight fake proxy: postflight.sh does not install postflight-fake-proxy.js to \$FAKE_PROXY"
+  if grep -Eq '(>|tee)[[:space:]]*"?\$\{?FAKE_PROXY\b' "$PF_SH"; then
+    fail "postflight fake proxy: postflight.sh writes its own \$FAKE_PROXY"
+  fi
+fi
+if [ -f "$PF_PS1" ]; then
+  grep -Eq "^[[:space:]]*Copy-Item -LiteralPath \(Join-Path \\\$root 'scripts\\\\tests\\\\postflight-fake-proxy\.js'\) -Destination \\\$fakeProxy -ErrorAction Stop[[:space:]]*$" "$PF_PS1" \
+    || fail "postflight fake proxy: postflight.ps1 does not install postflight-fake-proxy.js to \$fakeProxy"
+  if grep -Eiq '(Set-Content|Add-Content|Out-File)[^#]*\$fakeProxy\b|WriteAll(Text|Lines|Bytes)\([[:space:]]*\$fakeProxy\b' "$PF_PS1"; then
+    fail "postflight fake proxy: postflight.ps1 writes its own \$fakeProxy"
+  fi
+fi
 
 if [ "$failures" -ne 0 ]; then
   echo "FAIL parity-check.sh: $failures asymmetr$([ "$failures" -eq 1 ] && echo y || echo ies) between moe-agent.sh and moe-agent.ps1" >&2

@@ -3,6 +3,8 @@ param()
 # scripts/moe-agent.sh). Both must emit the SAME reason codes, chat prefixes,
 # log prefixes, commit-message trailers, settings keys and env names, so an
 # operator grepping either transcript (or git log) finds the same strings.
+# It also requires both postflight harnesses to install the ONE shared fake
+# proxy, scripts/tests/postflight-fake-proxy.js (section 6).
 # Twin: scripts/tests/parity-check.sh. Exit 1 on any asymmetry.
 $ErrorActionPreference = 'Stop'
 
@@ -155,6 +157,33 @@ $ps1Head = New-Object byte[] 3
 $ps1Stream = [IO.File]::OpenRead($ps1Path)
 try { [void]$ps1Stream.Read($ps1Head, 0, 3) } finally { $ps1Stream.Dispose() }
 if (($ps1Head -join ',') -ne '239,187,191') { $failures.Add("moe-agent.ps1 lost its UTF-8 BOM (Windows PowerShell 5.1 then reads it as ANSI and cannot parse it)") }
+
+# 6. Postflight fake proxy: both smoke tests run ONE shared fixture,
+#    scripts/tests/postflight-fake-proxy.js (their private embedded copies once
+#    drifted apart). Each harness must copy it to its temp proxy path, and
+#    neither may write a proxy of its own or embed one: a body is recognised by
+#    the fixture's request-parsing line, which only the shared file may carry.
+$proxyJs = Join-Path $root 'scripts\tests\postflight-fake-proxy.js'
+$proxyMarker = "const tool = String(req.params?.name || '').replace(/^moe\./, '');"
+if (-not (Test-Path -LiteralPath $proxyJs)) { $failures.Add('[postflight fake proxy] scripts/tests/postflight-fake-proxy.js is missing') }
+elseif ((Get-Content -Raw -Encoding UTF8 -LiteralPath $proxyJs).IndexOf($proxyMarker, [System.StringComparison]::Ordinal) -lt 0) {
+    $failures.Add('[postflight fake proxy] postflight-fake-proxy.js lost its request-parsing line')
+}
+$harnesses = [ordered]@{
+    'postflight.sh' = @{ Install = '(?m)^[ \t]*cp "\$ROOT_DIR/scripts/tests/postflight-fake-proxy\.js" "\$FAKE_PROXY"[ \t]*\r?$'
+        Write = '(>|tee)\s*"?\$\{?FAKE_PROXY\b'; Target = '$FAKE_PROXY' }
+    'postflight.ps1' = @{ Install = "(?m)^[ \t]*Copy-Item -LiteralPath \(Join-Path \`$root 'scripts\\tests\\postflight-fake-proxy\.js'\) -Destination \`$fakeProxy -ErrorAction Stop[ \t]*\r?$"
+        Write = '(?i)(Set-Content|Add-Content|Out-File)[^#\r\n]*\$fakeProxy\b|WriteAll(Text|Lines|Bytes)\(\s*\$fakeProxy\b'; Target = '$fakeProxy' }
+}
+foreach ($name in $harnesses.Keys) {
+    $path = Join-Path $root "scripts\tests\$name"
+    if (-not (Test-Path -LiteralPath $path)) { $failures.Add("[postflight fake proxy] $name is missing"); continue }
+    $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $path
+    $h = $harnesses[$name]
+    if ($text.IndexOf($proxyMarker, [System.StringComparison]::Ordinal) -ge 0) { $failures.Add("[postflight fake proxy] $name embeds a private fake-proxy body") }
+    if ($text -cnotmatch $h.Install) { $failures.Add("[postflight fake proxy] $name does not install postflight-fake-proxy.js to $($h.Target)") }
+    if ($text -cmatch $h.Write) { $failures.Add("[postflight fake proxy] $name writes its own $($h.Target)") }
+}
 
 if ($failures.Count -gt 0) {
     Write-Host "FAIL parity-check.ps1: $($failures.Count) asymmetry(ies) between moe-agent.ps1 and moe-agent.sh"
