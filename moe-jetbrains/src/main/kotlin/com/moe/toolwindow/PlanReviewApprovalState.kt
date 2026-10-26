@@ -14,7 +14,8 @@ import com.moe.model.MAX_SAFE_PLAN_REVISION
  *  - a [Decision.Send] always quotes the revision captured at render time, never
  *    a fresher one observed later, because the reviewer only ever read that one;
  *  - [Phase.FINISHED] is reachable only from [Phase.PENDING] observing the task
- *    move to `WORKING`. A transport that accepted the bytes is NOT an approval.
+ *    move to `WORKING` at that same captured revision. A transport that accepted
+ *    the bytes is NOT an approval, and neither is a newer plan already working.
  *
  * Error handling: no method throws for bad input. An unusable snapshot produces
  * a [Decision.Blocked] carrying a message key. These methods run inside Swing
@@ -98,10 +99,18 @@ class PlanReviewApprovalState(private val taskId: String) {
      */
     fun onStateUpdate(snapshot: TaskSnapshot): Boolean = synchronized(lock) {
         if (phase != Phase.READY && phase != Phase.PENDING) return false
-        // The one authoritative completion: the daemon moved the task on.
+        // The one authoritative completion: the daemon moved the task on, and the
+        // plan it moved is the SAME revision the reviewer read. A WORKING task at
+        // any other revision proves nothing about this approval, so it latches.
         if (phase == Phase.PENDING && snapshot.present && snapshot.status == STATUS_WORKING) {
-            phase = Phase.FINISHED
-            notice = null
+            val revision = snapshot.revision.effectiveOrNull()
+            val reason = when {
+                revision == null -> REVISION_UNUSABLE_KEY
+                revision != capturedRevision -> PLAN_CHANGED_KEY
+                else -> null
+            }
+            phase = if (reason == null) Phase.FINISHED else Phase.INVALIDATED
+            notice = reason
             return true
         }
         val reason = unusableReason(snapshot) ?: staleReason(snapshot) ?: return false

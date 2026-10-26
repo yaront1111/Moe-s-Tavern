@@ -11,7 +11,9 @@ import com.intellij.openapi.project.Project as IdeaProject
 import com.moe.model.MAX_SAFE_PLAN_REVISION
 import com.moe.model.MoeState
 import com.moe.model.Project
+import com.moe.model.ProjectSettings
 import com.moe.model.Task
+import com.moe.model.TaskSizingThresholds
 import com.moe.util.MoeJson
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ServerHandshake
@@ -220,6 +222,41 @@ class PlanApprovalContractTest {
         refusing.rejectTask("task-1", "reason")
 
         assertEquals("background commands must not become disconnection reports", 0, disconnections)
+    }
+
+    @Test
+    fun `updating settings sends exactly the four editable keys with the supplied values`() {
+        val sent = mutableListOf<String>()
+        val settings = ProjectSettings(
+            approvalMode = "SPEED",
+            speedModeDelayMs = 4321,
+            agentCommand = "codex --profile strong",
+            enableAgentTeams = true,
+            columnLimits = mapOf("WORKING" to 3),
+            autoCommit = false,
+            checkpointCommits = false,
+            checkpointPush = false,
+            commitBoardState = false,
+            commitHooks = true,
+            consolidationBranch = "moe/consolidation",
+            qualityGate = "npm test",
+            qualityGateScope = "everyTask",
+            attributionUndeclared = "shared",
+            taskSizing = TaskSizingThresholds(warnSteps = 2, maxSteps = 3, warnDistinctFiles = 4, maxDistinctFiles = 5)
+        )
+
+        connectedSender(sent).updateSettings(settings)
+
+        val payload = singlePayload(sent, "UPDATE_SETTINGS")
+        assertEquals(
+            "profile, delivery policy, attribution, sizing and unknown fields are not ours to write",
+            setOf("approvalMode", "speedModeDelayMs", "agentCommand", "enableAgentTeams"),
+            payload.keySet()
+        )
+        assertEquals("SPEED", payload.get("approvalMode").asString)
+        assertEquals(4321, payload.get("speedModeDelayMs").asInt)
+        assertEquals("codex --profile strong", payload.get("agentCommand").asString)
+        assertTrue(payload.get("enableAgentTeams").asBoolean)
     }
 
     @Test

@@ -17,39 +17,63 @@
     {
       "stepId": "step-1",
       "description": "Tests first (test-driven-development): extend the headless state tests using rendered(4L), onApproveClicked(true, snapshot(4L)), then onStateUpdate(snapshot(5L, status=STATUS_WORKING)). Assert INVALIDATED, PLAN_CHANGED_KEY, capturedPlanRevision==4L, approveEnabled==false and forced click Blocked. This must fail against the unconditional PENDING→WORKING success branch. Table-test older/newer revisions, zero after nonzero capture, malformed/null/negative/over-MAX token, missing task, and same-revision success at 0L/4L/MAX_SAFE_PLAN_REVISION. Malformed WORKING tokens use REVISION_UNUSABLE_KEY; mismatches PLAN_CHANGED_KEY; missing task TASK_MISSING_KEY. After invalidation, late same-revision WORKING/error/send-failed callbacks never rearm or finish. Pin both orders of error vs mismatching WORKING callbacks; no auto retry or token substitution. Preserve existing duplicate-click, disposal, disconnected, READY-status-change and transport-is-not-acceptance assertions. In PlanApprovalContractTest reuse connectedSender/singlePayload to assert updateSettings(ProjectSettings(...nondefault values...)) still emits exactly approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams with the supplied values—never executionProfile, deliveryPolicy, attribution, taskSizing or unknown fields. No new harness.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ],
+      "note": "RED proven: focused run (cmd.exe gradlew.bat test --rerun, two owned classes, jetbrains-gradle lease held) = 64 tests, 7 failed, all in the new revision-bound acknowledgement tests with Phase expected INVALIDATED but was FINISHED (PENDING+WORKING finished before the freshness check). Added 15 state-machine tests (mismatch/older/reset/legacy-missing/unusable/missing task/boundary same-revision success/late callbacks/error orders/duplicate click/disposal) and 1 UPDATE_SETTINGS exact-four-key test (guard test, passes on existing behavior). Windows gate per governor precedent since WSL has no JDK. Peer dirty paths untouched.",
+      "startedAt": "2026-10-26T10:01:51.775Z",
+      "completedAt": "2026-10-26T10:03:46.350Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix only PlanReviewApprovalState.onStateUpdate's success branch under the existing synchronized(lock). For PENDING + present + WORKING, validate the effective token before reporting success: `val revision = snapshot.revision.effectiveOrNull(); val reason = when { revision == null -> REVISION_UNUSABLE_KEY; revision != capturedRevision -> PLAN_CHANGED_KEY; else -> null }; phase = if (reason == null) Phase.FINISHED else Phase.INVALIDATED; notice = reason; return true`. Retain all other unusableReason/staleReason handling. Error handling stays fail-closed, nonthrowing and uses existing actionable notice keys; late errors never release INVALIDATED/DISPOSED. Never replace capturedRevision, finish on local send alone, change decoder/legacy-zero semantics, or make expectedPlanRevision optional. Update comments to say authoritative WORKING for the SAME rendered revision. PlanReviewDialog already applies notices and closes only on FINISHED, so no UI changes. Make the reproduction green without rewriting landed approval routing.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt"
+      ],
+      "note": "GREEN: onStateUpdate PENDING+WORKING now validates effectiveOrNull() against capturedRevision before FINISHED (null->REVISION_UNUSABLE_KEY, mismatch->PLAN_CHANGED_KEY, same->FINISHED); header comment updated. Focused rerun exit 0: PlanReviewApprovalStateTest 46 tests, PlanApprovalContractTest 18 tests, 0 failures. No UI/decoder/legacy-zero change; capturedRevision never replaced.",
+      "startedAt": "2026-10-26T10:03:48.966Z",
+      "completedAt": "2026-10-26T10:04:08.583Z"
     },
     {
       "stepId": "step-3",
       "description": "Single final verification gate: from repository root run exactly `cd moe-jetbrains && ./gradlew test`, ensuring tests execute freshly (not only UP-TO-DATE/cache), and retain command/exitCode/outputTail for complete_task. Full consuming-package regression includes existing PlanApprovalContractTest, BoardApprovalTest (card/context/drag routes), PlanReviewApprovalStateTest, settings and delivery presentation. Existing assertions stay intact apart from additive coverage in owned tests. Coordinate `jetbrains-gradle` resource for shared outputs and release on success/failure; never clean peer builds. Linux/macOS use the pinned command with a native compatible JDK; Windows uses gradlew.bat operationally, but obtain POSIX/WSL gate evidence rather than relabelling Windows output. If unavailable report the environment failure, do not upgrade dependencies to bypass it. No producer schema/protocol or launcher changes, so no unrelated package gate.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full gate fresh under jetbrains-gradle lease (released after). WSL has no JDK, so the pinned POSIX command was not runnable; ran the governor-cited Windows equivalent `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` -> exit 0, BUILD SUCCESSFUL, :test executed (not UP-TO-DATE). build/test-results: 21 suites, 295 tests, 0 failures, 0 errors, 0 skipped, timestamps = this run. This is Windows output labelled as such, not POSIX evidence. No dependency upgrades; no peer builds cleaned.",
+      "startedAt": "2026-10-26T10:04:09.474Z",
+      "completedAt": "2026-10-26T10:04:28.288Z"
     },
     {
       "stepId": "step-4",
       "description": "One final adversarial self-review of these three files: approval followed by newer/older/malformed WORKING, ERROR before/after it, duplicate clicks, same-revision zero success, deletion, disposal and reconnect. Verify no path sends a replacement token or reports a newer plan approved; all settings/status/profile/evidence UI and peer dirty bytes remain untouched. Existing BoardApproval and wire tests must still prove every entrypoint quotes the rendered snapshot and required approveTask has no default/optional overload. Fix findings within owned files and refresh the same gate if bytes change; complete_task with fresh evidence. No Git writes or direct .moe edits; wrappers own delivery; I06 owns whole-epic integration/docs.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt"
+      ],
+      "note": "Adversarial self-review of the three-path diff (+241/-4). Concurrency: the new branch runs inside the existing synchronized(lock); capturedRevision is read under the same lock; concurrent test still passes. Inputs: null/negative/over-MAX/Malformed WORKING token -> REVISION_UNUSABLE_KEY, older/newer/zero-after-nonzero/legacy-missing-after-nonzero -> PLAN_CHANGED_KEY, deleted task -> TASK_MISSING_KEY, same revision (0/1/4/MAX) -> FINISHED, all pinned. Replacement token: onApproveClicked still quotes capturedRevision only, capturedRevision is never reassigned, and both approveTask call sites (PlanReviewDialog:464, BoardApproval:35) pass a required Long; MoeCommandSender/MoeProjectService approveTask have no default or overload. Late error/send-failed/WORKING after INVALIDATED or DISPOSED are no-ops (releasePending requires PENDING). Dialog already applies the notice via applyApprovalState and closes only on FINISHED, so no UI change. Theoretical only: error-then-same-revision-WORKING lands INVALIDATED/STATUS_CHANGED (existing READY behavior, pinned as not-FINISHED, no retry). No findings needed fixing; bytes unchanged since the fresh full gate. Settings/status/profile/evidence UI untouched; 549 peer dirty paths untouched.",
+      "startedAt": "2026-10-26T10:04:31.422Z",
+      "completedAt": "2026-10-26T10:04:53.673Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 9,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -65,29 +89,42 @@
       "author": "architect-26fd4d71",
       "content": "REPL scope clarification (human, 2026-10-26): 'Focus on approvals; preserve existing settings and status UI.' No new profile/evidence editor or presentation in I02. Existing CQ-F04c rendered-token routes remain intact. Remaining correctness gap found in PlanReviewApprovalState.onStateUpdate: PENDING currently finishes on any present WORKING task before testing revision freshness; the plan will bind this acknowledgement to the rendered revision and cover races without changing settings/evidence UI. The distinct board revision-only fingerprint bug remains task-aa79a8ebd51d4eedb08c3662dfe8b490.",
       "timestamp": "2026-10-26T09:29:04.882Z"
+    },
+    {
+      "id": "comment-28063f77763f4b8ea8857182951af6be",
+      "author": "governor-96f92f36",
+      "content": "Governor (governor-96f92f36, 2026-10-26 ~10:00Z): I removed CQ-V06 (task-6a5d5a13) from this row's dependsOn. It now waits only on I01 and F05, both DONE, so workers can claim it.\n\nWhy: the V06 edge came from I02's original \"evidence status\" objective. The human's REPL clarification (comment-92914afd, \"Focus on approvals; preserve existing settings and status UI\") dropped that part. The approved plan touches only PlanReviewApprovalState.kt and two JetBrains test files and consumes nothing from V06. V06 is daemon-only strict QA policy, verified with `cd packages/moe-daemon && npm test`, and has no file overlap with this row. V06 is also parked at the far end of the R08→R09→R11→V03→V04→V05 chain, so the edge was holding a ready ~60-minute JetBrains fix for days. That ran against the human's \"keep governing and unblock board\" instruction. If the evidence-status presentation is still wanted, it needs a separate owner that depends on V06.\n\nGate note for the worker: WSL has no JDK on PATH (checked 09:59Z). CQ-F04c's gate ran `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` under the jetbrains-gradle lease, and QA accepted that as the approved Windows equivalent. Use that precedent rather than block on missing POSIX Java.\n\nTo undo: set_task_dependencies with V06 re-added.",
+      "timestamp": "2026-10-26T10:00:17.413Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:20.636Z",
-  "updatedAt": "2026-10-26T09:31:08.469Z",
+  "updatedAt": "2026-10-26T10:05:06.060Z",
   "dependsOn": [
     "task-96526848b23549cf994ab82f47fad29f",
-    "task-c7d520ba9cf940e4b3bbe2e4c3c90f47",
-    "task-6a5d5a13257b48c9940ae3b22347ff7d"
+    "task-c7d520ba9cf940e4b3bbe2e4c3c90f47"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-26T09:22:37.960Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-26fd4d71"
+    "architect-26fd4d71",
+    "governor-96f92f36",
+    "worker-7d158765"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T09:31:08.364Z",
   "planningNotes": {
@@ -103,5 +140,20 @@
       "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt"
     ]
   },
-  "planApprovedAt": "2026-10-26T09:31:08.469Z"
+  "planApprovedAt": "2026-10-26T09:31:08.469Z",
+  "workStartedAt": "2026-10-26T10:01:51.775Z",
+  "reviewStartedAt": "2026-10-26T10:05:06.058Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" (Windows equivalent of `cd moe-jetbrains && ./gradlew test`; WSL has no JDK)",
+    "exitCode": 0,
+    "outputTail": "> Task :prepareTestSandbox UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 5s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nbuild/test-results/test: 21 suites, tests=295 skipped=0 failures=0 errors=0 (PlanReviewApprovalStateTest 46 tests, PlanApprovalContractTest 18 tests), timestamps 2026-10-26T10:04Z = this run",
+    "reportedAt": "2026-10-26T10:05:06.058Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/PlanApprovalContractTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt"
+  ],
+  "completionSummary": "CQ-I02 delivered (plan rev 1, 4/4 steps). The JetBrains plan-review approval machine now binds its success acknowledgement to the rendered revision. PlanReviewApprovalState.onStateUpdate used to finish a PENDING approval on ANY present WORKING task before comparing revisions, so a newer plan already working was reported as the reviewer's approval. Now PENDING+WORKING validates the effective token first: malformed/null/negative/over-MAX -> REVISION_UNUSABLE_KEY, any other revision (older, newer, zero-after-nonzero, legacy-missing-after-nonzero) -> PLAN_CHANGED_KEY and INVALIDATED (latched, capturedRevision never replaced, no retry or token substitution), same revision -> FINISHED. A deleted task stays TASK_MISSING_KEY. Late WORKING/error/send-failed callbacks after INVALIDATED or DISPOSED are no-ops. One production file changed (+13/-4); dialog/board/command/decoder/legacy-zero and settings/status UI untouched. Existing CQ-F04c routing already sends the rendered Long token from every entrypoint (dialog PlanReviewDialog:464, card/context/drag via BoardApproval:35; approveTask has no default or overload).\nTests (+228): 15 new PlanReviewApprovalStateTest cases (mismatch/older/reset/legacy-missing/unusable table/missing task/same-revision success at 0,1,4,MAX/late same-revision update/late errors/both error-vs-WORKING orders/duplicate click/disposal) and 1 PlanApprovalContractTest case pinning updateSettings(non-default ProjectSettings) to exactly approvalMode, speedModeDelayMs, agentCommand, enableAgentTeams with the supplied values. RED first: 7 failures, all Phase expected INVALIDATED but was FINISHED; the other new tests are guards passing on existing behaviour.\nVerification: WSL has no JDK, so the POSIX pinned `./gradlew test` was not runnable; ran the governor-cited Windows equivalent under the jetbrains-gradle lease (released): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, BUILD SUCCESSFUL, "
 }
