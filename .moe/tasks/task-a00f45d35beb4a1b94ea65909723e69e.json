@@ -1,0 +1,93 @@
+{
+  "id": "task-a00f45d35beb4a1b94ea65909723e69e",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V01c] Candidate protectedEntries record (review slice of landed dc13b0e)",
+  "description": "Objective: an independent QA review of the candidate-record half of CQ-V01's landed bytes: runner-reported Candidate.protectedEntries.\n\nWhy this row exists: CQ-V01 (task-bde86540…) landed in dc13b0e, plus QA's one-line test fix in d8f2d6e. That is 448 net LOC across 9 daemon files, over QA's 400-net-LOC cap. The human rejected the size waiver twice (prop-3f2fd69a, prop-162240df). QA passed V01 on substance, so the route is to split REVIEW SCOPE, not bytes:\n- CQ-V01 keeps 4 files, 307 net: delivery/policy.ts, state/deliveryProjection.ts, tools/getContext.ts, delivery/requiredChecks.delivery.test.ts.\n- This row owns the other 5 files of dc13b0e, 141 net, all under packages/moe-daemon/src:\n  - types/schema.ts, +6;\n  - state/candidateStore.ts, +53/-5;\n  - state/candidateStore.test.ts, +60/-1;\n  - tools/recordCandidate.ts, +11;\n  - tools/recordCandidate.test.ts, +17.\n\nScope: verify and review the landed bytes. Do NOT re-implement, revert or re-land working code. Change a file only for a defect QA requires, and keep this row at 400 net or less. Measure with `git show --numstat --format= dc13b0e -- <the 5 paths>`.\n\nOut of scope:\n- the delivery predicate and consumers (CQ-V01);\n- execution identities on check runs (CQ-V02);\n- runner authentication (CQ-V03);\n- client or wrapper changes.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "Candidate.protectedEntries is optional and is recorded exactly as reported. Entries have normalized project-relative paths and lowercase 40-hex oids, are strictly ascending by UTF-8 bytes with no duplicates, and number at most 2000. Absent means not measured; [] means nothing exists under the protected paths.",
+    "Malformed protectedEntries are refused with INVALID_INPUT naming the offending entry, and nothing is written.",
+    "protectedEntries are part of the immutable candidate. A same-id re-record with different entries, absent vs [] included, is refused as CANDIDATE_IMMUTABLE; an identical re-record is idempotent; readers hand out deep copies.",
+    "moe.record_candidate accepts protectedEntries under the same rules, and the held-out acceptance payload (which has no protectedEntries) records unchanged.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "Review slice of already-landed bytes: never re-implement, revert or re-land; edit only for a QA-required defect, within 400 net LOC."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phase 0: confirm the review scope. Expect NO edits.\n- This row owns 5 files of dc13b0e, +147/-6, 141 net:\n  - types/schema.ts +6\n  - state/candidateStore.ts +53/-5\n  - state/candidateStore.test.ts +60/-1\n  - tools/recordCandidate.ts +11\n  - tools/recordCandidate.test.ts +17\n- CQ-V01 (task-bde86540) owns the other 4 files of that commit (see its task comment). Never touch them.\n- Confirm the 5 files carry no uncommitted bytes: `git diff --quiet HEAD -- <the 5 files>`.\n- List the commits since dc13b0e that touched them (`git log --oneline dc13b0e..HEAD -- <files>`; F08 changed schema.ts). Step 2 proves the behaviour still holds on HEAD.\n- Do NOT re-implement, revert or re-land (task rail). Edit only if one of these tests is red at HEAD. Then make the minimal fix inside the 5 files (error handling and test intent unchanged) and keep the row at 400 net or less.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/candidateStore.test.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.ts",
+        "packages/moe-daemon/src/tools/recordCandidate.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Prove DoD 1-4 on HEAD with focused tests and mutation probes.\n- Work in an isolated Linux snapshot of HEAD: native Linux node_modules symlinked (memory gotcha-linux-vitest-reuse-native-node-modules) and every MOE_* variable unset (memory gotcha-seat-env-leaks-into-daemon-tests). Never run vitest in /mnt/d.\n- Run `npx vitest run src/state/candidateStore.test.ts src/tools/recordCandidate.test.ts src/delivery/acceptance.test.ts`. The acceptance file is held-out: read it, never edit it.\n- Map each DoD item to its landed test in the protectedEntries section of candidateStore.test.ts:\n  - DoD1: 'persists a valid protectedEntries list and hands out copies of it', including [];\n  - DoD2: the badEntries table (INVALID_INPUT naming the entry, nothing written, the 2001-entry bound included);\n  - DoD3: 'treats protectedEntries as frozen', covering undefined vs [] vs changed lists, the identical replay, unchanged bytes, and deep copies via the copy-mutation assertions;\n  - DoD4: recordCandidate.test.ts 'declares protectedEntries as a closed {path, oid} list and records it', plus the held-out acceptance record_candidate case, which still passes with no protectedEntries.\n- Run six mutation probes on a scratch copy of the HEAD bytes, never the shared tree. Each must fail a named test:\n  (i) drop the strictly-ascending/duplicate check: the 'unsorted entries' and 'duplicate path' rows;\n  (ii) make BLOB_OID_RE case-insensitive: the 'an uppercase oid' row;\n  (iii) compare `stored.protectedEntries ?? []` with `incoming ?? []`: the frozen test;\n  (iv) make `copy` shallow: the copy-mutation assertion;\n  (v) raise MAX_PROTECTED_ENTRIES to 2001: the '2001 entries' row;\n  (vi) remove protectedEntries from record_candidate's inputSchema: the tool test.\n- Record each result in the step note. If a probe SURVIVES, that is a DoD test gap. Add the one minimal assertion that kills it, inside the 5 files, and note it.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once.\n- Exact command: `cd packages/moe-daemon && npm test`, plus `npx tsc --noEmit`. Run both in the isolated Linux snapshot with MOE_* unset.\n- Both must exit 0, and the fresh test output tail is the complete_task verification evidence.\n- SIZE: record `git show --numstat --format= dc13b0e -- <the 5 files>`. The expected total is +147/-6, 141 net, plus anything step 2 had to add. It must be at most 400.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the 5 files at HEAD. Load adversarial-self-review first.\n\nAttack the code:\n- Can a path escape the project, carry a control character, or arrive unnormalized and still be stored?\n- Can absent and [] ever compare equal?\n- Can a reader mutate stored entries?\n- Does the held-out record_candidate payload store a protectedEntries key it never sent?\n- Error handling: does every refusal name its field index and write nothing?\n\nThen call complete_task with a summary under 2000 chars that:\n- maps the 5 files and their numstat;\n- lists DoD to test and the six mutation results;\n- states that no bytes changed, or names the minimal assertion added.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-bde8654052f648f9b209174c3708322b",
+  "priority": "CRITICAL",
+  "order": 227.45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T08:32:50.950Z",
+  "updatedAt": "2026-10-26T08:35:41.096Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T08:34:51.276Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T08:35:40.988Z",
+  "planningNotes": {
+    "approachesConsidered": "This is a review slice of bytes that already landed: the review-scope split of CQ-V01 (`mem:decision-size-only-reject-of-landed-bytes`). The landed tests already cover every DoD item, so the plan verifies and mutation-proves them rather than adding code. A test is added only if a probe survives.",
+    "codebaseInsights": "- candidateStore.ts holds the rules:\n  - readProtectedEntries: absent stays absent; strict {path, oid} objects; normalizeAffectedFile with a must-already-be-normalized check; a control-character refusal; BLOB_OID_RE /^[0-9a-f]{40}$/; strictly ascending by Buffer.compare; MAX_PROTECTED_ENTRIES 2000.\n  - replayOrRefuse compares JSON.stringify(stored ?? null), so absent never equals [].\n  - copy deep-maps the entries.\n- recordCandidate.ts inputSchema: protectedEntries is an array with maxItems 2000 and closed items, and is not required.\n- Later commits touched schema.ts (F08 StepCompletionEvidence). The V01c bytes are unaffected.",
+    "risks": "- Do not touch V01's 4 files or the held-out src/delivery/acceptance.test.ts.\n- qa_approve may warn NO-COMPLETION-COMMIT when no bytes change. The warning is advisory; point QA at dc13b0e.\n- Never run vitest in the shared /mnt/d tree: its node_modules is a Windows install.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/state/candidateStore.test.ts",
+      "packages/moe-daemon/src/tools/recordCandidate.ts",
+      "packages/moe-daemon/src/tools/recordCandidate.test.ts",
+      "packages/moe-daemon/src/types/schema.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T08:35:41.096Z"
+}

@@ -13,9 +13,60 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Schema and store: CheckRun gets an outcome plus four optional, REPORTED execution identities (revision, environment, dispatch, attempt). Load test-driven-development and write the store tests first.\n\ntypes/schema.ts (additive: no schemaVersion bump, no migration, Candidate UNCHANGED; its attemptId stays the PRODUCER attempt):\n- Add `export type CheckOutcome = 'passed' | 'code-failure' | 'infra-failure' | 'timeout' | 'skipped' | 'inconclusive'`, with one JSDoc line each:\n  - passed: ran to completion and passed (exit 0);\n  - code-failure: ran to completion and the code under test failed (nonzero exit);\n  - infra-failure: the runner or environment failed, which says nothing about the code;\n  - timeout: stopped at its time budget;\n  - skipped: never ran;\n  - inconclusive: ran, but the result cannot be judged.\n  - Only `passed` can ever count.\n- CheckRun gains optional readonly fields:\n  - `outcome?: CheckOutcome`;\n  - `planRevision?: number`: the Task.planRevision the reporter ran under;\n  - `environment?: string`: opaque execution-environment identity, e.g. an image/toolchain digest, compared exactly and never parsed;\n  - `dispatchId?: string`: the dispatch request it answers; dispatch records come with CQ-V04;\n  - `attemptId?: string`: the ExecutionAttempt the check ran under, the producer's or a REVIEWER's. It is distinct from Candidate.attemptId.\n- Group JSDoc: these fields are REPORTED like treeSha, shape-validated and never authenticated (CQ-V03 authenticates). They are ABSENT on every row recorded before this change and on any report that omits them. Such a row is an unclassified legacy report. Nothing defaults, infers (no outcome from exitCode) or backfills them, and no stored row is rewritten.\n\nstate/checkRunStore.ts:\n- Add the five optional fields to RecordCheckRunParams, and export `CHECK_OUTCOMES`.\n- validateCheckRunParams refuses and never coerces, with INVALID_INPUT. Only `undefined` means absent; null is refused, like the existing optional id.\n  - outcome must be one of CHECK_OUTCOMES. Coherence: `passed` requires exitCode 0, and `code-failure` requires a nonzero exitCode. Every other outcome takes the exit code as reported.\n  - planRevision must be a safe integer >= 1.\n  - environment must be a non-blank string of at most 255 characters with no control characters, kept verbatim.\n  - dispatchId and attemptId must be non-blank entity ids (validateEntityId).\n  - Use conditional spreads, so an absent field leaves NO key.\n- RECORDED_FIELDS gains all five. A same-id replay that is identical (absent equals absent) is duplicate:true; any difference is CHECK_RUN_IMMUTABLE naming the field. A report that adds identities to a stored identity-less run is refused: nothing upgrades a historical row in place.\n- recordCheckRun builds the record with conditional spreads, so an identity-less report persists exactly today's key set (the held-out acceptance payload).\n- Error handling for attemptId: export candidateStore's existing `assertAttemptOfTask` (one keyword) and call it with the CANDIDATE's taskId. It runs after the same-id replay and case-collision checks and before the write, so an identical crash retry still returns the stored run. ATTEMPT_NOT_FOUND and ATTEMPT_ID_TASK_MISMATCH write nothing. This is referential integrity only, with no phase or fencing gate: a reviewer's attempt and a closed producer attempt are both valid. Update the header's order comment.\n\nTests in state/checkRunStore.test.ts, with exact assertions:\n(a) A fully bound report persists all five fields exactly, in memory, on disk and in the return value.\n(b) it.each over the six outcomes with coherent codes (passed 0, code-failure 1, infra-failure 0, timeout 124, skipped 0, inconclusive 0): each is stored as its own value (DoD 1).\n(c) Append to the existing `malformed` table:\n  - outcome 'PASSED', '', 42 and null;\n  - passed with exit 1; code-failure with exit 0;\n  - planRevision 0, -1, 1.5, '2' and null;\n  - environment '', '  ', 256 chars, 'a\\nb' and 7;\n  - dispatchId '' and 'bad id'; attemptId 'bad id'.\n  Each writes nothing.\n(d) Add five rows to the existing `changed` table (CHECK_RUN_IMMUTABLE). Add a case: a stored identity-less run is NOT upgraded by a same-id report that adds an outcome, and its file bytes are unchanged.\n(e) DoD 3:\n  - The beforeEach attempt-1 is the producer of cand-a. Close it with setAttemptPhase.\n  - Open attempt-2 for task-1 as 'qa-1', the reviewer, and record a run with attemptId 'attempt-2'.\n  - Assert: run.attemptId === 'attempt-2'; getCandidate('cand-a').attemptId is still 'attempt-1'; listCandidatesForAttempt('attempt-2') is []; an identical replay is duplicate:true.\n(f) An unknown attempt is refused with ATTEMPT_NOT_FOUND, and an attempt of another task with ATTEMPT_ID_TASK_MISMATCH. Neither writes anything.\n(g) DoD 2: identity-less reports at exit 0 and at exit 1 store NO outcome key. Nothing is inferred from the exit code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/checkRunStore.ts",
+        "packages/moe-daemon/src/state/candidateStore.ts",
+        "packages/moe-daemon/src/state/checkRunStore.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire the identities into moe.record_check_run (tools/recordCheckRun.ts) and its test (tools/recordCheckRun.test.ts).\n- inputSchema gains five optional properties. additionalProperties stays false, and none of them is required:\n  - `outcome`: an enum built from a `Record<CheckOutcome, true>`, so a missing value fails to compile, as with the existing SOURCES;\n  - `planRevision`: integer, minimum 1;\n  - `environment`, `dispatchId`, `attemptId`: strings, each with a one-line description.\n- Add 1-2 sentences to the tool description:\n  - the identities are optional, REPORTED provenance;\n  - only outcome `passed`, or a legacy report without an outcome at exit 0, can ever satisfy a gate;\n  - attemptId must name an attempt of the candidate's task, and may be the reviewer's.\n- The handler stays a thin delegate to the store.\n- Tests:\n  - update the exact property-key assertion and the outcome enum values;\n  - via callTool, a fully bound report persists every identity;\n  - outcome 'PASSED' and passed with exit 1 are refused with INVALID_INPUT;\n  - another task's attempt is refused with codeName ATTEMPT_ID_TASK_MISMATCH;\n  - each refusal writes no file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCheckRun.ts",
+        "packages/moe-daemon/src/tools/recordCheckRun.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Make the distinct outcomes count in the ONE shared delivery predicate (delivery/policy.ts), and test it in tools/qaApprove.test.ts.\n- passedOn adds `&& (run.outcome === undefined || run.outcome === 'passed')`. The quality gate and the protected required checks share it, so there is no second predicate.\n- Comment the clause with three points:\n  - A recorded outcome other than passed never satisfies, even at exit 0. That covers infra failure, timeout, skipped, inconclusive, and an incoherent or unrecognised stored value (fail closed).\n  - A row WITHOUT an outcome predates this change, or came from a reporter that does not classify, and keeps the exit-code rule. That is the explicit legacy compatibility.\n  - The legacy policy is untouched: evaluateDeliveryEvidence returns satisfied before any check is judged.\n- Tests in the existing describe 'delivery policy — evaluateDeliveryEvidence':\n  - Append decoys to the `does not accept %s` it.each. Each is an exit-0, runner-observed run on the current candidate, tree and command, with one of these outcomes: infra-failure, timeout, skipped, inconclusive, a hand-written incoherent code-failure (fixture rows bypass validation), and an unrecognised stored 'PASSED'. Each must leave exactly ['required-check:node gate.cjs'] missing.\n  - Add one test: run('…', { outcome: 'passed' }) satisfies.\n  - Leave 'accepts the one matching run on its own' UNCHANGED. Its RUNNER_PASS has no outcome, so it pins legacy compatibility.\n- Never edit src/delivery/acceptance.test.ts (held-out). Its identity-less runner-observed pass must still release.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/qaApprove.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Document the contract CQ-V03/V04 build on. Docs are outside QA's packages/ LOC measure.\n- docs/SCHEMA.md `## CheckRun` (~line 1224):\n  - add the five fields to the interface block;\n  - add the CheckOutcome definitions and the coherence rule;\n  - extend the validation and refusal order: ATTEMPT_NOT_FOUND and ATTEMPT_ID_TASK_MISMATCH come after the same-id checks;\n  - add a short 'Provenance and compatibility' paragraph: the fields are REPORTED; an absent field means an unclassified legacy report, judged by the exit-code rule; nothing is defaulted, inferred or backfilled; there is no schemaVersion bump.\n  - Mirror only what the `### CheckRun` list (~line 1873) already enumerates.\n- docs/MCP_SERVER.md `### moe.record_check_run` (~line 773): the new optional inputs, the refusals and the outcome rule.\n- In MCP_SERVER.md's attempt-gate sentence (~line 120), say that an optional attemptId is referential integrity only: an attempt of the candidate's task, the reviewer's included. It is not an ownership, status or fencing gate.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once. This changes a shared schema and tool contract, so run the FULL daemon suite.\n- Exact command: `cd packages/moe-daemon && npm test`. It must exit 0, and its fresh output tail is the complete_task evidence.\n- Run it in an isolated Linux snapshot, never in /mnt/d, whose node_modules is a Windows install:\n  - a HEAD archive, with this task's files copied over and cmp'd;\n  - the native Linux node_modules symlinked (memory gotcha-linux-vitest-reuse-native-node-modules);\n  - every MOE_* variable unset (memory gotcha-seat-env-leaks-into-daemon-tests).\n- In the same snapshot:\n  - run `npx tsc --noEmit`;\n  - type-check the three changed test files with the --ignoreConfig recipe (memory gotcha-daemon-tests-not-type-checked);\n  - confirm that src/delivery/acceptance.test.ts, requiredChecks.delivery.test.ts and deliveryProjection.test.ts pass UNCHANGED.\n- SIZE GATE: run `git diff --numstat -- packages/` for this task's files. The net added lines must be at most 400 (QA's cap). No waiver is available: the human refused V01's twice. Aim for about 330 or fewer. If you are over, trim the tests (prefer table rows to new it blocks), never the behaviour.\n- Record the suite counts, the tsc exits and the numstat in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff. Load adversarial-self-review first.\n\nMutation probes, run in a scratch copy only. Each must fail a named test:\n(1) remove the outcome clause from passedOn: the step-3 decoys;\n(2) make an absent outcome fail in passedOn: the legacy RUNNER_PASS and the held-out acceptance case;\n(3) remove one new field from RECORDED_FIELDS: its `changed` row;\n(4) default outcome from exitCode: test (g);\n(5) skip assertAttemptOfTask: test (f);\n(6) bind the current attempt or the candidate's attemptId instead of the named one: test (e);\n(7) drop the passed/exit-0 coherence check: test (c).\n\nAlso check:\n- Does an undefined key ever reach JSON or the replay compare?\n- Does any consumer conflate run.attemptId with the producer? deliveryProjection must keep using candidate.attemptId.\n- Can a corrupt stored outcome pass?\n- Is the held-out acceptance file byte-identical?\n- Does the scope hold: no wrapper, client or projection change; verified-local untouched; no .moe edits?\n- Error handling: every refusal names its field and writes nothing.\n\nIf anything changed, rerun the step-5 command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +79,42 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:53.719Z",
-  "updatedAt": "2026-10-25T10:17:06.587Z",
+  "updatedAt": "2026-10-26T08:33:05.564Z",
   "dependsOn": [
-    "task-bde8654052f648f9b209174c3708322b"
-  ]
+    "task-bde8654052f648f9b209174c3708322b",
+    "task-a00f45d35beb4a1b94ea65909723e69e"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-26T08:20:16.959Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 10
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T08:30:10.521Z",
+  "planningNotes": {
+    "approachesConsidered": "- Daemon-stamping planRevision from the live task at record time: rejected. A late report would carry a revision it never ran under, which is the stale binding CQ-V06 must catch. The field is reported and shape-validated instead; V03 authenticates it and V06 enforces that it is current.\n- Making exitCode nullable for skipped or infra outcomes: rejected. It ripples into every consumer and into the wrapper's acknowledgement. outcome is authoritative and exitCode stays 'as reported'.\n- A stored `binding: 'v2'` discriminator: rejected (YAGNI). The absence of an outcome is the explicit, documented legacy marker.\n- Adding identities to Candidate: rejected. Its revision is already bound through the producer attempt's executionPolicySnapshot, and the epic rail forbids a second revision authority.\n- A check-definition digest on each run: deferred. planRevision binds V01b's approved snapshot (definitionDigest), and V04 can add a digest if its matching needs one.\n- Exposing the identities in deliveryProjection, get_context or the clients: out of scope.\n- Enforcing revision currency, environment match and dispatch recovery: owned by V06, V04 and V03.",
+    "codebaseInsights": "- checkRunStore.ts is immutable by construction. Its order today: validate, candidate, tree, same-id replay (RECORDED_FIELDS), case collision, write (writeEntity before map.set).\n- candidateStore's assertAttemptOfTask (ATTEMPT_NOT_FOUND / ATTEMPT_ID_TASK_MISMATCH) runs after the replay checks; mirror that order.\n- policy.ts passedOn is the single pass match for both the quality gate and protected required checks. Under the 'legacy' policy, evaluateDeliveryEvidence returns satisfied before any check is judged.\n- A QA claim opens its own attempt (claimNextTask openClaimAttempt), so during REVIEW currentAttempt is the reviewer's. deliveryProjection.phaseFor deliberately uses candidate.attemptId, the producer.\n- The wrappers (moe-agent.sh record_check_run_rpc) send the frozen identity-less payload. With conditional spreads those rows stay byte-identical to today's.\n- Test homes:\n  - checkRunStore.test.ts: the `malformed` (~556) and `changed` (~278) tables; beforeEach creates attempt-1 plus cand-a and cand-b.\n  - qaApprove.test.ts ~1332: `run()` fixture builder and the decoy it.each; writeFixtureRecord bypasses validation.\n  - recordCheckRun.test.ts ~137: the exact inputSchema keys.",
+    "risks": "- QA's 400-net-LOC cap is binding, with no waiver: the human rejected V01's twice. Measure it with numstat over packages/.\n- src/delivery/acceptance.test.ts is HELD-OUT and must not be edited. Its identity-less runner-observed pass must keep releasing.\n- Existing exact key-set tests ('carrying exactly the frozen fields') must stay green. Never write undefined keys.\n- Replay ordering: the attempt check must not run before the same-id replay, or a crash retry breaks.\n- Incoherent or corrupt stored rows (fixtures, hand edits) must fail closed in passedOn.\n- Dependency: V01 (task-bde86540…) has its bytes landed but sits in PLANNING after a size-only reopen. This task's WORKING claim waits for V01 DONE, and its files (policy.ts, schema.ts, candidateStore.ts) overlap V01's landed bytes, so rebase mentally on HEAD.\n- 10 distinct files (2 of them docs): the daemon will warn about plan size. Each edit is shallow.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/state/candidateStore.ts",
+      "packages/moe-daemon/src/tools/recordCheckRun.ts",
+      "packages/moe-daemon/src/delivery/acceptance.test.ts",
+      "packages/moe-daemon/src/state/deliveryProjection.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T08:30:10.631Z"
 }

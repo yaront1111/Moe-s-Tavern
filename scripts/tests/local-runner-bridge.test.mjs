@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
-import { test } from 'node:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { connect } from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname } from 'node:path';
+import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import {
   MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, parseGuestFrame, scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
+import { JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
 
 const refuses = (fn, expected, label) => assert.throws(fn, error => error?.code === expected, label);
@@ -218,7 +222,8 @@ spec.loader.exec_module(m)
 `;
 const harness = (code, ...args) => spawnSync('python3', ['-I', '-B', '-c', LOAD + code, SUPERVISOR, ...args],
   { maxBuffer: 64 << 20, timeout: 60_000 });
-const RELAY = "sys.exit(m.relay(['python3', '-I', '-c', *sys.argv[2:]]))";
+// The harness holds the write end of in_fd, the host stream, open: its EOF would be a gone host.
+const RELAY = "r, w = os.pipe()\nsys.exit(m.relay(['python3', '-I', '-c', *sys.argv[2:]], in_fd=r))";
 const relay = (child, ...args) => harness(RELAY, child, ...args);
 const b64 = bytes => Buffer.from(bytes).toString('base64');
 const WRITE = 'import base64, os, sys\nos.write(1, base64.b64decode(sys.argv[1]))\nos.write(2, base64.b64decode(sys.argv[2]))\n';
@@ -392,3 +397,198 @@ test('S8 bridge mode refuses a non-root euid without writing a frame',
     const run = spawnSync('python3', ['-I', SUPERVISOR, 'bridge']);
     assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
   });
+
+// CQ-R08c: Node is the host on the supervisor's stdio and every agent on its socket. Linux checks the real
+// SO_PEERCRED; macOS has none, so there the peer uid is injected.
+const PEER = process.platform === 'linux' ? '' : ', peer_uid=lambda sock: os.getuid()';
+const AGENT_CHILD = 'import os, time\nos.write(1, b"%d" % os.getpid())\ntime.sleep(600)\n';
+async function until(check, label) {
+  for (const end = Date.now() + 10_000; !check(); await sleep(10)) assert.ok(Date.now() < end, `timed out: ${label}`);
+}
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const busy = id => ({ kind: 'response', id, ok: false, error: { code: 'BRIDGE_BUSY' } });
+
+const sessions = [];
+after(() => {
+  for (const host of sessions) {
+    if (host.proc.exitCode === null && host.proc.signalCode === null) { // a live supervisor still pins its child's pid
+      try { process.kill(host.child, 'SIGKILL'); } catch { /* never started */ }
+      host.proc.kill('SIGKILL');
+    }
+    rmSync(dirname(host.socket), { recursive: true, force: true });
+  }
+});
+
+async function ingress(options = 'agent_uid=os.getuid()', setup = '', socket = `${mkdtempSync(`${tmpdir()}/moe-r08c-`)}/agent.sock`) {
+  const code = `${LOAD}${setup}\nsys.exit(m.relay(['python3', '-I', '-c', sys.argv[3]], agent_socket=sys.argv[2], ${options}${PEER}))`;
+  const proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, socket, AGENT_CHILD], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const host = { proc, socket, frames: [], exited: once(proc, 'exit') };
+  sessions.push(host);
+  const decoder = createFrameDecoder();
+  proc.stdout.on('data', chunk => host.frames.push(...decoder.push(chunk).map(parseGuestFrame)));
+  host.requests = () => host.frames.filter(frame => frame.kind === 'request');
+  host.answer = (id, reply = { ok: true, result: { id } }) => proc.stdin.write(encodeFrame({ kind: 'response', id, ...reply }));
+  host.end = () => proc.stdin.end() && host.exited;
+  await until(() => host.frames.some(frame => frame.kind === 'output'), 'agent child started');
+  host.child = Number(host.frames.find(frame => frame.kind === 'output').data);
+  return host;
+}
+
+async function agent(host) {
+  const socket = connect(host.socket);
+  const decoder = createFrameDecoder(MAX_HOST_FRAME_BYTES);
+  const peer = { socket, bytes: [], frames: [], closed: false };
+  socket.on('data', chunk => { peer.bytes.push(chunk); peer.frames.push(...decoder.push(chunk)); });
+  socket.on('error', () => {}); // a refused peer may see ECONNRESET
+  socket.on('close', () => { peer.closed = true; });
+  await once(socket, 'connect');
+  peer.send = frame => socket.write(Buffer.isBuffer(frame) ? frame : encodeFrame(frame, MAX_GUEST_FRAME_BYTES));
+  return peer;
+}
+
+test('I1 a peer that is not the agent identity is closed at accept and nothing it sends is relayed', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const host = await ingress('agent_uid=os.getuid() + 1');
+  const peer = await agent(host);
+  peer.send(REQUEST);
+  await until(() => peer.closed, 'refused peer closed');
+  assert.deepEqual(peer.bytes, []);
+  assert.ok(alive(host.child), 'a refused peer does not end the bridge');
+  assert.deepEqual(await host.end(), [74, null]);
+  assert.deepEqual(host.requests(), []);
+  assert.equal(alive(host.child), false);
+});
+
+test('I2 supervisor ids keep connections apart and each rebuilt response reaches only its requester', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  // A stale socket from an earlier bridge is replaced; the live one is connectable by any guest user.
+  const host = await ingress(undefined, 'import socket\nstale = socket.socket(socket.AF_UNIX)\nstale.bind(sys.argv[2])\nstale.close()');
+  assert.equal(statSync(host.socket).mode & 0o777, 0o666);
+  const [a, b] = [await agent(host), await agent(host)];
+  const comment = { content: 'café \u{1F600}' };
+  a.send({ ...REQUEST, id: 7 });
+  await until(() => host.requests().length === 1, 'first request');
+  b.send({ kind: 'request', id: 7, tool: 'moe.add_comment', args: comment });
+  await until(() => host.requests().length === 2, 'second request');
+  assert.deepEqual(host.requests(), [{ ...REQUEST, id: 1 }, { kind: 'request', id: 2, tool: 'moe.add_comment', args: comment }]);
+  const result = { text: 'é\u{1F600}', lone: '\ud800' };
+  host.answer(2, { ok: false, error: { code: 'BRIDGE_TOOL_DENIED' } });
+  host.answer(1, { ok: true, result });
+  await until(() => a.frames.length && b.frames.length, 'both responses');
+  assert.deepEqual(Buffer.concat(a.bytes), encodeFrame({ kind: 'response', id: 7, ok: true, result }));
+  assert.deepEqual(Buffer.concat(b.bytes), encodeFrame({ kind: 'response', id: 7, ok: false, error: { code: 'BRIDGE_TOOL_DENIED' } }));
+  assert.deepEqual(await host.end(), [74, null]);
+  assert.equal(existsSync(host.socket), false);
+});
+
+test('I3 an unknown, answered or malformed host response ends the bridge as a protocol violation', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const reply = (extra = {}) => encodeFrame({ kind: 'response', id: 1, ok: true, result: {}, ...extra });
+  const cases = [reply({ id: 2 }), Buffer.concat([reply(), reply()]), reply({ id: '1' }), reply({ kind: 'request' }), reply({ extra: 1 }),
+    reply({ ok: 'yes' }), reply({ ok: false }), encodeFrame({ kind: 'response', id: 1, ok: true }),
+    ...[{ code: 'lower' }, { code: 'X', detail: 1 }, 'X'].map(error => encodeFrame({ kind: 'response', id: 1, ok: false, error })),
+    header(0), header(MAX_HOST_FRAME_BYTES + 1), framed('{'), framed('[]'), framed([0xff])];
+  for (const bytes of cases) {
+    const host = await ingress();
+    const peer = await agent(host);
+    peer.send(REQUEST);
+    await until(() => host.requests().length === 1, 'request relayed');
+    host.proc.stdin.write(bytes);
+    assert.deepEqual(await host.exited, [76, null], bytes.toString('latin1'));
+    await until(() => peer.closed, 'agent closed');
+    assert.ok(peer.frames.length <= 1 && host.frames.every(frame => frame.kind !== 'observation'));
+    assert.equal(alive(host.child), false);
+    await host.end();
+  }
+});
+
+test('I4 a malformed or over-limit agent frame closes only its own connection', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const host = await ingress();
+  const kept = await agent(host);
+  const exact = { kind: 'request', id: 1, tool: 'moe.add_comment', args: { content: '' } };
+  exact.args.content = 'x'.repeat(MAX_GUEST_FRAME_BYTES - JSON.stringify(exact).length);
+  kept.send(exact);
+  await until(() => host.requests().length === 1, 'exact-limit request');
+  assert.deepEqual(host.requests(), [exact]);
+  const nested = `{"kind":"request","id":1,"tool":"moe.get_context","args":{"a":${'['.repeat(100_000)}${']'.repeat(100_000)}}}`;
+  const bad = [header(0), header(MAX_GUEST_FRAME_BYTES + 1), framed('{'), framed([0xff]), framed([0xef, 0xbb, 0xbf, 0x7b, 0x7d]),
+    framed('[]'), framed(nested), framed('{"kind":"request","id":1,"tool":"moe.get_context","args":{"a":1e999}}'),
+    ...[0, 2 ** 31, true, 1.5].map(id => encodeFrame({ ...REQUEST, id })), encodeFrame({ ...REQUEST, extra: 1 }),
+    ...['moe.get_context\n', 'get_context'].map(tool => encodeFrame({ ...REQUEST, tool })), encodeFrame({ ...REQUEST, args: [] }),
+    encodeFrame(HELLO), encodeFrame({ kind: 'response', id: 1, ok: true, result: {} })];
+  for (const bytes of bad) {
+    const peer = await agent(host);
+    peer.send(bytes);
+    await until(() => peer.closed, bytes.subarray(0, 40).toString('latin1'));
+    assert.deepEqual(peer.bytes, []);
+  }
+  kept.send({ ...REQUEST, id: 3 });
+  await until(() => host.requests().length === 2, 'kept connection still relays');
+  host.answer(2);
+  await until(() => kept.frames.length === 1, 'kept connection answered');
+  assert.deepEqual(kept.frames, [{ kind: 'response', id: 3, ok: true, result: { id: 2 } }]);
+  assert.deepEqual(await host.end(), [74, null]);
+});
+
+test('I5 requests past the in-flight or total bound get BRIDGE_BUSY unrelayed, and connections past the cap are refused', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const run = harness('print(json.dumps([m.MAX_CONNECTIONS, m.MAX_IN_FLIGHT, m.AGENT_IDENTITY, m.AGENT_SOCKET]))');
+  assert.deepEqual(JSON.parse(run.stdout), [8, 8, JOB_IDENTITIES[0], '/run/moe/agent.sock']);
+  const host = await ingress(undefined, 'm.MAX_CONNECTIONS, m.MAX_IN_FLIGHT = 2, 2');
+  const relayed = () => host.requests().map(frame => frame.id);
+  const a = await agent(host);
+  for (const id of [1, 2, 3]) a.send({ ...REQUEST, id });
+  await until(() => a.frames.length === 1 && relayed().length === 2, 'per-connection bound');
+  assert.deepEqual(a.frames, [busy(3)]);
+  const [b, c] = [await agent(host), await agent(host)];
+  await until(() => c.closed, 'connection bound');
+  host.answer(1);
+  await until(() => a.frames.length === 2, 'the answer reaches a and frees its slot');
+  assert.deepEqual(a.frames[1], { kind: 'response', id: 1, ok: true, result: { id: 1 } });
+  a.send({ ...REQUEST, id: 4 });
+  await until(() => relayed().length === 3, 'freed slot relays');
+  a.socket.destroy(); // ids 2 and 3 are now answers nobody may receive
+  await until(() => a.closed, 'a closed');
+  for (const id of [1, 2]) b.send({ ...REQUEST, id });
+  await until(() => relayed().length === 5, 'b relays');
+  const d = await agent(host);
+  d.send({ ...REQUEST, id: 1 });
+  await until(() => d.frames.length === 1, 'total bound');
+  assert.deepEqual(d.frames, [busy(1)]);
+  host.answer(2);
+  host.answer(3);
+  d.send({ ...REQUEST, id: 2 });
+  await until(() => relayed().length === 6, 'orphan answers dropped and slot freed');
+  assert.deepEqual(relayed(), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(await host.end(), [74, null]);
+});
+
+test('I7 a newer bridge on the same path keeps its socket when an older bridge ends', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const older = await ingress();
+  const newer = await ingress(undefined, '', older.socket);
+  assert.deepEqual(await older.end(), [74, null]);
+  const peer = await agent(newer);
+  peer.send(REQUEST);
+  await until(() => newer.requests().length === 1, 'the newer bridge still serves its path');
+  assert.deepEqual(await newer.end(), [74, null]);
+  assert.equal(existsSync(newer.socket), false);
+});
+
+test('I6 the agent socket opens only in a directory private to the supervisor', { skip: NO_GUEST }, () => {
+  const dir = mkdtempSync(`${tmpdir()}/moe-r08c-`);
+  try {
+    const cases = ['os.chmod(d, 0o777)', "open(d + '/agent.sock', 'w').close()", "os.symlink(d, d + '-link')\nd += '-link'",
+      'os.geteuid = lambda: os.getuid() + 1', "m.AGENT_IDENTITY = 'moe-r08c-no-such-account'", "argv = [d + '/no-such-job']"];
+    for (const [index, setup] of cases.entries()) {
+      const uid = setup.startsWith('m.') ? '' : ', agent_uid=os.getuid()';
+      const run = harness(`d = os.path.join(sys.argv[2], '${index}')\nos.mkdir(d, 0o700)\nargv = ['python3', '-c', '']\n${setup}
+sys.exit(m.relay(argv, in_fd=os.pipe()[0], agent_socket=d + '/agent.sock'${uid}))`, dir);
+      assert.equal(run.status, 71, `${setup} ${run.stderr}`);
+      assert.deepEqual(createFrameDecoder().push(run.stdout).map(parseGuestFrame), [HELLO], setup);
+      // Only the planted file stays; a socket bound before the job failed to spawn is unlinked with its listener.
+      assert.equal(existsSync(`${dir}/${index}/agent.sock`), index === 1, setup);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  const families = spawnSync('python3', ['-I', '-B', '-c', `import ast, sys
+tree = ast.parse(open(sys.argv[1], 'rb').read())
+print(sorted({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and getattr(n.value, 'id', '') == 'socket'}))`, SUPERVISOR]);
+  assert.equal(families.stdout.toString().trim(), "['AF_UNIX', 'SOCK_STREAM', 'SOL_SOCKET', 'SO_PEERCRED', 'socket']");
+});
