@@ -1152,7 +1152,9 @@ fi
 
 # Print this seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
-# plus MOE_WORKER_ID=$2 and, when exported, the seat's runner identity
+# plus, when exported, the seat's execution identity (MOE_SESSION_ID and the
+# MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair, which moe-proxy stamps), then
+# MOE_WORKER_ID=$2 and the seat's runner identity
 # (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP server
 # only the env its table names. The override must be a complete server definition:
 # codex 0.163 TUI bootstrap rejects a partial dotted one
@@ -1165,6 +1167,7 @@ codex_moe_server_override() {
 import sys, json, os
 config_file, worker_id = sys.argv[1], sys.argv[2]
 seat_keys = ("MOE_WORKER_ID", "MOE_RUNNER_PROCESS_STARTED_AT", "MOE_RUNNER_HOST")
+identity_keys = ("MOE_SESSION_ID", "MOE_ATTEMPT_ID", "MOE_ATTEMPT_GENERATION")
 server, env, section = [], [], None
 with open(config_file, "r", encoding="utf-8-sig") as f:
     for line in f:
@@ -1175,7 +1178,7 @@ with open(config_file, "r", encoding="utf-8-sig") as f:
         if not s or s.startswith("#") or "=" not in s:
             continue
         key, value = (p.strip() for p in s.split("=", 1))
-        if key in seat_keys:
+        if key in seat_keys or key in identity_keys:
             continue
         if section == "[mcp_servers.moe]":
             server.append(key + "=" + value)
@@ -1183,6 +1186,9 @@ with open(config_file, "r", encoding="utf-8-sig") as f:
             env.append(key + "=" + value)
 if not any(p.startswith("command=") for p in server):
     sys.exit(1)
+for key in identity_keys:
+    if os.environ.get(key):
+        env.append(key + "=" + json.dumps(os.environ[key]))
 env.append("MOE_WORKER_ID=" + json.dumps(worker_id))
 for key in seat_keys[1:]:
     if os.environ.get(key):
@@ -1342,6 +1348,11 @@ moe_block_lines.extend([
     # only; empty (unset, to the proxy) for a worker or a human run.
     'MOE_RUNNER_PROCESS_STARTED_AT = "${MOE_RUNNER_PROCESS_STARTED_AT:-}"',
     'MOE_RUNNER_HOST = "${MOE_RUNNER_HOST:-}"',
+    # The seat's execution identity, which moe-proxy stamps onto
+    # get_context/start_step; empty (unset, to the proxy) outside a task.
+    'MOE_SESSION_ID = "${MOE_SESSION_ID:-}"',
+    'MOE_ATTEMPT_ID = "${MOE_ATTEMPT_ID:-}"',
+    'MOE_ATTEMPT_GENERATION = "${MOE_ATTEMPT_GENERATION:-}"',
     # Grok drops any MCP tool whose name contains a dot (it namespaces tools
     # as <server>__<tool> and validates the result), so the daemon's moe.<name>
     # tools all vanish -- "connected, 0 tools", then "failed to connect"
@@ -2031,6 +2042,10 @@ sys.exit(1)
 " <<< "$raw"
 }
 
+# A wrapper-only read the CLI is never served: a blank MOE_SESSION_ID keeps
+# moe-proxy from stamping this session's sessionId, so it mints no receipt.
+moe_rpc_unserved() { MOE_SESSION_ID= moe_rpc "$@"; }
+
 # claim_refused_no_team CLAIM_JSON
 # 0 when a claim answer is the daemon's NO_TEAM_MEMBERSHIP refusal
 # (claimNextTask.ts noTeamMembershipRefusal): the seat is SOLO and every
@@ -2136,9 +2151,11 @@ except Exception as e:
 PY
 }
 
+# Exported for the CLI's moe-proxy, which stamps the pair onto start_step. The
+# pair moves together: only an identity verified against the store is kept.
 pin_attempt_identity() {
-    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
-    local pinned tokens
+    export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
+    local pinned tokens attempt_id generation
     tokens=$($PYTHON_CMD -c '
 import json,re,sys
 c=json.load(sys.stdin); a=c.get("attemptId"); g=c.get("generation")
@@ -2151,8 +2168,9 @@ print(a+" "+str(g))
         pinned=$(moe_attempt_read "" "") || return 1
         tokens=$($PYTHON_CMD -c 'import json,sys;a=json.load(sys.stdin);print(a["id"]+" "+str(a["generation"]))' <<< "$pinned") || return 1
     fi
-    read -r MOE_ATTEMPT_ID MOE_ATTEMPT_GENERATION <<< "$tokens"
-    moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" >/dev/null
+    read -r attempt_id generation <<< "$tokens"
+    moe_attempt_read "$attempt_id" "$generation" >/dev/null || return 1
+    MOE_ATTEMPT_ID="$attempt_id"; MOE_ATTEMPT_GENERATION="$generation"
 }
 
 moe_evidence_rpc() {
@@ -6096,7 +6114,8 @@ while [ "$LOOP_RUNNING" = true ]; do
     MOE_FINALIZE_DONE=false; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
     LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
-    MOE_ATTEMPT_ID=""; MOE_ATTEMPT_GENERATION=""
+    # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
+    export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
     MOE_RUNNER_ID=$($PYTHON_CMD -c 'import uuid;print("runner-"+uuid.uuid4().hex)')
     PREFLIGHT_TASK_ID=""
     PREFLIGHT_HELD_TASK_ID=""
@@ -6132,6 +6151,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # as `sessionId`, and an isolated-clone delivery can read it from nowhere else (the
     # wrapper writes no preflight scope.json when settings.autoCommit is false). Twin:
     # moe-agent.ps1 sets $env:MOE_SESSION_ID from $moeSid at the same point.
+    # moe-proxy (CQ-F09) also stamps it, with the attempt pair, onto the CLI's get_context/start_step.
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
     MOE_REL=""
@@ -6524,7 +6544,7 @@ except Exception:
                 # 5. Fetch context for the claimed task
                 if [ -n "$PREFLIGHT_TASK_ID" ]; then
                     PREFLIGHT_CONTEXT=$(moe_rpc get_context \
-                        "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
+                        "$($PYTHON_CMD -c "import json,sys; t,s=sys.argv[1:]; print(json.dumps(dict(taskId=t,sessionId=s) if s else dict(taskId=t)))" "$PREFLIGHT_TASK_ID" "${MOE_SESSION_ID:-}" 2>/dev/null)" \
                         2>/dev/null || echo "")
                     PREFLIGHT_PROGRESS_MARK="$(plan_progress_mark "$PREFLIGHT_CONTEXT" "$PREFLIGHT_TASK_ID")"
                     # alreadyAssigned carries no chatChannel -- recover it from
@@ -8085,7 +8105,7 @@ PYEOF
         # get_context keys on the task id and cannot be paginated away.
         # Do NOT "fix" this by raising the limit: MAX_TASK_LIST_LIMIT is 500,
         # which only moves the same silent cliff further out.
-        POSTFLIGHT_CTX=$(moe_rpc get_context \
+        POSTFLIGHT_CTX=$(moe_rpc_unserved get_context \
             "$($PYTHON_CMD -c "import json,sys; print(json.dumps({'taskId':sys.argv[1]}))" "$PREFLIGHT_TASK_ID" 2>/dev/null)" \
             2>/dev/null || echo "")
         FINAL_STATUS=""
@@ -8396,7 +8416,7 @@ except Exception:
         ADOPT_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'workerId':sys.argv[1]}))" "$WORKER_ID" 2>/dev/null || echo "")
         ADOPT_RESULT=""
         if [ -n "$ADOPT_ARGS" ]; then
-            ADOPT_RESULT=$(moe_rpc get_context "$ADOPT_ARGS" 2>/dev/null || echo "")
+            ADOPT_RESULT=$(moe_rpc_unserved get_context "$ADOPT_ARGS" 2>/dev/null || echo "")
         fi
         ADOPTED_TASK_ID=""
         if [ -n "$ADOPT_RESULT" ]; then

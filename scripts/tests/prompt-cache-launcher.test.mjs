@@ -45,6 +45,11 @@ const scopedContext = role => ({
   omittedHint: 'Pass view:"full" only if you need one of these sections.',
   nextAction: { tool: role === 'qa' ? 'moe.qa_approve' : 'moe.start_step', args: { taskId: 'task-context' } },
   futureContextField: { version: 2, note: 'A newer daemon field must reach an older wrapper.' },
+  packetManifest: { version: 1, provenance: { task: { id: 'task-context', planRevision: 3 }, epic: { id: 'epic-context' }, project: { id: 'project-context' } },
+    sections: [{ path: 'task.definitionOfDone', mandatory: true, status: 'served', count: 1 }], complete: true, limitations: [],
+    budget: { limitChars: 100000, mandatoryChars: 2048, status: 'within' } },
+  servedContext: { taskId: 'task-context', planRevision: 3, approvedPlanRevision: 3, attemptId: 'attempt-context', generation: 2,
+    receiptStatus: 'recorded', receiptId: 'ctxreceipt-' + 'e'.repeat(32), packetId: 'sha256:' + 'd'.repeat(64) },
 });
 
 for (const [ext, engine] of engines) {
@@ -67,20 +72,30 @@ for (const [ext, engine] of engines) {
       } else {
         const project = between(source, '                # 5. Fetch context for the claimed task', '                # 6. Read task channel backlog');
         const inject = between(source, '        DYNAMIC_CONTEXT="# Pre-flight Complete', '        # JIT reminder:');
-        script = `set -eu\nPYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}\nPREFLIGHT_TASK_ID=task-context\nPREFLIGHT_TASK_CHANNEL=channel-context\nPREFLIGHT_CONTEXT=''\nmoe_rpc() { cat "$MOE_CONTEXT_FIXTURE"; }\nplan_progress_mark() { :; }\nROLE=${role}\nWORKER_ID=worker-context\nPREFLIGHT_GENERAL_COUNT=0\nPREFLIGHT_TASK_COUNT=0\nPREFLIGHT_ROUTED_MENTIONS_COUNT=0\nMEM_TOTAL=0\nMEM_TASK_NAMES=none\nMEM_RECENT_NAMES=none\nPREFLIGHT_PENDING='{}'\n${project}\n${inject}\nprintf '%s' "$DYNAMIC_CONTEXT"`;
+        script = `set -eu\nPYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}\nPREFLIGHT_TASK_ID=task-context\nPREFLIGHT_TASK_CHANNEL=channel-context\nPREFLIGHT_CONTEXT=''\nmoe_rpc() { printf '%s' "$2" > "$MOE_ARGS_FILE"; cat "$MOE_CONTEXT_FIXTURE"; }\nplan_progress_mark() { :; }\nROLE=${role}\nWORKER_ID=worker-context\nPREFLIGHT_GENERAL_COUNT=0\nPREFLIGHT_TASK_COUNT=0\nPREFLIGHT_ROUTED_MENTIONS_COUNT=0\nMEM_TOTAL=0\nMEM_TASK_NAMES=none\nMEM_RECENT_NAMES=none\nPREFLIGHT_PENDING='{}'\n${project}\n${inject}\nprintf '%s' "$DYNAMIC_CONTEXT"`;
       }
       const file = path.join(dir, `context.${ext}`);
       writeFileSync(file, script);
-      const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
-        encoding: 'utf8', timeout: 20000,
-        env: { ...process.env, MOE_CONTEXT_FIXTURE: fixture.replaceAll('\\', '/') },
-      });
-      assert.ifError(result.error);
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      const injected = result.stdout.match(/<claimed_task_context>\s*([\s\S]*?)\s*<\/claimed_task_context>/);
-      assert.ok(injected, 'launch must inject the claimed task context');
-      assert.deepEqual(JSON.parse(injected[1]), context,
-        'launchers must preserve the daemon-scoped payload, including source scope, architecture and review evidence');
+      const argsFile = path.join(dir, 'args.json');
+      const { MOE_SESSION_ID: _seat, ...baseEnv } = process.env;
+      // A fresh process asks for the full default read: sessionId only when the seat has one.
+      for (const sessionId of ext === 'sh' ? ['worker-context@2026-10-26T00:00:00Z', undefined] : [undefined]) {
+        const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
+          encoding: 'utf8', timeout: 20000,
+          env: { ...baseEnv, ...(sessionId ? { MOE_SESSION_ID: sessionId } : {}),
+            MOE_CONTEXT_FIXTURE: fixture.replaceAll('\\', '/'), MOE_ARGS_FILE: argsFile.replaceAll('\\', '/') },
+        });
+        assert.ifError(result.error);
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        const injected = result.stdout.match(/<claimed_task_context>\s*([\s\S]*?)\s*<\/claimed_task_context>/);
+        assert.ok(injected, 'launch must inject the claimed task context');
+        assert.deepEqual(JSON.parse(injected[1]), context,
+          'launchers must preserve the daemon-scoped payload, including source scope, architecture and review evidence');
+        if (ext === 'sh') {
+          assert.deepEqual(JSON.parse(readFileSync(argsFile, 'utf8')),
+            { taskId: 'task-context', ...(sessionId ? { sessionId } : {}) }, 'no view, delta or base-packet field');
+        }
+      }
     });
   }
 }
@@ -101,17 +116,94 @@ for (const [ext, engine] of engines) {
     const file = path.join(dir, `render.${ext}`);
     writeFileSync(file, script);
     const result = spawnSync(engine, ext === 'ps1' ? ['-NoProfile', '-File', file] : [file.replaceAll('\\', '/')], {
-      encoding: 'utf8', timeout: 20000, env: { ...process.env, MOE_TEST_DIR: dir },
+      encoding: 'utf8', timeout: 20000,
+      env: { ...process.env, MOE_TEST_DIR: dir, MOE_SESSION_ID: 'sid-A@2026', MOE_ATTEMPT_ID: 'attempt-A', MOE_ATTEMPT_GENERATION: '7' },
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const body = result.stdout.split(ext === 'sh' ? '\x1e' : 'shared role doc:').at(-1);
-    assert.doesNotMatch(body, /task-A/, 'task text invalidates the system prefix');
+    assert.doesNotMatch(body, /task-A|sid-A|attempt-A/, 'task text and execution identity invalidate the system prefix');
     assert.match(body, /stable role instructions/);
     const contextName = readdirSync(dir).find(name => /^(moe-codex-context-|session-context)/.test(name));
     assert.ok(contextName, 'private context file must be delivered');
     assert.equal(readFileSync(path.join(dir, contextName), 'utf8'), 'task-A "quoted" 漢字');
     assert.doesNotMatch(readFileSync(path.join(dir, '.codex/agent-instructions.md'), 'utf8'), /task-A|stable role instructions/,
       'shared fallback must not leak task or role text between seats');
+  });
+}
+
+// Execution identity (CQ-F10): moe-proxy stamps MOE_SESSION_ID and the attempt
+// pair from its env, so the wrapper exports a verified pair together or none.
+const runSh = (engine, dir, name, script, env = {}) => {
+  const file = path.join(dir, name);
+  writeFileSync(file, `set -eu\nPYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}\n${script}`);
+  const { MOE_SESSION_ID: _s, MOE_ATTEMPT_ID: _a, MOE_ATTEMPT_GENERATION: _g, ...base } = process.env;
+  return spawnSync(engine, [file.replaceAll('\\', '/')], { encoding: 'utf8', timeout: 20000, env: { ...base, ...env } });
+};
+const record = (id, generation, workerId = 'w') => ({ id, generation, workerId, taskId: 'task-t', phase: 'running' });
+const attemptCases = [
+  // [label, claim result, open attempt record, previous exported pair, expected rc 0, expected pair]
+  ['fresh claim', { attemptId: 'attempt-a', generation: 2 }, record('attempt-a', 2), null, true, ['attempt-a', '2']],
+  ['resume refresh', { alreadyAssigned: { taskId: 'task-t' } }, record('attempt-b', 3), ['attempt-a', '2'], true, ['attempt-b', '3']],
+  ['stale claim', { attemptId: 'attempt-a', generation: 2 }, record('attempt-b', 3), ['attempt-z', '9'], false, ['', '']],
+  ['foreign record', { attemptId: 'attempt-a', generation: 2 }, record('attempt-a', 2, 'other'), ['attempt-z', '9'], false, ['', '']],
+];
+
+for (const [ext, engine] of engines) {
+  if (ext !== 'sh') continue;
+  for (const [label, claim, open, previous, ok, pair] of attemptCases) {
+    test(`${engine}: attempt identity ${label} exports a verified pair or none`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe attempt '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      mkdirSync(path.join(dir, '.moe', 'attempts'), { recursive: true });
+      writeFileSync(path.join(dir, '.moe', 'attempts', `${open.id}.json`), JSON.stringify(open));
+      const fns = between(read('sh'), 'moe_attempt_read() {', 'moe_evidence_rpc() {');
+      const prior = previous ? `export MOE_ATTEMPT_ID=${previous[0]} MOE_ATTEMPT_GENERATION=${previous[1]}\n` : '';
+      const result = runSh(engine, dir, 'pin.sh', `PROJECT=${quote(dir.replaceAll('\\', '/'))}\nWORKER_ID=w\nPREFLIGHT_TASK_ID=task-t\n`
+        + `CLAIM_RESULT=${quote(JSON.stringify(claim))}\n${fns}\n${prior}rc=0; pin_attempt_identity 2>/dev/null || rc=$?\n`
+        + `printf 'rc=%s\\n' "$rc"; env | grep '^MOE_ATTEMPT_' || true`);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const seen = Object.fromEntries(result.stdout.split('\n').filter(l => l.startsWith('MOE_ATTEMPT_')).map(l => l.split('=')));
+      assert.equal(/^rc=0$/m.test(result.stdout), ok, result.stdout + result.stderr);
+      assert.deepEqual([seen.MOE_ATTEMPT_ID ?? '', seen.MOE_ATTEMPT_GENERATION ?? ''], pair, 'never half, stale or unverified');
+      if (ok) assert.deepEqual(Object.keys(seen).sort(), ['MOE_ATTEMPT_GENERATION', 'MOE_ATTEMPT_ID'], 'the CLI child must inherit the pair');
+    });
+  }
+
+  test(`${engine}: Codex override carries the seat's execution identity before its worker id`, t => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'moe codex identity '));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const config = path.join(dir, 'config.toml');
+    writeFileSync(config, '[mcp_servers.moe]\ncommand = "node"\nargs = ["proxy.js"]\n\n[mcp_servers.moe.env]\nMOE_PROJECT_PATH = "/p"\nMOE_SESSION_ID = "old"\n');
+    const fn = between(read('sh'), 'codex_moe_server_override() {', '# For grok: write project-scoped');
+    const script = `${fn}\ncodex_moe_server_override ${quote(config.replaceAll('\\', '/'))} w`;
+    const runner = { MOE_SESSION_ID: 'w@2026-10-26T00:00:00Z', MOE_RUNNER_PROCESS_STARTED_AT: '2026-10-26T00:00:00.000Z', MOE_RUNNER_HOST: 'host-a' };
+    const head = 'mcp_servers.moe={command="node",args=["proxy.js"],env={MOE_PROJECT_PATH="/p",MOE_SESSION_ID="w@2026-10-26T00:00:00Z",';
+    const tail = 'MOE_WORKER_ID="w",MOE_RUNNER_PROCESS_STARTED_AT="2026-10-26T00:00:00.000Z",MOE_RUNNER_HOST="host-a"}}';
+    for (const [pair, expected] of [
+      [{ MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' }, head + 'MOE_ATTEMPT_ID="attempt-a",MOE_ATTEMPT_GENERATION="2",' + tail],
+      [{ MOE_ATTEMPT_ID: '', MOE_ATTEMPT_GENERATION: '' }, head + tail],
+    ]) {
+      const result = runSh(engine, dir, 'override.sh', script, { ...runner, ...pair });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(result.stdout, expected);
+    }
+  });
+
+  test(`${engine}: wrapper-only context reads are never served as the session's context`, t => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'moe unserved '));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const source = read('sh');
+    for (const key of ['MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION']) {
+      assert.ok(source.includes(`'${key} = "\${${key}:-}"'`), `grok env table must expand ${key} per process`);
+    }
+    assert.equal(source.match(/\bmoe_rpc get_context\b/g).length, 1, 'only the pre-flight read is served to the CLI');
+    assert.ok(source.includes('POSTFLIGHT_CTX=$(moe_rpc_unserved get_context'));
+    assert.ok(source.includes('ADOPT_RESULT=$(moe_rpc_unserved get_context "$ADOPT_ARGS"'));
+    const helper = between(source, 'moe_rpc_unserved() {', '\n');
+    const result = runSh(engine, dir, 'unserved.sh', `moe_rpc() { printf '[%s][%s][%s]' "$*" "\${MOE_SESSION_ID-unset}" "$(env | grep '^MOE_SESSION_ID=' || true)"; }\n`
+      + `${helper}\nmoe_rpc_unserved get_context '{"taskId":"t"}'\nprintf '[%s]' "$MOE_SESSION_ID"`, { MOE_SESSION_ID: 'seat-sid' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(result.stdout, '[get_context {"taskId":"t"}][][MOE_SESSION_ID=][seat-sid]');
   });
 }
 

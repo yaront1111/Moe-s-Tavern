@@ -140,7 +140,10 @@ function attemptFixture() {
   // openAttempt records the runner's pair exactly as the claim sent it.
   // FAKE_ATTEMPT_PHASE=reconciling: a daemon restart parked the attempt before
   // the wrapper pinned it (the window a resume after a restart lands in).
-  if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify({
+  // A FAKE_CLAIM_LIMIT loop claims again after a landing closed the attempt:
+  // like openAttempt, that claim persists a running attempt before it answers.
+  const reopen = claimLimit > 1 && fs.existsSync(file) && JSON.parse(fs.readFileSync(file, 'utf8')).phase === 'closed';
+  if (!fs.existsSync(file) || reopen) fs.writeFileSync(file, JSON.stringify({
     id, generation, taskId, workerId: args.workerId, runnerId: args.workerId,
     phase: process.env.FAKE_ATTEMPT_PHASE || 'running', workspace: project, startedAt: new Date().toISOString(), lastPhaseAt: new Date().toISOString(),
     ...(args.processStartedAt === undefined ? {} : {processStartedAt: args.processStartedAt, host: args.host})
