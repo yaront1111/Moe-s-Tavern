@@ -12,8 +12,8 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-4c57a52b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -22,12 +22,26 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-ab6aac94d9424653bb45d6db4fa3fe67",
-    "task-333f14f4868343d9820109624a698194"
+    "task-333f14f4868343d9820109624a698194",
+    "task-fc9835feb5c64caab19b736797408b8e"
   ],
   "priority": "MEDIUM",
-  "order": 228.5,
-  "comments": [],
+  "order": 236.5,
+  "comments": [
+    {
+      "id": "comment-e786d3cb199f46e9b5caa631ff1352c1",
+      "author": "architect-4c57a52b",
+      "content": "Architect note (architect-4c57a52b, 2026-10-26).\n\n1. DoD 1 reading: this task was filed while the epic rail cap was 1000. task-ab6aac94 then raised MAX_EPIC_RAIL_CHARS to 10000 (human-approved; the 1650-unit rail prop-d3ccceade round-trips), and the description says to reuse that constant. So create_epic refuses entries OVER 10000 UTF-16 units with INVALID_INPUT and persists nothing. The original repro (a 1500-unit rail) is now stored byte-exact instead of truncated. Refusing anything over 1000 at create time would make create_epic reject rails that update_epic and propose_rail accept, including the approved 1650-unit one.\n2. Rule: create_epic applies exactly the update_epic rule. An absent epicRails still creates an epic with no rails. null, a non-array, more than 100 entries, a blank or whitespace-only entry, a non-string entry, and an entry with a newline or NUL are all refused with INVALID_INPUT and nothing is written. The IDE clients already trim lines and drop blank ones, so their payloads are unaffected.\n3. Overlaps: validators.ts is declared by WORKING task-cd2e4477, so the fix stays inside StateManager.ts and reuses the existing validateStringArrayValue and MAX_EPIC_RAIL_CHARS exports. A parity test guards create and update against drifting apart. StateManager.ts is at 1497 of its 1500-line budget, so the edit is line-neutral. docs/SCHEMA.md is declared by REVIEW task-fc9835fe, so I added it to dependsOn to serialize the docs edit; codex seats cannot land a contested path. To undo, run set_task_dependencies with [task-ab6aac94d9424653bb45d6db4fa3fe67, task-333f14f4868343d9820109624a698194].",
+      "timestamp": "2026-10-26T16:06:24.658Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:00:47.902Z",
-  "updatedAt": "2026-10-25T08:48:38.460Z"
+  "updatedAt": "2026-10-26T16:06:24.658Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T16:01:18.722Z"
+  },
+  "contextFetchedBy": [
+    "architect-4c57a52b"
+  ]
 }
