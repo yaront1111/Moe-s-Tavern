@@ -16,7 +16,9 @@ function between(source, start, end) {
 }
 const ps = read('ps1');
 const sh = read('sh');
-const shCurate = between(sh, '                        PREFLIGHT_CONTEXT_TRIMMED=$(', '\n                    fi\n                fi\n\n                # 6.');
+// This post-fetch region held the context curation until cfd3803; rendering it keeps
+// any curation reintroduced there under the comment-retention assertions.
+const shPreflightContext = between(sh, '                    if [ -z "$PREFLIGHT_TASK_CHANNEL" ] && [ -n "$PREFLIGHT_CONTEXT" ] && [ -n "$PYTHON_CMD" ]; then', '\n                fi\n\n                # 6.');
 const psContext = between(ps, '    $dynamicContext = ""', '    # -------- Pre-flight baseline');
 const psBody = between(ps, '    $claimPromptBody = $null', '    $script:CliLaunchedAt = Get-Date');
 const shPrompt = between(sh, '    DYNAMIC_CONTEXT=""', '    # -------- Pre-flight landing: recovery');
@@ -45,7 +47,7 @@ PREFLIGHT_ROUTED_MENTIONS_COUNT=1; PREFLIGHT_ROUTED_MENTIONS_JSON='[{"content":"
 PYTHON_CMD=${windows ? 'python' : 'python3'}; PREFLIGHT_CONTEXT="$MOE_FIXTURE_CONTEXT"
 STATUSES='["WORKING"]'; PROJECT=/nonexistent-moe-prompt-fixture
 `;
-    script = setup + shCurate + '\n' + shPrompt + '\nprintf "\\036%s\\036%s" "$DYNAMIC_CONTEXT" "$PROMPT_BODY"';
+    script = setup + shPreflightContext + '\n' + shPrompt + '\nprintf "\\036%s\\036%s" "$DYNAMIC_CONTEXT" "$PROMPT_BODY"';
   } else {
     const setup = `$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
