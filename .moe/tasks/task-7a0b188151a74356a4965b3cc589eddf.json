@@ -96,12 +96,12 @@
     }
   ],
   "planRevision": 30,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Size only. The substance passes and every gate re-runs green. But completion 4758ad1 is +843/-32 = 811 net changed non-board LOC, over the 400 net-LOC review cap:\n- runtime + docs: 278 net (helper +207/-8, sh +49/-6, ps1 +37/-6, docs +7/-2)\n- tests: 533 net\nNo project or epic rail waives size. No DoD item failed.\n\nRoute, as for task-c2cb5cf7 (prop-a53405bd) and task-08070acb: do NOT re-slice landed bytes. File moe.propose_rail (ADD_RAIL, EPIC) for a size exception scoped to this task, naming 4758ad1 and its per-file numstat. Then call complete_task again with the bytes unchanged. In round 2, QA checks the rail in allRails.epic, the numstat and the tree, then approves. If the proposal is still PENDING then, QA parks the row from REVIEW rather than rejecting again.\n\nVerified by QA from a pure git archive of 4758ad1, with MOE_*/CLAUDE* unset:\n- task.verification: lease test 40 tests, 39 pass, 1 skip; parity-check.sh PASS; postflight.sh PASS (frozen 73, [accounts] ok, scope 38); exit 0.\n- Native Windows node.exe: 54 tests, 52 pass, 2 skips. All 7 ps1 lease-loop cases pass on powershell.exe and pwsh.exe; all 6 Git Bash cases pass. parity-check.ps1 PASS. PS 5.1 ParseFile: 0 errors. BOM kept, 0 CR.\n- trust on a /mnt/c drvfs temp folder: granted, then trusted; other keys kept.\n- Three launcher mutations (drop the interactive guard, drop the per-account dedup, launch after a refusal) each fail 1-2 tests.\n\nDoD 1-4 all have evidence:\n- Only interactive leased claude seats run the trust step.\n- A refusal prints MOE_ACCOUNT_UNTRUSTED and sends one #general @governors line per account, naming the account and the project, never the folder.\n- Headless seats are byte-identical.\n- Sign-off comment-99598cf0 is cited in scripts/CLAUDE.md and docs/MCP_SERVER.md.\n- Parity PASS.\n\nThe stale \"never opens a file inside\" wording in SCHEMA.md and registry.ts is scheduled in follow-up task-fc9835fe.",
+  "reopenReason": "Human approved size-exception rail prop-f04ebf50a0bc4f1ea3a72671fa72ab8f at 09:21:45Z. QA's round-2 review on e5f0216 passed on substance with every gate green, and the waiver was the only open item. Next QA: confirm the rail in allRails.epic, then approve on the round-2 evidence (comment-60740ecb), naming the 811 net LOC in the summary.",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:39:58.071Z",
-  "updatedAt": "2026-10-26T08:14:05.624Z",
+  "updatedAt": "2026-10-26T09:22:47.467Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T22:18:28.699Z",
     "plannedStepCount": 7,
@@ -309,8 +309,10 @@
       ]
     }
   ],
-  "blockedReason": "Parked from REVIEW by QA in round 2. This is not a reject: the work passes on substance, but the size exception it needs is not approved yet.\n\n- Completion 4758ad1 is +843/-32 = 811 net non-board LOC, over the 400 net-LOC review cap. No project or epic rail waives size.\n- The worker filed an epic ADD_RAIL size exception scoped to this row as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f. It is still PENDING, and only a human can resolve it. Rejecting again would only burn a reopen.\n- The bytes are unchanged since 4758ad1: the round-2 commits 229e534 and e5f0216 are board-only. The per-file numstat equals the proposal text.\n\nQA re-ran every gate green from a pure git archive of e5f0216:\n- lease test: 39 pass, 1 skip.\n- parity-check.sh: PASS.\n- postflight.sh: PASS, with [accounts] ok.\n- Native Windows: node.exe 52 pass, 2 skip, including the ps1 lease-loop cases on powershell.exe and pwsh.exe plus the Git Bash cases. The PS 5.1 parse has 0 errors. parity-check.ps1: PASS.\n- DoD 1-4 all have evidence. The full evidence is in QA's round-2 comment on this task.\n\nTo resume:\n- Once the proposal is APPROVED, set_task_status REVIEW. The next QA checks the rail in allRails.epic and the unchanged bytes, then approves naming the size.\n- If it is REJECTED, set_task_status PLANNING so the architect splits the work.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-26T08:12:56.493Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Parked from REVIEW by QA in round 2. This is not a reject: the work passes on substance, but the size exception it needs is not approved yet.\n\n- Completion 4758ad1 is +843/-32 = 811 net non-board LOC, over the 400 net-LOC review cap. No project or epic rail waives size.\n- The worker filed an epic ADD_RAIL size exception scoped to this row as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f. It is still PENDING, and only a human can resolve it. Rejecting again would only burn a reopen.\n- The bytes are unchanged since 4758ad1: the round-2 commits 229e534 and e5f0216 are board-only. The per-file numstat equals the proposal text.\n\nQA re-ran every gate green from a pure git archive of e5f0216:\n- lease test: 39 pass, 1 skip.\n- parity-check.sh: PASS.\n- postflight.sh: PASS, with [accounts] ok.\n- Native Windows: node.exe 52 pass, 2 skip, including the ps1 lease-loop cases on powershell.exe and pwsh.exe plus the Git Bash cases. The PS 5.1 parse has 0 errors. parity-check.ps1: PASS.\n- DoD 1-4 all have evidence. The full evidence is in QA's round-2 comment on this task.\n\nTo resume:\n- Once the proposal is APPROVED, set_task_status REVIEW. The next QA checks the rail in allRails.epic and the unchanged bytes, then approves naming the size.\n- If it is REJECTED, set_task_status PLANNING so the architect splits the work.",
+  "blockedOnTaskIds": null
 }

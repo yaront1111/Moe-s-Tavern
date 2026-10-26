@@ -117,7 +117,7 @@ Three tools are deliberately **guard-exempt** even though the proxy injects `wor
 
 `moe.record_candidate` is likewise exempt from the ownership guard and allowed in every task status, for the same post-`complete_task` reason. Instead, the **attempt** fence guards it: a caller whose attempt has been superseded cannot record (see its section).
 
-`moe.record_check_run` has no ownership, status or attempt gate at all: a runner reports checks after `complete_task`, and a report may arrive after the attempt that offered the bytes has closed, when QA may already own the task (no other seat can claim the task while that attempt is still `finalizing`). Binding guards it instead: the named candidate must exist and the reported tree must be exactly that candidate's (see its section).
+`moe.record_check_run` has no ownership, status or attempt gate at all: a runner reports checks after `complete_task`, and a report may arrive after the attempt that offered the bytes has closed, when QA may already own the task (no other seat can claim the task while that attempt is still `finalizing`). Binding guards it instead: the named candidate must exist and the reported tree must be exactly that candidate's (see its section). An optional `attemptId` is referential integrity only: it must name an attempt of the candidate's task, the reviewer's included, and is not an ownership, status or fencing gate.
 
 `moe.record_delivery_receipt` has no ownership, status or attempt gate either: the wrapper reports a landing after `complete_task`, and a replayed report may arrive after its attempt has closed, when QA may already own the task. The candidate is the binding, with at most one receipt per candidate: an identical report replays and writes nothing, and a contradicting one is refused (see its section).
 
@@ -786,6 +786,13 @@ All seven are required; `additionalProperties` is `false`.
   outputTail?: string,     // the end of the output, stored as its final 16384 UTF-8 BYTES; absent is stored as ""
   runnerId: string,        // [A-Za-z0-9_-]{1,128}: the runner the report names. Reported, not authenticated; need not be a registered worker
   source: "runner-observed" | "agent-reported", // REQUIRED declared provenance; there is no default
+  // Optional execution identities: REPORTED provenance, stored only when sent (no key otherwise)
+  outcome?: "passed" | "code-failure" | "infra-failure" | "timeout" | "skipped" | "inconclusive",
+                           // passed requires exitCode 0, code-failure a nonzero one; never inferred from exitCode
+  planRevision?: number,   // integer >= 1: the task plan revision the check ran under
+  environment?: string,    // opaque environment identity (e.g. an image digest): non-blank, ≤255 chars, no control chars, verbatim
+  dispatchId?: string,     // [A-Za-z0-9_-]{1,128}: the dispatch request this run answers
+  attemptId?: string,      // [A-Za-z0-9_-]{1,128}: the attempt the check ran under (producer's or reviewer's); must belong to the candidate's task
   workerId?: string        // caller (auto-injected by proxy); not evidence, and not stored on the run
 }
 ```
@@ -793,7 +800,8 @@ All seven are required; `additionalProperties` is `false`.
 **Returns:**
 ```typescript
 { success: true, checkRun: CheckRun, duplicate: boolean }
-// checkRun: the stored record { id, candidateId, treeSha, command, exitCode, outputTail, runnerId, source, createdAt }
+// checkRun: the stored record { id, candidateId, treeSha, command, exitCode, outputTail, runnerId, source,
+//   ...any identities sent, createdAt }
 // duplicate: true when an identical run already existed under this id; it is returned unchanged and nothing is written
 ```
 
@@ -837,14 +845,16 @@ Sending the identical report again, for example after a runner crash, returns th
 - **Immutable, with an idempotent retry.** Re-recording an existing `id` is compared field by field after normalization: the bounded tail, and `""` for an absent one. An identical report returns the stored run (`duplicate: true`, original `createdAt`) and writes nothing. Any difference is refused, so a changed result (another exit code, command, tail or source) is a new run and needs a fresh `id`. If the daemon generated the id, a retry records a second run. An `id` that differs from an existing run's `id` only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`), because on NTFS and a default APFS volume both name one file.
 - **Output tail: 16384 UTF-8 bytes, not characters.** The kept portion is the end of the log and always starts on a whole character; malformed input such as a lone UTF-16 surrogate is first normalized to U+FFFD. This bound is deliberately different from `complete_task`'s `verification.outputTail`, which still keeps the last 2000 characters. Details: docs/SCHEMA.md `## CheckRun`.
 - `createdAt` is the daemon's clock, never the caller's. The tool emits no activity event, no chat line and no board broadcast.
-- **No ownership, status or attempt gate.** The runner reports after `complete_task`, when QA may already hold the `REVIEW` task and the attempt may be closed. The tool is not `blocking`, so dispatch serializes it under the state mutex: two concurrent identical reports make one write and one `duplicate: true`.
+- **Outcome rule.** Only `outcome: "passed"`, or a legacy report without an outcome at exit 0, can ever satisfy a gate. `infra-failure`, `timeout`, `skipped` and `inconclusive` never count, even at exit 0. The identities are shape-checked, never authenticated, and immutable like every other recorded field.
+- **No ownership, status or attempt gate.** The runner reports after `complete_task`, when QA may already hold the `REVIEW` task and the attempt may be closed. An optional `attemptId` is checked only for referential integrity (an attempt of the candidate's task, a reviewer's or a closed one included). The tool is not `blocking`, so dispatch serializes it under the state mutex: two concurrent identical reports make one write and one `duplicate: true`.
 
 **Errors.** Checked in this order, and every refusal writes nothing. Each is listed as JSON-RPC code, then `MoeError.codeName` (sent as `error.data.codeName`):
-- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: a malformed or absent field, such as a missing or differently spelled `source`, a string or fractional `exitCode`, an invalid `id`/`candidateId`/`runnerId`, a `treeSha` that is not 7-40 hex, a blank or over-500-character `command`, a non-string `outputTail`, or non-object arguments. Nothing is coerced.
+- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: a malformed or absent field, such as a missing or differently spelled `source`, an unknown `outcome` or one incoherent with `exitCode`, a `null` identity, a string or fractional `exitCode`, an invalid `id`/`candidateId`/`runnerId`, a `treeSha` that is not 7-40 hex, a blank or over-500-character `command`, a non-string `outputTail`, or non-object arguments. Nothing is coerced.
 - `-32001 CANDIDATE_NOT_FOUND`: `candidateId` names no candidate
 - `-32002 CHECK_RUN_TREE_MISMATCH`: `treeSha` is not exactly the candidate's tree. The message names both trees.
 - `-32002 CHECK_RUN_IMMUTABLE`: the `id` already holds a different run. The message names the differing fields; record the change under a new id.
 - `-32002 CHECK_RUN_ID_CASE_COLLISION`: the same for a check run: the supplied `id` differs only by case from an existing run's `id`; supply a distinct id. `context.checkRunId` is the stored id, `context.requestedId` the one sent.
+- `-32001 ATTEMPT_NOT_FOUND` / `-32002 ATTEMPT_ID_TASK_MISMATCH`: a supplied `attemptId` names no attempt, or an attempt of another task than the candidate's. Checked after the same-id rules, so an identical retry still replays.
 - A failed write (a full disk, a permission error) reaches the caller as a `-32000` error carrying the write's message. No run is recorded or published, and no success is returned.
 
 ---
