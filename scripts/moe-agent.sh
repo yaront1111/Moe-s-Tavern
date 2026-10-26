@@ -6823,9 +6823,12 @@ def verified_mention(msg, mid):
     timestamp = rec.get("timestamp") if isinstance(rec.get("timestamp"), str) else None
     rpc = msg.get("content")
     rpc = rpc if isinstance(rpc, str) else ""
+    # The daemon ends a cut copy with U+2026 and sets contentTruncated, so only
+    # the copy without that mark can be a prefix of the stored body.
+    cut = rpc[:-1] if msg.get("contentTruncated") is True and rpc.endswith("…") else rpc
     if body == rpc:
         prov = "VERIFIED"
-    elif rpc and body.startswith(rpc):
+    elif cut and body.startswith(cut):
         # chat_read truncates at maxContentChars. Legitimate, but delivering
         # silently truncated bytes as "the message" is the same defect wearing a
         # different hat -- deliver the FULL stored body and label the RPC copy.

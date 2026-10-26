@@ -1951,9 +1951,12 @@ function New-MoeVerifiedMention {
     if ($stored.ok) {
         $body = $stored.content
         $rpcBody = if ($Message.content -is [string]) { $Message.content } else { '' }
+        # The daemon ends a cut copy with U+2026 and sets contentTruncated, so only
+        # the copy without that mark can be a prefix of the stored body.
+        $cutBody = if ($Message.contentTruncated -eq $true -and $rpcBody.EndsWith([string][char]0x2026, [System.StringComparison]::Ordinal)) { $rpcBody.Substring(0, $rpcBody.Length - 1) } else { $rpcBody }
         if ($body -eq $rpcBody) {
             $prov = 'VERIFIED'
-        } elseif ($rpcBody.Length -gt 0 -and $body.StartsWith($rpcBody, [System.StringComparison]::Ordinal)) {
+        } elseif ($cutBody.Length -gt 0 -and $body.StartsWith($cutBody, [System.StringComparison]::Ordinal)) {
             # chat_read truncates at maxContentChars (default 1000). That is a
             # legitimate transform, but delivering silently-truncated bytes as
             # "the message" is the same defect wearing a different hat, so the
