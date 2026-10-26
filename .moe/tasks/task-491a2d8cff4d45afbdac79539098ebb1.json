@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,14 +99,16 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:36:22.943Z",
-  "updatedAt": "2026-10-26T07:03:49.810Z",
+  "updatedAt": "2026-10-26T07:10:55.378Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T05:52:58.414Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-26T07:10:55.378Z",
+    "wallClockMs": 4676964
   },
   "contextFetchedBy": [
     "qa-7c627d35",
@@ -155,7 +157,9 @@
   "filesModified": [
     "scripts/tests/local-runner-snapshot.test.mjs",
     "scripts/local-runner/source-snapshot.mjs",
-    ".github/workflows/ci.yml"
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+    ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json"
   ],
   "completionSummary": "Round 2 fixes both QA defects in 9a81f41.\n\n(1) Species and count bound, in admit() of source-snapshot.mjs:\n- slice is gone. length is read once and must be Number.isInteger and >= 0 (else INPUT_INVALID). It is checked against MAX before any element is read, and the loop reads entries[index] once each, for index < count.\n- This also closes a Proxy-over-array variant: its object length lied after the first read, and 9a81f41 admitted 10001 entries.\n- QA's species.mjs now admits 1 entry (it admitted 30000).\n\n(2) Trojan Source:\n- FORBIDDEN_CHAR is byte-identical to daemon workloadSnapshot.ts:115.\n- The DEVICE_NAME superscripts are escaped too, so the module is pure ASCII: grep -P '[^\\x00-\\x7f]' finds nothing.\n- An all-code-point sweep finds 0 semantic differences between the old and new regexes.\n- The header no longer claims DEVICE_NAME is verbatim.\n\nTests:\n- S8 adds a species row, a 'growing' row (count read once) and Proxy lengths [object, -1, 0.5].\n- S10 asserts an ASCII-only source.\n- S2 adds U+061C and U+009F; a dropped-ALM mutant had survived before.\n- Against 9a81f41, S8 and S10 fail, and each new row fails on its own.\n- Mutation sweep: 15/15 killed.\n\nGate: Linux exit 0, 14/14; native Windows node v24.16.0, 14/14; macOS not run.\nSize: 176 + 210 + ci.yml 1/1 = 388 lines.\nPlan deviation: the plan's step 2 said to take a slice snapshot; QA's fix removes it.\nThe module is still I/O-free and verified-local stays unavailable. Peers' dirty paths were not touched.",
   "commits": [
@@ -192,6 +196,24 @@
       "treeId": "031f83ed8fda4b058d8e3c018dda2f8173e077bf",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "2dcddc33974c43b622cb98c29c4af41b2766cfb3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-26T06:50:55Z",
+      "paths": [
+        ".moe/tasks/task-05e1f916f49c44eb97c08ca3f0e6e542.json",
+        ".moe/tasks/task-491a2d8cff4d45afbdac79539098ebb1.json",
+        "scripts/local-runner/source-snapshot.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-26T07:04:16.712Z",
+      "treeId": "5651a397e881e9579ae16c52cc9ce74c15ac5274",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -201,11 +223,11 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "qa-7c627d35@2026-10-26T06:37:51Z",
-    "at": "2026-10-26T06:42:47.806Z"
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-26T06:50:55Z",
+    "at": "2026-10-26T07:04:16.712Z"
   },
-  "reviewCompletedAt": "2026-10-26T06:41:55.460Z",
+  "reviewCompletedAt": "2026-10-26T07:10:55.378Z",
   "rejectionDetails": {
     "failedDodItems": [
       "The module is pure and bounded. Its only import is node:crypto, asserted by a test that reads the source. Entry-count and total-byte limits are enforced before any hashing. The new test file is added to the CI local-runner step by a one-line ci.yml change."
@@ -272,5 +294,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-26T07:10:55.378Z",
+  "reviewSummary": "Approve round 2. Reviewed completion commit 2dcddc3: HEAD of moe/work-2026-10-24, tree 5651a39 as recorded. It carries only module/test plus wrapper board state (own task record; peer 05e1f916, DONE). Delta vs 9a81f41: module +10/-7, test +16/-3. Task total vs 9a81f41^: 388 lines (176+210+ci.yml 1/1), within 400.\nRe-ran:\n- Gate (env -i, node v24.21.0): 14/14, exit 0, in a git-archive snapshot of 2dcddc3 and in the shared tree (owned paths equal 2dcddc3).\n- Native Windows node v24.16.0: 14/14, exit 0.\n- macOS not run (pure JS).\nRound-1 defects, both fixed:\n(1) Species: my species.mjs probe now admits 1, was 30000. length is read once, guarded by Number.isInteger and >=0; each element is read once (probed). Proxy length 2**40/NaN/'5'/5n/throwing getter and a revoked proxy all fail closed.\n(2) Trojan Source: both files are ASCII-only (grep -P [^\\x00-\\x7f] gives 0, no CR). FORBIDDEN_CHAR is byte-identical to workloadSnapshot.ts:115. Sweeping every code point, old vs new FORBIDDEN_CHAR/DEVICE_NAME: 0 diffs.\nRed: new tests vs the 9a81f41 module fail S8 (species 10001 != 1) and S10 (non-ASCII), 12 pass.\nMy mutation sweep: 20/22 killed, including the guards, length re-read, slice, off-by-one, literal RLO/BOM, ALM and range ends, control/symlink ordering, data.byteLength, no copy, UTF-16 sort, lower-only fold, NFC.\nDoD 1-6 map to S0-S10. ci.yml:236 names all four files. Only node:crypto is imported, no forbidden patterns, verified-local untouched.\nNon-blocking test gaps; behavior verified correct by probe, code unchanged since round 1:\n(a) no row reaches the copy-length guard (a proto-swapped Float64Array is refused ENTRY_INVALID);\n(b) only COM¹ among the superscripts is tested (COM/LPT ¹²³ all refused).\nSuggest these rows in CQ-R09 final.\nPonytail: lean already, net -0 lines.",
+  "requiredCheckAtDone": null
 }
