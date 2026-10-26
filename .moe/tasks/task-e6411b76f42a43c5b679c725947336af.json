@@ -25,16 +25,24 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 100,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-aafb4bc06bf5481d87d763715c647f7b",
+      "author": "worker-3729a0d6",
+      "content": "Handoff from CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced, host session in scripts/local-runner/guest-session.mjs), for planning R10 cancellation and teardown:\n1. Signal teardown of the guest supervisor is still open; R08b's QA note deferred it here. A SIGTERM, SIGHUP or SIGKILL sent to guest-supervisor.py skips its finally, and the job's start_new_session group survives. Observed locally: a supervisor SIGKILLed during an R08 mutation run left its job orphaned under init. Today only host EOF (exit 74) and I/O errors kill and reap the group.\n2. On abort, runGuestSession closes the bridge stdin and waits up to timeoutMs, then SIGKILLs the local provider process (multipass exec). That local kill does not prove the guest job ended, and executionReady is always false. R10 needs guest-side termination evidence, such as a job table or a kill-and-verify step.\n3. The session resolves only on a provider exit 0 with exactly one observation. Every other end rejects with a fixed SESSION_* code.",
+      "timestamp": "2026-10-26T10:50:54.130Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:15.727Z",
-  "updatedAt": "2026-10-26T09:31:53.216Z",
+  "updatedAt": "2026-10-26T10:50:54.130Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
     "task-fdbc59358b8746a4b19073b5f2ef5a7c"
   ],
   "contextFetchedBy": [
-    "architect-26fd4d71"
+    "architect-26fd4d71",
+    "worker-3729a0d6"
   ]
 }

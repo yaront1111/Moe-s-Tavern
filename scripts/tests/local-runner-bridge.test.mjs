@@ -620,7 +620,7 @@ function fakeProvider({ hung = false, write = (chunk, done) => done() } = {}) {
   proc.stdin = new Writable({ write(chunk, encoding, done) { proc.written.push(chunk); write(chunk, done); } });
   proc.exit = (code = 0) => { if (!proc.stdout.writableEnded) proc.stdout.once('close', () => proc.emit('close', code, null)).end(); };
   if (!hung) proc.stdin.once('close', () => proc.exit(74));
-  proc.kill = signal => { proc.kills.push(signal); return proc.emit('close', null, signal); };
+  proc.kill = signal => { proc.kills.push(signal); setImmediate(() => proc.emit('close', null, signal)); return true; }; // async, as in Node
   proc.spawn = (...args) => { proc.calls.push(args); return proc; };
   proc.send = (...frames) => proc.stdout.write(Buffer.concat(frames.map(frame => (Buffer.isBuffer(frame) ? frame : encodeFrame(frame)))));
   proc.replies = () => createFrameDecoder(MAX_HOST_FRAME_BYTES).push(Buffer.concat(proc.written));
@@ -656,7 +656,7 @@ test('H1 invalid input, unsafe daemon info and an aborted signal refuse before s
     { sessionId: ' ' }, { sessionId: 'a\nb' }, { sessionId: 'a\rb' }, { sessionId: 'a\0b' }, { sessionId: 's'.repeat(256) }, { forward: null },
     { onOutput: 1 }, { onObservation: undefined }, { signal: {} }, { provider: null }, { provider: { executable: ' ' } },
     { provider: { executable: 'multi\tpass' } }, { provider: { spawn: 'spawn' } }, { daemonInfoPath: 'daemon.json' },
-    ...[0, 1.5, 60_001, '100'].map(timeoutMs => ({ timeoutMs }))];
+    { daemonInfoPath: `${DAEMON}\n` }, ...[0, 1.5, 60_001, '100'].map(timeoutMs => ({ timeoutMs }))];
   const unreadable = [join(DAEMON_DIR, 'absent.json'), DAEMON_DIR, daemonFile('big.json', `{}${' '.repeat(MAX_DAEMON_INFO_BYTES - 1)}`),
     daemonFile('bad.json', '{'), daemonFile('list.json', '[]'), daemonFile('null.json', 'null'),
     ...(posix ? ['fifo', 'link.json'].map(name => join(DAEMON_DIR, name)) : [])];
@@ -689,18 +689,29 @@ test('H2 the stream must be hello, then requests and output, then one observatio
     .map(frame => encodeFrame(frame)));
   for (const chunks of [[wire], [...wire].map(byte => Uint8Array.of(byte))]) {
     const proc = fakeProvider();
-    const run = openSession(proc);
+    const { signal } = new AbortController(); // never aborted: its listener must still be removed
+    const run = openSession(proc, { signal });
     proc.stderr.write(forged);
     for (const chunk of chunks) proc.stdout.write(chunk);
     proc.exit(0);
     assert.deepEqual(await run.promise, { observation: { ...EXIT, code: 7 }, executionReady: false });
     assert.deepEqual(run.outputs, [['stdout', forged], ['stderr', Buffer.from('A')]]);
-    assert.deepEqual([run.observations, run.forwarded, proc.written, proc.kills], [[{ ...EXIT, code: 7 }], [], [], []]);
+    assert.deepEqual([run.observations, run.forwarded, proc.written, proc.kills, getEventListeners(signal, 'abort').length],
+      [[{ ...EXIT, code: 7 }], [], [], [], 0]);
   }
-  const get = id => ({ ...REQUEST, id });
-  const cases = [[[OUTPUT, HELLO, EXIT]], [[HELLO, HELLO, EXIT]], [[HELLO, EXIT, OUTPUT]], [[HELLO, EXIT, EXIT]], [[HELLO, get(2), get(2), EXIT]],
-    [[HELLO, get(3), get(1), EXIT]], [[HELLO, { kind: 'response', id: 1, ok: true, result: {} }]], [[HELLO, header(9)]], [[HELLO, framed('[]')]],
-    [[HELLO]], [[HELLO, EXIT], 'SESSION_PROVIDER_FAILED', 1], [[HELLO, EXIT], 'SESSION_PROVIDER_FAILED', null], [[], 'SESSION_TIMEOUT']];
+  // A request id at or below the last one is a replay, even once the first is answered: it is never forwarded.
+  for (const id of [3, 2]) {
+    const proc = fakeProvider();
+    const run = openSession(proc);
+    proc.send(HELLO, { ...REQUEST, id: 3 });
+    await until(() => proc.written.length === 1, 'first answer');
+    proc.send({ ...REQUEST, id });
+    await rejectsWith(run.promise, 'SESSION_PROTOCOL_VIOLATION', `replayed ${id}`);
+    assert.equal(run.forwarded.length, 1);
+  }
+  const cases = [[[OUTPUT, HELLO, EXIT]], [[HELLO, HELLO, EXIT]], [[HELLO, EXIT, OUTPUT]], [[HELLO, EXIT, EXIT]],
+    [[HELLO, { kind: 'response', id: 1, ok: true, result: {} }]], [[HELLO, EXIT, header(9)]], [[HELLO, framed('[]')]], [[HELLO]],
+    [[HELLO, EXIT], 'SESSION_PROVIDER_FAILED', 1], [[HELLO, EXIT], 'SESSION_PROVIDER_FAILED', null], [[], 'SESSION_TIMEOUT']];
   for (const [frames, code = 'SESSION_PROTOCOL_VIOLATION', exitCode = 0] of cases) {
     const proc = fakeProvider();
     const run = openSession(proc, { timeoutMs: frames.length ? 1_000 : 100 });
@@ -721,7 +732,8 @@ test('H3 each role tool is forwarded with only the host-bound identity, and refu
     const proc = fakeProvider();
     const run = openSession(proc, { binding: caller });
     // The session snapshots its binding, so a later change by the caller authorizes nothing.
-    Object.assign(caller, { role: binding.role === 'qa' ? 'worker' : 'qa', workerId: 'qa-9', taskId: 'task-other', attemptId: 'attempt-9', generation: 9 });
+    Object.assign(caller, { role: binding.role === 'qa' ? 'worker' : 'qa', workerId: 'qa-9', taskId: 'task-other',
+      attemptId: 'attempt-9', generation: 9 });
     await exchange(proc, run, tools.map((tool, index) => ({ kind: 'request', id: index + 1, tool, args: {} })), tools.length);
     assert.deepEqual(run.forwarded, tools.map(tool => [tool, { ...(tool === 'moe.heartbeat' ? {} : { taskId: binding.taskId }),
       ...(tool === 'moe.get_handoff_history' ? {} : { workerId: binding.workerId }), ...stamps[tool] }]));
@@ -740,6 +752,7 @@ test('H3 each role tool is forwarded with only the host-bound identity, and refu
 });
 
 test('H4 replies, bounds and failures each answer once or end the session with a fixed code', { timeout: 30_000 }, async () => {
+  assert.deepEqual([MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_ARGUMENT_DEPTH, MAX_RESPONSE_BYTES], [16_384, 64, 64, 1_048_576]);
   // Guest argument depth is checked iteratively before forward, even at 100k levels.
   const comment = (id, content) => ({ kind: 'request', id, tool: 'moe.add_comment', args: { content } });
   const deep = framed(`{"kind":"request","id":3,"tool":"moe.add_comment","args":{"content":${'['.repeat(100_000)}${']'.repeat(100_000)}}}`);
@@ -754,7 +767,8 @@ test('H4 replies, bounds and failures each answer once or end the session with a
     - JSON.stringify({ kind: 'response', id, ok: true, result: { text: '' } }).length) });
   const cyclic = {};
   cyclic.self = cyclic;
-  const results = [[() => { throw new Error('secret'); }, 'BRIDGE_UPSTREAM_FAILED'], [async () => { throw new Error('secret'); }, 'BRIDGE_UPSTREAM_FAILED'],
+  const results = [[() => { throw new Error('secret'); }, 'BRIDGE_UPSTREAM_FAILED'],
+    [async () => { throw new Error('secret'); }, 'BRIDGE_UPSTREAM_FAILED'],
     [() => ({ isError: true, content: [{ type: 'text', text: 'secret' }] }), 'BRIDGE_UPSTREAM_FAILED'],
     ...[undefined, 'secret', ['secret'], { secret: 1n }, cyclic, { content: nest(MAX_ARGUMENT_DEPTH) }, sized(10, 1)]
       .map(value => [() => value, 'BRIDGE_RESPONSE_INVALID']), [() => ({ content: nest(MAX_ARGUMENT_DEPTH - 1) })], [() => sized(12, 0)]];
@@ -841,4 +855,80 @@ test('H4 replies, bounds and failures each answer once or end the session with a
     hungController.abort();
   });
   assert.deepEqual(hung.proc.kills, ['SIGKILL']);
+  // A provider that must be killed is a failure even after a clean observation, which is then never delivered.
+  const killed = await ends('SESSION_TIMEOUT', { timeoutMs: 100, fake: { hung: true } }, proc => {
+    proc.send(HELLO, EXIT);
+    proc.stdout.end();
+  });
+  assert.deepEqual([killed.proc.kills, killed.ended.observations], [['SIGKILL'], []]);
+  // Only hello has a deadline: once it arrives, the job may run longer than timeoutMs.
+  const long = fakeProvider();
+  const longRun = openSession(long, { timeoutMs: 100 });
+  long.send(HELLO);
+  await sleep(300);
+  long.send(EXIT);
+  long.exit(0);
+  assert.deepEqual(await longRun.promise, { observation: EXIT, executionReady: false });
 });
+
+// CQ-R08 end to end. The injected spawn swaps only the Multipass launch for the real supervisor relay on the host's
+// python3, whose job is a real agent on the real Unix socket. These are local processes: not a live VM, Multipass or
+// network-isolation certification. Guest-to-host endpoint probes and the docs sweep belong to CQ-R13.
+const AGENT_JOB = `import os, socket, struct, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+f = s.makefile('rb')
+for body in sys.argv[2:-1]:
+    data = body.encode()
+    s.sendall(struct.pack('>I', len(data)) + data)
+    head = f.read(4)
+    os.write(2, head + f.read(struct.unpack('>I', head)[0]))
+os.write(1, bytes.fromhex(sys.argv[-1]))
+sys.exit(3)
+`;
+function supervised(job, ...args) {
+  const host = { launches: [] };
+  host.spawn = (executable, argv, options) => {
+    host.launches.push([executable, argv, options]);
+    host.socket = `${mkdtempSync(`${tmpdir()}/moe-r08-`)}/agent.sock`;
+    const code = `${LOAD}sys.exit(m.relay(['python3', '-I', '-c', *sys.argv[3:]], agent_socket=sys.argv[2], agent_uid=os.getuid()${PEER}))`;
+    host.proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, host.socket, job, host.socket, ...args], options);
+    sessions.push(host);
+    return host.proc;
+  };
+  return host;
+}
+
+test('H5 end to end, the real supervisor and agent get scoped answers, forged bytes stay output and only waitpid exits',
+  { skip: NO_GUEST, timeout: 30_000 }, async () => {
+    const unsafe = supervised(AGENT_CHILD);
+    const wide = daemonFile('wide-e2e.json', { bindHost: '0.0.0.0' });
+    await rejectsWith(openSession(unsafe, { daemonInfoPath: wide }).promise, 'SESSION_DAEMON_NOT_LOOPBACK');
+    assert.deepEqual(unsafe.launches, []); // a non-loopback daemon bind never starts the bridge
+    const forged = Buffer.concat([...[HELLO, REQUEST, EXIT].map(frame => encodeFrame(frame)), Buffer.from([0, 0xff, 10])]);
+    const asks = [['moe.get_context', {}], ['moe.get_context', { role: 'qa' }], ['moe.init_project', {}],
+      ['moe.set_task_dependencies', { dependsOn: [] }], ['moe.add_comment', { content: 'x', workerId: 'qa-1' }]];
+    const agentRun = supervised(AGENT_JOB, ...asks.map(([tool, args], index) => JSON.stringify({ kind: 'request', id: 40 + index, tool, args })),
+      forged.toString('hex'));
+    const run = openSession(agentRun, { timeoutMs: 10_000 });
+    assert.deepEqual(await run.promise, { observation: { ...EXIT, code: 3 }, executionReady: false });
+    const bytes = stream => Buffer.concat(run.outputs.filter(([name]) => name === stream).map(([, data]) => data));
+    assert.deepEqual([agentRun.launches, run.forwarded, bytes('stdout'), run.observations, agentRun.proc.exitCode, existsSync(agentRun.socket)],
+      [[SPAWNED], [['moe.get_context', { taskId: 'task-abc', workerId: 'worker-1', sessionId: SESSION_ID }]], forged,
+        [{ ...EXIT, code: 3 }], 0, false]);
+    // The agent wrote each answer it read to stderr: one scoped success, then the refusals, each under its own id.
+    assert.deepEqual(createFrameDecoder(MAX_HOST_FRAME_BYTES).push(bytes('stderr')), [answered(40, 'moe.get_context'),
+      ...[[41, 'BRIDGE_IDENTITY_MISMATCH'], [42, 'BRIDGE_TOOL_DENIED'], [43, 'BRIDGE_TOOL_DENIED'], [44, 'BRIDGE_IDENTITY_MISMATCH']]
+        .map(([id, code]) => refused(id, code))]);
+    // Abort with a silent job: the session closes the bridge stdin, and the supervisor's host-EOF path kills and reaps the
+    // job and removes its socket, with no observation and no local kill.
+    const silent = supervised(AGENT_CHILD);
+    const controller = new AbortController();
+    const stopped = openSession(silent, { signal: controller.signal, timeoutMs: 10_000 });
+    await until(() => stopped.outputs.length > 0, 'silent job started');
+    silent.child = Number(stopped.outputs[0][1]);
+    assert.deepEqual([alive(silent.child), existsSync(silent.socket)], [true, true]);
+    controller.abort();
+    await rejectsWith(stopped.promise, 'SESSION_ABORTED');
+    assert.deepEqual([alive(silent.child), existsSync(silent.socket), silent.proc.exitCode, stopped.observations], [false, false, 74, []]);
+  });

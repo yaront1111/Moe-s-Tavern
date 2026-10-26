@@ -54,7 +54,6 @@ export async function runGuestSession(input) {
     }
   } catch { options = undefined; }
   if (!options) throw sessionError('SESSION_INPUT_INVALID');
-  if (options.signal?.aborted) throw sessionError('SESSION_ABORTED');
   const refused = await daemonRefusal(options.daemonInfoPath);
   if (refused || options.signal?.aborted) throw sessionError(refused ?? 'SESSION_ABORTED');
   let child;
