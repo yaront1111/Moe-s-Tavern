@@ -191,6 +191,7 @@ include execution instructions or the contract.
 {
   taskId?: string,
   workerId?: string,
+  sessionId?: string,                      // the receiving session's incarnation, e.g. MOE_SESSION_ID `<workerId>@<preflight-iso>`; see **Served context** below
   view?: "full" | "status",                // omit = the normal read (role-trimmed default); "full" = also the sections left out for the role, only when one is needed; status is only for progress/commit polling
   commentsLimit?: number,                  // default: 3 recent comments, max 50; 0 omits comments
   commentsMaxChars?: number                // default: 1000 per comment; 0 returns full comment text
@@ -265,6 +266,12 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
     global: string[], // currently project.globalRails.requiredPatterns
     epic: string[],
     task: string[]
+  },
+  servedContext?: {     // default and view:"full" reads of a task only; see **Served context** below
+    taskId, planRevision: number | null, approvedPlanRevision: number | null,
+    attemptId: string | null, generation: number | null,
+    receiptStatus: "recorded" | "record-failed" | "identity-unreadable" | "no-session" | "no-running-attempt" | "not-attempt-owner",
+    receiptId: string | null, packetId: string | null
   }
 }
 ```
@@ -276,6 +283,14 @@ By default, `get_context` returns compact recent-chat previews, a lean worker ob
 **Reviewed bytes.** `currentCandidate` is the record QA must read before signing off, and its `id` is what `moe.qa_approve` / `moe.qa_reject` bind the decision to. Because it is re-resolved on every call, a reviewer who re-reads a task after the runner recorded a newer candidate sees the new one — and an approval still naming the old one is refused with `CANDIDATE_MISMATCH`. Projects that never call `moe.record_candidate` never see the key.
 
 **Verification provenance.** `task.verification` is the completing agent's own `complete_task` claim, bound to no candidate or tree, so both projections — `task.verification` and a declared prerequisite's `epicSiblings[].verification` — carry `source: "agent-reported"` whatever the stored row says. A row persisted before the label existed, or one hand-edited to claim `runner-observed`, reads the same way. The label is set on a fresh copy and never written back. Absent verification is `null`, and the compact `epicSiblings` projection still omits `outputTail`. Runner-observed results for a candidate's exact tree are a separate record, written with `moe.record_check_run`.
+
+**Served context (CQ-F06).** A default or `view: "full"` read of a task ends with `servedContext`; a field is `null` when absent. The optional `sessionId` is the receiving session's incarnation exactly as its runner names it, i.e. the wrapper's `MOE_SESSION_ID` (`<workerId>@<preflight-iso>`). It is non-blank, at most 255 characters, with no NUL, CR or LF, and the daemon has no env fallback and never derives it. A malformed value, `null` included, is refused `INVALID_INPUT` in every view, before `contextFetchedBy` is stamped.
+- `receiptStatus` is decided in this order: `identity-unreadable` (the stored `planRevision` or the open attempt cannot be decoded), `no-session` (no `sessionId` presented), `no-running-attempt`, `not-attempt-owner` (the running attempt's worker is not both the caller and the task's assignee), then `recorded` or `record-failed`. Only `recorded` writes anything: one latest-wins `contextReceipt` on the running attempt (see `docs/SCHEMA.md`).
+- `packetId` is `sha256:` plus the hex sha256 of the response without `servedContext`, and a recorded read serves exactly the bytes it hashed. `receiptId` and `packetId` are `null` for every other status.
+- A failed receipt write is logged and the context is still served as `record-failed`; `get_context` never throws for it. `view: "status"` never records a receipt.
+- A receipt records what was served to whom. It is never approval: `moe.start_step`, `moe.complete_step` and `moe.complete_task` compare it under verified-local, and the approval itself is `Task.approvedPlanRevision`.
+
+**Execution identity over moe-proxy (CQ-F09, CQ-F12a).** Through `moe-proxy`, the session environment supplies `sessionId` (`MOE_SESSION_ID`) to `moe.get_context`, `moe.start_step`, `moe.complete_step` and `moe.complete_task`, and `attemptId` plus `generation` (`MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION`, both or neither; `generation` is sent as a JSON number) to the last three. A caller-presented value that differs from the env value is refused `EXECUTION_IDENTITY_SUBSTITUTED` (`-32003`); a malformed or half env identity is refused `EXECUTION_IDENTITY_INVALID` (`-32602`), never coerced, and nothing is forwarded. JSON-RPC batch elements are fenced the same way. With no identity env the proxy forwards unchanged, which is the legacy path. The env vars are in `docs/CONFIGURATION.md`.
 
 **Execution policy context.** `executionPolicy` is `{ effectiveProfile, taskSnapshot, attemptSnapshot, unreadable? }`: the profile that governs the task (`settings.executionProfile`, floored by a stored `verified-local` snapshot, the one rule the progression backstop, claim admission and `qa_approve` share), the task's `executionPolicySnapshot`, and the snapshot of its open attempt (`running`, `finalizing` or `reconciling`; `null` when there is none or it recorded none). Both snapshots are decoded into fresh copies on every call, so nothing in the response aliases stored state (shapes in [`docs/SCHEMA.md`](SCHEMA.md), `executionPolicySnapshot`). The key is **omitted** when the setting, the task snapshot and the open attempt's snapshot are all absent, so a project that never used profiles sees an unchanged payload. A record that does not decode is served as `null` and named in `unreadable` (`settings.executionProfile`, `taskSnapshot`, `attemptSnapshot`), never echoed and never thrown, so a hand-edited record cannot break the read; `effectiveProfile` is `null` when the setting or the task snapshot is unreadable. Every role's default view and `view: "full"` carry it; `view: "status"` does not. It is configuration identity, not readiness: `effectiveProfile: "verified-local"` names a strict task, and every progression of one is refused `EXECUTION_PROFILE_NOT_READY` (see `moe.claim_next_task`).
 
@@ -369,7 +384,14 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 
 **Parameters:**
 ```typescript
-{ taskId: string, stepId: string, workerId?: string }
+{
+  taskId: string,
+  stepId: string,
+  workerId?: string,
+  attemptId?: string,     // ≤128 chars; the attemptId moe.claim_next_task returned
+  generation?: number,    // integer ≥1; the generation moe.claim_next_task returned
+  sessionId?: string      // the session that read moe.get_context; get_context's rules
+}
 ```
 
 > `moe.get_context` must be called by `workerId` before `moe.start_step` — see **Ownership & Ordering** below.
@@ -379,6 +401,15 @@ Mark a step as `IN_PROGRESS` and set task status to `WORKING`.
 - The refusal is retryable. Claim the row with `moe.claim_next_task { taskId, statuses: ["WORKING"], workerId }`, call `moe.get_context` if this worker has not fetched it yet, then retry. The error message names the claim call because `MoeError` context does not cross MCP; in-process callers also get `context.retryable: true` and `context.nextAction`.
 - A `workerId` that differs from a set `assignedWorkerId` is still refused with `NOT_ALLOWED`.
 - A call without a `workerId` (the JetBrains plugin `/ws` path, legacy clients) keeps the old tolerance.
+
+**Strict step entry (CQ-F07).** Both `attemptId` and `generation` are optional and `sessionId` follows `moe.get_context`'s rules (over `moe-proxy` the session env supplies them; see **Execution identity over moe-proxy** under `moe.get_context`). Checks run after the claimed-row and context-fetched checks, read-only, so every refusal happens before any write:
+- Every profile: a malformed `attemptId`, `generation` or `sessionId` is refused `INVALID_INPUT`, and a presented attempt that is superseded, closed or from the future is refused `STATE_CONFLICT` `ATTEMPT_SUPERSEDED`.
+- Strict means the task's resolved profile, or the open attempt's recorded snapshot, is `verified-local` (a stored snapshot floors the live setting; a malformed one fails closed with `INVALID_INPUT`). Legacy and observe keep worker-ID-only freshness. A strict call requires, in this order:
+  1. `workerId`, `attemptId`, `generation` and `sessionId`, else `MISSING_REQUIRED` (`-32602`) `STEP_ENTRY_IDENTITY_REQUIRED` with `context.missing`;
+  2. the caller's own running attempt, else `STATE_CONFLICT` `ATTEMPT_NOT_RUNNING`;
+  3. `Task.approvedPlanRevision === planRevision`, else `STATE_CONFLICT` `PLAN_REVISION_NOT_APPROVED`. A receipt never grants approval;
+  4. a served-context receipt on that attempt naming this task, attempt, generation, worker, session and the approved current revision, else `STATE_CONFLICT` `CONTEXT_RECEIPT_STALE` with `context.stale` listing the mismatched fields (or `receipt`). `packetId`, `view` and `servedAt` are not compared.
+- Passing grants entry only, never readiness: `verified-local` stays unavailable (`EXECUTION_PROFILE_NOT_READY`) at claim and at progression.
 
 **Account switch.** When the seat's Claude account is spent (see **Claude Account Rotation**), the call is refused with `NOT_ALLOWED`, and the reason starts with `ACCOUNT-SWITCH:`. The step stays `PENDING`. The worker ends its session; the wrapper relaunches the held task on the next account, and the new session starts the step. The check runs after every other guard. It fires only for a seat whose account this daemon process knows: one it leased, or one learned back from the seat's own usage report after a restart (see `moe.report_account_usage`).
 
@@ -400,7 +431,10 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
   stepId: string,
   modifiedFiles?: string[],   // EVERY project-relative path this step created or modified — omitting it draws a `warning`
   note?: string,              // ≤10000 chars; longer is refused with INVALID_INPUT (never stored clipped)
-  workerId?: string
+  workerId?: string,
+  attemptId?: string,         // as moe.start_step
+  generation?: number,        // as moe.start_step
+  sessionId?: string          // as moe.start_step
 }
 ```
 
@@ -431,6 +465,7 @@ Mark a step as `COMPLETED`. Appends `stepId` to `task.stepsCompleted` (de-duplic
 - `nextStep.description` and the `nextAction` reason are amendment-resolved as well — the worker is pointed at the amended work, never the superseded work.
 - `modifiedFiles` is the worker's positive assertion and feeds the **ASSERTED** attribution tier: the wrapper's post-flight commits every completed step's `modifiedFiles ?? affectedFiles` regardless of what its baseline says. Omitting it returns `warning`. The wrapper can still pick up unreported edits through the TOOL (stream-json harvest, claude only), PLANNED (plan-declared and changed) and MEASURED (undeclared and changed, solo only) tiers — but with another worker active an undeclared, non-tool-written edit stays **unattributed** (reported as `MOE_ATTRIBUTION_UNRESOLVED`, never staged) until someone declares it via `moe.declare_files`.
 - **Claimed row required**, the same rule as `moe.start_step`: a `workerId` on an unassigned `WORKING` row is refused with `STATE_CONFLICT` (`TASK_NOT_CLAIMED`) before the get_context check. The step stays `IN_PROGRESS`, nothing is recorded (no `note`, `modifiedFiles`, `stepsCompleted` or step metrics), and the caller's worker record is untouched.
+- **Strict completion (CQ-F08):** the same optional inputs and the same guard as `moe.start_step` (see **Strict step entry**), run after the claimed-row and context-fetched checks. Its refusals are `moe.start_step`'s, under `moe.complete_step`: `STEP_ENTRY_IDENTITY_REQUIRED`, `ATTEMPT_SUPERSEDED`, `ATTEMPT_NOT_RUNNING`, `PLAN_REVISION_NOT_APPROVED` and `CONTEXT_RECEIPT_STALE`. A strict call appends `{ stepId, planRevision, completedAt }` to the attempt's `stepCompletions` before the task write; the daemon is the only writer. Legacy and observe record no evidence.
 - `accountSwitch` appears when the seat's Claude account has reached the switch percent, hit its limit, been signed out or been removed, and another signed-in account is available (see **Claude Account Rotation**). The step is recorded as usual. The worker follows `instruction`: it ends the session without starting another step, and the wrapper relaunches the held task on `to`. `nextAction` is unchanged, and `moe.start_step` refuses the next step on the spent account anyway. The field is absent after the last step, since `moe.complete_task` comes next and needs no new session.
 
 ---
@@ -489,12 +524,16 @@ Mark a task as `REVIEW` (complete) and optionally attach a PR link. Requires tas
   prLink?: string,
   summary?: string,        // persisted as task.completionSummary (capped at 2000 chars, like qa_approve's summary)
   currentBranch?: string,  // branch the worker is on; enables the consolidationBranch check
-  workerId?: string
+  workerId?: string,
+  attemptId?: string,      // as moe.start_step
+  generation?: number,     // as moe.start_step
+  sessionId?: string       // as moe.start_step
 }
 ```
 
 **Notes:**
 - **Claimed row required**, the same rule as `moe.start_step`: a `workerId` on an unassigned `WORKING` row is refused with `STATE_CONFLICT` (`TASK_NOT_CLAIMED`) before the step, verification and branch-policy checks, before any open attempt is moved to `finalizing`, and before the `REVIEW` write. The task stays `WORKING` with no verification persisted, and the caller's worker record is untouched.
+- **Strict completion (CQ-F08):** the same optional inputs and guard as `moe.start_step` (see **Strict step entry**), run right after the claimed-row check. Its refusals are `moe.start_step`'s, under `moe.complete_task`: `STEP_ENTRY_IDENTITY_REQUIRED`, `ATTEMPT_SUPERSEDED`, `ATTEMPT_NOT_RUNNING`, `PLAN_REVISION_NOT_APPROVED` and `CONTEXT_RECEIPT_STALE`. After the all-steps-completed and verification checks, a strict call also needs step evidence from the CURRENT attempt for every plan step at the approved `planRevision`; otherwise it is refused `STATE_CONFLICT` `EXECUTION_EVIDENCE_INELIGIBLE` with `context { taskId, attemptId, generation, planRevision, steps }` naming the steps without evidence. Evidence from a superseded attempt or an earlier revision stays recorded but does not count: re-execute those steps through `moe.request_replan`. Malformed stored evidence fails closed with `INVALID_INPUT`. A strict `complete_task` still meets the progression readiness backstop (`EXECUTION_PROFILE_NOT_READY`).
 - Missing/malformed `verification` → `MISSING_REQUIRED`/`INVALID_INPUT`; `exitCode !== 0` → `INVALID_INPUT` telling the worker to fix and re-run before completing.
 - `summary` is persisted as `task.completionSummary` (it used to be accepted and silently discarded) and surfaced via `moe.get_context` — both on the task itself and on the `epicSiblings` entries of every dependent task, so a later task can read what its prerequisite actually delivered without grepping HEAD.
 - The evidence is persisted as `task.verification` (with `reportedAt`, and `source: "agent-reported"` stamped after validation), and the union of completed steps' `modifiedFiles ?? affectedFiles` seeds `task.filesModified` — the ASSERTED attribution tier, which the wrapper commits when the task produced the path's dirty bytes (`MOE_ATTR_ASSERTED_FOREIGN` otherwise); `moe.record_commit` later unions the non-inferred paths it actually landed. Both are surfaced to QA via `moe.get_context`, whose QA guidance is to re-run the command. The daemon never executes the command itself, and never checks these reports against git.
@@ -2946,7 +2985,7 @@ The token is **command metadata beside `taskId`/`updates`, never a task field.**
 - A supplied token must be a **non-negative safe integer**. `null`, strings (`"3"`), booleans, fractional (`3.5`), negative, unsafe (`Number.MAX_SAFE_INTEGER + 1`), `NaN` and `Infinity` are all refused with `INVALID_INPUT` (`-32602`). There is no coercion and no fallback to an unchecked approval.
 - A **legacy task row with no stored `planRevision`** has effective revision `0`, so an explicit `0` matches it and approves.
 - Any **non-equal** revision is refused — a *newer* token is as stale-or-forged as an older one.
-- Unchanged and still token-free: **SPEED/TURBO auto-approval** and the **`moe.set_task_status` relaxed-mode** approval. They take the legacy path and are unaffected.
+- Still token-free: the **`moe.set_task_status` relaxed-mode** approval, which records no stamp. **SPEED/TURBO auto-approval** carries no client token either: the daemon binds it to the revision its own plan submission committed (see **SPEED/TURBO auto-approval** below).
 
 **Mismatch `ERROR` frame** (identical for both routes; `operation` echoes the request type):
 ```json
@@ -2968,12 +3007,17 @@ A malformed token produces the same shape with `code: -32602` and `codeName: "IN
 
 **Durable authorization (`approvedPlanRevision`).** A token-checked approval on either route persists exactly the rendered token it was given as the task's `approvedPlanRevision`, in the same task write as `status: "WORKING"` and `planApprovedAt`. The store re-checks it against the revision that very write commits, so a delayed approval can never authorize a newer plan, DoD or execution contract. A refused or failed write publishes nothing and leaves a pending SPEED timer armed: the timer is cancelled only after the write lands.
 
-- A number means a revision-checked human approval; absent means an unchecked or legacy one. The daemon never writes `null`, and a stored `null` or non-integer reads exactly like absence. Nothing backfills it from `planApprovedAt`, `status` or event names.
+- A number is the revision an approval was bound to: either a token-checked human approval (`PLAN_APPROVED`) or a SPEED/TURBO automatic approval of the revision its plan submission committed (`PLAN_AUTO_APPROVED`). Absent means an unchecked or legacy approval. The daemon never writes `null`, and a stored `null` or non-integer reads exactly like absence. Nothing backfills it from `planApprovedAt`, `status` or event names.
 - A later material change (plan, DoD or contract) advances only `planRevision` and keeps the old number as history. The only current association is a non-negative safe integer equal to the current `planRevision`.
 - It is daemon-owned. The `UPDATE_TASK` denylist and `taskStore.updateTask` strip it from every caller update, and `CREATE_TASK` never copies it, so no client can forge, null or erase it.
 - Token-free approvals record no stamp, and an older number stays as history. The relaxed `moe.set_task_status` approval is one; SPEED/TURBO auto-approval instead stamps the revision its submission committed (CQ-F05). Revision-less human approval (an omitted-token `APPROVE_TASK` or drag) was deleted by CQ-F04b (`task-c619879ed9a643139c184fd5cb1ee888`) under the human-approved CQ-F rail; approvals already recorded without a stamp stay as history and are never upgraded.
 - Under an effective `verified-local` profile (the live setting, or a stored snapshot floor after a rollback), a `PLAN_APPROVED` write without a reviewed token is refused with `INVALID_INPUT` on `expectedPlanRevision`. Store readiness runs first and still refuses such writes with `EXECUTION_PROFILE_NOT_READY`. An omitted human token never gets that far (it is refused as above), and negotiated connection admission can refuse earlier as described above.
-- This records approval provenance only. Execution, claim and completion do not enforce it yet (CQ-F06–F08), and the legacy/observe delivery policy is unchanged.
+- Under an effective `verified-local` profile, step entry and completion require `approvedPlanRevision === planRevision` (`PLAN_REVISION_NOT_APPROVED`; see `moe.start_step`, `moe.complete_step` and `moe.complete_task`). Claims never consult it, and the legacy/observe delivery policy is unchanged. `verified-local` itself stays unavailable.
+
+**SPEED/TURBO auto-approval.** Both modes stamp `approvedPlanRevision` with the revision their `moe.submit_plan` committed, in the same task write as `status: "WORKING"` and `planApprovedAt` (`PLAN_AUTO_APPROVED`); the store re-checks it against the revision that write commits.
+- **TURBO** approves in the submission call.
+- **SPEED** arms a timer for that revision only. If the plan, DoD or contract has changed when it fires, it **withholds**: no task write and no `TASK` activity, one `#general` system message (which logs the usual non-task `MESSAGE_CREATED` activity) naming both revisions and saying "Approve the current revision from the board, or reject the plan and resubmit it.", the row stays `AWAITING_APPROVAL` with no live timer, and no timer is armed for the newer revision. Only `PLAN_REVISION_MISMATCH` withholds; any other failure records the existing `SPEED mode auto-approval failed` activity.
+- **Restart re-arm.** The timer lives in process memory, so a daemon start re-arms every `AWAITING_APPROVAL` row, bound to `executionPolicySnapshot.planRevision` (captured in the `PLAN_SUBMITTED` write) so a change made before the restart is never auto-approved. A row with no snapshot binds its current revision. A row whose snapshot or revision is unreadable records the failure activity and stays unarmed. The re-arm never throws at daemon start. A withheld row is re-armed bound to its older revision at every restart, withholds again and posts one more notice; it never approves the newer revision.
 
 > **Two detail-key spellings — parse both.** `PLAN_REVISION_MISMATCH` carries `expectedPlanRevision` + `currentPlanRevision`. The *producer's* separate `PLAN_REVISION_EXHAUSTED` error (a required bump refused at `Number.MAX_SAFE_INTEGER`, see [`docs/SCHEMA.md`](SCHEMA.md)) carries `currentRevision` + `maxPlanRevision` — a different spelling for the same idea. It shipped first and downstream parsers already bind to it, so it was deliberately left alone rather than renamed. Only the mismatch pair crosses the `/ws` error-context allowlist; the exhaustion details stay daemon-side.
 

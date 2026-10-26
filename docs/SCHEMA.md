@@ -406,14 +406,23 @@ interface Task {
   // Implementation Plan (AI-generated)
   implementationPlan: ImplementationStep[];
 
-  // Monotonic version of the approval-relevant plan surface
-  // (implementationPlan + definitionOfDone). Daemon-owned; see `planRevision` below.
+  // Monotonic version of the approval-relevant plan surface (ordered step ids,
+  // instructions, approved file scope, definitionOfDone, executionContract).
+  // Daemon-owned; see `planRevision` below.
   planRevision?: number;
+
+  // The planRevision an approval was bound to. Daemon-owned; absent for an
+  // unchecked or legacy approval. See `approvedPlanRevision` below.
+  approvedPlanRevision?: number;
 
   // Configuration identity (executionProfile + deliveryPolicy) captured with the
   // committed planRevision. Daemon-owned; never approval or readiness. See
   // `executionPolicySnapshot` below.
   executionPolicySnapshot?: ExecutionPolicySnapshot;
+
+  // Structured, approval-relevant intent for the plan. Absent on legacy rows.
+  // Never approval, readiness or evidence by itself. See `executionContract` below.
+  executionContract?: TaskExecutionContract;
   
   // Status
   status: TaskStatus;
@@ -695,7 +704,7 @@ effect immediately.
 
 ### `planRevision`
 
-`Task.planRevision` is a **daemon-owned monotonic version of the approval-relevant plan surface** — `implementationPlan` + `definitionOfDone`. It exists so a consumer can tell "the plan I am looking at" from "the plan on the board now". Domain: a **non-negative safe integer** (`Number.isSafeInteger`, ≤ `Number.MAX_SAFE_INTEGER`), which the Kotlin/TS clients carry as a `Long`/`number` without truncation.
+`Task.planRevision` is a **daemon-owned monotonic version of the approval-relevant plan surface**: the ordered step ids, each step's original and effective (active-amendment) instructions, the approved `affectedFiles`/`newFiles`, `definitionOfDone` and `executionContract`. It exists so a consumer can tell "the plan I am looking at" from "the plan on the board now". Domain: a **non-negative safe integer** (`Number.isSafeInteger`, ≤ `Number.MAX_SAFE_INTEGER`), which the Kotlin/TS clients carry as a `Long`/`number` without truncation.
 
 Producer rules, all enforced in `taskStore.updateTask` — the single choke point every plan/DoD writer already routes through (`moe.submit_plan`, `moe.amend_plan_step`, `moe.qa_reject`/reopen step resets, `moe.request_replan`, the plugin `UPDATE_TASK` message):
 
@@ -703,10 +712,10 @@ Producer rules, all enforced in `taskStore.updateTask` — the single choke poin
 - **Absent = 0.** A record written before this field existed is read as revision 0. There is **no migration and no `schemaVersion` bump**; the row materializes a real `0`/`1` on its next successful write.
 - **No caller-selected stamp.** A `planRevision` in a tool argument or an `UPDATE_TASK` payload is stripped before the write, so a client can neither forge a newer value nor reset an older one.
 - **+1 for every committed submission**, including a resubmission whose steps are byte-identical to the ones already stored.
-- **+1 for any write that actually changes the sanitized surface**, whoever the writer is. Comparison is structural against the *sanitized* prior value: array order is significant, object key insertion order is not. Every retained key inside a step participates — `status`, `startedAt`/`completedAt`, `note`, `modifiedFiles`, `newFiles`, `amendments`, `activeAmendmentId` — so an amendment or a completed step advances the revision exactly like a re-plan.
-- **One bump per task write.** A write that changes steps *and* DoD *and* carries the submission event advances by exactly 1.
-- **No bump for a no-op or for unrelated metadata.** Re-sending the same sanitized steps/DoD, reordering object keys, omitting the keys, passing them as `undefined`, or writing only status/comments/assignment/metrics leaves the number alone.
-- **Reopen never resets it.** `qa_reject` / reopen may *advance* it, because resetting steps to `PENDING` and dropping their execution evidence is a real surface change; an already-pending plan sanitizes equal and holds steady.
+- **+1 for any write that materially changes that surface**, whoever the writer is. Comparison is structural against the *sanitized* prior value: array order is significant, object key insertion order is not, so a contract whose keys merely arrive in another order does not bump. Material: the ordered step ids, the original and the effective active instructions (an amendment that changes the effective text is a re-plan), the approved `affectedFiles`/`newFiles`, `definitionOfDone` and `executionContract`. Not material: step `status`, `startedAt`/`completedAt`, reported `modifiedFiles`, progress notes, amendment audit metadata and inactive amendment history. Starting or completing a step therefore never advances the revision.
+- **One bump per task write.** A write that changes steps *and* DoD *and* contract *and* carries the submission event advances by exactly 1. A caller-supplied stamp is ignored on every path.
+- **No bump for a no-op or for unrelated metadata.** Re-sending the same sanitized steps/DoD/contract, reordering object keys, omitting the keys, passing them as `undefined`, or writing only status/comments/assignment/metrics leaves the number alone.
+- **Reopen never resets it, and never advances it by clearing execution evidence.** `qa_reject` / reopen resets steps to `PENDING` and drops their execution progress, which is not material; the revision moves only if the reopen also changes a material field.
 
 Atomicity and errors:
 
@@ -715,7 +724,17 @@ Atomicity and errors:
 - A **required increment at `Number.MAX_SAFE_INTEGER`** refuses with numeric code `STATE_CONFLICT` (-32002) and `codeName` `PLAN_REVISION_EXHAUSTED`, carrying `taskId`/`currentRevision`/`maxPlanRevision`, and throws before anything is persisted. A metadata-only write at that value still succeeds.
 - `moe.submit_plan` returns the committed value as `planRevision` in its success result (never a recomputed or later-cached number).
 
-**Scope note:** this section is the *producer*. The consumer side has since landed: an optional `expectedPlanRevision` on both `/ws` approval routes refuses a stale approval with `PLAN_REVISION_MISMATCH` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), and the JetBrains plan-review dialog and the VS Code plan-review panel each send the revision they actually rendered. It is still not a universal fence: omitting the token remains a legal legacy approval, the other board/detail approve entry points stay token-free, and SPEED/TURBO auto-approval is unchanged — so a stamped revision documents staleness everywhere but only *prevents* a stale approval on the paths that send it. Cross-client behaviour, reproduction steps and the exact boundaries are in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+**Scope note:** this section is the *producer*. The consumer side has since landed: an optional `expectedPlanRevision` on both `/ws` approval routes refuses a stale approval with `PLAN_REVISION_MISMATCH` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)), and the JetBrains plan-review dialog and the VS Code plan-review panel each send the revision they actually rendered. Every human approval route now requires it: an omitted token is refused `INVALID_INPUT` on both `/ws` routes (CQ-F04b), an explicit `0` still approves a stamp-less row, and unstamped approvals already recorded stay as history. SPEED/TURBO auto-approval is bound to the revision its own submission committed, and the relaxed `moe.set_task_status` approval is the one token-free path that records no stamp (see `approvedPlanRevision` below). Cross-client behaviour, reproduction steps and the exact boundaries are in [`docs/PLAN_APPROVAL_FRESHNESS.md`](PLAN_APPROVAL_FRESHNESS.md).
+
+### `approvedPlanRevision`
+
+`Task.approvedPlanRevision` is the `planRevision` an approval was bound to. It is **daemon-owned** and is the only approval identity that execution consumers trust.
+
+- **Who sets it.** Only the approval write itself, in the same task image as `status: "WORKING"` and `planApprovedAt`, and only when it equals the revision that very write commits: `approveTask`'s `PLAN_APPROVED` with the checked `expectedPlanRevision`, or a SPEED/TURBO `PLAN_AUTO_APPROVED` with the revision its plan submission committed (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)). A delayed approval therefore can never authorize a newer plan.
+- **Absent means unchecked.** An approval recorded without a stamp (history, or the relaxed token-free `moe.set_task_status` approval, which records none) leaves it absent. The daemon never writes `null`, and a stored `null` or non-integer reads exactly like absence. Nothing backfills it from `status`, `planApprovedAt` or event names.
+- **History, not currency.** A material plan, DoD or contract edit advances only `planRevision` and keeps the old number. Only a safe integer **equal to** `planRevision` is a current approval.
+- **No caller writes.** The `/ws` `UPDATE_TASK` denylist and `taskStore.updateTask` strip it from every caller update, and `CREATE_TASK` never copies it.
+- **Consumers.** Under `verified-local`, `moe.start_step`, `moe.complete_step` and `moe.complete_task` treat only that equality as authorization (`PLAN_REVISION_NOT_APPROVED` otherwise). Claims never consult it, and legacy/observe behaviour is unchanged.
 
 ### `executionPolicySnapshot`
 
@@ -731,9 +750,31 @@ type ExecutionPolicySnapshot =
 - **Shapes.** A v1 snapshot has exactly the keys `version`, `profile` and `planRevision`; a v2 snapshot has exactly `version`, `profile`, `planRevision` and `deliveryPolicy`. `planRevision` is a non-negative safe integer. Decoding (`readExecutionPolicySnapshot`) is strict and returns a fresh primitive-only copy; any other key set, version, profile, revision or policy is malformed. A v2 `deliveryPolicy` is never defaulted, and a v1 snapshot never gains one. The daemon captures v2.
 - **Capture.** Only the `PLAN_SUBMITTED` write (`moe.submit_plan`) captures it, in the same fresh `Task` object and the same write as the `planRevision` it names, recording the live `executionProfile` and `deliveryPolicy`. A stored `verified-local` snapshot is a floor and is kept whole: only its `planRevision` advances, so a rollback cannot lower it. Approval, progress, metadata, status and replanning writes (`request_replan`, `amend_plan_step`, reopen) never refresh, backfill or erase it, so a snapshot from an earlier revision is kept until the next submission. A malformed stored snapshot or live setting refuses the submission with `INVALID_INPUT` before any write.
 - **Ownership.** Daemon-owned. `taskStore.updateTask` strips it from every caller update, MCP tools and the plugin `UPDATE_TASK` alike (whose denylist also drops it), and `create_task` never copies it.
-- **Consumers.** A task is strict when its effective profile is `verified-local`: the live `executionProfile`, floored by a stored `verified-local` snapshot of any version or revision (`resolveTaskExecutionProfile`). The progression backstop in `taskStore.updateTask`, claim admission (`util/claimEligibility.ts`, shared by `claim_next_task` and `wait_for_task`) and delivery-policy selection (`resolveTaskDeliveryPolicy`, used by `qa_approve` and the dependency gate) all use that one rule, and today each refuses a strict task with `-32003` / `EXECUTION_PROFILE_NOT_READY`. A malformed snapshot or setting fails closed with `INVALID_INPUT` only where it is judged; reads, metadata writes, releases and cleanup never fail on it (`moe.get_context` names it in `executionPolicy.unreadable`). Legacy and observe tasks keep the **live** `deliveryPolicy`; a captured one is identity only and is never consulted.
+- **Consumers.** A task is strict when its effective profile is `verified-local`: the live `executionProfile`, floored by a stored `verified-local` snapshot of any version or revision (`resolveTaskExecutionProfile`). The progression backstop in `taskStore.updateTask`, claim admission (`util/claimEligibility.ts`, shared by `claim_next_task` and `wait_for_task`) and delivery-policy selection (`resolveTaskDeliveryPolicy`, used by `qa_approve` and the dependency gate) all use that one rule, and today each refuses a strict task with `-32003` / `EXECUTION_PROFILE_NOT_READY`. `moe.start_step`, `moe.complete_step` and `moe.complete_task` (`util/executionAuthorization.ts`) also judge strictness, from the resolved profile or the open attempt's recorded snapshot, so step progress is no longer among the writes that never read it. A malformed snapshot or setting fails closed with `INVALID_INPUT` only where it is judged; reads, metadata writes, releases and cleanup never fail on it (`moe.get_context` names it in `executionPolicy.unreadable`). Legacy and observe tasks keep the **live** `deliveryPolicy`; a captured one is identity only and is never consulted.
 - **Attempts.** A claim that opens an attempt records `ExecutionAttempt.executionPolicySnapshot` from the task's floor plus the live settings at the task's `planRevision` (`deriveAttemptPolicySnapshot`), never from claim arguments. An own-seat resume adopts the open attempt with its original snapshot (or none), and phase changes (restart parking, reattach) keep it; a successor attempt records a fresh one. It is never rewritten or backfilled.
 - **Serving.** `moe.get_context` serves both, decoded, as `executionPolicy` (see [`docs/MCP_SERVER.md`](MCP_SERVER.md)).
+
+### `executionContract`
+
+`Task.executionContract` (`TaskExecutionContract`) is the structured, approval-relevant statement of what a plan intends. It is optional; legacy rows load unchanged with no migration and no `schemaVersion` bump. By itself it grants no approval, readiness or evidence. `EXECUTION_CONTRACT_FIELDS` in `state/validators.ts` is the canonical field order; every field is optional.
+
+| Field | Shape | Meaning |
+|---|---|---|
+| `intendedBehavior` | string, at most 2000 chars | the observable outcome the change must produce |
+| `acceptanceCriteria` | string list | behavioural criteria; `definitionOfDone` stays human-owned |
+| `invariants` | string list | what must not change |
+| `compatibility` | string list | legacy data, wire shapes and callers that must keep working |
+| `approvedScope` | string list | symbols, interfaces and producer/consumer surfaces; file scope stays in the steps |
+| `reuse` | string list | existing implementations reused, or why a new one is introduced |
+| `sourceAssumptions` | string list | source facts with path or symbol references |
+| `checkRefs` | string list | verification commands exactly as they will be run |
+| `requiredChecks` | `ProtectedCheckDefinition[]` (at most 20) | approved check commands (`id`, `command`, and optional `configs`/`scripts`/`assertionRoots` path lists of at most 50). Approval material, never evidence; the measured snapshot and check runs are documented with the CQ-V delivery records |
+
+Every string list holds at most 50 entries, each at most 1000 chars.
+
+- **Validation** (`validateExecutionContract`, run by every `updateTask` writer): strict, refusing `INVALID_INPUT` with `context.field`; unknown keys are refused; strings are preserved and never truncated; the stored object is a fresh canonical copy; empty lists are omitted. `undefined`, `null` or an empty contract clears it.
+- **Writers.** `moe.submit_plan` replaces it, and an omitted contract clears it. `moe.get_context` projects it for every role when set.
+- **Revision.** A material change increments `planRevision` once, in the same write. Object key order is not material; list order is.
 
 ### Task subtypes
 
@@ -1112,8 +1153,36 @@ interface ExecutionAttempt {
   presenceKind?: 'process' | 'provider' | 'waiting' | 'progress'; // Latest moe.heartbeat self-report, not verified
   presenceAt?: string;        // When it was reported; never touches lastPhaseAt
   executionPolicySnapshot?: ExecutionPolicySnapshot; // Captured at claim; absent on attempts opened before it existed
+  contextReceipt?: ServedContextReceipt;             // Latest served get_context read; daemon-written, never approval
+  stepCompletions?: StepCompletionEvidence[];        // Strict step evidence; daemon-written, append-only, never approval
+}
+
+interface ServedContextReceipt {
+  id: string;                    // "ctxreceipt-<32 hex>"
+  packetId: string;              // "sha256:<64 hex>" of the served payload without its servedContext block
+  taskId: string;
+  attemptId: string;
+  generation: number;            // >= 1
+  workerId: string;
+  sessionId: string;             // The receiving session's incarnation (MOE_SESSION_ID), at most 255 chars
+  planRevision: number;          // Task.planRevision when served
+  approvedPlanRevision?: number; // Task.approvedPlanRevision when a safe integer; ABSENT, never null
+  view: 'default' | 'full';
+  servedAt: string;              // ISO 8601
+}
+
+interface StepCompletionEvidence {
+  stepId: string;
+  planRevision: number;          // The approved revision the step was completed under
+  completedAt: string;           // ISO 8601
 }
 ```
+
+**`contextReceipt`.** One latest-wins slot, written only by `moe.get_context` (default or `view: "full"`, with a presented `sessionId`) for a `running` attempt, by its own worker, who must also be the task's assignee. `taskId`, `attemptId`, `generation` and `workerId` come from the stored attempt, never the caller. The decoder (`readContextReceipt`) is strict: an exact key set, nothing coerced. It records what was served to whom; `moe.start_step`, `moe.complete_step` and `moe.complete_task` compare it under `verified-local`, but it is never approval.
+
+**`stepCompletions`.** Daemon-owned and append-only, written only by a strict `moe.complete_step` on the caller's own `running` attempt, before the task write. `moe.complete_task` counts an entry only while its attempt is current and its `planRevision` is the task's approved revision, so evidence from a superseded attempt or an earlier revision stays recorded but does not count. It is historical record, never approval. The decoder (`readStepCompletions`) is strict: exactly `stepId`, `planRevision` and `completedAt`, and malformed stored evidence fails closed with `INVALID_INPUT`.
+
+Phase changes (restart parking, reattach, finalizing, closing) keep both fields.
 
 **Phases.** A task has at most one attempt that is not `closed`.
 
@@ -1857,6 +1926,8 @@ function generateId(prefix: string): string {
 - `order` must be unique within epic
 - `status` transitions must be valid (see state machine)
 - `planRevision` is daemon-derived: a caller-supplied value is stripped, and a stored value outside the non-negative safe-integer domain refuses the write (`INVALID_INPUT`)
+- `approvedPlanRevision` is daemon-owned: a caller-supplied value is stripped, and it is stored only by an approval write, equal to the revision that write commits
+- `executionContract` is optional and strict: `intendedBehavior` at most 2000 chars; `acceptanceCriteria`, `invariants`, `compatibility`, `approvedScope`, `reuse`, `sourceAssumptions` and `checkRefs` at most 50 entries of at most 1000 chars each; unknown keys and wrong types are refused with `INVALID_INPUT` and `context.field`; `requiredChecks` at most 20 definitions
 
 ### Worker
 - `epicId` must exist
