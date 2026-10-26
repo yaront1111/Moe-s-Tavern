@@ -1,0 +1,32 @@
+{
+  "id": "task-6a612b08446e4e3cad10bf9cc44cecf6",
+  "epicId": "epic-be924fb8",
+  "title": "chore: designate the six CQ epics' integration-and-hardening tasks with update_epic finalTaskId",
+  "description": "Board data only; no code changes. task-cd2e447728224044abe7fa669d42f7fb adds Epic.finalTaskId and makes get_context isEpicFinal follow it. No structural rule can pick CQ-F12 on its own, because bc8410af depends on F12 and was created after it, so the six CQ epics need an explicit designation.\n\nThis project's live daemon runs the IDE-bundled build. That build rejects finalTaskId until the plugin is rebuilt from a commit that contains task-cd2e447728224044abe7fa669d42f7fb and the daemon restarts. Promote this row only after that. Probe with one moe.update_epic call first: an \"is not a supported epic update field\" error means the daemon is still on the old build.\n\nDesignate:\n- CQ-F epic-5d9f6c0a3b0a4a6882d2a74387a3f56d -> task-72184c6505cc41e8b6066732011ffb70 [CQ-F12]\n- CQ-R epic-fe5e32c32b044a20944c693dfd79411b -> task-f4811a729f9e436ba129a65c12d348c1 [CQ-R13]\n- CQ-V epic-f5c1c2ea674e40bcad8ab16d7657ccc0 -> task-b621ddc99fe44d50ab700b2aa51c84fc [CQ-V12]\n- CQ-C epic-9d76d843b4ec484987139b930d1d681e -> task-4e0264fc52e04574a9d10ef602281ca3 [CQ-C11]\n- CQ-I epic-c9561bfb767248e38c9c0be82d09ec2c -> task-4e412148225f480c8c0d5a1706a3cc76 [CQ-I06]\n- CQ-M epic-b8c6bbda4def46cbb8d1b351f8ea3eeb -> task-ced857485a1c4d75b57cc25dcc9b4d82 [CQ-M06]\n\nGo through moe.update_epic only. Never edit .moe/epics/*.json by hand.",
+  "definitionOfDone": [
+    "moe.update_epic { epicId, finalTaskId } has been called through the daemon for each of the six CQ epics, with the hardening task listed in the description, and no .moe/ file was edited by hand.",
+    "moe.get_context reports isEpicFinal true for F12, R13, V12, C11, I06 and M06, and false for each epic's highest-order non-ARCHIVED sibling at the time of the check. The six F12/R13/V12/C11/I06/M06 get_context outputs and the sibling checks are supplied to complete_task."
+  ],
+  "taskRails": [
+    "Human-gated: promote only after the daemon serving this project runs a build that contains task-cd2e447728224044abe7fa669d42f7fb (moe.update_epic accepts finalTaskId)."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cd2e447728224044abe7fa669d42f7fb"
+  ],
+  "priority": "MEDIUM",
+  "order": 238.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T16:00:42.739Z",
+  "updatedAt": "2026-10-26T16:00:42.739Z"
+}

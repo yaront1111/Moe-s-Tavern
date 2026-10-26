@@ -1,9 +1,12 @@
 package com.moe.toolwindow
 
+import com.moe.model.ImplementationStep
 import com.moe.model.MAX_SAFE_PLAN_REVISION
 import com.moe.model.Task
+import com.moe.model.TaskComment
 import com.moe.toolwindow.PlanReviewApprovalState.Decision
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -181,6 +184,77 @@ class BoardApprovalTest {
         assertTrue(body.contains("PlanReviewDialog(project, awaitingTask, service).show()"))
         assertTrue(!body.contains("approveTask("))
         assertTrue(body.contains("e.presentation.isEnabled = hasAwaitingTask"))
+    }
+
+    private fun step(id: String = "s1", description: String = "Do it", status: String = "PENDING") =
+        ImplementationStep(stepId = id, description = description, status = status, affectedFiles = emptyList())
+
+    private fun fingerprint(vararg tasks: Task) = boardTaskFingerprint(tasks.toList())
+
+    @Test
+    fun `identical snapshots share a refresh key`() {
+        val a = task(7L).copy(implementationPlan = listOf(step()))
+        val b = task(7L).copy(implementationPlan = listOf(step()))
+        assertEquals(fingerprint(a), fingerprint(b))
+    }
+
+    @Test
+    fun `revision only change refreshes the board key`() {
+        val rendered = task(1L)
+        assertNotEquals(fingerprint(rendered), fingerprint(rendered.copy(planRevision = 2L)))
+    }
+
+    @Test
+    fun `legacy zero malformed null and present revisions stay distinct`() {
+        val keys = listOf(0L, null, 7L).map { fingerprint(task(it)) }
+        assertEquals(keys.size, keys.toSet().size)
+    }
+
+    @Test
+    fun `step description only change refreshes the key`() {
+        val rendered = task(3L).copy(implementationPlan = listOf(step(description = "Old text")))
+        val edited = rendered.copy(implementationPlan = listOf(step(description = "New text")))
+        assertNotEquals(fingerprint(rendered), fingerprint(edited))
+    }
+
+    @Test
+    fun `step id status and ordering changes still refresh the key`() {
+        val base = task(3L).copy(implementationPlan = listOf(step("s1"), step("s2")))
+        listOf(
+            listOf(step("s1"), step("s3")),
+            listOf(step("s1"), step("s2", status = "COMPLETED")),
+            listOf(step("s2"), step("s1")),
+            listOf(step("s1"))
+        ).forEach { plan ->
+            assertNotEquals(fingerprint(base), fingerprint(base.copy(implementationPlan = plan)))
+        }
+    }
+
+    @Test
+    fun `every previously fingerprinted task field still refreshes the key`() {
+        val base = task(3L)
+        listOf(
+            base.copy(status = "WORKING"), base.copy(order = 1.0), base.copy(title = "Other"),
+            base.copy(description = "Other"), base.copy(priority = "HIGH"),
+            base.copy(assignedWorkerId = "worker-1"), base.copy(prLink = "https://pr"),
+            base.copy(reopenReason = "again"), base.copy(hasPendingQuestion = true),
+            base.copy(comments = listOf(TaskComment("c1", "a", "hi", "t"))), base.copy(id = "task-2")
+        ).forEach { changed -> assertNotEquals(fingerprint(base), fingerprint(changed)) }
+    }
+
+    @Test
+    fun `board and column caches both key on the shared task fingerprint before skipping`() {
+        // A fingerprint helper nobody calls would pass every test above, so pin
+        // both cache early-returns to it: the outer one hides revision-only
+        // updates from updateColumn entirely.
+        val panel = source("toolwindow/MoeToolWindowPanel.kt")
+        val board = panel.substringAfter("private fun updateBoard(").substringBefore("fun updateColumn(")
+        assertTrue(board.indexOf("boardTaskFingerprint(state.tasks)") in 0 until
+            board.indexOf("boardFingerprint == lastStateFingerprint"))
+        val column = panel.substringAfter("fun updateColumn(").substringBefore("val column = createTaskColumn(")
+        assertTrue(column.indexOf("boardTaskFingerprint(columnTasks)") in 0 until
+            column.indexOf("columnFingerprints[config.status] == fingerprint"))
+        assertTrue("inline task fingerprint must not return", !panel.contains("it.hasPendingQuestion}:["))
     }
 
     @Test

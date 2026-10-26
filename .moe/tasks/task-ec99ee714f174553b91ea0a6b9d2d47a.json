@@ -1,0 +1,32 @@
+{
+  "id": "task-ec99ee714f174553b91ea0a6b9d2d47a",
+  "epicId": "epic-be924fb8",
+  "title": "docs: name the epic-final designation (update_epic finalTaskId) in SCHEMA, CONFIGURATION and the breakdown, QA and regression skills",
+  "description": "Split out of task-cd2e447728224044abe7fa669d42f7fb. That task adds Epic.finalTaskId, set with moe.update_epic, and makes get_context isEpicFinal and delivery/policy.ts isEpicFinalTask follow it. An epic with no valid designation falls back to the highest `order` among its non-ARCHIVED tasks, ties counting. That task updates docs/MCP_SERVER.md and the moe-planning skill (its DoD) and stops at the daemon's 10-file plan limit, so these references still describe only the old highest-order rule:\n\n- docs/SCHEMA.md: the Epic shape has no finalTaskId.\n- docs/CONFIGURATION.md: the qualityGateScope row says \"the epic's final task (highest `order` among siblings)\".\n- docs/skills/moe-epic-breakdown/SKILL.md: says to create the hardening task \"at the highest `order`\" and never says to designate it, so new epics stay undesignated and keep the drift.\n- docs/skills/moe-qa-loop/SKILL.md (the mid-epic check) and docs/skills/regression-check/SKILL.md: say \"moe.list_tasks {epicId} and compare order\" instead of reading get_context task.isEpicFinal.\n\nRegenerate packages/moe-daemon/src/generated/skillFiles.ts with `npm run generate-skill-files` in packages/moe-daemon. Do not use `npm run build` for this: its prebuild also regenerates initFiles.ts from docs/roles.",
+  "definitionOfDone": [
+    "docs/SCHEMA.md's Epic shape lists `finalTaskId?: string` with the rule. The designated final task counts only while it names an existing, non-ARCHIVED task of the same epic; otherwise the highest-order fallback applies. docs/CONFIGURATION.md's qualityGateScope row names the designated final task instead of \"highest `order` among siblings\".",
+    "moe-epic-breakdown tells the architect to designate the integration-and-hardening task with moe.update_epic { epicId, finalTaskId } right after creating it, and to re-designate it if the epic later grows past that task.",
+    "moe-qa-loop and regression-check tell the agent to place a task by reading get_context task.isEpicFinal, not by comparing `order` via moe.list_tasks.",
+    "packages/moe-daemon/src/generated/skillFiles.ts is regenerated from docs/skills, and only the edited skills' entries change. A fresh `cd packages/moe-daemon && npx vitest run src/util/skillFiles.test.ts` exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cd2e447728224044abe7fa669d42f7fb"
+  ],
+  "priority": "MEDIUM",
+  "order": 237.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T16:00:32.070Z",
+  "updatedAt": "2026-10-26T16:00:32.070Z"
+}

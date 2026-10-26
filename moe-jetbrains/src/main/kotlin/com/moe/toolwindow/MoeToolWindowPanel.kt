@@ -459,10 +459,9 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             updateAccountsLabel(state.accountRotation)
 
             val boardFingerprint = runCatching {
-                val taskFingerprint = state.tasks.joinToString(",") {
-                    val stepFp = it.implementationPlan.joinToString(";") { s -> "${s.stepId}:${s.status}" }
-                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}:[$stepFp]"
-                }
+                // Includes planRevision/step text: this early-return otherwise hides a
+                // revision-only plan edit and leaves approvals on the old rendered snapshot.
+                val taskFingerprint = boardTaskFingerprint(state.tasks)
                 val epicFingerprint = state.epics.joinToString(",") {
                     "${it.id}:${it.title}:${it.status}:${it.order}"
                 }
@@ -711,10 +710,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             fun updateColumn(config: ColumnConfig, force: Boolean = false) {
                 val container = columnContainers[config.status] ?: return
                 val columnTasks = tasks.filter { displayStatus(it.status) == config.status }
-                val taskFingerprint = columnTasks.joinToString(",") {
-                    val stepFp = it.implementationPlan.joinToString(";") { s -> "${s.stepId}:${s.status}" }
-                    "${it.id}:${it.status}:${it.order}:${it.title}:${it.description}:${it.priority}:${it.assignedWorkerId ?: ""}:${it.prLink ?: ""}:${it.reopenReason ?: ""}:${it.comments?.size ?: 0}:${it.hasPendingQuestion}:[$stepFp]"
-                }
+                val taskFingerprint = boardTaskFingerprint(columnTasks)
                 val fingerprint = "$taskFingerprint|approvals=$approvalFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
 
                 if (!force && columnFingerprints[config.status] == fingerprint && container.componentCount > 0) {
