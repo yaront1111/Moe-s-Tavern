@@ -10,9 +10,54 @@
     "scripts/CLAUDE.md (Land on every exit) and docs/roles/governor.md describe declare_files' interaction with contested paths accurately."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read producer handoff/landed reporting contract plus the existing idle-peer attribution decision. Confirm option B is recorded: this task must change no candidate selection, peer activity logic, declaration semantics, TOOL evidence or policy precedence. Review the full related landing/reporting chain from record_commit through held summaries and governor instructions. Original DoD1 chooses explicit remedy, DoD2 is protected by unchanged predicate + negative tests, DoD3 twin harness/parity, DoD4 scripts doc + producer governor doc.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add equivalent regression scenarios to postflight.sh and postflight.ps1, extending existing AF/declared-field fixtures. Seed a path already dirty at THIS landing session's preflight, declare it to owner, and mark every peer idle: it must remain absent from commit, stay dirty and appear with peer ID in held/record_commit skipped data, and the session-ended message must carry actionable remedy. Repeat with active/unknown/mixed peer activity and with strict skip: no new landing. Control cases: preflight-clean idle path may still land; a supported witnessed path under skip-untouched may still land and must not get a false held remedy; strict skip still holds even witnessed. Keep original AF behavior assertions intact. Include paths with spaces/non-ASCII and bounded many-held output; no actual account/daemon calls.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update only held-summary/reporting branches in both wrappers. Retain existing bounded held=<path>(<peer>) field for consumers and append an identical concise remedy only when actual held list is nonempty. Say declare_files does not bypass contest; for skip-untouched, after verifying ownership and coordinating live peers the owning-assignee landing session needs a successful wrapper-observed supported editing-tool witness (currently Claude Edit/Write, not shell writes), or legitimately complete/archive stale peer and retry. For strict skip do not promise TOOL works: resolve peer contest before retry. Use existing structured skipped codes/policy context rather than guessing from path strings; no remedy on merely contested-but-landed trailers. Preserve JSON construction/quoting, bounded summaries and existing error handling when chat/record RPC fails; never change ledger outcome or source selection to make reporting pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update scripts/CLAUDE.md Land on every exit to qualify 'declared regardless of baseline' by deny/exclusion/contested policy. Explain preflight-dirty contested holds, existing clean-preflight+all-idle exception, supported successful TOOL evidence only under skip-untouched, and strict skip. State verified ownership and live-peer coordination prerequisite; no bulk policy weakening, auto-archive, shell touch or human-sender fallback. Cross-check producer docs/roles/governor.md, declare_files prose and MCP docs for identical semantics. This is the documentation sweep for the related fix; do not overwrite unrelated epic work.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/CLAUDE.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Single epic-final verification gate: use stable exact-candidate Windows-mounted snapshot/native Git Bash root, with native PowerShell5.1/pwsh7 and Windows JDK available; acquire jetbrains-gradle resource lease through Moe and release after test. Run exactly: bash -n scripts/moe-agent.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh && powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$ErrorActionPreference=\"Stop\"; $env:MOE_POSTFLIGHT_TIMEOUT_SEC=\"180\"; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){throw \"PowerShell syntax errors\"}; & ./scripts/tests/postflight.ps1; if($LASTEXITCODE){exit $LASTEXITCODE}; & ./scripts/tests/parity-check.ps1; exit $LASTEXITCODE' && pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command '$ErrorActionPreference=\"Stop\"; $env:MOE_POSTFLIGHT_TIMEOUT_SEC=\"180\"; $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ./scripts/moe-agent.ps1),[ref]$tokens,[ref]$errors); if($errors.Count){throw \"PowerShell syntax errors\"}; & ./scripts/tests/postflight.ps1; if($LASTEXITCODE){exit $LASTEXITCODE}; & ./scripts/tests/parity-check.ps1; exit $LASTEXITCODE' && (cd packages/moe-daemon && npm test) && (cd packages/moe-proxy && npm test) && (cd packages/moe-claude-plugin && npm test) && (cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\") && npm run lint . Require zero exit across both launcher harnesses/parity, daemon/proxy/Claude-plugin suites, JetBrains :test actually executed (--rerun), and role-doc lint; no SKIP-as-pass. Capture output counts, tested root/source hashes and command/exitCode/outputTail for complete_task. Proxy npm test rebuilds dist, so never use live shared dist. Tests must use test-owned accounts/environment and temporary repositories. If a supported-platform command is unavailable, report the real environment limitation rather than claiming broad coverage.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review (adversarial-self-review skill), sweeping the whole related epic landing/reporting diff and both producer/consumer slices: unchanged active/unknown-peer protection, preflight dirty versus clean provenance, recovery exclusion, declared+TOOL under skip/skip-untouched, false held trailers, truncation/quoting and failed/rate-limited chat. Verify governor alert fires for actual skipped contested paths even on committed/nothing, but no alert implies no false landed claim. Confirm remedy truly works in the named policy, every original DoD has evidence, no live-peer hunks become eligible, and actual landing contains owned paths rather than relying on overlays. Any corrections repeat the same final gate before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,8 +67,49 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 236.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-260a12938220492d95ab21e105387990",
+      "author": "architect-1520cc31",
+      "content": "Planning decision: option (b), preserve the existing contested attribution predicate and explain the remedy. Idle does not prove pre-existing dirty bytes are ours; declare_files must not silently override the hold. Reporting must distinguish actual skipped paths from contested trailers (which can accompany a landed TOOL path). Producer task-cfa0b48ba83e4f3f813a80504f62bdb9 is BACKLOG for record_commit held alerts, truthful declare_files prose, MCP docs and governor cheat sheet; parent remains final launcher/postflight/docs integration + regression gate with unchanged original DoD. Parent depends on producer and worker-type wrapper task to serialize all launcher edits. @governor-96f92f36 Please surface the reporting producer for human promotion. Remedy is verified owning-assignee-session wrapper-observed Edit/Write witness or legitimate completion/archive of stale peer, not declaration alone or merely unblocking.",
+      "timestamp": "2026-10-26T15:53:34.391Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T09:26:34.130Z",
-  "updatedAt": "2026-10-26T09:26:34.130Z"
+  "updatedAt": "2026-10-26T15:56:07.605Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T15:48:52.707Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31"
+  ],
+  "dependsOn": [
+    "task-cfa0b48ba83e4f3f813a80504f62bdb9",
+    "task-bdf6db6f65b04a009c88c1e49aed3848"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T15:56:07.491Z",
+  "planningNotes": {
+    "approachesConsidered": "Recorded decision B: preserve attribution; improve remedy visibility. Rejected DECLARED+idle bypass because idle peers do not prove that preflight-dirty bytes contain no old foreign hunks. Producer task-cfa0b48ba83e4f3f813a80504f62bdb9 owns daemon record_commit alerts, declare_files description/message and MCP/governor docs; parent keeps all original DoD and final launcher/postflight/scripts docs/integration gate. Parent depends on producer and bdf6db6f wrapper task so no concurrent launcher edits.",
+    "codebaseInsights": "resolve_attribution and Resolve-MoeAttribution check contest before DECLARED; do not move that check. attr_held_list/Get-MoeHeldList already derive a bounded path(peer) list from actual Skipped, distinct from Contested (trailers can accompany successful TOOL landings). Session-ended chat appends held= in sh around2516/PS2207; extend that branch only. Existing postflight AF cases prove clean-preflight+idle release versus preflight-dirty hold. Shared fake proxy supports FAKE_SCOPE_DECLARED_FIELD/FAKE_SCOPE_PEER_ACTIVE already; no fixture-source change required. recordCommit currently alerts governors only for unattributed/rescue/refused/failed, so producer adds actual held skipped paths even for nothing/committed.",
+    "risks": "No new permission to land active/unknown peers. Existing TOOL and clean-at-preflight idle exception behavior stays byte-for-byte logically unchanged; strict skip never allows TOOL. Remedy requires verified byte ownership and a supported successful wrapper-observed edit in owning-assignee session, or legitimately finishing/archiving stale peer; declaration/plain unblocking/shell touch are not guarantees. Existing owner guard from prior tasks still applies. Messages must be bounded and shell-safe. This is marked epic-final; full affected runtime/package regression and whole related-epic reporting/landing review are concentrated here. Native Windows gate requires Windows-mounted stable candidate copy, package dependencies/dist and jetbrains-gradle lease, no live shared runtime rebuild.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/CLAUDE.md",
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "docs/roles/governor.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T15:56:07.605Z"
 }

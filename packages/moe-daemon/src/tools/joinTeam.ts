@@ -5,7 +5,7 @@ import { missingRequired, notFound } from '../util/errors.js';
 export function joinTeamTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.join_team',
-    description: 'Add a worker to a team. Auto-registers worker if not exists.',
+    description: 'Add a worker to a team. Auto-registers worker if not exists; a successful join revives a DEAD worker to IDLE.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -37,6 +37,13 @@ export function joinTeamTool(_state: StateManager): ToolDefinition {
       }
 
       const updated = await state.addTeamMember(params.teamId, params.workerId);
+
+      // A join is the seat's fresh registration (its wrapper pre-flight), so it
+      // revives a DEAD record, e.g. after a hot reload's deregister. Heartbeats
+      // (touchWorker) still refuse DEAD: those may be the old session's calls.
+      if (state.getWorker(params.workerId)?.status === 'DEAD') {
+        await state.updateWorker(params.workerId, { status: 'IDLE' });
+      }
 
       return { team: updated };
     }

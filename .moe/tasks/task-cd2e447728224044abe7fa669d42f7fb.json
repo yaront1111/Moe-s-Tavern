@@ -10,10 +10,62 @@
     "Fresh `cd packages/moe-daemon && npm test` exits 0 with output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2c9d5121",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Persist an explicit epic-final designation and give agents one validated way to set it. TDD: write the updateEpic.test.ts cases first and watch them fail.\n\n1. schema.ts `interface Epic` (~L384): add `finalTaskId?: string` with a doc comment. It is the epic's designated final (integration-and-hardening) task, set or cleared with moe.update_epic. It counts only while it names an existing, non-ARCHIVED task of this epic; otherwise isEpicFinalTask (delivery/policy.ts) falls back to the highest `order`. The field is optional, so existing .moe/epics/*.json files without the key load unchanged (persistence.loadEntities keeps every field), and the JetBrains Gson `Epic` model and the VS Code `Epic` type ignore it.\n\n2. validators.ts `validateEpicUpdates` (~L513): add 'finalTaskId' to the rejectUnknownFields allow-list. Shape-check it with `validateStringValue(input.finalTaskId, 'finalTaskId', { maxLength: 200, allowEmpty: true, trim: true })`, which rejects a non-string, a NUL or newline, and an over-long id. An empty or all-space value clears the designation: set `sanitized.finalTaskId = undefined`, so the `{ ...epic, ...sanitized }` merge in StateManager.updateEpic drops the key from the written JSON. In `epicUpdatedActivityPayload` (~L571), when `updates` has its own 'finalTaskId', record `payload.finalTaskId = epic.finalTaskId ?? null`.\n\n3. updateEpic.ts: add to inputSchema.properties `finalTaskId: { type: 'string', description: \"Designate the epic's final (integration-and-hardening) task by id. get_context isEpicFinal and the epicFinal quality-gate scope follow it whatever the board order. An empty string clears it, and the epic falls back to the highest order.\" }`. Add 'finalTaskId' to allowedFields and to the params/updates types, and pass it through to `updates` untouched (validators trims it).\n\nThe error handling lives in the tool and runs before any write. Run the cross-entity check only when finalTaskId is a string whose trimmed value is non-empty AND state.getEpic(epicId) exists:\n- a missing epic keeps today's `Epic not found` error from state.updateEpic;\n- a non-string falls through to the validators' `must be a string`.\nThe check throws invalidInput('finalTaskId', ...), whose message reads `Invalid finalTaskId: ...`, in three cases:\n- state.getTask(id) is null: `names no task: <id>`;\n- task.epicId !== epicId: `task <id> belongs to epic <task.epicId>, not <epicId>`;\n- task.status === 'ARCHIVED': `task <id> is ARCHIVED and can never be epic-final`.\nThe board's UPDATE_EPIC path (WebSocketServer) reaches validateEpicUpdates only, so it gets the shape check alone. That is safe because step 2's read-time validity check ignores a dangling id.\n\n4. updateEpic.test.ts: add these cases beside the existing ones.\n(a) Designating a task of the epic persists `finalTaskId` (h.state.getEpic) and survives a reload: `await h.state.load()` again, or read .moe/epics/epic-1.json back from disk.\n(b) '' and '   ' each clear a set designation (getEpic(...).finalTaskId is undefined).\n(c) An unknown id, a task in another epic, and an ARCHIVED task each reject with a message containing 'finalTaskId'. Send each one together with a `title`, and assert the stored epic keeps its original title and designation, so nothing partial is written.\n(d) `finalTaskId: 42` rejects with `must be a string`.\n(e) A whitespace-padded valid id is stored trimmed.\nKeep 'rejects unknown epic update fields before applying allowed fields' passing unchanged.\n\nFocused check for this step: `cd packages/moe-daemon && npx vitest run src/tools/updateEpic.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/tools/updateEpic.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make isEpicFinalTask the single epic-final rule and point get_context at it. TDD: write the tests first and watch them fail.\n\n1. delivery/policy.ts `isEpicFinalTask(state, task)` (~L202):\n- A task with no epicId is final (unchanged).\n- Designation: read `state.getEpic(task.epicId)?.finalTaskId`. It counts only when it is a non-empty string, `state.getTask(id)` exists, that task's epicId equals task.epicId, and its status is not ARCHIVED. Then return `task.id === id`. Check `typeof === 'string'`, so a hand-edited null or number in an epic file is ignored rather than crashing.\n- Otherwise keep today's fallback code verbatim: the highest finite `order` among the epic's non-ARCHIVED tasks, ties counting, with a non-finite order read as 0. Undesignated epics therefore behave exactly as before. These existing tests must pass unchanged: 'isEpicFinal: highest order wins, ties count, ARCHIVED siblings are ignored' (getContext.test.ts) and the pin test 'decides epic-final exactly as get_context does, including ties, ARCHIVED tasks and other epics' (qaApprove.test.ts).\n- Rewrite the doc comment. State the rule, and say why `order` alone is wrong: it is a per-column sort position that board drags, set_task_status moves and create_task's max+1 rewrite. Say that requiredCheckCommand, qa_approve's requiredCheckAtDone snapshot and get_context all call this one function.\n\n2. tools/getContext.ts:\n- Replace the inline block (~L419-432, comment 'Epic-final = highest `order` among the epic's non-ARCHIVED tasks') with `const isEpicFinal = task ? isEpicFinalTask(state, task) : undefined;`.\n- Import isEpicFinalTask from '../delivery/policy.js'. getContext already reaches that module through ../state/dependencyUnblock.js, so this adds no new import cycle.\n- Rewrite the comment to name the shared rule, and drop the claim that the wrapper computes the same rule. The list_tasks+python fallback in scripts/moe-agent.{sh,ps1} runs only against daemons that do not serve isEpicFinal, and those use the highest-order rule, so leave the scripts untouched.\n- In the `epic` projection (~L484), add `...(epic.finalTaskId ? { finalTaskId: epic.finalTaskId } : {})` so a planner can see the designated task.\n\n3. getContext.test.ts: read isEpicFinal through `getContextTool(h.state).handler({ taskId }, h.state)`, and designate through `updateEpicTool(h.state).handler({ epicId, finalTaskId }, h.state)`.\n(a) DoD 1: 'a designated final task stays epic-final across board drags, set_task_status moves and new rows'. Set up epic-1 with task-a (BACKLOG, order 1), task-b (WORKING, order 2) and task-final (BACKLOG, order 3), and designate task-final. After EACH of these moves, assert task-final reads true and the moved or new row reads false:\n   (1) A JetBrains board drag. Its UPDATE_TASK {status, order} lands as `h.state.updateTask('task-b', { order: 3.5 })`.\n   (2) setTaskStatusTool BACKLOG->PLANNING on task-a, then the board's end-of-column order: `h.state.updateTask('task-a', { order: 4.5 })`.\n   (3) The REORDER_TASK path: `h.state.reorderTask('task-b', 'task-a', null)`, which lands at 5.5.\n   (4) createTaskTool({ epicId: 'epic-1', title: 'late bug row' }), which gets the epic's max order + 1.\n(b) Control: the same drag in an undesignated epic makes the dragged row true and task-final false. This proves the assertions catch the old behaviour and documents the fallback's drift.\n(c) Deterministic fallback. Write a designation straight into the fixture (`h.createEpic({ finalTaskId: ... })`) that names a missing task, a task of another epic, or an ARCHIVED task. Each is ignored and the epic answers with the highest-order rule, ties counting. Assert the exact true/false of every row. Clearing with update_epic '' does the same.\n(d) The `epic` projection carries finalTaskId when a task is designated and omits it otherwise.\n\nTypecheck after the edit with `cd packages/moe-daemon && npx tsc --noEmit` (vitest strips types).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 2 regression test in getContext.test.ts: 'designated CQ hardening rows are epic-final and every sibling is not'. Use the 2026-10-26 board snapshot of the six CQ epics' non-ARCHIVED rows below, as [label, order]. Build one epic per line, with task ids `task-cq-<label>` (lower case is fine) and the given orders. Status does not affect the rule, so the harness default BACKLOG is fine.\n\nCQ-F, final F12: ['F04', 40], ['F05', 50], ['F07', 70], ['F08', 80], ['F09', 90], ['F10', 100], ['F11', 110], ['F06', 221.5], ['F03', 225.5], ['bug-a982', 226.5], ['F04c', 230.1], ['F04d', 230.2], ['F04e', 230.3], ['F04b', 230.5], ['bug-aa79', 233.5], ['F12a', 234.2], ['F12b', 234.3], ['F12', 234.5], ['bug-bc84', 249.5]\nCQ-R, final R13: ['R03', 30], ['R04', 40], ['R05', 50], ['R06', 60], ['R07', 70], ['R09a', 85], ['R10', 100], ['R11', 110], ['R12', 120], ['R13', 130], ['R08a', 222.2], ['R08b', 222.3], ['R08c', 222.4], ['R08', 222.5], ['R01', 226.5], ['bug-ab6a', 227.5], ['bug-333f', 229.5], ['R09', 235.5], ['bug-6b60', 236.5], ['bug-c42d', 237.5], ['bug-d72f', 238.5], ['bug-6f50', 248.5]\nCQ-V, final V12: ['V07', 70], ['V08', 80], ['V09', 90], ['V10', 100], ['V11', 110], ['V12', 120], ['V02', 225.5], ['V03', 226.5], ['V01a', 227.3], ['V01b', 227.4], ['V01c', 227.45], ['V01', 227.5], ['V04', 242.5], ['V05', 243.5], ['V06', 244.5]\nCQ-C, final C11: ['C07', 70], ['C08', 80], ['C09', 90], ['C10', 100], ['C11', 110], ['C01', 221.5], ['C02', 222.5], ['C02b', 223.5], ['C03', 224.5], ['C04', 239.5], ['C05', 240.5], ['C06', 241.5]\nCQ-I, final I06: ['I02', 227.5], ['I03', 228.5], ['I01', 228.5], ['I04', 245.5], ['I05', 246.5], ['I06', 247.5]\nCQ-M, final M06: ['M03', 30], ['M04', 40], ['M01e', 217.5], ['M01f', 218.5], ['M01', 219.5], ['bug-9c86', 220.5], ['M04b', 223.5], ['M04c', 224.5], ['M05', 229.5], ['M06', 230.5]\n\nFor each epic:\n(1) BEFORE designating, assert that the highest-order row reads true under the fallback, which reproduces the bug: CQ-F bug-bc84, CQ-R bug-6f50, CQ-V V06, CQ-C C06. In CQ-I and CQ-M the hardening row is already the highest by coincidence.\n(2) Designate the hardening row (F12, R13, V12, C11, I06, M06) through updateEpicTool.\n(3) Assert that every row reads isEpicFinal === (label === hardening label). Use one expect per row, labelled with the epic and the row, so a failure names it.\n\nRead through get_context for the hardening rows and for each epic's highest-order row. If 84 get_context calls make the test slow (over about 5 s), assert the remaining rows through isEpicFinalTask(h.state, task) instead: it is the same shared implementation, imported from '../delivery/policy.js'.\n\nThe live board's CQ epics get their designations in follow-up task-6a612b08446e4e3cad10bf9cc44cecf6, once the daemon runs this build. This test is the DoD-2 evidence 'under the new rule'. Focused check: `cd packages/moe-daemon && npx vitest run src/tools/getContext.test.ts src/tools/qaApprove.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Describe the rule where DoD 3 asks for it.\n\n1. docs/MCP_SERVER.md, moe.get_context:\n- L216: `epic: { id, title, description, architectureNotes, epicRails, finalTaskId? } | null`.\n- Rewrite the isEpicFinal comment (~L238) to say this. It is true for the epic's designated final task (`epic.finalTaskId`, set with moe.update_epic), so board drags, set_task_status moves and new rows never move it. A designation counts only while it names an existing, non-ARCHIVED task of the same epic. An epic without one falls back to the highest `order` among its non-ARCHIVED tasks, ties counting, and drags and new rows DO move that. A task with no epic is final. The flag drives the wrapper's qualityGateScope 'epicFinal' rule and the delivery policy's required check, and wrappers prefer it over their old-daemon fallback.\n\n2. docs/MCP_SERVER.md, moe.update_epic (~L1618):\n- add `finalTaskId?: string, // the epic's final (integration-and-hardening) task; \"\" clears the designation` to Parameters;\n- add the three `Invalid finalTaskId: ...` rejections (no such task / task in another epic / ARCHIVED task) to Errors;\n- in the moe.create_epic nextAction paragraph (~L1614), say that the closing integration-and-hardening task is designated with moe.update_epic { epicId, finalTaskId }.\n\n3. docs/skills/moe-planning/SKILL.md, 'Where the gate goes':\n- After '(`moe.create_task` with the highest `order`)', add that you then designate it with `moe.update_epic { epicId, finalTaskId }`, because `order` is a per-column sort position that drags and new rows rewrite.\n- Replace 'If you can't tell where the task sits, `moe.list_tasks {epicId}` and compare `order` against the siblings.' with: read `get_context` -> `task.isEpicFinal`. It is true for the epic's designated final task (`epic.finalTaskId`); an epic with no valid designation falls back to the highest `order` among its non-ARCHIVED tasks. Keep 'No epic siblings -> treat it as epic-final.' as it is.\nEdit only those two places. moe-epic-breakdown, moe-qa-loop, regression-check, docs/SCHEMA.md and docs/CONFIGURATION.md belong to follow-up task-ec99ee714f174553b91ea0a6b9d2d47a; do not edit them here.\n\n4. Regenerate the vendored copy with `cd packages/moe-daemon && npm run generate-skill-files`. Do NOT use `npm run build`: its prebuild also rewrites initFiles.ts from docs/roles. Then confirm that `git diff --stat -- packages/moe-daemon/src/generated/skillFiles.ts` changes only the moe-planning entry and its sha marker. If other skill entries change, another session's docs/skills edits are in the tree: stop and report it in the step note. Never edit .moe/skills/; the IDE plugins sync it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/skills/moe-planning/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Regression gate; run it once. This task changes a shared schema type (Epic) and two MCP contracts (update_epic gains a parameter; get_context's isEpicFinal and its epic projection change), so run the whole daemon suite, not just the touched files.\n\n1. Typecheck: `cd packages/moe-daemon && npx tsc --noEmit`.\n2. The completion evidence command: `cd packages/moe-daemon && npm test`. It must exit 0. Supply the exact command, its exit code and its output tail to moe.complete_task as `verification`.\n\nA failing test outside the touched files is a regression to fix within this task's files, not to waive. If a failure looks unrelated to this diff, rerun that test file alone and report the evidence in the step note. Never use `git stash` or reset: the checkout is shared with other sessions.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review. Load the adversarial-self-review skill and read the whole diff as an attacker. Check each of these:\n- Concurrency: update_epic and the board's UPDATE_EPIC both run under the daemon's global state mutex, and isEpicFinalTask is a synchronous read of in-memory maps.\n- Null, empty and huge input: finalTaskId as '', whitespace, a non-string, a NUL, or over 200 chars; an epic file holding finalTaskId null or a number.\n- Dangling designations: a deleted task, a task moved to another epic, an ARCHIVED task, a missing epic.\n- Backward compatibility: epics without the key; the JetBrains epic dialog's UPDATE_EPIC never sends finalTaskId, so a dialog edit keeps the designation.\n- Consumers: requiredCheckCommand and qa_approve's requiredCheckAtDone follow the designation, and the wrapper scripts are unchanged.\n- The project's global forbiddenPatterns, in the new code, tests and docs.\n- Mutation check: temporarily disable the designation branch in isEpicFinalTask, confirm the step-2 DoD-1 test and the step-3 CQ test FAIL, then restore the branch and re-run both green.\n\nFix anything you find within this task's files. Then call moe.complete_task with the step-5 verification. Its summary must say that the live CQ designations are follow-up task-6a612b08446e4e3cad10bf9cc44cecf6, because the IDE-bundled daemon rejects finalTaskId until a rebuild.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -25,11 +77,76 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:51:12.686Z",
-  "updatedAt": "2026-10-26T15:23:06.833Z",
+  "updatedAt": "2026-10-26T16:04:34.736Z",
   "metrics": {
-    "firstClaimAt": "2026-10-26T15:22:43.932Z"
+    "firstClaimAt": "2026-10-26T15:22:43.932Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 10
   },
   "contextFetchedBy": [
     "architect-2c9d5121"
-  ]
+  ],
+  "commits": [
+    {
+      "sha": "e43bc757beb594f0873385264eaf9ad176b7bc3f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-2c9d5121@2026-10-26T15:22:39Z",
+      "paths": [
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+        ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
+        ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+        ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json"
+      ],
+      "recordedBy": "architect-2c9d5121",
+      "recordedAt": "2026-10-26T15:42:37.224Z",
+      "treeId": "ea6473f7fbb8fc6b0fd9e2c182cffd604cb1b3ea",
+      "status": "PLANNING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+    ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+    ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
+    ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+    ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "architect-2c9d5121@2026-10-26T15:22:39Z",
+    "at": "2026-10-26T15:42:37.224Z"
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 10 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T16:04:34.647Z",
+  "planningNotes": {
+    "approachesConsidered": "Measured on the 2026-10-26 board before choosing a rule.\n(1) A dependsOn-closure rule (the task whose closure covers every other non-ARCHIVED epic task) finds C11, I06 and V12, but no task in CQ-F, CQ-M or CQ-R, because later bug rows sit outside the hardening task's closure. Any new row without dependencies breaks it, so it also fails DoD 1.\n(2) A max-closure rule picks bc8410af over F12 in CQ-F, because bc8410af depends on F12. In an epic with no edges, every row ties.\n(3) A title heuristic ('integration and hardening', or createTask's META_TITLE_RE) depends on brittle free text.\n(4) A per-task flag allows several finals per epic and travels with a task that moves to another epic.\nChosen: Epic.finalTaskId. It is single-valued by construction, set with update_epic, validated at write time and re-checked at read time. Today's highest-order rule stays as the documented fallback, so undesignated epics behave exactly as before and the existing pin test holds. No structural rule can pick F12 for CQ-F, so the live CQ epics need explicit designations (follow-up task-6a612b08446e4e3cad10bf9cc44cecf6). The honest scope came to about 12 files, so the remaining docs sweep is follow-up task-ec99ee714f174553b91ea0a6b9d2d47a, and this task keeps the files its DoD names (10, at the daemon's limit).",
+    "codebaseInsights": "- Two copies of the rule today: delivery/policy.ts isEpicFinalTask (~L202) and an inline block in tools/getContext.ts (~L419-432). getContext already imports delivery/policy transitively through state/dependencyUnblock.\n- Consumers: get_context task.isEpicFinal, which the wrappers prefer (scripts/moe-agent.sh ~L8264, .ps1 ~L7355); requiredCheckCommand (strict deliveryPolicy); qa_approve's requiredCheckAtDone snapshot.\n- Who writes `order`: a JetBrains drag sends UPDATE_TASK {status, order} (MoeCommandSender.updateTaskStatus); REORDER_TASK goes to taskStore.reorderTask (prev+1 at the end); create_task uses nextTaskOrder, the epic's max + 1. set_task_status itself does not rewrite order.\n- update_epic and validateEpicUpdates both whitelist fields (rejectUnknownFields), and the board's UPDATE_EPIC goes through validateEpicUpdates only. loadEntities keeps unknown keys, so the new field round-trips.\n- packages/moe-daemon/src/generated/skillFiles.ts is committed and kept in sync with docs/skills by `npm run generate-skill-files`.",
+    "risks": "- The live daemon is the IDE-bundled build. Until the plugin is rebuilt and the daemon restarts, a live get_context still gives the old answer for the CQ rows. The DoD-2 evidence is the step-3 fixture test, and the live designations are follow-up task-6a612b08446e4e3cad10bf9cc44cecf6. The SCHEMA, CONFIGURATION and epic-breakdown/qa-loop/regression-check wording is follow-up task-ec99ee714f174553b91ea0a6b9d2d47a.\n- A designated final task that is DONE keeps later rows mid-epic until someone re-designates. That is documented behaviour, not a bug.\n- Under a strict deliveryPolicy, changing the designation can change which task owes required-check:<qualityGate>. DONE tasks keep their requiredCheckAtDone snapshot; a DONE task without the field is judged live, as with reorders today.\n- Do not regenerate skills with npm run build (it rewrites initFiles.ts too). Never edit .moe/, and never git stash in the shared checkout.\n- Tests must not read the real board: the CQ fixture is a frozen snapshot copied into the test.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/getContext.test.ts",
+      "packages/moe-daemon/src/tools/qaApprove.test.ts",
+      "packages/moe-daemon/src/tools/updateEpic.test.ts",
+      "docs/MCP_SERVER.md",
+      "docs/skills/moe-planning/SKILL.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T16:04:34.736Z"
 }

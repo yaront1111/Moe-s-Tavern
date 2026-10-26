@@ -88,7 +88,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T12:03:20.699Z",
-  "updatedAt": "2026-10-26T16:02:56.509Z",
+  "updatedAt": "2026-10-26T16:03:55.202Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:56:32.635Z",
     "plannedStepCount": 4,
@@ -134,7 +134,46 @@
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardTaskFingerprint.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+    ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+    ".moe/tasks/task-6f3725e6ae56471c982fc39492ca2069.json",
+    ".moe/tasks/task-aa79a8ebd51d4eedb08c3662dfe8b490.json",
+    ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json"
+  ],
+  "completionSummary": "JetBrains board now refreshes on revision-only (and step-text-only) plan updates. New internal boardTaskFingerprint(tasks) in BoardTaskFingerprint.kt replaces the two duplicated inline task fingerprints in MoeToolWindowPanel (outer updateBoard cache and per-column updateColumn key). It keeps every prior input and order and adds rev=planRevision (null malformed stays distinct from legacy 0) and step.description. The outer early-return, which previously hid revision-only edits before column processing, now misses, and columns rebuild and recapture the new rendered Task. Unchanged snapshots still skip; runCatching warn-then-rebuild, column try/catch, approvalFingerprint and CQ-F04c rendered-token logic are untouched. 7 new BoardApprovalTest tests (25 total): revision-only, null/0/present distinct, step-description-only, step id/status/order, all prior fields, and a wiring guard pinning both real call sites to the helper before their cache early-returns. Fresh gate under the jetbrains-gradle lease (released): Windows cmd.exe gradlew.bat test --rerun, exit 0, :test executed, 21 suites / 302 tests / 0 skipped / 0 failed / 0 errors. Adversarial self-review done; forbidden-pattern scan clean. 3 files: BoardTaskFingerprint.kt (new, 14 lines), MoeToolWindowPanel.kt (+4/-8), BoardApprovalTest.kt (+74).",
+  "commits": [
+    {
+      "sha": "b62d27493d59c9fdf8b62e95d3c8e6ed587b0be4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T15:59:32Z",
+      "paths": [
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-6f3725e6ae56471c982fc39492ca2069.json",
+        ".moe/tasks/task-aa79a8ebd51d4eedb08c3662dfe8b490.json",
+        ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardTaskFingerprint.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T16:03:55.202Z",
+      "treeId": "7a1da9139cb3136a19f0b3ddc02c25e9061e987b",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardTaskFingerprint.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt"
   ],
-  "completionSummary": "JetBrains board now refreshes on revision-only (and step-text-only) plan updates. New internal boardTaskFingerprint(tasks) in BoardTaskFingerprint.kt replaces the two duplicated inline task fingerprints in MoeToolWindowPanel (outer updateBoard cache and per-column updateColumn key). It keeps every prior input and order and adds rev=planRevision (null malformed stays distinct from legacy 0) and step.description. The outer early-return, which previously hid revision-only edits before column processing, now misses, and columns rebuild and recapture the new rendered Task. Unchanged snapshots still skip; runCatching warn-then-rebuild, column try/catch, approvalFingerprint and CQ-F04c rendered-token logic are untouched. 7 new BoardApprovalTest tests (25 total): revision-only, null/0/present distinct, step-description-only, step id/status/order, all prior fields, and a wiring guard pinning both real call sites to the helper before their cache early-returns. Fresh gate under the jetbrains-gradle lease (released): Windows cmd.exe gradlew.bat test --rerun, exit 0, :test executed, 21 suites / 302 tests / 0 skipped / 0 failed / 0 errors. Adversarial self-review done; forbidden-pattern scan clean. 3 files: BoardTaskFingerprint.kt (new, 14 lines), MoeToolWindowPanel.kt (+4/-8), BoardApprovalTest.kt (+74)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T15:59:32Z",
+    "at": "2026-10-26T16:03:55.202Z"
+  }
 }

@@ -2074,7 +2074,7 @@ Create a team or return an existing team with the same name+role (idempotent). I
 
 ### moe.join_team
 
-Add a worker to a team. Auto-registers the worker if it doesn't exist.
+Add a worker to a team. Auto-registers the worker if it doesn't exist, and a successful join revives a `DEAD` record to `IDLE` (type, current task and chat cursors kept): the wrappers re-join at every pre-flight, before any chat read, so an idle seat whose record was pruned or deregistered (hot reload) can answer chat under its own id. A refused join leaves a `DEAD` record `DEAD`; heartbeats never revive one.
 
 **Parameters:**
 ```typescript

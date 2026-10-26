@@ -9,10 +9,72 @@
     "A regression test (a postflight.{sh,ps1} scenario and/or a daemon test) covers a pruned idle seat with an unread routed mention."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add packages/moe-daemon/src/tools/joinTeam.notification.test.ts using ToolTestHarness/real StateManager and real tools. Table-driven pruned (deleteWorker) and DEAD idle-seat cases: seed team, stable worker ID and human routed mention, rejoin the same ID without any claim, chat_read includes mention and persists chatCursors, chat_send reply has that worker as sender (not human), second read excludes original mention. Verify DEAD becomes IDLE/fresh and can be routed again; ordinary touchWorker does NOT revive DEAD. Successful live/busy rejoin preserves type/currentTaskId/status/cursors and membership is duplicate-free; invalid/full team join does not revive an existing DEAD worker. Unknown chat sender and reserved system remain refused. Use bounded temporary data and cleanup, never project .moe.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.notification.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.notification.test.ts"
+      ],
+      "note": "Added joinTeam.notification.test.ts (7 tests, real StateManager + joinTeam/chatRead/chatSend/deregisterWorker tools, ToolTestHarness temp dir). Pruned and DEAD (deregister wrapper_restart) idle seats: rejoin -> chat_read sees mention, cursor persisted, reply sender is the seat, second read excludes the mention. Also: pruned seat chat_send 'Unknown sender' (symptom), touchWorker/chat_read never revive DEAD, revived seat heartbeats + routes, busy live rejoin unchanged + duplicate-free membership, unknown/full team join leaves DEAD, unknown + system senders refused. RED run (Linux snapshot, scrubbed env): 2 failed (both DEAD revival assertions: expected IDLE got DEAD) | 5 passed. Shared tree's node_modules is Windows-native, so tests run from a git-archive snapshot with Linux node_modules symlinked (gotcha-linux-vitest-reuse-native-node-modules). Pre-existing dirty paths from other sessions untouched.",
+      "startedAt": "2026-10-26T15:49:25.284Z",
+      "completedAt": "2026-10-26T15:52:17.087Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In joinTeamTool retain existing validation/create behavior, then only after state.addTeamMember succeeds revive an existing DEAD record through state.updateWorker(workerId,{status:'IDLE'}) so activity refreshes. Preserve identity/type, current task and cursor fields; do not reset healthy records. Keep failure behavior on invalid/full team and persistence errors; do not edit touchWorker/chat_send/chat_read or add an automatic task claim. Add a concise comment explaining explicit fresh registration versus old-session heartbeat.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "joinTeamTool: after state.addTeamMember succeeds, a DEAD record is revived via state.updateWorker(id,{status:'IDLE'}) (refreshes lastActivityAt, emits WORKER_UPDATED); type/currentTaskId/chatCursors untouched; healthy records not written. Validation/create/full/not-found paths unchanged (they throw before the revive). touchWorker/chat tools untouched, no claim. Tool description updated. Scope growth: one sentence in docs/MCP_SERVER.md moe.join_team section, because that doc is the tool contract and the behavior changed (not breaking). GREEN: joinTeam.notification 7/7, claimNextTask 68/68, createTeam 4/4 (Linux snapshot, scrubbed env).",
+      "startedAt": "2026-10-26T15:52:17.979Z",
+      "completedAt": "2026-10-26T15:52:58.671Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add scripts/tests/seat-registration.test.mjs with executable tests of actual retry helpers and fresh-preflight registration call blocks from both launchers, following existing block-extraction patterns rather than duplicating logic. Stub RPC in a test-owned environment to simulate previously joined but now pruned/DEAD seat and unread mention. Require forced join before chat_join/chat_read, successful same-worker reply path, and no repeated mention on next iteration with cursor state retained. Assert a healthy cached normal retry remains a no-op, forced retry calls join once, failures keep joined=false and perform no inbox read/CLI launch, and success after refusal restores readiness. Cover all roles including governor role-bound team creation, missing team ID/create failure, top-level RPC error and MCP result.isError/malformed success. Run Bash and native PS5.1/7 when available; include ps1 language-parser syntax check and explicit unavailable-platform reporting. Assert call-site ordering so a correct unused helper cannot pass.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "startedAt": "2026-10-26T15:52:59.559Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update both wrappers: add explicit force-refresh mode to retry_team_join/Invoke-MoeTeamJoinRetry while preserving default cached retry behavior. Invoke force refresh once at each fresh preflight BEFORE any chat_join/chat_read or routed-mention consumption, including notification-only and idle iterations; never require a successful task claim. Allow governors on this force path and preserve role:'governor' when creating their team. Validate accepted RPC response rather than treating arbitrary nonempty data as success; on force failure clear stale joined state, keep pending mentions unread, suppress notification launch and reuse existing poll/loop handling (a no-loop invocation exits with a clear failure rather than spinning). Error handling must preserve task/baseline state and never fall back to sender human; retry next iteration and deduplicate unchanged failure/success logs. Do not relax notification prompts' no-claim/no-work rule or add .moe writes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "One final verification gate from candidate root: bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test). Require fresh exit 0 and record command, exitCode, outputTail, test counts and any platform-unavailable notice for complete_task. Full daemon regression is mandatory after daemon changes; wrapper tests are the focused slice gate and parity must remain green. On Windows run the same command from Git Bash so executable PS5.1/7 tests and parser check run; do not call a skipped native branch verified. No intermediate full-suite gates.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Final adversarial self-review using adversarial-self-review: pruning after a prior successful loop, DEAD after hot reload, busy live seat rejoin, repeated registration, full/missing team, transport exception/MCP isError, governor path and no-loop failure. Ensure identity is restored before cursor consumption, both shell call sites actually execute, unknown chat senders still fail, no stale call revives DEAD, no duplicate membership/log floods, no task claims by notification sessions and no lost baseline/attempt state. Recheck that second read does not repeat original mention. If fixes change bytes, rerun the identical final gate; then complete_task with fresh evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 6,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-7d158765",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -27,9 +89,51 @@
       "author": "governor-96f92f36",
       "content": "Governor finding, 2026-10-26: the same root cause also hits a seat whose record goes DEAD, not just one whose record was pruned. Please plan for both.\n\nObserved: at 04:45:16Z a wrapper hot reload (any edit to scripts/moe-agent.sh) ran the reload path, which calls deregister_worker {reason:\"wrapper_restart\"} and then exec. Idle worker-3729a0d6 came back as the same process (pid 130561, MOE_WORKER_ID intact) and has been looping \"Agent idle, checking for tasks in 30 seconds\" ever since. It calls moe RPCs every cycle, yet list_workers has shown it DEAD with lastActivityAt frozen at 04:44:45Z for 15+ minutes. worker-7d158765 was in the same limbo from 03:07Z (pruned) until its own reload re-joined the team at 04:45:41Z.\n\nWhy (daemon source):\n- joinTeam.ts only creates a record when getWorker() is empty; an existing DEAD record stays DEAD.\n- claimNextTask.ts only creates or updates the record (status READING_CONTEXT) on a successful claim. hasNext:false leaves it untouched.\n- touchWorker deliberately refuses DEAD records, so heartbeats and other calls never revive it.\nSo the wrapper comment \"the re-exec'd wrapper registers afresh\" holds only for a seat that claims a task right away.\n\nImpact: the seat still picks up work, because a claim revives it. But it shows DEAD/hidden in list_workers and the IDE, and mentionRouter skips DEAD workers. Once the record is pruned, chat_send fails with \"Unknown sender\", which is this task's symptom.\n\nA fix covering both: have a fresh-session registration (join_team at wrapper pre-flight) revive a DEAD record to IDLE. Keep touchWorker's refusal for in-flight calls from the old session. Alternatively, skip the deregister on a reload when the seat holds no task.",
       "timestamp": "2026-10-26T05:00:33.291Z"
+    },
+    {
+      "id": "comment-75e88a5b3d58427c99a793edf47c93a9",
+      "author": "architect-1520cc31",
+      "content": "Plan includes the governor's DEAD-record finding, not just pruned records. Minimal fix stays at registration boundary: fresh preflight force-rejoins before chat_join/chat_read (current retry sits after general chat read and returns early when cached joined), and successful join_team revives DEAD to IDLE without relaxing chat sender checks or touchWorker's DEAD refusal. Covers all default role teams, including governors; no task claim is needed. Five files total with dedicated daemon and executable wrapper-block regression tests. To serialize shared files, the already-planned live-assignee wrapper guard and the new daemon worker-type prerequisite now depend on this task; this task has no new dependencies and can run first.",
+      "timestamp": "2026-10-26T15:43:30.765Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:13:17.758Z",
-  "updatedAt": "2026-10-26T05:00:33.291Z"
+  "updatedAt": "2026-10-26T15:52:59.559Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T15:40:37.561Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-1520cc31",
+    "worker-7d158765"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T15:45:16.935Z",
+  "planningNotes": {
+    "approachesConsidered": "Repair explicit registration, not chat authentication. Auto-registering arbitrary chat senders or weakening touchWorker's DEAD refusal would revive old sessions/impersonation paths. No new MCP tool needed: join_team already creates missing workers. Refresh the wrapper's cached membership at fresh preflight before reading inbox, and revive DEAD only through a successful explicit team join. This is five files, no split required. Claiming tasks solely to recreate identity is forbidden and unnecessary.",
+    "codebaseInsights": "Verified ordering bug: sh general chat read at ~6321 precedes cached retry_team_join at ~6346; PS twin same. retry_team_join/Invoke-MoeTeamJoinRetry return immediately when TEAM_JOINED/teamJoined is true and exclude governors. Add force-refresh mode called before first chat_join/read on every preflight; keep normal cached retries cheap. Startup teams default Workers/Architects/QA/Governors; governor team create must retain role:'governor'. joinTeamTool only creates absent records and addTeamMember returns early for existing members, so DEAD needs explicit status IDLE update after successful membership. chatReadTool already writes cursor through updateWorkerCursors when record exists; chatSendTool rejects genuinely unknown worker and reserved system. Tests can use ToolTestHarness, StateManager.deleteWorker, joinTeamTool/chatReadTool/chatSendTool and real extracted launcher blocks.",
+    "risks": "Governor comment requires both pruned and DEAD seats; include both. Never reset a healthy busy seat's status/currentTaskId or clear cursors during rejoin. Team full/not-found/malformed RPC cannot be counted as success, and failed registration must not consume mentions or launch a doomed notification CLI. Preserve existing cached behavior for ordinary retry sites and log only changes, not one successful-rejoin banner every idle poll. Wrapper changes must stay Bash3.2/PowerShell5.1+7 compatible; tests may not call live daemon or modify shared config. No source implementation edits by this architect. The two pending tasks that overlap joinTeam/wrappers are structurally ordered after this one (0b40957c and 6aa460bb).",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/joinTeam.ts",
+      "packages/moe-daemon/src/tools/chatRead.ts",
+      "packages/moe-daemon/src/tools/chatSend.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/taskless-handoff.test.mjs"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T15:45:17.036Z",
+  "workStartedAt": "2026-10-26T15:49:25.284Z"
 }
