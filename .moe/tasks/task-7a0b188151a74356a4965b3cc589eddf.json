@@ -96,7 +96,7 @@
     }
   ],
   "planRevision": 30,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -118,11 +118,17 @@
       "author": "governor-96f92f36",
       "content": "Governor dependency change (2026-10-26T06:00Z), following \"Serialize overlapping affectedFiles through explicit dependencies\". dependsOn was [] and is now [task-7c2872e7]. Step 3 of this plan edits scripts/tests/postflight.sh, which in-flight 7c2872e7 (postflight fake-proxy twins, worker-3729a0d6, 3/5 steps) also edits. Without the dependency, the next free worker would claim this row and both seats would edit the same harness at once, contesting each other's landings. Nothing else overlaps across the WORKING rows. The trust hazard itself is mitigated for now: all six accounts trust /mnt/d/projexts/moes (verified 05:34Z), so waiting costs little. For the implementer: rebase step 3's postflight.sh edits onto 7c2872e7's landed version of the harness.",
       "timestamp": "2026-10-26T05:57:06.049Z"
+    },
+    {
+      "id": "comment-60740ecb5ce746478bce677a5eaad86d",
+      "author": "qa-7c627d35",
+      "content": "QA round 2 (qa-7c627d35, 2026-10-26 08:02Z-08:13Z). Verdict: the substance passes again, but there is still no size rail. The row is parked from REVIEW, not rejected.\n\nSize rail\n- prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (ADD_RAIL, EPIC, scoped to this task) is still PENDING (resolvedAt null, re-checked 08:12Z).\n- allRails.epic holds only the three standing rails, and no project or epic rail waives size. QA cannot approve 811 net LOC yet.\n- Rejecting again would burn a reopen with nothing for the worker to change; only a human can resolve the proposal.\n\nBytes\n- HEAD = origin/moe/work-2026-10-24 = e5f0216.\n- Round-2 checkpoint 229e534 and completion e5f0216 each touch only this task's board JSON.\n- `git diff --quiet 4758ad1 HEAD` over the 7 owned paths is clean, and the worktree equals HEAD on them. The snapshot cmp equals 4758ad1 equals the worktree.\n- `git show --numstat 4758ad1` equals the proposal text exactly: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8. Total +843/-32, net 811.\n\ntask.verification, re-run by QA\n- Run from a pure `git archive e5f0216` in /tmp, with all 29 MOE_*/CLAUDE* vars unset and MOE_POSTFLIGHT_TIMEOUT_SEC=180 (bash 5.2.21, node v24.21.0).\n- lease test: 40 tests, 39 pass, 0 fail, 1 skip (Windows-only).\n- parity-check.sh: PASS.\n- postflight.sh: PASS, run 08:03:04Z to 08:12:16Z: frozen candidates 73, [accounts] ok, commit-scope 38, [team join] ok, [team heal] ok; GATE_EXIT=0.\n\nNative Windows\n- Run from a copy of the snapshot's scripts/ in %TEMP%, with MOE_*/CLAUDE* unset and WSLENV empty.\n- node.exe lease test: 54 tests, 52 pass, 0 fail, 2 skip (symlink, POSIX permissions). All 7 ps1 lease-loop cases pass on powershell.exe and on pwsh.exe, and all 6 Git Bash cases pass.\n- PS 5.1.26100 ParseFile on moe-agent.ps1: 0 errors.\n- parity-check.ps1: PASS.\n- moe-agent.ps1 keeps its BOM (ef bb bf) and has 0 CR.\n\nIndependent probes, run in a separate copy\n- 9 helper mutants, 8 killed (1 to 10 failing tests each):\n  - isTrusted every to some;\n  - no lock release;\n  - stealing a foreign lock;\n  - skipping launchInside;\n  - dropping the file mode;\n  - no locked re-read;\n  - a trailing newline;\n  - the config path in the refusal line.\n- Survivor: dropping the final read-back check. No test forces a read-back failure. This is a defensive path, not a DoD item; optional hardening.\n- 8 concurrent `trust` calls on one config: exactly 1 `granted` and 7 `trusted`. Mode 600 kept, other keys and key order intact, no .lock or .tmp left, no secret in any output.\n- No forbidden patterns in the added lines.\n\nDoD, re-checked against the diff\n1. An interactive leased seat gets MOE_ACCOUNT_TRUST_GRANTED. If trust cannot be set, it gets MOE_ACCOUNT_UNTRUSTED plus one #general @governors line per account per lease loop, naming the account and the project, never the folder. It then waits MOE_ACCOUNT_RETRY_SEC and re-leases. It never launches into the dialog.\n2. The headless guards (`[ \"$CLAUDE_INTERACTIVE\" = true ]` and `$claudeInteractive`) match the TUI branch, since PRINT_ARGS is empty only when CLAUDE_INTERACTIVE=true. The invariant amendment in scripts/CLAUDE.md and docs/MCP_SERVER.md cites sign-off comment-99598cf0.\n3. Parity passes on sh and ps1. Coverage is in the lease test (4 engines) and postflight [accounts]. There is no daemon change.\n4. Both docs are updated.\n\nResume route\n- When a human APPROVES the proposal: set_task_status REVIEW. The next QA confirms the rail in allRails.epic, re-checks that the 7 paths still equal 4758ad1, and approves naming the size (811 net).\n- If it is REJECTED: set_task_status PLANNING, so the architect splits.",
+      "timestamp": "2026-10-26T08:12:47.074Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:39:58.071Z",
-  "updatedAt": "2026-10-26T07:59:39.977Z",
+  "updatedAt": "2026-10-26T08:12:56.493Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T22:18:28.699Z",
     "plannedStepCount": 7,
@@ -190,7 +196,8 @@
     "scripts/tests/postflight.sh",
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
   ],
   "completionSummary": "Round 2 after the size-only reject (reopen 1). Following QA's route, the landed bytes are unchanged: the 7 owned paths equal completion 4758ad1 (git diff --quiet, no later commit touches them; HEAD 229e534 is a board-only checkpoint). The size exception is filed as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f (ADD_RAIL, EPIC) and is still PENDING human review. It is scoped to this task and names 4758ad1 +843/-32 (net 811) with this numstat: lease.mjs +207/-8, moe-agent.sh +49/-6, moe-agent.ps1 +37/-6, MCP_SERVER.md +6/-1, scripts/CLAUDE.md +1/-1, lease test +505/-2, postflight.sh +38/-8.\n\nBehaviour, as in round 1:\n- `moe-account-lease.mjs trust` sets projects[<key>].hasTrustDialogAccepted in the leased account's .claude.json, under claude's .claude.json.lock, with tmp+rename and a read-back.\n- Both launchers run it for interactive leased claude seats only, printing MOE_ACCOUNT_TRUST_GRANTED.\n- When trust cannot be set, they print MOE_ACCOUNT_UNTRUSTED and post one #general @governors line per account, naming the account and project but never the folder. They then wait MOE_ACCOUNT_RETRY_SEC and re-lease.\n- Headless -p seats are unchanged. The invariant amendment cites sign-off comment-99598cf0.\n\nStep-7 adversarial review: no defect. Theoretical residuals only:\n- A stale lock from a killed helper gives a loud refusal until claude's 10 s stale rule clears it.\n- A kill mid-write leaves tmp debris.\n- claude's no-lock fallback could drop the key later.\n\nFresh gate, run 07:48:58Z-07:57:54Z on a pure git archive of HEAD with 27 MOE_*/CLAUDE* vars unset and TIMEOUT 180:\n- lease test: 40 tests, 39 pass, 1 skip\n- parity-check.sh PASS\n- postflight PASS (frozen 73, [accounts] ok, scope 38)\n- exit 0\n\nNative Windows, same snapshot:\n- node.exe: 54 tests, 52 pass, 2 skips. That covers the 7 ps1 cases on each of powershell.exe and pwsh.exe, plus the 6 Git Bash cases.\n- PS 5.1 ParseFile: 0 errors.\n- parity-check.ps1 PASS.\n- BOM kept, 0 CR.",
   "commits": [
@@ -231,6 +238,21 @@
       "treeId": "00fb73fdab7f0fb6249724d9f98acc0588e831f7",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "e5f021639d7f75f205af71f28ccebee364d4af22",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-26T07:46:27Z",
+      "paths": [
+        ".moe/tasks/task-7a0b188151a74356a4965b3cc589eddf.json"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-26T08:00:25.741Z",
+      "treeId": "3ed22457fa52d0670bf1d22a35bbef3cea837f70",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -240,9 +262,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-3729a0d6@2026-10-26T07:32:19Z",
-    "at": "2026-10-26T07:45:56.220Z"
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-26T07:46:27Z",
+    "at": "2026-10-26T08:00:25.741Z"
   },
   "reviewCompletedAt": "2026-10-26T07:32:09.261Z",
   "rejectionDetails": {
@@ -265,5 +287,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "Parked from REVIEW by QA in round 2. This is not a reject: the work passes on substance, but the size exception it needs is not approved yet.\n\n- Completion 4758ad1 is +843/-32 = 811 net non-board LOC, over the 400 net-LOC review cap. No project or epic rail waives size.\n- The worker filed an epic ADD_RAIL size exception scoped to this row as prop-f04ebf50a0bc4f1ea3a72671fa72ab8f. It is still PENDING, and only a human can resolve it. Rejecting again would only burn a reopen.\n- The bytes are unchanged since 4758ad1: the round-2 commits 229e534 and e5f0216 are board-only. The per-file numstat equals the proposal text.\n\nQA re-ran every gate green from a pure git archive of e5f0216:\n- lease test: 39 pass, 1 skip.\n- parity-check.sh: PASS.\n- postflight.sh: PASS, with [accounts] ok.\n- Native Windows: node.exe 52 pass, 2 skip, including the ps1 lease-loop cases on powershell.exe and pwsh.exe plus the Git Bash cases. The PS 5.1 parse has 0 errors. parity-check.ps1: PASS.\n- DoD 1-4 all have evidence. The full evidence is in QA's round-2 comment on this task.\n\nTo resume:\n- Once the proposal is APPROVED, set_task_status REVIEW. The next QA checks the rail in allRails.epic and the unchanged bytes, then approves naming the size.\n- If it is REJECTED, set_task_status PLANNING so the architect splits the work.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-26T08:12:56.493Z"
 }

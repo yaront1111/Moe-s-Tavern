@@ -1,0 +1,31 @@
+{
+  "id": "task-a103c2f4c9984b7481dbefca4d52fdf0",
+  "epicId": "epic-be924fb8",
+  "title": "feat: an interactive claude seat exits on a moe END_SESSION handoff so its wrapper relaunches it, instead of idling until a human types /exit",
+  "description": "Human-approved 2026-10-26 in the governor REPL (AskUserQuestion \"Interactive seats stop and wait for a human /exit whenever the daemon tells them END_SESSION... exit them automatically?\" was answered \"Yes, auto-exit (Recommended)\"). This settles governor-187cc44e's open question #4 from 2026-10-25.\n\nObserved: at 05:37Z architect-4c57a52b called report_blocked on CQ-R09. The reply carried sessionHandoff {action:'END_SESSION', reason:\"... Do not call moe.claim_next_task or moe.wait_for_task inside this session ... If this is an interactive TUI, return control to its operator so the CLI can exit normally.\"}. The architect obeyed, ended its turn (\"Exit this CLI session (e.g. /exit ...) to start the next task\") and sat idle at the TUI prompt until a human typed /exit at 08:07Z. That was about 2.5 h of planner time lost, with ~25 rows in PLANNING. The daemon emits END_SESSION in reportBlocked.ts (seat freed, no current task) and in claimEligibility.ts blockedHoldGuidance (resource-held task). That is deliberate: commit 43f6dd55 enforces one task per wrapper session, so every task gets a fresh baseline. The gap is only that an interactive TUI cannot end itself.\n\nDirection: scripts/mods/moe-account-switch already turns a moe reply signal (accountSwitch, or claude stopping at the usage limit) into refused claim/wait tools plus a /exit run 10 s after the main turn ends. The wrapper loop then relaunches the seat. Reuse that path for sessionHandoff.action === 'END_SESSION' in any moe tool reply. It is the same mechanism, so this is not a new process. The mod is only loaded for interactive claude seats whose wrapper loop relaunches them (CLAUDE_INTERACTIVE and LOOP_ENABLED; ps1 $claudeInteractive and $loopEnabled), which is exactly the population that needs it. Note that the mod is currently inert without MOE_ACCOUNT_ID. The END_SESSION path should work on an unrotated interactive seat too (it needs only MOE_WORKER_ID), or the task must state why not. Claude seats only; codex/grok TUIs are out of scope.\n\nOrdering: 05e1f916 (DONE) last changed hooks/register.ts. Plan against its landed code.",
+  "definitionOfDone": [
+    "When a moe tool reply in an interactive claude seat whose wrapper loop relaunches it carries sessionHandoff.action END_SESSION (from report_blocked or a held-task claim refusal), the mod runs /exit after the main turn ends, using the existing delayed-exit path. The wrapper relaunches the seat with no human input.",
+    "Once END_SESSION has been seen, the mod refuses moe claim_next_task, wait_for_task, chat_wait and start_step for the rest of that session, as it already does for accountSwitch, so no in-session claim breaks the one-task-per-wrapper contract.",
+    "No exit is scheduled for headless -p seats, subagent turns, or replies without END_SESSION. The existing accountSwitch and usage-limit paths keep working. The path works on an unrotated interactive seat (no MOE_ACCOUNT_ID), or the task records why it cannot. Any error in the new check leaves the turn and the session as they were (fail open).",
+    "scripts/mods/moe-account-switch/hooks/register.test.ts covers the END_SESSION exit, the tool refusal and the no-exit cases. Fresh `claude plugin test scripts/mods/moe-account-switch` passes. The scripts/CLAUDE.md account-switch bullet and docs/MCP_SERVER.md describe the END_SESSION behaviour."
+  ],
+  "taskRails": [
+    "Fail open, as the mod does today: an error in the new check must leave the turn and the session as they were."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 235.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-26T08:09:12.856Z",
+  "updatedAt": "2026-10-26T08:09:12.856Z"
+}
