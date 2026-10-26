@@ -9,9 +9,52 @@
     "Provide fresh targeted native Windows and POSIX test output plus exact modified paths."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test-only fix in packages/moe-daemon/src/benchmarks/baselineRun.test.ts (LF, keep LF). baselineRun.ts stays READ-ONLY: production never reaches runAssessment on win32 (checkPreconditions refuses win32 first) and the driver contract is POSIX-only.\n\n1. Import mkdtempSync, rmSync, symlinkSync next to existsSync from 'node:fs'.\n2. Split U1 'reads bounded regular receipts, skips malformed lines and links without echoing content' (line 69) into:\n   a. it('U1 reads bounded regular receipts, skips malformed lines and directories without echoing content') = the same body MINUS the fs.symlink line (72); every other line/assertion byte-identical.\n   b. directly after it, a module-level sync probe in the style of `runnable` (line 192), with a comment that an NT file symlink needs SeCreateSymbolicLinkPrivilege (elevation or Developer Mode) and POSIX always runs the link case:\n      const canSymlink = process.platform !== 'win32' || (() => { const dir = mkdtempSync(path.join(os.tmpdir(), 'moe-symlink-probe-')); try { symlinkSync(path.join(dir, 'target'), path.join(dir, 'link'), 'file'); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'EPERM') return false; throw e; } finally { rmSync(dir, { recursive: true, force: true }); } })();\n      The short-circuit is what keeps Linux coverage: POSIX never probes, so a Linux symlink failure FAILS the test instead of skipping it.\n      Error handling: only EPERM (missing privilege) maps to false; every other error is rethrown so test collection fails loudly instead of skipping; the finally removes the probe dir on every path.\n   c. it.runIf(canSymlink)('U1 never follows a receipt symlink'): temp() dir, write one.jsonl = JSON.stringify(receipt()) + '\\n', fs.symlink(one.jsonl, link.jsonl), then expect(await readUsageReceipts(dir)).toEqual({ rows: [receipt()], malformedLines: 0, notes: [] }).\n3. U3 'assessment timeout preserves not-run and a null exit' (line 101) becomes it.skipIf(process.platform === 'win32')(...) with a one-line comment: terminateTree signals POSIX process groups; on win32 process.kill(-pid) throws ESRCH, so a hung assessment is never killed and outlives the run (the driver refuses win32). Body unchanged. skipIf(win32), not runIf(linux): macOS keeps it.\n\nDo NOT touch: the first U3 test (passes natively, never hangs), U5 and its guards, E1-E6, U6, any timeout value.\n\nRed proof (Linux only, throwaway copy built with the step-2 (A) snapshot recipe): in the COPY's baselineRun.ts change the readUsageReceipts filter `f => f.isFile() && f.name.endsWith('.jsonl')` to `f => (f.isFile() || f.isSymbolicLink()) && f.name.endsWith('.jsonl')`; `npx vitest run src/benchmarks/baselineRun.test.ts -t U1` must FAIL 'U1 never follows a receipt symlink' (notes non-empty: O_NOFOLLOW refuses the link). Delete the mutated copy. (Architect observed exactly this, 2026-10-26.)\n\nNever rerun the UNMODIFIED file on native Windows: its U3 timeout leaks a hung held-out tree (mem:gotcha-baseline-native-windows-gate); the red is already on record in /tmp/moe-account-switch-05e1-final-gate.log.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "Edited baselineRun.test.ts: split U1 (link case → runIf(canSymlink) with EPERM-only win32 probe), U3 timeout skipIf(win32). Linux snapshot: 14 passed|6 skipped, link+timeout ✓; tsc rc 0; red proof (follow-symlink mutation in copy) fails 'U1 never follows a receipt symlink'. Shared tree has ~533 foreign dirty paths, untouched.",
+      "startedAt": "2026-10-26T05:02:08.959Z",
+      "completedAt": "2026-10-26T05:02:31.966Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The ONE gate: `npx vitest run src/benchmarks/baselineRun.test.ts --reporter=verbose` from packages/moe-daemon, run fresh on BOTH runtimes. Never run vitest inside the shared tree's packages/moe-daemon (its node_modules is win32-only so rolldown fails under Linux; vitest writes node_modules/.vite; 500+ foreign dirty paths). Both recipes were validated by the architect on 2026-10-26 with the planned change.\n\n(A) POSIX, Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n  SNAP=$(mktemp -d /tmp/moe-7148-linux.XXXXXX); git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$SNAP\"\n  cp /mnt/d/projexts/moes/packages/moe-daemon/src/benchmarks/baselineRun.test.ts \"$SNAP/packages/moe-daemon/src/benchmarks/\"   # the ONLY overlay\n  NM=/tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon; LPATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\n  env -i HOME=$HOME PATH=$LPATH node -e 'const [a,b]=process.argv.slice(1).map(p=>JSON.stringify(require(p)));process.exit(a===b?0:1)' \"$NM/package-lock.json\" \"$SNAP/packages/moe-daemon/package-lock.json\" && ln -s \"$NM/node_modules\" \"$SNAP/packages/moe-daemon/node_modules\"   # if NM is gone or locks differ: npm ci in a scratch copy\n  cd \"$SNAP/packages/moe-daemon\" && env -i HOME=$HOME PATH=$LPATH npx vitest run src/benchmarks/baselineRun.test.ts --reporter=verbose\n  Expect exit 0, 14 passed | 6 skipped (20). MUST show ✓ (not ↓): 'U1 never follows a receipt symlink', 'U3 assessment timeout preserves not-run and a null exit', both U5. E1-E6 ↓ only because the archive has no dist (HEAD's file there: 13 passed | 6 skipped (19)).\n  Type-check (tsconfig excludes *.test.ts): env -i HOME=$HOME PATH=$LPATH npx tsc --noEmit --ignoreConfig --target ES2022 --module ESNext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule src/benchmarks/baselineRun.test.ts -> exit 0.\n\n(B) Native Windows (mem:pattern-qa-windows-native-vitest-from-wsl):\n  WT=/mnt/c/Users/Yaron/AppData/Local/Temp; W=$(mktemp -d \"$WT/moe-7148-win.XXXXXX\")\n  tar -C \"$SNAP\" -cf - --exclude=packages/moe-daemon/node_modules packages/moe-daemon scripts package.json .gitignore | tar -C \"$W\" -xf -\n  mkdir -p \"$W/packages/moe-daemon/node_modules\"; (cd /mnt/c/Windows/System32 && ./cmd.exe /c robocopy \"$(wslpath -w /mnt/d/projexts/moes/packages/moe-daemon/node_modules)\" \"$(wslpath -w \"$W/packages/moe-daemon/node_modules\")\" /E /XD .vite /NFL /NDL /NJH /NJS /NP /R:0 /W:0)   # rc 0-7 = success; read-only on the source\n  cmp the copied test file against the worktree.\n  Leak baseline (positive-controlled by the architect: returns 1 for a live match): held() { (cd /mnt/c/Windows/System32 && ./WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command '@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq \"node.exe\" -and $_.CommandLine -like \"*held-out.test.mjs*\" }).Count' | tr -d '\\r\\0'); }; dirs() { ls -d \"$WT\"/moe-driver-test-* \"$WT\"/moe-workload-* \"$WT\"/moe-symlink-probe-* 2>/dev/null | wc -l; }\n  UNSET=$(env | grep -oE '^(MOE_|CLAUDE)[A-Za-z0-9_]*' | sed 's/^/-u /' | tr '\\n' ' '); cd \"$W/packages/moe-daemon\" && env $UNSET \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run src/benchmarks/baselineRun.test.ts --reporter=verbose\n  Expect exit 0, 10 passed | 10 skipped (20): ↓ 'U1 never follows a receipt symlink' (host cannot create NT symlinks, mem:gotcha-symlink-hashing-and-windows-host-limits), ↓ U3 timeout, ↓ U5 x2, ↓ E1-E6; ✓ 'U1 reads bounded regular receipts…', first U3, U4, U6.\n  After: held() = 0 and dirs() unchanged from before. moe-workload-assessment-0uu4Ap (2026-10-25 11:59:18Z) is FOREIGN debris from the failed gate: don't count it, don't delete it.\n\nA native Git Bash seat runs (B) with its own node from a Windows temp copy, and (A) via `MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu-24.04 -e bash <script file>` (mem:gotcha-wsl-linux-harness-from-git-bash).\nCleanup: rm -rf SNAP and W after checking each path prefix.\n\ncomplete_task: verification = run (B) (command as run, exit 0, output tail). Summary: (A)'s tail + counts, the tsc exit, held()/dirs() before/after, and modified paths = exactly packages/moe-daemon/src/benchmarks/baselineRun.test.ts (git diff --stat). If step 3 changes the file, rerun (A) and (B).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "(A) Linux snapshot: rc 0, 14 passed|6 skipped (E1-E6 no dist), link + U3 timeout + U5 x2 ✓, tsc rc 0. (B) native Windows node: rc 0, 10 passed|10 skipped, link/U3 timeout/U5/E ↓; held-out procs 0 before/after, dirs 1 before/after (foreign). Temp dirs removed.",
+      "startedAt": "2026-10-26T05:02:37.522Z",
+      "completedAt": "2026-10-26T05:03:00.987Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this one-file diff (load adversarial-self-review). Check:\n- Linux coverage not weakened: canSymlink short-circuits to true on non-win32 with no probe; the U3 skip is win32-only (skipIf, not runIf linux); run (A) shows ✓ for the link and timeout tests.\n- Probe error handling: only EPERM -> false, anything else throws at collection; its dir is removed in finally even on throw. On a privileged Windows host (Developer Mode / elevated / CI windows-latest) the link test runs and still passes, because libuv reports reparse points as DT_LINK so Dirent.isFile() is false. Reason it through; it cannot run on this host.\n- The split U1 test keeps every original non-link assertion byte-identical; the new link assertion is a full-object toEqual, mutation-proven in step 1.\n- No production file changed, no timeout raised, U5/E guards untouched: `git diff --stat -- packages/moe-daemon` lists exactly the test file.\n- Still LF: `git diff` shows only the intended hunks, and `grep -c $'\\r'` on the file prints 0.\n- No leftover probe/temp dirs and no held-out processes after run (B).\n- Ownership: only the test file is yours. Never stage or revert peers' dirty paths.\nFix any finding, then rerun step 2's (A) and (B) before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+      ],
+      "note": "Self-review: no findings. Diff is test-only (git diff --stat: 1 file, +17/-4), LF (0 CRs), POSIX short-circuits probe (no skip possible), probe rethrows non-EPERM and rmSync in finally, no leftover temp dirs/held-out procs, no file change so no rerun needed.",
+      "startedAt": "2026-10-26T05:03:01.768Z",
+      "completedAt": "2026-10-26T05:03:05.214Z"
+    }
+  ],
+  "planRevision": 7,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -43,5 +86,52 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T12:00:51.376Z",
-  "updatedAt": "2026-10-26T04:38:58.980Z"
+  "updatedAt": "2026-10-26T05:03:13.989Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-26T04:44:10.404Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121",
+    "worker-3729a0d6"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-26T05:00:49.313Z",
+  "planningNotes": {
+    "approachesConsidered": "Chosen: test-only explicit guards. An EPERM capability probe (win32-only, POSIX short-circuits to true) plus it.runIf for the split-out link case; it.skipIf(win32) on the U3 timeout, mirroring U5 and checkPreconditions' win32 refusal.\nRejected:\n(1) runAssessment refusing win32 in production: production never reaches it on win32 (checkPreconditions throws first); it would drop the first U3 test's passing native coverage; and it changes an exported function to fix a test defect.\n(2) taskkill /T /F tree-kill in terminateTree: contradicts the POSIX-only driver contract and needs its own Windows evidence.\n(3) Raising the 5s timeout: the hang is unbounded (terminateTree is a no-op on win32) and leaks the tree.\n(4) A try/catch around fs.symlink inside the test: passes silently without link coverage; runIf reports an honest skip.\n(5) A junction, like the workloadSnapshot tests use: junctions link directories only, and readUsageReceipts' case is a file link.",
+    "codebaseInsights": "Measured on this host's Windows node v24.16.0:\n- process.kill(-pid, 0) throws ESRCH. signalGroup returns false, terminateTree returns false without signalling, and boundedCommand awaits proc.done forever.\n- fs.symlinkSync(...,'file') throws EPERM.\n- fs.constants.O_NOFOLLOW and O_NONBLOCK are undefined, so readBounded degrades to O_RDONLY; the rest of U1 passes natively.\nPrecedents: U5 skipIf(win32) (lines 129/139); the module-level sync `runnable` probe (line 192); workloadSnapshot.test.ts:725 platform-guards its file symlink.\ntsconfig.json excludes src/**/*.test.ts, so only the explicit tsc command type-checks this file.\nThe in-tree node_modules has win32 bindings only. /tmp/moe-linux-daemon.3EJTl5 holds a lock-equal Linux install.\nThe architect prototyped this exact change in throwaway copies: Linux 14 passed / 6 skipped (E-tests: no dist); native Windows 10 passed / 10 skipped, 0 held-out processes, no new temp dirs. The follow-symlink mutation fails the new link test.",
+    "risks": "- A guard that could skip on Linux would silently weaken coverage. The short-circuit prevents it; prove it with ✓ in run (A).\n- Do not reproduce the Windows red: it leaks a hung node --test tree. If a held-out process ever appears, kill only your own, fingerprinted by exact PID + CreationDate + CommandLine (mem:gotcha-baseline-native-windows-gate). Never kill a broad node tree.\n- Windows interop: run from a Windows-drive cwd, never a UNC /tmp cwd, and strip MOE_*/CLAUDE* (mem:gotcha-qa-ps1-postflight-from-wsl).\n- The shared checkout has 500+ foreign dirty paths: overlay only the owned test file into snapshots, and commit nothing (the wrapper lands).\n- task-05e1f916 (account switch) is BLOCKED on this task through its reason text and auto-unblocks at DONE; no dependency edits are needed.",
+    "keyFiles": [
+      "packages/moe-daemon/src/benchmarks/baselineRun.test.ts",
+      "packages/moe-daemon/src/benchmarks/baselineRun.ts",
+      "packages/moe-daemon/tsconfig.json",
+      "packages/moe-daemon/vitest.config.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-26T05:00:49.411Z",
+  "workStartedAt": "2026-10-26T05:02:08.959Z",
+  "reviewStartedAt": "2026-10-26T05:03:13.987Z",
+  "verification": {
+    "command": "cd <native Windows temp copy>/packages/moe-daemon && \"/mnt/c/Program Files/nodejs/node.exe\" node_modules/vitest/vitest.mjs run src/benchmarks/baselineRun.test.ts --reporter=verbose (script /tmp/moe-7148-B.sh)",
+    "exitCode": 0,
+    "outputTail": "✓ U1 reads bounded regular receipts… ↓ U1 never follows a receipt symlink ✓ U3 assesses… ↓ U3 assessment timeout ✓ U4 x5 ↓ U5 x2 ✓ U6 ↓ E1-E6\nTest Files 1 passed (1)\nTests 10 passed | 10 skipped (20)\nvitest rc=0\nafter held=0 dirs=1",
+    "reportedAt": "2026-10-26T05:03:13.987Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/benchmarks/baselineRun.test.ts"
+  ],
+  "completionSummary": "Test-only fix in packages/moe-daemon/src/benchmarks/baselineRun.test.ts (git diff --stat: 1 file, +17/-4; LF; baselineRun.ts untouched). U1 symlink case split into it.runIf(canSymlink)('U1 never follows a receipt symlink'); canSymlink = non-win32 (no probe, so Linux can't skip) or a win32 probe that maps only EPERM to false and rethrows anything else, with rmSync in finally. U3 timeout test is skipIf(win32) because terminateTree uses POSIX process groups. (A) Linux snapshot, fresh: exit 0, 14 passed | 6 skipped (E1-E6 skip because the archive has no dist); link test, U3 timeout and both U5 show ✓; tsc --noEmit exit 0. Red proof in a throwaway copy: changing the readUsageReceipts filter to also accept symlinks makes 'U1 never follows a receipt symlink' fail. (B) native Windows node, fresh: exit 0, 10 passed | 10 skipped; link, U3 timeout, U5 and E1-E6 skipped; held-out processes 0 before and after; temp dirs unchanged (1 before and after, the foreign moe-workload-assessment debris). Snapshot and Windows temp copies removed. Modified path: packages/moe-daemon/src/benchmarks/baselineRun.test.ts."
 }

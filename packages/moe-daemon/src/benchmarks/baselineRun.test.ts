@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -66,10 +66,9 @@ it('U1 receipts use reported models, requested effort and distinct task launch i
   expect(rolesFromReceipts([receipt({ requestedEffort: null })], 'task-one', 'claude').roles[1].effort).toBeNull();
   expect(mixed.notes[0].length).toBeLessThanOrEqual(200);
 });
-it('U1 reads bounded regular receipts, skips malformed lines and links without echoing content', async () => {
+it('U1 reads bounded regular receipts, skips malformed lines and directories without echoing content', async () => {
   const dir = await temp();
   await fs.writeFile(path.join(dir, 'one.jsonl'), JSON.stringify(receipt()) + '\nSECRET-BROKEN\n');
-  await fs.symlink(path.join(dir, 'one.jsonl'), path.join(dir, 'link.jsonl'));
   await fs.mkdir(path.join(dir, 'directory.jsonl'));
   const result = await readUsageReceipts(dir);
   expect(result.rows).toEqual([receipt()]);
@@ -80,6 +79,19 @@ it('U1 reads bounded regular receipts, skips malformed lines and links without e
   const missing = await readUsageReceipts(path.join(dir, 'missing'));
   expect(missing.rows).toEqual([]);
   expect(missing.notes.length).toBeGreaterThan(0);
+});
+// An NT file symlink needs SeCreateSymbolicLinkPrivilege (elevation or Developer Mode); POSIX always runs the link case.
+const canSymlink = process.platform !== 'win32' || (() => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'moe-symlink-probe-'));
+  try { symlinkSync(path.join(dir, 'target'), path.join(dir, 'link'), 'file'); return true; }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === 'EPERM') return false; throw e; }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+})();
+it.runIf(canSymlink)('U1 never follows a receipt symlink', async () => {
+  const dir = await temp();
+  await fs.writeFile(path.join(dir, 'one.jsonl'), JSON.stringify(receipt()) + '\n');
+  await fs.symlink(path.join(dir, 'one.jsonl'), path.join(dir, 'link.jsonl'));
+  expect(await readUsageReceipts(dir)).toEqual({ rows: [receipt()], malformedLines: 0, notes: [] });
 });
 it('U2 TAP handles nested lines, failure dominance, absent ids, comments and bounded output', () => {
   const output = 'ok 1 - a: pass\n    ok 2 - b: nested\nnot ok 3 - a: fail\nok 4 - decoy: pass\n# ok 5 - c: spoof\n';
@@ -98,7 +110,8 @@ it('U3 assesses a separate held-out snapshot against the final candidate, never 
   expect(await runAssessment(workload, coding.root, { timeoutMs: 3000 })).toMatchObject({ ran: true, exitCode: 0, criteria: [{ id: 'correct-value', result: 'pass' }] });
   expect(await fs.readdir(coding.root)).toEqual(['value.mjs']);
 });
-it('U3 assessment timeout preserves not-run and a null exit', async () => {
+// terminateTree signals POSIX process groups; on win32 process.kill(-pid) throws ESRCH, so a hung assessment is never killed and outlives the run.
+it.skipIf(process.platform === 'win32')('U3 assessment timeout preserves not-run and a null exit', async () => {
   const coding = await createCodingSnapshot(fixture()); cleanup.push(() => coding.dispose());
   expect(await runAssessment(fixture(true), coding.root, { timeoutMs: 100 })).toEqual({ ran: true, exitCode: null,
     criteria: [{ id: 'correct-value', result: 'not-run' }], reason: 'assessment timed out' });
