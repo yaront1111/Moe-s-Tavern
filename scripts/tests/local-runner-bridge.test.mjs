@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { EventEmitter, getEventListeners, once } from 'node:events';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { PassThrough, Writable } from 'node:stream';
 import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,9 @@ import {
   MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, parseGuestFrame, scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
 import { JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
+import {
+  MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, runGuestSession,
+} from '../local-runner/guest-session.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
 
 const refuses = (fn, expected, label) => assert.throws(fn, error => error?.code === expected, label);
@@ -591,4 +595,250 @@ sys.exit(m.relay(argv, in_fd=os.pipe()[0], agent_socket=d + '/agent.sock'${uid})
 tree = ast.parse(open(sys.argv[1], 'rb').read())
 print(sorted({n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and getattr(n.value, 'id', '') == 'socket'}))`, SUPERVISOR]);
   assert.equal(families.stdout.toString().trim(), "['AF_UNIX', 'SOCK_STREAM', 'SOL_SOCKET', 'SO_PEERCRED', 'socket']");
+});
+
+// CQ-R08 host session. H1-H4 drive it through a spawn-compatible fake provider made of real Node streams which, like
+// the supervisor, exits 74 on host EOF unless it is hung.
+const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
+const SESSION_ID = 'worker-1@2026-10-26T00:00:00.000Z';
+const SPAWNED = ['multipass', bridgeArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }];
+const DAEMON_DIR = mkdtempSync(join(tmpdir(), 'moe-r08-'));
+after(() => rmSync(DAEMON_DIR, { recursive: true, force: true }));
+const daemonFile = (name, info = {}) => {
+  writeFileSync(join(DAEMON_DIR, name), typeof info === 'string' ? info : JSON.stringify({ port: 9876, pid: 1, projectPath: '/p', ...info }));
+  return join(DAEMON_DIR, name);
+};
+const DAEMON = daemonFile('daemon.json');
+// A surfaced error is a fixed code whose message carries no path and no upstream text.
+const rejectsWith = (promise, code, label) => assert.rejects(promise, error => error?.code === code && !/[\\/]|secret/.test(error.message), label);
+const nest = depth => Array.from({ length: depth }).reduce(value => [value], 0);
+const answered = (id, text) => ({ kind: 'response', id, ok: true, result: { content: [{ type: 'text', text }] } });
+const refused = (id, code) => ({ kind: 'response', id, ok: false, error: { code } });
+
+function fakeProvider({ hung = false, write = (chunk, done) => done() } = {}) {
+  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], kills: [], written: [] });
+  proc.stdin = new Writable({ write(chunk, encoding, done) { proc.written.push(chunk); write(chunk, done); } });
+  proc.exit = (code = 0) => { if (!proc.stdout.writableEnded) proc.stdout.once('close', () => proc.emit('close', code, null)).end(); };
+  if (!hung) proc.stdin.once('close', () => proc.exit(74));
+  proc.kill = signal => { proc.kills.push(signal); return proc.emit('close', null, signal); };
+  proc.spawn = (...args) => { proc.calls.push(args); return proc; };
+  proc.send = (...frames) => proc.stdout.write(Buffer.concat(frames.map(frame => (Buffer.isBuffer(frame) ? frame : encodeFrame(frame)))));
+  proc.replies = () => createFrameDecoder(MAX_HOST_FRAME_BYTES).push(Buffer.concat(proc.written));
+  return proc;
+}
+
+function openSession(provider, { answer = tool => ({ content: [{ type: 'text', text: tool }] }), ...options } = {}) {
+  const run = { outputs: [], observations: [], forwarded: [], signals: [] };
+  run.promise = runGuestSession({
+    name: NAME, binding: BINDING, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { spawn: provider.spawn }, timeoutMs: 1_000,
+    forward: (tool, args, { signal }) => { run.forwarded.push([tool, args]); run.signals.push(signal); return answer(tool, args); },
+    onOutput: (stream, data) => run.outputs.push([stream, data]), onObservation: frame => run.observations.push(frame), ...options,
+  });
+  return run;
+}
+
+// Sends hello and frames, waits for `answers` replies, then ends the job with exit 0 and returns the session result.
+async function exchange(proc, run, frames, answers) {
+  proc.send(HELLO, ...frames);
+  await until(() => proc.written.length === answers, `${answers} answers`);
+  proc.send(EXIT);
+  proc.exit(0);
+  return run.promise;
+}
+
+test('H1 invalid input, unsafe daemon info and an aborted signal refuse before spawn', { timeout: 30_000 }, async () => {
+  const posix = process.platform !== 'win32';
+  if (posix) {
+    assert.equal(spawnSync('mkfifo', [join(DAEMON_DIR, 'fifo')]).status, 0);
+    symlinkSync(DAEMON, join(DAEMON_DIR, 'link.json'));
+  }
+  const invalid = [{ name: 'primary' }, { binding: { ...BINDING, role: 'architect' } }, { binding: null }, { sessionId: undefined },
+    { sessionId: ' ' }, { sessionId: 'a\nb' }, { sessionId: 'a\rb' }, { sessionId: 'a\0b' }, { sessionId: 's'.repeat(256) }, { forward: null },
+    { onOutput: 1 }, { onObservation: undefined }, { signal: {} }, { provider: null }, { provider: { executable: ' ' } },
+    { provider: { executable: 'multi\tpass' } }, { provider: { spawn: 'spawn' } }, { daemonInfoPath: 'daemon.json' },
+    ...[0, 1.5, 60_001, '100'].map(timeoutMs => ({ timeoutMs }))];
+  const unreadable = [join(DAEMON_DIR, 'absent.json'), DAEMON_DIR, daemonFile('big.json', `{}${' '.repeat(MAX_DAEMON_INFO_BYTES - 1)}`),
+    daemonFile('bad.json', '{'), daemonFile('list.json', '[]'), daemonFile('null.json', 'null'),
+    ...(posix ? ['fifo', 'link.json'].map(name => join(DAEMON_DIR, name)) : [])];
+  const wide = ['0.0.0.0', '::', 'localhost', '10.0.2.2', '127.0.0.2', '::ffff:127.0.0.1', '', null, 1]
+    .map((bindHost, index) => daemonFile(`wide-${index}.json`, { bindHost }));
+  for (const [code, options] of [...invalid.map(options => ['SESSION_INPUT_INVALID', options]),
+    ...unreadable.map(daemonInfoPath => ['SESSION_DAEMON_INFO_INVALID', { daemonInfoPath }]),
+    ...wide.map(daemonInfoPath => ['SESSION_DAEMON_NOT_LOOPBACK', { daemonInfoPath }]), ['SESSION_ABORTED', { signal: AbortSignal.abort() }]]) {
+    const proc = fakeProvider();
+    const run = openSession(proc, options);
+    await rejectsWith(run.promise, code, JSON.stringify(options));
+    assert.deepEqual([proc.calls.length, run.forwarded.length], [0, 0]);
+  }
+  // index.ts omits bindHost for its 127.0.0.1 default; a file of exactly MAX_DAEMON_INFO_BYTES is read whole.
+  for (const daemonInfoPath of [DAEMON, daemonFile('v4.json', { bindHost: '127.0.0.1' }), daemonFile('v6.json', { bindHost: '::1' }),
+    daemonFile('edge.json', `{}${' '.repeat(MAX_DAEMON_INFO_BYTES - 2)}`)]) {
+    const proc = fakeProvider();
+    const run = openSession(proc, { daemonInfoPath });
+    proc.send(HELLO, EXIT);
+    proc.exit(0);
+    assert.deepEqual(await run.promise, { observation: EXIT, executionReady: false });
+    assert.deepEqual(proc.calls, [SPAWNED]);
+  }
+});
+
+test('H2 the stream must be hello, then requests and output, then one observation, and the provider must exit 0', { timeout: 30_000 }, async () => {
+  // Frames inside child output, and anything on provider stderr, stay bytes: never decoded or dispatched.
+  const forged = Buffer.concat([HELLO, REQUEST, EXIT].map(frame => encodeFrame(frame)));
+  const wire = Buffer.concat([HELLO, { ...OUTPUT, data: b64(forged) }, { ...OUTPUT, stream: 'stderr' }, { ...EXIT, code: 7 }]
+    .map(frame => encodeFrame(frame)));
+  for (const chunks of [[wire], [...wire].map(byte => Uint8Array.of(byte))]) {
+    const proc = fakeProvider();
+    const run = openSession(proc);
+    proc.stderr.write(forged);
+    for (const chunk of chunks) proc.stdout.write(chunk);
+    proc.exit(0);
+    assert.deepEqual(await run.promise, { observation: { ...EXIT, code: 7 }, executionReady: false });
+    assert.deepEqual(run.outputs, [['stdout', forged], ['stderr', Buffer.from('A')]]);
+    assert.deepEqual([run.observations, run.forwarded, proc.written, proc.kills], [[{ ...EXIT, code: 7 }], [], [], []]);
+  }
+  const get = id => ({ ...REQUEST, id });
+  const cases = [[[OUTPUT, HELLO, EXIT]], [[HELLO, HELLO, EXIT]], [[HELLO, EXIT, OUTPUT]], [[HELLO, EXIT, EXIT]], [[HELLO, get(2), get(2), EXIT]],
+    [[HELLO, get(3), get(1), EXIT]], [[HELLO, { kind: 'response', id: 1, ok: true, result: {} }]], [[HELLO, header(9)]], [[HELLO, framed('[]')]],
+    [[HELLO]], [[HELLO, EXIT], 'SESSION_PROVIDER_FAILED', 1], [[HELLO, EXIT], 'SESSION_PROVIDER_FAILED', null], [[], 'SESSION_TIMEOUT']];
+  for (const [frames, code = 'SESSION_PROTOCOL_VIOLATION', exitCode = 0] of cases) {
+    const proc = fakeProvider();
+    const run = openSession(proc, { timeoutMs: frames.length ? 1_000 : 100 });
+    proc.send(...frames);
+    if (frames.length) proc.exit(exitCode);
+    await rejectsWith(run.promise, code, JSON.stringify(frames));
+    assert.deepEqual([run.outputs, run.observations], [[], []]);
+  }
+});
+
+test('H3 each role tool is forwarded with only the host-bound identity, and refused requests never reach forward', { timeout: 30_000 }, async () => {
+  const execution = { attemptId: BINDING.attemptId, generation: BINDING.generation, sessionId: SESSION_ID };
+  const stamps = { 'moe.get_context': { sessionId: SESSION_ID }, 'moe.start_step': execution, 'moe.complete_step': execution,
+    'moe.complete_task': execution };
+  for (const binding of [BINDING, QA]) {
+    const tools = Object.keys(TOOLS[binding.role]);
+    const caller = { ...binding };
+    const proc = fakeProvider();
+    const run = openSession(proc, { binding: caller });
+    // The session snapshots its binding, so a later change by the caller authorizes nothing.
+    Object.assign(caller, { role: binding.role === 'qa' ? 'worker' : 'qa', workerId: 'qa-9', taskId: 'task-other', attemptId: 'attempt-9', generation: 9 });
+    await exchange(proc, run, tools.map((tool, index) => ({ kind: 'request', id: index + 1, tool, args: {} })), tools.length);
+    assert.deepEqual(run.forwarded, tools.map(tool => [tool, { ...(tool === 'moe.heartbeat' ? {} : { taskId: binding.taskId }),
+      ...(tool === 'moe.get_handoff_history' ? {} : { workerId: binding.workerId }), ...stamps[tool] }]));
+    assert.deepEqual(proc.replies(), tools.map((tool, index) => answered(index + 1, tool)));
+  }
+  const denied = [...['moe.qa_approve', 'moe.set_task_dependencies', 'moe.set_task_status', 'moe.init_project', 'moe.claim_next_task']
+    .map(tool => ['BRIDGE_TOOL_DENIED', tool, {}]),
+  ...[{ role: 'qa' }, { workerId: 'qa-1' }, { taskId: 'task-other' }, { attemptId: BINDING.attemptId }, { generation: BINDING.generation }]
+    .map(args => ['BRIDGE_IDENTITY_MISMATCH', 'moe.get_context', args]),
+  ['BRIDGE_ARGUMENT_DENIED', 'moe.get_context', { sessionId: SESSION_ID }], ['BRIDGE_ARGUMENT_DENIED', 'moe.complete_task', { prLink: 'x' }]];
+  const proc = fakeProvider();
+  const run = openSession(proc);
+  await exchange(proc, run, denied.map(([, tool, args], index) => ({ kind: 'request', id: index + 1, tool, args })), denied.length);
+  assert.deepEqual(run.forwarded, []);
+  assert.deepEqual(proc.replies(), denied.map(([code], index) => refused(index + 1, code)));
+});
+
+test('H4 replies, bounds and failures each answer once or end the session with a fixed code', { timeout: 30_000 }, async () => {
+  // Guest argument depth is checked iteratively before forward, even at 100k levels.
+  const comment = (id, content) => ({ kind: 'request', id, tool: 'moe.add_comment', args: { content } });
+  const deep = framed(`{"kind":"request","id":3,"tool":"moe.add_comment","args":{"content":${'['.repeat(100_000)}${']'.repeat(100_000)}}}`);
+  const depth = fakeProvider();
+  const nested = openSession(depth);
+  await exchange(depth, nested, [comment(1, nest(MAX_ARGUMENT_DEPTH - 1)), comment(2, nest(MAX_ARGUMENT_DEPTH)), deep], 3);
+  assert.deepEqual(nested.forwarded, [['moe.add_comment', { content: nest(MAX_ARGUMENT_DEPTH - 1), taskId: 'task-abc', workerId: 'worker-1' }]]);
+  assert.deepEqual(depth.replies(), [answered(1, 'moe.add_comment'), refused(2, 'BRIDGE_ARGUMENT_TOO_DEEP'), refused(3, 'BRIDGE_ARGUMENT_TOO_DEEP')]);
+  // A failed or isError forward is BRIDGE_UPSTREAM_FAILED; a result that is not a JSON object, is too deep or exceeds
+  // MAX_RESPONSE_BYTES is BRIDGE_RESPONSE_INVALID. Neither echoes it.
+  const sized = (id, extra) => ({ text: 'x'.repeat(MAX_RESPONSE_BYTES + extra
+    - JSON.stringify({ kind: 'response', id, ok: true, result: { text: '' } }).length) });
+  const cyclic = {};
+  cyclic.self = cyclic;
+  const results = [[() => { throw new Error('secret'); }, 'BRIDGE_UPSTREAM_FAILED'], [async () => { throw new Error('secret'); }, 'BRIDGE_UPSTREAM_FAILED'],
+    [() => ({ isError: true, content: [{ type: 'text', text: 'secret' }] }), 'BRIDGE_UPSTREAM_FAILED'],
+    ...[undefined, 'secret', ['secret'], { secret: 1n }, cyclic, { content: nest(MAX_ARGUMENT_DEPTH) }, sized(10, 1)]
+      .map(value => [() => value, 'BRIDGE_RESPONSE_INVALID']), [() => ({ content: nest(MAX_ARGUMENT_DEPTH - 1) })], [() => sized(12, 0)]];
+  const replies = fakeProvider();
+  const run = openSession(replies, { answer: (tool, args) => results[args.view][0]() });
+  await exchange(replies, run, results.map((_, view) => ({ ...REQUEST, id: view + 1, args: { view } })), results.length);
+  assert.deepEqual(replies.replies(), results.map(([make, code], view) => (code ? refused(view + 1, code)
+    : { kind: 'response', id: view + 1, ok: true, result: make() })));
+  assert.equal(Buffer.concat(replies.written).includes('secret'), false);
+  // At most MAX_PENDING_REQUESTS answers may be owed; one more request ends the session before anything is forwarded.
+  for (const count of [MAX_PENDING_REQUESTS, MAX_PENDING_REQUESTS + 1]) {
+    const proc = fakeProvider();
+    const owed = openSession(proc);
+    const requests = Array.from({ length: count }, (_, index) => ({ ...REQUEST, id: index + 1 }));
+    if (count === MAX_PENDING_REQUESTS) {
+      await exchange(proc, owed, requests, count);
+      assert.deepEqual(proc.replies().map(frame => frame.id), requests.map(frame => frame.id));
+      continue;
+    }
+    proc.send(HELLO, ...requests);
+    await rejectsWith(owed.promise, 'SESSION_PROTOCOL_VIOLATION');
+    assert.deepEqual([owed.forwarded, proc.written], [[], []]);
+  }
+  const ends = async (code, { fake, ...options }, drive = () => {}) => {
+    const proc = fakeProvider(fake);
+    const ended = openSession(proc, options);
+    await drive(proc, ended);
+    await rejectsWith(ended.promise, code, code);
+    return { proc, ended };
+  };
+  const spawned = proc => until(() => proc.calls.length === 1, 'spawned');
+  const late = Promise.withResolvers();
+  const slow = await ends('SESSION_TIMEOUT', { timeoutMs: 100, answer: () => late.promise }, proc => proc.send(HELLO, REQUEST));
+  late.resolve({ content: [] }); // too late: never written
+  await sleep(20);
+  assert.deepEqual([slow.proc.written, slow.ended.signals.map(signal => signal.aborted)], [[], [true]]);
+  await ends('SESSION_TIMEOUT', { timeoutMs: 100, fake: { write: () => {} } }, proc => proc.send(HELLO, REQUEST)); // stdin never drains
+  await ends('SESSION_PROVIDER_FAILED', { fake: { write: (chunk, done) => done(new Error('secret')) } }, proc => proc.send(HELLO, REQUEST));
+  await ends('SESSION_PROVIDER_FAILED', { timeoutMs: 100 }, async proc => {
+    proc.send(HELLO);
+    await spawned(proc);
+    proc.stdout.destroy(new Error('secret'));
+  });
+  await ends('SESSION_SPAWN_FAILED', {}, async proc => {
+    await spawned(proc);
+    proc.emit('error', Object.assign(new Error('secret'), { code: 'ENOENT' }));
+  });
+  for (const spawn of [() => { throw new Error('secret'); }, () => ({})]) await ends('SESSION_SPAWN_FAILED', { provider: { spawn } });
+  let outputs = 0;
+  await ends('SESSION_CALLBACK_FAILED', { onOutput: () => { outputs += 1; throw new Error('secret'); } }, proc => proc.send(HELLO, OUTPUT, OUTPUT));
+  assert.equal(outputs, 1);
+  await ends('SESSION_CALLBACK_FAILED', { onObservation: () => { throw new Error('secret'); } }, proc => {
+    proc.send(HELLO, EXIT);
+    proc.exit(0);
+  });
+  // An answer still owed when the job ends leaves the session unclean, so no observation is delivered.
+  const unanswered = await ends('SESSION_PROTOCOL_VIOLATION', { answer: () => new Promise(() => {}) }, async (proc, ended) => {
+    proc.send(HELLO, REQUEST);
+    await until(() => ended.forwarded.length === 1, 'forwarded');
+    proc.send(EXIT);
+    proc.exit(0);
+  });
+  assert.deepEqual([unanswered.ended.observations, unanswered.proc.written], [[], []]);
+  // The daemon's bind is checked again before every forward.
+  const moved = await ends('SESSION_DAEMON_NOT_LOOPBACK', { daemonInfoPath: daemonFile('rebind.json') }, async proc => {
+    proc.send(HELLO, REQUEST);
+    await until(() => proc.written.length === 1, 'first answer');
+    daemonFile('rebind.json', { bindHost: '0.0.0.0' });
+    proc.send({ ...REQUEST, id: 2 });
+  });
+  assert.equal(moved.ended.forwarded.length, 1);
+  // An abort closes the bridge stdin; only a provider still running timeoutMs later is killed, locally.
+  const controller = new AbortController();
+  const stopped = await ends('SESSION_ABORTED', { signal: controller.signal, answer: () => new Promise(() => {}) }, async (proc, ended) => {
+    proc.send(HELLO, REQUEST);
+    await until(() => ended.forwarded.length === 1, 'forwarded');
+    controller.abort();
+  });
+  assert.deepEqual([stopped.proc.kills, stopped.ended.signals[0].aborted, getEventListeners(controller.signal, 'abort').length], [[], true, 0]);
+  const hungController = new AbortController();
+  const hung = await ends('SESSION_ABORTED', { timeoutMs: 100, fake: { hung: true }, signal: hungController.signal }, async proc => {
+    proc.send(HELLO);
+    await spawned(proc);
+    hungController.abort();
+  });
+  assert.deepEqual(hung.proc.kills, ['SIGKILL']);
 });
