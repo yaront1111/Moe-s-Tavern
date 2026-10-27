@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 18,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,18 +85,26 @@
       "author": "qa-6fa5d758",
       "content": "QA evidence for the rejection: the lost wakeup in Termination.wait() (qa-6fa5d758, 2026-10-27).\n\n1) Gate. A fresh run of env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs exited 1. Setup: node v24.21.0, Python 3.12.3, WSL2, load about 14 on 16 cores, 15:27:42Z.\n- 43 tests: 42 pass, 0 fail, 1 cancelled.\n- \"S9 SIGHUP during relay() ...\" timed out after 30000ms.\n- Five more full runs each passed 43/43.\n\n2) Mechanism. In guest-supervisor.py, Termination.wait() (L102-109) sets armed, checks `caught`, then calls the blocking syscall: pump's selector.select (L301) or os.read(start_end) (L358/L365).\n- A signal delivered after CPython's last eval-breaker check (in EpollSelector.select, after max()) but before epoll_wait/read(2) starts runs only the C handler. It trips a flag, and no wakeup fd is set.\n- CPython runs the Python handler only when the syscall returns. For S9's quiet job and idle agent, that never happens.\n- The final start_end read after stand-down has the same window. It waits as long as a job that closed fds 1-2 keeps running.\n\n3) Deterministic gdb repro (gdb as the harness's parent, so it works with ptrace_scope=1). The files are in /tmp/claude-1000/qa-r10a/gdb-c28u: harness.py, common.gdb, inject.gdb, control.gdb, driver.py.\n- Run: python3 -I -B driver.py <repo>/scripts/local-runner/guest-supervisor.py inject /tmp/claude-1000/qa-r10a/gdb-c28u (then the same with `control`).\n- harness.py runs m.relay(['python3','-I','-c',GROUP_JOB], out_fd=<file>, in_fd=r, agent_socket=<path>, agent_uid=os.getuid()).\n- common.gdb: set startup-with-shell off; handle SIGHUP/SIGTERM/SIGINT/SIGCHLD/SIGPIPE nostop noprint pass.\n- inject.gdb: tbreak epoll_wait; ignore $bpnum 1; commands: signal SIGHUP. This delivers SIGHUP at the entry of pump's idle select, once the output frame is out.\n\nRESULT (inject):\n- 3 s after the SIGHUP, the supervisor is alive.\n- wchan=do_epoll_wait, syscall 232, SigPnd=ShdPnd=0 (the signal was consumed), SigCgt=0x4003.\n- The job and grandchild are ALIVE, and there are 0 observation frames.\n- One agent connect (a single fd event) then gives exit 75 (gdb: \"exited with code 0113\"), and the job and grandchild are gone.\n\nRESULT (control): a SIGHUP sent while the supervisor is already blocked gives a prompt 75 with the group gone.\n\n4) Verified fine, keep as is:\n- The diff: runtime +108/-9 and tests +141/-2, existing tests untouched.\n- S10-S14.\n- Four scratch mutants each killed by their target: watch never kills (S10), no handlers (S9), kill instead of killpg (S9), and close instead of stand-down (S11).\n- Windows Node 24.16: 19 pass, 24 skip, 0 fail.\n- No __pycache__.\n\nFix direction: any TERM/HUP/INT inside relay() must end it promptly with 75, without waiting for another fd event. The stdlib way is signal.set_wakeup_fd() on a non-blocking, non-inheritable pipe:\n- register its read end in bridge.selector (drained);\n- make both start_end waits also watch it;\n- on every relay() exit path, restore the previous wakeup fd and close the pipe.\nOr bound each wait with a short timeout that re-checks `caught`. Re-run the gdb recipe after the fix: inject must exit 75 with no extra fd event.",
       "timestamp": "2026-10-27T15:44:58.824Z"
+    },
+    {
+      "id": "comment-5824086a705a4c2fb13710133cf35951",
+      "author": "qa-6fa5d758",
+      "content": "QA evidence for round 2 (approval), from qa-6fa5d758 on 2026-10-27.\n\nWhat I reviewed:\n- Completion 4b19742 and checkpoint b2c0904, both on moe/work-2026-10-24 and on origin/moe/work-2026-10-24. The task files are clean against HEAD.\n- Size vs 32da7f7~1: supervisor +136/-9, tests +219/-2, 366 changed lines, under the 400 cap. Round 2 alone is +34/-6 and +84/-6.\n- The 35 pre-existing tests are byte-identical; only the import lines changed. The S9 block is unchanged, and guarded()'s job parameter defaults to GROUP_JOB.\n\nCommands I re-ran:\n1. DoD4 gate in place at 4b19742, 16:37:27Z (env -i, nvm Node v24.21.0, Python 3.12.3, WSL2, load about 10 on 16 cores): exit 0. 46 tests, 46 pass, 0 fail, 0 cancelled, 0 skipped. No __pycache__.\n2. The same gate from an exact `git archive 4b19742 scripts` copy: exit 0, 46/46.\n3. 30 runs of `^S(9|15|17) `: 30/30 exit 0, no ECONNRESET, no timeouts.\n4. gdb (my round-1 recipe, SIGHUP at epoll_wait entry):\n   - 32da7f7 at hit 2: the supervisor hangs in do_epoll_wait with SigPnd=0, the job and grandchild alive, 0 observations. An agent connect then gives 75.\n   - 4b19742 at hit 3 (pump idle): 75 before the first 50 ms poll, the job and grandchild gone, 0 observations.\n   - 4b19742 at hit 1 (read('+')): 75 with only the hello frame, and no leftover processes.\n5. Nine mutants, each killed:\n   - no set_wakeup_fd, wake_r not in bridge.selector, read() not watching wake_r: S15;\n   - no-op drain, no drain in read(): S16;\n   - no accept at close: S17;\n   - no wakeup-fd restore, wake pipe not closed: S12;\n   - wait() without the caught check: S9 SIGHUP timed out, which is probabilistic.\n6. Windows Node 24.16: 46 tests, 19 pass, 27 skip, 0 fail.\n\nCode review findings, all correct:\n- The wake pipe is non-blocking and close-on-exec. set_wakeup_fd runs before the handlers are installed.\n- The finally restores the handlers, then the wakeup fd, then closes the pipe.\n- Terminated is still raised only inside wait(), and drain() always runs unarmed.\n- read()'s selector is closed by `with` on every path.\n- The accept loop in close() runs on a non-blocking listener. When open() failed, accept fails with EINVAL and the loop breaks.\n- Removing GUARD's set_inheritable is safe: close_fds stays on, and S4 still passes.\n\nNon-blocking notes:\n(a) The caught-check guard (a signal outside an armed wait) is only probabilistically tested, through S9.\n(b) Residuals:\n- The wakeup-fd restore resets warn_on_full_buffer to its default.\n- A TERM after GUARD's exit is absorbed: exit 0 with the real observation.\n- By design, a TERM during a write_frame blocked on a stalled host waits until the host drains or closes. R10's host-side kill covers that case.\n- Connections queued past 2*MAX_CONNECTIONS are still reset.\n- Round 1's residuals stand.\n\nponytail: lean already. net: -0 lines possible.",
+      "timestamp": "2026-10-27T16:45:40.157Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T14:09:37.141Z",
-  "updatedAt": "2026-10-27T16:30:47.000Z",
+  "updatedAt": "2026-10-27T16:45:47.244Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:33:08.434Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-27T16:45:47.243Z",
+    "wallClockMs": 7958809
   },
   "contextFetchedBy": [
     "worker-3729a0d6",
@@ -148,7 +156,8 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-bridge.test.mjs",
-    "scripts/local-runner/guest-supervisor.py"
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json"
   ],
   "completionSummary": "CQ-R10a rework 2, after QA reject 1. No wait in relay() can lose a termination signal, and the job never outlives a terminated supervisor.\nguest-supervisor.py (vs 32da7f7~1: +136/-9):\n- QA fix: set_wakeup_fd on Termination's non-blocking pipe. wake_r is in bridge.selector, drained; both start-pipe reads use Termination.read() (fd plus wake_r). relay() restores the caller's wakeup fd and closes the pipe on every path. Terminated still raises only inside wait().\n- New: Bridge.close() accepts at most 2*MAX_CONNECTIONS queued connections before closing, so peers read EOF. This fixes a pre-existing S9 flake: 7/30 S9-only runs on 32da7f7 hit ECONNRESET, because AF_UNIX 'connect' fires once a connection is queued and closing the listener resets it.\n- QA's taste notes applied.\nTests (+219/-2; the 35 pre-existing tests are byte-identical; S9 not edited):\n- S12 also checks the wakeup fd is restored and no fd leaks on all 6 paths.\n- S15: pthread_kill lost-wakeup emulation (pump, last read); RED on old code.\n- S16: a caller SIGUSR1 causes no spin (pump, last read).\n- S17: a queued connection reads EOF; RED 3/3 pre-fix.\n- guarded() takes an optional job.\nQA evidence:\n- (b) gdb, QA's driver: before, a hang in do_epoll_wait with SigPnd=0 until an extra fd event; after, exit 75 before the first 50 ms poll, job and grandchild gone (ignore 2, since read('+') now polls).\n- (c) 30x '^S9 ': 30/30, 0 ECONNRESET, 0 timeouts.\n- (d) Fresh gate exit 0, 46/46; 5 repeat gates 46/46 each.\nMutation: 17/17 scratch mutants killed by their target tests. Windows Node 24.16: 19 pass, 27 skip, 0 fail.\nResiduals:\n- relay() owns the process-wide wakeup fd while it runs; main() sets none.\n- A TERM after GUARD's exit is absorbed: exit 0 with the observation.\n- Connections queued past 2*MAX_CONNECTIONS at close are still reset.\n- Round 1's residuals stand.",
   "commits": [
@@ -190,23 +199,37 @@
       "treeId": "9daf08c8a06c2031cc933668d75d6f6f115fa340",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "4b197427ca7aec82c54e881bbde65a7e41d3eca1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T16:04:55Z",
+      "paths": [
+        ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T16:31:19.072Z",
+      "treeId": "ebde3e5f8997477dae494bb271f01b7c37bedad9",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
   ],
-  "unattributedPaths": [
-    "out-after-last-read",
-    "out-after-pump"
-  ],
+  "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-3729a0d6@2026-10-27T15:45:24Z",
-    "at": "2026-10-27T16:04:23.067Z"
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-27T16:04:55Z",
+    "at": "2026-10-27T16:31:19.072Z"
   },
-  "reviewCompletedAt": "2026-10-27T15:45:12.454Z",
+  "reviewCompletedAt": "2026-10-27T16:45:47.243Z",
   "rejectionDetails": {
     "failedDodItems": [
       "During relay(), SIGTERM, SIGHUP and SIGINT sent to the supervisor each SIGKILL and reap the job's whole session group (including a grandchild that ignores SIGTERM), leave no agent socket or connection behind, write no observation frame, and exit with one new documented code; one real-process test per signal proves it.",
@@ -275,5 +298,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-27T16:45:47.243Z",
+  "reviewSummary": "APPROVED. QA reject #1 (the lost wakeup in Termination.wait) is fixed and independently verified. Full evidence is in comment-5824086a.\n\nReviewed: completion 4b19742 and checkpoint b2c0904, on moe/work-2026-10-24 and on origin. Size vs 32da7f7~1: +136/-9 supervisor, +219/-2 tests, 366 changed lines, under 400. The pre-existing tests are byte-identical, and S9 is unchanged.\n\nRe-ran:\n- `node --test scripts/tests/local-runner-bridge.test.mjs` (env -i, Node v24.21.0, Python 3.12.3), in place at 16:37:27Z and from a git archive of 4b19742: exit 0, 46/46 both times, no __pycache__.\n- 30 runs of `^S(9|15|17) `: 30/30, no ECONNRESET.\n- gdb, SIGHUP at epoll_wait entry: 32da7f7 hangs with SigPnd=0; 4b19742 exits 75 at once with the job and grandchild gone and no observation, in pump and in read('+').\n- Nine scratch mutants, each killed (S12, S15, S16, S17, S9).\n- Windows Node 24.16: 19 pass, 27 skip, 0 fail.\n\nDoD:\n- DoD1: S9 x3 pass; S15 pins the race deterministically; 75 is documented.\n- DoD2: S10 and S11 pass.\n- DoD3: S12 adds the wakeup fd and fd leaks on all 6 paths; S7 passes (stdlib-only, main()=78).\n- DoD4: verified as above.\n\nNon-blocking notes:\n- The caught-check guard is tested only probabilistically, through S9.\n- Residuals accepted as documented: a TERM during a host write blocked on a stalled host waits until the host drains or closes (R10's host-side kill covers it); a TERM after GUARD's exit is absorbed.\n\nponytail: lean already. net: -0 lines possible.\n\nRails: wrapper commits only, no .moe edits, no verified-local claims.",
+  "requiredCheckAtDone": null
 }
