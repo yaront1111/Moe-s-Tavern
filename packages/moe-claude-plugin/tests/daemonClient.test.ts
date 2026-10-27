@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,6 +51,95 @@ describe('findDaemonInfo', () => {
       JSON.stringify({ port: 'nope', projectPath: tmp, startedAt: 'x' })
     );
     expect(() => findDaemonInfo({ projectPath: tmp })).toThrow(/not running/i);
+  });
+});
+
+describe('daemon.json size cap', () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Valid daemon.json JSON padded with trailing spaces to an exact byte length.
+  function makeProjectWithDaemonBytes(bytes: number): { project: string; file: string } {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-plugin-cap-'));
+    tmpDirs.push(project);
+    const moeDir = path.join(project, '.moe');
+    fs.mkdirSync(moeDir, { recursive: true });
+    const json = JSON.stringify({ port: 4321, pid: 7, startedAt: 'now', projectPath: project });
+    const text = json + ' '.repeat(bytes - Buffer.byteLength(json));
+    expect(Buffer.byteLength(text)).toBe(bytes);
+    const file = path.join(moeDir, 'daemon.json');
+    fs.writeFileSync(file, text);
+    return { project, file };
+  }
+
+  function notFoundCode(project: string): string | undefined {
+    try {
+      findDaemonInfo({ projectPath: project });
+    } catch (err) {
+      expect(err).toBeInstanceOf(DaemonError);
+      return (err as DaemonError).code;
+    }
+    return undefined;
+  }
+
+  it('accepts a 65536-byte daemon.json', () => {
+    const { project } = makeProjectWithDaemonBytes(65536);
+    expect(findDaemonInfo({ projectPath: project })).toEqual({
+      port: 4321,
+      pid: 7,
+      startedAt: 'now',
+      projectPath: project,
+      host: '127.0.0.1',
+    });
+  });
+
+  it('treats a 65537-byte daemon.json as not found', () => {
+    const { project } = makeProjectWithDaemonBytes(65537);
+    expect(notFoundCode(project)).toBe('DAEMON_NOT_FOUND');
+  });
+
+  it('reads exactly 65537 bytes of an 8 MiB daemon.json through one closed descriptor', () => {
+    const { project, file } = makeProjectWithDaemonBytes(8 * 1024 * 1024);
+    const readFile = vi.spyOn(fs, 'readFileSync');
+    const open = vi.spyOn(fs, 'openSync');
+    const read = vi.spyOn(fs, 'readSync');
+    const close = vi.spyOn(fs, 'closeSync');
+
+    expect(notFoundCode(project)).toBe('DAEMON_NOT_FOUND');
+
+    expect(readFile.mock.calls.filter((c) => c[0] === file)).toHaveLength(0);
+    const opened = open.mock.calls.map((c, i) => ({ c, fd: open.mock.results[i].value as number }))
+      .filter((o) => o.c[0] === file);
+    expect(opened).toHaveLength(1);
+    const fd = opened[0].fd;
+    const total = read.mock.calls.reduce(
+      (sum, c, i) => (c[0] === fd ? sum + (read.mock.results[i].value as number) : sum),
+      0
+    );
+    expect(total).toBe(65537);
+    expect(close.mock.calls.filter((c) => c[0] === fd)).toHaveLength(1);
+  });
+
+  it('closes the descriptor and stays not-found when the read throws', () => {
+    const { project, file } = makeProjectWithDaemonBytes(200);
+    const open = vi.spyOn(fs, 'openSync');
+    const close = vi.spyOn(fs, 'closeSync');
+    vi.spyOn(fs, 'readSync').mockImplementation(() => {
+      throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+    });
+
+    expect(notFoundCode(project)).toBe('DAEMON_NOT_FOUND');
+
+    const fds = open.mock.calls
+      .map((c, i) => ({ c, fd: open.mock.results[i].value as number }))
+      .filter((o) => o.c[0] === file)
+      .map((o) => o.fd);
+    expect(fds).toHaveLength(1);
+    expect(close.mock.calls.filter((c) => c[0] === fds[0])).toHaveLength(1);
   });
 });
 
