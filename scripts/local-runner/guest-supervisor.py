@@ -298,6 +298,12 @@ class Bridge:
         conn.sock.close()
 
     def close(self):
+        # Closing the listener resets each connection it still queues; accepted first, such a peer reads EOF instead.
+        for _ in range(2 * MAX_CONNECTIONS if self.server else 0):  # beyond what listen() queues, against a flood
+            try:
+                self.sockets.add(self.server.accept()[0])
+            except OSError:  # BlockingIOError: the queue is empty
+                break
         for sock in [*self.sockets, *filter(None, [self.server])]:
             sock.close()
         self.selector.close()

@@ -949,11 +949,11 @@ const procState = pid => { try { return readFileSync(`/proc/${pid}/stat`, 'latin
 const running = pid => alive(pid) && (process.platform !== 'linux' || procState(pid)?.[0] !== 'Z');
 const sessionMembers = sid => readdirSync('/proc').filter(entry => String(Number(entry)) === entry).map(Number)
   .filter(pid => { const fields = procState(pid); return fields !== null && fields[0] !== 'Z' && Number(fields[3]) === sid; });
-async function guarded() {
+async function guarded(job = GROUP_JOB) {
   const socket = `${mkdtempSync(`${tmpdir()}/moe-r10a-`)}/agent.sock`;
   const code = `${LOAD}r, w = os.pipe()
 sys.exit(m.relay(['python3', '-I', '-c', sys.argv[3]], in_fd=r, agent_socket=sys.argv[2], agent_uid=os.getuid()${PEER}))`;
-  const proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, socket, GROUP_JOB], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, socket, job], { stdio: ['ignore', 'pipe', 'inherit'] });
   const host = { proc, socket, frames: [], exited: once(proc, 'exit') };
   sessions.push(host); // after() kills a supervisor a failed test left running and removes the socket directory
   const decoder = createFrameDecoder();
@@ -1115,16 +1115,37 @@ test('S15 a termination signal that interrupts no syscall still ends a blocked w
   }
 });
 
-test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin', { skip: NO_GUEST, timeout: 30_000 }, () => {
+test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin, in pump and in the last start-pipe read', { skip: NO_GUEST, timeout: 30_000 }, () => {
   const run = harness(`import resource, signal
 calls = []
 signal.signal(signal.SIGUSR1, lambda number, frame: calls.append(number))
 cpu = lambda: sum(resource.getrusage(resource.RUSAGE_SELF)[:2])
-before = cpu()
-job = 'import os, signal, sys, time\\nos.kill(int(sys.argv[1]), signal.SIGUSR1)\\ntime.sleep(1)'
-code = m.relay(['python3', '-I', '-c', job, str(os.getpid())], out_fd=os.open(os.devnull, os.O_WRONLY), in_fd=os.pipe()[0])
-print(json.dumps([code, calls, cpu() - before < 0.5]))  # an undrained wakeup byte would spin for the job's whole second
+send = 'import os, signal, sys, time\\nos.kill(int(sys.argv[1]), signal.SIGUSR1)\\ntime.sleep(1)'
+quiet = 'import os, time\\nnull = os.open(os.devnull, os.O_RDWR)\\nos.dup2(null, 1)\\nos.dup2(null, 2)\\ntime.sleep(0.3)\\n'  # pump ends first
+results = []
+for job in (send, quiet + send):
+    before, calls[:] = cpu(), []
+    code = m.relay(['python3', '-I', '-c', job, str(os.getpid())], out_fd=os.open(os.devnull, os.O_WRONLY), in_fd=os.pipe()[0])
+    results.append([code, list(calls), cpu() - before < 0.5])  # an undrained wakeup byte would spin for the job's whole second
+print(json.dumps(results))
 `);
   assert.equal(run.status, 0, String(run.stderr));
-  assert.deepEqual(JSON.parse(run.stdout), [0, [constants.signals.SIGUSR1], true]);
+  assert.deepEqual(JSON.parse(run.stdout), [[0, [constants.signals.SIGUSR1], true], [0, [constants.signals.SIGUSR1], true]]);
+});
+
+// pump stops polling the listener once the job's output closes, so a connection made after that stays queued until
+// the bridge closes; S9's agent can race into the same queue between its connect and the signal.
+test('S17 a connection the listener still queues when relay() ends reads EOF, never a reset', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const host = await guarded('import os, time\nos.write(1, b"%d" % os.getpid())\nnull = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\ntime.sleep(600)\n');
+  try {
+    await sleep(500); // the job has closed its output, so pump has ended
+    const agent = connect(host.socket);
+    await once(agent, 'connect');
+    const closed = once(agent, 'close'); // rejects on ECONNRESET, the reset of a connection never accepted
+    host.proc.kill('SIGTERM');
+    assert.deepEqual(await host.exited, [EX_TERMINATED, null]);
+    await closed;
+  } finally {
+    try { process.kill(host.child, 'SIGKILL'); } catch { /* already gone */ }
+  }
 });

@@ -45,19 +45,29 @@
     {
       "stepId": "step-3",
       "description": "Verification gate, run once, fresh, in place. The test only spawns python3 and writes temp dirs. -B keeps __pycache__ out of scripts/local-runner, which both IDE bundlers ship wholesale.\n\nFrom the repo root:\nenv -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs\n\nRequire exit 0, with 0 failed and 0 cancelled. On Linux that is 41 tests: the 35 existing ones plus S9 x3, S10, S11 and S12. S8 skips only when run as root.\n\nAfterwards:\n- scripts/local-runner/__pycache__ must not exist;\n- `pgrep -af 'time[.]sleep[(]600'` must show no process this run started.\n\ncomplete_task gets { command: 'node --test scripts/tests/local-runner-bridge.test.mjs', exitCode, outputTail }, and notes the env -i PATH and node v24.21.0.\n\nError handling: on a failure, fix the cause and re-run fresh. Never weaken an assertion, never edit an existing test, and never leave a mutated supervisor in the checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate on rework round 2, in place, on checkpoint b2c0904. The task files are clean against HEAD.\n- Command: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs\n- Setup: node v24.21.0, Python 3.12.3, WSL2, 2026-10-27T16:08:55Z.\n- Result: exit 0. 45 tests: 45 pass, 0 fail, 0 cancelled, 0 skipped. That is the 35 pre-existing tests plus S9 x3 and S10-S16.\n- Afterwards: scripts/local-runner/__pycache__ does not exist, and no python3 sleeper from this run is left. The only matches are pids 1372168, 1372169, 3417156 and 3463707, started 2026-10-26 by another session's r08c scratchpad, and were left untouched.\n- No bytes changed in this step. Other sessions' dirty paths were not touched.",
+      "startedAt": "2026-10-27T16:08:15.919Z",
+      "completedAt": "2026-10-27T16:09:16.765Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (load adversarial-self-review) of the two-file diff, then kill-check the new tests.\n\nMUTATION PROBES run on a SCRATCH copy, never on the checkout: cp -r scripts/local-runner and scripts/tests/local-runner-bridge.test.mjs into a mktemp dir with the same layout. Run each probe as\ntimeout 120 env -i ... node --test --test-name-pattern='^S(9|1[0-2]) ' <copy>/scripts/tests/local-runner-bridge.test.mjs\nScore by exit code. Kill leftovers after each probe, and bracket pgrep patterns, per the gotcha.\n(a) GUARD's watch never kills (its killpg line becomes pass): S10 must fail.\n(b) run_bridge closes life_end instead of writing the stand-down byte: S11 must fail.\n(c) relay() installs no handlers: S9 must fail.\n(d) relay()'s finally restores nothing: S12 must fail.\n(e) the teardown os.kill()s child.pid instead of killpg: S9 must fail, because the grandchild survives.\n\nCHECKLIST\n- Terminated can originate only inside Termination.wait(), so no finally can be cut short.\n- Every killpg targets a pinned group: the supervisor's while the guard is unreaped, and the guard's own while it lives.\n- The normal path writes the stand-down byte, waits for the start-pipe EOF, then reaps, and closes life_end only after the reap.\n- The job inherits only fds 0-2 (S4) and default signal dispositions: the guard installs Python handlers, never SIG_IGN, before the job's exec.\n- The exit-status proxy is faithful: codes, SIGKILL and SIG40, with no core file.\n- bridgeArgv, frames and codes 0/64/71/74/76/77/78 are unchanged, and main() still returns 78.\n- S7 still passes, and S12 checks GUARD's imports.\n\nRESIDUALS, noted only:\n- a descendant that leaves the process group (setsid/setpgid) escapes killpg;\n- descendants that outlive a NORMAL job exit are R10 lifecycle policy;\n- a SIGKILLed supervisor leaves its socket path, which the next bridge unlinks at open;\n- each relay starts one extra python3;\n- relay() must run on the main thread, as SIGCHLD's reset already required.\n\nIf the review changes bytes, re-run step 3 fresh. Report both paths in complete_step.modifiedFiles.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Adversarial review of round 2 (wakeup fd), plus QA evidence (a)-(d). The review found two things and changed bytes, so the gate was re-run fresh.\n\n1) New defect: S9 also flaked with ECONNRESET. No hang was involved, and the cause predates this round. 30 S9-only runs each, same load (~15): round-1 supervisor 32da7f7 failed 7/30, pre-fix HEAD failed 8/30, every failure `read ECONNRESET` on the agent socket.\n- Cause: S9 signals as soon as Node reports 'connect'. On AF_UNIX that fires once the connection is queued, before accept. If Terminated wins, bridge.close() closes the listener and Linux resets the queued connection.\n- Probe: a queued connection whose listener closes gets ConnectionResetError 104; one accepted and then closed reads b''.\n- Fix in Bridge.close() (+6 lines): accept up to 2*MAX_CONNECTIONS queued connections (non-blocking; stop at the first OSError) and close them with the rest, so each peer reads EOF. The bound stops a flood stalling teardown, and nothing is read from these sockets.\n- S9 is untouched. guarded() gained an optional job parameter (default GROUP_JOB), so S9 and S10 run with identical inputs.\n- New S17 (deterministic): the job closes its output, so pump stops polling the listener; an agent connects 0.5 s later and stays queued; SIGTERM. It expects 75 and a clean close. HEAD supervisor: 3/3 ECONNRESET (RED). Fix: 3/3 pass.\n\n2) Coverage gap: no test reached read()'s own drain() call. S16 now has a second row: the job closes its output, then sends SIGUSR1 0.3 s later, during the last start-pipe read.\n\nQA evidence:\n(a) S12 restores the wakeup fd (sentinel) and leaks no fd on all 6 paths.\n(b) gdb: QA's driver.py, harness.py and common.gdb unchanged. inject.gdb uses `ignore $bpnum 1` before; after uses `ignore 2`, since read('+') now polls.\n- Before (32da7f7): 3 s after the SIGHUP the supervisor was alive in do_epoll_wait (syscall 232) with SigPnd=0, job and grandchild alive, 0 observations. One agent connect then gave exit 0113 (75).\n- After: the supervisor exited 0113 (75) before the driver's first 50 ms poll saw the output frame, with the job and grandchild gone, 0 observations and no extra fd event.\n(c) 30x `--test-name-pattern='^S9 '` on the fix, load 17.5: 30/30 exit 0, 90/90 tests, 0 ECONNRESET, 0 timeouts, max 96 ms.\n(d) Fresh full gate 16:27:27Z: exit 0, 46/46. Five repeat gates: 46/46 each.\n\nMutation (scratch copies, exit-code scored, `^S(9|1[0-7]) `, leftovers found by a per-run env marker): 17/17 killed by their target tests:\n- plan a-e: S10, S11, S9, S12, S9;\n- round 1: no EPIPE catch S13; reset without the OSError catch, GUARD SIG_IGN and no reset before re-raise S14;\n- wakeup: no set_wakeup_fd, wake_r not in bridge.selector and read() not watching wake_r S15; no restore and no close S12; no-op drain and no drain in read() S16;\n- no accept at close: S17.\n\nWindows Node 24.16: 46 tests, 19 pass, 27 skip, 0 fail.\n\nSize vs 32da7f7~1: supervisor +136/-9 and tests +219/-2, 366 changed, under the 400 cap.\n\nResiduals:\n- relay() owns the process-wide wakeup fd while it runs, so a caller that relies on its own wakeup fd (asyncio) misses those bytes; main() has none.\n- A termination signal after GUARD's exit is absorbed: exit 0 with the observation.\n- Connections past 2*MAX_CONNECTIONS at close are still reset.\n- Round 1's residuals stand.\n\nHousekeeping: deleted the untracked out-after-last-read and out-after-pump, my previous session's probe output written to the repo root (never tracked). No .moe edits, no Git writes; other sessions' dirty paths were left untouched.",
+      "startedAt": "2026-10-27T16:09:20.999Z",
+      "completedAt": "2026-10-27T16:29:23.108Z"
     }
   ],
-  "planRevision": 14,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-3729a0d6",
+  "planRevision": 18,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -79,12 +89,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T14:09:37.141Z",
-  "updatedAt": "2026-10-27T16:02:47.774Z",
+  "updatedAt": "2026-10-27T16:30:47.000Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:33:08.434Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6,
+    "executedStepCount": 8,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -98,7 +108,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [
     {
@@ -126,23 +138,19 @@
   },
   "planApprovedAt": "2026-10-27T14:52:50.255Z",
   "workStartedAt": "2026-10-27T14:58:34.117Z",
-  "reviewStartedAt": "2026-10-27T15:22:53.355Z",
+  "reviewStartedAt": "2026-10-27T16:30:46.998Z",
   "verification": {
     "command": "node --test scripts/tests/local-runner-bridge.test.mjs",
     "exitCode": 0,
-    "outputTail": "s: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs; node v24.21.0)\n✔ I7 a newer bridge on the same path keeps its socket when an older bridge ends (179.652151ms)\n✔ I6 the agent socket opens only in a directory private to the supervisor (337.950638ms)\n✔ H1 invalid input, unsafe daemon info and an aborted signal refuse before spawn (21.015139ms)\n✔ H2 the stream must be hello, then requests and output, then one observation, and the provider must exit 0 (133.436849ms)\n✔ H3 each role tool is forwarded with only the host-bound identity, and refused requests never reach forward (30.954315ms)\n✔ H4 replies, bounds and failures each answer once or end the session with a fixed code (1000.094661ms)\n✔ H5 end to end, the real supervisor and agent get scoped answers, forged bytes stay output and only waitpid exits (146.080039ms)\n✔ S9 SIGTERM during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation (79.155041ms)\n✔ S9 SIGHUP during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation (69.83696ms)\n✔ S9 SIGINT during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation (69.142976ms)\n✔ S10 a SIGKILLed supervisor leaves no process of the job session alive within 5 seconds (137.004845ms)\n✔ S11 a normal relay completion never kills the group: a lingering grandchild outlives it (1070.422277ms)\n✔ S12 relay() restores SIGTERM, SIGHUP and SIGINT on every exit path, leaves SIGCHLD at SIG_DFL, and its guard is stdlib-only (146.274064ms)\n✔ S13 a job that SIGKILLs its own group, guard included, still ends with the SIGKILL observation (975.746947ms)\n✔ S14 a job killed by TERM, HUP, INT or glibc-reserved 32 gets that signal as its observation through the guard (266.40566ms)\nℹ tests 43\nℹ suites 0\nℹ pass 43\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 7824.579657",
-    "reportedAt": "2026-10-27T15:22:53.355Z",
+    "outputTail": "(fresh, 2026-10-27T16:27:27Z, after the last byte change: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs; node v24.21.0, Python 3.12.3, WSL2)\n✔ H5 end to end, the real supervisor and agent get scoped answers, forged bytes stay output and only waitpid exits (138.062934ms)\n✔ S9 SIGTERM during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation (68.649756ms)\n✔ S9 SIGHUP during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation (60.358583ms)\n✔ S9 SIGINT during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation (60.804862ms)\n✔ S10 a SIGKILLed supervisor leaves no process of the job session alive within 5 seconds (122.586171ms)\n✔ S11 a normal relay completion never kills the group: a lingering grandchild outlives it (1059.833399ms)\n✔ S12 on every exit path relay() restores SIGTERM, SIGHUP, SIGINT and the wakeup fd, leaks no fd and leaves SIGCHLD at SIG_DFL; its guard is stdlib-only (131.667129ms)\n✔ S13 a job that SIGKILLs its own group, guard included, still ends with the SIGKILL observation (940.89358ms)\n✔ S14 a job killed by TERM, HUP, INT or glibc-reserved 32 gets that signal as its observation through the guard (241.747527ms)\n✔ S15 a termination signal that interrupts no syscall still ends a blocked wait with 75, in pump and in the last start-pipe read (1128.320388ms)\n✔ S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin, in pump and in the last start-pipe read (2393.11009ms)\n✔ S17 a connection the listener still queues when relay() ends reads EOF, never a reset (560.830415ms)\nℹ tests 46\nℹ suites 0\nℹ pass 46\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 11340.635256",
+    "reportedAt": "2026-10-27T16:30:46.998Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/local-runner-bridge.test.mjs",
-    "scripts/local-runner/guest-supervisor.py",
-    ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
-    ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
-    ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json",
-    ".moe/tasks/task-aa79a8ebd51d4eedb08c3662dfe8b490.json"
+    "scripts/local-runner/guest-supervisor.py"
   ],
-  "completionSummary": "CQ-R10a: relay() never leaves its job running when the supervisor is terminated.\nguest-supervisor.py (+108/-9): the job runs under GUARD, an inline stdlib `python3 -I -B` session leader running it in its group and exiting with its status (signals re-raised, no core). Life-pipe EOF (supervisor died unreaped) makes GUARD killpg(0, SIGKILL) [DoD2]; a stand-down byte after pump EOF means a normal completion never kills the group. relay() installs and restores TERM/HUP/INT handlers around the new run_bridge(); Termination raises only inside wait() (pump's select, the start-pipe reads), so the existing finally SIGKILLs and reaps the group and closes the bridge, no observation is written, and relay returns new code 75 (EX_TEMPFAIL, documented) [DoD1]. Frames, bridgeArgv, codes 0/64/71/74/76/77/78, SIGCHLD reset, main()=78 unchanged.\nPlan-code deviations, test-pinned: (1) the stand-down write catches BrokenPipeError: a job SIGKILLing its own group kills GUARD too; plan code exited 74 in 10/20 runs vs legacy SIGKILL 20/20 (S13). (2) GUARD's pre-re-raise reset catches OSError: glibc refuses sigaction on 32/33, so plan code observed SIG32 as exit 1 (S14); SIG33 remains exit 161.\nTests (+141/-2, only imports changed; no existing test touched): S9 x3 (grandchild ignores SIGTERM; exit 75, socket gone, no observation), S10 (SIGKILLed supervisor: session empty within 5 s, Linux), S11, S12 (dispositions restored on every path, SIGCHLD SIG_DFL, stdlib-only), S13, S14. RED before GREEN; 9/9 scratch mutants killed.\nFresh verification after the last edit: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs -> exit 0, 43/43 pass (35 old + 8 new), node v24.21.0; no __pycache__, no leftovers.\nResiduals (step-4 note): a signal in wait()'s pre-syscall window waits for the next fd event; pre-R10 the same-uid job can kill GUARD (R10's privilege drop fixes it); setsid descendants escape.",
+  "completionSummary": "CQ-R10a rework 2, after QA reject 1. No wait in relay() can lose a termination signal, and the job never outlives a terminated supervisor.\nguest-supervisor.py (vs 32da7f7~1: +136/-9):\n- QA fix: set_wakeup_fd on Termination's non-blocking pipe. wake_r is in bridge.selector, drained; both start-pipe reads use Termination.read() (fd plus wake_r). relay() restores the caller's wakeup fd and closes the pipe on every path. Terminated still raises only inside wait().\n- New: Bridge.close() accepts at most 2*MAX_CONNECTIONS queued connections before closing, so peers read EOF. This fixes a pre-existing S9 flake: 7/30 S9-only runs on 32da7f7 hit ECONNRESET, because AF_UNIX 'connect' fires once a connection is queued and closing the listener resets it.\n- QA's taste notes applied.\nTests (+219/-2; the 35 pre-existing tests are byte-identical; S9 not edited):\n- S12 also checks the wakeup fd is restored and no fd leaks on all 6 paths.\n- S15: pthread_kill lost-wakeup emulation (pump, last read); RED on old code.\n- S16: a caller SIGUSR1 causes no spin (pump, last read).\n- S17: a queued connection reads EOF; RED 3/3 pre-fix.\n- guarded() takes an optional job.\nQA evidence:\n- (b) gdb, QA's driver: before, a hang in do_epoll_wait with SigPnd=0 until an extra fd event; after, exit 75 before the first 50 ms poll, job and grandchild gone (ignore 2, since read('+') now polls).\n- (c) 30x '^S9 ': 30/30, 0 ECONNRESET, 0 timeouts.\n- (d) Fresh gate exit 0, 46/46; 5 repeat gates 46/46 each.\nMutation: 17/17 scratch mutants killed by their target tests. Windows Node 24.16: 19 pass, 27 skip, 0 fail.\nResiduals:\n- relay() owns the process-wide wakeup fd while it runs; main() sets none.\n- A TERM after GUARD's exit is absorbed: exit 0 with the observation.\n- Connections queued past 2*MAX_CONNECTIONS at close are still reset.\n- Round 1's residuals stand.",
   "commits": [
     {
       "sha": "32da7f75aadcfe6405a153dac5634b49dfdc657c",
@@ -163,19 +171,40 @@
       "treeId": "5ce624fda552e00266e4aca09629588b61e1954c",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "b2c09040c0dd2bc8acf52df8eaf9ba7a5ebfa0c1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T15:45:24Z",
+      "paths": [
+        ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json",
+        ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+        ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T16:04:23.067Z",
+      "treeId": "9daf08c8a06c2031cc933668d75d6f6f115fa340",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "out-after-last-read",
+    "out-after-pump"
+  ],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-6fa5d758@2026-10-27T15:25:49Z",
-    "at": "2026-10-27T15:46:18.528Z"
+    "sessionId": "worker-3729a0d6@2026-10-27T15:45:24Z",
+    "at": "2026-10-27T16:04:23.067Z"
   },
   "reviewCompletedAt": "2026-10-27T15:45:12.454Z",
   "rejectionDetails": {
