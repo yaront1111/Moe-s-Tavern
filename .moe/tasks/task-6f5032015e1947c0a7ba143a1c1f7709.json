@@ -67,7 +67,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,16 +80,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T06:23:44.455Z",
-  "updatedAt": "2026-10-27T08:45:26.876Z",
+  "updatedAt": "2026-10-27T15:22:15.778Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T16:05:00.789Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:22:15.778Z",
+    "wallClockMs": 83834989
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-6fa5d758"
   ],
   "tier": "standard",
   "effort": "high",
@@ -193,5 +196,9 @@
     "kind": "checkpoint",
     "sessionId": "architect-2c9d5121@2026-10-26T16:07:41Z",
     "at": "2026-10-27T08:45:26.875Z"
-  }
+  },
+  "completedAt": "2026-10-27T15:22:15.778Z",
+  "reviewCompletedAt": "2026-10-27T15:22:15.778Z",
+  "reviewSummary": "Approved. Reviewed completion commit 619cf11 (on moe/work-2026-10-24; task source files clean and byte-equal to HEAD). Source diff +12/-3 over 3 files: workloadSnapshot.ts DEVICE_NAME gains ' *' before the optional extension; workloadSnapshot.test.ts gains 3 BAD_PATHS rows ('CON .txt', 'a/aux  .c', 'COM1 .log') plus an acceptance test for 'con x' and 'console.log'; source-snapshot.mjs has comment-only edits. Far under the size limit.\n\nDoD met: the three bad paths are refused in every placement (initialFiles, assessmentFiles, source.paths, digestFiles) and 'con x'/'console.log' are still accepted.\n\nIndependent checks:\n- DEVICE_NAME line and its comment are byte-identical to source-snapshot.mjs:40/:39 (diff empty); all three files pure ASCII; superscripts are ¹/²/³ escapes with unchanged semantics.\n- Re-ran the task verification in a fresh whole-repo Linux snapshot (git archive HEAD, native node_modules symlink, env -i, files cmp-equal): benchmarks 7 files 304 passed + 6 skipped (pre-existing E1-E6), exit 0; local-runner-snapshot 14/14, exit 0. Package tsc and test-file tsc both exit 0.\n- My mutation probes: dropping ' *' fails exactly the 3 new rows (3 failed/152 passed); over-widening to (?:[ .].*)?$ fails the acceptance test; restored file 155/155 green.\n- All importers are in src/benchmarks; no corpus fixture newly refused; refusals reuse the existing INVALID_INPUT path, so no new error paths.\n\nNot epic-final, so benchmarks plus the local-runner snapshot test is the right width. No rails violated. Not exercised: a Windows-native vitest run.",
+  "requiredCheckAtDone": null
 }

@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T17:11:20.389Z",
-  "updatedAt": "2026-10-27T15:21:15.831Z",
+  "updatedAt": "2026-10-27T15:21:43.761Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:24:59.646Z",
     "plannedStepCount": 4,
@@ -126,7 +126,36 @@
   },
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
+    ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json"
   ],
-  "completionSummary": "readDaemonInfo now reads .moe/daemon.json through a bounded stream (readNBytes(MAX+1), MAX_DAEMON_JSON_BYTES = 64 KiB) under both profiles. An oversize file returns null with a fixed warn log (no content) and is kept, not deleted. MAX bytes parses and MAX+1 is refused. Three tests in MoeDaemonSupervisorTest: exact cap, cap+1, and a sparse file over 2 GiB (RED was OutOfMemoryError; falls back to a regular cap+1 file if sparse is unsupported). Gate is Windows evidence (WSL has no JDK): cmd.exe gradlew.bat test --rerun under the jetbrains-gradle lease: exit 0, 21 classes, 309 tests, 0 fail/err/skip. Residuals out of scope: the daemon, proxy and wrapper also read daemon.json uncapped."
+  "completionSummary": "readDaemonInfo now reads .moe/daemon.json through a bounded stream (readNBytes(MAX+1), MAX_DAEMON_JSON_BYTES = 64 KiB) under both profiles. An oversize file returns null with a fixed warn log (no content) and is kept, not deleted. MAX bytes parses and MAX+1 is refused. Three tests in MoeDaemonSupervisorTest: exact cap, cap+1, and a sparse file over 2 GiB (RED was OutOfMemoryError; falls back to a regular cap+1 file if sparse is unsupported). Gate is Windows evidence (WSL has no JDK): cmd.exe gradlew.bat test --rerun under the jetbrains-gradle lease: exit 0, 21 classes, 309 tests, 0 fail/err/skip. Residuals out of scope: the daemon, proxy and wrapper also read daemon.json uncapped.",
+  "commits": [
+    {
+      "sha": "0891a4e5311d2fbb8b6a9ddc59d39faecc97575a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T15:19:05Z",
+      "paths": [
+        ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
+        ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T15:21:43.760Z",
+      "treeId": "220d53ac6bc9f579b41e49e87ba05eaaace125ca",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-27T15:19:05Z",
+    "at": "2026-10-27T15:21:43.760Z"
+  }
 }
