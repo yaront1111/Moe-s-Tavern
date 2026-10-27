@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, getEventListeners, once } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
-import { tmpdir } from 'node:os';
+import { constants, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { after, test } from 'node:test';
@@ -932,3 +932,142 @@ test('H5 end to end, the real supervisor and agent get scoped answers, forged by
     await rejectsWith(stopped.promise, 'SESSION_ABORTED');
     assert.deepEqual([alive(silent.child), existsSync(silent.socket), silent.proc.exitCode, stopped.observations], [false, false, 74, []]);
   });
+
+// CQ-R10a: SIGTERM, SIGHUP and SIGINT take relay()'s teardown; the guard empties the session of a SIGKILLed supervisor.
+const EX_TERMINATED = 75;
+const GROUP_JOB = `import os, signal, time
+grandchild = os.fork()
+if grandchild == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    time.sleep(600)
+    os._exit(0)
+os.write(1, b'%d %d %d' % (os.getpid(), grandchild, os.getsid(0)))
+time.sleep(600)
+`;
+// Linux /proc/<pid>/stat after the comm field: [0] state, [3] session id.
+const procState = pid => { try { return readFileSync(`/proc/${pid}/stat`, 'latin1').split(')').at(-1).trim().split(' '); } catch { return null; } };
+const running = pid => alive(pid) && (process.platform !== 'linux' || procState(pid)?.[0] !== 'Z');
+const sessionMembers = sid => readdirSync('/proc').filter(entry => String(Number(entry)) === entry).map(Number)
+  .filter(pid => { const fields = procState(pid); return fields !== null && fields[0] !== 'Z' && Number(fields[3]) === sid; });
+async function guarded() {
+  const socket = `${mkdtempSync(`${tmpdir()}/moe-r10a-`)}/agent.sock`;
+  const code = `${LOAD}r, w = os.pipe()
+sys.exit(m.relay(['python3', '-I', '-c', sys.argv[3]], in_fd=r, agent_socket=sys.argv[2], agent_uid=os.getuid()${PEER}))`;
+  const proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, socket, GROUP_JOB], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const host = { proc, socket, frames: [], exited: once(proc, 'exit') };
+  sessions.push(host); // after() kills a supervisor a failed test left running and removes the socket directory
+  const decoder = createFrameDecoder();
+  proc.stdout.on('data', chunk => host.frames.push(...decoder.push(chunk).map(parseGuestFrame)));
+  await until(() => host.frames.some(frame => frame.kind === 'output'), 'job started');
+  [host.child, host.grandchild, host.sid] = String(host.frames.find(frame => frame.kind === 'output').data).split(' ').map(Number);
+  return host;
+}
+
+for (const name of ['SIGTERM', 'SIGHUP', 'SIGINT']) {
+  test(`S9 ${name} during relay() kills and reaps the whole job group, closes the bridge and exits 75 with no observation`, { skip: NO_GUEST, timeout: 30_000 }, async () => {
+    const host = await guarded();
+    try {
+      const agent = connect(host.socket);
+      await once(agent, 'connect');
+      const closed = once(agent, 'close');
+      host.proc.kill(name);
+      assert.deepEqual(await host.exited, [EX_TERMINATED, null]);
+      await closed;
+      for (let waited = 0; waited < 5000 && [host.child, host.grandchild].some(running); waited += 100) await sleep(100);
+      assert.deepEqual([host.child, host.grandchild].filter(running), []);
+      assert.equal(existsSync(host.socket), false);
+      assert.deepEqual(host.frames.filter(frame => frame.kind === 'observation'), []);
+    } finally { // today's code leaves both alive, and after() only handles a live supervisor
+      for (const pid of [host.child, host.grandchild]) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+}
+
+test('S10 a SIGKILLed supervisor leaves no process of the job session alive within 5 seconds',
+  { skip: NO_GUEST || (process.platform !== 'linux' && 'session membership is read from /proc'), timeout: 30_000 }, async () => {
+    const host = await guarded();
+    try {
+      host.proc.kill('SIGKILL');
+      assert.deepEqual(await host.exited, [null, 'SIGKILL']);
+      for (let waited = 0; waited < 5000 && sessionMembers(host.sid).length; waited += 100) await sleep(100);
+      assert.deepEqual(sessionMembers(host.sid), []);
+    } finally {
+      for (const pid of [host.child, host.grandchild]) try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+
+test('S11 a normal relay completion never kills the group: a lingering grandchild outlives it', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const run = relay(`import os, time
+grandchild = os.fork()
+if grandchild == 0:
+    null = os.open(os.devnull, os.O_RDWR)
+    os.dup2(null, 1)
+    os.dup2(null, 2)
+    time.sleep(30)
+    os._exit(0)
+os.write(1, b'%d' % grandchild)
+`);
+  const { exit, stdout } = session(run);
+  const grandchild = Number(stdout.toString());
+  try {
+    assert.deepEqual(exit, EXIT);
+    await sleep(1000);
+    assert.ok(running(grandchild), 'the lingering grandchild was killed');
+  } finally {
+    try { process.kill(grandchild, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+test('S12 relay() restores SIGTERM, SIGHUP and SIGINT on every exit path, leaves SIGCHLD at SIG_DFL, and its guard is stdlib-only', { skip: NO_GUEST, timeout: 30_000 }, () => {
+  // killSignal: this harness keeps a no-op SIGTERM handler, so a default SIGTERM timeout kill would not end it.
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}import ast, signal
+roots = {alias.name.split('.')[0] for node in ast.walk(ast.parse(m.GUARD)) if isinstance(node, ast.Import) for alias in node.names}
+assert 'subprocess' in roots and roots <= set(sys.stdlib_module_names), roots
+mark = lambda number, frame: None
+TERM = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+for number in TERM:
+    signal.signal(number, mark)
+null = os.open(os.devnull, os.O_WRONLY)
+def host(data=b''):
+    r, w = os.pipe()
+    os.write(w, data)
+    return r, w
+results = []
+def call(argv, out_fd=null, in_fd=None):
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    code = m.relay(argv, out_fd=out_fd, in_fd=host()[0] if in_fd is None else in_fd)
+    results.append([code, all(signal.getsignal(number) is mark for number in TERM), signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL])
+sleeper = ['python3', '-I', '-c', 'import time; time.sleep(30)']
+call(['python3', '-I', '-c', 'pass'])
+call(['/nonexistent/moe-child'])
+r, w = os.pipe()
+os.close(r)
+call(sleeper, out_fd=w)
+r, w = host()
+os.close(w)
+call(sleeper, in_fd=r)
+call(sleeper, in_fd=host(bytes([0, 0, 0, 1]) + b'x')[0])
+call(['python3', '-I', '-c', 'import os, signal, sys, time; os.kill(int(sys.argv[1]), signal.SIGTERM); time.sleep(30)', str(os.getpid())])
+print(json.dumps(results))
+`, SUPERVISOR], { timeout: 30_000, killSignal: 'SIGKILL' });
+  assert.equal(run.status, 0, String(run.error ?? run.stderr));
+  assert.deepEqual(JSON.parse(run.stdout), [[0, true, true], [71, true, true], [74, true, true], [74, true, true], [76, true, true], [EX_TERMINATED, true, true]]);
+});
+
+// A job that SIGKILLs its own group takes the guard with it, so the stand-down byte can meet a closed pipe; the legacy
+// supervisor observed SIGKILL every time. The sleep lets the guard confirm the start first.
+test('S13 a job that SIGKILLs its own group, guard included, still ends with the SIGKILL observation', { skip: NO_GUEST, timeout: 30_000 }, () => {
+  const job = 'import os, signal, time\ntime.sleep(0.1)\nos.killpg(0, signal.SIGKILL)\n';
+  for (let run = 0; run < 6; run += 1) assert.deepEqual(session(relay(job)).exit, { ...EXIT, code: null, signal: 'SIGKILL' }, `run ${run}`);
+});
+
+test('S14 a job killed by TERM, HUP, INT or glibc-reserved 32 gets that signal as its observation through the guard', { skip: NO_GUEST, timeout: 30_000 }, () => {
+  // The guard's handlers for TERM, HUP and INT reset at the job's exec, and the guard resets each before it re-raises.
+  // glibc's sigaction refuses 32 (Linux only), so that one is re-raised without a reset. 33 is refused too, but the
+  // guard's thread has made glibc install its own handler for 33, so that one falls back to exit 128 + 33.
+  const { SIGTERM, SIGHUP, SIGINT } = constants.signals;
+  const deaths = [[SIGTERM, 'SIGTERM'], [SIGHUP, 'SIGHUP'], [SIGINT, 'SIGINT'], ...(process.platform === 'linux' ? [[32, 'SIG32']] : [])];
+  for (const [number, signal] of deaths) {
+    assert.deepEqual(session(relay('import os, sys\nos.kill(os.getpid(), int(sys.argv[1]))\n', String(number))).exit, { ...EXIT, code: null, signal }, signal);
+  }
+});

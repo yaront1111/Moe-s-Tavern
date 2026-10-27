@@ -4,8 +4,8 @@
 # its stdout: child bytes reach the host only inside base64 'output' frames, and termination only as this process's
 # own 'observation' frame from waitpid. Standard library only; the guest has python3 for cloud-init and no Node.
 # Exit codes: 0 relay complete; 64 usage; 71 the job could not start (child or agent socket: hello, then EOF, no
-# observation); 74 I/O failure or host EOF (child group killed); 76 host protocol violation (child group killed);
-# 77 not root; 78 root bridge with no job.
+# observation); 74 I/O failure or host EOF (child group killed); 75 SIGTERM, SIGHUP or SIGINT (child group killed, no
+# observation); 76 host protocol violation (child group killed); 77 not root; 78 root bridge with no job.
 import base64
 import json
 import os
@@ -33,10 +33,80 @@ MAX_CONNECTIONS = 8
 MAX_IN_FLIGHT = 8  # per connection; MAX_CONNECTIONS * MAX_IN_FLIGHT bounds all pending ids, closed requesters' too
 TOOL = re.compile(r'moe\.[a-z][a-z_]{0,63}')
 CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+# CQ-R10a: these end relay() through its teardown; SIGKILL of the supervisor is left to GUARD.
+TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+EX_TERMINATED = os.EX_TEMPFAIL
+# The job's session leader. It runs the job in its own group and exits with the job's status. On EOF of the life pipe
+# (the supervisor died before reaping it) it SIGKILLs that group, whose id this live member pins. A stand-down byte,
+# sent after the output pipes close, lets it exit once the job has; the start pipe gets '+' once the job runs, and
+# EOF once this process is gone.
+GUARD = '''import os, resource, signal, subprocess, sys, threading
+life, start = int(sys.argv[1]), int(sys.argv[2])
+for fd in (life, start):
+    os.set_inheritable(fd, False)
+for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    signal.signal(number, lambda *_: None)  # group-wide signals are for the job; a caught signal resets at its exec
+released = threading.Event()
+def watch():
+    while True:
+        if not os.read(life, 1):
+            os.killpg(0, signal.SIGKILL)  # the supervisor died; this live leader pins the group id
+        released.set()
+threading.Thread(target=watch, daemon=True).start()
+try:
+    job = subprocess.Popen(sys.argv[3:])
+except Exception:
+    os._exit(1)  # no '+': the supervisor reports EX_OSERR
+try:
+    os.write(start, b'+')
+    null = os.open(os.devnull, os.O_RDWR)
+    os.dup2(null, 1)
+    os.dup2(null, 2)  # only the job and its descendants hold the output pipes
+    status = os.waitpid(job.pid, 0)[1]
+    released.wait()
+except BaseException:
+    os.killpg(0, signal.SIGKILL)  # never orphan a started job
+code = os.waitstatus_to_exitcode(status)
+if code >= 0:
+    os._exit(code)
+resource.setrlimit(resource.RLIMIT_CORE, (0, 0))  # die by the job's signal without writing a core file
+try:
+    signal.signal(-code, signal.SIG_DFL)
+except OSError:
+    pass  # SIGKILL and glibc's 32 and 33 refuse a reset; a signal that cannot end this process exits 128 + N
+os.kill(os.getpid(), -code)
+os._exit(128 - code)
+'''
 
 
 class ProtocolViolation(Exception):
     """The host broke the protocol; the bridge ends with EX_PROTOCOL."""
+
+
+class Terminated(Exception):
+    """A termination signal reached relay(); the bridge ends with EX_TERMINATED."""
+
+
+class Termination:
+    """Raises Terminated only inside wait(), so a signal can never cut teardown short."""
+
+    def __init__(self):
+        self.caught = self.armed = False
+
+    def handle(self, number, frame):
+        self.caught = True
+        if self.armed:
+            self.armed = False
+            raise Terminated
+
+    def wait(self, call, *args):
+        self.armed = True
+        try:
+            if self.caught:
+                raise Terminated
+            return call(*args)
+        finally:
+            self.armed = False
 
 
 def encode_frame(value, limit=MAX_GUEST_FRAME_BYTES):
@@ -222,13 +292,13 @@ class Bridge:
             pass
 
 
-def pump(child, out_fd, bridge):
+def pump(child, out_fd, bridge, wait=lambda call: call()):
     streams = {child.stdout.fileno(): 'stdout', child.stderr.fileno(): 'stderr'}
     with bridge.selector as selector:
         for fd in streams:
             selector.register(fd, selectors.EVENT_READ)
         while any(fd in selector.get_map() for fd in streams):
-            for key, mask in selector.select():
+            for key, mask in wait(selector.select):
                 if key.data:  # the host stream, the agent socket or an agent connection
                     key.data(key, mask)
                     continue
@@ -251,22 +321,49 @@ def reap(child):
 def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=peer_uid):
     # An inherited SIG_IGN (it survives exec) lets the kernel discard the child's status before waitpid reads it.
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    termination = Termination()
+    saved = [(number, signal.signal(number, termination.handle)) for number in TERMINATION_SIGNALS]
+    try:
+        return run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination)
+    except Terminated:
+        return EX_TERMINATED  # run_bridge's finally has killed and reaped the group and closed the bridge
+    finally:
+        for number, handler in saved:
+            signal.signal(number, signal.SIG_DFL if handler is None else handler)
+
+
+def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination):
     try:
         write_frame(out_fd, {'kind': 'hello', 'protocol': PROTOCOL})
     except OSError:
         return os.EX_IOERR
     bridge = Bridge(out_fd, peer_uid)
+    life, life_end = os.pipe()  # the guard reads life; this process holds life_end until the guard is reaped
+    start_end, start = os.pipe()  # the guard writes '+' once the job runs; EOF means the guard has exited
     try:
         bridge.open(in_fd, agent_socket, agent_uid)
-        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True)
+        child = subprocess.Popen([sys.executable, '-I', '-B', '-c', GUARD, str(life), str(start), *argv],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True, pass_fds=(life, start))
     except (OSError, KeyError):  # KeyError: no AGENT_IDENTITY account
+        os.close(life_end)
+        os.close(start_end)
         bridge.close()
         return os.EX_OSERR  # hello, then EOF: never a fabricated observation
+    finally:
+        os.close(life)
+        os.close(start)
     reaped = False
     try:
-        pump(child, out_fd, bridge)
-        # Both pipes are at EOF; waitpid is the only source of the exit frame.
+        if termination.wait(os.read, start_end, 1) != b'+':
+            return os.EX_OSERR  # the guard could not start the job
+        pump(child, out_fd, bridge, termination.wait)
+        try:
+            os.write(life_end, b'0')  # stand down: a normal completion never kills the group
+        except BrokenPipeError:
+            pass  # a job SIGKILLed its own group, guard included; waitpid still reports the guard's status
+        termination.wait(os.read, start_end, 1)  # EOF: the guard has exited with the job's status
+        # Both pipes are at EOF and the guard has exited; waitpid is the only source of the exit frame.
         status = reap(child)
         reaped = True
         write_frame(out_fd, exit_observation(status))
@@ -277,7 +374,7 @@ def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=p
         return os.EX_IOERR  # a gone host (BrokenPipeError: CPython ignores SIGPIPE) or a failed pipe read
     finally:
         if not reaped:
-            # Kill the whole session group while the unreaped leader still pins its id, then reap the leader.
+            # Kill the whole session group while the unreaped guard (its leader) still pins its id, then reap it.
             try:
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -285,6 +382,8 @@ def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=p
             reap(child)
         child.stdout.close()
         child.stderr.close()
+        os.close(life_end)
+        os.close(start_end)
         bridge.close()  # no agent connection or socket outlives the job
 
 
