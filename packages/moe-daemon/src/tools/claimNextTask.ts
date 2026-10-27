@@ -1,7 +1,8 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import type { ExecutionAttempt, ExecutionPolicySnapshot, Task, TaskPriority, WorkerType } from '../types/schema.js';
+import type { ExecutionAttempt, ExecutionPolicySnapshot, Task, TaskPriority } from '../types/schema.js';
 import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidInput } from '../util/errors.js';
+import { WORKER_TYPE_SCHEMA, normalizeWorkerType, refreshWorkerType } from './joinTeam.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { planSubmissionSnapshot } from '../state/taskStore.js';
 import { logger } from '../util/logger.js';
@@ -270,6 +271,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         },
         epicId: { type: 'string' },
         workerId: { type: 'string' },
+        workerType: WORKER_TYPE_SCHEMA,
         processStartedAt: {
           type: 'string',
           description: 'Optional; send together with host or not at all. The runner process start time as the runner itself records it (e.g. `<pid>@<start token>`): supplied by the runner, never derived by the daemon. Recorded on the attempt this claim opens and compared by moe.reattach_attempt as an exact string. Non-blank, no control characters, at most 200 chars.'
@@ -306,6 +308,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           preferAdjacentInEpic?: boolean;
           processStartedAt?: unknown;
           host?: unknown;
+          workerType?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -335,6 +338,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // without a record — so this guard preserves it rather than adding one.
         if (params.workerId && state.getWorker(params.workerId)) {
           if (resolveWorkerRole(state, params.workerId) === 'governor') {
+            await refreshWorkerType(state, params.workerId, params.workerType);
             return {
               hasNext: false,
               nextAction: {
@@ -353,6 +357,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         // and permanently wedges the worker — no tool acts on BACKLOG, and
         // one-task-per-worker blocks every other claim until a release.
         assertAgentClaimableStatuses(statuses);
+
+        // Record the seat's reported CLI type before any answer below (resume,
+        // alreadyAssigned, no work, a later refusal). Only after the input checks
+        // above, and never creating a record: auto-registration stays on a
+        // successful claim.
+        await refreshWorkerType(state, params.workerId, params.workerType);
 
         // One task per worker: a worker already holding an active task
         // (PLANNING/WORKING/REVIEW/BLOCKED — see workerStore's active set) must
@@ -647,10 +657,9 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           // Auto-register or update worker entity
           const existingWorker = state.getWorker(params.workerId);
           if (!existingWorker) {
-            const workerType: WorkerType = 'CLAUDE';
             await state.createWorker({
               id: params.workerId,
-              type: workerType,
+              type: normalizeWorkerType(params.workerType),
               projectId: state.project!.id,
               epicId: candidate.epicId,
               currentTaskId: candidate.id,
