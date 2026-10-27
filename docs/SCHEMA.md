@@ -149,7 +149,8 @@ interface ProjectSettings {
   qualityGate?: string;
 
   // When the gate runs. 'epicFinal' (default): only on the epic's final task
-  // (highest order among siblings) — verification stays concentrated and
+  // (get_context isEpicFinal: the epic's designated finalTaskId, else the highest
+  // order among its non-ARCHIVED tasks) — verification stays concentrated and
   // mid-epic tasks stay lean. 'everyTask': every worker completion.
   qualityGateScope?: 'epicFinal' | 'everyTask';
 
@@ -334,6 +335,14 @@ interface Epic {
   
   // Ordering
   order: number;                 // 0, 1, 2... for display order
+
+  // Epic-final designation: the epic's final (integration-and-hardening) task,
+  // set or cleared with moe.update_epic { epicId, finalTaskId } ("" clears).
+  // It counts only while it names an existing, non-ARCHIVED task of this epic;
+  // otherwise get_context isEpicFinal falls back to the highest order among the
+  // epic's non-ARCHIVED tasks, ties counting. Optional, so epic files written
+  // before it load unchanged.
+  finalTaskId?: string;          // "task-xyz789"
   
   // Timestamps
   createdAt: string;
@@ -1918,6 +1927,7 @@ function generateId(prefix: string): string {
 - `title` required, 1-200 chars
 - `projectId` must exist
 - `order` must be unique within project
+- `finalTaskId` is optional: at most 200 chars, trimmed, and `""` clears it. `moe.update_epic` refuses, before any write, an id that names no task, a task of another epic, or an ARCHIVED task
 
 ### Task
 - `title` required, 1-200 chars
