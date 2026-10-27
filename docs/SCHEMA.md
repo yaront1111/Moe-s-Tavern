@@ -383,12 +383,12 @@ type EpicStatus =
 
 ### Epic rail limits
 
-An epic update (`moe.update_epic`, and the apply step of an approved EPIC rail proposal) accepts at most 100 `epicRails` entries of at most 10000 UTF-16 code units each (JavaScript `string.length`, not bytes or code points). Each entry must be a non-blank single-line string with no NUL character. An entry that breaks a limit is **refused with `INVALID_INPUT`, never truncated**, and the whole update fails with nothing written. Accepted entries are stored exactly as sent, including leading/trailing whitespace and Unicode.
+Epic creation (`moe.create_epic`, and the IDE create-epic form) and every epic update (`moe.update_epic`, and the apply step of an approved EPIC rail proposal) accept at most 100 `epicRails` entries of at most 10000 UTF-16 code units each (JavaScript `string.length`, not bytes or code points). Each entry must be a non-blank single-line string with no NUL character. An entry that breaks a limit is **refused with `INVALID_INPUT`, never truncated or dropped**, and the whole create or update fails with nothing written. Accepted entries are stored exactly as sent, including leading/trailing whitespace and Unicode.
 
 - `moe.propose_rail` applies the same check to the `proposedValue` of an EPIC `ADD_RAIL`/`MODIFY_RAIL` before the proposal is saved or published. `REMOVE_RAIL` uses only `currentValue`, so a rail stored before the cap stays removable. GLOBAL and TASK rails are not newly bounded.
 - The whole array is re-validated on every epic rail change, so an entry already stored over the limit (only possible from a hand edit or an older build) blocks other rail changes until it is shortened (`MODIFY_RAIL`) or removed (`REMOVE_RAIL`); the error names the offending `epicRails[i]`.
 - A PENDING EPIC proposal saved before this check is re-validated when a human approves it. If it is over the limit, approval fails, the proposal stays `PENDING`, and the epic is unchanged; reject it and propose a shorter rail (or split the constraint across entries).
-- `moe.create_epic` still shortens over-long `epicRails` entries silently; tracked as `task-6b607b1278914531a75bfe16decf3199`.
+- On `moe.create_epic`, an absent `epicRails` creates the epic with no rails. `null`, a non-array, more than 100 entries, or any refused entry fails the call, and no epic is created. Blank and non-string entries are refused, not silently dropped. The IDE create-epic forms already trim each line and drop blank lines before sending (JetBrains CreateEpicDialog, VS Code media/epicDetail.js), so their payloads are unaffected.
 
 ---
 

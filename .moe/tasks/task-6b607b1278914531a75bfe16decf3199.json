@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -95,16 +95,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:00:47.902Z",
-  "updatedAt": "2026-10-27T14:30:19.290Z",
+  "updatedAt": "2026-10-27T15:09:38.076Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T16:01:18.722Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:09:38.076Z",
+    "wallClockMs": 83299354
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "tier": "standard",
   "effort": "high",
@@ -181,5 +184,9 @@
       ],
       "pushed": true
     }
-  ]
+  ],
+  "completedAt": "2026-10-27T15:09:38.076Z",
+  "reviewCompletedAt": "2026-10-27T15:09:38.076Z",
+  "reviewSummary": "APPROVED. Reviewed completion 4576850 (moe/work-2026-10-24, pushed); code files in working tree equal HEAD.\n\nDiff: createEpic now uses validateEpicUpdates({epicRails}).epicRails ?? [] = the exact update_epic path (100 items, MAX_EPIC_RAIL_CHARS=10000, truncate=false). Unused import removed; StateManager.ts still 1497 lines (<1500 budget). Refusal throws before write/emit. Code +2/-2, tests +80 (C1-C4, 14 tests).\n\nRe-ran via cmd.exe from WSL, MOE_* unset: `cd packages/moe-daemon && npm test` -> 170 files, 4358 passed, 19 skipped, exit 0; `npx tsc --noEmit` exit 0. Disclosure: first full run had 1 failure, repositorySource.test.ts (EPERM in afterEach fs.rmSync on a Windows temp dir, unrelated file). It passes on focused re-run with createEpic.test.ts (147/147) and the full re-run was exit 0: Windows file-lock flake.\n\nOwn mutation probe (git-archive snapshot + node_modules junction, removed before cleanup): restoring old lossy sanitize/substring(0,1000) failed 11/14 createEpic tests - killed.\n\nDoD: (1) over-cap entry -> INVALID_INPUT field epicRails[i], persisted state byte-identical, no EPIC_CREATED (cap is 10000 per architect comment-e786d3cb). (2) 1000-unit rail (also 1500, 10000 with surrogate end, whitespace/Unicode) byte-exact via tool, disk JSON and state.load(). (3) non-string, blank, NUL/CR/LF, 101 entries, bare string, null refused with error context equal to updateEpic's; 100 entries and absent/[] kept. (4) npm test exit 0.\n\nDelivery note: the docs/SCHEMA.md hunk (2+/2-, accurate; IDE-trim claim checked) is NOT in 4576850 (Moe-Contested with task-ec99ee71 at landing). It is the only dirty SCHEMA.md diff vs HEAD and needs a wrapper landing; I did not commit it (no Git writes outside wrappers). Not a DoD item.",
+  "requiredCheckAtDone": null
 }
