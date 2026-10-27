@@ -10,9 +10,49 @@
     "packages/moe-daemon/src/generated/skillFiles.ts is regenerated from docs/skills, and only the edited skills' entries change. A fresh `cd packages/moe-daemon && npx vitest run src/util/skillFiles.test.ts` exits 0, with its output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Reference docs. Before writing, read the landed facts:\n- packages/moe-daemon/src/types/schema.ts: Epic.finalTaskId;\n- src/delivery/policy.ts: isEpicFinalTask. No epic means final. A designation counts only while it names an existing task of the same epic that is not ARCHIVED, and then only that task is final. Otherwise the highest order among the epic's non-ARCHIVED tasks wins, ties counting;\n- src/state/validators.ts: validateEpicUpdates (string, at most 200 chars, trimmed, '' clears);\n- src/tools/updateEpic.ts: assertDesignatable, which refuses an id that names no task, a task of another epic, or an ARCHIVED task;\n- the update_epic section of docs/MCP_SERVER.md.\n\ndocs/SCHEMA.md:\n(a) In '## Epic', add finalTaskId?: string; after order: number;, with a comment in the file's style. It is the epic's designated final (integration-and-hardening) task, set or cleared with moe.update_epic { epicId, finalTaskId } ('' clears). It counts only while it names an existing, non-ARCHIVED task of this epic. Otherwise get_context isEpicFinal falls back to the highest order among the epic's non-ARCHIVED tasks, ties counting. It is optional, so epic files written before it load unchanged.\n(b) The ProjectSettings qualityGateScope comment ('only on the epic's final task (highest order among siblings)') must name the designated final task, with that fallback.\n(c) '## Validation Rules' > '### Epic' gets a finalTaskId bullet: optional, at most 200 chars, trimmed, '' clears; moe.update_epic refuses, before any write, an id that names no task, a task of another epic, or an ARCHIVED task.\n\ndocs/CONFIGURATION.md: in the qualityGateScope row (around line 183), replace '(highest `order` among siblings)'. The new text names the task get_context reports as isEpicFinal: the epic's finalTaskId (set with moe.update_epic), else the highest `order` among its non-ARCHIVED tasks.\n\nChange nothing else in either file. Live tasks also declare them (SCHEMA.md: task-6b607b12 and task-fc9835fe; CONFIGURATION.md: task-bdf6db6f), so keep hunks small and leave every other line byte-identical. Use the CLI's own file-editing tool, not sed or shell writes: on a Claude seat, Edit/Write is the TOOL witness a contested path needs to land. Keep LF line endings. Docs tests read both files (executionContractDocs, daemonGitDocs, taskTimeBudgetDocs); remove no phrase they pin.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Three skills, mirroring the wording moe-planning already landed (git show HEAD:docs/skills/moe-planning/SKILL.md, lines 27 and 39).\n\n(1) docs/skills/moe-epic-breakdown/SKILL.md, '## End the epic with an integration-and-hardening task': keep 'at the highest `order`', since order still ranks claims, and add two instructions.\n- Designate the task with moe.update_epic { epicId, finalTaskId } right after moe.create_task returns its id. Reason: `order` is a per-column sort position that board drags and new rows rewrite, so it cannot name the final task on its own.\n- Re-designate it with update_epic and the new id whenever the epic grows past that task: a new closing task replaces it, or work is re-sliced after it. Then get_context isEpicFinal and the quality gate follow the real closing task.\n\n(2) docs/skills/moe-qa-loop/SKILL.md, '## Review depth follows the task's position in its epic': replace the parenthetical '(sibling tasks come after it — check `moe.list_tasks {epicId}` and compare `order`)' with a check on the task.isEpicFinal that moe.get_context returns (QA's default read includes it). false means mid-epic; true means the epic-final/hardening bar. At most one clause may say it follows the epic's designated finalTaskId, else the highest-order fallback, so a dragged or newly created row does not change it. Leave untouched the phrases qaCommitPolicy.test.ts pins in this file and its generated copy ('bounded wait, not a blocker', 'up to ~2 minutes', 'land it yourself', 'record_commit'), and add neither phrase that test forbids.\n\n(3) docs/skills/regression-check/SKILL.md:\n- Replace 'Unsure of your position? `moe.list_tasks {epicId}` and compare `order`. No siblings after you → treat it as epic-final.' with: read moe.get_context task.isEpicFinal. true means epic-final (the full run); false means mid-epic. A task with no epic reads true.\n- In the mid-epic bullet, '(there are sibling tasks after this one in the epic)' becomes '(get_context task.isEpicFinal is false)' or an equivalent.\n\nNo other text changes. Keep each frontmatter block intact, because the generator stamps its sha marker inside it. Use the CLI's file-editing tool and keep LF endings. The moe-planning skill and docs/MCP_SERVER.md belong to task-cd2e447728224044abe7fa669d42f7fb: do not touch them, and never hand-edit the .moe/skills mirror.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/skills/moe-epic-breakdown/SKILL.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "docs/skills/regression-check/SKILL.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regenerate packages/moe-daemon/src/generated/skillFiles.ts with the generator only. Never use npm run build: its prebuild also deletes dist and regenerates initFiles.ts from docs/roles. Never hand-edit the file.\n\nOn WSL the shared checkout's tsx and vitest are Windows builds, so work in a Linux snapshot (see mem:gotcha-linux-vitest-reuse-native-node-modules):\n- SNAP=$(mktemp -d /tmp/moe-ec99-gate.XXXXXX).\n- git -C <repo root> archive HEAD | tar -x -C $SNAP. Archive the whole repo, because step 4's docs tests read root CLAUDE.md, .gitignore and docs/.\n- Overlay exactly the five edited docs from the worktree and cmp each one.\n- Symlink $SNAP/packages/moe-daemon/node_modules to /tmp/moe-linux-daemon.3EJTl5/repo/packages/moe-daemon/node_modules, after checking that its package.json and package-lock.json equal the snapshot's modulo CR. If they differ or it is gone, run npm ci in the snapshot.\n- Run (cd $SNAP/packages/moe-daemon && env -i HOME=$HOME PATH=<nvm node bin>:/usr/local/bin:/usr/bin:/bin npm run generate-skill-files).\n\nThe architect verified on 2026-10-27 that HEAD's skillFiles.ts regenerates byte-identical from HEAD's docs/skills (65 files across 17 skills). So diff the output against git show HEAD:packages/moe-daemon/src/generated/skillFiles.ts: only the moe-epic-breakdown, moe-qa-loop and regression-check SKILL.md entries may change, meaning their text and their sha marker. Error handling: if any other entry changes (a peer edited another skill since), or the generator fails, stop and report it with the diff. Never trim or hand-merge the generated file. cp the result over the worktree file and cmp it. On native Windows, npm run generate-skill-files may run in place in packages/moe-daemon (the generator only, never build).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, run once. Re-sync all six final files into $SNAP and cmp each one. From $SNAP, under the same env -i, run exactly: cd packages/moe-daemon && npx vitest run src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts src/util/executionContractDocs.test.ts src/util/daemonGitDocs.test.ts src/util/taskTimeBudgetDocs.test.ts. On native Windows, run it in place.\n\nThis is a superset of the DoD's skillFiles.test.ts:\n- qaCommitPolicy pins the moe-qa-loop text in both the source and the generated copy, so a stale or damaged regeneration fails it;\n- the three docs tests read SCHEMA.md and CONFIGURATION.md.\n\nFreshness proof: run npm run generate-skill-files in $SNAP again and cmp its output with the worktree's skillFiles.ts. They must be identical.\n\nRequire exit 0 and zero failed tests. Submit { command, exitCode, outputTail } to complete_task, and name the tested root and its base commit in the summary. Error handling: on a failure, fix the docs input in the worktree, re-sync, regenerate and re-run the same command. Never edit the generated file by hand or weaken a test. Never install, build or run vitest in the shared checkout's packages/moe-daemon from WSL.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load adversarial-self-review) of the six-file diff. Hunt for:\n- any statement that contradicts isEpicFinalTask. The fallback is the highest order among NON-ARCHIVED tasks, ties counting. A designation is valid only while it names an existing, same-epic, non-ARCHIVED task. A task with no epic is final;\n- any skill that still tells an agent to compare order via moe.list_tasks to learn its position;\n- epic-breakdown missing either the immediate designation or the re-designation rule;\n- skillFiles.ts changes outside the three entries;\n- a qaCommitPolicy sentinel lost;\n- unrelated hunks in the contested SCHEMA.md or CONFIGURATION.md;\n- CRLF line endings;\n- edits to .moe/skills, docs/MCP_SERVER.md or the moe-planning skill.\nIf any byte changes, re-run the step 4 gate fresh before complete_task. Report all six paths in complete_step.modifiedFiles, so the wrapper attributes them to this task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,5 +68,38 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T16:00:32.070Z",
-  "updatedAt": "2026-10-26T20:58:02.025Z"
+  "updatedAt": "2026-10-27T09:14:17.905Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T09:08:32.296Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T09:14:17.805Z",
+  "planningNotes": {
+    "approachesConsidered": "Keep it as one docs-sweep task with the generated file: 6 distinct files, past the 5-file warning but well under the 10-file limit, all mechanical. The 6th file forces the heavy tier, so the plan runs on Opus at the xhigh floor. Splitting off the regeneration would leave skillFiles.ts stale between landings, and qaCommitPolicy.test.ts asserts that the moe-qa-loop source and its generated copy agree, so a split breaks the suite in the middle. No npm run build: its prebuild cleans dist and regenerates initFiles.ts. No older-daemon fallback text in the skills: the plugins bundle a matching daemon, and the DoD says to stop comparing order. No edits to docs/MCP_SERVER.md or the moe-planning skill: task-cd2e4477 owns them.",
+    "codebaseInsights": "- isEpicFinalTask (delivery/policy.ts:211) is the one rule:\n  - no epic means final;\n  - a valid designation (existing task, same epic, not ARCHIVED) makes only that task final;\n  - otherwise own order >= the max order over non-ARCHIVED siblings (ties count).\n- update_epic validation:\n  - validateEpicUpdates: max 200, trimmed, '' clears (the key is dropped);\n  - assertDesignatable refuses no-such-task, other-epic and ARCHIVED ids before any write.\n- get_context serves task.isEpicFinal to QA by default. The QA trim omits only epicSiblings, planningNotes and routing (getContext.ts:35).\n- The landed moe-planning wording is the house phrasing (HEAD lines 27 and 39).\n- HEAD's generated skillFiles.ts regenerated byte-identical from HEAD docs/skills in a scratch Linux snapshot on 2026-10-27 (65 files across 17 skills).\n- The generator reads docs/skills relative to packages/moe-daemon/scripts and LF-normalizes before hashing.\n- qaCommitPolicy.test.ts pins sentinel phrases in moe-qa-loop (source and generated).\n- executionContractDocs, daemonGitDocs and taskTimeBudgetDocs read SCHEMA.md and CONFIGURATION.md.",
+    "risks": "Contested paths: docs/SCHEMA.md is declared by task-6b607b12 (WORKING) and task-fc9835fe (REVIEW), and docs/CONFIGURATION.md by task-bdf6db6f (WORKING). They land on a Claude seat's Edit/Write TOOL witness, or when clean at pre-flight with idle peers; a codex seat may see them held as MOE_ATTR_CONTESTED_UNTOUCHED. skillFiles.ts goes back via cp: it is ASSERTED through modifiedFiles plus a pre-flight change, and it is not contested once task-cd2e4477 is DONE, which dependsOn requires before WORKING. WSL: the shared checkout's node_modules are Windows builds, so use the snapshot plus the native node_modules at /tmp/moe-linux-daemon.3EJTl5. Never install into the shared checkout. Keep LF. docs/MCP_SERVER.md holds task-cd2e4477's uncommitted finalTaskId hunks (a contested hold, missing from its completion commit 4137865); they are not this task's to land or touch.",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+      "packages/moe-daemon/scripts/generate-skill-files.ts",
+      "docs/skills/moe-planning/SKILL.md",
+      "docs/SCHEMA.md",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T09:14:17.905Z"
 }

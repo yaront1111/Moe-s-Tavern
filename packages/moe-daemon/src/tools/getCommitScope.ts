@@ -45,6 +45,27 @@ function peerTaskActive(state: StateManager, other: Task, nowMs: number, sinceMs
   });
 }
 
+/**
+ * Whether a session that is not the assignee must leave the task's source paths
+ * alone. False only for an unassigned task, or for an owner that is missing or
+ * DEAD and holds no non-closed attempt of its own on this task. True otherwise:
+ * a registered non-DEAD owner, or a non-closed attempt this owner opened.
+ *
+ * Presence is deliberately not used (no isWorkerAlive, no lastActivityAt): a
+ * quiet build is not a death, and a stale heartbeat must never be permission to
+ * land bytes a live owner is still writing. Fails closed on malformed records:
+ * a non-string assignee id, a worker with no status and an unknown attempt phase
+ * all count as protected. Read-only and independent of the caller.
+ */
+function isAssigneeProtected(state: StateManager, task: Task): boolean {
+  const owner: unknown = task.assignedWorkerId;
+  if (owner === null || owner === undefined || owner === '') return false;
+  if (typeof owner !== 'string') return true;
+  const record = state.getWorker(owner);
+  if (record && record.status !== 'DEAD') return true;
+  return listAttempts(state, task.id).some((attempt) => attempt.workerId === owner && attempt.phase !== 'closed');
+}
+
 function sortedById<T extends { id: string }>(items: Iterable<T>): T[] {
   return Array.from(items).sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -52,7 +73,7 @@ function sortedById<T extends { id: string }>(items: Iterable<T>): T[] {
 export function getCommitScopeTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.get_commit_scope',
-    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds.',
+    description: 'Attribution scope the agent wrapper stages a task\'s commit from: the task\'s ASSERTED paths (completed steps\' modifiedFiles/affectedFiles, filesModified, declare_files, tool-written, previously committed), the DECLARED part of them (moe.declare_files: committed regardless of the pre-task baseline; the rest of ASSERTED only when this task produced the dirty bytes), its PLANNED paths (plan-declared only, committed when changed since the pre-task baseline), every other open task\'s declared paths (PEER map; a peer that waits on this task contributes only its asserted paths, since it cannot have run yet; each entry\'s peerActive is false only when, since `since`, no contributing task had an active assignee, an open attempt or an attempt phase change — always true without `since`), which workers are active (peersActive drives the attribution.undeclared policy), the board-state paths it may commit, and the project\'s commit policy. Read-only apart from a liveness touch; no ownership guard — an orphan-mode caller (workerId not the assignee) is counted in activePeerIds — but assigneeProtected tells a caller that is not the assignee whether it must leave the task\'s source paths alone.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -146,6 +167,7 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
       const activePeerIds = orphanCaller ? [...livePeerIds, caller] : [...livePeerIds];
       const assignee = task.assignedWorkerId ? state.getWorker(task.assignedWorkerId) : null;
       const assigneeAlive = assignee ? isWorkerAlive(assignee, nowMs) : false;
+      const assigneeProtected = isAssigneeProtected(state, task);
       const livePeerSet = new Set(livePeerIds);
 
       // ---- board state -----------------------------------------------------
@@ -191,6 +213,7 @@ export function getCommitScopeTool(_state: StateManager): ToolDefinition {
         reopenCount: task.reopenCount ?? 0,
         assignedWorkerId: task.assignedWorkerId ?? null,
         assigneeAlive,
+        assigneeProtected,
         asserted: tiers.asserted,
         // Additive: a wrapper that predates the field ignores it and keeps
         // committing every asserted path regardless of its baseline.

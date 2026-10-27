@@ -13,6 +13,7 @@ interface ScopeResult {
   reopenCount: number;
   assignedWorkerId: string | null;
   assigneeAlive: boolean;
+  assigneeProtected: boolean;
   asserted: string[];
   declared: string[];
   planned: string[];
@@ -522,6 +523,201 @@ describe('moe.get_commit_scope', () => {
         const result = await scope({ workerId: 'worker-1', since: new Date(Date.now() - 5 * 60_000).toISOString() });
         expect(result.peerDeclared).toEqual([{ path: 'src/shared.ts', taskId: 'task-p1', peerActive: true }]);
       }
+    });
+  });
+
+  describe('assigneeProtected', () => {
+    // A landing session that is not the assignee leaves the task's source paths
+    // alone while this is true, and lands only on a JSON false. A quiet build is
+    // not a death, so presence (assigneeAlive) must never decide it.
+    const STALE = '2020-01-01T00:00:00.000Z';
+    const OPEN_PHASES = ['running', 'finalizing', 'reconciling'] as const;
+
+    function ownedTask(id: string, assignedWorkerId: string | null): void {
+      h.createTask({ id, status: 'WORKING', assignedWorkerId });
+    }
+
+    const open = (taskId: string, workerId: string) =>
+      openAttempt(h.state, { taskId, workerId, runnerId: workerId, workspace: h.testDir });
+
+    async function ready(): Promise<void> {
+      h.setupMoeFolder();
+      h.createEpic();
+    }
+
+    it('is false for an unassigned task, even when a former worker left an open attempt on it', async () => {
+      await ready();
+      ownedTask('task-1', null);
+      ownedTask('task-2', null);
+      await h.state.load();
+      await open('task-1', 'worker-former');
+
+      const result = await scope({ workerId: 'worker-other' });
+      expect(result.assignedWorkerId).toBeNull();
+      expect(result.assigneeProtected).toBe(false);
+
+      // An empty id patched in memory is unassigned too (isTaskClaimable's reading).
+      const task = h.state.tasks.get('task-2')!;
+      h.state.tasks.set('task-2', { ...task, assignedWorkerId: '' as unknown as null });
+      await open('task-2', 'worker-former');
+      expect((await scope({ taskId: 'task-2', workerId: 'worker-other' })).assigneeProtected).toBe(false);
+    });
+
+    it('is true for a registered non-DEAD owner however stale its presence; assigneeAlive can be false', async () => {
+      await ready();
+      ownedTask('task-1', 'worker-fresh');
+      ownedTask('task-2', 'worker-stale');
+      ownedTask('task-3', 'worker-garbage');
+      h.createWorker({ id: 'worker-fresh', status: 'CODING', lastActivityAt: new Date().toISOString() });
+      h.createWorker({ id: 'worker-stale', status: 'IDLE', lastActivityAt: STALE });
+      h.createWorker({ id: 'worker-garbage', status: 'READING_CONTEXT', lastActivityAt: 'garbage' });
+      await h.state.load();
+
+      // A foreign caller, so nothing refreshes the owner's lastActivityAt first.
+      const fresh = await scope({ taskId: 'task-1', workerId: 'worker-other' });
+      expect([fresh.assigneeAlive, fresh.assigneeProtected]).toEqual([true, true]);
+      const stale = await scope({ taskId: 'task-2', workerId: 'worker-other' });
+      expect([stale.assigneeAlive, stale.assigneeProtected]).toEqual([false, true]);
+      const garbage = await scope({ taskId: 'task-3' });
+      expect([garbage.assigneeAlive, garbage.assigneeProtected]).toEqual([false, true]);
+    });
+
+    it.each(['IDLE', 'READING_CONTEXT', 'PLANNING', 'AWAITING_APPROVAL', 'CODING', 'BLOCKED', 'GOVERNING'] as const)(
+      'is true for a stale owner whose status is %s',
+      async (status) => {
+        await ready();
+        ownedTask('task-1', 'worker-owner');
+        h.createWorker({ id: 'worker-owner', status, lastActivityAt: STALE });
+        await h.state.load();
+        expect((await scope({ workerId: 'worker-other' })).assigneeProtected).toBe(true);
+      }
+    );
+
+    it('is false for a DEAD owner and for a missing owner when no attempt exists', async () => {
+      await ready();
+      ownedTask('task-1', 'worker-dead');
+      ownedTask('task-2', 'worker-missing');
+      h.createWorker({ id: 'worker-dead', status: 'DEAD', lastActivityAt: new Date().toISOString() });
+      await h.state.load();
+
+      expect((await scope({ taskId: 'task-1', workerId: 'worker-other' })).assigneeProtected).toBe(false);
+      expect((await scope({ taskId: 'task-2', workerId: 'worker-other' })).assigneeProtected).toBe(false);
+    });
+
+    describe.each(['DEAD', 'missing'] as const)('a %s owner holding its own attempt', (ownerKind) => {
+      it.each(OPEN_PHASES)('is true while the attempt is %s', async (phase) => {
+        await ready();
+        ownedTask('task-1', 'worker-owner');
+        if (ownerKind === 'DEAD') h.createWorker({ id: 'worker-owner', status: 'DEAD' });
+        await h.state.load();
+        const attempt = await open('task-1', 'worker-owner');
+        if (phase !== 'running') await setAttemptPhase(h.state, attempt.id, phase);
+
+        expect((await scope({ workerId: 'worker-other' })).assigneeProtected).toBe(true);
+      });
+
+      it('is false once that attempt is closed', async () => {
+        await ready();
+        ownedTask('task-1', 'worker-owner');
+        if (ownerKind === 'DEAD') h.createWorker({ id: 'worker-owner', status: 'DEAD' });
+        await h.state.load();
+        await setAttemptPhase(h.state, (await open('task-1', 'worker-owner')).id, 'closed');
+
+        expect((await scope({ workerId: 'worker-other' })).assigneeProtected).toBe(false);
+      });
+    });
+
+    it('ignores attempts that are not an open attempt of this assignee on this task', async () => {
+      await ready();
+      for (const id of ['task-a', 'task-b', 'task-c', 'task-d']) ownedTask(id, 'worker-owner');
+      ownedTask('task-elsewhere', 'worker-someone');
+      await h.state.load();
+
+      // (a) only the owner's closed attempt
+      await setAttemptPhase(h.state, (await open('task-a', 'worker-owner')).id, 'closed');
+      // (b) an open attempt on this task by a different worker
+      await open('task-b', 'worker-other');
+      // (c) the owner's open attempt, but on a different task
+      await open('task-elsewhere', 'worker-owner');
+      // (d) the owner's closed attempt, then a foreign open one
+      await setAttemptPhase(h.state, (await open('task-d', 'worker-owner')).id, 'closed');
+      await open('task-d', 'worker-other');
+
+      for (const taskId of ['task-a', 'task-b', 'task-c', 'task-d']) {
+        const result = await scope({ taskId, workerId: 'worker-caller' });
+        expect([taskId, result.assigneeProtected]).toEqual([taskId, false]);
+      }
+    });
+
+    it('is true when the owner holds an open attempt next to a foreign open one, or a corrupt generation', async () => {
+      await ready();
+      ownedTask('task-1', 'worker-owner');
+      ownedTask('task-2', 'worker-owner');
+      await h.state.load();
+      // openAttempt allows one open attempt per task, so a second open is a
+      // hand-edited or crash-damaged store: patch it in directly.
+      const first = await open('task-1', 'worker-owner');
+      h.state.attempts.set('attempt-foreign', { ...first, id: 'attempt-foreign', workerId: 'worker-other', generation: first.generation + 1 });
+      const second = await open('task-2', 'worker-owner');
+      h.state.attempts.set(second.id, { ...second, generation: 'garbage' as unknown as number });
+      h.state.attempts.set('attempt-foreign-2', { ...second, id: 'attempt-foreign-2', taskId: 'task-2', workerId: 'worker-other', generation: 7 });
+
+      expect((await scope({ taskId: 'task-1', workerId: 'worker-caller' })).assigneeProtected).toBe(true);
+      expect((await scope({ taskId: 'task-2', workerId: 'worker-caller' })).assigneeProtected).toBe(true);
+    });
+
+    it('fails closed on malformed records instead of throwing', async () => {
+      await ready();
+      ownedTask('task-1', 'worker-owner');
+      ownedTask('task-2', 'worker-nostatus');
+      ownedTask('task-3', 'worker-owner');
+      h.createWorker({ id: 'worker-nostatus', status: 'IDLE', lastActivityAt: STALE });
+      await h.state.load();
+
+      // An unknown, hand-edited phase counts as open.
+      const attempt = await open('task-1', 'worker-owner');
+      h.state.attempts.set(attempt.id, { ...attempt, phase: 'paused' as unknown as 'running' });
+      expect((await scope({ taskId: 'task-1', workerId: 'worker-caller' })).assigneeProtected).toBe(true);
+
+      // A worker record that lost its status is not DEAD.
+      const worker = h.state.workers.get('worker-nostatus')!;
+      h.state.workers.set('worker-nostatus', { ...worker, status: undefined as unknown as 'IDLE' });
+      expect((await scope({ taskId: 'task-2', workerId: 'worker-caller' })).assigneeProtected).toBe(true);
+
+      // A non-string assignee id is unreadable, not "unassigned".
+      const task = h.state.tasks.get('task-3')!;
+      h.state.tasks.set('task-3', { ...task, assignedWorkerId: 42 as unknown as string });
+      expect((await scope({ taskId: 'task-3', workerId: 'worker-caller' })).assigneeProtected).toBe(true);
+    });
+
+    it('is independent of the caller (the owner calling last, since a call refreshes its presence)', async () => {
+      await ready();
+      ownedTask('task-1', 'worker-quiet');
+      ownedTask('task-2', 'worker-dead');
+      h.createWorker({ id: 'worker-quiet', status: 'CODING', lastActivityAt: STALE });
+      h.createWorker({ id: 'worker-dead', status: 'DEAD' });
+      await h.state.load();
+
+      for (const [taskId, owner, expected] of [['task-1', 'worker-quiet', true], ['task-2', 'worker-dead', false]] as const) {
+        const foreign = await scope({ taskId, workerId: 'worker-other' });
+        const absent = await scope({ taskId });
+        const self = await scope({ taskId, workerId: owner });
+        expect([foreign.assigneeProtected, absent.assigneeProtected, self.assigneeProtected]).toEqual([expected, expected, expected]);
+      }
+    });
+
+    it('only adds the assigneeProtected key to the reply', async () => {
+      await ready();
+      ownedTask('task-1', 'worker-owner');
+      h.createWorker({ id: 'worker-owner', status: 'CODING' });
+      await h.state.load();
+
+      const result = await scope();
+      expect(Object.keys(result).sort()).toEqual([
+        'activePeerIds', 'alwaysInclude', 'asserted', 'assignedWorkerId', 'assigneeAlive', 'assigneeProtected',
+        'declared', 'epicId', 'excludePrefixes', 'inferredPaths', 'livePeerIds', 'peerDeclared', 'peersActive',
+        'planned', 'policy', 'reopenCount', 'status', 'taskId', 'title', 'touchedFiles', 'unattributedPaths',
+      ].sort());
     });
   });
 });

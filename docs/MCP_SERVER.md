@@ -213,7 +213,7 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 ```typescript
 {
   project: { id, name, globalRails, settings },
-  epic: { id, title, description, architectureNotes, epicRails } | null,
+  epic: { id, title, description, architectureNotes, epicRails, finalTaskId? } | null,
   task: {
     id, title, description, definitionOfDone, taskRails, status, implementationPlan,
     planSizeWarnings?: string[],        // present when the latest submit_plan drew warn-zone size warnings
@@ -235,7 +235,12 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
                                         // same epic, lower order, ≤20 — PLUS every task named by this task's dependsOn/blockedOnTaskIds,
                                         // regardless of the lower-order filter and the 20-cap; landed = a pushed completion commit or
                                         // status REVIEW/DONE. Prerequisite evidence is READ HERE — never via HEAD greps
-    isEpicFinal?: boolean,              // highest order among the epic's siblings — the wrapper's qualityGateScope 'epicFinal' rule; wrappers prefer this over their RPC+python fallback
+    isEpicFinal?: boolean,              // true for the epic's designated final task (epic.finalTaskId, set with moe.update_epic), so board drags,
+                                        // set_task_status moves and new rows never move it. A designation counts only while it names an existing,
+                                        // non-ARCHIVED task of the same epic. An epic without one falls back to the highest order among its
+                                        // non-ARCHIVED tasks, ties counting, and drags and new rows DO move that. A task with no epic is final.
+                                        // Drives the wrapper's qualityGateScope 'epicFinal' rule and the delivery policy's required check;
+                                        // wrappers prefer it over their RPC+python fallback (old daemons, highest-order rule)
     rejectionHistory?: RejectionHistoryEntry[], // present when non-empty; 5 most recent, newest first
     comments: Array<{
       id: string,
@@ -673,7 +678,13 @@ All seven are required; `additionalProperties` is `false`.
 ```typescript
 {
   taskId, title, status, epicId, reopenCount, assignedWorkerId,
-  assigneeAlive: boolean,
+  assigneeAlive: boolean,     // the 120 s display-presence window: the assignee's record exists, is not DEAD and its lastActivityAt is inside it (isWorkerAlive).
+                              // Never evidence that the assignee is dead and never permission to land — a quiet build outlasts it. See assigneeProtected
+  assigneeProtected: boolean, // false for an unassigned task (assignedWorkerId null or empty). Otherwise true while the assignee's worker record exists and is not
+                              // DEAD, however stale its lastActivityAt, or while the task has a non-closed attempt (running, finalizing, reconciling or an
+                              // unrecognised phase) that this same assignee opened. Only a missing or DEAD assignee with no such attempt is false. Malformed
+                              // records fail closed (a non-string assignee id, a worker record without a status, an unknown attempt phase all protect).
+                              // Caller-independent: the assignee, a foreign caller and no caller get the same value. Additive — see "Live-assignee protection"
   asserted: string[],         // ⋃ COMPLETED steps' (modifiedFiles ?? affectedFiles) ∪ task.filesModified ∪ task.declaredFiles ∪ task.touchedFiles ∪ non-inferred commits[].paths
   declared: string[],         // task.declaredFiles (moe.declare_files) ⊆ asserted: committed regardless of the pre-task baseline. Every other asserted path is
                               // committed only when this task produced its dirty bytes, else skipped as MOE_ATTR_ASSERTED_FOREIGN. Additive: a wrapper
@@ -703,7 +714,8 @@ All seven are required; `additionalProperties` is `false`.
 ```
 
 **Notes:**
-- No ownership guard and no status restriction — the wrapper calls it at pre-flight and post-flight, including for a task QA already owns, an unassigned `BLOCKED` task, or a `DONE`/`ARCHIVED` task (the wrapper then deletes that task's baseline instead of landing).
+- No ownership guard and no status restriction — the wrapper calls it at pre-flight and post-flight, including for a task QA already owns, an unassigned `BLOCKED` task, or a `DONE`/`ARCHIVED` task (the wrapper then deletes that task's baseline instead of landing). It serves every caller and refuses none: `assigneeProtected` is information for the wrapper, not a refusal.
+- **Live-assignee protection.** `assigneeProtected` is what a landing session that is not the assignee consults before it lands the task's source paths (wrapper side: `task-6aa460bb33184e1b84fc9c9e5c0a4560`). While it is true, that session lands no source path for the task. Only a boolean `false` permits a landing: an absent field (older daemon), a non-boolean value (`"false"` included) or a failed RPC is treated as protected, never coerced to false. An unassigned task, and a missing or DEAD assignee with no open attempt of its own, are unprotected, so orphan recovery lands as before; `assigneeAlive` plays no part in the decision. The disk fallback below has no protection signal, so a wrapper on it cannot infer that a foreign assignee is dead.
 - Paths are normalised like `affectedFiles` (`normalizeAffectedFiles`) and deduped by `pathKey` (case-folded on win32/darwin).
 - When the RPC fails (older daemon, daemon down) the wrapper falls back to disk — its own `.moe/tasks/<id>.json` (its `declaredFiles` serve as `declared`) plus every other task record — with the policy forced to `undeclared: "never"` and `peersActive: true`: declared-only landing, never a sweep.
 
@@ -1611,7 +1623,7 @@ Create a new epic.
 }
 ```
 
-The `nextAction` steers the architect into the slicing pass (`moe-epic-breakdown`) before the first `moe.create_task` — small tasks (typically 10-30 per epic, ~30-60 human-minutes, 1-3 files each) ending with an integration-and-hardening task.
+The `nextAction` steers the architect into the slicing pass (`moe-epic-breakdown`) before the first `moe.create_task` — small tasks (typically 10-30 per epic, ~30-60 human-minutes, 1-3 files each) ending with an integration-and-hardening task. Designate that closing task with `moe.update_epic { epicId, finalTaskId }`, so `get_context` `isEpicFinal` follows it whatever the board order.
 
 ---
 
@@ -1628,7 +1640,8 @@ Update an existing epic.
   architectureNotes?: string,
   epicRails?: string[],
   status?: "ACTIVE" | "COMPLETED" | "ARCHIVED",
-  order?: number
+  order?: number,
+  finalTaskId?: string          // the epic's final (integration-and-hardening) task; "" clears the designation
 }
 ```
 
@@ -1640,6 +1653,9 @@ Update an existing epic.
 **Errors:**
 - `epicId is required` - if epicId parameter is missing
 - `Epic not found: <epicId>` - if epic does not exist
+- `Invalid finalTaskId: names no task: <id>` - if no task has that id
+- `Invalid finalTaskId: task <id> belongs to epic <other>, not <epicId>` - if the task is in another epic
+- `Invalid finalTaskId: task <id> is ARCHIVED and can never be epic-final` - if the task is ARCHIVED
 
 ---
 

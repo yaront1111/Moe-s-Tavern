@@ -471,8 +471,43 @@ switch (tool) {
     //                                unset models a daemon from before the
     //                                field, whose asserted paths all land
     //                                regardless of the baseline
+    //   FAKE_SCOPE_ASSIGNEE=<id>|none  who holds the task. Unset or empty: the
+    //                                caller (args.workerId, else nobody), as
+    //                                before. `none`: unassigned. An empty value
+    //                                is the same as unset because PowerShell
+    //                                deletes a variable set to '', so the named
+    //                                sentinel carries "unassigned" on every engine.
+    //                                A caller that is not the assignee joins
+    //                                activePeerIds and makes peersActive true,
+    //                                as the daemon's orphan rule does.
+    //   FAKE_SCOPE_ASSIGNEE_ALIVE=0|1  assigneeAlive. Default true, false for `none`.
+    //   FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1  assigneeProtected. Default: true when
+    //                                a worker holds the task, false when none does
+    //                                (the daemon's answer for a registered owner and
+    //                                for an unassigned task). 0 with ALIVE=0 is a
+    //                                dead or missing owner; 1 with ALIVE=0 a quiet one.
+    //   FAKE_SCOPE_OWNERSHIP_MODE=omit|malformed  unset serves assigneeProtected as
+    //                                a boolean. `omit` leaves out that one key, as a
+    //                                daemon from before the field does. `malformed`
+    //                                serves String(value), so 'false' arrives as a
+    //                                string, the coercion trap a wrapper must refuse.
+    // The ALIVE, PROTECTED and OWNERSHIP_MODE knobs accept only the values above
+    // (empty counts as unset); anything else throws, so a typo cannot pass a scenario.
     // Pre-flight answers with the record's own status (the FAKE_TASK_STATUS
     // knob models the status the task reaches AFTER the CLI ran).
+    const knob = (name, allowed) => {
+      const value = process.env[name];
+      if (value === undefined || value === '') return null;
+      if (!allowed.includes(value)) throw new Error(`${name} must be ${allowed.map((a) => JSON.stringify(a)).join(' or ')} (got ${JSON.stringify(value)})`);
+      return value;
+    };
+    const ownerKnob = process.env.FAKE_SCOPE_ASSIGNEE || '';
+    const assignedWorkerId = ownerKnob === '' ? (args.workerId || null) : ownerKnob === 'none' ? null : ownerKnob;
+    const aliveKnob = knob('FAKE_SCOPE_ASSIGNEE_ALIVE', ['0', '1']);
+    const protectedKnob = knob('FAKE_SCOPE_ASSIGNEE_PROTECTED', ['0', '1']);
+    const ownershipMode = knob('FAKE_SCOPE_OWNERSHIP_MODE', ['omit', 'malformed']);
+    const assigneeAlive = aliveKnob === null ? ownerKnob !== 'none' : aliveKnob === '1';
+    const assigneeProtected = protectedKnob === null ? assignedWorkerId !== null : protectedKnob === '1';
     const taskId = args.taskId || 'task-postflight';
     const rec = readTask(taskId);
     const { asserted, planned } = rec ? declaredSets(rec) : { asserted: [], planned: [] };
@@ -494,25 +529,28 @@ switch (tool) {
     }
     const peerActive = process.env.FAKE_SCOPE_PEER_ACTIVE;
     if (peerActive === '0' || peerActive === '1') for (const e of peerDeclared) e.peerActive = peerActive === '1';
-    const peersActive = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
+    const livePeers = process.env.FAKE_SCOPE_PEERS_ACTIVE === '1';
+    const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId;
+    const activePeerIds = [...(livePeers ? ['worker-peer'] : []), ...(orphanCaller ? [args.workerId] : [])];
     ok({
       taskId,
       title: rec?.title || 'Postflight smoke',
       status: args.phase === 'preflight' ? (rec?.status || 'WORKING') : (process.env.FAKE_TASK_STATUS || rec?.status || 'WORKING'),
       epicId: 'epic-1',
       reopenCount: rec?.reopenCount || 0,
-      assignedWorkerId: args.workerId || null,
-      assigneeAlive: true,
+      assignedWorkerId,
+      assigneeAlive,
+      ...(ownershipMode === 'omit' ? {} : { assigneeProtected: ownershipMode === 'malformed' ? String(assigneeProtected) : assigneeProtected }),
       asserted, planned,
       ...(process.env.FAKE_SCOPE_DECLARED_FIELD === '1' ? { declared: strList(rec?.declaredFiles) } : {}),
       touchedFiles: strList(rec?.touchedFiles), inferredPaths: strList(rec?.inferredPaths), unattributedPaths: strList(rec?.unattributedPaths),
       peerDeclared,
-      livePeerIds: peersActive ? ['worker-peer'] : [],
-      activePeerIds: peersActive ? ['worker-peer'] : [],
-      peersActive,
+      livePeerIds: livePeers ? ['worker-peer'] : [],
+      activePeerIds,
+      peersActive: activePeerIds.length > 0,
       // BOARD candidates: own record, project.json and every record not held
       // by a live peer (the daemon also lists epics; no scenario seeds one).
-      alwaysInclude: [`.moe/tasks/${taskId}.json`, '.moe/project.json', ...(peersActive ? [] : peerIds.map((id) => `.moe/tasks/${id}.json`))],
+      alwaysInclude: [`.moe/tasks/${taskId}.json`, '.moe/project.json', ...(livePeers ? [] : peerIds.map((id) => `.moe/tasks/${id}.json`))],
       excludePrefixes: [],
       policy: { autoCommit: true, checkpointCommits: true, checkpointPush: true, commitBoardState: true, commitHooks: false, undeclared: 'solo', contested: 'commit' }
     });
