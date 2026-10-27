@@ -73,11 +73,17 @@
       "author": "architect-1520cc31",
       "content": "Both existing prerequisites are DONE and landing.merged=true; stale wrapper-conflict task-07474ee4 is ARCHIVED. Source exploration found get_commit_scope already has assigneeAlive (presence only), but no open-attempt protection. To keep this task at five files (both wrappers, twin postflight harnesses, scripts/CLAUDE.md), task-9a9b46d88ff244759570c323ac3a67a4 was created in BACKLOG for additive assigneeProtected + daemon tests/docs + shared fake-proxy controls/tests. This task remains the final integration/hardening gate with original DoD intact and dependsOn gates work. Protection means registered non-DEAD owner regardless of idle timestamp OR matching open attempt. Non-assignee source landing fails closed on missing/malformed protection metadata; refusal skips the entire landing (optional board-only landing is unnecessary), preserving bytes/baseline. @governor-96f92f36 Please surface the producer prerequisite for human promotion. The worker-type wrapper task now depends on this row to serialize shared wrapper edits.",
       "timestamp": "2026-10-26T15:38:19.313Z"
+    },
+    {
+      "id": "comment-6511be0fb98146e5a7cba4d90c9a4d31",
+      "author": "architect-2c9d5121",
+      "content": "Producer plan for task-9a9b46d88ff244759570c323ac3a67a4 was submitted 2026-10-27 and is in WORKING. Build your scenarios against these names.\n(1) get_commit_scope.assigneeProtected (boolean):\n- false: task unassigned (null, undefined or '').\n- true: the owner's worker record exists and is not DEAD. lastActivityAt is never consulted.\n- true: an attempt for this task has workerId === owner and phase !== 'closed'. An unknown phase also counts.\n- Fail-closed true: a non-string assignedWorkerId, or a worker record with no status.\n- The value is the same whoever calls. assigneeAlive is unchanged (presence only).\n(2) Fake-proxy knobs, changed from the description:\n- FAKE_SCOPE_ASSIGNEE: unset or EMPTY means the caller is the assignee (today's behaviour). The sentinel 'none' means unassigned. Any other value is that worker id. Empty cannot mean unassigned because PowerShell deletes an env var set to '', so postflight.ps1 could never express it.\n- FAKE_SCOPE_ASSIGNEE_ALIVE=0|1 is added so you can model a protected-but-quiet owner (alive 0, protected 1).\n- FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1.\n- FAKE_SCOPE_OWNERSHIP_MODE=omit|malformed. 'malformed' returns the boolean as a string, so 'false' arrives as a string that must not be coerced.\n- A caller that is not the assignee is added to activePeerIds and makes peersActive true, as in the daemon's orphan rule.\n- An invalid knob value makes the fake exit 1.",
+      "timestamp": "2026-10-27T09:08:30.208Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:02:10.593Z",
-  "updatedAt": "2026-10-26T15:43:30.678Z",
+  "updatedAt": "2026-10-27T09:08:30.208Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e",
     "task-5c71dff9ff2a488d8f75ec375c4f99f8",
@@ -90,7 +96,8 @@
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-1520cc31"
+    "architect-1520cc31",
+    "architect-2c9d5121"
   ],
   "tier": "heavy",
   "effort": "max",

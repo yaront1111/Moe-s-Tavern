@@ -1,0 +1,28 @@
+{
+  "id": "task-e57d1d20d1854e2cae44eaea9fee584e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the VS Code extension reads .moe/daemon.json with no size cap",
+  "description": "Objective: bound every .moe/daemon.json read in moe-vscode. Each of these call sites reads the whole file with fs.readFileSync:\n- src/services/MoeDaemonClient.ts: the connection lookup (~:604);\n- src/services/MoeDaemonClient.ts: the wait-for-daemon loop (~:792), which re-reads the file until a timeout;\n- src/extension.ts: the status quick-pick (~:196).\nThis is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, 64 KiB cap). daemon.json is repository content.\n\nDeliverable:\n- One small helper that reads at most 65537 bytes, used by every daemon.json read.\n- At each call site, a file over 64 KiB (65536 bytes) is handled like an unparseable one.\n- Valid files behave as today.\n\nNot in scope: JetBrains (task-4f1e37f3), connection and retry behaviour, and the other clients, which have their own sibling tasks.\n\nVerification: cd moe-vscode && npm test && npm run compile.",
+  "definitionOfDone": [
+    "Every daemon.json read in MoeDaemonClient.ts and extension.ts goes through one helper that reads at most 65537 bytes; a grep finds no other readFileSync of daemon.json in moe-vscode/src.",
+    "A node:test case proves the helper accepts a valid 65536-byte daemon.json, treats a 65537-byte one as unreadable, and refuses a sparse multi-GiB file promptly.",
+    "Fresh cd moe-vscode && npm test && npm run compile exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:26.045Z",
+  "updatedAt": "2026-10-27T13:43:26.045Z"
+}

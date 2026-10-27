@@ -1,0 +1,29 @@
+{
+  "id": "task-938653f9a7334f369ab74c49239ecbf3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the Claude Code plugin hook reads .moe/daemon.json with no size cap",
+  "description": "Objective: bound packages/moe-claude-plugin/src/daemonClient.ts readDaemonJson. The PostToolUse hook runs it on every moe.* tool call, and it reads the whole .moe/daemon.json with fs.readFileSync. This is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, 64 KiB cap). daemon.json is repository content, so a huge or never-ending file stalls every tool call.\n\nDeliverable:\n- A bounded read of at most 65537 bytes, with the descriptor closed on every path.\n- A larger file returns null, like an unreadable one, so the hook stays fail-open: it takes the existing DAEMON_NOT_FOUND path and never throws into Claude Code.\n- Valid files behave as today.\n\nNot in scope: the walk-up project discovery, the hook's event forwarding, and the other clients, which have their own sibling tasks.\n\nVerification: cd packages/moe-claude-plugin && npm test. On WSL its node_modules is a Windows install, so run vitest from a snapshot with a native npm ci. Never run npm run build in the shared checkout: the hook shim imports dist.",
+  "definitionOfDone": [
+    "readDaemonJson accepts a valid 65536-byte daemon.json (JSON padded with spaces) and returns null for a 65537-byte one, proven by new tests/daemonClient.test.ts cases.",
+    "The read never takes more than 65537 bytes and closes its descriptor on every path, proven by a test.",
+    "An oversize daemon.json leaves the hook fail-open: no throw, and the existing not-found handling runs, proven by a test.",
+    "Fresh cd packages/moe-claude-plugin && npm test exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:20.391Z",
+  "updatedAt": "2026-10-27T13:43:20.391Z"
+}

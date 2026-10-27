@@ -1,0 +1,34 @@
+{
+  "id": "task-ad0dc2e7557d4ceca42ce7fab3708942",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the agent launchers read .moe/daemon.json with no size cap",
+  "description": "Objective: bound the launchers' reads of .moe/daemon.json. Both twins read the whole file:\n- scripts/moe-agent.sh pre-flight parses it with python json.load(open(...)) several times: the daemon check (~:1469-1490) and the start wait loop (~:1581);\n- scripts/moe-agent.ps1 uses Get-Content -Raw | ConvertFrom-Json (~:570).\nThis is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, 64 KiB cap). daemon.json is repository content.\n\nDeliverable:\n- In both twins, every daemon.json read goes through one bounded read of at most 65537 bytes. In Python that is open(p, 'rb').read(65537); in PowerShell, a FileStream read into a 65537-byte buffer.\n- A larger file is handled exactly like an unparseable one: the sh's existing '[WARN] Failed to parse daemon.json' path, or the ps1's existing catch. The launcher then starts its own daemon as today.\n- String parity between the twins is kept.\n\nNot in scope:\n- moe-team.{sh,ps1} and moe-call.sh: they never read the file's contents (moe-call delegates to moe-proxy, a sibling task);\n- the WSL foreign-daemon probing logic.\n\nDepends on the live wrapper tasks task-bdf6db6f65b04a009c88c1e49aed3848, task-bc8410afe7144ddda804b60af000864d and task-c2a900aa5107479aa4c630f1b3837ed0, and through bdf6db6f on task-6aa460bb. All of them edit both launchers, so these edits must wait.\n\nVerification: bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh. The new test runs the real sh block, and the real ps1 block wherever Windows PowerShell 5.1 or pwsh 7 exists.",
+  "definitionOfDone": [
+    "Every daemon.json read in moe-agent.sh and moe-agent.ps1 goes through a bounded read of at most 65537 bytes, and a larger file takes the existing unparseable path.",
+    "New scripts/tests/daemon-json-cap.test.mjs runs the real launcher blocks against a 65536-byte and a 65537-byte daemon.json, on bash and on every PowerShell engine available. A missing engine is reported and never counted as a pass.",
+    "bash scripts/tests/parity-check.sh passes, and moe-agent.ps1 keeps its UTF-8 BOM.",
+    "Fresh bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bdf6db6f65b04a009c88c1e49aed3848",
+    "task-bc8410afe7144ddda804b60af000864d",
+    "task-c2a900aa5107479aa4c630f1b3837ed0"
+  ],
+  "priority": "LOW",
+  "order": 236.45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:36.349Z",
+  "updatedAt": "2026-10-27T13:43:36.349Z"
+}

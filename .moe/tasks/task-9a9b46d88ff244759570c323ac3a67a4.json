@@ -95,7 +95,7 @@
   "reopenReason": null,
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-6aa460bb33184e1b84fc9c9e5c0a4560",
-  "priority": "MEDIUM",
+  "priority": "HIGH",
   "order": 3,
   "comments": [
     {
@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:36:53.728Z",
-  "updatedAt": "2026-10-27T09:16:53.851Z",
+  "updatedAt": "2026-10-27T13:42:26.822Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T08:59:11.778Z",
     "plannedStepCount": 5,
@@ -160,7 +160,62 @@
     "packages/moe-daemon/src/tools/getCommitScope.test.ts",
     "scripts/tests/postflight-fake-proxy.js",
     "scripts/tests/postflight-owner-scope.test.mjs",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+    ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+    ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+    ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json",
+    ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json"
+  ],
+  "completionSummary": "moe.get_commit_scope now returns an additive boolean assigneeProtected. Rule: false for an unassigned task (null/undefined/''); true when the assignee's worker record exists and is not DEAD (however stale lastActivityAt; presence/assigneeAlive is never used) or when listAttempts(task) holds a non-closed attempt (running/finalizing/reconciling/unknown phase) opened by that same assignee; otherwise false (missing or DEAD owner with no own open attempt, so orphan recovery still lands). Malformed records fail closed (non-string assignee id, worker without status, unknown attempt phase). Caller-independent, read-only; every existing field, the inputSchema and the peer/liveness logic are unchanged and existing tests untouched. Daemon: new describe('assigneeProtected') with 23 cases (own/foreign/absent caller, fresh/stale/garbage non-DEAD owner across 7 statuses, DEAD/missing owner x running/finalizing/reconciling/closed, foreign-worker/other-task/closed-then-foreign attempts, two open attempts + garbage generation, fail-closed cases, key-set check); RED seen first (23/23 failed), mutation probes fail the suite. Shared fake proxy: FAKE_SCOPE_ASSIGNEE (unset/empty = caller-as-assignee, 'none' = unassigned, else an id; 'none' because PowerShell deletes an env var set to ''), FAKE_SCOPE_ASSIGNEE_ALIVE, FAKE_SCOPE_ASSIGNEE_PROTECTED, FAKE_SCOPE_OWNERSHIP_MODE=omit|malformed, orphan rule mirrored, typos throw naming the knob; knobs are read only inside get_commit_scope. New standalone postflight-owner-scope.test.mjs: 13 tests, RED 12/13 first. A differential run of HEAD's fake vs the new one over 240 legacy knob/arg combinations is identical modulo the new key; parity-check.sh PASS. docs/MCP_SERVER.md: only the get_commit_scope section (Returns + 'Live-assignee protection' note: only boolean false permits a landing; absent/non-boolean/failed RPC = protected; disk fallback has no signal). Gate (fresh): node:test 13/13; tsc clean; vitest 170 files, 4343 passed, 16 skipped; exit 0",
+  "commits": [
+    {
+      "sha": "201d5ab4299ba43ba0b44fdfc251e8443ae2cd07",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T09:08:35Z",
+      "paths": [
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+        ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json",
+        ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json",
+        ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T09:17:22.284Z",
+      "treeId": "782318d8d2238bb54f1b2519313fc0fb8e5444ac",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-0b40957cd116453aa76965059743fefb"
+        },
+        {
+          "path": "scripts/tests/postflight-fake-proxy.js",
+          "taskId": "task-8333866a53464d07bcaf88134f259ff4"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "scripts/tests/postflight-owner-scope.test.mjs",
+    "scripts/tests/postflight-fake-proxy.js",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "moe.get_commit_scope now returns an additive boolean assigneeProtected. Rule: false for an unassigned task (null/undefined/''); true when the assignee's worker record exists and is not DEAD (however stale lastActivityAt; presence/assigneeAlive is never used) or when listAttempts(task) holds a non-closed attempt (running/finalizing/reconciling/unknown phase) opened by that same assignee; otherwise false (missing or DEAD owner with no own open attempt, so orphan recovery still lands). Malformed records fail closed (non-string assignee id, worker without status, unknown attempt phase). Caller-independent, read-only; every existing field, the inputSchema and the peer/liveness logic are unchanged and existing tests untouched. Daemon: new describe('assigneeProtected') with 23 cases (own/foreign/absent caller, fresh/stale/garbage non-DEAD owner across 7 statuses, DEAD/missing owner x running/finalizing/reconciling/closed, foreign-worker/other-task/closed-then-foreign attempts, two open attempts + garbage generation, fail-closed cases, key-set check); RED seen first (23/23 failed), mutation probes fail the suite. Shared fake proxy: FAKE_SCOPE_ASSIGNEE (unset/empty = caller-as-assignee, 'none' = unassigned, else an id; 'none' because PowerShell deletes an env var set to ''), FAKE_SCOPE_ASSIGNEE_ALIVE, FAKE_SCOPE_ASSIGNEE_PROTECTED, FAKE_SCOPE_OWNERSHIP_MODE=omit|malformed, orphan rule mirrored, typos throw naming the knob; knobs are read only inside get_commit_scope. New standalone postflight-owner-scope.test.mjs: 13 tests, RED 12/13 first. A differential run of HEAD's fake vs the new one over 240 legacy knob/arg combinations is identical modulo the new key; parity-check.sh PASS. docs/MCP_SERVER.md: only the get_commit_scope section (Returns + 'Live-assignee protection' note: only boolean false permits a landing; absent/non-boolean/failed RPC = protected; disk fallback has no signal). Gate (fresh): node:test 13/13; tsc clean; vitest 170 files, 4343 passed, 16 skipped; exit 0"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-27T09:08:35Z",
+    "at": "2026-10-27T09:17:22.284Z"
+  }
 }

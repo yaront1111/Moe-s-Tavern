@@ -1,0 +1,32 @@
+{
+  "id": "task-685d8a8e6e5d42d2bf68db4d791de972",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-proxy reads .moe/daemon.json with no size cap",
+  "description": "Objective: bound packages/moe-proxy/src/utils.ts readDaemonInfoResult. It calls fs.readFileSync on the whole .moe/daemon.json on every connect and reconnect. Wrapper RPCs and heartbeats spawn a fresh proxy for every call, so an oversize file is read again on each call. This is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, 64 KiB cap). daemon.json is repository content, and a huge or never-ending file (a symlink to /dev/zero) exhausts memory.\n\nDeliverable:\n- A bounded read of at most 65537 bytes: fs.openSync plus fs.readSync into a 65537-byte Buffer, with the descriptor closed in finally.\n- A larger file returns { info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' }, so the proxy exits with that JSON-RPC error through the existing non-retryable path.\n- A missing file stays retryable, a malformed file keeps its current error, and valid files behave as today.\n\nNot in scope: index.ts reconnect logic, the README, and the other clients, which have their own sibling tasks.\n\nDepends on task-eb85340bf5ee4bde84ca8658a0ca0cd2, which also edits utils.ts.\n\nVerification: cd packages/moe-proxy && npm test. Never run it in the shared checkout: live WSL seats run that checkout's gitignored dist through the global moe-proxy symlink, and pretest's clean deletes dist first. Run it from a git-archive snapshot with a native npm ci (Serena mem gotcha-proxy-npm-test-shared-checkout-deletes-dist).",
+  "definitionOfDone": [
+    "readDaemonInfoResult parses a valid 65536-byte daemon.json, and for a 65537-byte file returns { info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' }, proven by new utils.test.ts cases.",
+    "The read never takes more than 65537 bytes and closes its descriptor on every path, proven by a test (for example, a sparse multi-GiB file is refused promptly).",
+    "A missing daemon.json stays retryable and a malformed one keeps its existing error, proven by the existing readDaemonInfo tests passing unchanged.",
+    "Fresh cd packages/moe-proxy && npm test exits 0, run from an isolated snapshot, never in the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-eb85340bf5ee4bde84ca8658a0ca0cd2"
+  ],
+  "priority": "LOW",
+  "order": 236.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:14.603Z",
+  "updatedAt": "2026-10-27T13:43:14.603Z"
+}

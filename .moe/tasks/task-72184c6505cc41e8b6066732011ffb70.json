@@ -128,7 +128,7 @@
     }
   ],
   "planRevision": 17,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -208,7 +208,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:33:45.303Z",
-  "updatedAt": "2026-10-26T10:44:41.183Z",
+  "updatedAt": "2026-10-27T13:45:46.486Z",
   "dependsOn": [
     "task-bf14bb1e39494eba83158a26e36ddb20",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
@@ -228,13 +228,16 @@
   "contextFetchedBy": [
     "architect-bb003851",
     "architect-2c9d5121",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-6fa5d758"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-26T09:22:27.398Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 8
+    "executedStepCount": 8,
+    "doneAt": "2026-10-27T13:45:46.486Z",
+    "wallClockMs": 102199088
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -289,7 +292,9 @@
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-3ead73b368094850bfec955c316bc239.json",
     ".moe/tasks/task-72184c6505cc41e8b6066732011ffb70.json",
-    ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json"
+    ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json",
+    ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+    ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json"
   ],
   "completionSummary": "CQ-F12 delivered (plan rev 1, 8/8 steps). 5 files, net +313/-2 under packages/, docs +1/-1.\n\nHardening, completeTask.ts (+4): readiness (assertExecutionProfileReady(resolveTaskExecutionProfile(...)), the store backstop's own expression) now runs after the evidence gate and BEFORE checkBranchPolicy and the finalizing write.\n- A refused completion writes nothing and the attempt stays running, so a retry gets the same refusal (before: ATTEMPT_NOT_RUNNING).\n- On verified-local, NOT_READY now precedes BRANCH-POLICY-FAIL (documented in MCP_SERVER.md).\n- The backstop is kept. RED, then GREEN.\n\nTests:\n- completionAuthorization: the readiness case calls refused() twice and checks the attempt is still running.\n- attemptStore.test: recordStepCompletion NOT_FOUND, NOT_RUNNING (reconciling, finalizing, closed) and NOT_ALLOWED, each with no write; an append keeps lastPhaseAt and the receipt.\n- New __e2e__/executionContract.e2e.test.ts (5 tests, real tools):\n  - DoD2: one receipt survives strict progress, 2 restarts and reattach, with planRevision and approvedPlanRevision 1/1 throughout; complete_task gets NOT_READY. Contrast: a DoD edit gives PLAN_REVISION_NOT_APPROVED, even with a rev-2 receipt.\n  - Reassignment keeps the approval; old ids get ATTEMPT_SUPERSEDED, a foreign session gets CONTEXT_RECEIPT_STALE, A gets NOT_ALLOWED.\n  - No approval backfill.\n  - Legacy progress is not evidence (EXECUTION_EVIDENCE_INELIGIBLE ['step-1']), and a rollback restores legacy.\n  - DoD3: candidate.attemptId is the producer's gen1, while QA's servedContext and check run use gen2; producer gen1 then gets ATTEMPT_SUPERSEDED; the review names the candidate.\n\nGate:\n- npm test exit 0: 169 files, 4290 passed | 16 skipped (HEAD baseline 4279/16; same skips).\n- DoD1: approvalRevision.acceptance 31/31 and delivery/acceptance 6/6, sha256 4dc39921…/891861b8…, git diff empty.\n- tsc and test-file tsc exit 0.\n- Proxy 98/98, launcher node tests 38/38, parity PASS. JetBrains/VS Code not touched.\n\nMutants all k",
   "commits": [
@@ -314,6 +319,23 @@
       "treeId": "a3ca174c03bfef93907f5c2d60dde11709db9154",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5d3be94f09bbc0b04f3914cf71a97923c0b3461b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-2c9d5121@2026-10-26T09:22:24Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-7a77465621dc4d6588d5747394cb0ced.json",
+        ".moe/tasks/task-bc8410afe7144ddda804b60af000864d.json"
+      ],
+      "recordedBy": "architect-2c9d5121",
+      "recordedAt": "2026-10-26T15:22:03.782Z",
+      "treeId": "beb74bb0f60bd2dcc4d1206597ef36066061a10f",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -325,8 +347,12 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-26T10:30:15Z",
-    "at": "2026-10-26T10:44:41.183Z"
-  }
+    "kind": "checkpoint",
+    "sessionId": "architect-2c9d5121@2026-10-26T09:22:24Z",
+    "at": "2026-10-26T15:22:03.782Z"
+  },
+  "completedAt": "2026-10-27T13:45:46.486Z",
+  "reviewCompletedAt": "2026-10-27T13:45:46.486Z",
+  "reviewSummary": "CQ-F12 approved.\n\nCommits: completion f3197844 and board-only checkpoint 5d3be94, both on moe/work-2026-10-24. The owned files are unchanged since.\n\nDiff: net +311 under packages/ (completeTask +4, two test files +57/-2, e2e 263); docs +1/-1.\n\nReadiness: the early check is the store backstop's exact expression. WORKING->REVIEW is always a new progression, so it only moves the refusal before branch-policy and finalizing. The backstop is kept and assertExecutionProfileReady is untouched.\n\nGate: fresh Linux snapshot of the current HEAD 201d5ab (owned files cmp-equal, native node_modules, env -i).\n- npm test: EXIT 0, 170 files, 4343 passed, 16 skipped.\n- tsc and test-file tsc: EXIT 0.\n\nDoD:\n1. Held-out sha256 unchanged; 31/31 and 6/6 pass.\n2. The receipt is unchanged across strict progress, 2 restarts and reattach, with revisions 1/1.\n3. The candidate keeps producer gen1; QA uses gen2.\n4. Verification reproduced.\n\nQA mutation probes (early readiness removed; receipt dropped by setAttemptPhase): both killed.\n\nProxy, launcher and parity not rerun (worker-reported; untouched). No blocking complexity findings.",
+  "requiredCheckAtDone": null
 }

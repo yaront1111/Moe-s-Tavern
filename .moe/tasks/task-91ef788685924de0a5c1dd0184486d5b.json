@@ -1,0 +1,29 @@
+{
+  "id": "task-91ef788685924de0a5c1dd0184486d5b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the daemon reads .moe/daemon.json with no size cap (readDaemonInfo, doctor probe)",
+  "description": "Objective: bound the daemon's own reads of .moe/daemon.json. Two readers call fs.readFileSync on the whole file:\n- packages/moe-daemon/src/index.ts readDaemonInfo, used by start's lock check, status and stop;\n- src/commands/doctor.ts probeDaemonJson.\nThis is a sibling of task-4f1e37f30ee548298b26e17c0b6ea84e (the JetBrains reader, same cap). daemon.json is repository content: a repository can commit one past .moe/.gitignore. A huge or never-ending file (a symlink to /dev/zero) therefore makes start, status, stop and doctor allocate up to gigabytes before they fail.\n\nDeliverable:\n- Both readers go through one bounded read of at most 65537 bytes. The cap is 64 KiB (65536 bytes), the JetBrains value.\n- A file over the cap is handled exactly like an unparseable one: readDaemonInfo returns null, and doctor reports a fail that names the 64 KiB limit and echoes no file content.\n- Read through a file descriptor, never a whole-file read, and never a size pre-check alone: a symlink to a device reports size 0.\n- No deletion for size alone. Valid files behave as today.\n\nNot in scope:\n- the daemon.json write path and format;\n- benchmarks/baselineRun.ts, which reads its own temp project;\n- the other clients (proxy, Claude Code plugin, VS Code, launchers, JetBrains), which have their own sibling tasks.\n\nVerification: cd packages/moe-daemon && npx tsc --noEmit && npm test. On WSL the shared checkout's node_modules is a Windows install, so run it from a Linux snapshot (Serena mem gotcha-daemon-linux-snapshot-gate).",
+  "definitionOfDone": [
+    "index.ts readDaemonInfo returns the parsed info for a valid daemon.json of exactly 65536 bytes (JSON padded with spaces) and null for one of 65537 bytes, proven by new vitest cases.",
+    "doctor's daemon.json probe reports a fail that names the 64 KiB limit for a 65537-byte file and echoes none of its content, and still passes a valid 65536-byte file, proven by new doctor.test.ts cases.",
+    "Neither reader loads more than 65537 bytes of daemon.json, proven by a test (for example, readFileSync is never called on daemon.json, or a sparse multi-GiB file is refused promptly).",
+    "Fresh cd packages/moe-daemon && npx tsc --noEmit && npm test exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 236.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T13:43:06.687Z",
+  "updatedAt": "2026-10-27T13:43:06.687Z"
+}

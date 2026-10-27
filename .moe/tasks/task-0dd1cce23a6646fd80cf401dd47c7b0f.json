@@ -15,15 +15,15 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BLOCKED",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor unblock under the human's \"unblock tasks\" instruction (2026-10-27). R09's only unmet prerequisite, CQ-R08, has landed its code (completion b0e59828 on moe/work-2026-10-24) and is in QA. R09a is DONE. Plan R09 against R08's landed code. dependsOn still holds WORKING claims until R08 is DONE.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
-  "priority": "HIGH",
+  "priority": "CRITICAL",
   "order": 235.5,
   "comments": [
     {
@@ -37,11 +37,17 @@
       "author": "architect-4c57a52b",
       "content": "Split on 2026-10-26 (architect-4c57a52b; the operator chose this in the REPL). The original row is too big for one 400-LOC task, and its transfer half needs the CQ-R08 bridge, which is still three slices away. Following the epic's M01/C02/R08 pattern, this row keeps its full DoD as the FINAL slice. It depends on:\n- CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced), which closes the guest-supervisor chain.\n- CQ-R09a (task-491a2d8cff4d45afbdac79539098ebb1, PLANNING). This is the pure host-side import gate, scripts/local-runner/source-snapshot.mjs:\n  - it refuses traversal and non-portable paths, control paths, every symlink, and case and ancestor collisions;\n  - it derives size and sha256 from a private copy of the transferred bytes and refuses writer-declared identities;\n  - its tests are in the new scripts/tests/local-runner-snapshot.test.mjs, registered in CI.\n  It touches no R08 file, so it runs in parallel now.\n\nControl paths (operator decision): any segment equal, case-insensitively, to .git, .gitmodules, .moe, .mcp.json, .claude, .codex, .gemini, .grok or .worktrees, at any depth. NTFS and HFS lookalikes are refused through the portability rules.\n\nWhat remains for this row, to plan after both land. It will likely need a further SPIDR split then.\n1. Host export of the PROTECTED base manifest: read-only Git plumbing on a full commit id (ls-tree -r -z, cat-file --batch). Identities are the host's own, computed through source-snapshot.mjs. Also the ACTUAL overlay bytes of the dirty paths. Per the C02 note above: if the base must feed the daemon's repository provider, expose a commit/tree identity C02 can read, or plan an adapter task.\n2. Transfer by copy only, over multipass exec stdin or `multipass transfer`, never a mount. Re-check R07's zero-mount boundary evidence around the transfer (DoD 3).\n3. Guest side, in guest-supervisor.py after R08: materialize the snapshot into the workspace, and export the candidate overlay back. CQ-R10 owns attempt workspaces and identities, so keep that boundary explicit.\n4. Host import: parse the transport into R09a entries and pass every one through validateImport (DoD 1 and 2).\n\nSuggested verification for this row: `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-snapshot.test.mjs`, a superset of the DoD command.\n\nR09a deliberately refuses ALL symlinks. Permitting contained ones would need base-manifest awareness (writes beneath a base symlink), which CQ-R12 admission must handle in any case.",
       "timestamp": "2026-10-26T05:36:41.907Z"
+    },
+    {
+      "id": "comment-9bc3c1c2a3464b93a6ac8171e7bb64aa",
+      "author": "governor-96f92f36",
+      "content": "Governor (governor-96f92f36, 2026-10-27 ~13:45Z): I moved this row back to PLANNING and set it CRITICAL, under the human's \"unblock tasks\" instruction.\n\nPlanning basis: CQ-R08 (task-7a774656) has landed its code. Its completion commit b0e59828 is on moe/work-2026-10-24 (scripts/local-runner/guest-session.mjs plus the H1-H5 tests in scripts/tests/local-runner-bridge.test.mjs, size exception prop-719ef032 approved). R08 is now in QA. CQ-R09a is DONE. Plan the final R09 slice against that landed code, using the remaining scope in the split comment and the Serena memory decision-cq-r09-split. dependsOn still holds WORKING claims until R08 is DONE. If R08's QA forces an API change, amend this plan rather than re-block it.\n\nWhy this row first: R09 is the root of the whole remaining CQ graph. R10, R11, R12 and C02b, then C03, I03, V03 and everything below them, are waiting on it. As soon as R09's plan is approved I'll make those rows plannable against it.",
+      "timestamp": "2026-10-27T13:42:40.009Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:13.756Z",
-  "updatedAt": "2026-10-26T05:37:03.541Z",
+  "updatedAt": "2026-10-27T13:42:40.009Z",
   "dependsOn": [
     "task-7a77465621dc4d6588d5747394cb0ced",
     "task-491a2d8cff4d45afbdac79539098ebb1"
@@ -52,12 +58,10 @@
   "contextFetchedBy": [
     "architect-4c57a52b"
   ],
-  "blockedReason": "Split on 2026-10-26 (the operator approved it in the REPL). This row keeps its full DoD as the final slice and waits on two tasks:\n- CQ-R08 task-7a77465621dc4d6588d5747394cb0ced, the guest-supervisor and bridge chain that the transfer needs;\n- CQ-R09a task-491a2d8cff4d45afbdac79539098ebb1, the pure host import gate.\nPlan it after both are DONE. The remaining scope is in the task comment and in Serena decision-cq-r09-split.",
-  "blockedOnTaskIds": [
-    "task-7a77465621dc4d6588d5747394cb0ced",
-    "task-491a2d8cff4d45afbdac79539098ebb1"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-10-26T05:37:03.541Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Split on 2026-10-26 (the operator approved it in the REPL). This row keeps its full DoD as the final slice and waits on two tasks:\n- CQ-R08 task-7a77465621dc4d6588d5747394cb0ced, the guest-supervisor and bridge chain that the transfer needs;\n- CQ-R09a task-491a2d8cff4d45afbdac79539098ebb1, the pure host import gate.\nPlan it after both are DONE. The remaining scope is in the task comment and in Serena decision-cq-r09-split."
 }
