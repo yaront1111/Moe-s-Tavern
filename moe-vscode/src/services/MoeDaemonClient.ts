@@ -107,6 +107,29 @@ function pathsMatch(a: string, b: string): boolean {
         : na === nb;
 }
 
+// daemon.json is repository content: the cap matches the daemon, proxy, Claude-plugin and JetBrains readers.
+const MAX_DAEMON_JSON_BYTES = 64 * 1024;
+
+/** Read daemon.json through one descriptor, at most cap + 1 bytes; a larger file throws like an unparseable one. */
+export function readDaemonJsonText(filePath: string): string {
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        const buf = Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1);
+        let total = 0;
+        while (total < buf.length) {
+            const n = fs.readSync(fd, buf, total, buf.length - total, null);
+            if (n === 0) { break; }
+            total += n;
+        }
+        if (total > MAX_DAEMON_JSON_BYTES) {
+            throw new Error('daemon.json is larger than 64 KiB');
+        }
+        return buf.toString('utf8', 0, total);
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 export class MoeDaemonClient implements vscode.Disposable {
     private readonly extensionPath: string;
     private ws: WebSocket | undefined;
@@ -606,7 +629,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         const daemonJsonPath = path.join(projectPath, '.moe', 'daemon.json');
 
         try {
-            const content = fs.readFileSync(daemonJsonPath, 'utf-8');
+            const content = readDaemonJsonText(daemonJsonPath);
             const daemonInfo = JSON.parse(content);
             if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
                 log(
@@ -686,7 +709,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
 
         try {
-            const content = fs.readFileSync(daemonInfoPath, 'utf-8');
+            const content = readDaemonJsonText(daemonInfoPath);
             const daemonInfo = JSON.parse(content);
             if (daemonInfo.projectPath && !pathsMatch(daemonInfo.projectPath, projectPath)) {
                 log(
@@ -794,7 +817,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         while (Date.now() - start < timeoutMs) {
             if (fs.existsSync(daemonInfoPath)) {
                 try {
-                    const content = fs.readFileSync(daemonInfoPath, 'utf-8');
+                    const content = readDaemonJsonText(daemonInfoPath);
                     const daemonInfo = JSON.parse(content);
                     const port = Number(daemonInfo.port);
                     if (!Number.isNaN(port)) {

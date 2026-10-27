@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { BoardViewProvider } from './providers/BoardViewProvider';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
-import { MoeDaemonClient } from './services/MoeDaemonClient';
+import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
 import { PlanReviewPanel } from './panels/PlanReviewPanel';
@@ -195,7 +195,7 @@ export function activate(context: vscode.ExtensionContext) {
                 if (workspaceFolders) {
                     const daemonJsonPath = path.join(workspaceFolders[0].uri.fsPath, '.moe', 'daemon.json');
                     if (fs.existsSync(daemonJsonPath)) {
-                        const daemonInfo = JSON.parse(fs.readFileSync(daemonJsonPath, 'utf-8'));
+                        const daemonInfo = JSON.parse(readDaemonJsonText(daemonJsonPath));
                         if (daemonInfo.pid) {
                             items.push({ label: `PID: ${daemonInfo.pid}`, description: '' });
                         }
