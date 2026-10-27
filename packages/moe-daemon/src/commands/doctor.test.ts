@@ -136,4 +136,34 @@ describe('runDoctor — daemon health reachability', () => {
     expect(reach).toContain('[FAIL]');
     expect(result.exitCode).toBe(1);
   });
+
+  // daemon.json is repository content; the cap (64 KiB = 65536 bytes) is shared
+  // with the other clients, so the boundary is pinned as literals.
+  function writePaddedDaemonJson(port: number, bytes: number, startedAt: string): void {
+    const body = JSON.stringify({ port, pid: process.pid, projectPath: testDir, startedAt });
+    fs.writeFileSync(path.join(moePath, 'daemon.json'), body + ' '.repeat(bytes - Buffer.byteLength(body)));
+  }
+
+  it('fails a 65537-byte daemon.json naming the 64 KiB limit and echoing none of its content', async () => {
+    const marker = 'SECRET-MARKER-5f3a9c';
+    writePaddedDaemonJson(1, 65537, marker);
+
+    const result = await runDoctor(testDir);
+
+    const probe = line(result.output, 'daemon.json:');
+    expect(probe).toContain('[FAIL]');
+    expect(probe).toContain('64 KiB');
+    expect(result.output.join('\n')).not.toContain(marker);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('still passes a valid 65536-byte daemon.json', async () => {
+    const port = await startHealthServer({ status: 'healthy', projectPath: testDir, pid: process.pid });
+    writePaddedDaemonJson(port, 65536, new Date().toISOString());
+
+    const result = await runDoctor(testDir);
+
+    expect(line(result.output, 'daemon.json:')).toContain('[OK]');
+    expect(result.exitCode).toBe(0);
+  });
 });

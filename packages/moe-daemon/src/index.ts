@@ -25,6 +25,7 @@ import { writeInitFiles } from './generated/initFiles.js';
 import { writeSkillFiles } from './generated/skillFiles.js';
 import { linkClaudeSkills } from './util/claudeSkills.js';
 import { escapeJsonForFile } from './util/atomicWrite.js';
+import { readDaemonJsonText } from './util/daemonJsonFile.js';
 import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from './tools/submitPlan.js';
 import { startAccountWatch } from './state/accountStore.js';
 import os from 'os';
@@ -406,8 +407,8 @@ function readDaemonInfo(projectPath: string): DaemonInfo | null {
   const filePath = daemonInfoPath(projectPath);
   if (!fs.existsSync(filePath)) return null;
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw) as DaemonInfo;
+    // Bounded read: an oversize daemon.json is treated like an unparseable one.
+    return JSON.parse(readDaemonJsonText(filePath)) as DaemonInfo;
   } catch {
     return null;
   }

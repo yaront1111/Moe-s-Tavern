@@ -9,6 +9,7 @@ import type { DaemonInfo } from './types/schema.js';
 import {
   acquireLock,
   isPortAvailable,
+  readDaemonInfo,
   readLockInfo,
   releaseLock,
   stopDaemon,
@@ -221,5 +222,80 @@ describe('port probing', () => {
     await new Promise<void>(resolve => held.pop()!.close(() => resolve()));
 
     expect(await isPortAvailable(port, '127.0.0.1')).toBe(true);
+  });
+});
+
+describe('daemon.json size cap', () => {
+  let testDir: string;
+  let daemonJson: string;
+
+  // The 64 KiB cap is shared with the JetBrains reader and the other clients,
+  // so the boundary is pinned as literals: a silent constant change must fail.
+  const CAP = 65536;
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-daemon-sizecap-'));
+    fs.mkdirSync(path.join(testDir, '.moe'));
+    daemonJson = path.join(testDir, '.moe', 'daemon.json');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  function info(): DaemonInfo {
+    return { port: 12345, pid: process.pid, startedAt: '2026-10-27T00:00:00.000Z', projectPath: testDir };
+  }
+
+  // Valid JSON padded with trailing spaces (legal whitespace) to an exact byte length.
+  function paddedJson(bytes: number): string {
+    const body = JSON.stringify(info());
+    return body + ' '.repeat(bytes - Buffer.byteLength(body));
+  }
+
+  it('readDaemonInfo parses a 65536-byte daemon.json and refuses a 65537-byte one', () => {
+    fs.writeFileSync(daemonJson, paddedJson(CAP));
+    expect(fs.statSync(daemonJson).size).toBe(65536);
+    expect(readDaemonInfo(testDir)).toEqual(info());
+
+    fs.writeFileSync(daemonJson, paddedJson(CAP + 1));
+    expect(fs.statSync(daemonJson).size).toBe(65537);
+    expect(readDaemonInfo(testDir)).toBeNull();
+  });
+
+  it('reads at most 65537 bytes and never loads the whole file', () => {
+    fs.writeFileSync(daemonJson, paddedJson(8 * 1024 * 1024));
+    const readFileSpy = vi.spyOn(fs, 'readFileSync');
+    const readSyncSpy = vi.spyOn(fs, 'readSync');
+
+    expect(readDaemonInfo(testDir)).toBeNull();
+
+    expect(readFileSpy.mock.calls.some(([target]) => String(target) === daemonJson)).toBe(false);
+    const total = readSyncSpy.mock.results.reduce(
+      (sum, r) => sum + (r.type === 'return' ? (r.value as number) : 0),
+      0,
+    );
+    expect(readSyncSpy).toHaveBeenCalled();
+    expect(total).toBeLessThanOrEqual(65537);
+  });
+
+  // A symlink to a device reports size 0, so only a bounded read can stop it.
+  it.skipIf(process.platform === 'win32')('returns null promptly for a daemon.json symlinked to /dev/zero', () => {
+    fs.symlinkSync('/dev/zero', daemonJson);
+    const started = Date.now();
+    expect(readDaemonInfo(testDir)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('stopDaemon treats an oversize daemon.json as no daemon info and does not delete or signal', async () => {
+    fs.writeFileSync(daemonJson, paddedJson(CAP + 1));
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as typeof process.kill);
+
+    await stopDaemon(testDir);
+
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(testDir, '.moe', 'daemon.stop'))).toBe(true);
+    expect(fs.existsSync(daemonJson)).toBe(true);
   });
 });

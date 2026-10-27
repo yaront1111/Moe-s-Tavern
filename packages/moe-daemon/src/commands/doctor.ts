@@ -8,6 +8,7 @@ import fs from 'fs';
 import http from 'http';
 import net from 'net';
 import path from 'path';
+import { DaemonJsonTooLargeError, readDaemonJsonText } from '../util/daemonJsonFile.js';
 
 interface ProbeResult {
   symbol: 'pass' | 'warn' | 'fail';
@@ -76,8 +77,11 @@ async function probeDaemonJson(moePath: string): Promise<DaemonJsonProbe> {
   }
   let parsed: { port?: number; pid?: number; projectPath?: string };
   try {
-    parsed = JSON.parse(fs.readFileSync(daemonJson, 'utf-8'));
+    parsed = JSON.parse(readDaemonJsonText(daemonJson));
   } catch (err) {
+    if (err instanceof DaemonJsonTooLargeError) {
+      return { result: { symbol: 'fail', message: 'daemon.json is larger than 64 KiB; not read' }, alive: false };
+    }
     return {
       result: { symbol: 'fail', message: `daemon.json unparseable: ${(err as Error).message}` },
       alive: false,
