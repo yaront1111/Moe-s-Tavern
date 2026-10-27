@@ -1018,7 +1018,7 @@ os.write(1, b'%d' % grandchild)
   }
 });
 
-test('S12 relay() restores SIGTERM, SIGHUP and SIGINT on every exit path, leaves SIGCHLD at SIG_DFL, and its guard is stdlib-only', { skip: NO_GUEST, timeout: 30_000 }, () => {
+test('S12 on every exit path relay() restores SIGTERM, SIGHUP, SIGINT and the wakeup fd, leaks no fd and leaves SIGCHLD at SIG_DFL; its guard is stdlib-only', { skip: NO_GUEST, timeout: 30_000 }, () => {
   // killSignal: this harness keeps a no-op SIGTERM handler, so a default SIGTERM timeout kill would not end it.
   const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}import ast, signal
 roots = {alias.name.split('.')[0] for node in ast.walk(ast.parse(m.GUARD)) if isinstance(node, ast.Import) for alias in node.names}
@@ -1028,15 +1028,21 @@ TERM = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 for number in TERM:
     signal.signal(number, mark)
 null = os.open(os.devnull, os.O_WRONLY)
+wakeup = os.pipe()[1]  # the caller's own wakeup fd, which relay() must hand back
+os.set_blocking(wakeup, False)
+signal.set_wakeup_fd(wakeup)
 def host(data=b''):
     r, w = os.pipe()
     os.write(w, data)
     return r, w
 results = []
 def call(argv, out_fd=null, in_fd=None):
+    in_fd = host()[0] if in_fd is None else in_fd
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)
-    code = m.relay(argv, out_fd=out_fd, in_fd=host()[0] if in_fd is None else in_fd)
-    results.append([code, all(signal.getsignal(number) is mark for number in TERM), signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL])
+    fds = set(os.listdir('/dev/fd'))
+    code = m.relay(argv, out_fd=out_fd, in_fd=in_fd)
+    results.append([code, all(signal.getsignal(number) is mark for number in TERM), signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL,
+                    signal.set_wakeup_fd(wakeup) == wakeup, set(os.listdir('/dev/fd')) == fds])
 sleeper = ['python3', '-I', '-c', 'import time; time.sleep(30)']
 call(['python3', '-I', '-c', 'pass'])
 call(['/nonexistent/moe-child'])
@@ -1051,7 +1057,7 @@ call(['python3', '-I', '-c', 'import os, signal, sys, time; os.kill(int(sys.argv
 print(json.dumps(results))
 `, SUPERVISOR], { timeout: 30_000, killSignal: 'SIGKILL' });
   assert.equal(run.status, 0, String(run.error ?? run.stderr));
-  assert.deepEqual(JSON.parse(run.stdout), [[0, true, true], [71, true, true], [74, true, true], [74, true, true], [76, true, true], [EX_TERMINATED, true, true]]);
+  assert.deepEqual(JSON.parse(run.stdout), [0, 71, 74, 74, 76, EX_TERMINATED].map(code => [code, true, true, true, true]));
 });
 
 // A job that SIGKILLs its own group takes the guard with it, so the stand-down byte can meet a closed pipe; the legacy
@@ -1070,4 +1076,55 @@ test('S14 a job killed by TERM, HUP, INT or glibc-reserved 32 gets that signal a
   for (const [number, signal] of deaths) {
     assert.deepEqual(session(relay('import os, sys\nos.kill(os.getpid(), int(sys.argv[1]))\n', String(number))).exit, { ...EXIT, code: null, signal }, signal);
   }
+});
+
+// QA's gdb repro: a signal that lands after a wait's last Python-level check, but before its syscall blocks, interrupts
+// nothing, so only the wakeup fd can end that wait. A signal sent to a helper thread leaves the main thread in that same
+// state at any timing: CPython runs the C handler on the helper thread, and the blocked syscall never sees the signal.
+const STALLED = `import base64, signal, threading, time
+r, w = os.pipe()
+seen, frames = bytearray(), []
+def fire():
+    while len(frames) < 2:  # hello, then the job's pid
+        frames.extend(m.take_frames(seen, os.read(r, 65536), m.MAX_GUEST_FRAME_BYTES))
+    time.sleep(0.5)  # by now the main thread is blocked in its wait
+    signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
+threading.Thread(target=fire, daemon=True).start()
+code = m.relay(['python3', '-I', '-c', sys.argv[2]], out_fd=w, in_fd=os.pipe()[0])
+os.close(w)
+while data := os.read(r, 65536):
+    frames.extend(m.take_frames(seen, data, m.MAX_GUEST_FRAME_BYTES))
+print(json.dumps([code, [frame['kind'] for frame in frames], int(base64.b64decode(frames[1]['data']))]))
+`;
+
+test('S15 a termination signal that interrupts no syscall still ends a blocked wait with 75, in pump and in the last start-pipe read', { skip: NO_GUEST, timeout: 30_000 }, async () => {
+  const started = 'import os, time\nos.write(1, b"%d" % os.getpid())\n';
+  const closed = 'null = os.open(os.devnull, os.O_RDWR)\nos.dup2(null, 1)\nos.dup2(null, 2)\n'; // pump ends; the guard waits on
+  for (const job of [`${started}time.sleep(600)\n`, `${started}${closed}time.sleep(600)\n`]) {
+    // SIGKILL: a timeout's SIGTERM would itself wake the hung wait and let the run pass.
+    const run = spawnSync('python3', ['-I', '-B', '-c', LOAD + STALLED, SUPERVISOR, job], { timeout: 10_000, killSignal: 'SIGKILL' });
+    assert.equal(run.status, 0, String(run.error ?? run.stderr));
+    const [code, kinds, pid] = JSON.parse(run.stdout);
+    try {
+      assert.deepEqual([code, kinds], [EX_TERMINATED, ['hello', 'output']]);
+      for (let waited = 0; waited < 5000 && running(pid); waited += 100) await sleep(100);
+      assert.equal(running(pid), false);
+    } finally {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  }
+});
+
+test('S16 a signal relay() does not handle still reaches the caller handler and never makes its wait spin', { skip: NO_GUEST, timeout: 30_000 }, () => {
+  const run = harness(`import resource, signal
+calls = []
+signal.signal(signal.SIGUSR1, lambda number, frame: calls.append(number))
+cpu = lambda: sum(resource.getrusage(resource.RUSAGE_SELF)[:2])
+before = cpu()
+job = 'import os, signal, sys, time\\nos.kill(int(sys.argv[1]), signal.SIGUSR1)\\ntime.sleep(1)'
+code = m.relay(['python3', '-I', '-c', job, str(os.getpid())], out_fd=os.open(os.devnull, os.O_WRONLY), in_fd=os.pipe()[0])
+print(json.dumps([code, calls, cpu() - before < 0.5]))  # an undrained wakeup byte would spin for the job's whole second
+`);
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(JSON.parse(run.stdout), [0, [constants.signals.SIGUSR1], true]);
 });

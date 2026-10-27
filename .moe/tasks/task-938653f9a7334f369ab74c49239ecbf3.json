@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:20.391Z",
-  "updatedAt": "2026-10-27T15:51:30.846Z",
+  "updatedAt": "2026-10-27T15:52:04.286Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:12:28.796Z",
     "plannedStepCount": 4,
@@ -130,7 +130,8 @@
     "packages/moe-claude-plugin/tests/daemonClient.test.ts",
     "packages/moe-claude-plugin/tests/postToolUse.test.ts",
     "packages/moe-claude-plugin/src/daemonClient.ts",
-    ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json"
+    ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+    ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json"
   ],
   "completionSummary": "readDaemonJson in packages/moe-claude-plugin/src/daemonClient.ts now reads daemon.json through one descriptor, at most 65537 bytes (short reads looped, closeSync in finally); >65536 bytes returns null so the hook takes the existing DAEMON_NOT_FOUND / send-failed fail-open path. New tests: 65536 accepted, 65537 refused, exact 65537-byte read total + single close on an 8 MiB file (no /dev/zero), fd closed when readSync throws EIO, and hook fail-open with stderr 'Moe daemon not running for project'. Tested root: isolated snapshot /tmp/moe-9386-gate.* of HEAD c006918 with the three owned files overlaid; npm ci there, shared checkout never built.",
   "commits": [
@@ -151,6 +152,22 @@
       "treeId": "c21af5e4bf2f5c247ca8e8b754b7089fe869c0bc",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "ef973f02c589cbc08742ac5163b7a2edd45fb33e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T15:49:53Z",
+      "paths": [
+        ".moe/tasks/task-91ef788685924de0a5c1dd0184486d5b.json",
+        ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T15:52:04.286Z",
+      "treeId": "075b0008b1ab3a4c7d2c16716c9b02de0b70e5f2",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -161,9 +178,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3729a0d6@2026-10-27T14:18:42Z",
-    "at": "2026-10-27T14:22:16.322Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T15:49:53Z",
+    "at": "2026-10-27T15:52:04.286Z"
   },
   "completedAt": "2026-10-27T15:51:30.845Z",
   "reviewCompletedAt": "2026-10-27T15:51:30.845Z",

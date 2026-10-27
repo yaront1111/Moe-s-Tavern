@@ -42,8 +42,6 @@ EX_TERMINATED = os.EX_TEMPFAIL
 # EOF once this process is gone.
 GUARD = '''import os, resource, signal, subprocess, sys, threading
 life, start = int(sys.argv[1]), int(sys.argv[2])
-for fd in (life, start):
-    os.set_inheritable(fd, False)
 for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
     signal.signal(number, lambda *_: None)  # group-wide signals are for the job; a caught signal resets at its exec
 released = threading.Event()
@@ -88,16 +86,26 @@ class Terminated(Exception):
 
 
 class Termination:
-    """Raises Terminated only inside wait(), so a signal can never cut teardown short."""
+    """Raises Terminated only inside wait(), so a signal can never cut teardown short. relay() makes wake_w the signal
+    wakeup fd and every wait watches wake_r, so a signal that lands just before a wait's syscall still ends it."""
 
     def __init__(self):
         self.caught = self.armed = False
+        self.wake_r, self.wake_w = os.pipe()
+        for fd in (self.wake_r, self.wake_w):
+            os.set_blocking(fd, False)  # set_wakeup_fd requires it of wake_w; drain() must never block
 
     def handle(self, number, frame):
         self.caught = True
         if self.armed:
             self.armed = False
             raise Terminated
+
+    def drain(self, *_):
+        try:
+            os.read(self.wake_r, 4096)  # the bytes only wake a wait; handle() records the signal
+        except BlockingIOError:
+            pass
 
     def wait(self, call, *args):
         self.armed = True
@@ -107,6 +115,15 @@ class Termination:
             return call(*args)
         finally:
             self.armed = False
+
+    def read(self, fd):
+        # One byte, or b'' at EOF, from a blocking pipe, once a wait() on it and on wake_r reports it readable.
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, selectors.EVENT_READ)
+            selector.register(self.wake_r, selectors.EVENT_READ)
+            while not any(key.fd == fd for key, mask in self.wait(selector.select)):
+                self.drain()
+        return os.read(fd, 1)
 
 
 def encode_frame(value, limit=MAX_GUEST_FRAME_BYTES):
@@ -292,7 +309,7 @@ class Bridge:
             pass
 
 
-def pump(child, out_fd, bridge, wait=lambda call: call()):
+def pump(child, out_fd, bridge, wait):
     streams = {child.stdout.fileno(): 'stdout', child.stderr.fileno(): 'stderr'}
     with bridge.selector as selector:
         for fd in streams:
@@ -322,6 +339,7 @@ def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=p
     # An inherited SIG_IGN (it survives exec) lets the kernel discard the child's status before waitpid reads it.
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     termination = Termination()
+    wakeup = signal.set_wakeup_fd(termination.wake_w, warn_on_full_buffer=False)  # a full pipe already wakes
     saved = [(number, signal.signal(number, termination.handle)) for number in TERMINATION_SIGNALS]
     try:
         return run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination)
@@ -330,6 +348,9 @@ def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=p
     finally:
         for number, handler in saved:
             signal.signal(number, signal.SIG_DFL if handler is None else handler)
+        signal.set_wakeup_fd(wakeup)  # before the close, so no signal byte can reach a reused fd number
+        os.close(termination.wake_r)
+        os.close(termination.wake_w)
 
 
 def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination):
@@ -341,6 +362,7 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
     life, life_end = os.pipe()  # the guard reads life; this process holds life_end until the guard is reaped
     start_end, start = os.pipe()  # the guard writes '+' once the job runs; EOF means the guard has exited
     try:
+        bridge.selector.register(termination.wake_r, selectors.EVENT_READ, termination.drain)  # wakes pump's select
         bridge.open(in_fd, agent_socket, agent_uid)
         child = subprocess.Popen([sys.executable, '-I', '-B', '-c', GUARD, str(life), str(start), *argv],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -355,14 +377,14 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
         os.close(start)
     reaped = False
     try:
-        if termination.wait(os.read, start_end, 1) != b'+':
+        if termination.read(start_end) != b'+':
             return os.EX_OSERR  # the guard could not start the job
         pump(child, out_fd, bridge, termination.wait)
         try:
             os.write(life_end, b'0')  # stand down: a normal completion never kills the group
         except BrokenPipeError:
             pass  # a job SIGKILLed its own group, guard included; waitpid still reports the guard's status
-        termination.wait(os.read, start_end, 1)  # EOF: the guard has exited with the job's status
+        termination.read(start_end)  # EOF: the guard has exited with the job's status
         # Both pipes are at EOF and the guard has exited; waitpid is the only source of the exit frame.
         status = reap(child)
         reaped = True
