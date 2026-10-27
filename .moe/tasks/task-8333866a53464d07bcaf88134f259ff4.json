@@ -77,12 +77,12 @@
     }
   ],
   "planRevision": 26,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Size-only reject; no DoD item failed. This task's non-board diff (checkpoint 81dff6d + completion f75f57b, both pushed on moe/work-2026-10-24) is +550/-38 = 512 net LOC, over the 400 net-LOC review cap. No rail waives it: the epic size exception names task-7a0b1881 only (\"Other size ... requirements remain unchanged\"), and .moe/proposals has none for this task.\n\nSubstance PASSES, no code change requested:\n- Gate re-run from Windows Git Bash on a pure git archive of HEAD 8dca342 (owned paths == f75f57b), LC_ALL=C, MOE_*/CLAUDE* stripped: GATE_EXIT=0. seat-registration 57/57 (19 each Git Bash/PS5.1/PS7 + parser), parity PASS, tsc clean, vitest 170 files 4341 passed/18 skipped.\n- Mutants killed: DEAD revive disabled -> 2/7 daemon tests fail; sh forced re-join made cached -> Git Bash pruned/DEAD cases fail; ps1 -Force dropped -> PS7 cases fail.\n- DoD 1-3 map to the join_team revive, the forced pre-flight re-join before any chat call, and joinTeam.notification.test.ts + seat-registration.test.mjs.\n\nRoute (mem:decision-size-only-reject-of-landed-bytes): do NOT re-slice or rewrite the landed bytes. File moe.propose_rail EPIC ADD_RAIL on epic-be924fb8 naming this task, commits 81dff6d + f75f57b, the per-file numstat below, \"net 512 (runtime+docs 73, tests 439); waive size-based rejection of those landed bytes; grow only by QA-required fixes; do not re-slice or add scope\". Ping #governors with the id, then complete_task with a fresh gate; QA approves once the rail is in allRails.epic.\n\nPer file: joinTeam.ts +8/-1; docs/MCP_SERVER.md +1/-1 (own hunk only); joinTeam.notification.test.ts +135/-0; seat-registration.test.mjs +305/-2; moe-agent.sh +56/-21; moe-agent.ps1 +42/-11; postflight-fake-proxy.js +2/-1; mention-provenance-proxy.js +1/-1.\n\nNon-blocking, no change asked: a seat refused for a FULL team now reads no #general/routed chat. Before, join_team auto-registered it first, so it could still reply. The plan sanctions this; a follow-up card is the governor's call.",
+  "reopenReason": "The size-only hold is cleared. The human APPROVED prop-4b703e3f7b534b57974e0a54311efe9f, the EPIC size exception for this row (net 512: checkpoint 81dff6d plus completion f75f57b). Following QA's stated route: confirm the rail in allRails.epic, re-run the gate fresh and approve, naming net 512.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:13:17.758Z",
-  "updatedAt": "2026-10-27T14:55:18.528Z",
+  "updatedAt": "2026-10-27T16:48:59.234Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:40:37.561Z",
     "plannedStepCount": 6,
@@ -309,8 +309,10 @@
       ]
     }
   ],
-  "blockedReason": "QA park from REVIEW: substance PASSES, only the human size-waiver decision is outstanding. The non-board diff of checkpoint 81dff6d + completion f75f57b is +550/-38 = net 512 (runtime+docs 73, tests 439), over the 400 net-LOC review cap, and allRails.epic has no exception for this row. The worker filed prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL on epic-be924fb8); its file still reads status PENDING, resolvedBy null, and only a human can resolve it in the IDE. Not rejecting again: no DoD item failed and no code change is wanted, so a reject would only burn a reopen.\nFresh evidence (QA round 2): pure git archive of HEAD b83d638, Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset: GATE_EXIT=0. seat-registration 57/57 on Git Bash, PS 5.1 and PS 7; parity PASS; tsc clean; vitest 170 files, 4358 passed, 19 skipped. Owned bytes equal f75f57b except peer 201d5ab hunks in docs/MCP_SERVER.md and postflight-fake-proxy.js. Full evidence is in the row's latest comment.\nRoute: on APPROVED, a governor runs set_task_status REVIEW, and QA approves naming net 512 after a fresh gate. On REJECTED, set_task_status PLANNING for a review-scope split of the landed bytes (never re-implement).",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-27T14:54:17.066Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA park from REVIEW: substance PASSES, only the human size-waiver decision is outstanding. The non-board diff of checkpoint 81dff6d + completion f75f57b is +550/-38 = net 512 (runtime+docs 73, tests 439), over the 400 net-LOC review cap, and allRails.epic has no exception for this row. The worker filed prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL on epic-be924fb8); its file still reads status PENDING, resolvedBy null, and only a human can resolve it in the IDE. Not rejecting again: no DoD item failed and no code change is wanted, so a reject would only burn a reopen.\nFresh evidence (QA round 2): pure git archive of HEAD b83d638, Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset: GATE_EXIT=0. seat-registration 57/57 on Git Bash, PS 5.1 and PS 7; parity PASS; tsc clean; vitest 170 files, 4358 passed, 19 skipped. Owned bytes equal f75f57b except peer 201d5ab hunks in docs/MCP_SERVER.md and postflight-fake-proxy.js. Full evidence is in the row's latest comment.\nRoute: on APPROVED, a governor runs set_task_status REVIEW, and QA approves naming net 512 after a fresh gate. On REJECTED, set_task_status PLANNING for a review-scope split of the landed bytes (never re-implement).",
+  "blockedOnTaskIds": null
 }

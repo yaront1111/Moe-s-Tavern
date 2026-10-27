@@ -1,0 +1,38 @@
+{
+  "id": "task-4af8b8c17d1f4949b0d85e24e69f986f",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R09c] Copy-only snapshot materialization in the guest",
+  "description": "Objective: copy one exported source snapshot (protected base plus overlay) into an owned guest's workspace over the protected supervisor's stdin, never a mount. Prove that the guest received exactly those bytes, and that no host filesystem is mounted in the guest before or after the copy.\n\nContext: third slice of CQ-R09 (task-0dd1cce23a6646fd80cf401dd47c7b0f), split 3 ways on 2026-10-27 with the operator's approval in the architect REPL. It builds on the landed CQ-R08 bridge chain and CQ-R10a's teardown in guest-supervisor.py (both DONE). It consumes the SourceSnapshot shape that CQ-R09b (task-697fb2de19324ccb851defaf9f24043b) produces, but its tests build snapshots with validateImport directly, so it runs in parallel with R09b; CQ-R09 final's end-to-end test joins the two. CQ-R09 final adds the export direction on top of this module and mode, CQ-R10 binds attempts to the workspace defined here, and CQ-R11 extends materialization to check environments.\n\nDeliverable:\n1. New scripts/local-runner/snapshot-transfer.mjs exporting:\n- SNAPSHOT_CHUNK_BYTES = 1048576, the raw bytes per host data frame.\n- workspaceEntries(snapshot): checks the SourceSnapshot shape (version 1, sealed base and overlay), then returns validateImport of the merged view: base files, replaced or added by overlay files, minus overlay deletes. Its digest is the materialization identity.\n- snapshotArgv(name, mode): frozen ['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, mode], for an owned instance name and mode 'materialize' or 'export' only.\n- assertNoMounts(name, provider): readGuestInfo must report zero Multipass mounts and the R07 mountinfo probe must show no host-sharing filesystem, reusing guest-readiness.mjs's mount rule (export mountFailure unchanged). Otherwise it throws TRANSFER_MOUNTS_PRESENT or TRANSFER_MOUNTS_UNKNOWN; provider failures keep their fixed PROVIDER_* codes.\n- runSupervisorStream({ name, mode, provider, timeoutMs, input, onFrame }): spawns snapshotArgv(name, mode) through provider.spawn (default child_process.spawn) with shell:false. It writes the input frame Buffers to stdin with backpressure, then ends stdin; decodes stdout with createFrameDecoder(MAX_GUEST_FRAME_BYTES), calling onFrame with each decoded object; and resolves only after stdout EOF and provider exit 0 within timeoutMs. Any other outcome kills the provider and rejects with a fixed TRANSFER_* code (spawn, timeout, exit or frame), never guest text. An error thrown by onFrame kills the provider and rejects with that same error.\n- materializeSnapshot({ name, snapshot, provider = {}, timeoutMs }): assertNoMounts; stream the frames below; require exactly one {kind:'materialized', digest} whose digest equals workspaceEntries(snapshot).digest; assertNoMounts again; then resolve frozen { instance, digest, files, bytes, executionReady: false }.\nHost frames, each within MAX_HOST_FRAME_BYTES: {kind:'snapshot', version: 1, files, bytes, digest}; then, per file in manifest order, {kind:'file', path, executable, size} followed by ceil(size / SNAPSHOT_CHUNK_BYTES) {kind:'data', data} frames of base64; then {kind:'end'}.\n\n2. guest-supervisor.py materialize mode. main(['materialize']) runs only as euid 0 (else 77); any other argv stays 64. materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, owner=None):\n- WORKSPACE = '/var/lib/moe/workspace' and WORKSPACE_MANIFEST = '/var/lib/moe/workspace.manifest.json'. An existing workspace or manifest exits EX_CANTCREAT (73).\n- It builds the tree in a root-only (0700) staging directory beside WORKSPACE, with directory-fd-relative O_NOFOLLOW and O_EXCL creates. No symlink is ever followed, and a traversal, absolute, empty-segment, NUL or duplicate path is refused even from the host.\n- It checks every size and the header counts, and recomputes R09a's digest framing from the bytes it wrote.\n- On a match it gives the tree to the AGENT_IDENTITY account (root directory 0700) and renames it into place. It then writes WORKSPACE_MANIFEST (root, 0600, O_EXCL; UTF-8 JSON {\"version\": 1, \"digest\": hex, \"files\": {path: [executable, size, sha256 hex]}}), which CQ-R09's export mode diffs against, writes exactly one {kind:'materialized', digest} frame and exits 0.\n- A malformed or out-of-order frame, a bound breach or a mismatch exits EX_DATAERR (65); an I/O failure exits EX_IOERR (74). Both remove the staging tree and write no frame.\n\n3. Tests in scripts/tests/local-runner.test.mjs. Host rows reuse its fakeGuest mount fixtures and a fake spawn. Supervisor rows load the real guest-supervisor.py under python3 -I -B with injected workspace, manifest and owner (the R08b test-seam pattern). One end-to-end row materializes through the real supervisor. Rows that need POSIX python skip on win32 with a reason.\n\nNot in scope: the export/import direction and its supervisor mode (CQ-R09 final); per-attempt workspaces, job identities or credentials (CQ-R10); check environments (CQ-R11); host admission (CQ-R12); real VM certification (CQ-R13); `multipass mount` or `multipass transfer`. executionReady stays false and verified-local stays unavailable.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs",
+  "definitionOfDone": [
+    "The snapshot reaches the guest only through snapshotArgv(name, 'materialize') on the supervisor's stdin, spawned with shell:false. No mount or transfer subcommand, host path or snapshot byte appears in any provider argv (tests record every provider call).",
+    "materializeSnapshot refuses unless readGuestInfo shows zero mounts and mountinfo shows no host-sharing filesystem, both before and after the copy, and it never spawns when the first check fails.",
+    "Identities come from the transferred bytes: the supervisor recomputes R09a's digest from the bytes it wrote, and the host accepts only one materialized frame whose digest equals workspaceEntries(snapshot).digest. A wrong, missing or repeated frame, or a nonzero exit, is a fixed refusal.",
+    "The materialize mode refuses traversal, absolute, empty-segment and duplicate paths, symlink-redirected writes, and an existing workspace or manifest. After any failure it handles, it leaves neither a staging tree nor a partial workspace (supervisor rows under python3).",
+    "The listed verification command exits 0 and its fresh output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7a77465621dc4d6588d5747394cb0ced",
+    "task-7988e5b97ea0484fae6bf8e49009266a",
+    "task-491a2d8cff4d45afbdac79539098ebb1"
+  ],
+  "priority": "CRITICAL",
+  "order": 87,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T16:55:14.489Z",
+  "updatedAt": "2026-10-27T16:55:14.489Z"
+}

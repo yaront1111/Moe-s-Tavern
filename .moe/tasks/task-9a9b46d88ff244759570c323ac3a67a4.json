@@ -69,12 +69,12 @@
     }
   ],
   "planRevision": 22,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE-ONLY reject. Substance is clean; no DoD item failed and no bytes need to change.\n\nVerified on completion 201d5ab (on moe/work-2026-10-24, pushed), pure git archive in a Linux snapshot, env -i: `node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` exit 0 (node:test 13/13; tsc clean; vitest 170 files, 4343 passed, 16 skipped). Mutants in the snapshot copy only (presence instead of status; any-worker attempt; running-only phase; non-string owner unprotected) fail 10/1/5/1 of the 42 getCommitScope tests. All five DoD items are met. The fake proxy keeps legacy behaviour and docs match the code.\n\nDefect: the diff is over the 400 net-LOC cap and no rail waives it (the epic's size-exception rail names task-7a0b1881 only).\nOwn bytes: getCommitScope.test.ts +196, postflight-owner-scope.test.mjs +185, getCommitScope.ts +24/-1, postflight-fake-proxy.js +45/-7, docs/MCP_SERVER.md +9/-2 (two get_commit_scope hunks) = net 449. The whole commit is +472/-14 = net 458; the other docs hunks (lines 216, 238, 1626, 1643, 1656) are cd2e4477's, carried under Moe-Contested.\n\nRoute (do not re-slice, revert or re-land 201d5ab; see mem:decision-size-only-reject-of-landed-bytes):\n1. File moe.propose_rail (EPIC ADD_RAIL, or MODIFY of the size-exception rail) naming 201d5ab, the per-file numstat above, \"waive size-based rejection of those landed bytes; grow only by QA-required fixes; do not re-slice or add scope\".\n2. Ping #governors with the proposal id.\n3. When APPROVED, call complete_task again with unchanged bytes. QA will confirm the rail text against numstat, re-run the gate and approve. While it is PENDING, report_blocked from REVIEW is the right park.",
+  "reopenReason": "The size-only hold is cleared. The human APPROVED prop-a3ac15754218441c9a3b43595af3fece, the EPIC size exception for this row (net 449, landed completion 201d5ab). Following QA's stated route: confirm the rail in allRails.epic, re-run the gate fresh and approve with the bytes unchanged.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-6aa460bb33184e1b84fc9c9e5c0a4560",
   "priority": "HIGH",
@@ -89,14 +89,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:36:53.728Z",
-  "updatedAt": "2026-10-27T14:23:18.829Z",
+  "updatedAt": "2026-10-27T16:59:46.881Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T08:59:11.778Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-27T16:59:46.881Z",
+    "wallClockMs": 28835103
   },
   "contextFetchedBy": [
     "qa-6fa5d758",
@@ -246,7 +248,7 @@
     "sessionId": "qa-6fa5d758@2026-10-27T14:17:12Z",
     "at": "2026-10-27T14:23:18.829Z"
   },
-  "reviewCompletedAt": "2026-10-27T13:53:02.185Z",
+  "reviewCompletedAt": "2026-10-27T16:59:46.881Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -270,8 +272,13 @@
       ]
     }
   ],
-  "blockedReason": "Size-only hold from REVIEW. The task is waiting on a human decision on prop-a3ac15754218441c9a3b43595af3fece, an EPIC ADD_RAIL size exception on epic-be924fb8 that is still PENDING. The work itself checks out: no DoD item failed and no bytes need to change.\n\nQA round 2 (qa-6fa5d758, 2026-10-27 14:20Z):\n- The five owned paths are byte-identical to landed completion 201d5ab at HEAD c006918 and in the worktree; `git log 201d5ab..HEAD` on them is empty. 8dca342 changes board JSON only.\n- I re-ran the gate fresh from a pure git archive of HEAD c006918, with env -i and node 24.21.0: `node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` exited 0. node:test 13/13, tsc clean, vitest 170 files with 4349 passed and 16 skipped.\n- I checked the proposal's rail text against `git show --numstat 201d5ab`. Own bytes are +459/-10, net 449:\n  - getCommitScope.ts +24/-1\n  - its test +196/-0\n  - fake proxy +45/-7, every hunk inside case get_commit_scope\n  - owner-scope test +185/-0\n  - docs +9/-2, in the hunks at new lines 681 and 717\n  The peer docs hunks add +13/-4, so the whole commit is net 458. The text is accurate.\n\nThe epic rails still waive size only for the 4758ad1 landing. QA cannot approve over the 400 net-LOC cap, and rejecting again would only use up a reopen.\n\nRoute:\n- APPROVED: run set_task_status REVIEW, or unblock_worker with resolveBlocks:true. QA then confirms the rail in allRails.epic, re-runs the gate and approves with the bytes unchanged.\n- REJECTED: run set_task_status PLANNING and split the review scope, not the bytes (mem:decision-size-only-reject-of-landed-bytes).",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-27T14:22:00.751Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Size-only hold from REVIEW. The task is waiting on a human decision on prop-a3ac15754218441c9a3b43595af3fece, an EPIC ADD_RAIL size exception on epic-be924fb8 that is still PENDING. The work itself checks out: no DoD item failed and no bytes need to change.\n\nQA round 2 (qa-6fa5d758, 2026-10-27 14:20Z):\n- The five owned paths are byte-identical to landed completion 201d5ab at HEAD c006918 and in the worktree; `git log 201d5ab..HEAD` on them is empty. 8dca342 changes board JSON only.\n- I re-ran the gate fresh from a pure git archive of HEAD c006918, with env -i and node 24.21.0: `node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` exited 0. node:test 13/13, tsc clean, vitest 170 files with 4349 passed and 16 skipped.\n- I checked the proposal's rail text against `git show --numstat 201d5ab`. Own bytes are +459/-10, net 449:\n  - getCommitScope.ts +24/-1\n  - its test +196/-0\n  - fake proxy +45/-7, every hunk inside case get_commit_scope\n  - owner-scope test +185/-0\n  - docs +9/-2, in the hunks at new lines 681 and 717\n  The peer docs hunks add +13/-4, so the whole commit is net 458. The text is accurate.\n\nThe epic rails still waive size only for the 4758ad1 landing. QA cannot approve over the 400 net-LOC cap, and rejecting again would only use up a reopen.\n\nRoute:\n- APPROVED: run set_task_status REVIEW, or unblock_worker with resolveBlocks:true. QA then confirms the rail in allRails.epic, re-runs the gate and approves with the bytes unchanged.\n- REJECTED: run set_task_status PLANNING and split the review scope, not the bytes (mem:decision-size-only-reject-of-landed-bytes).",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-27T16:59:46.881Z",
+  "reviewSummary": "Round 3 approve, bytes unchanged. Size rail APPROVED: prop-a3ac1575 resolvedBy HUMAN 16:46Z; exact text in allRails.epic. It waives own +459/-10 net 449 (getCommitScope.ts +24/-1, test +196/-0, fake proxy +45/-7, owner-scope test +185/-0, docs +9/-2 in hunks @681/@717); other docs hunks +13/-4 are peer content under Moe-Contested, whole commit net 458.\nDelivery: completion 201d5ab on moe/work-2026-10-24 and origin. 5 owned blobs identical at 201d5ab, HEAD 0244b1c and worktree; git log 201d5ab..HEAD on them empty; later task commits cf96fd3/8dca342/bbd614a are board JSON only.\nGate (fresh, pure git archive of HEAD, env -i, node 24.21.0, native node_modules with deps equal modulo CR): node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test) exit 0. node:test 13/13; tsc clean; vitest 170 files, 4361 passed, 16 skipped; getCommitScope.test.ts 42/42. parity-check.sh PASS.\nMutants, in snapshot copies only, restored and cmp-checked. Runtime, failing of 42: presence for status 10, any-worker attempt 1, running-only 5, non-string owner unprotected 1, wired to assigneeAlive 17. Dropping the '' check survives as an equivalent mutant ('' resolves to no record and no attempt). Fixture, failing of 13: omit ignored 1, orphan rule dropped 6, malformed as boolean 1, typo accepted 1, protected default true 2.\nLegacy differential, old fake (201d5ab^) vs landed: 432 combos, 0 mismatches; new key = assignedWorkerId!==null in all.\nDoD: 1 additive field + Returns/Live-assignee docs + key-set test; 2-3 describe('assigneeProtected') covers own/foreign/absent caller, fresh/stale/garbage non-DEAD owner, DEAD/missing x running/finalizing/reconciling/closed, foreign-worker and other-task attempts, unassigned and '' ids, fail-closed malformed records; 4 fixture knobs + 13 node tests; 5 gate above.\nponytail: lean already, net: -0 lines possible. Finalizing-window note left for consumer task-6aa460bb.",
+  "requiredCheckAtDone": null
 }

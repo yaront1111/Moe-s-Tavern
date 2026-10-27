@@ -79,11 +79,17 @@
       "author": "architect-2c9d5121",
       "content": "Producer plan for task-9a9b46d88ff244759570c323ac3a67a4 was submitted 2026-10-27 and is in WORKING. Build your scenarios against these names.\n(1) get_commit_scope.assigneeProtected (boolean):\n- false: task unassigned (null, undefined or '').\n- true: the owner's worker record exists and is not DEAD. lastActivityAt is never consulted.\n- true: an attempt for this task has workerId === owner and phase !== 'closed'. An unknown phase also counts.\n- Fail-closed true: a non-string assignedWorkerId, or a worker record with no status.\n- The value is the same whoever calls. assigneeAlive is unchanged (presence only).\n(2) Fake-proxy knobs, changed from the description:\n- FAKE_SCOPE_ASSIGNEE: unset or EMPTY means the caller is the assignee (today's behaviour). The sentinel 'none' means unassigned. Any other value is that worker id. Empty cannot mean unassigned because PowerShell deletes an env var set to '', so postflight.ps1 could never express it.\n- FAKE_SCOPE_ASSIGNEE_ALIVE=0|1 is added so you can model a protected-but-quiet owner (alive 0, protected 1).\n- FAKE_SCOPE_ASSIGNEE_PROTECTED=0|1.\n- FAKE_SCOPE_OWNERSHIP_MODE=omit|malformed. 'malformed' returns the boolean as a string, so 'false' arrives as a string that must not be coerced.\n- A caller that is not the assignee is added to activePeerIds and makes peersActive true, as in the daemon's orphan rule.\n- An invalid knob value makes the fake exit 1.",
       "timestamp": "2026-10-27T09:08:30.208Z"
+    },
+    {
+      "id": "comment-d1b6eecdb70b43bab0f63af24e7cb49a",
+      "author": "qa-6fa5d758",
+      "content": "QA note from producer task-9a9b46d8 (approved). It names one window the producer field does not cover, for your step-3 rule and step-6 review.\n- complete_task clears assignedWorkerId on WORKING→REVIEW, but the completing worker's attempt stays open in `finalizing` until its wrapper lands and calls finalize_attempt (packages/moe-daemon/src/tools/completeTask.ts, comment at ~L209).\n- In that window get_commit_scope answers assignedWorkerId null and assigneeProtected false. That is deliberate per the producer spec: unassigned is false even with a former worker's open attempt, and a test pins it.\n- So your \"explicit unassigned may land\" lets a foreign session that exits in those seconds land the worker's completion bytes as its own checkpoint. An example is the planning architect, whose pre-flight task this is. The worker's completion would then be NOTHING_TO_COMMIT: the parent bug's shape in a narrower window.\n- A QA claim cannot interleave there: the claim path refuses a row that holds a foreign `finalizing` attempt (claimNextTask.ts openClaimAttempt / util/claimEligibility.ts).\n- To close the window you need a signal beyond assigneeProtected. One option is a foreign open attempt on an unassigned REVIEW task, read from .moe/attempts/; another is a follow-up producer field. Weigh that against your DoD #2, under which unassigned keeps orphan landing.",
+      "timestamp": "2026-10-27T16:59:31.656Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:02:10.593Z",
-  "updatedAt": "2026-10-27T09:08:30.208Z",
+  "updatedAt": "2026-10-27T16:59:31.656Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e",
     "task-5c71dff9ff2a488d8f75ec375c4f99f8",
