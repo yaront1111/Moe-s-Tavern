@@ -79,7 +79,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T17:11:20.389Z",
-  "updatedAt": "2026-10-27T15:24:48.412Z",
+  "updatedAt": "2026-10-27T15:25:17.706Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:24:59.646Z",
     "plannedStepCount": 4,
@@ -131,7 +131,8 @@
     "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
     ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
-    ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json"
+    ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json",
+    ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json"
   ],
   "completionSummary": "readDaemonInfo now reads .moe/daemon.json through a bounded stream (readNBytes(MAX+1), MAX_DAEMON_JSON_BYTES = 64 KiB) under both profiles. An oversize file returns null with a fixed warn log (no content) and is kept, not deleted. MAX bytes parses and MAX+1 is refused. Three tests in MoeDaemonSupervisorTest: exact cap, cap+1, and a sparse file over 2 GiB (RED was OutOfMemoryError; falls back to a regular cap+1 file if sparse is unsupported). Gate is Windows evidence (WSL has no JDK): cmd.exe gradlew.bat test --rerun under the jetbrains-gradle lease: exit 0, 21 classes, 309 tests, 0 fail/err/skip. Residuals out of scope: the daemon, proxy and wrapper also read daemon.json uncapped.",
   "commits": [
@@ -152,14 +153,30 @@
       "treeId": "220d53ac6bc9f579b41e49e87ba05eaaace125ca",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "5ac3eea615ff0d1659abd4fb90b04dbd298d199f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-6fa5d758@2026-10-27T15:23:18Z",
+      "paths": [
+        ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
+        ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json"
+      ],
+      "recordedBy": "qa-6fa5d758",
+      "recordedAt": "2026-10-27T15:25:17.706Z",
+      "treeId": "cfb9a851c025fbd2c7ddfaae494d47a05260667b",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-3729a0d6@2026-10-27T15:19:05Z",
-    "at": "2026-10-27T15:21:43.760Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-6fa5d758@2026-10-27T15:23:18Z",
+    "at": "2026-10-27T15:25:17.706Z"
   },
   "completedAt": "2026-10-27T15:24:48.412Z",
   "reviewCompletedAt": "2026-10-27T15:24:48.412Z",

@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -115,14 +115,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:13:17.758Z",
-  "updatedAt": "2026-10-27T16:48:59.234Z",
+  "updatedAt": "2026-10-27T17:08:40.582Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:40:37.561Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-27T17:08:40.582Z",
+    "wallClockMs": 91683021
   },
   "contextFetchedBy": [
     "worker-7d158765",
@@ -287,7 +289,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "Reopen 1 after a size-only QA reject (failedDodItems empty, no code change asked). No bytes changed this round. Delivery unchanged: checkpoint 81dff6d + completion f75f57b on moe/work-2026-10-24, non-board +550/-38 = net 512 (runtime+docs 73, tests 439). Per file: joinTeam.ts +8/-1; docs/MCP_SERVER.md +1/-1 (own hunk); moe-agent.sh +56/-21; moe-agent.ps1 +42/-11; joinTeam.notification.test.ts +135/-0; seat-registration.test.mjs +305/-2; postflight-fake-proxy.js +2/-1; mention-provenance-proxy.js +1/-1.\nSize waiver: prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL, epic-be924fb8, PENDING human review), pinged in #governors (msg-b04eeb1d). QA approves once the rail is in allRails.epic. If it is still PENDING, QA parks the row from REVIEW.\nBytes at HEAD a7b407c: six owned paths byte-identical to f75f57b. docs/MCP_SERVER.md and postflight-fake-proxy.js differ only by peer 201d5ab's hunks; this task's join_team sentence and fake answer are intact. No owned path is dirty.\nFresh gate: pure git archive of HEAD c006918 (no packages/moe-daemon or scripts/ change since), Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset. GATE_EXIT=0 in 152 s:\n- seat-registration 57/57: 1 ordering, 18 Git Bash, 19 PS 5.1, 19 PS 7 (parser checks included), no platform skipped\n- parity PASS, tsc clean\n- vitest 170 files: 4346 passed, 19 skipped; joinTeam.notification 7/7\nDoD:\n1) Pruned worker/qa/architect seats and a DEAD seat reply as themselves (wrapper cases on 3 shells, daemon test).\n2) The second read excludes the mention and the seat is not re-notified.\n3) Covered by joinTeam.notification.test.ts + seat-registration.test.mjs.\nSelf-review found no defect. Theoretical, left unfixed (grow only by QA-required fixes):\n- ps1 would accept a bare-string memberIds equal to the seat id; the daemon never emits one.\n- An explicit join_team from an old session can revive DEAD (plan-sanctioned; heartbeats still refuse DEAD).\n- A FULL-team seat reads no chat (QA's non-blocking note).",
-  "reviewCompletedAt": "2026-10-27T14:14:12.571Z",
+  "reviewCompletedAt": "2026-10-27T17:08:40.582Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -314,5 +316,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "QA park from REVIEW: substance PASSES, only the human size-waiver decision is outstanding. The non-board diff of checkpoint 81dff6d + completion f75f57b is +550/-38 = net 512 (runtime+docs 73, tests 439), over the 400 net-LOC review cap, and allRails.epic has no exception for this row. The worker filed prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL on epic-be924fb8); its file still reads status PENDING, resolvedBy null, and only a human can resolve it in the IDE. Not rejecting again: no DoD item failed and no code change is wanted, so a reject would only burn a reopen.\nFresh evidence (QA round 2): pure git archive of HEAD b83d638, Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset: GATE_EXIT=0. seat-registration 57/57 on Git Bash, PS 5.1 and PS 7; parity PASS; tsc clean; vitest 170 files, 4358 passed, 19 skipped. Owned bytes equal f75f57b except peer 201d5ab hunks in docs/MCP_SERVER.md and postflight-fake-proxy.js. Full evidence is in the row's latest comment.\nRoute: on APPROVED, a governor runs set_task_status REVIEW, and QA approves naming net 512 after a fresh gate. On REJECTED, set_task_status PLANNING for a review-scope split of the landed bytes (never re-implement).",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-27T17:08:40.582Z",
+  "reviewSummary": "QA r3 APPROVED. Size net 512, under the epic rail for this row.\n- Rail: allRails.epic has the exception (prop-4b703e3f APPROVED by HUMAN 16:46:28Z). Re-measured 81dff6d+f75f57b non-board: +550/-38 = net 512 (runtime+docs 73, tests 439), matching per file. 8158c25 and 76b18c6 carry board JSON only.\n- Delivery: after a fresh fetch, local = origin moe/work-2026-10-24 = 3973f7f, and all three commits are ancestors of it.\n- Bytes: the 6 owned paths at HEAD are byte-identical to f75f57b. MCP_SERVER.md and postflight-fake-proxy.js were changed only by peer 201d5ab, and own hunks are intact. No owned path is dirty.\n- Gate: task.verification on a git archive of HEAD 3973f7f, Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset. GATE_EXIT=0 in 167 s:\n  - seat-registration 57/57 (Git Bash 18, PS 5.1 19, PS 7 19, plus ordering), 0 skipped\n  - parity PASS, tsc clean\n  - vitest 170 files: 4358 passed, 19 skipped; joinTeam.notification 7/7\n  - Extra, WSL Linux bash 5.2: bash legs 19/19 (PS legs skip with a notice there)\nDoD:\n1) join_team registers a pruned seat and revives DEAD to IDLE only after addTeamMember succeeds (full/unknown team leaves it DEAD; touchWorker still refuses). Both wrappers force a join at every pre-flight before any chat call, order asserted. The reply's sender is the seat: daemon test (pruned+DEAD), wrapper test (pruned worker/qa/architect + DEAD, all shells).\n2) The cursor equals the mention id after the first read; the second read excludes it. Wrapper iteration 2: mentions=0, skip=true.\n3) joinTeam.notification.test.ts (7) + seat-registration.test.mjs (57).\nError paths: Team not found is a JSON-RPC error ('Team not found: <id>'), matched to drop TEAM_ID. isError, malformed, foreign, unlisted and silent joins read no chat and launch nothing (tested).\nRails: tests present; join_team still returns {team}; no schema change; no forbidden patterns; ps1 BOM ok.\nPonytail: lean already, net -0.\nNon-blocking: a FULL-team seat reads no chat (plan-sanctioned).",
+  "requiredCheckAtDone": null
 }
