@@ -105,7 +105,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -120,10 +120,17 @@
   ],
   "priority": "CRITICAL",
   "order": 87,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-09c971cd779e4d8bb4e99e6c5821e899",
+      "author": "qa-6fa5d758",
+      "content": "QA review (qa-6fa5d758, 2026-10-27). SUBSTANCE PASSES. Parked only on size: proposal prop-be47d22cbb414b8f9506a6818178e845 is PENDING human review.\n\nCommit: completion efffad6 (tree a5bea8b) is on moe/work-2026-10-24 and is HEAD. The four owned paths are unchanged at HEAD.\n\nSize: git show --numstat efffad6 gives snapshot-transfer.mjs +193, guest-supervisor.py +167/-6, guest-readiness.mjs +1/-1, local-runner.test.mjs +335. That is 703 changed (+696/-7), exactly the proposal's figures and under its 720 cap. No epic rail waives R09c, and the epic rail says \"Other tasks retain normal sizing limits\", so the 400 default applies until a human rules.\n\nGate, fresh from a full-tree `git archive efffad6` under env -i with Node 24.21.0, running the exact 4-file task.verification command: exit 0, 271 tests, 270 pass, 0 fail, 1 skip (the pre-existing macOS native smoke). The worker's 279 includes a peer's uncommitted edits to local-runner-snapshot.test.mjs in the shared tree. Windows Node (cmd.exe, from WSL) on local-runner.test.mjs: exit 0, 204/187/17 skip. T1-T6 pass there, and M1-M4/T7 skip by NOT_POSIX as designed. No __pycache__. Both new runtime files are ASCII and LF.\n\nDoD:\n1. T4/T7 record every provider call: info, mountinfo, a single spawn of ['multipass', snapshotArgv(name,'materialize'), {shell:false, windowsHide, pipes}], then info, mountinfo. fakeGuest.unexpected stays [], and the stdin bytes equal hostFrames exactly.\n2. T5: mounts present or unknown before the stream mean no spawn, and late mounts in info or mountinfo give TRANSFER_MOUNTS_PRESENT.\n3. Supervisor side: the digest is recomputed from the written bytes, and M2/T7 give a cross-language digest equal to Node's (UTF-8 vs UTF-16 order is exercised by U+1F600 and U+FF5E). Host side: T6 refuses a wrong, missing or repeated frame, an extra key, an unknown kind, malformed, oversize and truncated frames, a nonzero or signal exit, a hang, and an early exit 0.\n4. M3: 27 hostile streams each give 65 with an empty lib dir. M4: 73 untouched for an existing workspace, manifest or symlink; a planted parent symlink is never followed; injected fsync and rename failures leave nothing.\n5. Gate exits 0 (above).\n\nMy own mutation sweep (26 single-guard mutants, scratch copies, scored by exit code) killed 24/26:\n- JS: shell:true, both mount checks, digest, repeat, fed, kill, no-frame, decoder.end, delete-ignored, backpressure.\n- Python: O_NOFOLLOW walk, digest, sort, canonical b64, after-end, rmtree, lexists, '..', fchmod, unlink on rename, root 0700, bool version, manifest-after-rename.\n\nTwo survivors, advisory and not blocking. In both, a later check still yields 65, so the outcome is unchanged:\n(a) O_EXCL removed from the file create. M3's duplicate row also breaks the digest, so it masks the guard (the worker disclosed this).\n(b) The per-file `size <= left_total` bound: the end-of-stream total catches the breach, but only after the bytes are written.\n\nA test that computes the R09a digest over the duplicate rows would pin (a). R10a relay: the only change is write_frame delegating to the new write_all.\n\nResume: proposal APPROVED → the governor adds the rail and sets this task back to REVIEW; QA re-checks the rail against numstat, re-runs the gate and approves. REJECTED → PLANNING; split review scope, not bytes (mem decision-size-only-reject-of-landed-bytes).",
+      "timestamp": "2026-10-27T17:35:43.846Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T16:55:14.489Z",
-  "updatedAt": "2026-10-27T17:28:23.772Z",
+  "updatedAt": "2026-10-27T17:35:50.954Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:03:21.357Z",
     "plannedStepCount": 6,
@@ -132,7 +139,8 @@
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-6fa5d758"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -177,7 +185,46 @@
     "scripts/local-runner/snapshot-transfer.mjs",
     "scripts/local-runner/guest-readiness.mjs",
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/guest-supervisor.py"
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
+    ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json"
   ],
-  "completionSummary": "CQ-R09c delivered. The new scripts/local-runner/snapshot-transfer.mjs provides:\n- workspaceEntries (base files merged with overlay replace/add/delete, re-sealed by validateImport);\n- snapshotArgv (frozen `multipass exec --no-map-working-directory <owned> -- sudo -n <supervisor> materialize|export`);\n- assertNoMounts (R07 mountFailure, now exported from guest-readiness.mjs);\n- hostFrames (header, per-file frame plus 1 MiB base64 data frames, end);\n- runSupervisorStream: shell:false, backpressured stdin, single-settle, SIGKILL on any failure, fixed TRANSFER_* codes;\n- materializeSnapshot: mounts checked before and after, exactly one {kind:'materialized',digest} matching the host digest; returns executionReady:false.\n\nguest-supervisor.py gains a root-only 'materialize' mode. It reads strict frames, creates files dir-fd-relative with O_NOFOLLOW/O_EXCL into a 0700 mkdtemp staging tree, accepts only canonical base64, checks totals, recomputes the R09a digest from the written bytes, writes a 0600 manifest, then renames into place. Exit codes: 65 bad stream, 73 existing, 74 I/O. Failure cleanup leaves no staging, workspace or manifest. The R10a bridge code is untouched.\n\nDoD mapping:\n1. Provider calls recorded (T2/T4/T6/T7).\n2. Mounts checked before and after; no spawn on refusal (T3/T5).\n3. Cross-language digest; wrong, missing or repeated frame and nonzero exit refused (M2/M3/T6).\n4. Traversal, absolute, empty and duplicate paths, symlink and existing workspace refused, nothing left behind (M3/M4).\n5. Gate exits 0: 279 tests, 278 pass, 1 skip.\n\nSelf-review fixed a rename-before-manifest ordering bug and a partial manifest on fsync failure. A 28-mutant sweep in scratch copies killed 28/28 (added an M1 root-routing row).\n\nSize: 703 changed lines (+696/-7) against a plan estimate of ~490. Size rail proposal prop-be47d22cbb414b8f9506a6818178e845 is PENDING; QA, please confirm.\n\nDeviations:\n- hostFrames is exported because the M rows use it.\n- A base delete entry is refused.\n-"
+  "completionSummary": "CQ-R09c delivered. The new scripts/local-runner/snapshot-transfer.mjs provides:\n- workspaceEntries (base files merged with overlay replace/add/delete, re-sealed by validateImport);\n- snapshotArgv (frozen `multipass exec --no-map-working-directory <owned> -- sudo -n <supervisor> materialize|export`);\n- assertNoMounts (R07 mountFailure, now exported from guest-readiness.mjs);\n- hostFrames (header, per-file frame plus 1 MiB base64 data frames, end);\n- runSupervisorStream: shell:false, backpressured stdin, single-settle, SIGKILL on any failure, fixed TRANSFER_* codes;\n- materializeSnapshot: mounts checked before and after, exactly one {kind:'materialized',digest} matching the host digest; returns executionReady:false.\n\nguest-supervisor.py gains a root-only 'materialize' mode. It reads strict frames, creates files dir-fd-relative with O_NOFOLLOW/O_EXCL into a 0700 mkdtemp staging tree, accepts only canonical base64, checks totals, recomputes the R09a digest from the written bytes, writes a 0600 manifest, then renames into place. Exit codes: 65 bad stream, 73 existing, 74 I/O. Failure cleanup leaves no staging, workspace or manifest. The R10a bridge code is untouched.\n\nDoD mapping:\n1. Provider calls recorded (T2/T4/T6/T7).\n2. Mounts checked before and after; no spawn on refusal (T3/T5).\n3. Cross-language digest; wrong, missing or repeated frame and nonzero exit refused (M2/M3/T6).\n4. Traversal, absolute, empty and duplicate paths, symlink and existing workspace refused, nothing left behind (M3/M4).\n5. Gate exits 0: 279 tests, 278 pass, 1 skip.\n\nSelf-review fixed a rename-before-manifest ordering bug and a partial manifest on fsync failure. A 28-mutant sweep in scratch copies killed 28/28 (added an M1 root-routing row).\n\nSize: 703 changed lines (+696/-7) against a plan estimate of ~490. Size rail proposal prop-be47d22cbb414b8f9506a6818178e845 is PENDING; QA, please confirm.\n\nDeviations:\n- hostFrames is exported because the M rows use it.\n- A base delete entry is refused.\n-",
+  "commits": [
+    {
+      "sha": "efffad662a7e11775a15aff5554eff9d56c48f65",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-27T17:06:34Z",
+      "paths": [
+        ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
+        ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-27T17:29:16.837Z",
+      "treeId": "a5bea8b82912af4d4e94531d6db435e8e9f1e261",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/snapshot-transfer.mjs",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-27T17:06:34Z",
+    "at": "2026-10-27T17:29:16.837Z"
+  },
+  "blockedReason": "QA substance PASSES and the review is parked on size only. Full evidence is in comment-09c971cd779e4d8bb4e99e6c5821e899.\n\nSize: completion efffad6 (on moe/work-2026-10-24, equal to HEAD) is 703 changed lines (+696/-7): snapshot-transfer.mjs +193, guest-supervisor.py +167/-6, guest-readiness.mjs +1/-1, local-runner.test.mjs +335. That is above the 400 default. No epic rail waives CQ-R09c, and the epic rail says other tasks keep normal sizing limits. The worker's EPIC ADD_RAIL proposal prop-be47d22cbb414b8f9506a6818178e845 (cap 720, exact numstat match) is PENDING human review.\n\nEvidence:\n- Fresh full-tree archive gate (the 4-file task.verification command, Node 24.21, env -i): exit 0, 271/270/1 skip.\n- Windows Node: exit 0, with T1-T6 passing.\n- QA mutation sweep: 24/26 killed. Two masked guards (O_EXCL on duplicate paths, per-file size bound) are advisory and non-blocking.\n- All 5 DoD items are evidenced by tests T1-T7 and M1-M4.\n\nResume path:\n- APPROVED: the governor adds the rail and calls set_task_status REVIEW. QA then checks the rail against numstat, re-runs the gate and approves. No worker bytes are needed.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope into file-disjoint slices of at most 400, never re-slicing the landed bytes.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-27T17:35:50.954Z"
 }

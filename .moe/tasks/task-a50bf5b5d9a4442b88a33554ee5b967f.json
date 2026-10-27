@@ -14,10 +14,67 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2c9d5121",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Contract types, decoders and decoder tests (DoD 4). (1) types/schema.ts, next to RequiredCheckSnapshot, add exactly:\n- PlanSourceBasis { version: 1; commit: string; planRevision: number }\n- PlanningEntry { from: TaskStatus; at: string; seq: number }\n- type PlanReuseDecision = 'reuse'|'refresh'|'reassess'|'replan'\n- PlanReuseRecord { version: 1; decision: PlanReuseDecision; planRevision: number; entrySeq: number; reasons: string[]; assessedAt: string; basisCommit?: string; headCommit?: string; changedPaths?: string[]; candidate?: 'current'|'revalidate' }\nAdd the optional Task fields planSourceBasis?, planningEntry? and planReuse? right after requiredCheckSnapshot. Each JSDoc says:\n- daemon-owned, written only by taskStore.updateTask: the basis in the PLAN_SUBMITTED write, the entry on a status change into PLANNING, and the record through the private daemonOwned argument;\n- stripped from caller updates and listed in the /ws denylist;\n- decode it with the context/planReuseState readers;\n- never approval, readiness or evidence.\n(2) Create context/planReuseState.ts. Header comment: daemon-owned plan-reuse facts (CQ-C07a), no decision logic. It contains:\n- `export const planSourceGit = { run: runGit }`, mirroring requiredCheckGit in delivery/requiredChecks.ts.\n- readPlanSourceBasis(task: Pick<Task,'planSourceBasis'>), readPlanningEntry(task: Pick<Task,'planningEntry'>) and readPlanReuseRecord(task: Pick<Task,'planReuse'>). Each returns a detached copy or null.\n- validatePlanReuseRecord(value: unknown): PlanReuseRecord returns the detached copy or throws invalidInput('planReuse', <reason>). readPlanReuseRecord is this function inside try/catch, so the two can never drift.\nError handling: the three readers never throw (the body is wrapped in try/catch and returns null), validatePlanReuseRecord throws only INVALID_INPUT, and capturePlanSourceBasis turns every Git or fs failure into null.\nShape rules:\n- The value is a plain object (prototype Object.prototype or null, not an array).\n- Key check on the ENUMERABLE own key set (mem gotcha-strict-decoder-key-set): every required key is in Object.keys(value), and every entry of Object.keys(value) is required or optional. Do NOT copy requiredChecks.ts exactKeys (count + hasOwn).\n- Read each field once into a local and build the copy from the locals.\n- version === 1.\n- Commits match /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.\n- planRevision and entrySeq are non-negative safe integers. seq is a safe integer >= 1, since the counter starts at 1.\n- `from` is checked against an exhaustive `const TASK_STATUSES: Record<TaskStatus, true>` (complete at compile time) with Object.hasOwn.\n- at and assessedAt match /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/ and round-trip through new Date(v).toISOString().\n- decision and candidate are in their literal sets.\n- reasons is an array of 0-32 strings of 1-300 chars, none matching /[\\u0000-\\u001f\\u007f-\\u009f]/.\n- changedPaths is an array of at most 64 strings. Each satisfies normalizeAffectedFile(p) === p (util/affectedFiles.ts; catch its throw) and the same control-character ban.\n- An optional key that is present must be valid; an own undefined is malformed. The copy includes only the optional keys that are present, and it copies the arrays.\ncapturePlanSourceBasis(projectRoot): Promise<{ commit: string } | null>:\n- `const git = await openProjectGit(projectRoot, planSourceGit.run, 2000)`, then trim the output of `git('rev-parse --verify', ['rev-parse','--verify','--end-of-options','HEAD^{commit}'])`.\n- Return { commit } only if it matches the commit regex; otherwise return null. Any throw returns null.\n- Read planSourceGit.run at call time so vi.spyOn works.\n(3) Create context/planReuseState.test.ts with table-driven, compact cases:\n- One valid fixture per decoder. The result toEqual the input but is not the same object (not toBe), and mutating its arrays leaves the source intact.\n- One malformed table per decoder. The reader returns null, and validatePlanReuseRecord throws INVALID_INPUT for each record row.\nThe table covers:\n- an extra key; a missing key; a non-enumerable required key plus an enumerable extra key (add the extra by assignment AFTER defineProperty, because spread drops hidden keys);\n- a wrong type; a 39-hex, an uppercase and a non-hex commit;\n- -1, 2**53 and NaN integers (titles use %s, not %j); seq 0;\n- an unknown status, decision or candidate;\n- 33 reasons; an empty, a 301-char and a control-character reason;\n- 65 changedPaths; the paths './a', 'a\\\\b', '/abs' and '../x';\n- a non-canonical ISO time; an array or class-instance value;\n- an absent field, which returns null.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/context/planReuseState.ts",
+        "packages/moe-daemon/src/context/planReuseState.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "taskStore.updateTask ownership, the stamp and the record (DoD 2, 3). Keep the file's load-bearing order: validate, write, map, emit, activity.\n(a) Beside the executionPolicySnapshot/requiredCheckSnapshot strip, delete planSourceBasis, planningEntry and planReuse from `sanitized`. Add a comment naming their only writers. A caller value, including null, never reaches the row.\n(b) The private daemonOwned type gains planSourceBasis?: { commit: string } and planReuse?: PlanReuseRecord. StateManager.updateTask still omits daemonOwned.\n(c) Error handling, before ANY write:\n- `const reuse = daemonOwned?.planReuse === undefined ? undefined : validatePlanReuseRecord(daemonOwned.planReuse)`. A throw is INVALID_INPUT: nothing is written or emitted.\n- After planRevision is derived and still before the write, on PLAN_SUBMITTED with daemonOwned?.planSourceBasis, compose { version: 1, commit, planRevision } and decode it with readPlanSourceBasis. A null result throws invalidInput('planSourceBasis', 'commit must be 40 or 64 lowercase hex'). submit_plan's capture already validates, so this never fires from submit_plan.\n(d) Compute `const now = new Date().toISOString()` once and use it as updatedAt.\n- In the existing `event === 'PLAN_SUBMITTED' && daemonOwned` block, set updated.planSourceBasis to the composed basis, or delete it when there is none. This is the requiredCheckSnapshot pattern. A PLAN_SUBMITTED write WITHOUT daemonOwned leaves the basis untouched; the basis's planRevision lets readers see that it is stale.\n- If reuse is set, set updated.planReuse = reuse, whatever the event. When absent, the field is left untouched.\n(e) Stamp the entry when statusChanged && finalUpdates.status === 'PLANNING', EXCEPT when task.status === 'BLOCKED' && task.blockedFromStatus === 'PLANNING'.\n- Judge the exception on the STORED row `task`: every unblock path clears blockedFromStatus in the same update.\n- The stamp: updated.planningEntry = { from: task.status, at: now, seq: prior < Number.MAX_SAFE_INTEGER ? prior + 1 : 1 }, where prior = readPlanningEntry(task)?.seq ?? 0.\n- The exception leaves planningEntry untouched, even when it is absent.\nEverything rides in the single `updated` image, so a refused or failed write publishes none of it. createTask stays unchanged: it builds the row field by field, so it never stamps or copies these keys. All PLANNING entries funnel through updateTask; the restart purge and nextStatusForRelease never move a row INTO PLANNING.\nTests in context/planReuseState.test.ts (ToolTestHarness; CONTROL is the default). Each is a named case:\n- 'BACKLOG->PLANNING stamps from BACKLOG, seq 1': at equals updatedAt.\n- 'a later WORKING->PLANNING stamps seq 2 from WORKING'.\n- 'qa_reject escalation stamps from REVIEW': a REVIEW row with reopenCount 2 through qaRejectTool, as in tools/qaReject.test.ts 'flips to PLANNING once at the soft cap'.\n- 'BLOCKED (blockedFromStatus PLANNING)->PLANNING keeps the earlier entry': toEqual the seq-1 entry, same at. Clear blockedFromStatus to null in the same update, as the unblock paths do.\n- 'BLOCKED (blockedFromStatus WORKING)->PLANNING stamps from BLOCKED'.\n- 'createTask never stamps': state.createTask in PLANNING carrying a forged planningEntry yields no key.\nOwnership cases:\n- Seed all three fields: the entry through a transition, and the basis and record through taskStore.updateTask's daemonOwned argument on a PLAN_SUBMITTED write (commit 'a'.repeat(40); no Git needed).\n- Then state.updateTask with forged values, and again with null, each plus a title change: the title applies, and all three still toEqual the seeded values in memory and on disk.\n- daemonOwned.planReuse on a plain update stores the validated detached copy: mutating the input afterwards changes nothing.\n- A malformed record throws INVALID_INPUT. The task file bytes and the in-memory row are unchanged, and no TASK_UPDATED event is emitted.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/context/planReuseState.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Board denylist (DoD 3, /ws path). In server/WebSocketServer.ts, add 'planSourceBasis', 'planningEntry' and 'planReuse' to UPDATE_TASK_DENYLIST after 'approvedPlanRevision'. Give them a one-line comment: daemon-owned plan-reuse state, written only by taskStore.updateTask (submit_plan's basis, the PLANNING-entry stamp and the daemonOwned reuse record), so a board echo must not forge or wipe it. See mem convention-daemon-owned-task-field-ws-denylist.\nIn server/WebSocketServer.test.ts, add a case beside 'UPDATE_TASK strips requiredCheckAtDone…':\n- `const spy = vi.spyOn(state, 'updateTask')`.\n- Send UPDATE_TASK with { title: 'Renamed', planSourceBasis: <forged valid basis>, planningEntry: <forged entry>, planReuse: null }, and await the TASK_UPDATED frame.\n- Assert the title applied and every forwarded `updates` argument (spy.mock.calls[i][1]) lacks all three keys. The store strip would hide a dropped denylist entry, so the spy is what pins it.\n- Assert the stored row carries none of the forged values.\nRed proof: with the three denylist entries removed, exactly this case fails.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "submit_plan capture (DoD 1) and the one order-sensitive pre-existing test.\nIn tools/submitPlan.ts:\n- In the handler, directly after the measureRequiredCheckSnapshot statement and before `submit` is defined, add `const basis = await capturePlanSourceBasis(state.projectPath);`. This is outside the state mutex, since the tool is blocking:true. It is captured once per call, so the cached-path retry's second submit() reuses it.\n- Pass `{ ...(snapshot ? { requiredCheckSnapshot: snapshot } : {}), ...(basis ? { planSourceBasis: basis } : {}) }` as the PLAN_SUBMITTED daemonOwned argument. It is always an object, so a null capture deletes an older basis.\n- Error handling: a null capture never refuses and never warns. The capture cannot throw, so it adds no new failure path to submit_plan.\nReal-Git tests in context/planReuseState.test.ts. Copy the git()/repo() helper pattern from delivery/requiredChecks.snapshot.test.ts: GIT_* stripped, NOSYSTEM/GLOBAL masked, author env, core.autocrlf=false and empty core.hooksPath. Cases:\n- (1) Submitting in a committed temp repo stores planSourceBasis toEqual { version: 1, commit: git('rev-parse','HEAD'), planRevision: the stored planRevision }, in memory and on disk. The result's planRevision is the same number.\n- (2) Commit again, replan (updateTask status PLANNING) and resubmit: commit is the new HEAD and planRevision the new revision.\n- (3) A non-Git root whose stored row carries an older basis (seeded through h.createTask) submits successfully, with no planSourceBasis key in memory or on disk and no warnings in the result.\n- (4) In the repo, vi.spyOn(planSourceGit, 'run').mockRejectedValue(new Error('injected')) on a resubmission: the submission succeeds and the older basis is removed.\n- (5) An unborn HEAD (git init with no commit) stores no basis.\nPre-existing test fix in state/executionContract.test.ts, 'serializes simultaneous submission and board-style writes with one bump each':\n- It asserts the submission wins the mutex race. That held only because submit_plan never awaited before runExclusive. The capture's await now lets the concurrent board write in first. An architect probe confirmed this is the only suite failure the change causes.\n- Make it order-agnostic in the style of submitPlan.test.ts 'gives queued surface changes successive revisions': `expect([submission.planRevision, board.planRevision].sort()).toEqual([8, 9])`, then `await persisted(9, board.planRevision === 9 ? replacement : fullContract())`.\n- Keep its title and its one-bump-each intent, and change nothing else in that file.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/state/executionContract.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/context/planReuseState.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate, run once and fresh. The exact command is `cd packages/moe-daemon && npm test`, the full daemon suite (the Task schema is shared). It must exit 0. Supply the command, exit code and output tail to complete_task.\nThis WSL checkout's in-tree node_modules is Windows-native, so run that same command inside a Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate):\n- `git archive HEAD` of the WHOLE repo.\n- Overlay ONLY the eight owned paths: types/schema.ts, context/planReuseState.ts, context/planReuseState.test.ts, state/taskStore.ts, server/WebSocketServer.ts, server/WebSocketServer.test.ts, tools/submitPlan.ts and state/executionContract.test.ts (all under packages/moe-daemon/src).\n- Symlink a native node_modules after checking that package.json and package-lock.json are equal modulo CR.\n- Run under env -i with a Linux-only PATH.\n- cmp the owned files against the snapshot before citing the run.\nIn the same snapshot, also run `npx tsc --noEmit` (vitest does not typecheck) and record its result in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff (load the adversarial-self-review skill). Attack:\n- Each decoder with a hidden-key/extra-key object, a getter, a null-prototype object and a huge array.\n- Any caller (MCP updateTask, a board echo, null) reaching one of the three fields.\n- A refused planReuse or basis leaving bytes, an emit or an activity entry behind.\n- The BLOCKED exception judged on the post-write row by mistake.\n- seq at Number.MAX_SAFE_INTEGER.\n- The capture holding the mutex, throwing, warning, refusing, or being called twice per submit.\n- Two concurrent submits for one task.\n- Windows paths: openProjectGit already handles pathKey and safe.directory, so add nothing of your own.\nThen confirm:\n- Error handling is complete: no reader throws, and every refusal happens before any write.\n- Net changed lines are 400 or fewer including tests (git diff --numstat on the six edited files plus wc -l on the two new files). QA rejects past 400, and no rail waives it for this task.\n- No edits to docs/SCHEMA.md (CQ-C11), VS Code or Kotlin, and no new activity event types.\n- None of the 600+ dirty peer paths in this shared checkout were touched.\n- Every DoD item maps to a named, passing test.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -29,11 +86,39 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T17:11:22.617Z",
-  "updatedAt": "2026-10-27T17:16:50.029Z",
+  "updatedAt": "2026-10-27T17:32:16.105Z",
   "metrics": {
-    "firstClaimAt": "2026-10-27T17:16:47.252Z"
+    "firstClaimAt": "2026-10-27T17:16:47.252Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 8
   },
   "contextFetchedBy": [
     "architect-2c9d5121"
-  ]
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T17:32:15.999Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Stamping planningEntry in each tool that moves a row to PLANNING (qa_reject, request_replan, rejectTask, plan critique, the unblock paths, the board): rejected, because six writers would drift. taskStore.updateTask is the single funnel. Verified: the restart purge and nextStatusForRelease never move a row INTO PLANNING, and createTask builds the row field by field.\n2) Capturing HEAD inside the mutex: rejected. That is up to 2 s of Git under the fleet lock.\n3) Writing the basis in a second write after PLAN_SUBMITTED: rejected. It leaves a window with a plan but no basis, plus a double write.\n4) A `.git`-exists fast path to keep submit_plan's old 'wins the lock synchronously' ordering: rejected. It only hides the ordering change for non-Git test dirs; making the one order-sensitive test order-agnostic is the honest fix.\n5) Silently dropping a malformed daemonOwned basis: rejected in favour of INVALID_INPUT before any write. It is unreachable from submit_plan (the capture validates) and fails closed on programming errors, matching planReuse.",
+    "codebaseInsights": "- daemonOwned pattern: state/taskStore.ts updateTask(..., daemonOwned?) carries requiredCheckSnapshot/approvedPlanRevision. StateManager.updateTask omits it, so only direct taskStore importers (submitPlan, the approval paths) can write those fields.\n- The strip block sits right after the id/createdAt deletes.\n- The file header says the statement order is load-bearing: validate, write, map, emit, activity.\n- submit_plan is `blocking: true`. Its handler measures requiredChecks outside the mutex, and `submit = () => state.runExclusive(...)` is retried once for cached-path misses.\n- Seams: requiredCheckGit = { run: runGit } in delivery/requiredChecks.ts, and openProjectGit(root, run, budgetMs) in util/cachedPlanPaths.ts. openProjectGit owns the read-only trust envelope: GIT_* stripped, safe.directory pinned, toplevel must equal the root, partial-clone/core.worktree refused.\n- requiredChecks.ts exactKeys is the count+hasOwn anti-pattern (mem gotcha-strict-decoder-key-set). Do not copy it.\n- stateModules.test.ts guards import cycles only inside src/state. planReuseState imports only types and util, so there is no cycle.\n- Architect probe (Linux snapshot of HEAD, stub stamp + basis + a pre-mutex git await): 4360 passed, 1 failed. The failure is executionContract.test.ts's race-order assertion; no exact-shape assertion elsewhere breaks.",
+    "risks": "- Decoder traps: spread drops non-enumerable keys in tests; it.each %j prints NaN as null; read each field once (getters).\n- The BLOCKED exception must use the pre-write row: the unblock writes null blockedFromStatus in the same update.\n- Guard seq overflow (wrap to 1, never write an unsafe integer).\n- A corrupted stored status stamps a `from` that reads back null. That fails closed and is acceptable.\n- capturePlanSourceBasis must never throw and must read the seam at call time.\n- A project root that is a subdirectory of a repo, or one with an unborn HEAD, gets no basis. C07 will then never reuse a plan there, which is conservative.\n- submit_plan now awaits Git (up to 3 subprocesses, a 2 s budget) before taking the lock, so a concurrent board write can land first. Only one test depended on that order.\n- Size: 400 net lines or fewer including tests; keep the tests table-driven.\n- Out of scope: docs/SCHEMA.md (CQ-C11), VS Code/Kotlin parity, activity event types, any reuse decision (C07b) or claim/context wiring (C07).\n- Shared checkout: touch only the 8 owned paths.\n- The WSL gate must run in a Linux-native snapshot.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.snapshot.test.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/state/executionContract.test.ts",
+      "packages/moe-daemon/src/tools/qaReject.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T17:32:16.105Z"
 }
