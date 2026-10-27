@@ -103,7 +103,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T16:54:17.650Z",
-  "updatedAt": "2026-10-27T17:43:15.159Z",
+  "updatedAt": "2026-10-27T17:44:11.586Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:00:08.522Z",
     "plannedStepCount": 5,
@@ -150,7 +150,37 @@
   },
   "filesModified": [
     "scripts/local-runner/source-export.mjs",
-    "scripts/tests/local-runner-snapshot.test.mjs"
+    "scripts/tests/local-runner-snapshot.test.mjs",
+    ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json"
   ],
-  "completionSummary": "New scripts/local-runner/source-export.mjs (199 lines) exports `exportSourceSnapshot({ repoDir, commit, git='git', timeoutMs=120000 })`. It resolves `Object.freeze({ version: 1, commit, tree, base, overlay, excluded })`, where base and overlay are validateImport results. Errors use fixed codes: EXPORT_INPUT_INVALID, REPOSITORY_UNSUPPORTED, COMMIT_INVALID, ENTRY_UNSUPPORTED, GIT_FAILED, READ_FAILED, or a SNAPSHOT_* code re-minted. Messages never echo paths, stderr or bytes.\n\nGit runs only in the daemon's openProjectGit envelope (GIT_* stripped, NOSYSTEM, GLOBAL masked, --no-optional-locks --no-replace-objects, protocol.allow=never, safe.directory=<root>), plus core.fsmonitor=false, under one deadline. The base comes from `ls-tree -r -z -l` and is bounded before one exact-length `cat-file --batch`, with every header checked.\n\nDeviations from the plan:\n- Porcelain `git diff` rewrites .git/index even under --no-optional-locks (Git 2.43), so the overlay uses plumbing `diff-index --name-only -z --no-renames --ignore-submodules=dirty` plus `ls-files --others --exclude-standard`. Stat-only paths are dropped by a byte+mode compare.\n- `=dirty` rather than `=none`: none spawns `git status` inside a staged nested checkout.\n- The local-config refusal now also covers `filter.*`: a clean filter ran on a racily clean entry (probed).\n- \"Untracked FIFO refuses\" is impossible because Git never lists FIFOs. It became \"file replaced by a FIFO refuses\" plus \"untracked FIFO resolves\".\n- I also escaped E1's non-ASCII file name so the test file stays ASCII-only.\n\nTests are E1–E8 plus the R09a S2 (COM/LPT ²³) and S6 (Float64Array) rows. Mutation probes in /tmp: every guard is killed except equivalent ones and race-only ones (O_NOFOLLOW, dev/ino, size+1 read).\n\nKnown limits:\n- Worktree reads are bounded in bytes but not in time.\n- The worktree is not an atomic multi-file snapshot.\n- Repos with local LFS or filter config are unsupported.\n\nSize: 400 net changed lines (module 199 + test +202/-1)"
+  "completionSummary": "New scripts/local-runner/source-export.mjs (199 lines) exports `exportSourceSnapshot({ repoDir, commit, git='git', timeoutMs=120000 })`. It resolves `Object.freeze({ version: 1, commit, tree, base, overlay, excluded })`, where base and overlay are validateImport results. Errors use fixed codes: EXPORT_INPUT_INVALID, REPOSITORY_UNSUPPORTED, COMMIT_INVALID, ENTRY_UNSUPPORTED, GIT_FAILED, READ_FAILED, or a SNAPSHOT_* code re-minted. Messages never echo paths, stderr or bytes.\n\nGit runs only in the daemon's openProjectGit envelope (GIT_* stripped, NOSYSTEM, GLOBAL masked, --no-optional-locks --no-replace-objects, protocol.allow=never, safe.directory=<root>), plus core.fsmonitor=false, under one deadline. The base comes from `ls-tree -r -z -l` and is bounded before one exact-length `cat-file --batch`, with every header checked.\n\nDeviations from the plan:\n- Porcelain `git diff` rewrites .git/index even under --no-optional-locks (Git 2.43), so the overlay uses plumbing `diff-index --name-only -z --no-renames --ignore-submodules=dirty` plus `ls-files --others --exclude-standard`. Stat-only paths are dropped by a byte+mode compare.\n- `=dirty` rather than `=none`: none spawns `git status` inside a staged nested checkout.\n- The local-config refusal now also covers `filter.*`: a clean filter ran on a racily clean entry (probed).\n- \"Untracked FIFO refuses\" is impossible because Git never lists FIFOs. It became \"file replaced by a FIFO refuses\" plus \"untracked FIFO resolves\".\n- I also escaped E1's non-ASCII file name so the test file stays ASCII-only.\n\nTests are E1–E8 plus the R09a S2 (COM/LPT ²³) and S6 (Float64Array) rows. Mutation probes in /tmp: every guard is killed except equivalent ones and race-only ones (O_NOFOLLOW, dev/ino, size+1 read).\n\nKnown limits:\n- Worktree reads are bounded in bytes but not in time.\n- The worktree is not an atomic multi-file snapshot.\n- Repos with local LFS or filter config are unsupported.\n\nSize: 400 net changed lines (module 199 + test +202/-1)",
+  "commits": [
+    {
+      "sha": "01ca00b087e1f55ea74a5500371952654d8274bf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T17:03:15Z",
+      "paths": [
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T17:44:11.586Z",
+      "treeId": "951dd985608a3149e7e49e53d805f7d52fbe1381",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/local-runner/source-export.mjs"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-27T17:03:15Z",
+    "at": "2026-10-27T17:44:11.586Z"
+  }
 }
