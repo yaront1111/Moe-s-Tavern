@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -88,16 +88,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T12:03:20.699Z",
-  "updatedAt": "2026-10-26T16:03:55.202Z",
+  "updatedAt": "2026-10-27T15:04:21.731Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:56:32.635Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:04:21.731Z",
+    "wallClockMs": 83269096
   },
   "contextFetchedBy": [
     "architect-1520cc31",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -175,5 +178,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-26T15:59:32Z",
     "at": "2026-10-26T16:03:55.202Z"
-  }
+  },
+  "completedAt": "2026-10-27T15:04:21.731Z",
+  "reviewCompletedAt": "2026-10-27T15:04:21.731Z",
+  "reviewSummary": "Reviewed completion commit b62d274 (on moe/work-2026-10-24, pushed) via git show: BoardTaskFingerprint.kt (new, 14 lines), MoeToolWindowPanel.kt (+4/-8), BoardApprovalTest.kt (+74); ~+92/-8 code LOC, under 400. DoD: outer updateBoard fingerprint and per-column updateColumn key both call shared boardTaskFingerprint(), which keeps every prior input/order and adds rev=planRevision (null distinct from legacy 0) and step.description. A revision-only edit now misses the outer early-return and columns rebuild with the new rendered Task; unchanged snapshots still skip; runCatching warn-then-rebuild, column force-rebuild, approvalFingerprint and CQ-F04c rendered-token logic untouched. Tests are mutation-resistant: identical snapshots equal; revision-only 1->2 changes key; 0/null/present distinct; step-description-only; step id/status/order/removal; all 11 prior task fields; source-wiring guard pins both real call sites before their cache early-returns (unused helper fails via empty range) and bans the old inline fingerprint. No weakened tests, no scope creep. Re-ran plan gate under jetbrains-gradle lease (released): (cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\") [Windows route, no JDK in WSL] -> exit 0, :test executed, fresh XML 21 suites/306 tests/0 skipped/0 failures/0 errors; BoardApprovalTest 25/25 incl. 7 new tests (306 vs worker's 302: peer tests landed since). Not run: deliberate source mutation (shared dirty tree; reasoned from assertions). Kotlin-only mid-epic slice, daemon/proxy suites not required.",
+  "requiredCheckAtDone": null
 }
