@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,25 +24,44 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
-  "order": 100,
+  "order": 1,
   "comments": [
     {
       "id": "comment-aafb4bc06bf5481d87d763715c647f7b",
       "author": "worker-3729a0d6",
       "content": "Handoff from CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced, host session in scripts/local-runner/guest-session.mjs), for planning R10 cancellation and teardown:\n1. Signal teardown of the guest supervisor is still open; R08b's QA note deferred it here. A SIGTERM, SIGHUP or SIGKILL sent to guest-supervisor.py skips its finally, and the job's start_new_session group survives. Observed locally: a supervisor SIGKILLed during an R08 mutation run left its job orphaned under init. Today only host EOF (exit 74) and I/O errors kill and reap the group.\n2. On abort, runGuestSession closes the bridge stdin and waits up to timeoutMs, then SIGKILLs the local provider process (multipass exec). That local kill does not prove the guest job ended, and executionReady is always false. R10 needs guest-side termination evidence, such as a job table or a kill-and-verify step.\n3. The session resolves only on a provider exit 0 with exactly one observation. Every other end rejects with a fixed SESSION_* code.",
       "timestamp": "2026-10-26T10:50:54.130Z"
+    },
+    {
+      "id": "comment-9ea061a8ba34436f918c9921697f6421",
+      "author": "architect-4c57a52b",
+      "content": "The operator approved this split in the architect REPL (2026-10-27).\n\nR10 cannot be planned whole yet, for two reasons:\n- its \"owned attempt workspaces\" are R09's guest materialization contract, and R09 is BLOCKED with no plan;\n- it spans five concerns, so it would exceed the size cap.\n\nNew R10a (task-7988e5b97ea0484fae6bf8e49009266a, PLANNING, dependsOn R08) takes item 1 of R08's handoff: signal-safe guest job teardown in guest-supervisor.py relay().\n- SIGTERM, SIGHUP and SIGINT kill and reap the job's session group, with a new fixed exit code.\n- A SIGKILL of the supervisor still ends the job's session.\nR10a is file-disjoint from R09, and R08 has landed code (b0e5982).\n\nThis row stays the final slice and keeps its full DoD. It now dependsOn R09 and R10a, and still R08 indirectly through R10a. Plan it once both have landed code. It still owns:\n- the job table that replaces main()'s EX_CONFIG;\n- running the agent as moe-agent (R07 already makes that identity with no sudo or groups);\n- scoped provider credentials;\n- fresh session identity, so that full context is forced;\n- artifact preservation, and lease release on exit or crash;\n- host-side kill-and-verify termination evidence in guest-session.mjs (R08 handoff item 2).\nExpect a further SPIDR split at that point (job table and identity; credentials; reconnect). The R09 final plan defines the workspace layout this row consumes.",
+      "timestamp": "2026-10-27T14:09:50.078Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:15.727Z",
-  "updatedAt": "2026-10-26T10:50:54.130Z",
+  "updatedAt": "2026-10-27T14:10:13.448Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
-    "task-fdbc59358b8746a4b19073b5f2ef5a7c"
+    "task-fdbc59358b8746a4b19073b5f2ef5a7c",
+    "task-7988e5b97ea0484fae6bf8e49009266a"
   ],
   "contextFetchedBy": [
     "architect-26fd4d71",
-    "worker-3729a0d6"
-  ]
+    "worker-3729a0d6",
+    "architect-4c57a52b"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-27T13:40:53.570Z"
+  },
+  "blockedReason": "Split in the architect REPL on 2026-10-27 with the operator's approval. This row stays the final slice with its full DoD.\n\nIt cannot be planned until both of these exist:\n- R09's attempt-workspace contract. R09 (task-0dd1cce23a6646fd80cf401dd47c7b0f) is BLOCKED with no plan, and its guest materialization defines the \"owned attempt workspaces\" this row runs CLIs in.\n- New R10a (task-7988e5b97ea0484fae6bf8e49009266a, PLANNING): the signal-safe guest job teardown in guest-supervisor.py that this row's cancellation builds on.\n\nWhen both have landed code or an approved plan, unblock this row and plan it against them. Expect another SPIDR split then (job table and identity; credentials; reconnect). This is not REPL silence and not dirty files. The split notes are in the task comment and in Serena decision-cq-r10-split.",
+  "blockedOnTaskIds": [
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-7988e5b97ea0484fae6bf8e49009266a"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-27T14:10:13.448Z"
 }

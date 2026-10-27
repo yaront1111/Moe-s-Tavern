@@ -10,9 +10,39 @@
     "Fresh cd packages/moe-proxy && npm test exits 0, run from an isolated snapshot, never in the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first (load test-driven-development). The cap contract is shared with JetBrains task-4f1e37f3 and the daemon row task-91ef7886: 64 KiB is 65536 bytes; read at most 65537 bytes through one descriptor; a larger file is refused like invalid connection details and never deleted. The tests pin 65536 and 65537 as literals. Pad JSON.stringify(info) with trailing spaces to an exact byte length. Before editing, confirm prerequisite task-eb85340b landed (its injectWorkerType sits elsewhere in utils.ts) and work on top of it. NEVER run npm test, npm run build/clean or tsc in the shared checkout's packages/moe-proxy: live WSL seats run its gitignored dist through the global moe-proxy symlink. All runs happen in the step 3 snapshot.\n\npackages/moe-proxy/src/utils.test.ts, in describe('readDaemonInfo'):\n(1) A valid 65536-byte daemon.json gives readDaemonInfo toEqual(info). The 65537-byte version gives readDaemonInfoResult toEqual({ info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' }).\n(2) Bounded read. Spy (pass-through) on fs.readFileSync, fs.readSync and fs.closeSync; utils.ts imports fs as a default import, so the spies see its calls. For an 8 MiB daemon.json: the oversize result above is returned, readFileSync is never called with the daemon.json path, the readSync return values sum to at most 65537, and closeSync runs once.\n(3) POSIX only (it.skipIf(process.platform === 'win32')): a daemon.json that is a symlink to /dev/zero gives the same oversize result promptly. Metadata reports size 0, so only the bounded read stops it.\n(4) The existing missing-file (retryable), malformed-JSON, malformed-port and project-mismatch cases stay unchanged and green.\n\npackages/moe-proxy/src/index.test.ts: next to the existing 'returns clear JSON-RPC error for daemon.json project mismatch' test, and copying its spawn and cleanup pattern:\n(5) A proxy spawned at a testDir whose daemon.json is 65537 bytes of valid JSON exits with code 1, and its first stdout line's error.message is 'daemon.json is larger than 64 KiB'.\n\nIn the snapshot, (1)'s oversize case, (2), (3) on POSIX and (5) fail on today's code. Record that.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.test.ts",
+        "packages/moe-proxy/src/index.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN in packages/moe-proxy/src/utils.ts, next to readDaemonInfoResult:\n- const MAX_DAEMON_JSON_BYTES = 64 * 1024. Comment: daemon.json is repository content (a repository can commit one), and the cap matches the daemon and JetBrains readers. Wrapper RPCs spawn a fresh proxy per call, so the file is read again on every call.\n- A private helper reads it bounded:\n  - fs.openSync(filePath, 'r') and one Buffer.alloc(MAX + 1);\n  - loop fs.readSync(fd, buf, total, buf.length - total, null) until it returns 0 or the buffer is full, since a device can return short reads;\n  - fs.closeSync in finally;\n  - return the UTF-8 text, or null when total > MAX.\n- In readDaemonInfoResult, inside the existing try, replace fs.readFileSync(filePath, 'utf-8') with the helper. A null result returns { info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' }.\n- Error handling for IO errors stays as today, via the existing catch.\n\nKeep the existsSync-missing retryable result, the shape check, the project comparison, index.ts and the README unchanged. Re-run step 1's tests in the snapshot: green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once: cd packages/moe-proxy && npm test, from an isolated snapshot. The shared checkout's dist is what live WSL seats run, and pretest's clean deletes it first (mem:gotcha-proxy-npm-test-shared-checkout-deletes-dist).\n- ROOT=$(git rev-parse --show-toplevel); SNAP=$(mktemp -d /tmp/moe-685d-gate.XXXXXX).\n- git -C $ROOT archive HEAD packages/moe-proxy | tar -x -C $SNAP.\n- Check that package.json, package-lock.json and tsconfig.json equal HEAD.\n- Overlay exactly the three owned files and cmp each one.\n- (cd $SNAP/packages/moe-proxy && npm ci --no-audit --no-fund) with the Linux node/npm.\n- From $SNAP run (cd packages/moe-proxy && npm test) in the seat's normal environment; vitest.config blanks the seat's MOE_* exports.\n\nRequire exit 0 and zero failed tests. Confirm the shared checkout's packages/moe-proxy/dist/index.js stat is unchanged. complete_task gets { command: '(cd packages/moe-proxy && npm test)', exitCode, outputTail }, plus the tested root and base commit. If npm ci cannot reach the registry, report_blocked with the error; never fall back to an in-place run. Error handling: on a failure, fix the cause, re-overlay and re-run; never weaken an assertion.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review) of the three-file diff. Check:\n- the off-by-one at the cap;\n- short reads are looped;\n- the descriptor is closed on every path;\n- no whole-file read of daemon.json is left (grep readFileSync in src);\n- a missing file is still retryable within the reconnect window;\n- the oversize error text carries no file content;\n- the subprocess test kills its child and removes its temp dir even on failure;\n- valid daemon.json files connect exactly as before.\nResiduals, noted only and pre-existing:\n- a daemon.json removed between existsSync and open is reported as invalid details (non-retryable), as today;\n- opening a FIFO blocks, but git cannot commit FIFOs.\nIf the review changes bytes, re-run the step 3 gate fresh. Report the three paths in complete_step.modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,5 +58,29 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:14.603Z",
-  "updatedAt": "2026-10-27T14:07:03.104Z"
+  "updatedAt": "2026-10-27T14:10:31.246Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T14:09:45.464Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T14:10:31.154Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) An fs.statSync size pre-check: rejected. Device symlinks report size 0, so the read itself must be bounded, as in the JetBrains and daemon rows. (2) Treating oversize as retryable: rejected. Every invalid daemon.json is non-retryable today, and an oversize file is not a daemon's; the proxy exits with a clear message instead of re-reading a huge file every reconnect. (3) A shared helper package: rejected. The packages have no workspaces, so each keeps a tiny private bounded read. (4) A sparse multi-GiB file test: rejected. Node zero-fills on NTFS, which is slow on Windows CI. An 8 MiB file plus fs spies proves the bound on every OS, and /dev/zero covers lying metadata on POSIX.",
+    "codebaseInsights": "- utils.ts:83 readDaemonInfoResult. It returns a retryable result when the file is missing. Shape and project mismatches, and any read or parse error caught by its catch, are non-retryable with a fixed error string.\n- index.ts:366 connect() turns a non-retryable error into writeError plus process.exit(1).\n- index.test.ts:42 already spawns the built proxy against a mismatched daemon.json and asserts exit 1 plus the error message. Copy that pattern.\n- utils.test.ts describe('readDaemonInfo') at :25 holds the existing cases.\n- utils.ts imports fs as a default import, so vi.spyOn(fs, ...) intercepts its calls.\n- Prerequisite task-eb85340b adds injectWorkerType to utils.ts, in a different region.",
+    "risks": "Shared dist hazard: never run npm test, build or clean in the shared checkout's packages/moe-proxy. The global moe-proxy symlinks to it and live WSL seats run its dist; the shared node_modules is a Windows install. utils.ts is also edited by task-eb85340b, and dependsOn serializes this row behind it. Test (3) is skipped on Windows by design. The cap is a cross-package contract: do not change 64 KiB here.",
+    "keyFiles": [
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-proxy/src/utils.test.ts",
+      "packages/moe-proxy/src/index.test.ts",
+      "packages/moe-proxy/src/index.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T14:10:31.246Z"
 }
