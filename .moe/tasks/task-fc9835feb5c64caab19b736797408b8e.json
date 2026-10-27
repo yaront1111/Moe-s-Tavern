@@ -81,7 +81,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -104,16 +104,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:45:52.197Z",
-  "updatedAt": "2026-10-27T13:42:26.896Z",
+  "updatedAt": "2026-10-27T14:25:34.708Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:45:40.980Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-27T14:25:34.708Z",
+    "wallClockMs": 81593728
   },
   "contextFetchedBy": [
     "architect-1520cc31",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "tier": "standard",
   "effort": "high",
@@ -186,5 +189,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-26T15:48:15Z",
     "at": "2026-10-26T15:51:56.022Z"
-  }
+  },
+  "completedAt": "2026-10-27T14:25:34.708Z",
+  "reviewCompletedAt": "2026-10-27T14:25:34.708Z",
+  "reviewSummary": "Reviewed completion commit 66a0062 (on moe/work-2026-10-24, pushed; non-board diff +110/-3, well under the 400 LOC cap) via git show, not the dirty tree. Re-ran: `node --test scripts/tests/account-trust-docs.test.mjs` 5/5 pass; `cmd.exe /c 'npx tsc --noEmit'` in packages/moe-daemon exit 0; `npm run lint` OK (architect 39, worker 29, qa 32 lines); `git grep -n 'opens a file inside' -- docs packages/moe-daemon/CLAUDE.md packages/moe-daemon/src` shows only ARCHITECTURE.md:98, MCP_SERVER.md:2866, daemon CLAUDE.md:11, accountStore.ts:26 (all daemon-scoped or carrying the exception) and registry.ts:11 (now scoped to this module/daemon/accounts CLI plus the exception).\nDoD: (1) SCHEMA.md claude-accounts/<id>/ bullet and registry.ts header + accountConfigDir comment state the interactive-seat-only exception for scripts/moe-account-lease.mjs setting projects[<key>].hasTrustDialogAccepted in .claude.json, daemon and accounts CLI still open nothing; registry.ts hunks are comments only. (2) TROUBLESHOOTING.md adds a MOE_ACCOUNT_UNTRUSTED / MOE_ACCOUNT_TRUST_GRANTED section listing all 8 TRUST_REASON strings verbatim (I compared against scripts/moe-account-lease.mjs:49-58), the retry behaviour (MOE_ACCOUNT_RETRY_SEC default 300, task held, headless -p seats unaffected) and the remedy; the printed-line format matches moe-agent.sh:6070 / moe-agent.ps1:5519. (3) ARCHITECTURE.md, packages/moe-daemon/CLAUDE.md and accountStore.ts are untouched by the commit (diff shows only the 4 owned paths + the task board JSON). (4) tsc and lint green as above.\nTests: new account-trust-docs.test.mjs parses TRUST_REASON from the helper source and asserts each value is present in the TROUBLESHOOTING section, so changing or removing a reason fails it; also guards the daemon-only statements. No deleted or weakened tests, no scope creep. Note: WSL cannot run the daemon's TS7 tsc natively, so tsc was run through cmd.exe.",
+  "requiredCheckAtDone": null
 }
