@@ -49,7 +49,12 @@ class MoeDaemonSupervisor(
         val file = File(base, ".moe/daemon.json")
         if (!file.exists()) return null
         return try {
-            val info = gson.fromJson(file.readText(), DaemonInfo::class.java)
+            val bytes = file.inputStream().use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }
+            if (bytes.size > MAX_DAEMON_JSON_BYTES) {
+                log.warn("Ignoring .moe/daemon.json: larger than ${MAX_DAEMON_JSON_BYTES / 1024} KiB")
+                return null
+            }
+            val info = gson.fromJson(String(bytes, Charsets.UTF_8), DaemonInfo::class.java)
             if (info.projectPath.isNotEmpty()) {
                 val daemonPath = File(info.projectPath).canonicalPath
                 val expectedPath = File(base).canonicalPath
@@ -573,6 +578,9 @@ class MoeDaemonSupervisor(
     }
 
     companion object {
+        // The daemon writes a few hundred bytes; 64 KiB still fits a 32K-character project path.
+        internal const val MAX_DAEMON_JSON_BYTES = 64 * 1024
+
         private val PORT_CHECK_TIMEOUT_MS: Int =
             System.getProperty("moe.portCheckTimeoutMs")?.toIntOrNull() ?: 200
 

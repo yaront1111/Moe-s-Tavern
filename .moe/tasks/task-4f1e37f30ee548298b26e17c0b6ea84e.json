@@ -13,34 +13,57 @@
     {
       "stepId": "step-1",
       "description": "RED tests, test-first (load test-driven-development), in moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt, next to the existing readDaemonInfo cases. The cap is a constant step 2 adds: internal const val MAX_DAEMON_JSON_BYTES in MoeDaemonSupervisor's companion object, reachable from tests in the same module. Reference it; do not hard-code the number. Build the payload as Gson().toJson(DaemonInfo(9876, 42, \"now\", root.canonicalPath)) padded with trailing spaces, which JSON allows, to an exact byte length, and write it with writeText. Tests:\n(a) Boundary: a file of exactly MAX_DAEMON_JSON_BYTES bytes parses. Assert port 9876, pid 42 and projectPath, under a supervisor built with profile = { RuntimeProfile.LEGACY } and under one built with profile = { RuntimeProfile.PROTECTED }. Construct each directly as MoeDaemonSupervisor(root.absolutePath, \"Test Project\", profile = ...); every other parameter has a default, so the shared supervisor() helper and the existing tests stay as they are.\n(b) Oversize: the same valid JSON padded to MAX_DAEMON_JSON_BYTES + 1 bytes returns null under both profiles, and the file still exists. Like the malformed path it is ignored, not deleted; deletion stays reserved for the existing other-project path. Because the prefix is valid JSON, an implementation that reads only MAX bytes and parses them would wrongly succeed, so this pins the boundary in both directions.\n(c) Without reading the whole file: create .moe/daemon.json as a sparse file larger than Int.MAX_VALUE bytes: Files.newByteChannel(path, CREATE_NEW, WRITE, StandardOpenOption.SPARSE).use { it.position(Int.MAX_VALUE.toLong() + 1); it.write(ByteBuffer.wrap(byteArrayOf(32))) }. On NTFS, ext4 and APFS that writes one byte, not 2 GiB, and TemporaryFolder deletes it afterwards. readDaemonInfo must return null. On today's code Kotlin's readText throws OutOfMemoryError ('too big'), which the catch (ex: Exception) does not catch, so the RED is a clean, distinctive failure. Error handling: if the filesystem cannot make the file sparse, the test may fall back to a regular file only above the cap, but never skip.\nRun only this class while RED. On WSL there is no JDK, so use the step 3 command with --tests com.moe.services.MoeDaemonSupervisorTest, under the jetbrains-gradle lease. (b) and (c) must fail on the current code, and (a) and the existing cases must pass. Record that in the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Added 3 tests (cap boundary, cap+1, >2GiB sparse). Also added MAX_DAEMON_JSON_BYTES const early so RED is behavioral. RED run (cmd.exe gradlew.bat, Windows evidence, jetbrains-gradle lease): 18 tests, 2 failed (cap+1 AssertionError; sparse OutOfMemoryError); boundary + existing pass. Other dirty paths are peers' and untouched.",
+      "startedAt": "2026-10-27T15:19:45.350Z",
+      "completedAt": "2026-10-27T15:20:32.152Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN in moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt.\n- Add internal const val MAX_DAEMON_JSON_BYTES = 64 * 1024 to the existing companion object (line ~575). Comment: the daemon writes a few hundred bytes, and 64 KiB still fits a 32K-character project path.\n- In readDaemonInfo, replace gson.fromJson(file.readText(), ...) with a bounded read inside the existing try: val bytes = file.inputStream().use { it.readNBytes(MAX_DAEMON_JSON_BYTES + 1) }. When bytes.size > MAX_DAEMON_JSON_BYTES, log.warn a fixed message ('Ignoring .moe/daemon.json: larger than 64 KiB', with no file content) and return null. Otherwise parse String(bytes, Charsets.UTF_8) exactly as before.\n- Read through the stream rather than checking File.length() first. This mirrors RuntimeSelectionPolicy's project.json read (readNBytes(MAX + 1)), and it stays bounded when the length lies: a symlink to /dev/zero reports size 0 but never ends.\n- No profile check: the cap applies under LEGACY and PROTECTED alike.\n- Keep the existing project-mismatch delete, the catch (ex: Exception) error handling for an IO failure or a vanished file (null, debug log), and every caller unchanged. MoeProjectService.getDaemonInfo delegates here, so it is covered too.\nRe-run the class: green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Bounded readNBytes(MAX+1) read; oversize logs fixed warn and returns null. Class run green (BUILD SUCCESSFUL).",
+      "startedAt": "2026-10-27T15:20:33.081Z",
+      "completedAt": "2026-10-27T15:20:44.677Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification gate, run once: the full JetBrains suite named by the DoD, cd moe-jetbrains && ./gradlew test, run fresh. This row reads isEpicFinal:true only through the undesignated highest-order fallback: its order 249.5 tops CQ-R, whose real integration-and-hardening task is CQ-R13 (task-f4811a72), and task-6a612b08 will designate it. So this is a standalone bug fix and its gate is this suite, not an epic-wide sweep. The WSL seats have no JDK. The accepted equivalent, which QA took for task-c42dd646, runs while holding the jetbrains-gradle shared resource (moe.acquire_resource, then moe.release_resource afterwards): (cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\"). On a native Windows seat run gradlew.bat test --rerun; with a POSIX JDK run ./gradlew test --rerun. Require exit 0 and BUILD SUCCESSFUL. Count tests/failures/errors/skipped from the fresh build/test-results XML: expect zero failures, zero errors and no new skips (306 tests passed after task-c42dd646). Report it honestly as Windows evidence when it ran through cmd.exe, never relabelled as the POSIX command. complete_task gets { command, exitCode, outputTail }. Error handling: a failure gets fixed and the same command re-run; never weaken or skip a test.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows evidence via cmd.exe gradlew.bat test --rerun under jetbrains-gradle lease: EXIT 0, BUILD SUCCESSFUL; XML: 21 classes, 309 tests, 0 fail, 0 err, 0 skip (306+3 new).",
+      "startedAt": "2026-10-27T15:20:45.706Z",
+      "completedAt": "2026-10-27T15:20:59.657Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review (load adversarial-self-review) of the two-file diff. Check:\n- an off-by-one at the cap: MAX parses and MAX+1 is refused;\n- a reader that still loads the whole file, such as File.length() followed by readText, or readBytes without a bound;\n- the stream is closed on every path (use);\n- no file deletion or new write for the oversize case;\n- the log message never echoes file content;\n- concurrent connect retries read the file independently, with no shared state;\n- a daemon.json that vanishes between exists() and open is caught as an IOException and yields null;\n- no behaviour change for valid files or under either profile.\nOut of scope, noted only: the daemon (packages/moe-daemon/src/index.ts readDaemonInfo), moe-proxy (readDaemonInfoResult) and the wrapper pre-flight also read daemon.json without a cap. A FIFO at that path could block open(); git cannot commit FIFOs, so that is a residual. If the review changes bytes, re-run the step 3 gate fresh. Report both paths in complete_step.modifiedFiles.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Self-review passed, no byte changes: boundary MAX parses/MAX+1 refused (tests); bounded stream read via use{}; no delete/write on oversize; fixed log text; no shared state; vanished file -> caught Exception -> null; same UTF-8 parse for valid files in both profiles. Residuals out of scope: daemon/proxy/wrapper uncapped reads, FIFO open.",
+      "startedAt": "2026-10-27T15:21:00.647Z",
+      "completedAt": "2026-10-27T15:21:07.130Z"
     }
   ],
-  "planRevision": 2,
-  "status": "WORKING",
+  "planRevision": 10,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -56,21 +79,28 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T17:11:20.389Z",
-  "updatedAt": "2026-10-27T13:40:28.259Z",
+  "updatedAt": "2026-10-27T15:21:15.831Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:24:59.646Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "architect-4c57a52b"
+    "architect-4c57a52b",
+    "worker-3729a0d6"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-27T13:40:28.145Z",
   "planningNotes": {
@@ -84,5 +114,19 @@
       "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
     ]
   },
-  "planApprovedAt": "2026-10-27T13:40:28.259Z"
+  "planApprovedAt": "2026-10-27T13:40:28.259Z",
+  "workStartedAt": "2026-10-27T15:19:45.350Z",
+  "reviewStartedAt": "2026-10-27T15:21:15.829Z",
+  "verification": {
+    "command": "(cd moe-jetbrains && MSYS_NO_PATHCONV=1 cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\")  (= cd moe-jetbrains && ./gradlew test; WSL host has no Java, so Gradle ran through Windows cmd.exe under the jetbrains-gradle lease)",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 7s\n11 actionable tasks: 2 executed, 9 up-to-date\nbuild/test-results XML: 21 classes, 309 tests, 0 failures, 0 errors, 0 skipped",
+    "reportedAt": "2026-10-27T15:21:15.829Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+  ],
+  "completionSummary": "readDaemonInfo now reads .moe/daemon.json through a bounded stream (readNBytes(MAX+1), MAX_DAEMON_JSON_BYTES = 64 KiB) under both profiles. An oversize file returns null with a fixed warn log (no content) and is kept, not deleted. MAX bytes parses and MAX+1 is refused. Three tests in MoeDaemonSupervisorTest: exact cap, cap+1, and a sparse file over 2 GiB (RED was OutOfMemoryError; falls back to a regular cap+1 file if sparse is unsupported). Gate is Windows evidence (WSL has no JDK): cmd.exe gradlew.bat test --rerun under the jetbrains-gradle lease: exit 0, 21 classes, 309 tests, 0 fail/err/skip. Residuals out of scope: the daemon, proxy and wrapper also read daemon.json uncapped."
 }

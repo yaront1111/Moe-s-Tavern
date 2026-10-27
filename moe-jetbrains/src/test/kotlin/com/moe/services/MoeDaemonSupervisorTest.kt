@@ -2,6 +2,7 @@ package com.moe.services
 
 import com.google.gson.Gson
 import com.moe.model.DaemonInfo
+import com.moe.util.RuntimeProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -14,6 +15,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.TimeUnit
 
 class MoeDaemonSupervisorTest {
@@ -204,6 +208,57 @@ class MoeDaemonSupervisorTest {
         assertEquals(listOf("existing-first", "existing-second", nodeBin.absolutePath, agentBin.absolutePath), path.split(File.pathSeparator))
     }
 
+    @Test
+    fun `readDaemonInfo parses a daemon file of exactly the size cap under both profiles`() {
+        for (profile in RuntimeProfile.values()) {
+            val root = temporaryFolder.newFolder("cap-${profile.name}")
+            writePaddedDaemonInfo(root, MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES)
+
+            val info = MoeDaemonSupervisor(root.absolutePath, "Test Project", profile = { profile }).readDaemonInfo()
+
+            assertEquals(9876, info?.port)
+            assertEquals(42, info?.pid)
+            assertEquals(root.canonicalPath, info?.projectPath)
+        }
+    }
+
+    @Test
+    fun `readDaemonInfo ignores but keeps a daemon file one byte over the size cap under both profiles`() {
+        for (profile in RuntimeProfile.values()) {
+            val root = temporaryFolder.newFolder("over-${profile.name}")
+            val file = writePaddedDaemonInfo(root, MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES + 1)
+
+            assertNull(MoeDaemonSupervisor(root.absolutePath, "Test Project", profile = { profile }).readDaemonInfo())
+            assertTrue(file.exists())
+        }
+    }
+
+    @Test
+    fun `readDaemonInfo does not read a daemon file larger than 2 GiB`() {
+        for (profile in RuntimeProfile.values()) {
+            val root = temporaryFolder.newFolder("huge-${profile.name}")
+            val file = File(File(root, ".moe").apply { mkdirs() }, "daemon.json")
+            try {
+                Files.newByteChannel(
+                    file.toPath(),
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.SPARSE
+                ).use {
+                    it.position(Int.MAX_VALUE.toLong() + 1)
+                    it.write(ByteBuffer.wrap(byteArrayOf(32)))
+                }
+            } catch (ex: java.io.IOException) {
+                // Filesystem cannot hold it sparsely: fall back to a regular file just above the cap.
+                file.delete()
+                writePaddedDaemonInfo(root, MoeDaemonSupervisor.MAX_DAEMON_JSON_BYTES + 1)
+            }
+
+            assertNull(MoeDaemonSupervisor(root.absolutePath, "Test Project", profile = { profile }).readDaemonInfo())
+            assertTrue(file.exists())
+        }
+    }
+
     private fun supervisor(
         root: File,
         onStatus: (Boolean, String) -> Unit = { _, _ -> },
@@ -222,6 +277,16 @@ class MoeDaemonSupervisorTest {
     private fun writeDaemonInfo(root: File, info: DaemonInfo): File {
         val moeDir = File(root, ".moe").apply { mkdirs() }
         return File(moeDir, "daemon.json").apply { writeText(Gson().toJson(info)) }
+    }
+
+    private fun writeDaemonInfo(root: File, json: String, totalBytes: Int): File {
+        val moeDir = File(root, ".moe").apply { mkdirs() }
+        return File(moeDir, "daemon.json").apply { writeText(json.padEnd(totalBytes, ' ')) }
+    }
+
+    private fun writePaddedDaemonInfo(root: File, totalBytes: Int): File {
+        val json = Gson().toJson(DaemonInfo(9876, 42, "now", root.canonicalPath))
+        return writeDaemonInfo(root, json, totalBytes)
     }
 
     private fun setSpawnAttempts(supervisor: MoeDaemonSupervisor, attempts: Int) {
