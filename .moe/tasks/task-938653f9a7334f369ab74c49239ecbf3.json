@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,16 +79,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:20.391Z",
-  "updatedAt": "2026-10-27T14:22:16.322Z",
+  "updatedAt": "2026-10-27T15:51:30.846Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:12:28.796Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:51:30.845Z",
+    "wallClockMs": 5942049
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "tier": "standard",
   "effort": "high",
@@ -161,5 +164,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-27T14:18:42Z",
     "at": "2026-10-27T14:22:16.322Z"
-  }
+  },
+  "completedAt": "2026-10-27T15:51:30.845Z",
+  "reviewCompletedAt": "2026-10-27T15:51:30.845Z",
+  "reviewSummary": "APPROVED. Reviewed completion 0f0e389f (tree c21af5e4, on moe/work-2026-10-24, pushed). Non-board diff +150/-4 over 3 files, under the 400 LOC cap.\n\nRe-ran verification in a git-archive snapshot of HEAD ba1b052 (contains 0f0e389; owned files cmp-identical), npm ci under env -i, shared checkout never built: `(npx tsc --noEmit && npm test)` -> tsc clean, 2 files / 18 of 18 tests passed, EXIT 0.\n\nMutation check: reverting only src/daemonClient.ts to 0f0e389^ turned exactly 4 new tests RED (65537 refusal, bounded read, fd close on EIO, hook fail-open); the 65536 test and the 13 existing tests stayed green. No /dev/zero fixture used.\n\nDoD:\n1. 65536 accepted / 65537 refused: pinned by literal-size padded-JSON fixtures. Pass.\n2. At most 65537 bytes, fd closed on every path: MAX+1 buffer, looped readSync on one fd, closeSync in finally. Tests assert 0 readFileSync on daemon.json, one openSync, readSync total exactly 65537 on an 8 MiB file, one closeSync, and a close after a throwing readSync (EIO). Pass.\n3. Oversize stays fail-open: hook resolves {forwarded:false, reason:'send-failed'}, server receives 0 messages, stderr has 'Moe daemon not running for project'. Pass.\n4. Fresh npm test exits 0. Pass.\n\nAdversarial: cap off-by-one correct; short reads looped; openSync failure caught as null; stderr carries only the project path; spies/env/temp dirs restored. Only remaining readFileSync in src is readRecentProject's ~/.moe/projects.json (user-home, out of scope). Known pre-existing residuals: walk-up continues past an oversize file, FIFO open would block (git cannot commit one).\n\nSnapshot removed. Dirty shared-tree paths belong to other sessions; none under packages/moe-claude-plugin, none touched.",
+  "requiredCheckAtDone": null
 }
