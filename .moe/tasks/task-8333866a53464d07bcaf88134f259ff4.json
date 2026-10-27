@@ -18,12 +18,9 @@
       "newFiles": [
         "packages/moe-daemon/src/tools/joinTeam.notification.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/joinTeam.notification.test.ts"
-      ],
-      "note": "Added joinTeam.notification.test.ts (7 tests, real StateManager + joinTeam/chatRead/chatSend/deregisterWorker tools, ToolTestHarness temp dir). Pruned and DEAD (deregister wrapper_restart) idle seats: rejoin -> chat_read sees mention, cursor persisted, reply sender is the seat, second read excludes the mention. Also: pruned seat chat_send 'Unknown sender' (symptom), touchWorker/chat_read never revive DEAD, revived seat heartbeats + routes, busy live rejoin unchanged + duplicate-free membership, unknown/full team join leaves DEAD, unknown + system senders refused. RED run (Linux snapshot, scrubbed env): 2 failed (both DEAD revival assertions: expected IDLE got DEAD) | 5 passed. Shared tree's node_modules is Windows-native, so tests run from a git-archive snapshot with Linux node_modules symlinked (gotcha-linux-vitest-reuse-native-node-modules). Pre-existing dirty paths from other sessions untouched.",
-      "startedAt": "2026-10-26T15:49:25.284Z",
-      "completedAt": "2026-10-26T15:52:17.087Z"
+      "note": "Reopen 1 (size-only reject, QA asked for no code change): there are no byte changes this round. joinTeam.notification.test.ts landed in checkpoint 81dff6d (+135/-0) and is byte-identical at HEAD c006918 and in the worktree. Its RED proof is already recorded: QA disabled the DEAD revive and 2 of the 7 tests failed. The step-5 gate re-runs this file inside the full daemon vitest suite. The size waiver is prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL, PENDING), pinged in #governors. The 582 dirty paths in the shared checkout belong to other sessions and were left untouched.",
+      "startedAt": "2026-10-27T14:19:33.249Z",
+      "completedAt": "2026-10-27T14:19:54.137Z"
     },
     {
       "stepId": "step-2",
@@ -32,13 +29,9 @@
       "affectedFiles": [
         "packages/moe-daemon/src/tools/joinTeam.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/joinTeam.ts",
-        "docs/MCP_SERVER.md"
-      ],
-      "note": "joinTeamTool: after state.addTeamMember succeeds, a DEAD record is revived via state.updateWorker(id,{status:'IDLE'}) (refreshes lastActivityAt, emits WORKER_UPDATED); type/currentTaskId/chatCursors untouched; healthy records not written. Validation/create/full/not-found paths unchanged (they throw before the revive). touchWorker/chat tools untouched, no claim. Tool description updated. Scope growth: one sentence in docs/MCP_SERVER.md moe.join_team section, because that doc is the tool contract and the behavior changed (not breaking). GREEN: joinTeam.notification 7/7, claimNextTask 68/68, createTeam 4/4 (Linux snapshot, scrubbed env).",
-      "startedAt": "2026-10-26T15:52:17.979Z",
-      "completedAt": "2026-10-26T15:52:58.671Z"
+      "note": "There are no byte changes this round (size-only reject). joinTeam.ts landed in 81dff6d at +8/-1, net 7: after a successful addTeamMember it revives a DEAD record to IDLE through updateWorker, which keeps type, currentTaskId and cursors and refreshes activity. The file carries a comment on why fresh registration differs from a heartbeat, plus the tool description and the docs/MCP_SERVER.md join_team sentence. touchWorker, chat_send and chat_read are untouched. The file is byte-identical at HEAD and has no worktree changes. Ponytail: nothing to cut; the revive is a single guarded call in the one shared registration path.",
+      "startedAt": "2026-10-27T14:19:55.992Z",
+      "completedAt": "2026-10-27T14:20:05.075Z"
     },
     {
       "stepId": "step-3",
@@ -48,12 +41,9 @@
       "newFiles": [
         "scripts/tests/seat-registration.test.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/tests/seat-registration.test.mjs"
-      ],
-      "note": "seat-registration.test.mjs (prior session's draft, finished this session) runs the launchers' REAL pre-flight blocks (chat, routed backlog, mention extraction, launch decision/outcome, post-loop tail) and RPC helpers against a fake proxy that models daemon registration (pruned=no record → Unknown sender, cursor persisted only for an existing record). 17 cases per engine: static order/one-forced-call-site/operator strings; pruned worker/qa/architect + DEAD worker re-join → reply as itself, cursor advances, 2nd pre-flight no mention + no launch; governor role-bound create {name:'Governors',role:'governor'} → join before chat; refused re-join (JSON-RPC error, isError, malformed {success:true}, foreign member list, silent) → one join, zero chat calls, no launch, mention unread, next pre-flight recovers; dedupe (MOE_SEAT_UNREGISTERED once over 2 refusals, 'no longer teamless' once); create failure (noid/silent) → no join/chat; one-shot unregistered → exit 1 with MOE_SEAT_UNREGISTERED line; one-shot registered → exit 0; cached unforced retry of a joined seat → zero RPCs. Fixed a draft expectation (refused pre-flight expected 2 join_team calls; plan says one). RED vs HEAD launchers: 16/17 bash fail. GREEN after step 4: WSL bash 17/17 (PS skipped: not on Linux); native Windows node.exe: 51/51 (Git Bash, PowerShell 5.1, PowerShell 7 incl. ps1 parser check). Pre-existing dirty paths from other sessions untouched.",
-      "startedAt": "2026-10-26T15:52:59.559Z",
-      "completedAt": "2026-10-26T16:50:11.744Z"
+      "note": "No byte changes this round (size-only reject). scripts/tests/seat-registration.test.mjs landed in two parts: 81dff6d (+261) and f75f57b (+44/-2), so +305/-2 in total. It is byte-identical at HEAD and clean in the worktree. It runs the launchers' real pre-flight segments on Git Bash, PS5.1 and PS7, 19 cases each, plus the ps1 parser check. RED evidence is already on record from round 1, where 16 of 17 bash cases failed on the old launchers. QA's mutants were killed too: making the sh forced re-join cached fails the Git Bash pruned/DEAD cases, and dropping the ps1 -Force fails the PS7 cases. The step-5 gate re-runs the file natively from Windows Git Bash so the PS legs execute. (TDD skill loaded earlier this session.)",
+      "startedAt": "2026-10-27T14:20:10.144Z",
+      "completedAt": "2026-10-27T14:20:15.710Z"
     },
     {
       "stepId": "step-4",
@@ -63,47 +53,36 @@
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
       ],
-      "modifiedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1",
-        "scripts/tests/seat-registration.test.mjs",
-        "scripts/tests/postflight-fake-proxy.js",
-        "scripts/tests/mention-provenance-proxy.js"
-      ],
-      "note": "retry_team_join [force] / Invoke-MoeTeamJoinRetry -Force: force re-joins even a cached-joined seat, governors included (create_team keeps role:'governor'); clears stale TEAM_JOINED first; success only when the join_team answer's team.id == TEAM_ID and memberIds lists this worker (JSON-RPC error, MCP isError, {success:true}, foreign list, no answer all refused); healthy forced re-join logs nothing, recovery logs 'no longer teamless' once, failure logs MOE_SEAT_UNREGISTERED (with \"this seat's chat stays unread until a pre-flight join succeeds\") only when the error changes; 'Team not found: ' drops the cached TEAM_ID so the next retry re-creates the team by name (else a team deleted from the IDE would leave the seat chat-less forever). Called once at the top of each AUTO_CLAIM pre-flight BEFORE chat_channels/chat_join/chat_read; SEAT_REGISTERED/$seatRegistered gates those plus the routed chat_wait backlog, so a failed join reads nothing, keeps mentions unread and (count 0) suppresses the notification launch. Claim path unchanged except the now-redundant pre-claim cached retry removed (the forced call ran moments earlier); wait-loop cached retry kept. No-loop/one-shot run that ends teamless with no launch prints MOE_SEAT_UNREGISTERED ... exit 1 and exits 1. No prompt/.moe writes, no claim needed. Scope growth: postflight-fake-proxy.js and mention-provenance-proxy.js now answer join_team like the daemon ({team:{id,memberIds:[workerId]}}) because strict validation refuses their old {success:true}. Evidence: seat-registration WSL bash 18/18; native Windows node 54-case run (Git Bash/PS5.1/PS7) green before the deleted-team case was added, deleted-team case green on bash; parity-check.sh PASS; mention-provenance.sh PASS; postflight.sh PASS (rerun: first run's scenario AD hit a torn read because I edited moe-agent.sh mid-run); postflight.ps1 on Windows PS 5.1 PASS (73 frozen + scope + team join/heal). Other sessions' dirty paths (e.g. docs/MCP_SERVER.md isEpicFinal edits) untouched.",
-      "startedAt": "2026-10-26T16:50:12.537Z",
-      "completedAt": "2026-10-26T17:05:53.247Z"
+      "note": "No byte changes this round (size-only reject). The wrappers landed in completion f75f57b: moe-agent.sh +56/-21 and moe-agent.ps1 +42/-11. The two fixtures landed with them: postflight-fake-proxy.js +2/-1 and mention-provenance-proxy.js +1/-1. What they do:\n- `retry_team_join force` / `Invoke-MoeTeamJoinRetry -Force` runs at the top of every pre-flight, before chat_channels/chat_join/chat_read, with governors included.\n- A join only counts when the answer names the team and lists the seat in its members.\n- If the join fails, the wrapper reads no chat and starts no notification CLI; it retries on the next pre-flight.\n- Logs are deduplicated. A stale team id is dropped on 'Team not found'.\n- A one-shot run that ends without a team exits 1.\nmoe-agent.sh, moe-agent.ps1 and mention-provenance-proxy.js are byte-identical at HEAD c006918. The only later change to postflight-fake-proxy.js is peer commit 201d5ab (task-9a9b), and this task's join_team answer lines are still present at HEAD. Nothing is dirty in the worktree. Ponytail: no cuts; QA's mutants show each guard is load-bearing.",
+      "startedAt": "2026-10-27T14:20:17.519Z",
+      "completedAt": "2026-10-27T14:20:24.730Z"
     },
     {
       "stepId": "step-5",
       "description": "One final verification gate from candidate root: bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test). Require fresh exit 0 and record command, exitCode, outputTail, test counts and any platform-unavailable notice for complete_task. Full daemon regression is mandatory after daemon changes; wrapper tests are the focused slice gate and parity must remain green. On Windows run the same command from Git Bash so executable PS5.1/7 tests and parser check run; do not call a skipped native branch verified. No intermediate full-suite gates.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/tests/seat-registration.test.mjs"
-      ],
-      "note": "Final gate, run fresh from Windows Git Bash on the shared root (daemon tree clean = HEAD 4137865, only my scripts dirty), MOE_*/CLAUDE* env stripped, LC_ALL=C: `bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` → GATE_EXIT=0. node v24.16.0, bash 5.3.9. seat-registration 57/57, 0 skipped (Git Bash, PowerShell 5.1, PowerShell 7 incl. ps1 parser check, 19 each); PASS parity-check.sh; tsc clean; vitest 170 files, 4314 passed / 18 skipped. LC_ALL=C is the documented workaround (mem:gotcha-git-bash-grep-supplementary-unicode): the first Git Bash gate run under en_GB.UTF-8 failed parity on '🚫 PUSH-BLOCKED:', and HEAD's own scripts fail identically under that locale; parity passes on WSL bash. Between the two gate runs I changed one line (bash join validator now requires memberIds to be a list; new 'unlisted' test case, since `in` on a string is a substring match), so the green run covers the final bytes. Mutation probes in a scratch copy: removing the Team-not-found reset fails the deleted-team case (bash, PS7); reintroducing the PS `$team`/`$Team` shadowing fails the dedupe and deleted-team cases (PS7).",
-      "startedAt": "2026-10-26T17:05:54.167Z",
-      "completedAt": "2026-10-26T17:13:23.061Z"
+      "note": "Fresh gate GATE_EXIT=0 (152 s).\n\nSetup:\n- Snapshot: a pure `git archive` of HEAD c006918 in D:\\tmp, with the daemon node_modules junctioned in. The junction was removed first, then the snapshot. The shared node_modules is intact.\n- Before running, cmp in the snapshot: the 6 owned paths are byte-identical to f75f57b. docs/MCP_SERVER.md and postflight-fake-proxy.js are identical to HEAD (peer 201d5ab hunks only).\n- Command, run from Windows Git Bash at the repo root: `bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test)`\n- Environment: LC_ALL=C, MOE_*/CLAUDE* unset (0 left), node v24.16.0, bash 5.3.9, pwsh 7.6.9, PowerShell 5.1.26100.\n\nResults:\n- seat-registration: 57 tests, 57 pass, 0 fail, 0 skipped. That is 1 cross-launcher ordering test, 18 Git Bash, and 19 each on PS 5.1 and PS 7 (each including the parser check). No platform-unavailable notice.\n- parity-check: PASS.\n- tsc --noEmit: clean.\n- vitest: 170 files passed; 4346 tests passed, 19 skipped (4365); 28.03 s. joinTeam.notification.test.ts ran 7/7.\n\nThe log is at D:\\tmp\\w8333-scripts\\gate.log.",
+      "startedAt": "2026-10-27T14:20:26.516Z",
+      "completedAt": "2026-10-27T14:24:21.997Z"
     },
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review using adversarial-self-review: pruning after a prior successful loop, DEAD after hot reload, busy live seat rejoin, repeated registration, full/missing team, transport exception/MCP isError, governor path and no-loop failure. Ensure identity is restored before cursor consumption, both shell call sites actually execute, unknown chat senders still fail, no stale call revives DEAD, no duplicate membership/log floods, no task claims by notification sessions and no lost baseline/attempt state. Recheck that second read does not repeat original mention. If fixes change bytes, rerun the identical final gate; then complete_task with fresh evidence.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Adversarial review (skill loaded) of this task's paths only. Fixes made during the review, all before the final green gate, so no gate rerun is needed: (1) PS local `$team` shadowed the script's `$Team` (case-insensitive), garbling the success/warn messages; renamed to $joinedTeam, with team-name assertions added. (2) A team deleted from the IDE left a stale TEAM_ID cached, so every forced join failed forever and the seat stopped reading chat (a regression); 'Team not found: ' now drops the id and the next retry re-creates the team. (3) The bash validator used `in` on a possibly non-list memberIds; it now requires a list. Checked and OK: pruned after a successful loop (cached joined → force re-join recreates the record); DEAD after hot reload (the join revives it, deregister had already nulled currentTaskId, so no stale task comes back); busy live rejoin (addTeamMember returns early for an existing member even when the team is full, clearMembershipTombstone is a no-op, status/task/cursors kept); repeated registration writes nothing and logs only on change; full/missing team, JSON-RPC error, isError, malformed, foreign, unlisted and silent answers are all refused and read no chat; governor create keeps role:'governor'; one-shot exits 1. The identity is restored before any chat call in both launchers: they have no chat_read/chat_wait before the forced call, and the task-channel read runs only after a claim binds a task. Unknown/system chat senders are still refused; touchWorker never revives DEAD (daemon tests). No task claims or prompt changes; only TEAM_* vars change, so baseline and attempt state are untouched. A second read excludes the original mention (bash/PS tests + daemon test). Theoretical, left as is: chat_join posts its presence message only on a process's first iteration, so a seat whose first pre-flight join failed never posts it (cosmetic); a governor still launches when its forced join fails (not a notification launch).",
-      "startedAt": "2026-10-26T17:13:23.772Z",
-      "completedAt": "2026-10-26T17:13:34.397Z"
+      "note": "Adversarial self-review of the landed bytes (81dff6d + f75f57b), checked against the real daemon. No defect found, so no byte change, and the step-5 gate still stands. HEAD has moved to a7b407c, but nothing under packages/moe-daemon or scripts/ changed after the gate's HEAD c006918, and the owned paths are clean in the worktree.\n\nConfirmed:\n- Answer shape: McpAdapter returns JSON.stringify({team}) as the text content, and Team.memberIds is a validated string[], which matches the wrapper's member check.\n- Team not found: notFound gives 'Team not found: <id>', the prefix the wrapper matches to drop a stale TEAM_ID.\n- Stderr: moe_rpc discards the proxy's stderr and writes stderr only on failure, so `2>&1` cannot corrupt a successful answer.\n- Pruned records: deleteWorker removes the seat from memberIds (with a tombstone), so a pruned seat re-joins through the full add path, and teamId gets set.\n- Chat gating: chat_join and chat_read sit behind GENERAL_CHANNEL_ID, which comes only from a registered chat_channels call. The routed chat_wait is gated too. The tests check the call order on both shells.\n- One-shot exit 1: MOE_SKIP_LAUNCH is the production taskless no-launch flag, so it fires only for a run that did no work.\n- DEAD records: they come only from deregisterWorker, which nulls currentTaskId and releases the seat's tasks, so a revive owns nothing. The daemon test pins the touchWorker DEAD refusal, the lastActivityAt refresh, a busy rejoin left unchanged, a full or unknown team leaving DEAD alone, and refusal of unknown and system senders.\n\nTheoretical only, left unfixed (the rail allows growth only for QA-required fixes):\n(1) ps1 would accept a bare-string memberIds exactly equal to the seat id where sh requires a list; the daemon never emits that.\n(2) join_team is an MCP tool, so an explicit call from an old session could revive DEAD; the plan sanctions that, and heartbeats still refuse DEAD.\n(3) A seat refused for a FULL team reads no chat, which is QA's non-blocking note and plan-sanctioned.",
+      "startedAt": "2026-10-27T14:24:27.667Z",
+      "completedAt": "2026-10-27T14:27:25.880Z"
     }
   ],
-  "planRevision": 13,
+  "planRevision": 26,
   "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Size-only reject; no DoD item failed. This task's non-board diff (checkpoint 81dff6d + completion f75f57b, both pushed on moe/work-2026-10-24) is +550/-38 = 512 net LOC, over the 400 net-LOC review cap. No rail waives it: the epic size exception names task-7a0b1881 only (\"Other size ... requirements remain unchanged\"), and .moe/proposals has none for this task.\n\nSubstance PASSES, no code change requested:\n- Gate re-run from Windows Git Bash on a pure git archive of HEAD 8dca342 (owned paths == f75f57b), LC_ALL=C, MOE_*/CLAUDE* stripped: GATE_EXIT=0. seat-registration 57/57 (19 each Git Bash/PS5.1/PS7 + parser), parity PASS, tsc clean, vitest 170 files 4341 passed/18 skipped.\n- Mutants killed: DEAD revive disabled -> 2/7 daemon tests fail; sh forced re-join made cached -> Git Bash pruned/DEAD cases fail; ps1 -Force dropped -> PS7 cases fail.\n- DoD 1-3 map to the join_team revive, the forced pre-flight re-join before any chat call, and joinTeam.notification.test.ts + seat-registration.test.mjs.\n\nRoute (mem:decision-size-only-reject-of-landed-bytes): do NOT re-slice or rewrite the landed bytes. File moe.propose_rail EPIC ADD_RAIL on epic-be924fb8 naming this task, commits 81dff6d + f75f57b, the per-file numstat below, \"net 512 (runtime+docs 73, tests 439); waive size-based rejection of those landed bytes; grow only by QA-required fixes; do not re-slice or add scope\". Ping #governors with the id, then complete_task with a fresh gate; QA approves once the rail is in allRails.epic.\n\nPer file: joinTeam.ts +8/-1; docs/MCP_SERVER.md +1/-1 (own hunk only); joinTeam.notification.test.ts +135/-0; seat-registration.test.mjs +305/-2; moe-agent.sh +56/-21; moe-agent.ps1 +42/-11; postflight-fake-proxy.js +2/-1; mention-provenance-proxy.js +1/-1.\n\nNon-blocking, no change asked: a seat refused for a FULL team now reads no #general/routed chat. Before, join_team auto-registered it first, so it could still reply. The plan sanctions this; a follow-up card is the governor's call.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -120,23 +99,31 @@
       "author": "architect-1520cc31",
       "content": "Plan includes the governor's DEAD-record finding, not just pruned records. Minimal fix stays at registration boundary: fresh preflight force-rejoins before chat_join/chat_read (current retry sits after general chat read and returns early when cached joined), and successful join_team revives DEAD to IDLE without relaxing chat sender checks or touchWorker's DEAD refusal. Covers all default role teams, including governors; no task claim is needed. Five files total with dedicated daemon and executable wrapper-block regression tests. To serialize shared files, the already-planned live-assignee wrapper guard and the new daemon worker-type prerequisite now depend on this task; this task has no new dependencies and can run first.",
       "timestamp": "2026-10-26T15:43:30.765Z"
+    },
+    {
+      "id": "comment-78bff5fe41db43afb45f9dd321cb7b82",
+      "author": "worker-7d158765",
+      "content": "Reopen 1 (size-only reject): filed prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL on epic-be924fb8, PENDING) and pinged #governors (msg-b04eeb1d6ae94f43b3b4931c5b2ff1c7). I re-measured the numstat for 81dff6d + f75f57b, non-board: +550/-38 = net 512 (runtime+docs 73, tests 439), the same per-file numbers QA reported. Own paths at HEAD c006918: six are byte-identical to f75f57b, and none are dirty in the worktree. Peer commit 201d5ab touched docs/MCP_SERVER.md and postflight-fake-proxy.js; I checked that this task's hunks (the join_team sentence and the fake join_team answer) are still present at HEAD. There are no byte changes this round. Next: a fresh gate, then complete_task.",
+      "timestamp": "2026-10-27T14:19:32.557Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:13:17.758Z",
-  "updatedAt": "2026-10-27T13:42:26.744Z",
+  "updatedAt": "2026-10-27T14:28:12.145Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:40:37.561Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-1520cc31",
-    "worker-7d158765"
+    "worker-7d158765",
+    "qa-6fa5d758"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
@@ -227,18 +214,9 @@
     }
   ],
   "filesModified": [
-    "packages/moe-daemon/src/tools/joinTeam.notification.test.ts",
     "packages/moe-daemon/src/tools/joinTeam.ts",
-    "docs/MCP_SERVER.md",
-    "scripts/tests/seat-registration.test.mjs",
     "scripts/moe-agent.sh",
-    "scripts/moe-agent.ps1",
-    "scripts/tests/postflight-fake-proxy.js",
-    "scripts/tests/mention-provenance-proxy.js",
-    ".moe/tasks/task-4f1e37f30ee548298b26e17c0b6ea84e.json",
-    ".moe/tasks/task-8333866a53464d07bcaf88134f259ff4.json",
-    ".moe/tasks/task-c42dd646a2694666b40ea7f6d3985647.json",
-    ".moe/tasks/task-cd2e447728224044abe7fa669d42f7fb.json"
+    "scripts/moe-agent.ps1"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/tools/joinTeam.notification.test.ts",
@@ -248,18 +226,41 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-7d158765@2026-10-26T16:06:53Z",
-    "at": "2026-10-26T17:16:07.066Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-6fa5d758@2026-10-27T14:03:32Z",
+    "at": "2026-10-27T14:16:39.162Z"
   },
-  "reviewStartedAt": "2026-10-26T17:14:11.322Z",
+  "reviewStartedAt": "2026-10-27T14:28:12.143Z",
   "verification": {
-    "command": "bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test)  # run from Windows Git Bash at the repo root, LC_ALL=C (mem:gotcha-git-bash-grep-supplementary-unicode), MOE_*/CLAUDE* env stripped",
+    "command": "bash -n scripts/moe-agent.sh && node --test scripts/tests/seat-registration.test.mjs && bash scripts/tests/parity-check.sh && (cd packages/moe-daemon && npx tsc --noEmit && npm test)  # run from Windows Git Bash at the repo root of a pure git archive of HEAD c006918 (owned paths == f75f57b), LC_ALL=C (mem:gotcha-git-bash-grep-supplementary-unicode), MOE_*/CLAUDE* env stripped",
     "exitCode": 0,
-    "outputTail": "GATE node=v24.16.0 bash=5.3.9(1)-release LC_ALL=C\n[seat-registration.test.mjs] ℹ tests 57 / ℹ pass 57 / ℹ fail 0 / ℹ skipped 0  (Git Bash, PowerShell 5.1, PowerShell 7: 19 each incl. ps1 parser check)\nPASS parity-check.sh\n[tsc --noEmit] clean\n Test Files  170 passed (170)\n      Tests  4314 passed | 18 skipped (4332)\n   Duration  28.92s\nGATE_EXIT=0",
-    "reportedAt": "2026-10-26T17:14:11.322Z",
+    "outputTail": "GATE node=v24.16.0 bash=5.3.9(1)-release LC_ALL=C pwd=/d/tmp/w8333-gate-r2 head=c006918b31e3a45a2461affd708d462d20c82e71\nenvleft=0\npwsh=7.6.9\npowershell=5.1.26100.9711\n✔ both launchers re-join before any chat call, exactly once per pre-flight, and share the operator strings\n✔ Git Bash: a pruned idle worker seat re-joins, replies as itself and is not re-notified\n✔ Git Bash: a DEAD idle worker seat re-joins, replies as itself and is not re-notified\n✔ PowerShell 5.1: moe-agent.ps1 parses\n✔ PowerShell 5.1: a pruned idle worker seat re-joins, replies as itself and is not re-notified\n✔ PowerShell 7: moe-agent.ps1 parses\n✔ PowerShell 7: a DEAD idle worker seat re-joins, replies as itself and is not re-notified\n✔ PowerShell 7: the cached (unforced) retry of a joined seat calls nothing\n[... 57 cases: 1 ordering + Git Bash 18 + PS 5.1 19 + PS 7 19 ...]\nℹ tests 57\nℹ pass 57\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nPASS parity-check.sh\n[tsc --noEmit: no output, exit 0]\n> moe-daemon@0.8.0 test\n> vitest run\n ✓ src/tools/joinTeam.notification.test.ts (7 tests) 1651ms\n Test Files  170 passed (170)\n      Tests  4346 passed | 19 skipped (4365)\n   Duration  28.03s (tests 93%, transform 4%, import 3%)\nGATE_SECONDS=152\nGATE_EXIT=0",
+    "reportedAt": "2026-10-27T14:28:12.143Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Pruned or DEAD idle seats re-register before reading chat, so a notification-only session replies under its own workerId and the mention's cursor advances.\nDaemon (checkpoint 81dff6d): join_team revives a DEAD record to IDLE after a successful join (type, currentTaskId and cursors kept). touchWorker and the chat tools are unchanged. Test: joinTeam.notification.test.ts (7).\nWrappers (sh and ps1 twins):\n- `retry_team_join force` / `Invoke-MoeTeamJoinRetry -Force` runs at the top of every pre-flight, before chat_channels/chat_join/chat_read, governors included (their create keeps role:'governor').\n- A join counts only when the answer's team.id matches and its memberIds list contains the seat. Error, isError, malformed, foreign, string and silent answers are refused.\n- While the join fails, no chat is read and the routed chat_wait backlog is skipped, so mentions stay unread and no notification CLI launches. The next pre-flight retries.\n- Logging is deduplicated: MOE_SEAT_UNREGISTERED prints only when the error changes, and recovery prints once.\n- 'Team not found' drops a stale team id so the team is re-created.\n- A one-shot run that ends teamless exits 1. The redundant pre-claim cached retry is removed.\nTest fakes: postflight-fake-proxy.js and mention-provenance-proxy.js now answer join_team the way the daemon does.\nNew test scripts/tests/seat-registration.test.mjs runs the launchers' real pre-flight segments against a fake proxy:\n- pruned worker/qa/architect and DEAD worker: the seat replies as itself and is not notified again;\n- governor team creation; 6 refusal shapes; log dedupe; deleted team; create failure; one-shot exit 1/0; cached retry makes no call.\nRED on the old launchers: 16 of 17 bash cases failed.\nAlso green: postflight.sh (WSL), postflight.ps1 (PS 5.1, includes team join/heal), mention-provenance.sh, and parity on WSL bash.\nNote: parity under Git Bash needs LC_ALL=C; HEAD fails the same way without it."
+  "completionSummary": "Reopen 1 after a size-only QA reject (failedDodItems empty, no code change asked). No bytes changed this round. Delivery unchanged: checkpoint 81dff6d + completion f75f57b on moe/work-2026-10-24, non-board +550/-38 = net 512 (runtime+docs 73, tests 439). Per file: joinTeam.ts +8/-1; docs/MCP_SERVER.md +1/-1 (own hunk); moe-agent.sh +56/-21; moe-agent.ps1 +42/-11; joinTeam.notification.test.ts +135/-0; seat-registration.test.mjs +305/-2; postflight-fake-proxy.js +2/-1; mention-provenance-proxy.js +1/-1.\nSize waiver: prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL, epic-be924fb8, PENDING human review), pinged in #governors (msg-b04eeb1d). QA approves once the rail is in allRails.epic. If it is still PENDING, QA parks the row from REVIEW.\nBytes at HEAD a7b407c: six owned paths byte-identical to f75f57b. docs/MCP_SERVER.md and postflight-fake-proxy.js differ only by peer 201d5ab's hunks; this task's join_team sentence and fake answer are intact. No owned path is dirty.\nFresh gate: pure git archive of HEAD c006918 (no packages/moe-daemon or scripts/ change since), Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset. GATE_EXIT=0 in 152 s:\n- seat-registration 57/57: 1 ordering, 18 Git Bash, 19 PS 5.1, 19 PS 7 (parser checks included), no platform skipped\n- parity PASS, tsc clean\n- vitest 170 files: 4346 passed, 19 skipped; joinTeam.notification 7/7\nDoD:\n1) Pruned worker/qa/architect seats and a DEAD seat reply as themselves (wrapper cases on 3 shells, daemon test).\n2) The second read excludes the mention and the seat is not re-notified.\n3) Covered by joinTeam.notification.test.ts + seat-registration.test.mjs.\nSelf-review found no defect. Theoretical, left unfixed (grow only by QA-required fixes):\n- ps1 would accept a bare-string memberIds equal to the seat id; the daemon never emits one.\n- An explicit join_team from an old session can revive DEAD (plan-sanctioned; heartbeats still refuse DEAD).\n- A FULL-team seat reads no chat (QA's non-blocking note).",
+  "reviewCompletedAt": "2026-10-27T14:14:12.571Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Oversized: 512 net non-board LOC (81dff6d + f75f57b: +550/-38; runtime+docs 73 net, tests 439 net) exceeds the 400 net-LOC review cap, and no project/epic/task rail waives it. No code change requested. File an EPIC ADD_RAIL size exception (moe.propose_rail) naming these two commits and the per-file numstat, ping #governors, then complete_task with a fresh gate. Do not re-slice or rewrite the landed bytes."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Size-only reject; no DoD item failed. This task's non-board diff (checkpoint 81dff6d + completion f75f57b, both pushed on moe/work-2026-10-24) is +550/-38 = 512 net LOC, over the 400 net-LOC review cap. No rail waives it: the epic size exception names task-7a0b1881 only (\"Other size ... requirements remain unchanged\"), and .moe/proposals has none for this task.\n\nSubstance PASSES, no code change requested:\n- Gate re-run from Windows Git Bash on a pure git archive of HEAD 8dca342 (owned paths == f75f57b), LC_ALL=C, MOE_*/CLAUDE* stripped: GATE_EXIT=0. seat-registration 57/57 (19 each Git Bash/PS5.1/PS7 + parser), parity PASS, tsc clean, vitest 170 files 4341 passed/18 skipped.\n- Mutants killed: DEAD revive disabled -> 2/7 daemon tests fail; sh forced re-join made cached -> Git Bash pruned/DEAD cases fail; ps1 -Force dropped -> PS7 cases fail.\n- DoD 1-3 map to the join_team revive, the forced pre-flight re-join before any chat call, and joinTeam.notification.test.ts + seat-registration.test.mjs.\n\nRoute (mem:decision-size-only-reject-of-landed-bytes): do NOT re-slice or rewrite the landed bytes. File moe.propose_rail EPIC ADD_RAIL on epic-be924fb8 naming this task, commits 81dff6d + f75f57b, the per-file numstat below, \"net 512 (runtime+docs 73, tests 439); waive size-based rejection of those landed bytes; grow only by QA-required fixes; do not re-slice or add scope\". Ping #governors with the id, then complete_task with a fresh gate; QA approves once the rail is in allRails.epic.\n\nPer file: joinTeam.ts +8/-1; docs/MCP_SERVER.md +1/-1 (own hunk only); joinTeam.notification.test.ts +135/-0; seat-registration.test.mjs +305/-2; moe-agent.sh +56/-21; moe-agent.ps1 +42/-11; postflight-fake-proxy.js +2/-1; mention-provenance-proxy.js +1/-1.\n\nNon-blocking, no change asked: a seat refused for a FULL team now reads no #general/routed chat. Before, join_team auto-registered it first, so it could still reply. The plan sanctions this; a follow-up card is the governor's call.",
+      "rejectedAt": "2026-10-27T14:14:12.571Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Oversized: 512 net non-board LOC (81dff6d + f75f57b: +550/-38; runtime+docs 73 net, tests 439 net) exceeds the 400 net-LOC review cap, and no project/epic/task rail waives it. No code change requested. File an EPIC ADD_RAIL size exception (moe.propose_rail) naming these two commits and the per-file numstat, ping #governors, then complete_task with a fresh gate. Do not re-slice or rewrite the landed bytes."
+        }
+      ]
+    }
+  ]
 }

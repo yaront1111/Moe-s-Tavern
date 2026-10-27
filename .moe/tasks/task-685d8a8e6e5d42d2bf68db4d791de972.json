@@ -18,7 +18,17 @@
       "affectedFiles": [
         "packages/moe-proxy/src/utils.test.ts",
         "packages/moe-proxy/src/index.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "RED first (load test-driven-development).\n\nThe cap contract is shared with JetBrains task-4f1e37f3 and the daemon row task-91ef7886:\n- 64 KiB is 65536 bytes;\n- read at most 65537 bytes through one descriptor;\n- a larger file is refused like invalid connection details and never deleted.\n\nThe tests pin 65536 and 65537 as literals. Pad JSON.stringify(info) with trailing spaces to an exact byte length.\n\nBefore editing, confirm prerequisite task-eb85340b landed (its injectWorkerType sits elsewhere in utils.ts) and work on top of it.\n\nNEVER run npm test, npm run build/clean or tsc in the shared checkout's packages/moe-proxy: live WSL seats run its gitignored dist through the global moe-proxy symlink. All runs happen in the step 3 snapshot.\n\nSAFETY: do NOT add a /dev/zero case, or any other never-ending device, and never point a test at one.\n- Today's whole-file readFileSync of /dev/zero never reaches EOF. It grows memory until the process dies, and a synchronous read cannot be stopped by the vitest timeout.\n- On the daemon row task-91ef7886, exactly that RED run got its vitest worker killed with SIGTERM.\n- Case (2)'s exact read total proves the bound without one.\n\npackages/moe-proxy/src/utils.test.ts, in describe('readDaemonInfo'):\n\n(1) A valid 65536-byte daemon.json gives readDaemonInfo toEqual(info). The 65537-byte version gives readDaemonInfoResult toEqual({ info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' }).\n\n(2) Bounded read. Spy, pass-through, on fs.readFileSync, fs.openSync, fs.readSync and fs.closeSync. utils.ts and the test both import fs from 'fs', so the spies see its calls. Write an 8 MiB daemon.json: valid JSON padded with spaces. Assert:\n- the oversize result above is returned;\n- readFileSync is never called with the daemon.json path;\n- openSync opened the daemon.json path exactly once;\n- the readSync return values for that descriptor sum to exactly 65537. Exact, not \"at most\": a size pre-check that never reads gives 0, and an unbounded read gives more;\n- closeSync received that descriptor exactly once.\n\n(3) Error path. Mock fs.readSync to throw an Error whose code is 'EIO', for a valid small daemon.json. Assert:\n- readDaemonInfoResult returns the existing invalid-details result unchanged: { info: null, retryable: false, error: 'daemon.json contains invalid daemon connection details' };\n- closeSync still received the descriptor openSync returned.\n\nRestore every spy in afterEach (vi.restoreAllMocks()), so a failing assertion cannot leak a mock into later cases.\n\n(4) The existing missing-file (retryable), malformed-JSON, malformed-port and project-mismatch cases stay unchanged and green.\n\npackages/moe-proxy/src/index.test.ts, next to the existing 'returns clear JSON-RPC error for daemon.json project mismatch' test, copying its spawn pattern and its 5-second kill timeout:\n\n(5) A proxy spawned at a testDir whose daemon.json is 65537 bytes of valid JSON for this project exits with code 1. Its first stdout line's error.message is 'daemon.json is larger than 64 KiB'.\n\nIn the snapshot, (1)'s oversize case, (2), (3) and (5) fail on today's code. (5) fails by the copied 5-second kill timeout, which also reaps the child. Record that.",
+          "reason": "Removes the /dev/zero case. Against today's unbounded read it never reaches EOF and grows memory until the process dies; the daemon row task-91ef7886's RED vitest worker was killed with SIGTERM that way. An exact read-total assertion and a forced-IO-error case prove the bound and the descriptor close instead.",
+          "amendedBy": "architect-2c9d5121",
+          "amendedAt": "2026-10-27T14:17:00.465Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -41,7 +51,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -58,7 +68,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:14.603Z",
-  "updatedAt": "2026-10-27T14:10:31.246Z",
+  "updatedAt": "2026-10-27T14:17:00.466Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:09:45.464Z",
     "plannedStepCount": 4,
