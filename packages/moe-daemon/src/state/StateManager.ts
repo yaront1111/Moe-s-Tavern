@@ -78,7 +78,6 @@ import {
   sanitizeString,
   sanitizeNumber,
   sanitizePatternPreservingPlaceholders,
-  sanitizeStringArray,
   sanitizeBoolean,
   sanitizeEnum,
   sanitizeUrl,
@@ -1250,7 +1249,8 @@ export class StateManager {
     const title = sanitizeString(input.title, 'epicTitle', 500, 'Untitled epic');
     const description = sanitizeString(input.description, 'epicDescription', 10000, '');
     const architectureNotes = sanitizeString(input.architectureNotes, 'architectureNotes', 50000, '');
-    const epicRails = sanitizeStringArray(input.epicRails, 100, 1000);
+    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate or drop.
+    const epicRails = validateEpicUpdates({ epicRails: input.epicRails }).epicRails ?? [];
     const validStatuses = ['PLANNED', 'ACTIVE', 'COMPLETED'] as const;
     const status = sanitizeEnum(input.status, validStatuses, 'PLANNED');
 
