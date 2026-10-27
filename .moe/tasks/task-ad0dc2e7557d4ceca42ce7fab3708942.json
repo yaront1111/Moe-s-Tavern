@@ -10,9 +10,51 @@
     "Fresh bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh exits 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first (load test-driven-development).\n\nLIVE-LAUNCHER SAFETY (read first). Every live seat hot-reloads scripts/moe-agent.sh (exec) and scripts/moe-agent.ps1 (in-process supervisor) as soon as the file changes, then re-runs this exact pre-flight. Untested or half-done launcher bytes must never sit in the checkout, so work in a MIRROR until step 4:\n- M=\"$(wslpath \"$(cmd.exe /d /c 'echo %TEMP%' 2>/dev/null | tr -d '\\r')\")/moe-ad0d-$$\"; mkdir -p \"$M/scripts/tests\" \"$M/pristine\". The mirror sits under the Windows temp so both WSL node and Windows node can run it.\n- Copy scripts/moe-agent.sh and scripts/moe-agent.ps1 into both $M/scripts/ and $M/pristine/.\n- The new test reads ../moe-agent.{sh,ps1} relative to its own file, so $M/scripts/tests/daemon-json-cap.test.mjs exercises the mirror.\n\nPrerequisites task-bdf6db6f, task-bc8410af and task-c2a900aa (and, through bdf6db6f, task-6aa460bb) edit both launchers. Take the mirror only after they have landed, and locate the blocks by anchor, never by line number.\n\nWrite $M/scripts/tests/daemon-json-cap.test.mjs (node:test, node builtins only). Model it on scripts/tests/seat-registration.test.mjs:\n- read(ext) with .replaceAll('\\r\\n', '\\n');\n- between(source, start, end), which asserts both anchors;\n- fwd/shq/psq quoting;\n- PYTHON = windows ? 'python' : 'python3';\n- its ENGINES matrix with probe(): bash ('Git Bash' at C:/Program Files/Git/bin/bash.exe on Windows); PowerShell 5.1, skipped with a reason off Windows or when absent; PowerShell 7 (pwsh), skipped with a reason when absent. A skipped engine is reported as skipped, never counted as a pass.\n\nSEGMENTS, sliced inside each test so that a missing anchor fails only that test. Anchor each boundary WITH its leading newline and exact indentation: the same text also appears deeper-indented (the FOREIGN branch has its own `if [ \"$RUNNING\" = false ]; then`, which a bare indexOf would hit first).\n- sh helper: between(sh, '\\ndaemon_json_field() {', '\\n# Start daemon if needed'). Slice it only if present, else use ''. That way today's launchers fail on behavior rather than on a missing anchor; case (e) separately requires the helper.\n- sh check: between(sh, '\\n    if [ -f \"$DAEMON_INFO\" ]; then', '\\n    if [ \"$RUNNING\" = false ]; then').\n- ps1 helper: between(ps, '\\nfunction Read-MoeDaemonJsonText(', '\\nif (-not $NoStartDaemon) {'), likewise optional.\n- ps1 check: between(ps, '\\n    if (Test-Path $daemonInfoPath) {', '\\n    if (-not $running) {').\n\nFIXTURES. Each lives in its own mkdtemp dir, removed in finally. daemon.json = JSON.stringify(info) padded with trailing spaces to an exact byte length (assert Buffer.byteLength).\n- sh info = { port: 9876, startedAt: 'x', projectPath: '/moe-cap/fixture' }, with no pid: Git Bash's kill -0 cannot see a Windows PID.\n- ps1 info adds pid: process.pid; Get-Process finds the test runner on every OS.\n- Malformed = the bytes '{not json'.\nNever use a fixture larger than 65537 bytes, and never /dev/zero (mem:gotcha-dev-zero-red-run-runaway).\n\nsh SCRIPT, run with --noprofile --norc:\n- 'set -e' (the launcher runs under it);\n- RED='' GREEN='' YELLOW='' NC='';\n- PYTHON_CMD=<PYTHON>, DAEMON_INFO=<shq(fwd(file))>, RUNNING=false, FOREIGN_DAEMON=false;\n- then the helper and the check;\n- then echo \"@@ port=[$DAEMON_PORT] project=[$DAEMON_PROJECT] running=$RUNNING\".\n\nps1 SCRIPT, run with -NoProfile -NonInteractive -ExecutionPolicy Bypass -File:\n- $ErrorActionPreference = 'Stop' (the launcher's);\n- $daemonInfoPath = <psq(file)>, $running = $false;\n- then the helper and the check;\n- then Write-Output \"@@ running=$running port=$($info.port) err=$(if ($Error.Count) { $Error[0].Exception.Message })\".\nUse spawnSync with a 60 s timeout.\n\nCASES, per engine:\n(a) 65536 bytes: exit 0.\n   - sh prints no 'Failed to parse daemon.json', and prints '@@ port=[9876] project=[/moe-cap/fixture] running=false'.\n   - ps1 prints '@@ running=True port=9876'.\n(b) 65537 bytes of valid JSON: exit 0, so the script reached its last line.\n   - sh prints '[WARN] Failed to parse daemon.json: daemon.json is larger than 64 KiB', 'Will attempt to start a new daemon' and '@@ port=[] project=[] running=false'.\n   - ps1 prints '@@ running=False port= err=daemon.json is larger than 64 KiB'.\n   - The fixture still exists at 65537 bytes.\n(c) Malformed: exit 0.\n   - sh prints '[WARN] Failed to parse daemon.json:' and '@@ port=[] project=[] running=false'.\n   - ps1 prints '@@ running=False port=', with no 'larger than' in err.\n(d) PowerShell engines only: the whole moe-agent.ps1 parses. [System.Management.Automation.Language.Parser]::ParseFile(<absolute path>, [ref]$null, [ref]$errors) must report zero errors; print them on failure.\n(e) Static, engine-independent:\n   - no line of moe-agent.sh contains both '$PYTHON_CMD -c' and 'DAEMON_INFO';\n   - no line of moe-agent.ps1 contains both 'Get-Content' and '$daemonInfoPath';\n   - the sh helper segment contains 'read(65537)' and '>65536';\n   - the ps1 helper segment contains 'byte[] 65537' and '-gt 65536';\n   - both files contain 'daemon.json is larger than 64 KiB' (string parity).\n\nRED, with WSL node, on the mirror: node --test \"$M/scripts/tests/daemon-json-cap.test.mjs\". On today's launchers:\n- bash (b) fails, because the 65537 file parses;\n- bash (c) fails, because set -e aborts at the unguarded PID_OUTPUT=$(...) before its WARN. The architect verified the shell exits 1 there;\n- (e) fails;\n- (a) passes;\n- the PowerShell cases are skipped on WSL.\nRecord that in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN for sh, in the MIRROR ($M/scripts/moe-agent.sh). Step 4 replays it into scripts/moe-agent.sh.\n\n1. Add, right after wsl_gateway_host() and before '# Start daemon if needed':\n\n# daemon.json is repository content: read at most 64 KiB + 1 byte and treat a\n# larger file like unparseable JSON (python exits non-zero). Same cap as the\n# daemon, proxy, IDE plugins and moe-agent.ps1's Read-MoeDaemonJsonText.\ndaemon_json_field() { # $1 = daemon.json path, $2 = key; prints the value\n    $PYTHON_CMD -c 'import json,sys\nd=open(sys.argv[1],\"rb\").read(65537)\nif len(d)>65536: sys.exit(\"daemon.json is larger than 64 KiB\")\nsys.stdout.write(str(json.loads(d).get(sys.argv[2],\"\")))' \"$1\" \"$2\"\n}\n\nNotes on the helper:\n- $PYTHON_CMD stays unquoted, like every existing call: it is 'py -3' on some Windows boxes.\n- json.loads accepts bytes, including a UTF-8 BOM.\n- sys.stdout.write adds no newline, so Windows Python cannot leave a '\\r' inside $(...).\n\n2. Replace the four inline reads with the helper, keeping each site's redirections.\n- PID check:\n  PID_EXIT_CODE=0\n  PID_OUTPUT=$(daemon_json_field \"$DAEMON_INFO\" pid 2>&1) || PID_EXIT_CODE=$?\n  This replaces the old 'PID_EXIT_CODE=$?' line. The '||' is REQUIRED. Under the script's set -e, the old unguarded assignment exits the launcher silently on ANY parse failure, so its own '[WARN] Failed to parse daemon.json' branch was unreachable (verified). Now an oversize or malformed file prints that WARN, leaves PID empty and starts a daemon. That matches moe-agent.ps1, which already does so from its catch.\n- DAEMON_PORT=$(daemon_json_field \"$DAEMON_INFO\" port 2>/dev/null || echo \"\")\n- DAEMON_PROJECT=$(daemon_json_field \"$DAEMON_INFO\" projectPath 2>/dev/null || echo \"\")\n- In the start wait loop: NEW_PID=$(daemon_json_field \"$DAEMON_INFO\" pid 2>/dev/null || echo \"\")\n\nError handling is otherwise unchanged:\n- the foreign-daemon probe;\n- the stale-PID delete, which only follows a successful parse with a dead PID and never happens for size;\n- the start and wait logic.\n\nThen run bash -n \"$M/scripts/moe-agent.sh\" and the WSL mirror run: bash cases (a), (b) and (c) are green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "GREEN for ps1, in the MIRROR ($M/scripts/moe-agent.ps1). Step 4 replays it into scripts/moe-agent.ps1.\n\nKeep the UTF-8 BOM (bytes EF BB BF) and the LF line endings. A tool that drops the BOM makes Windows PowerShell 5.1 read the file as ANSI and fail to parse it; parity-check.sh checks for this.\n\n1. Add, immediately before 'if (-not $NoStartDaemon) {', in the same idiom as the existing Read-MoeGateTail:\n\n# daemon.json is repository content: read at most 64 KiB + 1 byte so a huge or\n# never-ending file cannot stall pre-flight; the callers' catch treats the throw\n# like unparseable JSON. Same cap as moe-agent.sh's daemon_json_field.\nfunction Read-MoeDaemonJsonText([string]$Path) {\n    $stream = [IO.File]::OpenRead($Path)\n    try {\n        $buffer = New-Object byte[] 65537\n        $total = 0\n        while ($total -lt $buffer.Length) {\n            $read = $stream.Read($buffer, $total, $buffer.Length - $total)\n            if ($read -le 0) { break }\n            $total += $read\n        }\n        if ($total -gt 65536) { throw 'daemon.json is larger than 64 KiB' }\n        return [Text.Encoding]::UTF8.GetString($buffer, 0, $total).TrimStart([char]0xFEFF)\n    } finally { $stream.Dispose() }\n}\n\nNotes on the helper:\n- $daemonInfoPath is absolute ($projectPath comes from Resolve-Path), so .NET's separate current directory does not matter.\n- TrimStart keeps Get-Content's BOM tolerance.\n\n2. Replace both reads, each inside its existing try:\n- $info = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json\n- in the wait loop: $newInfo = Read-MoeDaemonJsonText $daemonInfoPath | ConvertFrom-Json\nError handling is each site's existing catch: $running = $false, or keep waiting.\n\nThen run the mirror on Windows as well as WSL. From WSL: (cd \"$M\" && cmd.exe /d /c \"node --test scripts\\tests\\daemon-json-cap.test.mjs\"). Windows node 24, Git Bash, PowerShell 5.1 and pwsh 7 all exist on this box, so every case, including (d), runs there and none may be skipped. If the seat runs where no Windows host is reachable, report_blocked: PowerShell coverage is not optional for a ps1 change.\n\nBoth legs must be green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Land the mirror into the checkout, then run the verification gate ONCE.\n\n1. Compare-and-swap. cmp the checkout's scripts/moe-agent.sh and scripts/moe-agent.ps1 against $M/pristine/. If either changed since the mirror was taken (another task landed), redo steps 2-3 on fresh copies and re-run both legs first.\n\n2. Replay with your edit tool (Claude: Edit). That also gives the wrapper's TOOL attribution witness on a contested launcher path; never use a shell cp over a live launcher.\n   - Order the hunks so every intermediate file stays valid for live seats: each helper first, then its call sites, and the sh PID hunk with its guard in one edit.\n   - Create scripts/tests/daemon-json-cap.test.mjs from the mirror copy.\n\n3. cmp all three checkout files against the mirror: they must be byte-identical. head -c3 scripts/moe-agent.ps1 | od -An -tx1 must show ef bb bf.\n\n4. Gate, on WSL, in place (it reads the scripts and writes only temp dirs):\n   bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\n   Exit 0 is required. On WSL the PowerShell cases are reported as skipped.\n\n5. Windows leg, labelled Windows evidence: cmd.exe /d /c \"node --test scripts\\tests\\daemon-json-cap.test.mjs\" from the repo root. It must show zero failed and zero skipped.\n\ncomplete_task gets { command: 'bash -n scripts/moe-agent.sh && node --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh', exitCode, outputTail }, plus the Windows leg's tail.\n\nError handling: if the in-place gate fails, restore the launchers from $M/pristine/ at once. First cmp that nobody else changed them. Then fix the problem in the mirror, re-test and replay. Never leave a failing launcher in the checkout, and never weaken an assertion.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load adversarial-self-review) of the three-file diff. Check:\n- the off-by-one at 65536/65537 in both shells;\n- the ps1 stream is disposed on every path, including the throw;\n- 'py -3' still word-splits;\n- only the PID read needed the set -e guard, and the other three reads keep their '|| echo \"\"';\n- an oversize file is never deleted (only the stale-PID branch deletes, after a successful parse);\n- the WARN prints python's one-line message, never file content;\n- the test removes its temp dirs and spawns with timeouts;\n- every anchor is newline-anchored;\n- no other daemon.json read is left: moe-call.sh only checks existence, and moe-team never reads it.\n\nState in the completion summary, as an INTENDED behavior change: on sh, a malformed daemon.json now WARNs and starts a daemon, matching ps1, instead of silently aborting the launcher under set -e.\n\nResiduals, pre-existing, noted only:\n- a daemon is started while one is live but its daemon.json is unreadable, exactly as ps1 does today;\n- a FIFO at .moe/daemon.json blocks the open, but git cannot commit FIFOs.\n\nIf the review changes bytes, make the change in the mirror and repeat step 4 items 1-5. Report the three paths in complete_step.modifiedFiles.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -30,5 +72,32 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:36.349Z",
-  "updatedAt": "2026-10-27T14:07:06.905Z"
+  "updatedAt": "2026-10-27T14:32:38.624Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T14:23:40.801Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-27T14:32:38.522Z",
+  "planningNotes": {
+    "approachesConsidered": "(1) Editing the launchers in place: rejected. Live seats hot-reload moe-agent.sh and moe-agent.ps1 on every change and re-run this pre-flight, so a buggy intermediate state could make every reloading seat abort or start a duplicate daemon. A mirror under the Windows temp lets both WSL and Windows node test the exact bytes before they land. (2) Leaving the PID read unguarded: rejected. Under set -e the WARN branch the task names is unreachable (verified: exit 1). The guard is what makes 'handled like unparseable' and 'starts its own daemon as today' true. (3) Adding the oversize message to parity-check.sh: rejected. It would need the .ps1 twin as well, two more files; the new test asserts the shared string. (4) A large-file or /dev/zero test: rejected. The cap is by construction (read(65537), byte[65537]), the boundary pair proves the threshold, and huge fixtures risk runaway memory.",
+    "codebaseInsights": "- moe-agent.sh runs under `set -e` (line 5). The daemon check (~:1465-1538) does four python json.load(open()) reads: the PID one is unguarded with 2>&1; port and projectPath use 2>/dev/null || echo \"\"; the wait loop ~:1581 does the same.\n- PYTHON_CMD can be 'py -3', so it is expanded unquoted.\n- moe-agent.ps1 sets $ErrorActionPreference = 'Stop' (:103). Its reads are at :569 and :609, each inside a try/catch.\n- Read-MoeGateTail (:1666) is the house bounded-read idiom.\n- The ps1 file is UTF-8 with BOM and LF endings.\n- postflight.sh always passes --no-start-daemon, so the new test is the only coverage of this block.\n- seat-registration.test.mjs has the ENGINES matrix and probe to copy.\n- This WSL box reaches Windows node 24.16, Git Bash, Python 3.14, PS 5.1 and pwsh 7 through cmd.exe.",
+    "risks": "- Hot reload: never leave untested launcher bytes in the checkout (mirror, then compare-and-swap, then an Edit replay).\n- A bare-substring anchor slices the FOREIGN branch, so anchors must include the newline.\n- The ps1 BOM must survive.\n- Behavior change: a malformed daemon.json now starts a daemon on sh instead of aborting the launcher (parity with ps1).\n- Prerequisites edit the same launchers; locate everything by anchor after they land.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/seat-registration.test.mjs",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "planApprovedAt": "2026-10-27T14:32:38.624Z"
 }

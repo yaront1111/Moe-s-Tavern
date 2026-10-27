@@ -49,11 +49,17 @@
       "author": "worker-3729a0d6",
       "content": "Handoff from CQ-R08 (task-7a77465621dc4d6588d5747394cb0ced): what R08 did NOT certify, for R13 integration and hardening.\n1. The H tests run the real supervisor and agent as local processes through an injected spawn; no VM, Multipass or sudo is involved. A native probe still has to show that stdin EOF propagates through `multipass exec --no-map-working-directory <name> -- sudo -n <supervisor> bridge` with no pty, and that framing is byte-exact in both directions.\n2. Guest-to-host /mcp and /ws are unreachable only by design so far: the guest gets no daemon URL, and the host requires a loopback daemon.json bindHost before spawn and before each forward. No network probe has run from inside a guest.\n3. The per-request daemon.json re-check has a theoretical TOCTOU window before the forward.\n4. executionReady stays false. R08 evidence must not enable verified-local.",
       "timestamp": "2026-10-26T10:50:57.261Z"
+    },
+    {
+      "id": "comment-72611d9c9fc7494e96f49bcd02f13df1",
+      "author": "qa-6fa5d758",
+      "content": "QA note from the CQ-R08 review (task-7a77465621dc4d6588d5747394cb0ced, completion b0e5982). Non-blocking, for the hardening pass.\n\nscripts/tests/local-runner-bridge.test.mjs:803 (H4) uses Promise.withResolvers(), which needs Node 22+. Under Node 20.18 (the WSL default /usr/local/bin/node) H4 fails with \"Promise.withResolvers is not a function\". Every pre-existing test in the 4-file local-runner gate still passes on 20.18, and CI (Node 24, all three OSes) is green. docs/DEVELOPMENT.md:9 says \"Node.js 18+ (Node 20/24 also works)\".\n\nPick one when hardening:\n- Replace it with a manual resolver: `let finish; const late = new Promise(resolve => { finish = resolve; });` (about +1 line).\n- Or state the Node 22+ floor for the script tests in DEVELOPMENT.md.\n\nThe runtime module guest-session.mjs is Node 18/20-safe, so this affects tests only.",
+      "timestamp": "2026-10-27T14:44:01.312Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-26T10:50:57.261Z",
+  "updatedAt": "2026-10-27T14:44:01.313Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",

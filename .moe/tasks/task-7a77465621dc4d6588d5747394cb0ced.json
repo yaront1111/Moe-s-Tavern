@@ -100,7 +100,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -138,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:10.214Z",
-  "updatedAt": "2026-10-26T15:22:09.220Z",
+  "updatedAt": "2026-10-27T14:44:09.839Z",
   "dependsOn": [
     "task-84c2da018ce74995b609805dab4fe7da",
     "task-b03c0c7744e84955a7a069255a124ef7",
@@ -150,12 +150,15 @@
     "firstClaimAt": "2026-10-25T10:21:06.541Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-27T14:44:09.838Z",
+    "wallClockMs": 188583297
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
     "architect-1520cc31",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -258,5 +261,9 @@
     "reportedAt": "2026-10-26T10:53:14.210Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R08 host session is delivered: plan rev 1, 6/6 steps. New scripts/local-runner/guest-session.mjs (238 lines) exports runGuestSession. H1-H5 were added to local-runner-bridge.test.mjs (+343/-3); B/S/I are unchanged.\n\nDesign:\n- Inputs are validated pre-spawn and the binding is frozen; the fixed bridgeArgv runs with shell:false.\n- A bounded O_NOFOLLOW daemon.json read admits only an absent bindHost, 127.0.0.1 or ::1, before spawn and before each forward.\n- Hello first within timeoutMs; increasing ids; at most 64 pending; output never decoded; one observation, then nothing.\n- Per request: scopeRequest, depth 64, host stamping (sessionId on get_context; attempt, generation and session on start_step, complete_step and complete_task), a bounded forward with no retry, a 1 MiB cap.\n- Fixed error codes. Stdin-first teardown, SIGKILL only after timeoutMs. executionReady is always false.\n\nDoD:\n1. No raw /mcp or /ws path: the scoped bridge is the only channel, and a non-loopback daemon is refused (H1, H3-H5).\n2. Role or worker substitution gives IDENTITY_MISMATCH; settings and dependency tools give TOOL_DENIED; the binding is snapshotted (H3, H5).\n3. Forged frames on child stdout stay byte-exact output; the exit comes only from waitpid (H5).\n4. The 4-file gate exits 0: 249 tests, 248 pass, 1 pre-existing macOS skip. H5 uses real SO_PEERCRED and skips only on win32. The DoD file alone exits 0 (193/192/1).\n\nMutation: 55 mutants, 54 killed; the survivor no-isFile is equivalent on Linux (EISDIR).\n\nSize: 584 changed (+581/-3, 578 net), above the 400 cap. prop-719ef03262304f53ba007b430e121f78 (cap 620) is PENDING human review; #governors pinged. QA: confirm it is APPROVED before approving.\n\nNot certified: no VM, Multipass or sudo. Handoffs are on R10 (signal teardown leaves the guest job alive) and R13 (native EOF and network probes). No .moe edits or Git writes."
+  "completionSummary": "CQ-R08 host session is delivered: plan rev 1, 6/6 steps. New scripts/local-runner/guest-session.mjs (238 lines) exports runGuestSession. H1-H5 were added to local-runner-bridge.test.mjs (+343/-3); B/S/I are unchanged.\n\nDesign:\n- Inputs are validated pre-spawn and the binding is frozen; the fixed bridgeArgv runs with shell:false.\n- A bounded O_NOFOLLOW daemon.json read admits only an absent bindHost, 127.0.0.1 or ::1, before spawn and before each forward.\n- Hello first within timeoutMs; increasing ids; at most 64 pending; output never decoded; one observation, then nothing.\n- Per request: scopeRequest, depth 64, host stamping (sessionId on get_context; attempt, generation and session on start_step, complete_step and complete_task), a bounded forward with no retry, a 1 MiB cap.\n- Fixed error codes. Stdin-first teardown, SIGKILL only after timeoutMs. executionReady is always false.\n\nDoD:\n1. No raw /mcp or /ws path: the scoped bridge is the only channel, and a non-loopback daemon is refused (H1, H3-H5).\n2. Role or worker substitution gives IDENTITY_MISMATCH; settings and dependency tools give TOOL_DENIED; the binding is snapshotted (H3, H5).\n3. Forged frames on child stdout stay byte-exact output; the exit comes only from waitpid (H5).\n4. The 4-file gate exits 0: 249 tests, 248 pass, 1 pre-existing macOS skip. H5 uses real SO_PEERCRED and skips only on win32. The DoD file alone exits 0 (193/192/1).\n\nMutation: 55 mutants, 54 killed; the survivor no-isFile is equivalent on Linux (EISDIR).\n\nSize: 584 changed (+581/-3, 578 net), above the 400 cap. prop-719ef03262304f53ba007b430e121f78 (cap 620) is PENDING human review; #governors pinged. QA: confirm it is APPROVED before approving.\n\nNot certified: no VM, Multipass or sudo. Handoffs are on R10 (signal teardown leaves the guest job alive) and R13 (native EOF and network probes). No .moe edits or Git writes.",
+  "completedAt": "2026-10-27T14:44:09.838Z",
+  "reviewCompletedAt": "2026-10-27T14:44:09.838Z",
+  "reviewSummary": "CQ-R08 approved. Completion b0e5982 (tree d7d69cd matches) plus checkpoint 750921e, both on moe/work-2026-10-24 and origin; the owned paths are unchanged at HEAD a7b407c and clean in the worktree.\n\nSize: numstat vs 750921e~1 is guest-session.mjs +238 and the bridge test +343/-3, 584 changed, within the epic rail \"CQ-R08 size exception\" (cap 620). B/S/I are byte-identical; only the imports and the appended H section changed.\n\nFresh gate from a pure git archive, env -i, Node v24.21.0 (CI's version), python3 3.12.3:\n- 4-file local-runner gate: exit 0, 249 tests, 248 pass, 1 skip (pre-existing macOS smoke), at both b0e5982 and HEAD.\n- DoD command alone: exit 0, 193/192/1.\n- Bridge file 5x: 35/35 each.\n- Windows Node 24.16: H1-H4 pass, H5 skipped by the existing NO_GUEST.\n\nDoD:\n1. argv is the constant bridgeArgv with no env added. bindHost is admitted only if absent, 127.0.0.1 or ::1, matching daemon index.ts:663. Checked before spawn (H1/H5) and before each forward (H4).\n2. Role/worker substitution gives IDENTITY_MISMATCH; settings/dependency tools give TOOL_DENIED; the binding is frozen (H3/H5). Stamping mirrors proxy utils.ts:254 and the daemon schemas.\n3. Forged frames on child stdout/stderr stay byte-exact output; the exit comes only from the supervisor's waitpid (H2/H5).\n4. Fresh output supplied.\n\nQA mutants: 19/19 killed:\n- scoping, both daemon guards, a widened loopback set;\n- output or stderr re-decoded, stamping, a live binding, depth;\n- duplicate id, stdin close, owed replies, isError, exit code;\n- frames after observation, hello first, the pending bound, the response cap, error echo.\n\nNon-blocking:\n- H4 test line 803 uses Promise.withResolvers (Node 22+) and fails on Node 20.18; CI is Node 24; noted on R13.\n- Ponytail: isRecord duplicates guest-bridge's helper; two identical error handlers; net -3 lines possible.\n\nNot certified: VM/Multipass EOF and network probes (R13), signal teardown (R10). executionReady stays false.",
+  "requiredCheckAtDone": null
 }
