@@ -15,12 +15,12 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BLOCKED",
+  "status": "PLANNING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Unblocked on the human's explicit, repeated instruction (\"unblock tasks\", then \"unblock\", 2026-10-27). Plan now instead of parking. Use prerequisites' landed code or approved plans where they exist. Otherwise use their task description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes. Keep dependsOn, so WORKING waits until the prerequisites are DONE. If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a) instead of report_blocked. Re-block only if any possible plan would breach a rail.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -28,7 +28,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:31.065Z",
-  "updatedAt": "2026-10-26T09:36:14.803Z",
+  "updatedAt": "2026-10-27T16:48:12.547Z",
   "dependsOn": [
     "task-b23c65b0bb3548fc95d46973b9d589cb",
     "task-e6411b76f42a43c5b679c725947336af"
@@ -40,11 +40,10 @@
     "architect-6e3edf85",
     "architect-1520cc31"
   ],
-  "blockedReason": "Missing prerequisite contract; not REPL silence and not dirty files.\n\nC03 adds an ISOLATED Serena read adapter whose queries consume immutable inputs. The rollout made it depend on CQ-R10 (Isolated agent lifecycle: owned attempt workspaces, scoped credentials, cancellation, fresh-session identity). CQ-R10 is BACKLOG and unplanned, behind CQ-R09, CQ-F10 and CQ-F11. Where the analyzer runs, which immutable workspace it reads and how it is cancelled are CQ-R10 deliverables, so planning now would invent them. This task auto-unblocks when CQ-R10 is DONE.\n\nThen plan against the landed CQ-R10 lifecycle and CQ-C02's landed repositorySource, which supplies the explicit immutable-commit search fallback:\n- Capability and version discovery come from MCP initialize plus tools/list, with a read-only tool allowlist.\n- An absent, failed or timed-out analyzer yields an explicit limitation, never \"no helper exists\".\n- No persistent index or memory store.\n\nThe alternative needs a human decision: re-slice like CQ-C02, with a host-side adapter over immutable commits now and VM integration later. No source changes. Full notes are in this task's Serena handoff memory.",
-  "blockedOnTaskIds": [
-    "task-e6411b76f42a43c5b679c725947336af"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "PLANNING",
-  "blockedAt": "2026-10-25T10:46:49.127Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Missing prerequisite contract; not REPL silence and not dirty files.\n\nC03 adds an ISOLATED Serena read adapter whose queries consume immutable inputs. The rollout made it depend on CQ-R10 (Isolated agent lifecycle: owned attempt workspaces, scoped credentials, cancellation, fresh-session identity). CQ-R10 is BACKLOG and unplanned, behind CQ-R09, CQ-F10 and CQ-F11. Where the analyzer runs, which immutable workspace it reads and how it is cancelled are CQ-R10 deliverables, so planning now would invent them. This task auto-unblocks when CQ-R10 is DONE.\n\nThen plan against the landed CQ-R10 lifecycle and CQ-C02's landed repositorySource, which supplies the explicit immutable-commit search fallback:\n- Capability and version discovery come from MCP initialize plus tools/list, with a read-only tool allowlist.\n- An absent, failed or timed-out analyzer yields an explicit limitation, never \"no helper exists\".\n- No persistent index or memory store.\n\nThe alternative needs a human decision: re-slice like CQ-C02, with a host-side adapter over immutable commits now and VM integration later. No source changes. Full notes are in this task's Serena handoff memory."
 }

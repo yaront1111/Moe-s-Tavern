@@ -1,0 +1,39 @@
+{
+  "id": "task-a50bf5b5d9a4442b88a33554ee5b967f",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C07a] Daemon-owned plan reuse state",
+  "description": "Split from CQ-C07 (task-93dee42f71db4a6a8e47a8de052ad411) on 2026-10-27 by architect-2c9d5121, under the governor's plan-don't-park directive (\"If a prerequisite's contract must be designed first, split it out (SPIDR, as with R10a)\"). C07's reuse decision needs state that does not exist yet: the commit an approved plan was submitted against, and how the task last entered PLANNING. This row lands that state contract and nothing else. CQ-C07b (assessment library) and CQ-C07 (claim/context integration) consume it.\n\nObjective: give the daemon durable, daemon-owned facts that an approved-plan reuse decision can be computed from. No decision logic.\n\nDeliverable (the contract C07b and C07 build against; implement it exactly):\n1. packages/moe-daemon/src/types/schema.ts\n   - PlanSourceBasis { version: 1; commit: string; planRevision: number }. commit is the full 40- or 64-hex id that `HEAD^{commit}` resolved to when submit_plan ran. planRevision is the revision that PLAN_SUBMITTED write committed.\n   - PlanningEntry { from: TaskStatus; at: string; seq: number }. from is the status the task left when it last entered PLANNING, at is that write's ISO time, and seq is a per-task counter starting at 1.\n   - PlanReuseDecision = 'reuse' | 'refresh' | 'reassess' | 'replan'.\n   - PlanReuseRecord { version: 1; decision: PlanReuseDecision; planRevision: number; entrySeq: number; reasons: string[]; assessedAt: string; basisCommit?: string; headCommit?: string; changedPaths?: string[]; candidate?: 'current' | 'revalidate' }. Limits:\n     - reasons: 0-32 items of 1-300 chars, no control characters;\n     - changedPaths: at most 64 normalized repo-relative paths;\n     - commits: 40 or 64 lowercase hex;\n     - planRevision and entrySeq: non-negative safe integers;\n     - assessedAt: an ISO string.\n   - Task gains optional planSourceBasis, planningEntry and planReuse. Their JSDoc says: daemon-owned, never approval, readiness or evidence.\n2. New packages/moe-daemon/src/context/planReuseState.ts\n   - readPlanSourceBasis(task), readPlanningEntry(task) and readPlanReuseRecord(task) check the exact enumerable key set (mem gotcha-strict-decoder-key-set), return detached copies, return null for anything malformed, and never throw.\n   - validatePlanReuseRecord(value) applies the same rules and throws INVALID_INPUT.\n   - capturePlanSourceBasis(projectRoot): Promise<{ commit: string } | null> runs openProjectGit (util/cachedPlanPaths.ts) with a 2000 ms budget, then `rev-parse --verify --end-of-options HEAD^{commit}`. It returns null on any failure (non-Git root, foreign toplevel, unborn HEAD, timeout) and never throws.\n   - Export the seam `planSourceGit = { run: runGit }`, mirroring requiredCheckGit in delivery/requiredChecks.ts.\n3. state/taskStore.ts updateTask\n   - Strip planSourceBasis, planningEntry and planReuse from every caller update, beside the existing executionPolicySnapshot strip.\n   - The private daemonOwned argument gains planSourceBasis?: { commit } and planReuse?: PlanReuseRecord.\n   - A PLAN_SUBMITTED write that passes daemonOwned writes planSourceBasis { version: 1, commit, planRevision: <this write's derived revision> } when supplied, and deletes it otherwise. This is the requiredCheckSnapshot pattern.\n   - daemonOwned.planReuse is validated and written on any event. Absent, the field is left untouched.\n   - A status change INTO PLANNING stamps planningEntry { from: previous status, at: this write's updatedAt, seq: previous valid seq + 1 } in the same write. The one exception: a return from BLOCKED whose blockedFromStatus is PLANNING keeps the earlier entry. createTask never stamps it.\n4. server/WebSocketServer.ts: UPDATE_TASK_DENYLIST lists the three keys (mem convention-daemon-owned-task-field-ws-denylist).\n5. tools/submitPlan.ts captures the basis once per call, OUTSIDE the state mutex, next to measureRequiredCheckSnapshot; the cached-path retry reuses it. It passes the basis in the PLAN_SUBMITTED daemonOwned argument. A capture failure never refuses the submission and adds no warnings.\n\nNOT in scope:\n- any reuse decision or Git comparison (CQ-C07b);\n- claim, wait and get_context changes, and task resumption (CQ-C07);\n- new activity event types;\n- JetBrains or VS Code parity;\n- docs/SCHEMA.md (the CQ-C11 docs sweep);\n- dirty-byte provenance.\n\nVerification command: cd packages/moe-daemon && npm test. Run it fresh; it must exit 0. The full daemon suite is required because the Task schema is shared.",
+  "definitionOfDone": [
+    "submit_plan stores planSourceBasis {version 1, commit equal to `git rev-parse HEAD`, planRevision equal to the committed revision} in its PLAN_SUBMITTED write, and every resubmission refreshes it. A non-Git project root, or a Git failure injected through planSourceGit.run, still submits successfully, with no basis and any older basis removed. Proven by vitest cases in context/planReuseState.test.ts against a real temporary Git repo.",
+    "Entering PLANNING stamps planningEntry, each case a named vitest case:\n- BACKLOG->PLANNING gives {from BACKLOG, seq 1}.\n- A later WORKING->PLANNING gives seq 2, from WORKING.\n- qa_reject escalation gives from REVIEW.\n- BLOCKED (blockedFromStatus PLANNING)->PLANNING keeps the earlier entry.\n- BLOCKED (blockedFromStatus WORKING)->PLANNING gives from BLOCKED.\n- createTask never stamps.",
+    "planSourceBasis, planningEntry and planReuse are daemon-owned:\n- A caller's updateTask value (including null) is stripped, leaving the stored value unchanged.\n- The /ws UPDATE_TASK path drops forged values: a WebSocketServer.test.ts case, pinned with vi.spyOn(state, 'updateTask').\n- Only taskStore.updateTask's daemonOwned argument writes planReuse. A malformed record throws INVALID_INPUT and writes nothing.",
+    "The three decoders accept the exact shapes and return detached copies. Each malformed variant returns null, in table-driven vitest cases:\n- an extra or missing key;\n- a wrong type;\n- a short or non-hex commit;\n- a negative or unsafe integer;\n- an unknown status or decision;\n- reasons or changedPaths over the cap.",
+    "Fresh `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2c9d5121",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 1.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T17:11:22.617Z",
+  "updatedAt": "2026-10-27T17:16:50.029Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-27T17:16:47.252Z"
+  },
+  "contextFetchedBy": [
+    "architect-2c9d5121"
+  ]
+}
