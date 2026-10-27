@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,7 +89,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:36:53.728Z",
-  "updatedAt": "2026-10-27T14:06:45.983Z",
+  "updatedAt": "2026-10-27T14:22:00.751Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T08:59:11.778Z",
     "plannedStepCount": 5,
@@ -252,5 +252,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "Size-only hold from REVIEW. The task is waiting on a human decision on prop-a3ac15754218441c9a3b43595af3fece, an EPIC ADD_RAIL size exception on epic-be924fb8 that is still PENDING. The work itself checks out: no DoD item failed and no bytes need to change.\n\nQA round 2 (qa-6fa5d758, 2026-10-27 14:20Z):\n- The five owned paths are byte-identical to landed completion 201d5ab at HEAD c006918 and in the worktree; `git log 201d5ab..HEAD` on them is empty. 8dca342 changes board JSON only.\n- I re-ran the gate fresh from a pure git archive of HEAD c006918, with env -i and node 24.21.0: `node --test scripts/tests/postflight-owner-scope.test.mjs && (cd packages/moe-daemon && npx tsc --noEmit && npm test)` exited 0. node:test 13/13, tsc clean, vitest 170 files with 4349 passed and 16 skipped.\n- I checked the proposal's rail text against `git show --numstat 201d5ab`. Own bytes are +459/-10, net 449:\n  - getCommitScope.ts +24/-1\n  - its test +196/-0\n  - fake proxy +45/-7, every hunk inside case get_commit_scope\n  - owner-scope test +185/-0\n  - docs +9/-2, in the hunks at new lines 681 and 717\n  The peer docs hunks add +13/-4, so the whole commit is net 458. The text is accurate.\n\nThe epic rails still waive size only for the 4758ad1 landing. QA cannot approve over the 400 net-LOC cap, and rejecting again would only use up a reopen.\n\nRoute:\n- APPROVED: run set_task_status REVIEW, or unblock_worker with resolveBlocks:true. QA then confirms the rail in allRails.epic, re-runs the gate and approves with the bytes unchanged.\n- REJECTED: run set_task_status PLANNING and split the review scope, not the bytes (mem:decision-size-only-reject-of-landed-bytes).",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-27T14:22:00.751Z"
 }
