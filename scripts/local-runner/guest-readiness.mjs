@@ -51,7 +51,7 @@ const reported = error => (typeof error?.code === 'string' && REPORTED.test(erro
 // Exit 1 is the only denial; 0 means the identity CAN, and any other code is unknown.
 const deny = allowed => ({ code }) => (code === 1 ? null : code === 0 ? allowed : 'PROBE_UNKNOWN');
 
-function mountFailure({ code, stdout }, { info }) {
+export function mountFailure({ code, stdout }, { info }) {
   if (info.mountCount > 0) return 'MOUNTS_PRESENT';
   const lines = code === 0 ? outputLines(stdout) : [];
   const fstypes = lines.map(line => MOUNTINFO_LINE.exec(line)?.[1]);

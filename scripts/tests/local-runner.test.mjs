@@ -2684,3 +2684,338 @@ if (typeof answer === 'string') process.stdout.write(answer); else process.exitC
   const virtualbox = await probe({ 'get local.driver': 'virtualbox\n' });
   assert.deepEqual([virtualbox.ready, virtualbox.prerequisites], [false, macItems([T, U, U, F], { combination: 'darwin/arm64 + virtualbox' })]);
 });
+
+// CQ-R09c copy-only snapshot materialization
+import { validateImport } from '../local-runner/source-snapshot.mjs';
+import { EventEmitter } from 'node:events';
+import { spawn as spawnChild } from 'node:child_process';
+import { lstatSync } from 'node:fs';
+import { PassThrough } from 'node:stream';
+import { createFrameDecoder, encodeFrame, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES } from '../local-runner/guest-bridge.mjs';
+import {
+  assertNoMounts, hostFrames, materializeSnapshot, runSupervisorStream, SNAPSHOT_CHUNK_BYTES, snapshotArgv, workspaceEntries,
+} from '../local-runner/snapshot-transfer.mjs';
+
+const fileOf = (path, bytes, executable = false) => ({ kind: 'file', path, executable, data: Buffer.from(bytes) });
+const snapshotOf = (base, overlay = []) => ({
+  version: 1, commit: 'a'.repeat(40), tree: 'b'.repeat(40), base: validateImport(base), overlay: validateImport(overlay), excluded: 0,
+});
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+// A surfaced error is a fixed code whose message carries no path, guest text or byte.
+const transferRefused = code => error => error?.code === code && !/secret|private|[\\/]/.test(error.message);
+
+test('T1 workspaceEntries is the validated base plus overlay replacements and additions, minus overlay deletes', () => {
+  const merged = workspaceEntries(snapshotOf([fileOf('a', 'A'), fileOf('b', 'B'), fileOf('c/d', 'D', true)],
+    [fileOf('b', 'B2', true), fileOf('e', 'E'), { kind: 'delete', path: 'c/d' }]));
+  assert.deepEqual(merged.entries.map(({ path, executable, size, sha256 }) => [path, executable, size, sha256]),
+    [['a', false, 1, sha('A')], ['b', true, 2, sha('B2')], ['e', false, 1, sha('E')]]);
+  assert.equal(merged.digest, validateImport([fileOf('e', 'E'), fileOf('a', 'A'), fileOf('b', 'B2', true)]).digest);
+  const good = snapshotOf([fileOf('a', 'A')]);
+  for (const [label, snapshot, code] of [
+    ['null', null, 'TRANSFER_INPUT_INVALID'], ['version 2', { ...good, version: 2 }, 'TRANSFER_INPUT_INVALID'],
+    ['no overlay', { ...good, overlay: undefined }, 'TRANSFER_INPUT_INVALID'],
+    ['entries not an array', { ...good, base: { entries: 'a', digest: good.base.digest } }, 'TRANSFER_INPUT_INVALID'],
+    ['a null entry', { ...good, base: { entries: [null], digest: good.base.digest } }, 'TRANSFER_INPUT_INVALID'],
+    ['a base delete', { ...good, base: validateImport([{ kind: 'delete', path: 'a' }]) }, 'TRANSFER_INPUT_INVALID'],
+    ['a merge collision', snapshotOf([fileOf('a', 'A')], [fileOf('a/x', 'X')]), 'SNAPSHOT_PATH_COLLISION'],
+  ]) assert.throws(() => workspaceEntries(snapshot), transferRefused(code), label);
+});
+
+test('T2 snapshotArgv is the frozen supervisor argv where only the owned name varies', () => {
+  for (const mode of ['materialize', 'export']) {
+    const argv = snapshotArgv(GUEST, mode);
+    assert.deepEqual(argv, ['exec', '--no-map-working-directory', GUEST, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', mode]);
+    assert.equal(Object.isFrozen(argv), true);
+  }
+  for (const [name, mode] of [[GUEST, 'bridge'], [GUEST, 'MATERIALIZE'], [GUEST, undefined], ['primary', 'materialize'],
+    [`${GUEST}\n`, 'export'], [`moe-vm-\0${'a'.repeat(19)}`, 'export'], [undefined, 'export']]) {
+    assert.throws(() => snapshotArgv(name, mode), transferRefused('TRANSFER_INPUT_INVALID'), `${name} ${mode}`);
+  }
+});
+
+const SHARED_LINE = fstype => `40 22 0:50 / /home/ubuntu/src rw,relatime shared:9 - ${fstype} host-share rw`;
+const HOST_MOUNT = { '/home/ubuntu/src': { source_path: '/private/secret', uid_mappings: [], gid_mappings: [] } };
+test('T3 assertNoMounts runs info then the mountinfo probe and refuses any mount, unknown mounts or provider failure', async () => {
+  const fake = fakeGuest();
+  assert.equal(await assertNoMounts(GUEST, { run: fake.run }), undefined);
+  assert.deepEqual([fake.ids(), fake.unexpected], [['info', 'mountinfo'], []]);
+  for (const [label, options, code] of [
+    ['provider mount', { info: guestDetail({ mounts: HOST_MOUNT }) }, 'TRANSFER_MOUNTS_PRESENT'],
+    ...['9p', 'virtiofs', 'fuse.sshfs'].map(fstype => [fstype, { answers: healthy({ mountinfo: mountinfo([...MOUNTS, SHARED_LINE(fstype)]) }) },
+      'TRANSFER_MOUNTS_PRESENT']),
+    ['empty mountinfo', { answers: healthy({ mountinfo: { code: 0, stdout: '' } }) }, 'TRANSFER_MOUNTS_UNKNOWN'],
+    ['unparsable mountinfo', { answers: healthy({ mountinfo: mountinfo([...MOUNTS, 'secret garbage']) }) }, 'TRANSFER_MOUNTS_UNKNOWN'],
+    ['provider failure', { info: { error: failWith({ code: 'ENOENT' }) } }, 'PROVIDER_NOT_FOUND'],
+  ]) await assert.rejects(assertNoMounts(GUEST, { run: fakeGuest(options).run }), transferRefused(code), label);
+});
+
+// A spawn-compatible supervisor of Node streams. It records every stdin byte and the peak queued stdin length, completes
+// each write a turn later and answers once stdin ends; stall never completes a write and answers right after spawn.
+// kill() closes asynchronously, as Node does.
+function fakeSpawn(respond = proc => proc.reply({ kind: 'materialized', digest: proc.frames()[0].digest }), { stall = false } = {}) {
+  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], kills: [], written: [], peak: 0 });
+  proc.stdin = new Writable({ write(chunk, encoding, done) {
+    proc.written.push(chunk);
+    proc.peak = Math.max(proc.peak, proc.stdin.writableLength);
+    if (!stall) setImmediate(done);
+  } });
+  proc.frames = () => createFrameDecoder(MAX_HOST_FRAME_BYTES).push(Buffer.concat(proc.written));
+  proc.reply = (frames, code = 0, signal = null) => {
+    proc.stdout.write(Buffer.concat([frames].flat().map(frame => (Buffer.isBuffer(frame) ? frame : encodeFrame(frame)))));
+    proc.stdout.once('close', () => proc.emit('close', code, signal)).end();
+  };
+  proc.kill = signal => { proc.kills.push(signal); setImmediate(() => proc.emit('close', null, signal)); return true; };
+  proc.spawn = (...args) => {
+    proc.calls.push(args);
+    if (stall) setImmediate(() => respond(proc));
+    else proc.stdin.once('finish', () => respond(proc));
+    return proc;
+  };
+  return proc;
+}
+function transferProvider(guestOptions, respond, spawnOptions) {
+  const guest = fakeGuest(guestOptions);
+  const proc = fakeSpawn(respond, spawnOptions);
+  return { guest, proc, provider: { run: guest.run, spawn: (...args) => { proc.before = guest.ids(); return proc.spawn(...args); } } };
+}
+const PIPES = { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
+const dataFrames = bytes => Array.from({ length: Math.ceil(bytes.length / SNAPSHOT_CHUNK_BYTES) },
+  (_, at) => ({ kind: 'data', data: Buffer.from(bytes).subarray(at * SNAPSHOT_CHUNK_BYTES, (at + 1) * SNAPSHOT_CHUNK_BYTES).toString('base64') }));
+const BIG = Buffer.alloc(2.5 * SNAPSHOT_CHUNK_BYTES, 7);
+
+test('T4 a clean materialize streams the merged view on the supervisor stdin and resolves the frozen result', async () => {
+  const snapshot = snapshotOf([fileOf('src/big.bin', BIG), fileOf('empty', ''), fileOf('run.sh', '#!/bin/sh\n', true)], [fileOf('new.txt', 'N')]);
+  const { digest } = workspaceEntries(snapshot);
+  const bytes = BIG.length + 11;
+  const t = transferProvider();
+  const result = await materializeSnapshot({ name: GUEST, snapshot, provider: t.provider });
+  assert.deepEqual(result, { instance: GUEST, digest, files: 4, bytes, executionReady: false });
+  assert.equal(Object.isFrozen(result), true);
+  assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
+  assert.deepEqual([t.proc.calls, t.proc.kills], [[['multipass', snapshotArgv(GUEST, 'materialize'), PIPES]], []]);
+  assert.equal(dataFrames(BIG).length, 3);
+  assert.deepEqual(t.proc.frames(), [{ kind: 'snapshot', version: 1, files: 4, bytes, digest },
+    { kind: 'file', path: 'empty', executable: false, size: 0 },
+    { kind: 'file', path: 'new.txt', executable: false, size: 1 }, ...dataFrames('N'),
+    { kind: 'file', path: 'run.sh', executable: true, size: 10 }, ...dataFrames('#!/bin/sh\n'),
+    { kind: 'file', path: 'src/big.bin', executable: false, size: BIG.length }, ...dataFrames(BIG), { kind: 'end' }]);
+  assert.deepEqual(Buffer.concat(t.proc.written), Buffer.concat([...hostFrames(workspaceEntries(snapshot))]));
+  // Backpressure: a write that fills the queue waits for 'drain', so it never holds more than one data frame past it.
+  assert.ok(t.proc.peak <= encodeFrame(dataFrames(BIG)[0]).length + t.proc.stdin.writableHighWaterMark, String(t.proc.peak));
+});
+
+test('T5 invalid input or mounts before the stream refuse it without a spawn, and mounts that appear during it refuse the result', async () => {
+  const snapshot = snapshotOf([fileOf('a', 'A')]);
+  for (const [label, options] of [['primary', { name: 'primary' }], ['snapshot', { snapshot: { ...snapshot, version: 2 } }],
+    ['timeout', { timeoutMs: 600_001 }], ['spawn', { provider: { spawn: 'spawn' } }], ['executable', { provider: { executable: 'a\tb' } }]]) {
+    const t = transferProvider();
+    await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: t.provider, ...options }), transferRefused('TRANSFER_INPUT_INVALID'), label);
+    assert.deepEqual([t.guest.calls, t.proc.calls], [[], []], label);
+  }
+  for (const [label, options, code] of [['provider mount', { info: guestDetail({ mounts: HOST_MOUNT }) }, 'TRANSFER_MOUNTS_PRESENT'],
+    ['9p', { answers: healthy({ mountinfo: mountinfo([...MOUNTS, SHARED_LINE('9p')]) }) }, 'TRANSFER_MOUNTS_PRESENT'],
+    ['unknown', { answers: healthy({ mountinfo: { code: 0, stdout: '' } }) }, 'TRANSFER_MOUNTS_UNKNOWN']]) {
+    const t = transferProvider(options);
+    await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: t.provider }), transferRefused(code), label);
+    assert.deepEqual([t.guest.ids(), t.proc.calls], [['info', 'mountinfo'], []], label);
+  }
+  for (const [label, options] of [['late provider mount', { info: [guestDetail(), guestDetail({ mounts: HOST_MOUNT })] }],
+    ['late virtiofs', { answers: healthy({ mountinfo: [mountinfo(), mountinfo([...MOUNTS, SHARED_LINE('virtiofs')])] }) }]]) {
+    const t = transferProvider(options);
+    await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: t.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'), label);
+    assert.deepEqual([t.proc.calls.length, t.guest.ids().length], [1, 4], label);
+  }
+});
+
+test('T6 a wrong, missing, repeated or malformed answer, a failed exit or a hang is a fixed refusal that kills the child', async () => {
+  const snapshot = snapshotOf([fileOf('a', 'A')]);
+  const done = { kind: 'materialized', digest: workspaceEntries(snapshot).digest };
+  for (const [label, respond, code, kills = ['SIGKILL']] of [
+    ['wrong digest', proc => proc.reply({ ...done, digest: 'f'.repeat(64) }), 'TRANSFER_DIGEST_MISMATCH'],
+    ['no frame', proc => proc.reply([]), 'TRANSFER_FRAME_INVALID', []],
+    ['two frames', proc => proc.reply([done, done]), 'TRANSFER_FRAME_INVALID'],
+    ['an extra key', proc => proc.reply({ ...done, extra: 1 }), 'TRANSFER_FRAME_INVALID'],
+    ['an unknown kind', proc => proc.reply({ kind: 'exported', digest: done.digest }), 'TRANSFER_FRAME_INVALID'],
+    ['malformed JSON', proc => proc.reply(Buffer.from([0, 0, 0, 2, 0x7b, 0x7b])), 'TRANSFER_FRAME_INVALID'],
+    ['an oversize frame', proc => proc.reply(Buffer.from([0, 4, 0, 1])), 'TRANSFER_FRAME_INVALID'],
+    ['a truncated frame', proc => proc.reply(encodeFrame(done).subarray(0, 9)), 'TRANSFER_FRAME_INVALID'],
+    ['a nonzero exit', proc => proc.reply(done, 65), 'TRANSFER_EXIT_FAILED'],
+    ['a signal exit', proc => proc.reply(done, null, 'SIGSEGV'), 'TRANSFER_EXIT_FAILED'],
+    ['a hang', () => {}, 'TRANSFER_TIMEOUT'],
+  ]) {
+    const t = transferProvider(undefined, respond);
+    await assert.rejects(materializeSnapshot({ name: GUEST, snapshot, provider: t.provider, timeoutMs: label === 'a hang' ? 50 : 5_000 }),
+      transferRefused(code), label);
+    assert.deepEqual(t.proc.kills, kills, label);
+  }
+  // Exit 0 before the guest took its input: the first data frame never completes.
+  const large = snapshotOf([fileOf('a', BIG)]);
+  const early = transferProvider(undefined, proc => proc.reply({ ...done, digest: workspaceEntries(large).digest }), { stall: true });
+  await assert.rejects(materializeSnapshot({ name: GUEST, snapshot: large, provider: early.provider }), transferRefused('TRANSFER_EXIT_FAILED'));
+  assert.deepEqual(early.proc.kills, ['SIGKILL']);
+  const boom = new Error('host check');
+  const direct = fakeSpawn(proc => proc.reply({ kind: 'any' }));
+  await assert.rejects(runSupervisorStream({ name: GUEST, mode: 'export', provider: { spawn: direct.spawn }, onFrame: () => { throw boom; } }),
+    error => error === boom);
+  assert.deepEqual([direct.calls[0][1], direct.kills], [snapshotArgv(GUEST, 'export'), ['SIGKILL']]);
+  const base = { name: GUEST, mode: 'export', provider: { spawn: fakeSpawn().spawn }, onFrame: () => {} };
+  for (const [label, options] of [['no options', null], ['mode', { mode: 'bridge' }], ['onFrame', { onFrame: undefined }],
+    ['input string', { input: 'abc' }], ['input object', { input: {} }], ['timeout 0', { timeoutMs: 0 }], ['timeout 1.5', { timeoutMs: 1.5 }]]) {
+    await assert.rejects(runSupervisorStream(options && { ...base, ...options }), transferRefused('TRANSFER_INPUT_INVALID'), label);
+  }
+  for (const spawn of [() => { throw new Error('/private/secret'); }, () => ({}), () => null]) {
+    await assert.rejects(runSupervisorStream({ ...base, provider: { spawn } }), transferRefused('TRANSFER_SPAWN_FAILED'));
+  }
+  const odd = fakeSpawn(() => {});
+  await assert.rejects(runSupervisorStream({ ...base, provider: { spawn: odd.spawn }, input: ['not a buffer'] }), transferRefused('TRANSFER_INPUT_INVALID'));
+  assert.deepEqual([odd.written, odd.kills], [[], ['SIGKILL']]);
+});
+
+// CQ-R09c supervisor rows: the real guest-supervisor.py, loaded under python3 -I -B with importlib as in
+// local-runner-bridge.test.mjs (-B: a __pycache__ in scripts/local-runner would ship in both IDE bundles).
+const NOT_POSIX = process.platform === 'win32' && 'the guest supervisor runs only in the Linux guest (POSIX python3)';
+const PY_SUPERVISOR = fileURLToPath(new URL('../local-runner/guest-supervisor.py', import.meta.url));
+const PY_LOAD = `import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location('moe_supervisor', sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+`;
+// materialize() into <dir>/lib, whose parent it creates, owned by the test user; setup runs first in the harness.
+const layoutIn = dir => ({ lib: path.join(dir, 'lib'), workspace: path.join(dir, 'lib', 'workspace'),
+  manifest: path.join(dir, 'lib', 'workspace.manifest.json') });
+function materializeIn(dir, input, setup = '', ...extra) {
+  const paths = layoutIn(dir);
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.materialize(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid())))`;
+  return Object.assign(spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest, ...extra],
+    { input, maxBuffer: 64 << 20, timeout: 60_000 }), paths);
+}
+const framesOf = list => Buffer.concat(list.map(frame => (Buffer.isBuffer(frame) ? frame : encodeFrame(frame))));
+const modeOf = file => statSync(file).mode & 0o7777;
+
+test('M1 the supervisor CLI accepts only bridge and materialize, and materialize needs root', { skip: NOT_POSIX }, () => {
+  for (const args of [['materialize', 'x'], ['MATERIALIZE']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
+  }
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}sys.exit(m.main(['materialize'], geteuid=lambda: 1000))`, PY_SUPERVISOR]);
+  assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
+  // As root, 'materialize' runs materialize(0, 1) with the fixed layout defaults, and nothing else.
+  const routed = `${PY_LOAD}m.materialize = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.main(['materialize'], geteuid=lambda: 0))`;
+  const root = spawnSync('python3', ['-I', '-B', '-c', routed, PY_SUPERVISOR]);
+  assert.deepEqual([root.status, String(root.stderr), root.stdout.length], [42, '((0, 1), {})', 0]);
+});
+
+test('M2 a clean stream writes exactly the merged files and the root-only manifest, and answers with the Node digest', { skip: NOT_POSIX }, t => {
+  const snapshot = snapshotOf([fileOf('src/main.c', 'int main;\n'), fileOf('bin/run', '#!/bin/sh\n', true), fileOf('src/old', 'x')],
+    [fileOf('src/\u{1F600}', BIG.subarray(0, SNAPSHOT_CHUNK_BYTES + 3)), fileOf('src/～', 'w'), fileOf('empty', ''), { kind: 'delete', path: 'src/old' }]);
+  const manifest = workspaceEntries(snapshot);
+  const run = materializeIn(scratch(t), framesOf([...hostFrames(manifest)]));
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(createFrameDecoder().push(run.stdout), [{ kind: 'materialized', digest: manifest.digest }]);
+  assertMaterialized(run, manifest);
+});
+
+// Exactly the manifest's files, bytes, owner and modes, no staging tree, and the root-only manifest recording them.
+function assertMaterialized(paths, manifest) {
+  assert.deepEqual(readdirSync(paths.lib).sort(), ['workspace', 'workspace.manifest.json']);
+  const listed = readdirSync(paths.workspace, { recursive: true }).filter(name => statSync(path.join(paths.workspace, name)).isFile());
+  assert.deepEqual(listed.sort(), manifest.entries.map(entry => entry.path).sort());
+  for (const entry of manifest.entries) {
+    const file = path.join(paths.workspace, entry.path);
+    assert.deepEqual([readFileSync(file), modeOf(file), statSync(file).uid], [Buffer.from(entry.data), entry.executable ? 0o755 : 0o644, process.getuid()]);
+    assert.equal(modeOf(path.dirname(file)), file === path.join(paths.workspace, path.basename(file)) ? 0o700 : 0o755, entry.path);
+  }
+  assert.deepEqual([modeOf(paths.workspace), modeOf(paths.manifest)], [0o700, 0o600]);
+  const stored = JSON.parse(readFileSync(paths.manifest, 'utf8'));
+  assert.deepEqual(stored, { version: 1, digest: manifest.digest,
+    files: Object.fromEntries(manifest.entries.map(({ path: name, executable, size, sha256 }) => [name, [executable, size, sha256]])) });
+  assert.deepEqual(Object.keys(stored.files), manifest.entries.map(entry => entry.path)); // UTF-8 path-byte order
+}
+
+test('M3 a malformed, out-of-order or mismatched stream exits 65 with no frame and leaves no workspace, manifest or staging', { skip: NOT_POSIX }, t => {
+  const { digest } = workspaceEntries(snapshotOf([fileOf('a', 'A')]));
+  const head = (files = 1, bytes = 1, changes = {}) => ({ kind: 'snapshot', version: 1, files, bytes, digest, ...changes });
+  const file = (name = 'a', size = 1, changes = {}) => ({ kind: 'file', path: name, executable: false, size, ...changes });
+  const data = (text = 'QQ==') => ({ kind: 'data', data: text });
+  const END = { kind: 'end' };
+  const one = name => [head(), file(name), data(), END];
+  for (const [label, frames] of [
+    ...['../x', '/abs', 'a//b', 'a\0b', './a', 'a/..', ''].map(name => [JSON.stringify(name), one(name)]),
+    ['a duplicate path', [head(2, 2), file(), data(), file(), data(), END]],
+    ['a path under a file', [head(2, 2), file(), data(), file('a/b'), data(), END]],
+    ['a wrong digest', [head(1, 1, { digest: 'b'.repeat(64) }), file(), data(), END]],
+    ['short data', [head(1, 2), file('a', 2), data(), END]], ['long data', [head(1, 2), file('a', 1), data('QUE='), END]],
+    ['over the header total', [head(1, 0), file(), data(), END]], ['under the header total', [head(1, 2), file(), data(), END]],
+    ['empty data', [head(), file(), data(''), data(), END]],
+    ['non-canonical base64', [head(), file(), data('QR=='), END]], ['data before a header', [data(), head(), file(), data(), END]],
+    ['a missing end', [head(), file(), data()]], ['bytes after end', [...one('a'), Buffer.from([0])]],
+    ['a frame after end', [...one('a'), END]], ['more files than the header counts', [head(1, 2), file(), data(), file('b'), data(), END]],
+    ['a version 2 header', [head(1, 1, { version: 2 }), file(), data(), END]], ['a true version', [head(1, 1, { version: true }), file(), data(), END]],
+    ['an extra key', [head(), file('a', 1, { mode: 420 }), data(), END]], ['a numeric executable', [head(), file('a', 1, { executable: 1 }), data(), END]],
+    ['a truncated frame', [...one('a').slice(0, 3), encodeFrame(END).subarray(0, 5)]],
+  ]) {
+    const run = materializeIn(scratch(t), framesOf(frames));
+    assert.deepEqual([run.status, run.stdout.length, readdirSync(run.lib)], [65, 0, []], `${label} ${run.stderr}`);
+  }
+  assert.equal(materializeIn(scratch(t), framesOf(one('a'))).status, 0); // each row breaks exactly one rule
+  const pair = workspaceEntries(snapshotOf([fileOf('a', 'A'), fileOf('b', 'A')]));
+  const reversed = [head(2, 2, { digest: pair.digest }), file('b'), data(), file(), data(), END];
+  assert.equal(materializeIn(scratch(t), framesOf(reversed)).status, 0); // the digest sorts by path bytes, whatever the order
+});
+
+test('M4 an existing workspace, manifest or symlink exits 73 untouched, and a planted parent symlink is never followed', { skip: NOT_POSIX }, t => {
+  const frames = framesOf([...hostFrames(workspaceEntries(snapshotOf([fileOf('a/b', 'B')])))]);
+  const outside = scratch(t);
+  const listing = lib => readdirSync(lib).map(name => [name, lstatSync(path.join(lib, name)).mtimeMs]);
+  for (const [label, plant] of [['workspace', paths => mkdirSync(paths.workspace)], ['manifest', paths => writeFileSync(paths.manifest, 'kept')],
+    ['symlink', paths => symlinkSync(outside, paths.workspace)]]) {
+    const dir = scratch(t);
+    const paths = layoutIn(dir);
+    mkdirSync(paths.lib);
+    plant(paths);
+    const before = listing(paths.lib);
+    const run = materializeIn(dir, frames);
+    assert.deepEqual([run.status, run.stdout.length, listing(paths.lib)], [73, 0, before], `${label} ${run.stderr}`);
+  }
+  // os.mkdir patched in the harness plants a symlink to `outside` in place of the parent directory 'a'.
+  const planted = `real = os.mkdir
+def plant(name, mode=0o777, *, dir_fd=None):
+    if dir_fd is None:
+        return real(name, mode)
+    os.symlink(sys.argv[4], name, dir_fd=dir_fd)
+os.mkdir = plant`;
+  const run = materializeIn(scratch(t), frames, planted, outside);
+  assert.ok([65, 74].includes(run.status), `${run.status} ${run.stderr}`);
+  assert.deepEqual([run.stdout.length, readdirSync(run.lib), readdirSync(outside)], [0, [], []]);
+  // I/O failures once the manifest is created, and once it is written: no manifest, staging or workspace is left.
+  for (const call of ['fsync', 'rename']) {
+    const failed = materializeIn(scratch(t), frames, `def fail(*args, **kwargs):\n    raise OSError(5, 'injected')\nos.${call} = fail`);
+    assert.deepEqual([failed.status, failed.stdout.length, readdirSync(failed.lib)], [74, 0, []], `${call} ${failed.stderr}`);
+  }
+});
+
+test('T7 end to end, materializeSnapshot copies the merged view through the real supervisor and refuses a second copy',
+  { skip: NOT_POSIX, timeout: 60_000 }, async t => {
+    const paths = layoutIn(scratch(t));
+    const guest = fakeGuest();
+    const launches = [];
+    t.after(() => launches.forEach(({ child }) => child.exitCode === null && child.signalCode === null && child.kill('SIGKILL')));
+    // A spawn that keeps only the argv's final mode and runs that real supervisor function on the child's stdio.
+    const spawn = (executable, argv, options) => {
+      const code = `${PY_LOAD}sys.exit(m.${argv.at(-1)}(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid())))`;
+      const child = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
+      launches.push({ call: [executable, argv, options], before: guest.ids(), child });
+      return child;
+    };
+    const snapshot = snapshotOf([fileOf('a.txt', 'old'), fileOf('bin/tool', '#!/bin/sh\nexit 0\n', true), fileOf('docs/old.md', 'gone')],
+      [fileOf('a.txt', 'new text'), fileOf('src/new.js', BIG), { kind: 'delete', path: 'docs/old.md' }]);
+    const merged = workspaceEntries(snapshot);
+    const copy = () => materializeSnapshot({ name: GUEST, snapshot, provider: { run: guest.run, spawn }, timeoutMs: 30_000 });
+    assert.deepEqual(await copy(), { instance: GUEST, digest: merged.digest, files: 3, bytes: 8 + 17 + BIG.length, executionReady: false });
+    assert.deepEqual([launches.map(({ call, before }) => [call, before]), guest.ids(), guest.unexpected],
+      [[[['multipass', snapshotArgv(GUEST, 'materialize'), PIPES], ['info', 'mountinfo']]], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
+    assertMaterialized(paths, merged);
+    await assert.rejects(copy(), transferRefused('TRANSFER_EXIT_FAILED'));
+    assert.deepEqual([launches.length, launches[1].child.exitCode, guest.ids().length], [2, 73, 6]);
+    assertMaterialized(paths, merged); // the first workspace is untouched
+  });

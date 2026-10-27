@@ -3,21 +3,26 @@
 # GUEST_LAYOUT.supervisor, and guest-bridge.mjs is the protocol source of truth. This process is the ONLY writer of
 # its stdout: child bytes reach the host only inside base64 'output' frames, and termination only as this process's
 # own 'observation' frame from waitpid. Standard library only; the guest has python3 for cloud-init and no Node.
-# Exit codes: 0 relay complete; 64 usage; 71 the job could not start (child or agent socket: hello, then EOF, no
-# observation); 74 I/O failure or host EOF (child group killed); 75 SIGTERM, SIGHUP or SIGINT (child group killed, no
-# observation); 76 host protocol violation (child group killed); 77 not root; 78 root bridge with no job.
+# Modes: 'bridge' (CQ-R08b/c) and 'materialize' (CQ-R09c: one snapshot from host frames on stdin into WORKSPACE).
+# Exit codes: 0 relay or materialization complete; 64 usage; 65 malformed or mismatched snapshot stream; 71 the job could
+# not start (child or agent socket: hello, then EOF, no observation; or no AGENT_IDENTITY account); 73 the workspace or
+# its manifest already exists; 74 I/O failure or host EOF (child group killed); 75 SIGTERM, SIGHUP or SIGINT (child group
+# killed, no observation); 76 host protocol violation (child group killed); 77 not root; 78 root bridge with no job.
 import base64
+import hashlib
 import json
 import os
 import pwd
 import re
 import selectors
+import shutil
 import signal
 import socket
 import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import types
 
 PROTOCOL = 1
@@ -136,10 +141,14 @@ def encode_frame(value, limit=MAX_GUEST_FRAME_BYTES):
     return struct.pack('>I', len(body)) + body
 
 
-def write_frame(fd, value):
-    view = memoryview(encode_frame(value))
+def write_all(fd, data):
+    view = memoryview(data)
     while view:
         view = view[os.write(fd, view):]
+
+
+def write_frame(fd, value):
+    write_all(fd, encode_frame(value))
 
 
 def exit_observation(status):
@@ -415,12 +424,164 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
         bridge.close()  # no agent connection or socket outlives the job
 
 
+# CQ-R09c materialize. Callers serialize per VM through R06's job lease; rename never replaces a non-empty workspace.
+WORKSPACE = '/var/lib/moe/workspace'
+WORKSPACE_MANIFEST = '/var/lib/moe/workspace.manifest.json'
+SNAPSHOT_DIGEST_TAG = b'moe-source-snapshot-v1\0'  # the digest framing of source-snapshot.mjs
+MAX_SNAPSHOT_FILES = 10000  # mirrors source-snapshot.mjs
+MAX_SNAPSHOT_BYTES = 268435456
+DIGEST = re.compile(r'[0-9a-f]{64}')
+WALK = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def snapshot_frames(in_fd):
+    buffer = bytearray()
+    while data := os.read(in_fd, OUTPUT_CHUNK_BYTES):
+        yield from take_frames(buffer, data, MAX_HOST_FRAME_BYTES)
+    if buffer:
+        raise ValueError('a partial frame at EOF')
+
+
+def expect(frame, kind, *keys):
+    if not (type(frame) is dict and frame.get('kind') == kind and frame.keys() == {'kind', *keys}):
+        raise ValueError('an unexpected snapshot frame')
+    return frame
+
+
+def own(fd, owner, mode):
+    os.fchown(fd, *owner)
+    os.fchmod(fd, mode)  # explicit, whatever the umask
+
+
+def create(root, path, executable, owner):
+    # Directory-fd-relative and never through a symlink: O_NOFOLLOW on every segment, O_EXCL on the file.
+    parts = path.encode('utf-8').split(b'/') if type(path) is str else [b'']
+    if b'\0' in b''.join(parts) or any(part in (b'', b'.', b'..') for part in parts):  # '/abs' splits to an empty segment
+        raise ValueError('not a relative snapshot path')
+    fds = [root]  # the caller closes root
+    try:
+        for part in parts[:-1]:
+            try:
+                fds.append(os.open(part, WALK, dir_fd=fds[-1]))
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=fds[-1])
+                fds.append(os.open(part, WALK, dir_fd=fds[-1]))
+                own(fds[-1], owner, 0o755)
+        fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fds[-1])
+    except (FileExistsError, NotADirectoryError):
+        raise ValueError('a duplicate path or a path under a file') from None
+    finally:
+        for parent in fds[1:]:
+            os.close(parent)
+    try:
+        own(fd, owner, 0o755 if executable else 0o644)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def receive(frames, root, owner):
+    head = expect(next(frames, None), 'snapshot', 'version', 'files', 'bytes', 'digest')
+    count, total, digest = head['files'], head['bytes'], head['digest']
+    if not (type(head['version']) is int and head['version'] == 1 and type(count) is int and 0 <= count <= MAX_SNAPSHOT_FILES
+            and type(total) is int and 0 <= total <= MAX_SNAPSHOT_BYTES and type(digest) is str and DIGEST.fullmatch(digest)):
+        raise ValueError('a malformed snapshot header')
+    rows, left_total = [], total
+    for _ in range(count):
+        frame = expect(next(frames, None), 'file', 'path', 'executable', 'size')
+        path, executable, size = frame['path'], frame['executable'], frame['size']
+        if type(executable) is not bool or type(size) is not int or not 0 <= size <= left_total:
+            raise ValueError('a malformed file frame')
+        left_total -= size
+        fd, sha, left = create(root, path, executable, owner), hashlib.sha256(), size
+        try:
+            while left:
+                text = expect(next(frames, None), 'data', 'data')['data']
+                chunk = base64.b64decode(text, validate=True) if type(text) is str else b''
+                if not chunk or len(chunk) > left or base64.b64encode(chunk).decode('ascii') != text:
+                    raise ValueError('a malformed data frame')
+                write_all(fd, chunk)
+                sha.update(chunk)
+                left -= len(chunk)
+        finally:
+            os.close(fd)
+        rows.append((path.encode('utf-8'), path, executable, size, sha.digest()))
+    expect(next(frames, None), 'end')
+    if next(frames, None) is not None or left_total:
+        raise ValueError('bytes after end or a short total')
+    rows.sort()
+    check = hashlib.sha256(SNAPSHOT_DIGEST_TAG + struct.pack('>I', len(rows)))
+    for raw, _, executable, size, sha in rows:
+        check.update(struct.pack('>BI', 0x46, len(raw)) + raw + struct.pack('>?I', executable, size) + sha)
+    if check.hexdigest() != digest:
+        raise ValueError('the snapshot digest does not match its bytes')
+    return digest, rows
+
+
+def write_manifest(path, digest, rows):
+    files = {name: [executable, size, sha.hex()] for _, name, executable, size, sha in rows}
+    body = json.dumps({'version': 1, 'digest': digest, 'files': files}, separators=(',', ':'), ensure_ascii=False)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        write_all(fd, body.encode('utf-8'))
+        os.fsync(fd)
+    except BaseException:
+        os.unlink(path)  # only the file this call created
+        raise
+    finally:
+        os.close(fd)
+
+
+# Builds the tree in a root-only staging directory beside workspace and checks it against the header. It then writes the
+# root-only manifest and renames the tree into place for owner (default: the AGENT_IDENTITY account), so no workspace
+# ever exists without its manifest. A handled failure leaves neither and writes no frame. A crash can leave only the
+# 0700 staging tree, and after the manifest that manifest too, so a retry exits 73.
+def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, owner=None):
+    if owner is None:
+        try:
+            entry = pwd.getpwnam(AGENT_IDENTITY)
+        except KeyError:
+            return os.EX_OSERR
+        owner = (entry.pw_uid, entry.pw_gid)
+    if os.path.lexists(workspace) or os.path.lexists(manifest):
+        return os.EX_CANTCREAT
+    staging = root = None
+    try:
+        parent = os.path.dirname(workspace)
+        os.makedirs(parent, 0o755, exist_ok=True)
+        staging = tempfile.mkdtemp(prefix='.workspace-', dir=parent)  # 0700
+        root = os.open(staging, WALK)
+        digest, rows = receive(snapshot_frames(in_fd), root, owner)
+        own(root, owner, 0o700)
+        write_manifest(manifest, digest, rows)
+        try:
+            os.rename(staging, workspace)
+        except BaseException:
+            os.unlink(manifest)
+            raise
+        staging = None
+        write_frame(out_fd, {'kind': 'materialized', 'digest': digest})
+        return 0
+    except (ValueError, RecursionError):  # binascii.Error, JSON and UTF-8 errors are ValueErrors
+        return os.EX_DATAERR
+    except OSError:
+        return os.EX_IOERR
+    finally:
+        if root is not None:
+            os.close(root)
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 # geteuid is injectable from Python only (tests), never from argv or the environment. No path writes to stdout.
 def main(argv, geteuid=os.geteuid):
-    if argv != ['bridge']:  # bridgeArgv in guest-bridge.mjs passes exactly this
+    if argv not in (['bridge'], ['materialize']):  # bridgeArgv and snapshotArgv pass exactly these
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
+    if argv == ['materialize']:
+        return materialize(0, 1)
     # The job a bridge session runs comes from the CQ-R10/R11 job tables; until one exists a root bridge fails closed.
     return os.EX_CONFIG
 
