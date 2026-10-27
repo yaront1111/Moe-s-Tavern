@@ -6820,7 +6820,11 @@ $mentionsJson
             # says its Claude account is spent, so this loop relaunches the seat
             # on the next one. Only for an interactive seat whose loop relaunches
             # it (a --print run already ends per task; a -NoLoop seat would end
-            # for good); MOE_DISABLE_ACCOUNT_SWITCH_MOD=1 leaves it out.
+            # for good); MOE_DISABLE_ACCOUNT_SWITCH_MOD=1 leaves it out. Where
+            # this loop also claims for the seat (auto-claim, not a governor) it
+            # sets MOE_SESSION_ENDS_WHEN_IDLE, and the mod ends a session whose
+            # seat holds no task once a turn is over instead of parking until an
+            # operator /exit.
             if (-not $env:CLAUDE_CODE_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_PROMPT_CACHE_TTL = '1h' }
             if (-not $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL) { $env:CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL = '1h' }
             $moeCompactWindow = switch ($Role) { 'qa' { '500000' } 'architect' { '600000' } 'governor' { '600000' } default { '300000' } }
@@ -6837,11 +6841,13 @@ $mentionsJson
                 }
             }
             $moeSwitchDir = Join-Path $PSScriptRoot 'mods\moe-account-switch'
+            $env:MOE_SESSION_ENDS_WHEN_IDLE = $null
             if ($claudeInteractive -and $loopEnabled -and -not $env:MOE_DISABLE_ACCOUNT_SWITCH_MOD -and (Test-Path -LiteralPath $moeSwitchDir -PathType Container)) {
                 $moePluginDirs = @("$env:CLAUDE_CODE_PLUGIN_DIRS" -split [regex]::Escape([IO.Path]::PathSeparator) | Where-Object { $_ })
                 if ($moePluginDirs -notcontains $moeSwitchDir) {
                     $env:CLAUDE_CODE_PLUGIN_DIRS = (@($moePluginDirs) + $moeSwitchDir) -join [IO.Path]::PathSeparator
                 }
+                if ($AutoClaim -and $Role -ne 'governor') { $env:MOE_SESSION_ENDS_WHEN_IDLE = '1' }
             }
 
             # Inline stream-json parser. Reads one JSON line at a time, prints

@@ -7553,7 +7553,10 @@ $PROMPT_BODY"
         # its Claude account is spent, so this loop relaunches the seat on the
         # next one. Only for an interactive seat whose loop relaunches it (a
         # --print run already ends per task; a --no-loop seat would end for
-        # good); MOE_DISABLE_ACCOUNT_SWITCH_MOD=1 leaves it out.
+        # good); MOE_DISABLE_ACCOUNT_SWITCH_MOD=1 leaves it out. Where this loop
+        # also claims for the seat (auto-claim, not a governor) it sets
+        # MOE_SESSION_ENDS_WHEN_IDLE, and the mod ends a session whose seat holds
+        # no task once a turn is over instead of parking until an operator /exit.
         if [ "$CLI_TYPE" = "claude" ]; then
             export CLAUDE_CODE_PROMPT_CACHE_TTL="${CLAUDE_CODE_PROMPT_CACHE_TTL:-1h}"
             export CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL="${CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL:-1h}"
@@ -7574,12 +7577,14 @@ $PROMPT_BODY"
                 esac
             fi
             moe_switch_dir="$SCRIPT_DIR/mods/moe-account-switch"
+            unset MOE_SESSION_ENDS_WHEN_IDLE
             if [ "$CLAUDE_INTERACTIVE" = true ] && [ "$LOOP_ENABLED" = true ] \
                 && [ -z "${MOE_DISABLE_ACCOUNT_SWITCH_MOD:-}" ] && [ -d "$moe_switch_dir" ]; then
                 case ":${CLAUDE_CODE_PLUGIN_DIRS:-}:" in
                     *":$moe_switch_dir:"*) ;;
                     *) export CLAUDE_CODE_PLUGIN_DIRS="${CLAUDE_CODE_PLUGIN_DIRS:+$CLAUDE_CODE_PLUGIN_DIRS:}$moe_switch_dir" ;;
                 esac
+                if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != governor ]; then export MOE_SESSION_ENDS_WHEN_IDLE=1; fi
             fi
         fi
 

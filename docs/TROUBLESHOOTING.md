@@ -813,6 +813,23 @@ seat; it then moves at its next launch, as before. A `--no-loop`/`-NoLoop` or on
 the mod. If a seat leaves the toast `Type /exit and Moe relaunches it.` and keeps running, the claude build could not
 run `/exit` from the mod. Exit it by hand.
 
+### An architect session ends after it finds nothing to plan
+
+**Symptom:** an interactive claude architect shows the toast `Moe: this seat holds no task. This session ends in 10 s
+and the wrapper claims the next one.` and exits. The wrapper then prints `[no-task] No claimable task for role
+architect; not launching a CLI without one` until a PLANNING task appears, and launches a fresh session for it.
+
+**Cause:** expected. The wrapper claims the next task only once the CLI exits, and a TUI stays open after the model
+stops, so a seat that ran out of work used to park until someone typed `/exit`. Where the wrapper's loop claims for
+the seat (auto-claim on, not a governor), the `moe-account-switch` mod ends the session when a main turn ends with
+the seat holding no task: a claim found nothing, the session planned `MOE_ARCHITECT_TASKS_PER_SESSION` tasks, or
+the session only answered notifications. An interrupted turn (Esc) keeps the session. A claim made after the toast
+is refused, so the task goes to the fresh session.
+
+**Fix:** none needed. To keep such a TUI open, run the seat with `--no-auto-claim`, or set
+`MOE_DISABLE_ACCOUNT_SWITCH_MOD=1`, which also stops its account switching. A codex, gemini or grok TUI has no mod:
+exit it by hand.
+
 ### `MOE_ACCOUNT_WAIT retry_in=…`
 
 **Symptom:** a claude seat prints `[account] MOE_ACCOUNT_WAIT retry_in=<s>s next_reset=<iso> - every signed-in
