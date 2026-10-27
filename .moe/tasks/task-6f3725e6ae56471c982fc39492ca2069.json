@@ -88,7 +88,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:27.077Z",
-  "updatedAt": "2026-10-26T16:37:09.286Z",
+  "updatedAt": "2026-10-27T14:57:41.289Z",
   "dependsOn": [
     "task-df5384bf7fbd4b7ba3dedb43d7373ffa"
   ],
@@ -116,11 +116,14 @@
     "firstClaimAt": "2026-10-26T15:22:26.533Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-27T14:57:41.289Z",
+    "wallClockMs": 84914756
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "commits": [
     {
@@ -246,5 +249,9 @@
     "moe-vscode/tests/plan-review.test.cjs",
     "moe-vscode/src/panels/PlanReviewPanel.ts",
     "moe-vscode/tests/settings-wire.test.cjs"
-  ]
+  ],
+  "completedAt": "2026-10-27T14:57:41.289Z",
+  "reviewCompletedAt": "2026-10-27T14:57:41.289Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 82aa4ee (in task.commits, on moe/work-2026-10-24; owned files match the working tree).\n\nRe-ran `cd moe-vscode && npm test && npm run compile`: exit 0, 165 pass / 0 fail / 0 skipped, tsc 0. The count is above the worker's 160 only because peer tests landed since. All 17 I2 plan-review tests and 9 settings-wire tests are green.\n\nRED proof: with the pre-fix PlanReviewPanel.ts restored in a scratch copy, plan-review.test.cjs gave 50 tests, 39 pass, 11 fail. The 11 are the mismatch table, the unusable-revision table and the late-error case, as planned.\n\nDoD 1: every approve route sends the rendered token (grep of moe-vscode/src+media): TaskDetailPanel approveRendered, BoardViewProvider.approveTask, PlanReviewPanel. BoardViewProvider refuses a tokenless AWAITING_APPROVAL->WORKING move. No new route. PlanReviewPanel success now needs WORKING at the SAME revision (absent=0, malformed never coerced), checked on every state event before the debounce. Other revisions warn and latch.\n\nDoD 2: settings-wire.test.cjs runs the real client, SettingsPanel and settings.js. It pins UPDATE_SETTINGS to the six form keys, CONTROL as the no-project default, and bad delays sent as 2000. I read the assertions but did not re-run the worker's mutant proof.\n\nDoD 3/4: full suite and tsc green; output reproduced.\n\nSize 381 net lines (41+9+133+198), under the 400 cap. No existing test weakened. VS Code-only change, mid-epic; rails respected.\n\nNon-blocking: SettingsPanel still shows 'Settings saved.' when the send fails; the architect flagged it as a separate bug for the governor.",
+  "requiredCheckAtDone": null
 }
