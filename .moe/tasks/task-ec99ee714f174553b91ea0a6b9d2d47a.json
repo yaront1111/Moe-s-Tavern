@@ -87,7 +87,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,16 +103,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T16:00:32.070Z",
-  "updatedAt": "2026-10-27T14:09:17.810Z",
+  "updatedAt": "2026-10-27T15:01:24.613Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:08:32.296Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-27T15:01:24.613Z",
+    "wallClockMs": 21172317
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -220,5 +223,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-27T14:01:30Z",
     "at": "2026-10-27T14:09:17.810Z"
-  }
+  },
+  "completedAt": "2026-10-27T15:01:24.613Z",
+  "reviewCompletedAt": "2026-10-27T15:01:24.613Z",
+  "reviewSummary": "Reviewed completion 80e1a55: on moe/work-2026-10-24 and pushed. The 6 task files are blob-identical at branch HEAD ede2abe. Non-board diff is +36/-17. No candidate is recorded.\n\nRe-ran task.verification in a fresh Linux snapshot of ede2abe (native node_modules, lock equal modulo CR, env -i, node v24.21.0): `cd packages/moe-daemon && npx vitest run src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts src/util/executionContractDocs.test.ts src/util/daemonGitDocs.test.ts src/util/taskTimeBudgetDocs.test.ts` → EXIT=0, 5 files, 52/52 passed. A fresh `npm run generate-skill-files` is cmp-identical to the committed skillFiles.ts.\n\nDoD:\n(1) SCHEMA Epic.finalTaskId's rule matches policy.ts isEpicFinalTask: valid only for an existing, same-epic, non-ARCHIVED task, else the highest order among non-ARCHIVED tasks, ties counting. The validation bullet matches validators.ts and updateEpic.ts assertDesignatable. The qualityGateScope comment and the CONFIGURATION row are updated.\n(2) epic-breakdown says to designate right after create_task and to re-designate when the epic grows.\n(3) qa-loop and regression-check read get_context task.isEpicFinal; \"no epic reads true\" matches policy.ts:212. A grep finds no stale \"compare order\" wording.\n(4) skillFiles.ts changes only the 3 edited entries, and the test is green.\n\nNo CRLF. MCP_SERVER.md and moe-planning are untouched. The rail's test requirement is met by the existing skill and doc-pin tests (docs-only). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
