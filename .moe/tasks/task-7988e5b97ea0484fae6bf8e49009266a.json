@@ -1,0 +1,35 @@
+{
+  "id": "task-7988e5b97ea0484fae6bf8e49009266a",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10a] Signal-safe guest job teardown",
+  "description": "This row was split from CQ-R10 (task-e6411b76f42a43c5b679c725947336af) on 2026-10-27, with the operator's approval in the architect REPL. R10 keeps its full DoD as the final slice and now depends on this row and on R09. The source is R08's handoff (comment-aafb4bc0 on R10): a SIGTERM, SIGHUP or SIGKILL sent to guest-supervisor.py skips relay()'s finally, so the job's start_new_session group survives. This was seen locally as a job orphaned under init.\n\nObjective: relay() in scripts/local-runner/guest-supervisor.py must never leave its job running when the supervisor itself is terminated.\n- Catchable signals (SIGTERM, SIGHUP, SIGINT) delivered during relay() take the existing teardown path:\n  - SIGKILL the job's whole session group while the unreaped leader still pins its id;\n  - reap the leader;\n  - close the bridge, so no agent socket or connection outlives the job;\n  - write no observation frame;\n  - exit with ONE new, fixed exit code, documented in the header's exit-code list.\n- An uncatchable SIGKILL of the supervisor must still end every process of the job's session within a few seconds, through a guest-side mechanism chosen at planning. Candidates, none binding:\n  - a stdlib guard process that holds a pipe from the supervisor and acts on its EOF;\n  - prctl PR_SET_PDEATHSIG (via ctypes) on a stdlib job leader;\n  - a per-job cgroup v2 with cgroup.kill.\n- Constraints on that mechanism:\n  - Standard library only: the guest has python3 and no Node.\n  - The supervisor runs as root under sudo -n, but the tests run unprivileged, so the mechanism must be provable without root.\n  - Never signal a reused pid or pgid: kill a group only while a live or unreaped member pins its id.\n  - A normal relay completion must not trigger the SIGKILL path.\n\nDeliverable:\n- changes to scripts/local-runner/guest-supervisor.py;\n- real-process tests appended to scripts/tests/local-runner-bridge.test.mjs (S-series). Follow Serena gotcha-local-runner-supervisor-tests and decision-guest-supervisor-relay: the python3 -I -B importlib harness, the after() cleanup, timeouts on each test, and Linux-only rows that skip elsewhere with a reason.\n\nNOT in scope; these stay with R10 final or R11:\n- the job table, and main()'s fail-closed EX_CONFIG (78);\n- running the job as moe-agent, or any privilege drop;\n- provider credentials;\n- attempt workspaces (R09);\n- the session identity;\n- killing lingering descendants after a NORMAL job exit (that is R10 lifecycle policy);\n- host-side kill-and-verify termination evidence in guest-session.mjs (it needs a job reference from the job table).\nbridgeArgv, the frame protocol and every existing exit code (0/64/71/74/76/77/78) keep their meaning.\n\nVerification (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs, on a POSIX host with python3 >= 3.10. Under WSL, run env -i with the nvm Node 24 PATH, per the gotcha memory.",
+  "definitionOfDone": [
+    "During relay(), SIGTERM, SIGHUP and SIGINT sent to the supervisor each SIGKILL and reap the job's whole session group (including a grandchild that ignores SIGTERM), leave no agent socket or connection behind, write no observation frame, and exit with one new documented code; one real-process test per signal proves it.",
+    "A SIGKILL of the supervisor leaves no process of the job's session alive within 5 seconds, proven by a Linux real-process test whose job has a grandchild (the row skips off Linux with a reason); a normal relay completion never triggers that kill path.",
+    "Signal dispositions are restored on every relay() exit path, SIGCHLD stays SIG_DFL, the file stays stdlib-only, main() still returns 78, and every existing test in scripts/tests/local-runner-bridge.test.mjs passes unchanged.",
+    "A fresh `node --test scripts/tests/local-runner-bridge.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7a77465621dc4d6588d5747394cb0ced"
+  ],
+  "priority": "HIGH",
+  "order": 0.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-27T14:09:37.141Z",
+  "updatedAt": "2026-10-27T14:09:37.141Z"
+}

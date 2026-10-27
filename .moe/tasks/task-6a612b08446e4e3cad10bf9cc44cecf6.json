@@ -14,8 +14,9 @@
     {
       "stepId": "step-1",
       "description": "Probe the live daemon, then designate CQ-F. This changes board data only: no code, no repo files, no new tests. The regression tests for the designation rule landed with task-cd2e4477 (updateEpic.test.ts, getContext.test.ts, and its frozen six-epic fixture). Use moe.update_epic only. Never edit .moe/epics/*.json or any other .moe file by hand.\n\n1. Gate check, read-only:\n- The dependsOn gate already holds this row until task-cd2e4477 is DONE.\n- The live daemon must also run a build that contains it (landing 4137865).\n- Look at your moe update_epic tool's input schema. As of 2026-10-27 09:15Z the live schema had NO finalTaskId property: the IDE-bundled build was still old.\n- If the property is missing, or the first call below fails with 'is not a supported epic update field', or a client-side schema validation refuses the key, nothing has been written.\n- In that case call moe.report_blocked with reason: 'live daemon lacks update_epic finalTaskId: a human must rebuild the JetBrains plugin from a commit containing 4137865 (task-cd2e4477) and restart the daemon'. Pass no blockedOnTaskIds, because the blocker is a human action, not a task. Then end the session. Do not retry in a loop, and do not route around it with a hand edit.\n- scripts/moe-call.sh update_epic '<json>' is an acceptable route to the same moe.update_epic tool when only the CLI-side schema is stale. It is never a way past an old daemon.\n\n2. Record the CQ-F epic's current title, description, epicRails, status and order, using moe.get_context on task-72184c6505cc41e8b6066732011ffb70 (its epic block) or the update response. You will use these for the step-4 drift check.\n\n3. Call moe.update_epic { epicId: 'epic-5d9f6c0a3b0a4a6882d2a74387a3f56d', finalTaskId: 'task-72184c6505cc41e8b6066732011ffb70' } ([CQ-F12]).\n\n4. Error handling:\n- Success requires the response's epic.finalTaskId to equal the id.\n- An 'Invalid finalTaskId: …' refusal (no such task, another epic, or ARCHIVED) means the board moved since planning. Stop and report_blocked naming the refusal. Never substitute a different task without a human.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-10-27T14:09:22.564Z"
     },
     {
       "stepId": "step-2",
@@ -36,8 +37,8 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 2,
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -53,14 +54,15 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T16:00:42.739Z",
-  "updatedAt": "2026-10-27T09:15:39.565Z",
+  "updatedAt": "2026-10-27T14:09:30.102Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:11:12.195Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 0
   },
   "contextFetchedBy": [
-    "architect-4c57a52b"
+    "architect-4c57a52b",
+    "worker-7d158765"
   ],
   "tier": "standard",
   "effort": "high",
@@ -80,5 +82,10 @@
       "scripts/moe-call.sh"
     ]
   },
-  "planApprovedAt": "2026-10-27T09:15:39.565Z"
+  "planApprovedAt": "2026-10-27T09:15:39.565Z",
+  "workStartedAt": "2026-10-27T14:09:22.564Z",
+  "blockedReason": "live daemon lacks update_epic finalTaskId: a human must rebuild the JetBrains plugin from a commit containing 4137865 (task-cd2e4477) and restart the daemon. Probe via scripts/moe-call.sh update_epic returned '[INVALID_INPUT] Invalid finalTaskId: is not a supported epic update field'; nothing was written.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-27T14:09:30.102Z"
 }

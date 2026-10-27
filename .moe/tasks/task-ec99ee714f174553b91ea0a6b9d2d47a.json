@@ -103,7 +103,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T16:00:32.070Z",
-  "updatedAt": "2026-10-27T14:08:07.231Z",
+  "updatedAt": "2026-10-27T14:09:17.810Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:08:32.296Z",
     "plannedStepCount": 5,
@@ -160,7 +160,65 @@
     "docs/skills/moe-epic-breakdown/SKILL.md",
     "docs/skills/moe-qa-loop/SKILL.md",
     "docs/skills/regression-check/SKILL.md",
-    "packages/moe-daemon/src/generated/skillFiles.ts"
+    "packages/moe-daemon/src/generated/skillFiles.ts",
+    ".moe/tasks/task-685d8a8e6e5d42d2bf68db4d791de972.json",
+    ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+    ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+    ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
+    ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json",
+    ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json"
   ],
-  "completionSummary": "The docs now name the epic-final designation (Epic.finalTaskId, set with moe.update_epic) everywhere the old highest-order-only rule appeared.\n\n- docs/SCHEMA.md:\n  - The Epic shape gains `finalTaskId?: string` after `order`, with the rule: set or cleared with update_epic ('' clears). It counts only while it names an existing, non-ARCHIVED task of the same epic. Otherwise isEpicFinal falls back to the highest order among the epic's non-ARCHIVED tasks, ties counting. Optional, so old epic files load unchanged.\n  - The qualityGateScope comment names the designated final task with that fallback.\n  - Validation Rules > Epic gains a finalTaskId bullet: max 200 chars, trimmed, '' clears; update_epic refuses no-task, other-epic or ARCHIVED ids before any write.\n- docs/CONFIGURATION.md: only the qualityGateScope row changed. It now names the task get_context reports as isEpicFinal: finalTaskId, else the highest order among non-ARCHIVED tasks.\n- moe-epic-breakdown: designate the hardening task with update_epic { epicId, finalTaskId } right after create_task, and re-designate it if the epic grows past it. 'at the highest `order`' is kept.\n- moe-qa-loop and regression-check: a task's position comes from get_context task.isEpicFinal, not from list_tasks plus order. The self-review fixed a wording bug: under the fallback, a drag DOES move the flag; only the designation is drag-proof.\n- packages/moe-daemon/src/generated/skillFiles.ts was regenerated with `npm run generate-skill-files` only, never build or hand edits. The diff against HEAD changes only the 3 edited skills' entries (text plus sha).\n\nTested root: Linux snapshot /tmp/moe-ec99-gate.vgsS8a, a git archive of base 5787844 with the 6 final files cmp-verified, and native node_modules. Result: 5 files, 52 tests passed, 0 failed, exit 0. HEAD later moved to 8dca342 (task-9a9b46d8), which touches neither docs/ nor packages/moe-daemon, so the result holds.\n\nUntouched: docs/MCP_SERVER.md, the moe-planning skill (task-cd2e4477's)"
+  "completionSummary": "The docs now name the epic-final designation (Epic.finalTaskId, set with moe.update_epic) everywhere the old highest-order-only rule appeared.\n\n- docs/SCHEMA.md:\n  - The Epic shape gains `finalTaskId?: string` after `order`, with the rule: set or cleared with update_epic ('' clears). It counts only while it names an existing, non-ARCHIVED task of the same epic. Otherwise isEpicFinal falls back to the highest order among the epic's non-ARCHIVED tasks, ties counting. Optional, so old epic files load unchanged.\n  - The qualityGateScope comment names the designated final task with that fallback.\n  - Validation Rules > Epic gains a finalTaskId bullet: max 200 chars, trimmed, '' clears; update_epic refuses no-task, other-epic or ARCHIVED ids before any write.\n- docs/CONFIGURATION.md: only the qualityGateScope row changed. It now names the task get_context reports as isEpicFinal: finalTaskId, else the highest order among non-ARCHIVED tasks.\n- moe-epic-breakdown: designate the hardening task with update_epic { epicId, finalTaskId } right after create_task, and re-designate it if the epic grows past it. 'at the highest `order`' is kept.\n- moe-qa-loop and regression-check: a task's position comes from get_context task.isEpicFinal, not from list_tasks plus order. The self-review fixed a wording bug: under the fallback, a drag DOES move the flag; only the designation is drag-proof.\n- packages/moe-daemon/src/generated/skillFiles.ts was regenerated with `npm run generate-skill-files` only, never build or hand edits. The diff against HEAD changes only the 3 edited skills' entries (text plus sha).\n\nTested root: Linux snapshot /tmp/moe-ec99-gate.vgsS8a, a git archive of base 5787844 with the 6 final files cmp-verified, and native node_modules. Result: 5 files, 52 tests passed, 0 failed, exit 0. HEAD later moved to 8dca342 (task-9a9b46d8), which touches neither docs/ nor packages/moe-daemon, so the result holds.\n\nUntouched: docs/MCP_SERVER.md, the moe-planning skill (task-cd2e4477's)",
+  "commits": [
+    {
+      "sha": "80e1a55a1aec90ecb8873c2968911539df34d7b9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-3729a0d6@2026-10-27T14:01:30Z",
+      "paths": [
+        ".moe/tasks/task-685d8a8e6e5d42d2bf68db4d791de972.json",
+        ".moe/tasks/task-938653f9a7334f369ab74c49239ecbf3.json",
+        ".moe/tasks/task-9a9b46d88ff244759570c323ac3a67a4.json",
+        ".moe/tasks/task-ad0dc2e7557d4ceca42ce7fab3708942.json",
+        ".moe/tasks/task-e57d1d20d1854e2cae44eaea9fee584e.json",
+        ".moe/tasks/task-ec99ee714f174553b91ea0a6b9d2d47a.json",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "docs/skills/moe-epic-breakdown/SKILL.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "docs/skills/regression-check/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "recordedBy": "worker-3729a0d6",
+      "recordedAt": "2026-10-27T14:09:17.810Z",
+      "treeId": "9c57be0f7aff02810b210c1aa29548cacef87330",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/CONFIGURATION.md",
+          "taskId": "task-bdf6db6f65b04a009c88c1e49aed3848"
+        },
+        {
+          "path": "docs/SCHEMA.md",
+          "taskId": "task-6b607b1278914531a75bfe16decf3199"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "docs/SCHEMA.md",
+    "docs/CONFIGURATION.md",
+    "docs/skills/moe-epic-breakdown/SKILL.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "docs/skills/regression-check/SKILL.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-3729a0d6@2026-10-27T14:01:30Z",
+    "at": "2026-10-27T14:09:17.810Z"
+  }
 }
