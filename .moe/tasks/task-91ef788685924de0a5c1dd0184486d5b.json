@@ -74,7 +74,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,12 +94,14 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:06.687Z",
-  "updatedAt": "2026-10-27T14:17:06.194Z",
+  "updatedAt": "2026-10-27T15:48:51.338Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:07:11.469Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:48:51.338Z",
+    "wallClockMs": 6099869
   },
   "tier": "standard",
   "effort": "high",
@@ -127,7 +129,8 @@
   },
   "planApprovedAt": "2026-10-27T14:09:31.169Z",
   "contextFetchedBy": [
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "workStartedAt": "2026-10-27T14:11:16.349Z",
   "reviewStartedAt": "2026-10-27T14:14:10.828Z",
@@ -179,5 +182,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-27T14:09:52Z",
     "at": "2026-10-27T14:15:53.089Z"
-  }
+  },
+  "completedAt": "2026-10-27T15:48:51.338Z",
+  "reviewCompletedAt": "2026-10-27T15:48:51.338Z",
+  "reviewSummary": "Reviewed completion commit c006918b (on moe/work-2026-10-24; 5 source/test paths, +154 net non-board LOC, well under the 400 cap). Diff read: new util/daemonJsonFile.ts readDaemonJsonText opens one fd, allocates one 65537-byte buffer, loops readSync until EOF or full, closes in finally (including on throw), and throws DaemonJsonTooLargeError (no file content) above 65536. index.ts readDaemonInfo and doctor.ts probeDaemonJson both use it; oversize gives null / '[FAIL] daemon.json: daemon.json is larger than 64 KiB; not read'. No deletion or kill for size alone. Grep of daemon src finds no remaining whole-file daemon.json reads. Re-ran verification myself in a Linux snapshot of HEAD (5ac3eea, five owned files cmp-identical to c006918b, node v24.21.0, env -i): npx tsc --noEmit OK; npm test EXIT=0, 170 files, 4361 passed, 16 skipped. Discrimination check against the pre-fix index.ts and doctor.ts, using only the boundary and 8 MiB cases via -t (the /dev/zero case deliberately excluded per the architect note): 4 RED (readDaemonInfo 65536/65537, bounded-read, stopDaemon-keeps-oversize, doctor 65537 fail), and the doctor 65536 case passes pre-fix as expected. DoD: (1) 65536 parses, 65537 null, pinned as literals; (2) doctor fails naming 64 KiB, marker not echoed, 65536 still [OK]; (3) readFileSync never called on daemon.json and readSync total <= 65537 on an 8 MiB file, plus a /dev/zero symlink returns null promptly on POSIX; (4) fresh gate exit 0. Not exercised: the JetBrains reader and the other clients (sibling rows); a FIFO daemon.json would block on open (noted residual; git cannot commit one).",
+  "requiredCheckAtDone": null
 }
