@@ -63,7 +63,7 @@
     }
   ],
   "planRevision": 10,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -79,17 +79,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T17:11:20.389Z",
-  "updatedAt": "2026-10-27T15:21:43.761Z",
+  "updatedAt": "2026-10-27T15:24:48.412Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:24:59.646Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-27T15:24:48.412Z",
+    "wallClockMs": 21588766
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
     "architect-4c57a52b",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "tier": "standard",
   "effort": "high",
@@ -157,5 +160,9 @@
     "kind": "completion",
     "sessionId": "worker-3729a0d6@2026-10-27T15:19:05Z",
     "at": "2026-10-27T15:21:43.760Z"
-  }
+  },
+  "completedAt": "2026-10-27T15:24:48.412Z",
+  "reviewCompletedAt": "2026-10-27T15:24:48.412Z",
+  "reviewSummary": "Reviewed completion commit 0891a4e (on moe/work-2026-10-24; git show + branch --contains). Product diff: 2 files, ~75 net LOC (MoeDaemonSupervisor.kt +10/-1, test +65), under 400.\n\nDoD1: readDaemonInfo reads file.inputStream().use{readNBytes(MAX+1)}, MAX=64 KiB. Oversize -> fixed warn (no content) + null, file kept, bounded by stream not File.length() (a lying size cannot defeat it). No profile branch: applies to LEGACY and PROTECTED. Delete-on-other-project and catch->null unchanged. grep: readDaemonInfo is the only daemon.json reader (getDaemonInfo delegates; other hits only delete).\n\nDoD2: 3 new tests: exact MAX parses (port/pid/path asserted) and MAX+1 returns null with file kept (valid-JSON prefix + padding, so a read-MAX-then-parse bug would fail), both under both profiles; sparse >2GiB file returns null (regular MAX+1 fallback, never skipped). Exact assertions; additions only, no existing test weakened.\n\nDoD3: re-ran under jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& gradlew.bat test --rerun\" in moe-jetbrains -> exit 0, BUILD SUCCESSFUL; fresh XML: 21 classes, 309 tests, 0 failures/errors/skipped; all 7 readDaemonInfo cases pass. This is Windows evidence via cmd.exe, not POSIX ./gradlew (WSL has no JDK), the gate the plan and c42dd646 QA accepted.\n\nNot done: I did not re-run the RED mutation (revert to readText) in the shared tree; relied on the worker's recorded RED (cap+1 AssertionError, sparse OutOfMemoryError) and the test design.\n\nResiduals out of scope (per plan): daemon, proxy and wrapper also read daemon.json uncapped; a FIFO at that path could block open(). No ponytail findings.",
+  "requiredCheckAtDone": null
 }

@@ -83,7 +83,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T14:09:37.141Z",
-  "updatedAt": "2026-10-27T15:22:53.358Z",
+  "updatedAt": "2026-10-27T15:24:23.122Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:33:08.434Z",
     "plannedStepCount": 4,
@@ -129,7 +129,44 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/local-runner/guest-supervisor.py",
+    ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+    ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+    ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json",
+    ".moe/tasks/task-aa79a8ebd51d4eedb08c3662dfe8b490.json"
+  ],
+  "completionSummary": "CQ-R10a: relay() never leaves its job running when the supervisor is terminated.\nguest-supervisor.py (+108/-9): the job runs under GUARD, an inline stdlib `python3 -I -B` session leader running it in its group and exiting with its status (signals re-raised, no core). Life-pipe EOF (supervisor died unreaped) makes GUARD killpg(0, SIGKILL) [DoD2]; a stand-down byte after pump EOF means a normal completion never kills the group. relay() installs and restores TERM/HUP/INT handlers around the new run_bridge(); Termination raises only inside wait() (pump's select, the start-pipe reads), so the existing finally SIGKILLs and reaps the group and closes the bridge, no observation is written, and relay returns new code 75 (EX_TEMPFAIL, documented) [DoD1]. Frames, bridgeArgv, codes 0/64/71/74/76/77/78, SIGCHLD reset, main()=78 unchanged.\nPlan-code deviations, test-pinned: (1) the stand-down write catches BrokenPipeError: a job SIGKILLing its own group kills GUARD too; plan code exited 74 in 10/20 runs vs legacy SIGKILL 20/20 (S13). (2) GUARD's pre-re-raise reset catches OSError: glibc refuses sigaction on 32/33, so plan code observed SIG32 as exit 1 (S14); SIG33 remains exit 161.\nTests (+141/-2, only imports changed; no existing test touched): S9 x3 (grandchild ignores SIGTERM; exit 75, socket gone, no observation), S10 (SIGKILLed supervisor: session empty within 5 s, Linux), S11, S12 (dispositions restored on every path, SIGCHLD SIG_DFL, stdlib-only), S13, S14. RED before GREEN; 9/9 scratch mutants killed.\nFresh verification after the last edit: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs -> exit 0, 43/43 pass (35 old + 8 new), node v24.21.0; no __pycache__, no leftovers.\nResiduals (step-4 note): a signal in wait()'s pre-syscall window waits for the next fd event; pre-R10 the same-uid job can kill GUARD (R10's privilege drop fixes it); setsid descendants escape.",
+  "commits": [
+    {
+      "sha": "32da7f75aadcfe6405a153dac5634b49dfdc657c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-7d158765@2026-10-27T14:53:00Z",
+      "paths": [
+        ".moe/tasks/task-6b607b1278914531a75bfe16decf3199.json",
+        ".moe/tasks/task-6f5032015e1947c0a7ba143a1c1f7709.json",
+        ".moe/tasks/task-7988e5b97ea0484fae6bf8e49009266a.json",
+        ".moe/tasks/task-aa79a8ebd51d4eedb08c3662dfe8b490.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-7d158765",
+      "recordedAt": "2026-10-27T15:24:23.122Z",
+      "treeId": "5ce624fda552e00266e4aca09629588b61e1954c",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bridge.test.mjs",
     "scripts/local-runner/guest-supervisor.py"
   ],
-  "completionSummary": "CQ-R10a: relay() never leaves its job running when the supervisor is terminated.\nguest-supervisor.py (+108/-9): the job runs under GUARD, an inline stdlib `python3 -I -B` session leader running it in its group and exiting with its status (signals re-raised, no core). Life-pipe EOF (supervisor died unreaped) makes GUARD killpg(0, SIGKILL) [DoD2]; a stand-down byte after pump EOF means a normal completion never kills the group. relay() installs and restores TERM/HUP/INT handlers around the new run_bridge(); Termination raises only inside wait() (pump's select, the start-pipe reads), so the existing finally SIGKILLs and reaps the group and closes the bridge, no observation is written, and relay returns new code 75 (EX_TEMPFAIL, documented) [DoD1]. Frames, bridgeArgv, codes 0/64/71/74/76/77/78, SIGCHLD reset, main()=78 unchanged.\nPlan-code deviations, test-pinned: (1) the stand-down write catches BrokenPipeError: a job SIGKILLing its own group kills GUARD too; plan code exited 74 in 10/20 runs vs legacy SIGKILL 20/20 (S13). (2) GUARD's pre-re-raise reset catches OSError: glibc refuses sigaction on 32/33, so plan code observed SIG32 as exit 1 (S14); SIG33 remains exit 161.\nTests (+141/-2, only imports changed; no existing test touched): S9 x3 (grandchild ignores SIGTERM; exit 75, socket gone, no observation), S10 (SIGKILLed supervisor: session empty within 5 s, Linux), S11, S12 (dispositions restored on every path, SIGCHLD SIG_DFL, stdlib-only), S13, S14. RED before GREEN; 9/9 scratch mutants killed.\nFresh verification after the last edit: env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs -> exit 0, 43/43 pass (35 old + 8 new), node v24.21.0; no __pycache__, no leftovers.\nResiduals (step-4 note): a signal in wait()'s pre-syscall window waits for the next fd event; pre-R10 the same-uid job can kill GUARD (R10's privilege drop fixes it); setsid descendants escape."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-7d158765@2026-10-27T14:53:00Z",
+    "at": "2026-10-27T15:24:23.122Z"
+  }
 }
