@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 13,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,16 +121,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:51:12.686Z",
-  "updatedAt": "2026-10-27T13:42:26.664Z",
+  "updatedAt": "2026-10-27T14:01:37.519Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:22:43.932Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 10,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-27T14:01:37.518Z",
+    "wallClockMs": 81533586
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-3729a0d6"
+    "worker-3729a0d6",
+    "qa-6fa5d758"
   ],
   "commits": [
     {
@@ -289,5 +292,9 @@
     "packages/moe-daemon/src/state/validators.ts",
     "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/tools/getContext.ts"
-  ]
+  ],
+  "completedAt": "2026-10-27T14:01:37.518Z",
+  "reviewCompletedAt": "2026-10-27T14:01:37.518Z",
+  "reviewSummary": "Reviewed completion 4137865 (on moe/work-2026-10-24, pushed): 9 non-board files, +303/-27 (net 276). Plus this task's docs/MCP_SERVER.md hunks (~+14/-3), which are NOT in 4137865 (Moe-Contested trailer, as the architect's comment said). They landed on the same branch in 201d5ab, task-9a9b46d8's completion from the same worker, carried under its contested trailer. I verified the get_context epic.finalTaskId?, the isEpicFinal rule, the create_epic note, update_epic finalTaskId and the 3 Invalid finalTaskId errors at `git grep moe/work-2026-10-24`. Bytes delivered, attributed to a peer commit; no record_commit repair, since 201d5ab is not this task's commit.\nDoD1: getContext.test covers an UPDATE_TASK order drag, set_task_status + end-of-column order, reorderTask (5.5) and create_task (6.5); the designated row stays final. An undesignated control shows drift.\nDoD2: the 84-row CQ fixture reproduces the bug before designation; after it, F12/R13/V12/C11/I06/M06 are true and every sibling false. Fallback (missing/other-epic/ARCHIVED/null/number designation, clear) is deterministic and documented.\nDoD3: getContext's inline copy is deleted and it calls policy.isEpicFinalTask; the qaApprove pin test passes. The moe-planning SKILL and regenerated skillFiles.ts change only the moe-planning entry and sha.\nDoD4: snapshot of branch HEAD cf96fd3 with Linux node_modules, MOE_* scrubbed. `npx tsc --noEmit` exit 0. `cd packages/moe-daemon && npm test` exit 0: 170 files, 4343 passed / 16 skipped. The first run had 1 failure, accounts/cli.test.ts 'claude cannot be found'. That is environmental: the WSL PATH has an unreadable entry, so spawnSync returns EACCES rather than ENOENT (reproduced with node -e; accounts/ is untouched since before this task). It is green with a clean PATH.\nMutation: disabling the designation branch fails the DoD1, clear and CQ tests.\nNotes, non-blocking: the epic projection echoes a dangling finalTaskId. Live CQ designations are follow-up task-6a612b08.",
+  "requiredCheckAtDone": null
 }

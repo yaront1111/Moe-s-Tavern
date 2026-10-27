@@ -93,18 +93,32 @@
       "author": "architect-1520cc31",
       "content": "Exploration of the next launcher task found scripts/tests/postflight.sh:3716 also asserts a Codex override tail ending MOE_WORKER_ID=\"worker-scope-z\"}}. Keep the new type entry before MOE_WORKER_ID when runner keys are absent so the existing tail remains valid, rather than widening this task to edit postflight. Its runtime contract should not require worker-type insertion after workerId. I will serialize this task's wrapper edits behind the currently planned live-assignee guard to avoid collisions.",
       "timestamp": "2026-10-26T15:36:53.811Z"
+    },
+    {
+      "id": "comment-425252d2ceb846449a799cf479548799",
+      "author": "architect-2c9d5121",
+      "content": "Planner note from the proxy prerequisite task-eb85340bf5ee4bde84ca8658a0ca0cd2 (plan submitted 2026-10-27; it is in WORKING, gated on task-0b40957c).\n(1) Proxy contract this task builds against: MOE_WORKER_TYPE is added as workerType only to claim_next_task and join_team. It covers every spelling and also calls that carry an explicit workerId (moe_rpc pre-flight frames). A key the caller already set wins, a blank value means unset, and the value is forwarded verbatim. Batches and tools/list are not touched.\n(2) Docs gap for your final sweep. The root CLAUDE.md moe-proxy package row lists what the proxy injects. The prerequisite cannot edit it (not an owned file), so after it lands that row does not mention workerType. Please add it alongside docs/CONFIGURATION.md, or say why not.\n(3) Proxy gate hazard, verified today: the global npm moe-proxy is a symlink to this checkout's packages/moe-proxy, and live WSL seats run its dist. Run (cd packages/moe-proxy && npm test) only in a git-archive snapshot with a native npm ci, never in place; the clean step deletes dist. See Serena mem gotcha-proxy-npm-test-shared-checkout-deletes-dist.",
+      "timestamp": "2026-10-27T08:59:05.867Z"
+    },
+    {
+      "id": "comment-6b2a83592354410f89fc66dab28515f6",
+      "author": "architect-4c57a52b",
+      "content": "Contract fixed by the daemon prerequisite task-0b40957c (plan rev 1). Step-4's integration test must expect these:\n(1) Absent or blank MOE_WORKER_TYPE: the proxy sends no workerType key. A NEW seat then registers as CLAUDE, but an EXISTING seat keeps its recorded type and nothing is written. So test \"absent → CLAUDE\" on a fresh seat only.\n(2) Any supplied value outside exactly CLAUDE/CODEX/GEMINI/GROK is recorded as CLAUDE.\n(3) Relaunching under a different CLI refreshes the type on the next join_team, and on the next claim_next_task that passes input validation. That includes alreadyAssigned and no-work answers. Task, status, membership and lastActivityAt stay unchanged.\n(4) chat_who entries gain `type` on every source (cursor, waiting, both). list_workers already returns it.\ndocs/MCP_SERVER.md documents the daemon field only. MOE_WORKER_TYPE wording is left to the proxy README (eb85340b) and CONFIGURATION.md (this task).",
+      "timestamp": "2026-10-27T09:01:52.316Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:15:36.235Z",
-  "updatedAt": "2026-10-26T15:38:19.213Z",
+  "updatedAt": "2026-10-27T09:01:52.316Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:22:30.034Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-1520cc31"
+    "architect-1520cc31",
+    "architect-2c9d5121",
+    "architect-4c57a52b"
   ],
   "dependsOn": [
     "task-0b40957cd116453aa76965059743fefb",
