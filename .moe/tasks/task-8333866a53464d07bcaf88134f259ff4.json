@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -105,11 +105,17 @@
       "author": "worker-7d158765",
       "content": "Reopen 1 (size-only reject): filed prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL on epic-be924fb8, PENDING) and pinged #governors (msg-b04eeb1d6ae94f43b3b4931c5b2ff1c7). I re-measured the numstat for 81dff6d + f75f57b, non-board: +550/-38 = net 512 (runtime+docs 73, tests 439), the same per-file numbers QA reported. Own paths at HEAD c006918: six are byte-identical to f75f57b, and none are dirty in the worktree. Peer commit 201d5ab touched docs/MCP_SERVER.md and postflight-fake-proxy.js; I checked that this task's hunks (the join_team sentence and the fake join_team answer) are still present at HEAD. There are no byte changes this round. Next: a fresh gate, then complete_task.",
       "timestamp": "2026-10-27T14:19:32.557Z"
+    },
+    {
+      "id": "comment-449273b8f719444fa1de1c27b4d27c86",
+      "author": "qa-6fa5d758",
+      "content": "QA round 2 (qa-6fa5d758): substance is green again. The row is parked only because the size waiver is still PENDING.\n- Size: I re-measured the non-board numstat of 81dff6d + f75f57b: +550/-38 = net 512 (runtime+docs 73, tests 439). It matches the per-file list in prop-4b703e3f7b534b57974e0a54311efe9f exactly. 8158c25 carries board JSON only (0 non-board lines). allRails.epic has no rail for this row, and the proposal file still reads status PENDING, resolvedBy null.\n- Bytes: at HEAD b83d638 the 6 owned paths are byte-identical to f75f57b. docs/MCP_SERVER.md and scripts/tests/postflight-fake-proxy.js were changed only by peer commit 201d5ab: both f75f57b..201d5ab^ and 201d5ab..HEAD are empty on those paths. This task's join_team sentence and fake join_team answer are intact. No owned path is dirty.\n- Gate: run on a pure git archive of HEAD b83d638 from Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset (envleft=0), node v24.16.0, pwsh 7.6.9, PS 5.1.26100. It ran the task's verification command and gave GATE_EXIT=0 in 152 s:\n  - seat-registration 57/57 (1 ordering, 18 Git Bash, 19 PS 5.1, 19 PS 7, parser checks included, 0 skipped)\n  - parity PASS, tsc clean\n  - vitest 170 files: 4358 passed, 19 skipped; joinTeam.notification 7/7\n  - Log: D:\\tmp\\q8333-r2b-scripts\\gate.log. The snapshot was removed junction-first; the shared node_modules is intact.\n- Review: DoD 1-3 hold. The reply's sender is the seat id. The cursor moves to the mention id and the second read excludes it. The regression tests cover the daemon and all 3 shells.\n  - A seat launched without --team is unaffected, because TEAM falls back to the role team in both launchers.\n  - A healthy member's forced re-join each pre-flight is a no-op on the daemon side: addTeamMember returns early, writes nothing and logs no activity.\n- Next QA: once the rail is in allRails.epic, cmp the owned paths again, re-run the gate, and approve naming net 512. If the human REJECTS the waiver, the route is a review-scope split of the landed bytes (mem:decision-size-only-reject-of-landed-bytes), not a third proposal.",
+      "timestamp": "2026-10-27T14:54:10.607Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T13:13:17.758Z",
-  "updatedAt": "2026-10-27T14:29:14.332Z",
+  "updatedAt": "2026-10-27T14:54:17.066Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:40:37.561Z",
     "plannedStepCount": 6,
@@ -287,5 +293,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "QA park from REVIEW: substance PASSES, only the human size-waiver decision is outstanding. The non-board diff of checkpoint 81dff6d + completion f75f57b is +550/-38 = net 512 (runtime+docs 73, tests 439), over the 400 net-LOC review cap, and allRails.epic has no exception for this row. The worker filed prop-4b703e3f7b534b57974e0a54311efe9f (EPIC ADD_RAIL on epic-be924fb8); its file still reads status PENDING, resolvedBy null, and only a human can resolve it in the IDE. Not rejecting again: no DoD item failed and no code change is wanted, so a reject would only burn a reopen.\nFresh evidence (QA round 2): pure git archive of HEAD b83d638, Windows Git Bash, LC_ALL=C, MOE_*/CLAUDE* unset: GATE_EXIT=0. seat-registration 57/57 on Git Bash, PS 5.1 and PS 7; parity PASS; tsc clean; vitest 170 files, 4358 passed, 19 skipped. Owned bytes equal f75f57b except peer 201d5ab hunks in docs/MCP_SERVER.md and postflight-fake-proxy.js. Full evidence is in the row's latest comment.\nRoute: on APPROVED, a governor runs set_task_status REVIEW, and QA approves naming net 512 after a fresh gate. On REJECTED, set_task_status PLANNING for a review-scope split of the landed bytes (never re-implement).",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-27T14:54:17.066Z"
 }
