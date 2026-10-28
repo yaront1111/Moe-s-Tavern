@@ -85,7 +85,7 @@ dependencies {
     intellijPlatform {
         intellijIdea("2026.2.3")
     }
-    implementation("com.google.code.gson:gson:2.14.0")
+    implementation("com.google.code.gson:gson:2.15.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
     testImplementation("junit:junit:4.13.2")
 }
