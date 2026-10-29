@@ -1,0 +1,35 @@
+{
+  "id": "task-90847011452544dc868039ff435b018b",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d] Guest agent CLI runtime and MCP route",
+  "description": "Gap found while planning CQ-R10 (2026-10-29), filed for a human decision.\n\nThe guest image ships python3 and no Node or agent CLI. No CQ-R task installs a coding/QA CLI, and none gives a CLI an MCP route to the CQ-R08c agent socket (/run/moe/agent.sock), whose protocol is length-prefixed bridge frames, not MCP. CQ-R10 (with R10b and R10c) proves its lifecycle DoD with fake CLIs. CQ-R13 needs this row to certify real isolated agents.\n\nObjective: make the CQ-R10b job table runnable with real CLIs:\n- Pinned Linux claude and codex binaries at /opt/moe/agents/<cli>:\n  - root:root 0555, never agent-writable;\n  - sha256-pinned next to the image pins (certified-provider.json style);\n  - copied in without trusting the network on first use, e.g. a copy-only supervisor stream like R09c materialize, or a pinned bootstrap step;\n  - readiness reports a hash mismatch.\n- A stdlib MCP stdio shim the CLI spawns as its only MCP server. It serves initialize, tools/list and tools/call, maps them onto bridge request frames over the agent socket for exactly the role's guest-bridge.mjs TOOLS allowlist (MOE_ROLE), and uses bounded frames and fixed errors.\n- The per-session MCP config written into the session home.\n- Each CLI's fixed headless argv and per-role prompt in JOBS. There is never a resume or continue flag; the prompt starts the agent with moe.get_context.\n\nExpect a SPIDR split when planned: binaries and their pinning; the shim; argv and prompt.\n\nOut of scope: lifecycle, leases and termination (R10 final), certification on hardware (R13), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs",
+  "definitionOfDone": [
+    "Each CLI binary is verified against its pinned sha256 before install, installed root-owned and not agent-writable, and a mismatch fails closed.",
+    "The shim reaches Moe only through the agent socket, and only for the role's allowlisted tools. Frames are bounded and errors are fixed codes.",
+    "A guest job starts the CLI headless in the workspace with no resume or continue flag. Its MCP config names only the shim.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7f928d96060341f382d37cf5e22f7d53"
+  ],
+  "priority": "HIGH",
+  "order": 0.8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T12:06:53.451Z",
+  "updatedAt": "2026-10-29T12:06:53.451Z"
+}

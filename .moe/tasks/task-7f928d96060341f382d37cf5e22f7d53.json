@@ -1,0 +1,36 @@
+{
+  "id": "task-7f928d96060341f382d37cf5e22f7d53",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10b] Guest agent job start",
+  "description": "Objective: replace guest-supervisor.py main()'s bridge EX_CONFIG (78) with a fixed job table. A root `moe-supervisor bridge` session then runs one agent CLI job as the unprivileged moe-agent, in the materialized attempt workspace, with exactly one scoped provider credential, a fresh session home and nothing inherited.\n\nSplit from CQ-R10 (task-e6411b76f42a43c5b679c725947336af) on 2026-10-29, as its reopen reason authorized (SPIDR, like R10a). R10 final consumes this contract. CQ-R10c (host side) must stay in step with it.\n\nContract:\n- Job frame. Before writing hello, main(['bridge']) reads exactly one host frame from stdin (fd 0). Read it byte-exact: the 4-byte header, then the body, with no over-read, because later stdin bytes are relay()'s response frames. Shape, with exact keys at both levels: {\"kind\":\"job\",\"version\":1,\"cli\":\"claude\"|\"codex\",\"role\":\"worker\"|\"qa\",\"credential\":{\"name\":<allowed for cli>,\"value\":<1-4096 chars of [\\x21-\\x7e]>}}. UTF-8 JSON object, at most MAX_HOST_FRAME_BYTES.\n- JOBS, a constant table:\n  - claude: /opt/moe/agents/claude, credential ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN;\n  - codex: /opt/moe/agents/codex, credential OPENAI_API_KEY or CODEX_API_KEY.\n  argv is [executable] only. CLI flags, prompt, MCP wiring and installing the binaries belong to CQ-R10d. Nothing from the frame reaches argv.\n- New exit codes; no frame is written on any of them:\n  - 65 (EX_DATAERR): a malformed or disallowed job frame.\n  - 66 (EX_NOINPUT): no materialized workspace (WORKSPACE missing, not a directory, or not owned by the agent uid).\n  - 74: host EOF before a whole job frame.\n  Existing codes keep their meaning. Update the header comment; 78 is retired for bridge.\n- Session home: create a fresh one per job under /var/lib/moe/sessions (root-owned parent, mkdtemp 0700, owned by moe-agent). Never reuse a home. Earlier homes are kept as artifacts, never deleted.\n- Job environment, exactly:\n  - PATH (a constant);\n  - HOME (the fresh home);\n  - USER and LOGNAME (moe-agent);\n  - LANG=C.UTF-8;\n  - MOE_ROLE (the role);\n  - the one credential variable.\n  Nothing is inherited from sudo or root.\n- Privilege:\n  - GUARD stays root, because it pins and kills the group (R10a).\n  - On Linux GUARD sets PR_SET_NO_NEW_PRIVS through ctypes, failing closed if it cannot. It spawns the job as the moe-agent uid/gid with no supplementary groups, umask 077 and cwd WORKSPACE.\n  - The credential travels only through GUARD's environment (root-only /proc/<pid>/environ), never argv or a file.\n- Compatibility:\n  - relay() keeps working without a job spec for every existing caller: S1-S17, I1-I7 and H1-H5 stay byte-identical.\n  - main() routes bridge with AGENT_SOCKET and the real identity.\n  - Tests inject paths and identity only through Python keyword parameters (the materialize owner= / geteuid= seam), never argv or env.\n  - Non-root tests cannot call setgroups, so pin main()'s real identity (no supplementary groups) with a recorder test, as R09c's M1 does.\n\nScope: scripts/local-runner/guest-supervisor.py and scripts/tests/local-runner-bridge.test.mjs only. Stdlib only, LF line endings, python3 -I -B in every test load (mem gotcha-local-runner-supervisor-tests). Out of scope: host JS, CLI installation, the MCP shim, and any verified-local or isolation claim. Target at most 400 changed lines by git diff --numstat; no size exception exists.\n\nIt depends on R09 final (task-0dd1cce2) because both edit guest-supervisor.py main().\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "Each of these exits 65: a malformed or extra-key job frame, an oversize one, a disallowed cli, role or credential name, or a credential value with a control or space character. Host EOF before the frame exits 74. A missing or foreign-owned workspace exits 66. Tests show that none of them writes a frame or starts a job.",
+    "The started job's environment is exactly the allowlist plus the one credential, its cwd is the workspace and its umask is 077. On Linux, /proc/self/status shows NoNewPrivs 1. The credential is absent from the /proc/<pid>/cmdline of the supervisor, GUARD and the job. All shown by tests.",
+    "A recorder test with geteuid=lambda: 0 shows main() routing bridge to relay with the real moe-agent identity, no supplementary groups, AGENT_SOCKET and the job table's executable. Tests show each run gets a fresh 0700 session home and earlier homes are kept.",
+    "Every pre-existing B, S, I and H test is byte-identical and passes. The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-7988e5b97ea0484fae6bf8e49009266a"
+  ],
+  "priority": "HIGH",
+  "order": 0.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T12:06:24.217Z",
+  "updatedAt": "2026-10-29T12:06:24.217Z"
+}

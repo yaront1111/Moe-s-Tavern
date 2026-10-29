@@ -1,0 +1,35 @@
+{
+  "id": "task-3b70b82401b6455896dfa139e85b5ca8",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10c] Host job frame and verified guest job termination",
+  "description": "Objective: the host bridge session sends CQ-R10b's job frame, and the host can prove with fixed probes that no moe-agent process is left in the owned guest. This is R08's handoff item 2: a local kill of `multipass exec` is not evidence that the guest job ended.\n\nSplit from CQ-R10 (task-e6411b76f42a43c5b679c725947336af) on 2026-10-29. R10 final consumes this contract.\n\nContract:\n- guest-bridge.mjs exports:\n  - AGENT_JOBS: cli -> its allowed credential names. It mirrors guest-supervisor.py JOBS, and a drift test pins the equality.\n  - jobFrame({cli, role, credential}): returns the exact CQ-R10b frame bytes through encodeFrame: {kind:'job', version:1, cli, role, credential:{name, value}}, exact keys, value 1-4096 chars of [\\x21-\\x7e]. A refusal uses a fixed BRIDGE_* code and never echoes the credential.\n- guest-session.mjs runGuestSession:\n  - gains a required job: {cli, credential:{name, value}}; the role comes from the frozen binding;\n  - writes the job frame as the FIRST bytes on the provider's stdin, right after spawn and before any response, bounded by timeoutMs like every other write;\n  - refuses invalid job input before spawn with SESSION_INPUT_INVALID.\n  The credential never appears in argv, spawn options or env, an error, onOutput, or any other provider call. Existing H1-H5 call sites get the new input and nothing else. No assertion is weakened.\n- guest-session.mjs exports endAgentJobs(name, provider = {}, {rounds = 3, sleep, delayMs}), which resolves a frozen {verified: boolean}.\n  - It uses lifecycle.mjs invoker() (bounded execFile, shell:false).\n  - Each round runs `exec --no-map-working-directory <name> -- sudo -n pkill -KILL -U moe-agent`, then `exec --no-map-working-directory <name> -- sudo -n pgrep -U moe-agent`.\n  - verified is true only when pgrep exits exactly 1 (no process left). Exit 0 retries after delayMs. Any other code, provider error or timeout, or running out of rounds, gives verified false.\n  - The argv are fixed constants (JOB_IDENTITIES[0]). No other user, process or provider command is touched. It never claims termination it did not observe.\n\nScope: scripts/local-runner/guest-bridge.mjs, scripts/local-runner/guest-session.mjs and scripts/tests/local-runner-bridge.test.mjs. Out of scope: the guest supervisor, ledger or lease handling, CLI installation, and any verified-local or isolation claim. Target at most 400 changed lines by git diff --numstat; no size exception exists.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "In every session the job frame is byte-exact and is the first write on stdin. Invalid job input refuses before spawn without echoing the credential. The credential is absent from argv, spawn options, errors and output. All shown by tests.",
+    "An end-to-end test runs the real supervisor through R10b's main() with injected paths and identity. The job starts with exactly the frame's credential and role in its environment, and a scoped get_context still carries only the host sessionId.",
+    "Tests with an injected run show endAgentJobs issuing only the fixed argv. It reports verified only on pgrep exit 1 and retries a still-present process. Any other code, a provider error or running out of rounds reports unverified.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7f928d96060341f382d37cf5e22f7d53"
+  ],
+  "priority": "HIGH",
+  "order": 0.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T12:06:39.556Z",
+  "updatedAt": "2026-10-29T12:06:39.556Z"
+}
