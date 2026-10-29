@@ -17,25 +17,38 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nThe producer is CQ-I03a (task-c0b0775f, a dependency): scripts/local-runner/vm-control.mjs. It is landed by WORKING time; adapt to its landed field names and codes, which planningNotes lists as assumed.\n\nCreate moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt (JUnit 4, headless), in the style of AccountPresentationTest.kt and DeliveryPresentationTest.kt. Keep it to about 130 lines, with parameterized tables and helpers. Assert exact keys, args, rows and action booleans; never truthiness.\n\nCases:\n- P1, readiness separation (DoD 1):\n  - a status report with provider.ready true and executionReady/verified false gives three distinct lines: PROVIDER_READY, EXECUTION_NOT_READY and NOT_VERIFIED;\n  - provider ready with executionReady or verified absent, null, \"true\" (a string) or 1 still gives EXECUTION_NOT_READY and NOT_VERIFIED. Only a literal JSON true counts, and provider readiness never implies either;\n  - provider not ready gives PROVIDER_NOT_READY with its code.\n- P2, owned only (DoD 2):\n  - rows equal the report's instances, in order, and nothing else;\n  - an instance name failing R06's owned-name shape (lifecycle.mjs OWNED_NAME_PREFIX plus its random suffix), or a duplicated name, makes the WHOLE report Unreadable, failing closed;\n  - ManagedVmCommand.args(command) is exactly [script, 'status'|'reconcile'|'cleanup', '--project', basePath]. The API has no instance parameter at all.\n- P3, actions:\n  - refresh is enabled whenever nothing runs;\n  - reconcile and cleanup only when the last status was readable with provider ready, and cleanup only with at least 1 instance;\n  - every action is disabled while a run is in flight (single flight);\n  - an Unreadable state allows only refresh.\n- P4, strong profile (DoD 3): for EVERY report, including one claiming executionReady:true and verified:true, strongProfile is Blocked(STRONG_PROFILE_BLOCKED). ManagedVmActions holds exactly refresh, reconcile and cleanup: no activation entry.\n- P5, report and refusal mapping:\n  - a cleanup report renders deleted, preserved (each with its reason) and errors (each with its fixed code);\n  - each known code maps to its key, with the code as an arg;\n  - an unknown code maps to UNKNOWN_CODE plus the code;\n  - non-JSON, more than one line, more than 64 KiB, an unknown schema, a nonzero exit or a timeout give Unreadable(key), never the raw text or stderr.\n\nRun `cd moe-jetbrains && ./gradlew test --tests com.moe.toolwindow.ManagedVmPresentationTest`. It fails before step 2 exists (use the Windows equivalent of step 4 if WSL has no JDK).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt"
+      ],
+      "note": "RED: ManagedVmPresentationTest (7 tests: P1-P5 + bundle-key check) written against the LANDED I03a contract (vm-control.mjs ad8097f). Run in a git-archive HEAD snapshot (D:\\projexts\\moes-i03-snap) under the jetbrains-gradle lease, because the shared tree has an in-progress peer merge (MERGE_HEAD 2c306fbf, main into moe/work-2026-10-24) leaving conflict markers in moe-jetbrains/.../MoeDaemonSupervisor.kt + its test; not mine, untouched. `gradlew.bat test --tests com.moe.toolwindow.ManagedVmPresentationTest` -> exit 1, :compileTestKotlin FAILED, only \"Unresolved reference ManagedVmCommand/ManagedVmReport/ManagedVmKeys/ManagedVmPresentation\" (main sources compile). Adaptations to the landed producer: rows drop 'collision' (foreign VM) and 'deleted' phases per the I03a handoff; cleanup is enabled only when a LAUNCHED-phase row exists; Refused(code) report for top-level producer codes (LEDGER_UNREADABLE, VM_CONTROL_FAILED, ...); decode takes the command so a schema mismatch is unreadable.",
+      "startedAt": "2026-10-29T20:16:21.090Z",
+      "completedAt": "2026-10-29T20:20:05.613Z"
     },
     {
       "stepId": "step-2",
       "description": "Create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt. It is pure, with no Swing and no IO, about 110 lines, and mirrors AccountPresentation.kt's shape.\n\n- `data class ManagedVmText(val key: String, val args: List<Any> = emptyList())`.\n- `data class ManagedVmRow(instance, phase, state, launchTries, taskId)`.\n- `data class ManagedVmActions(val refresh: Boolean, val reconcile: Boolean, val cleanup: Boolean)`.\n- `object ManagedVmKeys`, with every bundle key:\n  - TAB 'moe.tab.managedVms';\n  - PROVIDER_READY, PROVIDER_NOT_READY, EXECUTION_NOT_READY, EXECUTION_READY, NOT_VERIFIED, VERIFIED;\n  - STRONG_PROFILE_BLOCKED, UNREADABLE, UNKNOWN_CODE;\n  - one key per I03a code;\n  - the column and button keys.\n- `enum class ManagedVmCommand { STATUS, RECONCILE, CLEANUP }`, with `fun args(script: String, basePath: String): List<String>`. There is no instance parameter.\n- `sealed interface ManagedVmReport`: Status, Reconcile, Cleanup and Unreadable(key).\n- `object ManagedVmPresentation`:\n  - decode(stdout, exitCode, timedOut): Gson over a JsonReader with lenient parsing OFF;\n  - readiness(report): the three lines;\n  - strongProfile(report): always Blocked(STRONG_PROFILE_BLOCKED);\n  - rows(report);\n  - actions(lastStatus, running).\n\nError handling: decode never throws. Every malformed, foreign-named, duplicated, oversized, multi-line, unknown-schema, nonzero-exit or timed-out output is Unreadable with a fixed key. Raw stdout or stderr never reaches a ManagedVmText.\n\nThe KDoc states:\n- provider readiness is not execution readiness or verification;\n- the IDE never offers strong-profile activation, because the daemon refuses verified-local with EXECUTION_PROFILE_NOT_READY;\n- ownership is the producer's ledger, and the IDE never names an instance.\n\nMake P1-P5 pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "note": "GREEN: ManagedVmPresentation.kt (pure, no Swing/IO). decode(command, stdout, exit, timedOut) never throws: timed out/nonzero exit/>64KiB+1/multi-line/non-strict JSON/trailing data/schema mismatch/missing or mistyped field/unknown phase or state/bad taskId/lower-case code -> Unreadable(fixed key); foreign or repeated instance name anywhere in the report -> Unreadable(NOT_OWNED). JSON read via Gson TypeAdapter<JsonElement>.read on a fresh (non-lenient) JsonReader, avoiding Gson.fromJson/parseReader which force lenient and the Strictness API (absent from older platform Gson). Top-level producer code -> Refused(code). readiness = 3 lines (literal JSON true only); strongProfile always STRONG_PROFILE_BLOCKED; rows hide collision (foreign) and deleted; actions single-flight, cleanup only with a LAUNCHED row. MoeBundle.properties +53 lines moved forward from step 3 so the bundle-key test passes now (13 known codes, 4 preserve reasons, no HTML/single quotes). Snapshot run `gradlew.bat test --tests com.moe.toolwindow.ManagedVmPresentationTest` -> exit 0, BUILD SUCCESSFUL; XML: tests=7 failures=0 errors=0 skipped=0 @20:24:02Z.",
+      "startedAt": "2026-10-29T20:20:09.113Z",
+      "completedAt": "2026-10-29T20:24:18.217Z"
     },
     {
       "stepId": "step-3",
       "description": "The Swing tab and its wiring. Report every file in modifiedFiles.\n\n1. Create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt (about 90 lines, Disposable):\n   - three readiness labels and the strong-profile line;\n   - a JBTable of rows;\n   - Refresh, Reconcile and Clean up owned buttons, each enabled from ManagedVmPresentation.actions;\n   - a note area for the last report's preserved and errors entries.\n   Each button runs ManagedVmCommand through a Task.Backgroundable using the platform's CapturingProcessHandler(GeneralCommandLine(node + args).withCharset(UTF_8)).runProcessWithProgressIndicator(indicator, timeoutMs):\n   - timeoutMs is 120s for status and reconcile and 20 min for cleanup;\n   - cancellation kills the process;\n   - only stdout and the exit code reach decode; stderr is ignored;\n   - render on the EDT;\n   - single flight.\n   Clean up owned first shows a confirmation naming the producer's rule: only Moe-owned VMs whose attempt is closed and whose lease is free. Refresh runs once when the tab is shown.\n2. moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt: addTab(MoeBundle.message(ManagedVmKeys.TAB), managedVmPanel) after the Accounts tab, plus Disposer.register(this, managedVmPanel).\n3. moe-jetbrains/src/main/resources/messages/MoeBundle.properties: every ManagedVmKeys key, as plain text with no HTML, giving actionable wording. Example: 'Strong profile (verified-local) is unavailable: protected isolation, trusted runner evidence and revision-bound delivery are not certified.'\n4. The script path: make TerminalAgentLauncher.resolveBundledPath internal and call it with 'scripts/local-runner/vm-control.mjs', which build.gradle.kts already bundles under local-runner/**. A missing script shows UNREADABLE with SCRIPT_MISSING, and no process starts.\n5. node: resolve it exactly as MoeDaemonSupervisor does for the project's RuntimeSelectionPolicy profile, at about line 235. Reach the existing resolver through the project's supervisor instance if one is reachable; otherwise hoist resolveNodeExecutable into the companion without behavior change (MoeDaemonSupervisorTest stays green). If node is unresolved, show NODE_MISSING and start no process.\n\nError handling: every process failure renders a fixed key; nothing blocks the EDT; dispose cancels a running task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
         "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
@@ -44,23 +57,42 @@
       ],
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt"
+      ],
+      "note": "ManagedVmPanel.kt (Disposable): 3 readiness lines, the fixed strong-profile line, a JBTable (VM, phase, state, launch tries, task), Refresh/Reconcile/Clean up owned enabled from ManagedVmPresentation.actions, plus a note area (status notes + last action notes). run() re-checks actions(lastStatus, running), so it is single flight. A Task.Backgroundable does ALL IO off the EDT: the script via TerminalAgentLauncher.resolveBundledPath(\"scripts/local-runner/vm-control.mjs\") (now internal; SCRIPT_MISSING, no process), the profile via RuntimeSelectionPolicy.profile, and node exactly as the supervisor does (LEGACY resolveNodeExecutable(); PROTECTED resolveNodeExecutable(nodeOnProtectedPath) + installedExecutable Accepted, else NODE_MISSING). It runs ProcessBuilder(node + args) as an arg list, cwd = the script dir, stderr Redirect.DISCARD, protectedDaemonEnvironment under PROTECTED, through CapturingProcessHandler.runProcessWithProgressIndicator(progress, 120s or 20min). Cancel gives CANCELLED; IOException gives FAILED. Clean up asks for confirmation first. Each action is followed by a status refresh. Refresh runs once on first show (HierarchyListener). dispose cancels the indicator, and late results are dropped. MoeToolWindowPanel +3 (tab after Accounts + Disposer.register). DEVIATION: MoeDaemonSupervisor.kt is NOT edited. It holds a peer merge's conflict markers in the shared tree, and its internal resolver members are already reachable from a fresh no-side-effect instance, so no hoist was needed. Bundle +1 (column.tries). Compile fix: arrayOf<Any>. Snapshot `gradlew.bat test --tests ...ManagedVmPresentationTest` exit 0, 7/7 @20:27:45Z.",
+      "startedAt": "2026-10-29T20:24:19.160Z",
+      "completedAt": "2026-10-29T20:28:04.111Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail the named case:\n   - derive execution readiness from provider readiness: P1;\n   - accept a string \"true\": P1;\n   - add an instance argument to a command, or accept a foreign name: P2;\n   - enable cleanup while running: P3;\n   - let strongProfile follow report.verified: P4;\n   - put stderr or raw stdout into a message: P5.\n2. The GATE: `cd moe-jetbrains && ./gradlew test` must exit 0.\n   - WSL has no JDK. As CQ-I02's QA did, hold the 'jetbrains-gradle' lease (moe.acquire_resource, then release_resource) and run the Windows equivalent: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`.\n   - Supply both the pinned command and the one actually run.\n   - Read the result XMLs to confirm that ManagedVmPresentationTest ran, with its counts, and that no suite failed.\n3. Size: `git diff --numstat` over moe-jetbrains must be at most 400 net (QA cap; tests count).\n4. A red suite outside this task is compared against the same run on a tree WITHOUT this task's files. Never edit peer files.\n5. Supply the command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY (no byte changes in this step).\n(1) Mutants, applied to the snapshot copy by /tmp/i03-mut/run.py and restored after each (cmp identical=True): 8/8 killed, each by its named case only.\n- M1 exec-from-provider and M2 string \"true\": P1.\n- M3a instance-arg overload and M3b foreign name: P2.\n- M4 cleanup while running: P3.\n- M5 strongProfile follows verified: P4.\n- M6a raw code text into Refused and M6b raw stdout into Unreadable: P5.\nThe panel's stderr discard (Redirect.DISCARD) is not headless-testable; it is checked by review.\n(2) GATE. The pinned `cd moe-jetbrains && ./gradlew test` cannot run here: WSL has no JDK. The shared tree also cannot compile: it has a peer's unresolved merge (MERGE_HEAD 2c306fbf, main into moe/work-2026-10-24), with conflict markers in MoeDaemonSupervisor.kt and MoeDaemonSupervisorTest.kt, and its staged build.gradle.kts moves to IDEA 2026.2.3. So, under the jetbrains-gradle lease, I ran the Windows equivalent in a `git archive HEAD` snapshot, overlaid with exactly this task's 6 files (cmp-verified identical to the shared tree): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes-i03-snap\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. Result: exit 0, BUILD SUCCESSFUL. The XMLs, all stamped 20:29Z, show 22 suites and 316 tests with 0 failures, 0 errors and 0 skipped; ManagedVmPresentationTest has 7 tests, 0 fail.\n(3) SIZE: +617/-1, so 616 net, OVER the 400 cap. Per file: ManagedVmPresentation.kt +227, ManagedVmPanel.kt +179, ManagedVmPresentationTest.kt +153, MoeBundle.properties +54, MoeToolWindowPanel.kt +3, TerminalAgentLauncher.kt +1/-1. The plan's estimates (110/130/90) were low. Cutting further would drop requested refusal texts or decode guards. I will file an epic size-exception rail with the final numbers after step 5.\n(4) No red suite.",
+      "startedAt": "2026-10-29T20:28:04.958Z",
+      "completedAt": "2026-10-29T20:30:08.842Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as a user, or a buggy producer, trying to get the IDE to act on a VM Moe does not own or to suggest a strong profile it cannot run:\n- a foreign or duplicated name in the report;\n- a report that claims readiness or verification;\n- a double click, or a dispose mid-run;\n- a huge, hanging or stderr-flooding producer;\n- a missing script or node;\n- paths with spaces and Windows drive letters in GeneralCommandLine. Arguments are passed as a list, never through a shell;\n- whether the panel writes .moe or sends UPDATE_SETTINGS. It must do neither: I02's PlanApprovalContractTest pins UPDATE_SETTINGS to four keys.\nAlso check JetBrains threading (no EDT IO) and that every string comes from MoeBundle.\n\nThen write the Serena memory 'task-task-63930ba4a46344f9af3c41cfef60ae0d-handoff' for CQ-I05 (VS Code parity) and CQ-I06. Cover:\n- the presentation contract: keys, actions, the owned-name rule and Unreadable cases;\n- the process seam: CapturingProcessHandler, timeouts and single flight;\n- that I05 must mirror the same three readiness lines and the no-activation rule.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt"
+      ],
+      "note": "Adversarial self-review over this task's 6 paths.\nFIXED, real: a dispose before the background thread published its indicator left the run uncancelled, so a queued cleanup could outlive the project. Now disposed is @Volatile, run(progress) cancels itself when disposed is set, and execute starts no process once cancelled (+2 lines, +1 comment change). The full gate re-ran after the fix: compileKotlin executed, exit 0, 22 suites, 316 tests, 0 fail @20:31Z.\nCHECKED OK:\n- A foreign or duplicate name anywhere in a report makes it NOT_OWNED.\n- Readiness or verification claims never unblock the strong profile.\n- A double click or a dialog race re-checks actions and is refused.\n- A missing script or node starts no process.\n- Arguments are passed as a ProcessBuilder list, never through a shell. basePath uses forward slashes with no trailing backslash.\n- stderr is discarded by Redirect.DISCARD.\n- No .moe writes and no MoeProjectService or UPDATE_SETTINGS use.\n- No EDT IO: profile, script, node and the process all run in the Backgroundable.\n- UI prose comes from MoeBundle. Table cells are validated identifiers.\n- Gson nesting is limited, and its JsonElement adapter is iterative.\nRESIDUALS (theoretical, in the handoff):\n- Captured stdout is unbounded until the timeout; the producer caps it at 64 KiB.\n- A killed node may leave a multipass delete running; reconcile repairs it.\n- A WSL-mode bindHost of 0.0.0.0 preserves everything.\n- A Windows versus WSL ledger split matters for activation.\n- Gson keeps the last of duplicate keys.\n- Only headless tests ran, against IDEA 2025.2.\nSize rail prop-30944337eea941b7b76576c1aa0938c5 filed (EPIC ADD_RAIL, PENDING; final counts +619/-1, 618 net). #governors pinged, also about the shared-tree merge conflict. Serena handoff written.",
+      "startedAt": "2026-10-29T20:30:09.943Z",
+      "completedAt": "2026-10-29T20:33:06.576Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -73,7 +105,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:23.379Z",
-  "updatedAt": "2026-10-29T19:18:23.590Z",
+  "updatedAt": "2026-10-29T20:33:27.722Z",
   "dependsOn": [
     "task-df5384bf7fbd4b7ba3dedb43d7373ffa",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -83,11 +115,13 @@
   "metrics": {
     "firstClaimAt": "2026-10-26T09:31:27.237Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 7
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-26fd4d71",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-5ebbf433"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -102,7 +136,13 @@
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T19:18:23.503Z",
   "planningNotes": {
@@ -127,5 +167,23 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T19:18:23.590Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T20:16:21.090Z",
+  "reviewStartedAt": "2026-10-29T20:33:27.719Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes-i03-snap\\moe-jetbrains && .\\gradlew.bat test --rerun\" (Windows equivalent of the pinned `cd moe-jetbrains && ./gradlew test`: WSL has no JDK. It ran in a `git archive HEAD` snapshot overlaid with exactly this task's 6 files, cmp-identical to the shared tree, because the shared tree holds a peer's unresolved merge with conflict markers in MoeDaemonSupervisor.kt; held under the jetbrains-gradle lease, now released)",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\n> Task :compileTestKotlin UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 6s\n11 actionable tasks: 6 executed, 5 up-to-date\n--- result XMLs (all stamped 2026-10-29T20:31Z): 22 suites, 316 tests, 0 failures, 0 errors, 0 skipped; TEST-com.moe.toolwindow.ManagedVmPresentationTest.xml tests=7 failures=0 errors=0 skipped=0 timestamp=2026-10-29T20:31:45.945Z",
+    "reportedAt": "2026-10-29T20:33:27.719Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+  ],
+  "completionSummary": "CQ-I03 delivered (plan rev 1, 5/5 steps): a JetBrains 'Managed VMs' tab that consumes CQ-I03a's vm-control.mjs.\n- ManagedVmPresentation.kt is pure. decode(command, stdout, exit, timedOut) never throws.\n  - Unreadable(fixed key): timeout, nonzero exit, more than 64 KiB, more than one line, non-strict JSON, trailing data, schema/command mismatch, a bad field, phase or state, a bad code.\n  - Unreadable(NOT_OWNED): any foreign or repeated VM name.\n  - Refused(code): a top-level producer code.\n  - readiness() gives 3 separate lines (provider, execution, verification); only a literal JSON true counts.\n  - strongProfile() is always blocked. Actions are refresh, reconcile and cleanup only, single flight. Commands take no instance argument.\n  - Fixed refusal text for 13 codes and 4 preserve reasons.\n- ManagedVmPanel.kt: all IO runs in a Task.Backgroundable.\n  - It resolves the bundled script and resolves node exactly as the supervisor does per profile; under PROTECTED the env is scrubbed.\n  - ProcessBuilder(arg list, stderr DISCARD) runs through CapturingProcessHandler.runProcessWithProgressIndicator: 120 s, or 20 min for cleanup.\n  - Cleanup asks for confirmation. A refresh follows each action. dispose cancels the run. No .moe writes and no settings changes.\n- Wiring: MoeToolWindowPanel +3; TerminalAgentLauncher.resolveBundledPath made internal; MoeBundle +54. MoeDaemonSupervisor.kt is untouched, because it holds a peer's merge conflict.\nDoD: 1 P1 plus mutants M1/M2. 2 P2 plus M3a/M3b; the producer ledger is the only ownership source. 3 P4 plus M5; there is no activation entry. 4 Gate above. Mutants: 8/8 killed by their named cases.\nSIZE: +619/-1, 618 net, over the 400 cap. EPIC size-exception rail prop-30944337eea941b7b76576c1aa0938c5 filed, PENDING human; #governors pinged.\nResiduals: unbounded stdout capture until the timeout (the producer caps at 64 KiB); a killed node can leave a multipass delete running (reconcile repairs it); WSL bindHost 0.0.0.0 preserves everything"
 }

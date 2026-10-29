@@ -301,6 +301,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         val chatPanel = ChatPanel(project)
         val metricsPanel = MetricsPanel(project)
         val accountsPanel = AccountsPanel(project)
+        val managedVmPanel = ManagedVmPanel(project)
 
         val tabbedPane = JTabbedPane().apply {
             addTab(MoeBundle.message("moe.tab.board"), scroll)
@@ -309,6 +310,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
             addTab(MoeBundle.message("moe.tab.chat"), chatPanel)
             addTab(MoeBundle.message("moe.tab.metrics"), metricsPanel)
             addTab(MoeBundle.message(AccountKeys.TAB), accountsPanel)
+            addTab(MoeBundle.message(ManagedVmKeys.TAB), managedVmPanel)
         }
         accountsLabel.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
@@ -329,6 +331,7 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         Disposer.register(this, chatPanel)
         Disposer.register(this, metricsPanel)
         Disposer.register(this, accountsPanel)
+        Disposer.register(this, managedVmPanel)
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {

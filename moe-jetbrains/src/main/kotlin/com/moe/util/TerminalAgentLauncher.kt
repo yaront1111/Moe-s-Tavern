@@ -786,7 +786,7 @@ object TerminalAgentLauncher {
         return emptyMap()
     }
 
-    private fun resolveBundledPath(relative: String): File? {
+    internal fun resolveBundledPath(relative: String): File? {
         val root = resolveBundledRoot() ?: return null
         val candidate = File(root, relative)
         return if (candidate.exists()) candidate else null

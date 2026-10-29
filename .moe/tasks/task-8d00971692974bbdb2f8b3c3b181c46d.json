@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:31.065Z",
-  "updatedAt": "2026-10-29T20:16:12.264Z",
+  "updatedAt": "2026-10-29T20:16:57.947Z",
   "dependsOn": [
     "task-b23c65b0bb3548fc95d46973b9d589cb",
     "task-e6411b76f42a43c5b679c725947336af",
@@ -192,7 +192,8 @@
     "packages/moe-daemon/src/context/semanticSource.ts",
     "packages/moe-daemon/src/context/semanticSource.test.ts",
     ".moe/tasks/task-53daa94fa9d7405a831eb727eec803ac.json",
-    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json"
+    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+    ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json"
   ],
   "completionSummary": "CQ-C03 optional semantic provider: new packages/moe-daemon/src/context/semanticSource.ts (203 lines) and semanticSource.test.ts (197 lines, 33 tests), 400 net lines.\n\nAPI: readSemanticSource(projectRoot, commit, queries, options?) and validateSemanticRequest. Queries are symbol / references / overview, and the three allowlisted Serena read tools (SEMANTIC_TOOLS) answer them. SEMANTIC_LIMITS: 16 queries, 60 s budget (ceiling 120 s), 64 KiB per response, 256 KiB total. Out-of-range limits are refused, never clamped.\n\nHow it runs: it materializes the commit privately (C03a), deletes any committed .serena config, makes a private SERENA_HOME that links the shared language_servers cache, and opens the C03b read-only MCP session with an allowlisted env. Every step races the remaining budget. Cleanup runs in reverse on every exit.\n\nFailure handling: any absent analyzer (including a relative command), materialize failure, home failure, open failure, time budget, missing capability, schema mismatch, tool failure or internal error ends as 'unavailable' + inconclusive, carrying a C02 literal fallback at the same commit. A references fallback is unscoped so it finds every caller. Empty answers are served as returned, never rewritten into absence; the 'semantic-empty-not-absence' limitation is set whenever a session opened. Seams (materialize/open/fallback/launcher) stay public for C04, and args are built in a fixed key order.\n\nSelf-review fix: '.serena' is not a snapshot control segment, and Serena's ls_additional_workspace_folders is not trust-gated, so a committed project.yml could have pointed the language server at the mutable worktree. Fixed, with a RED mutant test and a real-Serena rerun.\n\nDoD:\n1. Absence is never implied (T2-T9, T12).\n2. The analyzer reads only the materialized commit: integration test with a real materializer, real client and a fake Serena, plus the real-Serena runs.\n3. No native knowledge DB: private home removed and ~/.serena config sha unchanged.\n4. G",
   "commits": [
@@ -213,6 +214,22 @@
       "treeId": "92422e5fe0830717a5ccb43cde257729e173dcfc",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "21d901c65ff29a996a4fe74a5fdbd92700865630",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T20:11:05Z",
+      "paths": [
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T20:16:57.947Z",
+      "treeId": "a779d7b4449f8f2cc24a361af3ac03626597fa6e",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -222,9 +239,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-29T19:31:57Z",
-    "at": "2026-10-29T20:03:32.988Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T20:11:05Z",
+    "at": "2026-10-29T20:16:57.947Z"
   },
   "completedAt": "2026-10-29T20:16:12.263Z",
   "reviewCompletedAt": "2026-10-29T20:16:12.263Z",
