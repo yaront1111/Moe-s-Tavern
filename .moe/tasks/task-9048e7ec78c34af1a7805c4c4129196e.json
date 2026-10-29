@@ -1,0 +1,35 @@
+{
+  "id": "task-9048e7ec78c34af1a7805c4c4129196e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11b] Guest check protected-path integrity",
+  "description": "Objective: a candidate check job cannot weaken or swap the protected check definitions it runs against (CQ-R11 DoD 1, \"cannot mutate protected definitions\"). The protected paths are the approved RequiredCheckSnapshot entries: the configs, scripts and assertionRoots of the task's ProtectedCheckDefinitions. They arrive as {path, oid} in CQ-R11a's check frame.\n\nSplit from CQ-R11 (task-0795112597cb453f93aaa5106e92d023) on 2026-10-29. It depends on CQ-R11a (task-37dd3edb), because both edit guest-supervisor.py's check mode and its tests. A worktree or ownership alone is not enough: a job that can rename a writable ancestor directory can swap a protected file and restore it before it exits.\n\nContract (scripts/local-runner/guest-supervisor.py check mode, for a NON-EMPTY protected list):\n- Before hello, each listed path must be a regular file, reached through directory fds without following a symlink. Its git blob oid, sha1 of b'blob <size>\\0' + bytes, must equal the frame's oid. A missing, non-regular or mismatched path exits a NEW fixed code with no frame and no job, documented in the header: the candidate does not carry the approved bytes.\n- Protected files stay root-owned with mode 0444 and are never re-owned to moe-check.\n- During the job, moe-check cannot write, replace, rename or remove a protected file, and cannot rename any of its ancestor directories. Production mechanism, set up by root GUARD on Linux and failing closed:\n  - a private mount namespace (os.unshare(os.CLONE_NEWNS), with mount propagation made private);\n  - a read-only bind mount of each protected file onto itself;\n  - a self bind mount of each ancestor directory, so it stays writable but cannot be renamed;\n  - mount(2) through ctypes.\n- After the job is reaped, every protected path is verified again. Any change ends the supervisor with a SECOND new fixed code, written after the observation frame; CQ-R11c classifies it as inconclusive.\n- CQ-R11a's 65 for a non-empty protected list is retired.\n\nTests in scripts/tests/local-runner-check.test.mjs:\n- non-root rows cover the oid verification and every fail-closed path;\n- a recorder pins the requested namespace and mounts;\n- a root-only real-process row proves EROFS/EBUSY on write, rename and unlink. It is skipped with a reason when not root; CQ-R13 certifies it on real guests.\n\nOut of scope: the host session (CQ-R11c), VM lifecycle (CQ-R11), the daemon's protectedEntries admission (CQ-V01c, already landed), toolchains, and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "A protected path that is missing, not a regular file, reached through a symlink, or whose git blob oid differs exits the new pre-run code before hello with no frame and no job. Shown by tests.",
+    "A recorder test pins that root GUARD requests a private mount namespace, a read-only self bind mount of every protected file and a self bind mount of each ancestor directory, failing closed; a root-only test proves write, rename and unlink are refused (skipped with a reason when not root).",
+    "After the job, any change to a protected path ends the supervisor with the second new code after the observation frame, and an unchanged run exits 0. Shown by tests.",
+    "Every pre-existing bridge and CQ-R11a test passes unchanged except the retired non-empty-protected 65 row, and the verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-37dd3edb921c42eca56efefb36832992"
+  ],
+  "priority": "HIGH",
+  "order": 105.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T13:27:10.200Z",
+  "updatedAt": "2026-10-29T13:27:10.200Z"
+}

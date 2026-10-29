@@ -1,0 +1,37 @@
+{
+  "id": "task-37dd3edb921c42eca56efefb36832992",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11a] Guest check job start",
+  "description": "Objective: add a root `moe-supervisor check` mode. It runs one approved check command as the unprivileged moe-check user, in the materialized workspace of a fresh check VM, under the boundaries CQ-R11d reports.\n\nSplit from CQ-R11 (task-0795112597cb453f93aaa5106e92d023) on 2026-10-29; the human chose one fresh owned VM per check. It reuses CQ-R10b's start_job machinery and must not duplicate it: byte-exact frame reading, session_home, relay(job=...), and GUARD's NoNewPrivs and Popen identity keywords. It depends on:\n- R10b (task-7f928d96) and R09 final (task-0dd1cce2), because all three edit guest-supervisor.py;\n- R11d (task-874aa17c), for its test file and CHECK_BOUNDARIES.\n\nContract (scripts/local-runner/guest-supervisor.py):\n- Frame. main(['check']) as root reads exactly one host frame before hello, byte-exact: {kind:'check', version:1, id, command, protected}, with exact keys. These mirror the daemon's validateRequiredChecks:\n  - id matches /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;\n  - command is a string of 1-1000 characters with no control character;\n  - protected is a list of at most 2000 {path, oid} entries with exact keys: path a normalized relative path, oid 40 lowercase hex.\n  Until CQ-R11b lands, a NON-EMPTY protected list exits 65 (fail closed).\n- Exit codes, writing no frame: 65 for a malformed frame or a non-file/non-directory workspace entry; 66 for no materialized workspace; 74 for EOF before the frame; 71 for no moe-check account or session home. A non-root euid stays 77.\n- Workspace: hand the WORKSPACE that R09c materialized (agent-owned) to moe-check by re-owning every entry through directory fds, never following a symlink.\n- The job is ['/bin/sh', '-c', command]. The command is the approved definition from the host, never candidate bytes. It runs as moe-check (JOB_IDENTITIES[1]) with:\n  - no supplementary groups, NoNewPrivs and umask 077;\n  - cwd WORKSPACE and a fresh 0700 session home;\n  - an environment of exactly PATH, HOME, USER, LOGNAME, LANG=C.UTF-8 and MOE_CHECK_ID;\n  - no agent socket;\n  - CQ-R11d's rlimits;\n  - on Linux as root, a private network namespace via os.unshare(os.CLONE_NEWNET) in GUARD, failing closed.\n- Non-root tests inject identity, and skip setgroups and the namespace, only through Python keyword seams. A recorder test pins the production values, as R10b's J3 does.\n- Tests go in scripts/tests/local-runner-check.test.mjs, with their own python3 -I -B importlib loader as R09c's PY_LOAD does. Every pre-existing bridge test must pass unchanged.\n\nOut of scope: protected-path verification and immutability (CQ-R11b), the host session (CQ-R11c), toolchains (CQ-R11e), VM lifecycle (CQ-R11), and any verified-local or isolation claim. Stdlib only, LF line endings, python3 -I -B in every test load.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "A malformed or disallowed check frame exits 65, EOF before it 74, a missing workspace 66, and a missing moe-check account or session home 71; none writes a frame or starts a job. A non-empty protected list exits 65 until CQ-R11b. Shown by tests.",
+    "A recorder test with geteuid=lambda: 0 shows main() routing check to relay with ['/bin/sh', '-c', command], the moe-check identity with no supplementary groups, no agent socket, the network-namespace request and CQ-R11d's rlimits.",
+    "On Linux a real check job runs with exactly the allowlisted environment, cwd WORKSPACE, umask 077, NoNewPrivs 1 and CQ-R11d's rlimits in /proc/self/limits, and the workspace is re-owned without following a planted symlink. Shown by tests.",
+    "A drift test pins the supervisor's enforced identity and rlimits to CQ-R11d's CHECK_BOUNDARIES. Every pre-existing bridge test passes unchanged, and the verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7f928d96060341f382d37cf5e22f7d53",
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-874aa17c4016492689f24138d04b71d0"
+  ],
+  "priority": "HIGH",
+  "order": 105.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T13:26:53.251Z",
+  "updatedAt": "2026-10-29T13:26:53.251Z"
+}

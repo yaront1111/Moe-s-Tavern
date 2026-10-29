@@ -85,12 +85,12 @@
     }
   ],
   "planRevision": 26,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE-ONLY REJECT. Substance passed; no code change is requested.\n\nMeasured with `git show --numstat --format= f107447` (board JSON excluded): packages joinTeam.ts +50/-4 (net 46), claimNextTask.ts +12/-3 (net 9), chatWho.ts +4, workerType.test.ts +432; docs/MCP_SERVER.md +11/-4 (net 7). Own net = 498 (66 runtime+docs, 432 tests), over the 400 cap. The epic's size rails name only task-7a0b1881, task-8333866a and task-9a9b46d8; task rails are empty, so no rail waives size for this row. Per the QA role rule, over-400 with no rail is a reject.\n\nVerified:\n- Gate (tsc --noEmit && npm test) in a Linux snapshot of a pure `git archive f107447`, env -i: exit 0, 171 files, 4418 passed, 16 skipped. workerType.test.ts 57/57; claimNextTask.test 68, .contract 49, .race 6, joinTeam.notification 7, all unedited.\n- The 5 owned blobs are identical at f107447, HEAD and the worktree. The completion is on moe/work-2026-10-24 and pushed.\n- All 5 DoD items map to code, tests and docs. The claim refresh sits after the statuses, identity and project checks and after assertAgentClaimableStatuses; join refreshes last; chat_who types all 3 branches.\n- Mutants, all killed: chat_who waiting branch without type (1), case-insensitive normalize (3), claim refresh before the status check (3).\n\nRoute (mem decision-size-only-reject-of-landed-bytes): do not re-slice landed bytes. Worker files moe.propose_rail, an EPIC ADD_RAIL: size exception for this task only, commit f107447, per-file counts above, runtime+docs 66 net / tests 432 net, grow only by QA-required fixes, under 1000 chars; ping #governors with the proposal id. Then re-run the gate with no byte change and call complete_task. QA approves once the human has APPROVED it.",
+  "reopenReason": "Human approved EPIC size waiver prop-3aea8953 (this row only, f107447, net 498) on 2026-10-29 13:22Z. The rail is now in epic-be924fb8 epicRails. Per QA r3's parked route: QA approves once it sees the rail in allRails.epic. The bytes stay unchanged.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-bdf6db6f65b04a009c88c1e49aed3848",
   "priority": "MEDIUM",
@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:28:17.007Z",
-  "updatedAt": "2026-10-29T13:01:54.136Z",
+  "updatedAt": "2026-10-29T13:22:27.545Z",
   "dependsOn": [
     "task-8333866a53464d07bcaf88134f259ff4"
   ],
@@ -234,6 +234,21 @@
       "treeId": "764a426badaaf00f7d9b380965cee9207c15865c",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "0887b9bdbe2eacf3fc7726f93dbb9b3b928ea6ad",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T12:54:38Z",
+      "paths": [
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T13:02:48.658Z",
+      "treeId": "58cacd75dc0dcdf727767abcc61110cc12c98e12",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -247,9 +262,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-29T12:39:35Z",
-    "at": "2026-10-29T12:53:58.079Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T12:54:38Z",
+    "at": "2026-10-29T13:02:48.658Z"
   },
   "workStartedAt": "2026-10-27T17:30:31.781Z",
   "declaredFiles": [
@@ -298,8 +313,10 @@
       ]
     }
   ],
-  "blockedReason": "Size waiver pending. Human proposal prop-3aea89536f004d529d67e8820b933d03 (EPIC ADD_RAIL, a size exception for this row) is still PENDING. No epic or task rail waives the 400 net-LOC review cap for this row: own net 498 (runtime+docs 66, tests 432), completion f107447. Substance passes again (QA r3, 2026-10-29):\n- bytes unchanged: the 5 owned paths are identical at f107447, HEAD a2441f5 and the worktree, and c4d8f20 is board-only;\n- fresh gate on a pure git archive of HEAD a2441f5 (env -i, node 24.21.0): tsc 0 errors; vitest 172 files, 4536 passed, 16 skipped; exit 0;\n- DoD 1-5 verified;\n- 4 of 5 QA mutants killed; the survivor behaves the same on every successful join.\nNot a code defect; no change requested. Route back is manual, nothing auto-unblocks:\n- APPROVED: set_task_status REVIEW. QA approves once the rail is in allRails.epic.\n- REJECTED: set_task_status PLANNING to re-slice.\nFull evidence is in the QA r3 comment.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-29T13:01:54.136Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Size waiver pending. Human proposal prop-3aea89536f004d529d67e8820b933d03 (EPIC ADD_RAIL, a size exception for this row) is still PENDING. No epic or task rail waives the 400 net-LOC review cap for this row: own net 498 (runtime+docs 66, tests 432), completion f107447. Substance passes again (QA r3, 2026-10-29):\n- bytes unchanged: the 5 owned paths are identical at f107447, HEAD a2441f5 and the worktree, and c4d8f20 is board-only;\n- fresh gate on a pure git archive of HEAD a2441f5 (env -i, node 24.21.0): tsc 0 errors; vitest 172 files, 4536 passed, 16 skipped; exit 0;\n- DoD 1-5 verified;\n- 4 of 5 QA mutants killed; the survivor behaves the same on every successful join.\nNot a code defect; no change requested. Route back is manual, nothing auto-unblocks:\n- APPROVED: set_task_status REVIEW. QA approves once the rail is in allRails.epic.\n- REJECTED: set_task_status PLANNING to re-slice.\nFull evidence is in the QA r3 comment.",
+  "blockedOnTaskIds": null
 }

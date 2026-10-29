@@ -1,0 +1,35 @@
+{
+  "id": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e] Guest check toolchain",
+  "description": "Gap found while splitting CQ-R11 (2026-10-29). Filed for a human decision, like CQ-R10d.\n\nThe pinned Ubuntu 24.04 guest ships python3 but no Node, npm or project dependencies. A fresh check VM therefore cannot run this repository's real checks, e.g. `cd packages/moe-daemon && npm test`. CQ-R11a-d and CQ-R11 prove the check lifecycle with python3 stdlib check commands. CQ-R13 needs this row to certify real checks.\n\nObjective: a fresh check VM can run a project's approved check commands with a pinned toolchain and the candidate's locked dependencies, without trusting the network for code identity. Options to decide:\n- a pinned toolchain bundle (node and npm) copied in root-owned 0555 and sha256-pinned next to the image pins, e.g. a copy-only supervisor stream like R09c materialize;\n- a separate, network-enabled dependency install phase from the candidate's lockfile, run before the network-namespaced check, with its own outcome. A failed install is infra-failure, never code-failure;\n- vendored or offline dependency caches.\nWhatever is chosen becomes part of CQ-R11d's environment identity (a toolchain digest input), so a toolchain change requires new evidence.\n\nExpect a SPIDR split when planned: the toolchain bundle and its pinning; the dependency phase; and their identity inputs.\n\nOut of scope: the check mode itself (CQ-R11a/b), the session (CQ-R11c), the lifecycle (CQ-R11), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs",
+  "definitionOfDone": [
+    "The toolchain is verified against its pinned sha256 before install and installed root-owned, not writable by job identities; a mismatch fails closed.",
+    "Dependencies reach the check only through the decided, bounded path. A failed dependency phase is reported as infra-failure, never as code-failure or passed.",
+    "The toolchain identity is an input of CQ-R11d's checkEnvironment, so a toolchain change makes earlier evidence stale. Shown by tests.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-37dd3edb921c42eca56efefb36832992"
+  ],
+  "priority": "HIGH",
+  "order": 105.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T13:27:38.551Z",
+  "updatedAt": "2026-10-29T13:27:38.551Z"
+}

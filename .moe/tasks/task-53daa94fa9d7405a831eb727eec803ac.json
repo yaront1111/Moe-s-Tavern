@@ -1,0 +1,36 @@
+{
+  "id": "task-53daa94fa9d7405a831eb727eec803ac",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11c] Host check session and outcome",
+  "description": "Objective: the host runs one check in a guest through `multipass exec ... moe-supervisor check`. It sends the approved check frame first and classifies how the check ended into the daemon's CheckOutcome values, with a bounded output tail. It never yields 'passed' without a clean observation.\n\nSplit from CQ-R11 (task-0795112597cb453f93aaa5106e92d023) on 2026-10-29. It depends on:\n- CQ-R10c (task-3b70b824), because both edit guest-bridge.mjs;\n- CQ-R11b (task-9048e7ec), for the supervisor check mode and its exit codes, which the end-to-end test drives.\n\nContract:\n- scripts/local-runner/guest-bridge.mjs:\n  - checkArgv(name) = ['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, 'check'], frozen, for owned instance names only;\n  - checkFrame({id, command, protected}) returns the exact CQ-R11a frame bytes. It applies the same id, command and protected rules and refuses with a fixed BRIDGE_* code.\n- A new scripts/local-runner/check-session.mjs: runCheckSession({name, check, provider, budgetMs, timeoutMs, signal}).\n  - It validates every input before spawn, then spawns checkArgv and writes the check frame as the first stdin bytes.\n  - It accepts only hello, output and exactly one observation. A request frame ends the session, because a check job has no Moe route. Reuse guest-bridge's decoder and parseGuestFrame.\n  - It keeps at most the last 16384 UTF-8 bytes of combined output, cut on a character boundary (CheckRun.outputTail's rule).\n  - budgetMs is the host's wall-clock budget. When it fires, the session closes stdin (the supervisor kills and reaps the group), then kills the local provider after timeoutMs.\n  - It resolves a frozen {outcome, exitCode, signal, outputTail}, where outcome is:\n    - 'passed': observation code 0 and supervisor exit 0;\n    - 'code-failure': a nonzero code or a signal;\n    - 'inconclusive': CQ-R11b's post-run protected-change code;\n    - 'skipped': CQ-R11b's pre-run protected mismatch;\n    - 'timeout': the budget fired;\n    - 'infra-failure': spawn, protocol, provider or other supervisor failures.\n  - A local kill is never evidence that the guest job ended.\n- Tests in scripts/tests/local-runner-check.test.mjs: fake-provider rows for every outcome and refusal, and an end-to-end row through the real supervisor's check mode with injected Python seams (python3 -I -B).\n\nOut of scope: VM lifecycle and deletion (CQ-R11), environment identity (CQ-R11d), the daemon's ingestion (CQ-V03), dispatch (CQ-V04), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "The check frame is the first stdin write and byte-exact, invalid check input refuses before spawn with a fixed code, and checkArgv is fixed and accepts owned names only. Shown by tests.",
+    "Each outcome (passed, code-failure, inconclusive, skipped, timeout, infra-failure) arises only from its condition, and a request frame, a missing observation or a nonzero supervisor exit never yields passed. Shown by tests.",
+    "outputTail keeps at most the last 16384 UTF-8 bytes, starting on a whole character. Shown by tests.",
+    "An end-to-end test runs the real supervisor's check mode and gets 'passed' and 'code-failure' from real exit codes. The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3b70b82401b6455896dfa139e85b5ca8",
+    "task-9048e7ec78c34af1a7805c4c4129196e"
+  ],
+  "priority": "HIGH",
+  "order": 105.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T13:27:28.562Z",
+  "updatedAt": "2026-10-29T13:27:28.562Z"
+}

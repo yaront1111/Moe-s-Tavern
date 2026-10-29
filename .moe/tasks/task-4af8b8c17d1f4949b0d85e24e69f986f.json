@@ -130,7 +130,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T16:55:14.489Z",
-  "updatedAt": "2026-10-29T13:26:15.402Z",
+  "updatedAt": "2026-10-29T13:27:23.702Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:03:21.357Z",
     "plannedStepCount": 6,
@@ -192,7 +192,9 @@
     "scripts/local-runner/guest-supervisor.py",
     ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
     ".moe/tasks/task-eb85340bf5ee4bde84ca8658a0ca0cd2.json",
-    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json"
+    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+    ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json",
+    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
   ],
   "completionSummary": "CQ-R09c delivered. The new scripts/local-runner/snapshot-transfer.mjs provides:\n- workspaceEntries (base files merged with overlay replace/add/delete, re-sealed by validateImport);\n- snapshotArgv (frozen `multipass exec --no-map-working-directory <owned> -- sudo -n <supervisor> materialize|export`);\n- assertNoMounts (R07 mountFailure, now exported from guest-readiness.mjs);\n- hostFrames (header, per-file frame plus 1 MiB base64 data frames, end);\n- runSupervisorStream: shell:false, backpressured stdin, single-settle, SIGKILL on any failure, fixed TRANSFER_* codes;\n- materializeSnapshot: mounts checked before and after, exactly one {kind:'materialized',digest} matching the host digest; returns executionReady:false.\n\nguest-supervisor.py gains a root-only 'materialize' mode. It reads strict frames, creates files dir-fd-relative with O_NOFOLLOW/O_EXCL into a 0700 mkdtemp staging tree, accepts only canonical base64, checks totals, recomputes the R09a digest from the written bytes, writes a 0600 manifest, then renames into place. Exit codes: 65 bad stream, 73 existing, 74 I/O. Failure cleanup leaves no staging, workspace or manifest. The R10a bridge code is untouched.\n\nDoD mapping:\n1. Provider calls recorded (T2/T4/T6/T7).\n2. Mounts checked before and after; no spawn on refusal (T3/T5).\n3. Cross-language digest; wrong, missing or repeated frame and nonzero exit refused (M2/M3/T6).\n4. Traversal, absolute, empty and duplicate paths, symlink and existing workspace refused, nothing left behind (M3/M4).\n5. Gate exits 0: 279 tests, 278 pass, 1 skip.\n\nSelf-review fixed a rename-before-manifest ordering bug and a partial manifest on fsync failure. A 28-mutant sweep in scratch copies killed 28/28 (added an M1 root-routing row).\n\nSize: 703 changed lines (+696/-7) against a plan estimate of ~490. Size rail proposal prop-be47d22cbb414b8f9506a6818178e845 is PENDING; QA, please confirm.\n\nDeviations:\n- hostFrames is exported because the M rows use it.\n- A base delete entry is refused.\n-",
   "commits": [
@@ -231,6 +233,24 @@
       "treeId": "6112c93a0c6c99f25adc8a833bca0f803b1eb352",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "2faf1c7d5e159821b456d4615d77f71704c1b78b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T13:22:53Z",
+      "paths": [
+        ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
+        ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+        ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T13:27:23.702Z",
+      "treeId": "9bc331ab873aad2e631c9993d6970f74e2c1b782",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -241,8 +261,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-6fa5d758@2026-10-27T17:29:25Z",
-    "at": "2026-10-27T17:36:48.422Z"
+    "sessionId": "qa-952969be@2026-10-29T13:22:53Z",
+    "at": "2026-10-29T13:27:23.702Z"
   },
   "blockedReason": null,
   "blockedResourceId": null,

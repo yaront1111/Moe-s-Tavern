@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,12 +25,40 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 110,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8f5b3b665a514e8fbc91f348575fc371",
+      "author": "architect-bd1eb82d",
+      "content": "Architect split, 2026-10-29. The human chose in the architect REPL: **one fresh owned VM per check run**, deleted after it.\n\nThis row is now the orchestrator and keeps its DoD 1-4. It is BLOCKED until its slices are DONE, then it returns to PLANNING. Plan it against their landed code:\n- CQ-R11d (task-874aa17c): CHECK_BOUNDARIES, checkEnvironment and evidenceStatus, in the new check-evidence.mjs and local-runner-check.test.mjs (added to CI). It owns DoD 3 and the \"reported\" half of DoD 2.\n- CQ-R11a (task-37dd3edb): the guest `check` mode. One frame; the job runs as moe-check with no groups, NoNewPrivs, umask 077, an exact environment, rlimits and a private network namespace. It owns the \"enforced\" half of DoD 2.\n- CQ-R11b (task-9048e7ec): protected-path oids verified before and after the run, plus read-only bind mounts. It owns the \"mutate protected definitions\" half of DoD 1.\n- CQ-R11c (task-53daa94f): the host runCheckSession, the CheckOutcome classification and a bounded outputTail.\n- CQ-R11e (task-001d8ab3, BACKLOG): the guest check toolchain, a human decision. CQ-R13 now depends on it; this row does not, because it proves the lifecycle with python3 stdlib checks.\n\nWhat remains for this row is the orchestration for one check:\n1. provision a fresh owned VM (R03/R04/R05 provisionGuest plus the R06 ledger);\n2. waitForGuestReady (R07: the supervisor hash, and every job identity denied the supervisor credential, which is the \"credential\" half of DoD 1);\n3. assertNoMounts, then materializeSnapshot (R09c);\n4. runCheckSession (R11c);\n5. delete the VM on every path (R06);\n6. return an observation carrying R11d's checkEnvironment.\nDetails are in Serena `decision-cq-r11-split`.",
+      "timestamp": "2026-10-29T13:28:48.502Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-29T12:29:44.898Z",
+  "updatedAt": "2026-10-29T13:29:02.721Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
-    "task-23a5563cea384d56abb8da1551435455"
-  ]
+    "task-23a5563cea384d56abb8da1551435455",
+    "task-874aa17c4016492689f24138d04b71d0",
+    "task-37dd3edb921c42eca56efefb36832992",
+    "task-9048e7ec78c34af1a7805c4c4129196e",
+    "task-53daa94fa9d7405a831eb727eec803ac"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T13:16:35.024Z"
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "blockedReason": "This row is split (SPIDR, 2026-10-29; the human chose one fresh owned VM per check in the architect REPL) and is now the orchestrator: provision a fresh VM, run readiness, materialize, run the check session, then delete the VM. It waits for its slices to land so it can be planned against their real interfaces:\n- CQ-R11d task-874aa17c4016492689f24138d04b71d0;\n- CQ-R11a task-37dd3edb921c42eca56efefb36832992;\n- CQ-R11b task-9048e7ec78c34af1a7805c4c4129196e;\n- CQ-R11c task-53daa94fa9d7405a831eb727eec803ac;\n- R09 final task-0dd1cce23a6646fd80cf401dd47c7b0f.\nIt auto-unblocks to PLANNING when all are DONE. See comment-8f5b3b66 and Serena decision-cq-r11-split.",
+  "blockedOnTaskIds": [
+    "task-874aa17c4016492689f24138d04b71d0",
+    "task-37dd3edb921c42eca56efefb36832992",
+    "task-9048e7ec78c34af1a7805c4c4129196e",
+    "task-53daa94fa9d7405a831eb727eec803ac",
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-29T13:29:02.721Z"
 }
