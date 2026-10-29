@@ -84,7 +84,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -104,14 +104,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:23.882Z",
-  "updatedAt": "2026-10-29T22:18:15.572Z",
+  "updatedAt": "2026-10-29T22:34:58.955Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:41:30.489Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T22:34:58.955Z",
+    "wallClockMs": 17608466
   },
   "contextFetchedBy": [
     "worker-5ebbf433",
@@ -290,7 +292,7 @@
     "sessionId": "qa-952969be@2026-10-29T19:42:40Z",
     "at": "2026-10-29T19:52:08.715Z"
   },
-  "reviewCompletedAt": "2026-10-29T19:16:31.820Z",
+  "reviewCompletedAt": "2026-10-29T22:34:58.955Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -331,5 +333,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "QA park, not a reject: the substance is green, and the size waiver awaits a human. Completion 1607abf2 on moe/work-2026-10-24 is net 451 under packages/ (+471/-20: 152 runtime + 299 tests). That is over the 400-net QA cap, and no project, epic or row rail waives it. The worker filed the waiver as prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL), still PENDING at 19:50Z; its per-file numbers match the numstat.\n\nFresh QA gate: a pure git archive of HEAD 53d1b240, with the six owned files cmp-identical to 1607abf2.\n- npm test exit 0: 181 files, 5041 passed, 16 skipped.\n- tsc --noEmit exit 0.\n- 5 targeted mutants, all killed.\nThe full evidence is in this row's comment comment-55e13f82.\n\nResolution: a human resolves the proposal in the IDE.\n- On APPROVED: set_task_status REVIEW. QA re-gates and approves, naming net 451.\n- On REJECTED: set_task_status PLANNING for a review-scope split of the landed bytes.\nunblock_worker cannot reach this parked, unassigned row.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-29T22:34:58.955Z",
+  "reviewSummary": "CQ-V03a QA round 4: APPROVED on substance.\nSIZE: net 451 (+471/-20 under packages/: 152 runtime + 299 tests). That is over the 400 cap, but the approved epic rail from prop-a439fe72 waives it, and the numstat of 1607abf2 matches the rail file by file.\nDELIVERY: completion 1607abf2 (tree bfa7730b) is on moe/work-2026-10-24 and is an ancestor of HEAD e7de228. 1eada7de holds board JSON only. None of the 6 owned paths changed after 1607abf2.\nGATE: pure git archive of HEAD e7de228, no overlay, owned paths cmp-identical to 1607abf2. npm ci exit 0 under env -i with a scratch HOME, NO_COLOR=1 and node v24.21.0.\n- `cd packages/moe-daemon && npm test` exit 0: Test Files 186 passed (186), Tests 5193 passed | 16 skipped; runnerChannel.test.ts 41/41.\n- `npx tsc --noEmit` exit 0; a scratch tsconfig over the test file also exits 0.\n- The real ~/.moe/runner-keys was absent before and after.\nMUTANTS: 6/6 killed, originals restored (sha256 checked): loopback dropped, repeated header accepted, digest compare dropped, /mcp given a runner, runner read from args, no return after the 1008 close.\nDoD:\n1) One W1 test per refusal (no, wrong, malformed or repeated header; non-loopback; missing key file): each closes 1008 'runner authentication failed' and the probe never runs.\n2) /runner gets runner-<16 hex>; /mcp with the header and identity args gets null.\n3) K2: 43-char base64url, 0600 file in a 0700 dir, reused, malformed replaced, no tmp left. Log spies and the response exclude the key.\n4) The top-level beforeEach sets MOE_RUNNER_KEY_DIR to a mkdtemp dir.\n5) Verification reproduced.\nRAILS: no forbidden patterns; verified-local appears only in comments; runnerChannel.ts has no logger; the refusal log carries remoteAddress only.\nADVISORY (unchanged, non-blocking): the index.ts provisioning try/catch has no test; the stored-key KEY_RE check is redundant after the digest match.",
+  "requiredCheckAtDone": null
 }

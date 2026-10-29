@@ -13,9 +13,51 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nscripts/tests/local-runner-agents.test.mjs is created by CQ-R10d1 (task-9faf1ef3); add rows to its LANDED bytes. Fixtures come from an INJECTED fetch, never the network: it returns {ok, status, url, headers, body: ReadableStream} per request, as the image-cache tests in scripts/tests/local-runner.test.mjs do. Test manifests use the real fixed URL templates with fixture sizes and hashes, and go through the same validator.\n\nRows (exact codes; each refusal also asserts that the cacheDir holds no file at all):\n- AC1 loader (DoD 1): the shipped agent-binaries.json loads. validateAgentManifest refuses with AGENT_BINARY_MANIFEST_INVALID each of these:\n  - a wrong schemaVersion, a missing or extra cli or arch, an extra key;\n  - an http URL, or a URL other than its cli's fixed template;\n  - a version that fails the strict pattern;\n  - a non-64-hex sha256, or a size that is not a positive safe integer;\n  - an archive entry missing member, memberSha256 or memberSize, or whose member is absolute, has '..', or has a backslash;\n  - a manifest file over 64 KiB.\n- AC2 download (DoD 2):\n  - a matching body is kept at <cacheDir>/<sha256>.bin and returned as {file, sha256, size};\n  - a wrong sha256 gives AGENT_BINARY_CHECKSUM_MISMATCH;\n  - a declared or streamed size over the pin gives AGENT_BINARY_TOO_LARGE;\n  - a redirect to http, a redirect chain over 5, or a non-2xx gives AGENT_BINARY_DOWNLOAD_FAILED;\n  - a body that errors midway gives AGENT_BINARY_DOWNLOAD_FAILED.\n- AC3 archive (DoD 2). A tar.gz built in-test (a few-line ustar writer with zlib.gzipSync) holding the member plus a decoy entry:\n  - the member alone is extracted and verified;\n  - a member whose bytes miss memberSha256 gives AGENT_BINARY_CHECKSUM_MISMATCH;\n  - a missing member, a symlink or hard link at the member path, a corrupt header checksum or truncated gzip gives AGENT_BINARY_ARCHIVE_INVALID;\n  - decompressed output past memberSize gives AGENT_BINARY_TOO_LARGE.\n- AC4 cache (DoD 3):\n  - a valid cached file makes zero fetch calls;\n  - a cached file with one byte flipped is removed and downloaded exactly once more, then verified;\n  - a cached directory or symlink is refused, and never followed or deleted;\n  - two concurrent calls both resolve verified files, with no .part left.\n- AC5: every error message is its fixed text and includes neither the URL, nor cacheDir, nor body bytes.\n\nscripts/tests/local-runner-bundle.test.mjs: add 'agent-binaries.json' and 'agent-cache.mjs' to its `required` list, so the bundle provably ships them.\n\nRun the verification command and confirm the rows fail for the missing module or manifest.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/tests/local-runner-agents.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Pin the releases in the new scripts/local-runner/agent-binaries.json. It is shaped like certified-provider.json: compact and hand-reviewable.\n\nShape: {schemaVersion: 1, binaries: {claude: {x64: entry, arm64: entry}, codex: {x64: entry, arm64: entry}}}.\n- An entry is {version, url, sha256, size}.\n- An archive entry adds {archive: 'tar.gz', member, memberSha256, memberSize}.\n\nSources (official only; confirm them from each vendor's own installer or release page before pinning):\n- claude: the native Linux builds that Anthropic's install script fetches, one raw ELF per arch (linux-x64 and linux-arm64), with no archive.\n- codex: the openai/codex GitHub release assets codex-x86_64-unknown-linux-musl.tar.gz and codex-aarch64-unknown-linux-musl.tar.gz, whose binary is the tar member.\n\nPick the current stable versions, download each file ONCE, and record:\n- its exact final https URL, sha256 and size;\n- for an archive, the member path and the member's own sha256 and size, computed from the extracted bytes;\n- cross-checked against any checksum file the vendor publishes.\nPut the versions, the source pages and the cross-check in this step's completion note.\n\nThis step's error handling: if the official files cannot be downloaded from this environment, stop and call moe.report_blocked naming the missing network access. Never invent, guess or copy a hash from anywhere but the downloaded bytes.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-binaries.json"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create scripts/local-runner/agent-cache.mjs, reusing image-cache.mjs's pattern: an exclusive 0600 .part per call, bounded streaming writes with handle.sync(), verify then atomic rename, and on a cache hit re-verify, unlink a corrupt file and download once.\n\nExports:\n1. validateAgentManifest(value), the strict shape check behind AC1. The fixed URL templates live in code, built from the validated version and arch maps, and each url must equal its template:\n   - claude: the official native-release base plus /<version>/linux-<x64|arm64>/claude;\n   - codex: https://github.com/openai/codex/releases/download/rust-v<version>/codex-<x86_64|aarch64>-unknown-linux-musl.tar.gz.\n   Adapt the templates to what step 2 confirmed. The member must be a plain relative path with no '..'. Return a deep-frozen copy.\n2. loadAgentManifest(): the module-relative agent-binaries.json, at most 64 KiB, through validateAgentManifest. Callers cannot choose a manifest or URL; the CLI and the environment cannot select one either.\n3. fetchAgentBinary({ cli, arch, cacheDir }, { fetch = globalThis.fetch, manifest } = {}) resolves a frozen {file, sha256, size} of the BINARY (the member when archived).\n   - cli must be a JOBS key (claude or codex), and arch must be in IMAGE_ARCHES. cacheDir must be absolute with no control character; create it 0700.\n   - The manifest seam is for tests only and is validated by validateAgentManifest too.\n   - Target: <cacheDir>/<binary sha256>.bin, mode 0600.\n   - Redirects: fetch with redirect:'manual', follow at most 5 hops, require https on every hop and on the final URL, and use AbortSignal.timeout.\n   - Bounds: a content-length or streamed byte count over the pinned size fails.\n   - Verify the download's size and sha256 BEFORE any parsing.\n   - For tar.gz, stream a zlib gunzip through a minimal ustar reader that:\n     - checks each 512-byte header's checksum;\n     - skips non-member entries by their sizes;\n     - accepts only a regular-file entry (typeflag '0' or NUL) at exactly the member path, and refuses links;\n     - stops writing past memberSize;\n     - then verifies memberSha256 and memberSize.\n   - Every failure removes this call's .part files.\n\nThis module's error handling: fixed codes only (AGENT_BINARY_INPUT_INVALID, _MANIFEST_INVALID, _DOWNLOAD_FAILED, _CHECKSUM_MISMATCH, _TOO_LARGE, _ARCHIVE_INVALID, _UNREADABLE). The message text is fixed, with no URL, path or body. This is not isolation and certifies nothing: copying into the guest is CQ-R10d3.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/agent-cache.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<nvm node 24 bin>:/usr/local/bin:/usr/bin:/bin\" node --test ...`. It must exit 0; supply its command, exit code and output tail to complete_task.\n2. ALSO run `node --test scripts/tests/local-runner.test.mjs`, the image-cache neighbours, and report it.\n3. One manual check, reported in the completion summary: fetchAgentBinary with the SHIPPED manifest and the real fetch, into a temp cacheDir, for the host's own arch, for each cli, then a second call that must hit the cache without a fetch. If there is no network, say so.\n4. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) follow redirects automatically: AC2's http-redirect row;\n   (ii) verify after the rename: AC2's no-file assertions;\n   (iii) accept a symlink entry at the member path: AC3;\n   (iv) skip re-verification on a cache hit: AC4;\n   (v) let the manifest seam bypass validation: AC1.\nKeep the diff at or under 400 net lines. Make the test rows table-driven.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a network attacker and as a hostile archive. Check:\n- Is any byte trusted before its sha256 check: parsing or extracting before the archive hash, or renaming before the member hash?\n- Is there any path where the URL, a redirect target or the manifest comes from the caller, the environment or the network?\n- Can a .part or partial file be left behind on any failure: an abort, a timeout, a stream error or a disk full?\n- TOCTOU between the cache-hit lstat and the hash: the file is opened once, then fstat and hash on that fd.\n- Can concurrent callers collide? Unique .part names, an exclusive create, and an atomic rename.\n- The tar reader: header checksums, sizes padded to 512, a member split across chunks, links, devices, decompression bombs, and a huge decoy entry before the member (bounded by the pinned archive size).\n- Messages: no URL, path or body anywhere.\n- The bundle ships the module and the manifest, and no test fixtures.\nReport every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-4017cf1d0cab459eb98f488ea7e3a047-handoff' for CQ-R10d3, the copy into the guest.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -31,5 +73,80 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-29T17:48:04.014Z"
+  "updatedAt": "2026-10-29T22:29:15.048Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:26:25.711Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:29:14.964Z",
+  "executionContract": {
+    "intendedBehavior": "The host gets exact pinned Linux claude and codex CLI binaries for x64 and arm64, without trusting the network for their identity.\n\nagent-binaries.json pins each release file's fixed https URL, sha256 and size (plus the member path, sha256 and size for an archive). fetchAgentBinary downloads into a controller-private cacheDir, following only https redirects, bounded by the pinned size. It verifies the file before parsing, extracts only the pinned regular-file member of a tar.gz, and verifies that member before an atomic rename. It re-verifies on every cache hit, removing and re-downloading a corrupt entry once. Failures carry fixed codes, with no URL, path or body.",
+    "acceptanceCriteria": [
+      "AC1: the shipped manifest loads, and every off-shape manifest is AGENT_BINARY_MANIFEST_INVALID.",
+      "AC2/AC3: only bytes matching their pins are kept; a mismatch, oversize, non-https redirect, interrupted body or bad archive fails closed with no file left.",
+      "AC4: a cache hit is re-verified; a corrupt entry is removed and fetched once; directories and symlinks are refused.",
+      "AC5: messages are fixed text only.",
+      "The bundle test lists agent-binaries.json and agent-cache.mjs as required."
+    ],
+    "invariants": [
+      "No byte is parsed, extracted or renamed into the cache before its sha256 and size verify.",
+      "URLs and manifests never come from callers, the environment or the network; only the module-relative manifest, or a test manifest that passes the same validator.",
+      "Every failure leaves no file of this call in cacheDir; the cache holds verified files only.",
+      "Tests never touch the network; nothing under .moe; no isolation or verified-local claim."
+    ],
+    "compatibility": [
+      "image-cache.mjs, certified-provider.json and every existing local-runner module are unchanged.",
+      "The JetBrains and VS Code bundles already copy scripts/local-runner/** minus tests and fixtures, so no bundler change is needed."
+    ],
+    "approvedScope": [
+      "New scripts/local-runner/agent-binaries.json and scripts/local-runner/agent-cache.mjs (validateAgentManifest, loadAgentManifest, fetchAgentBinary).",
+      "Rows in scripts/tests/local-runner-agents.test.mjs (created by CQ-R10d1) and the required list of scripts/tests/local-runner-bundle.test.mjs."
+    ],
+    "reuse": [
+      "The download, verify and cache pattern of scripts/local-runner/image-cache.mjs.",
+      "The strict manifest style of scripts/local-runner/doctor.mjs with scripts/local-runner/certified-provider.json.",
+      "node:zlib createGunzip and node:crypto sha256; no dependency is added."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/image-cache.mjs ensurePinnedImage: exclusive .part, bounded writeBody with sync, verify before rename, cachedImage re-verify with unlink of a corrupt entry, injectable fetch, and an https final-URL check.",
+      "scripts/local-runner/doctor.mjs validateManifest and loadCertifiedProvider: a module-relative manifest, a size cap, exact fixed URLs built in code, and a deep freeze.",
+      "scripts/local-runner/guest-bootstrap.mjs IMAGE_ARCHES ['x64', 'arm64']; scripts/local-runner/guest-supervisor.py JOBS keys claude and codex.",
+      "scripts/tests/local-runner-bundle.test.mjs keeps a `required` list of shipped local-runner files; moe-jetbrains/build.gradle.kts includes local-runner/** minus tests and fixtures."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs",
+      "node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Trusting redirect:'follow' with only a final-URL check, as image-cache does: rejected. DoD 2 names a non-https redirect, which needs manual hops.\n- Shelling out to system tar or unzip: rejected. It adds argv and toolchain trust. The archive's own sha256 is verified first, so a small ustar reader over pinned bytes is defense in depth only.\n- npm packages as the source: rejected. They are archives of JS wrappers plus vendored binaries; the vendors' direct native release files are simpler to pin.\n- Real HTTPS fixture servers: rejected. They need certificates, and the https check would refuse a plain local server. An injected fetch with fixture bodies is the local fixture, as in the image-cache tests.",
+    "codebaseInsights": "- R10d1 (task-9faf1ef3, WORKING) CREATES scripts/tests/local-runner-agents.test.mjs and its CI line; it is declared under newFiles here only because it does not exist at submit time. dependsOn R10d1 serializes the edits.\n- The bundles copy scripts/local-runner/** minus test and fixture globs (moe-jetbrains/build.gradle.kts:177; moe-vscode/scripts/bundle-assets.mjs:121).\n- The guest arches are IMAGE_ARCHES x64 and arm64; the CLI keys are the JOBS keys claude and codex.\n- R10d3 consumes {file, sha256, size} to stream the binary into the guest; R10d4 owns argv and MCP config.",
+    "risks": "- The worker needs network access to pin real releases. Without it, report_blocked; never invent a hash.\n- The vendors' URL formats can change. Confirm them from the official installer or release page, adapt the code templates, and record them.\n- Binary size: the claude native binary is about 200 MB, so it must be streamed and never buffered.\n- The diff can exceed 400 lines: keep the test rows table-driven.\n- A ustar member path can carry a './' prefix; match the exact member string recorded from the real archive.",
+    "keyFiles": [
+      "scripts/local-runner/image-cache.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "scripts/local-runner/certified-provider.json",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:29:15.048Z",
+  "approvedPlanRevision": 1
 }

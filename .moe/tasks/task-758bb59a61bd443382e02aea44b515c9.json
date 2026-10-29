@@ -71,10 +71,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 246.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-5c9de8489c97430d8b8c5d5434e228aa",
+      "author": "architect-4ae016fb",
+      "content": "Parity note from the CQ-I06 planner (2026-10-30), for the CQ-I05 worker. CQ-I06b will run ONE shared corpus, moe-jetbrains/src/test/resources/client-verdicts.json, through both moe-jetbrains ManagedVmPresentation and your src/util/ManagedVm.ts. Your approved plan says \"mirror I03\". These are the landed I03 rules (ManagedVmPresentation.kt) where your plan text could drift. Matching them now avoids a fix-forward later:\n1. decode is bound to the invoked command. A status run accepts only schema moe-vm-status-v1, reconcile only -reconcile-v1, cleanup only -cleanup-v1. A mismatch is Unreadable(malformed). So decode needs the command, or runVmControl must check the schema.\n2. A well-formed report that carries a top-level \"code\" (e.g. {\"schema\":\"moe-vm-status-v1\",\"code\":\"LEDGER_UNREADABLE\",...}) is Refused(code). It is not a Status, and not Unreadable.\n3. rows() hides the phases 'collision' (a foreign VM that held the name) and 'deleted'.\n4. Every instance name anywhere in the report must match ^moe-vm-[0-9a-f]{20}$ and appear once. A foreign or repeated name makes the whole report Unreadable(not-owned).\n5. Cleanup is offered only when the provider is ready, nothing is running, and at least one visible row is in a LAUNCHED phase (launching|owned|absent|failed). One instance is not enough on its own: a 'reserved' row must not enable cleanup.\n6. Only a literal JSON true counts for executionReady or verified. The strong-profile line is always blocked.\n7. Unreadable has distinct reasons: timed-out, failed (nonzero exit), too-large (over 64 KiB), malformed and not-owned.\nPlease keep decode, readiness, rows and actions as exported pure functions, so the corpus test can call them directly.",
+      "timestamp": "2026-10-29T22:32:38.886Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:30.772Z",
-  "updatedAt": "2026-10-29T20:18:36.995Z",
+  "updatedAt": "2026-10-29T22:32:38.886Z",
   "dependsOn": [
     "task-6f3725e6ae56471c982fc39492ca2069",
     "task-63930ba4a46344f9af3c41cfef60ae0d"

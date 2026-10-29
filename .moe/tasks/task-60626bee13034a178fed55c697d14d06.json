@@ -13,9 +13,38 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nIn scripts/tests/local-runner-bridge.test.mjs, beside the CQ-R10b J rows (about line 1163), reuse:\n- bridgeJob with the RECORD recorder that stands in for relay() (about line 1181);\n- the HELD probe harness, which runs a real executable through main(['bridge']) with jobs = {cli: (probe, names)} (about line 1278).\n\n- LA1 (DoD 1): for each cli in {claude, codex} and each role in {worker, qa}, the recorded argv is EXACTLY:\n  - claude: [exe, '-p', PROMPTS[role], '--mcp-config', <home>/.moe-mcp.json, '--strict-mcp-config', '--dangerously-skip-permissions'];\n  - codex: [exe, 'exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', PROMPTS[role]].\n  No element is or starts with '--resume', '--continue' or 'resume'. Each prompt starts with 'Call moe.get_context'; the worker and qa prompts differ and hold no credential. A table row pins PROMPTS' exact text.\n- LA2 (DoD 2), using the same recorder runs. The fresh session home holds exactly:\n  - claude: ['.moe-mcp.json'], whose JSON deep-equals {mcpServers: {moe: {command: '/opt/moe/bin/moe-mcp-shim'}}};\n  - codex: ['.codex'] containing exactly ['config.toml'], whose text equals the three-line [mcp_servers.moe] table: command = the shim, default_tools_approval_mode = \"approve\". Also job.env.CODEX_HOME === <home>/.codex.\n  Every created entry is owned by the job uid and is mode 0600 (file) or 0700 (dir). HOME is that fresh home, so no other MCP config is reachable.\n- LA3 (DoD 3): through HELD, a real probe CLI run by main(['bridge']) prints its sys.argv, os.getcwd() and both config files' bytes.\n  - Assert the argv as in LA1, cwd == WORKSPACE, and the bytes as in LA2.\n  - It runs with QA_JOB (codex) and JOB (claude).\n- LA4 drift:\n  - set(m.LAUNCH) == set(m.JOBS);\n  - set(m.PROMPTS) == set(m.JOB_ROLES);\n  - m.SHIM equals guest-bootstrap.mjs GUEST_LAYOUT.shim (CQ-R10d1);\n  - B17 still passes UNCHANGED, because the JOBS 2-tuple shape is kept.\n\nRun `node --test scripts/tests/local-runner-bridge.test.mjs` and confirm the new rows fail for the missing tables or argv.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/guest-supervisor.py: the headless launch spec. First read the LANDED bytes of CQ-R10d3 (agents mode) and CQ-R11f (verify mode), and keep them intact.\n\n1. Constants beside JOBS (about line 762), which keeps its (executable, credential names) shape:\n   - SHIM = '/opt/moe/bin/moe-mcp-shim', mirroring GUEST_LAYOUT.shim;\n   - PROMPTS = {'worker': ..., 'qa': ...}, fixed strings. Each begins 'Call moe.get_context for your assigned task first.', then says the role: the worker follows nextAction and the approved plan and finishes with moe.complete_task; QA reviews against the definition of done and finishes with moe.qa_approve or moe.qa_reject;\n   - LAUNCH, a dict keyed like JOBS that describes each cli's argv tail and session files.\n2. A helper, prepare_launch(cli, role, home, uid, gid, exe), returns (argv, extra_env). It writes the session MCP config into the FRESH home from session_home(), through a home directory fd opened with WALK:\n   - each file: os.open(name, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600, dir_fd=...), a write loop, fsync, then fchown(uid, gid);\n   - codex's '.codex': os.mkdir(..., 0o700, dir_fd=...), reopened with WALK, then fchown.\n   - claude: .moe-mcp.json = json.dumps({'mcpServers': {'moe': {'command': SHIM}}}).\n   - codex: .codex/config.toml = '[mcp_servers.moe]\\ncommand = \"' + SHIM + '\"\\ndefault_tools_approval_mode = \"approve\"\\n', with extra_env {'CODEX_HOME': home + '/.codex'}.\n   - argv exactly as in LA1. '--skip-git-repo-check' is there because the materialized WORKSPACE has no .git (R09c copies files only). Confirm it from the pinned codex binary's `exec --help` (CQ-R10d2); if that version lacks the flag or the check, drop it and update LA1.\n3. In start_job, after session_home, call prepare_launch. Its OSError returns os.EX_OSERR (71) with no frame and no job, exactly like a missing session home. Merge extra_env into env, then call relay(argv, ...) instead of relay([exe], ...).\n4. Update start_job's comment and its exit-code list, plus the module header.\n\nThis step's error handling: nothing from the job frame reaches argv except the role's fixed prompt; the credential stays env-only. No resume or continue path exists. The check, verify, agents, materialize and export modes are unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<nvm node 24 bin>:/usr/local/bin:/usr/bin:/bin\" node --test ...`, with POSIX python3 on PATH. It must exit 0; supply its command, exit code and output tail to complete_task.\n2. ALSO run `node --test scripts/tests/local-runner.test.mjs` and report it; it holds the R11f and R10d3 supervisor rows.\n3. Mutants, on scratch copies only; restore and cmp afterwards:\n   (i) drop --strict-mcp-config: LA1;\n   (ii) write the config before session_home, or into WORKSPACE: LA2;\n   (iii) create without O_EXCL or O_NOFOLLOW: replace a pre-planted symlink at the config path in an LA2 variant (planted before prepare_launch through a session_home seam). It must give 71, with no file written through the link;\n   (iv) pass the role from the frame into argv unvalidated: LA1's prompt pins;\n   (v) change JOBS to 3-tuples: B17.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a hostile workspace and agent. Check:\n- Can a candidate file in WORKSPACE add an MCP server?\n  - claude: --strict-mcp-config ignores .mcp.json and settings.\n  - codex: does the pinned version read a project .codex/config.toml when CODEX_HOME is fresh with no trusted projects? Confirm it from the pinned codex version's docs or behavior and record the answer. If it does read one, refuse a workspace with .codex/config.toml (exit 65), or pass the version's override; never assume.\n- Can a symlink or pre-existing file in the fresh home redirect the config write? (O_EXCL, O_NOFOLLOW and dir_fd; and the home is fresh per job.)\n- Does the credential appear in argv, a file or the prompt? It must be env-only.\n- No resume or continue under any role.\n- --dangerously-skip-permissions runs only as moe-agent, never as root; the identity drop is unchanged.\n- The other modes are byte-identical; no .moe edits; no verified-local or isolation claim.\nReport every path in complete_step.modifiedFiles, and write the Serena handoff memory 'task-task-60626bee13034a178fed55c697d14d06-handoff' for CQ-R10 and CQ-R13 (task-f4811a72).",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,12 +54,86 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-b8e7ad927dc04d69b47906b291d30a41",
-    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
+    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d",
+    "task-5b0a2bcf70f34c62ba29df0f7ff99988"
   ],
   "priority": "HIGH",
   "order": 252.4,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:35.352Z",
-  "updatedAt": "2026-10-29T17:48:35.352Z"
+  "updatedAt": "2026-10-29T22:33:04.568Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:29:27.778Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:33:04.481Z",
+  "executionContract": {
+    "intendedBehavior": "A bridge job starts its real agent CLI headless, with full access inside the VM, with the CQ-R10d1 shim as its only MCP server and a fixed per-role prompt that begins with the instruction to call moe.get_context.\n- claude: -p <prompt> --mcp-config <home>/.moe-mcp.json --strict-mcp-config --dangerously-skip-permissions.\n- codex: exec --sandbox danger-full-access --skip-git-repo-check <prompt>, with CODEX_HOME=<home>/.codex whose config.toml names only the moe shim with tool approval 'approve'.\nThe config files are created O_EXCL|O_NOFOLLOW in the fresh session home and owned by the agent. The job runs in WORKSPACE. There is never a resume or continue.",
+    "acceptanceCriteria": [
+      "LA1: exact argv per cli and role, with no resume or continue token and the pinned prompt prefix.",
+      "LA2: the exact config files and contents, owned by the job uid with 0600/0700 modes, in the fresh home; CODEX_HOME set for codex.",
+      "LA3: a real probe CLI through main() shows the argv, cwd WORKSPACE and the config bytes.",
+      "LA4: LAUNCH and PROMPTS key drift, the SHIM path mirror, and B17 unchanged."
+    ],
+    "invariants": [
+      "The JOBS (executable, credential names) shape is unchanged, so B17 and AGENT_JOBS stay valid.",
+      "The credential reaches the job only through env; argv carries only the fixed template and the role's fixed prompt.",
+      "Config files exist only in the fresh per-job home; a creation failure is 71 with no job started.",
+      "Every other supervisor mode is byte-identical; nothing under .moe; no verified-local or isolation claim."
+    ],
+    "compatibility": [
+      "guest-bridge.mjs AGENT_JOBS and jobFrame are unchanged; the host job frame shape is unchanged."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-supervisor.py: SHIM, PROMPTS, LAUNCH, prepare_launch, and start_job's argv and env merge.",
+      "scripts/tests/local-runner-bridge.test.mjs: the LA1-LA4 rows."
+    ],
+    "reuse": [
+      "The R10b J-row harnesses in scripts/tests/local-runner-bridge.test.mjs.",
+      "The dir-fd, O_EXCL and O_NOFOLLOW file creation idiom already in scripts/local-runner/guest-supervisor.py (materialize).",
+      "The codex MCP table convention of scripts/moe-agent.sh."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/guest-supervisor.py JOBS (about line 762) maps cli to (executable, credential names); start_job (about line 820) builds env and spawn, then calls relay([exe], ...); session_home creates a fresh 0700 home chowned to the job uid.",
+      "scripts/local-runner/guest-supervisor.py main() forwards keyword seams (jobs, workspace, sessions, identity, agent_socket) from Python only.",
+      "scripts/local-runner/guest-bridge.mjs AGENT_JOBS mirrors JOBS; the B17 test in scripts/tests/local-runner-bridge.test.mjs unpacks `(_, names)` from m.JOBS.",
+      "scripts/tests/local-runner-bridge.test.mjs RECORD (relay stand-in) and HELD (real probe through main) harnesses around lines 1163-1300.",
+      "scripts/moe-agent.sh writes codex [mcp_servers.moe] with default_tools_approval_mode = \"approve\" (about line 986)."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs",
+      "node --test scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Extending JOBS to 3-tuples: rejected. It breaks B17's `(_, names)` unpacking and the AGENT_JOBS mirror. A separate LAUNCH table keeps the drift tests unchanged, which the description allows.\n- Writing the config into WORKSPACE: rejected. It would sit in the candidate tree, reach the export, and could be overwritten by candidate files. The fresh per-job home is private.\n- Adding --skip-git-repo-check to codex argv is a deliberate deviation from the description's argv. codex exec refuses to run outside a git repository without it, and the materialized WORKSPACE has no .git. The worker confirms it against the pinned binary; if the pinned version does not need it, it is dropped.",
+    "codebaseInsights": "- R10d1 (task-9faf1ef3) adds GUEST_LAYOUT.shim '/opt/moe/bin/moe-mcp-shim' and installs it 0555.\n- R10d3 (task-b8e7ad92, unplanned) adds the 'agents' mode and /opt/moe/agents/<cli> binaries; JOBS executables already point there.\n- R11f (task-5b0a2bcf) adds the 'verify' mode. dependsOn R10d3, R10d1 and R11f serializes all three edits of guest-supervisor.py.\n- The bridge scopes every tool call to the job binding, so an argument-less moe.get_context reaches the bound task.\n- Tests run the real supervisor module under python3 -I -B with seams; Windows skips them via NO_GUEST.",
+    "risks": "- codex project-config loading under a fresh CODEX_HOME is version-specific. Confirm it, or refuse a workspace .codex/config.toml.\n- claude refuses --dangerously-skip-permissions as root. The job must run as moe-agent, which start_job's identity drop already ensures.\n- A pre-planted path in the home: O_EXCL and O_NOFOLLOW make it 71, never a write through a link.\n- A prompt wording change breaks LA1's pins on purpose; keep the prompts fixed constants.\n- POSIX python3 is required. On WSL, use env -i with a Linux PATH.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:33:04.567Z",
+  "approvedPlanRevision": 1
 }

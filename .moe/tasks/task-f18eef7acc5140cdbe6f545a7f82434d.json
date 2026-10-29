@@ -1,0 +1,32 @@
+{
+  "id": "task-f18eef7acc5140cdbe6f545a7f82434d",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "[CQ-I06c] Test-free packaged helper bundles",
+  "description": "Objective: CQ-I06 DoD 2. A packaged plugin must contain every production helper asset it needs, and no test artifacts. Three defects were verified on 2026-10-30:\n(a) packages/moe-proxy/tsconfig.json compiles src/*.test.ts. Its dist/ therefore holds index.test.js, input-framing.test.js, utils.test.js and workerType.test.js, with their .d.ts and .map files. Both bundlers copy that dist wholesale: moe-jetbrains/build.gradle.kts through from(bundledProxyDir), and moe-vscode/scripts/bundle-assets.mjs.\n(b) The daemon build compiles the test-only src/tools/toolTestHarness.ts into dist/tools/toolTestHarness.js, and both plugins ship it. Only *.test.ts files import it.\n(c) Both IDEs' Managed VM panels (CQ-I03, CQ-I05) spawn scripts/local-runner/vm-control.mjs. It ships only because the bundlers copy local-runner/**: no bundler required-list, onboarding check or bundle test names it.\n\nDeliverable:\n- packages/moe-daemon/tsconfig.json excludes src/tools/toolTestHarness.ts.\n- Both bundlers add vm-control.mjs to their required local-runner assets, and drop **/*.test.* and **/*.spec.* from the daemon and proxy dist copies.\n- scripts/tests/onboarding.mjs, in its packaged-bundle block, does three things:\n  - requires local-runner/vm-control.mjs;\n  - runs the packaged vm-control.mjs with no arguments and asserts exit 2 and exactly {\"code\":\"VM_CONTROL_INPUT_INVALID\"}. That proves its whole static import closure loads from the bundle, without touching Multipass, the ledger or the daemon;\n  - fails on any test artifact under the bundle's daemon/, proxy/ or scripts/, excluding node_modules.\n- scripts/tests/local-runner-bundle.test.mjs covers all of it.\n\nOut of scope:\n- the proxy tsconfig, which keeps typechecking proxy tests at build;\n- what the npm-published moe-proxy package contains;\n- node_modules dev dependencies;\n- ci.yml and docs, which belong to CQ-I06;\n- any runtime behaviour change.\n\nVerification (run fresh, exit 0 required): node --test scripts/tests/local-runner-bundle.test.mjs",
+  "definitionOfDone": [
+    "A fresh daemon build no longer emits dist/tools/toolTestHarness.js, and the daemon `npx tsc --noEmit` stays green. Both are shown in a Linux snapshot build.",
+    "The actual VS Code bundler run in local-runner-bundle.test.mjs copies vm-control.mjs byte-identical and refuses to bundle without it. A *.test.* or *.spec.* file planted in either dist is absent from the bundle, while dist/index.js is still copied.",
+    "The onboarding packaged checks, run by the bundle test against real bundler output, pass on the clean bundle. They refuse a missing vm-control.mjs, a vm-control.mjs whose import closure is broken, and a test artifact under daemon/, proxy/ or scripts/. A test file inside node_modules is ignored.",
+    "The static Gradle checks in the same test pin that requireBundledAssets names vm-control.mjs, and that the daemon and proxy dist copies exclude **/*.test.* and **/*.spec.*.",
+    "Fresh `node --test scripts/tests/local-runner-bundle.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "Packaging only: never change what a production module does at runtime; never remove an asset a wrapper or IDE loads by path."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 246.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:33:43.274Z",
+  "updatedAt": "2026-10-29T22:33:43.274Z"
+}

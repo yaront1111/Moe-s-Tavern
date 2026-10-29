@@ -1,0 +1,36 @@
+{
+  "id": "task-f2d3d553bd684eff997498a55c564f13",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "[CQ-I06b] Shared client verdict corpus",
+  "description": "Objective: CQ-I06 DoD 1, 'Both clients consume identical daemon verdicts'. Build ONE client-neutral corpus of daemon approval-frame sequences and managed-VM producer reports, and run it through BOTH IDEs' real decision code, so JetBrains and VS Code cannot drift apart. Today each client mirrors the other through its own hand-written tables: I02 against I04, and I03 against I05.\n\nDeliverable:\n- NEW moe-jetbrains/src/test/resources/client-verdicts.json. It is a test resource: the plugin jar ships only main resources, and the VS Code vsix never includes moe-jetbrains.\n- NEW moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt, which loads the corpus from the classpath.\n- A corpus section in moe-vscode/tests/plan-review.test.cjs that drives the approval rows through the existing real PlanReviewPanel + media/planReview.js harness.\n- NEW moe-vscode/tests/managed-vm-verdicts.test.cjs, which drives the VM rows through CQ-I05's src/util/ManagedVm.ts.\nBoth VS Code files read the same JSON bytes, at ../../moe-jetbrains/src/test/resources/client-verdicts.json.\n\nOut of scope:\n- packaging (CQ-I06c), CI and docs (CQ-I06), and the daemon;\n- production changes, except a fix-forward for a row the two clients disagree on. Such a fix is at most 20 lines, goes in the owning client module, and is reported in modifiedFiles. Anything bigger becomes a new defect task, and this task calls report_blocked on it.\n\nVerification (run fresh, exit 0 required): cd moe-vscode && npm test && npm run compile && cd ../moe-jetbrains && ./gradlew test",
+  "definitionOfDone": [
+    "client-verdicts.json holds the plan's approval rows and VM rows, each with exactly one client-neutral expectation. An approval row gives the rendered revision, the ordered daemon events, and one verdict: confirmed, rearmed, latched or pending. A VM row gives the command, stdout, exit and timedOut, plus its verdict, readiness and actions. No row is client-specific.",
+    "ClientVerdictCorpusTest runs every approval row through MoeJson.parseTask + PlanReviewApprovalState, and every VM row through ManagedVmPresentation. It asserts each row's verdict by id, and fails on an empty corpus or an unknown verdict.",
+    "The VS Code tests run the SAME bytes: approval rows through the real PlanReviewPanel + planReview.js harness, VM rows through ManagedVm. Each mutant named in the plan fails its row in the client it mutates.",
+    "Fresh `cd moe-vscode && npm test && npm run compile && cd ../moe-jetbrains && ./gradlew test` exits 0 for both clients, and the output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "One corpus, two consumers: never give one client a different expectation, skip, or tolerance for a row; a disagreement is fixed or filed, never encoded."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b20f7a40efbd4f56b457888612cd52a8",
+    "task-63930ba4a46344f9af3c41cfef60ae0d",
+    "task-758bb59a61bd443382e02aea44b515c9"
+  ],
+  "priority": "HIGH",
+  "order": 246.8,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:33:55.625Z",
+  "updatedAt": "2026-10-29T22:33:55.625Z"
+}

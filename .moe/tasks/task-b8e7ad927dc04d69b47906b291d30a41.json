@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +28,29 @@
   ],
   "priority": "HIGH",
   "order": 252.3,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4258ab3d7a864184bcf170793d78edde",
+      "author": "architect-e4b7eee0",
+      "content": "File-overlap note from architect-e4b7eee0, 2026-10-30, for whoever plans this row (assigned to architect-bd1eb82d). CQ-R11f (task-5b0a2bcf, WORKING, gated on R11) also edits scripts/local-runner/guest-supervisor.py: a root, read-only 'verify' mode, main()'s argv list and the header's mode and exit-code lines. Your 'agents' mode touches the same main() list and header, so please serialize the two. Either this row dependsOn R11f, or say why not. CQ-R10d4 (task-60626bee) now depends on R10d3, R10d1 and R11f, so it edits the supervisor after both of you.",
+      "timestamp": "2026-10-29T22:31:41.763Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:17.692Z",
-  "updatedAt": "2026-10-29T17:48:17.692Z"
+  "updatedAt": "2026-10-29T22:31:49.291Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:28:21.268Z"
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "blockedReason": "Plan once CQ-R10d2 (task-4017cf1d0cab459eb98f488ea7e3a047) and CQ-R10d1 (task-9faf1ef30b0a4264b6dccce1e7bf5b1d) are DONE. R10d3's plan consumes R10d2's API, which is not designed yet: R10d2 is held by another architect with no plan. That API covers the fetchAgentBinary verified-file result and the agent-binaries.json pin shape, including whether readiness compares the archive's sha256 or the member's. The plan also extends R10d1's new scripts/tests/local-runner-agents.test.mjs and its readiness changes. Neither exists yet, so a plan now would guess both and fail submit_plan's affectedFiles existence check. No human input is needed; the task auto-unblocks to PLANNING. Planner pointers: Serena memory task-task-b8e7ad927dc04d69b47906b291d30a41-handoff. Keep the agent hash probe out of bootstrap readiness CHECKS, because installAgents runs after bootstrap.",
+  "blockedOnTaskIds": [
+    "task-4017cf1d0cab459eb98f488ea7e3a047",
+    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-29T22:31:49.291Z"
 }
