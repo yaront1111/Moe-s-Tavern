@@ -90,7 +90,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -107,16 +107,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:40:35.408Z",
-  "updatedAt": "2026-10-29T16:24:58.466Z",
+  "updatedAt": "2026-10-29T16:53:43.225Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T14:43:03.450Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T16:53:43.224Z",
+    "wallClockMs": 7839774
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -208,5 +211,9 @@
     "reportedAt": "2026-10-29T16:24:15.864Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-C02b1 adds the daemon's own pure verifier for R09b's frozen SourceSnapshot, in packages/moe-daemon/src/context/snapshotManifest.ts (213 lines) and its test (186 lines). That is 399 new lines, under the 400 cap.\n\nContract, exact names for CQ-C02b (task-311dbda4):\n- verifySourceSnapshot(raw) returns {ok:true, snapshot} or {ok:false, code, layer?}. The result union is also exported as SnapshotVerification.\n- The SnapshotRefusal (9 codes), VerifiedSnapshotFile and VerifiedSnapshot types.\n- snapshotPathRefusal, plus the SNAPSHOT_MAX_*/SNAPSHOT_CONTROL_SEGMENTS constants.\n- Layer-scoped refusals carry layer; top-level and merged-view refusals carry none.\n- Sealed entry shape: {kind, path, executable, size, sha256, data}. Each sha256 and both layer digests are recomputed from a private copy and compared with the declared ones.\n- The byte bound is 256 MiB per layer, as R09b bounds each validateImport separately.\n\nTests (120, none skipped in the gate):\n- P1: a 59-row path table checked against R09a validateImportPath.\n- V1: conformance with validateImport.\n- V2: a real temp repo through the landed exportSourceSnapshot.\n- V3: 39 named refusal rows covering all 9 codes, including 3 cross-layer collisions.\n- V4/V5: Proxies, accessors, read-once counting, species and Proxy length.\n- V6: purity, and both files ASCII-only.\n\nMutation sweep (step 4): 52 mutants, 48 killed. The 4 survivors are equivalent, argued in the step-4 note.\n\nSelf-review (step 5) probes all held:\n- DataView, BigInt64Array, detached buffers and a thrown string are refused without a throw.\n- Resizable and SAB views verify, and the copy is private.\n- No O(n^2) path.\n\nStep 5 also documented that the view's Maps, like TypedArray data, cannot be frozen at runtime; ReadonlyMap is the compile-time guard. It simplified the V2 put helper too.\n\nTheoretical only: excluded -0 is accepted.\n\nGate: fresh `npm test` exit 0 (174 files, 4717 passed, 16 skipped) and tsc --noEmit exit 0, run in a Linux snapshot of HEAD with onl"
+  "completionSummary": "CQ-C02b1 adds the daemon's own pure verifier for R09b's frozen SourceSnapshot, in packages/moe-daemon/src/context/snapshotManifest.ts (213 lines) and its test (186 lines). That is 399 new lines, under the 400 cap.\n\nContract, exact names for CQ-C02b (task-311dbda4):\n- verifySourceSnapshot(raw) returns {ok:true, snapshot} or {ok:false, code, layer?}. The result union is also exported as SnapshotVerification.\n- The SnapshotRefusal (9 codes), VerifiedSnapshotFile and VerifiedSnapshot types.\n- snapshotPathRefusal, plus the SNAPSHOT_MAX_*/SNAPSHOT_CONTROL_SEGMENTS constants.\n- Layer-scoped refusals carry layer; top-level and merged-view refusals carry none.\n- Sealed entry shape: {kind, path, executable, size, sha256, data}. Each sha256 and both layer digests are recomputed from a private copy and compared with the declared ones.\n- The byte bound is 256 MiB per layer, as R09b bounds each validateImport separately.\n\nTests (120, none skipped in the gate):\n- P1: a 59-row path table checked against R09a validateImportPath.\n- V1: conformance with validateImport.\n- V2: a real temp repo through the landed exportSourceSnapshot.\n- V3: 39 named refusal rows covering all 9 codes, including 3 cross-layer collisions.\n- V4/V5: Proxies, accessors, read-once counting, species and Proxy length.\n- V6: purity, and both files ASCII-only.\n\nMutation sweep (step 4): 52 mutants, 48 killed. The 4 survivors are equivalent, argued in the step-4 note.\n\nSelf-review (step 5) probes all held:\n- DataView, BigInt64Array, detached buffers and a thrown string are refused without a throw.\n- Resizable and SAB views verify, and the copy is private.\n- No O(n^2) path.\n\nStep 5 also documented that the view's Maps, like TypedArray data, cannot be frozen at runtime; ReadonlyMap is the compile-time guard. It simplified the V2 put helper too.\n\nTheoretical only: excluded -0 is accepted.\n\nGate: fresh `npm test` exit 0 (174 files, 4717 passed, 16 skipped) and tsc --noEmit exit 0, run in a Linux snapshot of HEAD with onl",
+  "completedAt": "2026-10-29T16:53:43.224Z",
+  "reviewCompletedAt": "2026-10-29T16:53:43.224Z",
+  "reviewSummary": "Approved CQ-C02b1.\n\nDelivery: checkpoint 34a440c (source) and completion 7c7ce76, on moe/work-2026-10-24, pushed. 399 net new lines in two files, under the cap. The files are unchanged through HEAD 2eda20f.\n\nGate, re-run in a fresh Linux snapshot (git archive of 7c7ce76, own npm ci with an unchanged lockfile, env -i, node v24.21.0, files cmp-equal):\n- npm test exit 0: 174 files; 4717 passed, 16 skipped; all 120 snapshotManifest tests ran.\n- tsc --noEmit exit 0.\n\nDoD:\n1. sha256 and digests are recomputed from a private copy, with framing matching R09a seal line by line. V1 checks against validateImport; V2 checks a real exportSourceSnapshot.\n2. snapshotPathRefusal is a verbatim port of validateImportPath. The 59-row P1 table runs through both, codes included.\n3. All 9 codes have named V3 rows. V4 and V5 cover Proxies, accessors, species, Proxy length and a spoofed byteLength.\n\nMy mutation check: 24/24 killed by their named rows. Covered: the symlink, hash, digest, both tries, limits, delete-base, entry catch, exact keys, copy-length, id-length, wellFormed, private copy, prototype, excluded sign, size, order, control, fold, shortName, sha256 format and freeze.\n\nMy probes held:\n- species and an own constructor on data or its buffer run no user code;\n- an entries getter is read once;\n- empty layers, SHA-256 ids and a null prototype verify;\n- 10,000 deep paths take about 120 ms;\n- a thrown revoked Proxy gives INPUT_INVALID with no throw.\n\nRails: no forbidden tokens, ASCII-only, node:crypto is the only import, no scripts/ change.\n\nNotes for CQ-C02b, none blocking:\n- The Maps and data are not frozen at runtime (documented).\n- The byte bound is per layer, as in R09b.\n- As the task rules require, a cross-layer case-fold twin is refused, though R09b can export one.\n- excluded -0 is accepted.\n\nComplexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

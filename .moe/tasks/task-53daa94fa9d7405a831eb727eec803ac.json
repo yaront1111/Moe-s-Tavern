@@ -13,9 +13,59 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "checkArgv and checkFrame in scripts/local-runner/guest-bridge.mjs, plus rows C1-C2 in scripts/tests/local-runner-check.test.mjs (DoD 1).\n\nRead first: the LANDED R10c bytes of guest-bridge.mjs (AGENT_JOBS, jobFrame, and exactKeys as a key-set comparison) and the LANDED R11a/R11b supervisor (read_check's rules and the constants PROTECTED_MISMATCH = 79 and PROTECTED_CHANGED = 80). This plan follows their approved plans; if the landed code differs, follow it and note it.\n\nguest-bridge.mjs:\n- checkArgv(name): owned names only (isOwnedInstanceName), else BRIDGE_INPUT_INVALID. Return Object.freeze(['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, 'check']), exactly like bridgeArgv.\n- checkFrame({id, command, protected}) returns encodeFrame({kind: 'check', version: 1, id, command, protected}), built from validated copies in that key order. Any refusal throws bridgeError('BRIDGE_INPUT_INVALID'). The rules mirror the supervisor's read_check, which mirrors the daemon:\n  - input: a plain record whose key set is exactly {id, command, protected} (R10c's exactKeys);\n  - id: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;\n  - command: a string with command.trim() !== '', command.isWellFormed(), length <= 1000 (String.length is UTF-16 units, as the supervisor measures) and no /[\\u0000-\\u001f\\u007f-\\u009f\u2028\u2029]/;\n  - protected: an array of at most 2000 entries, each a plain record whose keys are exactly {path, oid}:\n    - oid matches /^[0-9a-f]{40}$/;\n    - path is a well-formed string of at most 500 units, with no '\\\\', '�' or control character, and no '' / '.' / '..' segment;\n    - paths are strictly ascending by Buffer.compare of their UTF-8.\n  Copy the entries as {path, oid} literals, so a later caller edit or a getter cannot change the bytes.\n- Error handling: fixed text only (bridgeError); no value is ever echoed.\n\nTests (CQ-R11c section):\n- C1:\n  - checkArgv: deepEqual to the literal for an owned name, and Object.isFrozen. 'vm', '', 'moe-x', 42 and undefined each give BRIDGE_INPUT_INVALID.\n  - checkFrame: for a valid input, the bytes equal a 4-byte big-endian length + JSON.stringify of the literal frame, built in the test. Each refusal class gives BRIDGE_INPUT_INVALID with the fixed message: bad and boundary ids, commands and paths, an extra or missing key, unsorted or duplicate paths, 2001 entries, a lone '\\ud800' in a command or path, and non-record input.\n- C2, drift; skip on win32 (POSIX python3):\n  - Table-drive about 16 boundary inputs through BOTH sides: 64/65-char ids; 1000/1001 commands; '\\x9f' vs '\\xa0'; '\u2028'; 500/501-unit paths; 2000/2001 entries; '.', '..', '' and '\\\\' paths.\n  - The supervisor side runs read_check through R11a's python3 -I -B importlib loader on a pipe holding the frame. Host-refused inputs are framed by hand with the same JSON. Assert that checkFrame accepts exactly when read_check returns, and refuses exactly when read_check raises ValueError.\n  - Also assert that the supervisor's m.PROTECTED_MISMATCH and m.PROTECTED_CHANGED equal check-session.mjs's constants (step 2 exports them).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "A new scripts/local-runner/check-session.mjs with runCheckSession, plus rows C3-C5 (DoD 1, DoD 2).\n\nModel it on guest-session.mjs's runGuestSession (R08): its input validation, the child shape check, later/cancel timers, the idempotent stop (destroy stdin, then SIGKILL only the local provider timeoutMs later) and settle. There are no requests, forwards or pending queue. Do not edit guest-session.mjs.\n\n- Header comment: one check per `multipass exec ... moe-supervisor check`. Every guest byte is untrusted. A local kill is never evidence that the guest job ended. This is local session logic: executionReady stays false and verified-local stays unavailable.\n- Exports: PROTECTED_MISMATCH = 79 and PROTECTED_CHANGED = 80, both mirroring guest-supervisor.py and pinned by C2. MAX_BUDGET_MS = 86_400_000.\n- runCheckSession({name, check, provider = {}, budgetMs, timeoutMs = 30_000, signal}). Before any spawn, validate:\n  - provider is a plain record with executable = 'multipass' (non-blank, no control character) and spawn = child_process.spawn (a function);\n  - budgetMs is a safe integer, 1 to MAX_BUDGET_MS;\n  - timeoutMs is a safe integer, 1 to 60_000;\n  - signal is undefined or an AbortSignal;\n  - argv = checkArgv(name) and frame = checkFrame(check), both computed here.\n  Any failure throws Object.assign(new Error('Check session input was invalid.'), {code: 'CHECK_SESSION_INPUT_INVALID'}), and nothing is spawned.\n  An already-aborted signal resolves 'infra-failure' without a spawn. A spawn that throws, or a child without kill, on, stdin, stdout and stderr, resolves 'infra-failure'.\n- Spawn: spawn(executable, argv, {shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']}).\n  - The FIRST and ONLY stdin write is frame, bounded by timeoutMs; a write error or timeout means failure.\n  - stdin then stays open: the supervisor reads host EOF as a gone host and kills the job (74).\n  - stderr is drained unread.\n  - The budgetMs timer starts at spawn. When it fires: timedOut = true, then stop().\n  - Abort, a child 'error' and a stdin or stdout 'error' each mark failure and call stop().\n- Frames go through createFrameDecoder() and parseGuestFrame:\n  - the first frame must be hello, and only once;\n  - then output frames, which only feed the tail (step 3);\n  - then exactly one observation, with no frame after it.\n  A request frame (a check job has no Moe route), a malformed or extra frame, or a truncated frame at stdout end (decoder.end()) marks failure and calls stop().\n- settle() runs on child 'close' or after the stop kill. It resolves Object.freeze({outcome, exitCode, signal, outputTail}). The outcome is decided in this order:\n  1. timedOut gives 'timeout';\n  2. a failure, a kill, or no clean stdout end gives 'infra-failure';\n  3. close code 79 with no frame at all gives 'skipped';\n  4. no hello or no observation gives 'infra-failure';\n  5. close code 80 gives 'inconclusive';\n  6. any other nonzero close code gives 'infra-failure';\n  7. otherwise 'passed' when observation.code === 0, else 'code-failure'.\n  exitCode and signal come from the observation for passed, code-failure and inconclusive, and are null otherwise.\n- Error handling: every failure path resolves exactly one outcome, never a throw after spawn and never 'passed'. All timers and the abort listener are cleared on settle.\n\nTests: copy the bridge test's fakeProvider (exit 74 on stdin close; async kill and close via setImmediate, per the Serena memory gotcha-local-runner-supervisor-tests) into the check file.\n- C3: each input refusal throws CHECK_SESSION_INPUT_INVALID with the fixed text and spawn.calls === 0. Cover a bad name, a bad check, a provider that is not a record, a non-function spawn, a blank executable or one containing '\\n', budgetMs 0, 1.5, '1' and MAX_BUDGET_MS + 1, timeoutMs 0 and 60_001, and signal {}. An aborted signal resolves 'infra-failure' with no spawn.\n- C4: proc.written[0] deep-equals checkFrame(check), written.length === 1, and stdin is not ended before close.\n- C5, an outcome table:\n  - passed (observation code 0, close 0);\n  - code-failure for code 3 and for signal 'SIGKILL', with exitCode or signal reported;\n  - inconclusive for close 80 after observation code 0 and after code 3;\n  - skipped for close 79 with no frames;\n  - infra-failure for: close 79 after hello; close 80 without observation; observation 0 then close 74, 71 or 1; hello only, then close 0; a request frame, even if observation 0 and close 0 follow; double hello; output before hello; a frame after the observation; garbage bytes; a truncated frame; a spawn error; a child 'error'; an abort mid-session; a provider that never closes after a protocol stop (killed);\n  - timeout for the budget firing mid-job (the fake exits 74), and for the budget firing after the observation, before close;\n  - a hung fake ignoring stdin close is killed timeoutMs later and gives 'timeout', never 'passed'.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/local-runner/check-session.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "outputTail, plus row C6 (DoD 3).\n\nIn check-session.mjs:\n- Append each output frame's bytes (stdout and stderr, in arrival order) to a buffer.\n- Whenever the buffer exceeds 2 * MAX_CHECK_TAIL_BYTES (MAX_CHECK_TAIL_BYTES = 16384, CheckRun's MAX_CHECK_LOG_BYTES), keep only its last 2 * MAX_CHECK_TAIL_BYTES. Memory stays bounded however long the job runs, and the window is wide enough that UTF-8 resynchronization and U+FFFD expansion never reach the kept end.\n- At settle:\n  - decode with a non-fatal TextDecoder, so malformed bytes become U+FFFD;\n  - re-encode to UTF-8 and take the last 16384 bytes;\n  - move the start past any continuation byte ((b & 0xc0) === 0x80);\n  - decode that slice.\n  This is the daemon checkRunStore tail rule. Every outcome carries its tail; '' when nothing was sent.\n\nError handling: the tail never throws, and a malformed byte becomes U+FFFD, never a failure.\n\nC6, with the fake provider:\n- exactly 16384 ASCII bytes are kept whole; 16385 drops the first;\n- a 2-byte and a 4-byte character straddling the cut are dropped whole, and the tail starts on a character;\n- interleaved stdout and stderr keep arrival order;\n- invalid bytes give U+FFFD, and Buffer.byteLength(tail) stays <= 16384;\n- a 2 MiB stream of 65,536-byte output frames keeps the right last 16384 bytes;\n- no output gives ''.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "End-to-end row C7 through the real supervisor's check mode (DoD 4).\n\nSkip on win32 (POSIX python3), and with R11a K3's busy-host RLIMIT_NPROC guard, since GUARD forks the job as the test user.\n\n- provider.spawn ignores multipass's argv except its final 'check' (assert it), and runs spawnProcess('python3', ['-I', '-B', '-c', LOAD + harness, SUPERVISOR, workspace, sessions], {stdio: 'pipe'}).\n- The harness:\n  - stubs m.protect_mounts with a no-op;\n  - calls sys.exit(m.main(['check'], geteuid=lambda: 0, workspace=, sessions=, identity=(os.getuid(), os.getgid(), None), netns=False)).\n  stdin is the session's own pipe, so the check frame really travels as the first write.\n- Rows. Commands are shell builtins only, so the job forks nothing:\n  - 'exit 0' resolves {outcome: 'passed', exitCode: 0, signal: null, outputTail: ''};\n  - 'echo boom; exit 3' resolves 'code-failure', exitCode 3, outputTail 'boom\\n';\n  - a protected entry with a flipped oid resolves 'skipped' from the real exit 79, with no job.\n- Kill your own leftovers in after(): spawnSync timeouts and pgrep markers, per gotcha-local-runner-supervisor-tests.\n\nError handling: a harness failure must fail the row, never skip it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run this once, fresh, from the repo root: `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`.\n\nOn WSL, run `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`. Exit 0 is required, and its output tail is the complete_task verification evidence (DoD 4).\n\nAlso confirm the following. They are not evidence.\n- Every pre-existing bridge (B, S, I, H, J) and check (E, K) row passes unchanged, with no removed line in either test file.\n- No scripts/local-runner/__pycache__.\n- git diff --numstat plus wc -l of the new module totals at most 400 changed lines. Budget: runtime up to 160 (bridge about 35, session about 125) and tests up to 240.\n  If the honest diff exceeds 400, do not cut a DoD row. Stop, and comment on the task with the measured split, so the architect can propose a size rail as for R08/R09c.\n- LF line endings.\n\nNote peers' dirty paths and continue. Error handling for the gate itself: fix a failure's cause with a test, never by weakening or skipping a row, then re-run the whole command.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff only. Load the adversarial-self-review skill first, then read it as each attacker in turn:\n- A hostile guest stream: a forged observation inside output data (it stays bytes); frames split byte by byte; a request frame; a second observation; a huge or truncated frame; output after the observation; an exit code of 79 or 80 sent with the wrong frames.\n- A slow or hung provider: one that never closes; a close before the write callback; 'error' after 'close'.\n- A caller: a frozen or getter-bearing check object; a budget at the edges; abort at every phase.\n\nCheck that:\n- 'passed' needs hello, exactly one observation with code 0, a clean EOF and close 0, and nothing else;\n- every path settles exactly once and clears its timers and listener;\n- the frame is written once and first;\n- the tail is bounded in memory and bytes;\n- verified-local, executionReady and isolation claims are untouched;\n- there is no .moe edit and no Git write.\n\nMutation spot-check in a scratch `git archive HEAD | tar -x` copy, scored by exit code with --test-name-pattern='^C[1-7] ' and a timeout. Mutants, and the row that should kill each:\n- dropping the request-frame refusal: C5;\n- accepting close 80 as passed: C5;\n- treating 79 after hello as skipped: C5;\n- outcome from the observation alone (ignoring the close code): C5;\n- a kill treated as clean: C5;\n- no budget: C5;\n- a tail cut by characters: C6;\n- no continuation skip: C6;\n- an unbounded buffer: C6, by its 2 MiB row's heap check if feasible; otherwise judge it;\n- frame keys reordered: C1;\n- a rule drifting from the supervisor: C2.\n\nFix anything found with a test, then re-run step 5's command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -32,5 +82,41 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:28.562Z",
-  "updatedAt": "2026-10-29T13:27:28.562Z"
+  "updatedAt": "2026-10-29T16:53:27.368Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:49:58.492Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:53:27.255Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected these options:\n1) Extending runGuestSession with a check mode. It would entangle forwarding and pending-request logic with a session that must refuse requests, and edit R08/R10c's file. A separate, smaller module mirrors its proven structure instead.\n2) A hello deadline. Pre-run work (re-own, blob hashing, mounts) happens before hello, and budgetMs already bounds everything.\n3) Keeping only the last 16384 raw bytes. U+FFFD expansion and a partial first sequence could leak into the kept end, so keep a 32 KiB raw window and cut after normalizing.\n4) Rejecting on abort. The contract resolves an outcome after validation; only input refusal throws.",
+    "codebaseInsights": "- guest-session.mjs (R08) is the template: input validation, child shape check, later/cancel, a stop that destroys stdin then SIGKILLs the provider after timeoutMs, and a settle that runs once.\n- The bridge tests' fakeProvider (local-runner-bridge.test.mjs:618) exits 74 on stdin close and closes asynchronously on kill.\n- parseGuestFrame validates exact guest kinds and returns output data as bytes. The observation shape is {kind, type: 'exit', code|null, signal|null}.\n- ASSUMED from approved, unlanded plans:\n  - R10c: AGENT_JOBS/jobFrame, exactKeys as a key set;\n  - R11a: read_check, main(['check']) with seams workspace/sessions/identity/netns, LOAD harness;\n  - R11b: PROTECTED_MISMATCH 79 pre-hello, PROTECTED_CHANGED 80 after the observation, m.protect_mounts.\n- The daemon's CheckRun tail rule is checkRunStore.ts (MAX_CHECK_LOG_BYTES 16384, then skip continuation bytes).",
+    "risks": "- Size: 400 is tight. The budget is in step 5, and the fallback is a size-rail proposal, never cutting DoD rows.\n- C7 depends on three unlanded slices. Adapt to the landed names, and keep the outcome rules.\n- Fake-provider masking:\n  - a synchronous close masks the kill path;\n  - a fake whose stdin close doesn't exit masks the budget path; use hung only where intended.\n- C7 is RLIMIT_NPROC-sensitive on busy hosts; use R11a K3's guard.\n- String.prototype.isWellFormed needs Node 20+. CI uses Node 24 and WSL uses the nvm Node 24.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "packages/moe-daemon/src/state/checkRunStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:53:27.368Z",
+  "approvedPlanRevision": 1
 }

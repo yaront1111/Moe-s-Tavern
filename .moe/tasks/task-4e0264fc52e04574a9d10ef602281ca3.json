@@ -13,9 +13,61 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Inventory only; no code. This is the epic-final task. Read every prerequisite's LANDED entry points and its Serena handoff memory, then list in the step note the exact names the tests will call:\n- C02b readSnapshotSource;\n- C03 semanticSource;\n- C04 the positive cache;\n- C05 negativeSearch (recordNegative, lookupNegative, the generations);\n- C06a and C06: contextDelta, and get_context's basePacketId and contextEpoch;\n- C07 planReuseJob, with claim and get_context planReuse;\n- C08 recipe.ts: instantiateRecipe, recipeKinds, RECIPE_ACTOR and readRecipeInstance;\n- C09 docsLiteralReplace, including assessPostpatch;\n- C11a: the docs.\nWhere a landed name differs from the planned one, use the landed one. Error handling: if a prerequisite is missing an entry point the matrix needs, call moe.report_blocked naming that task; never stub it in a test.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts for DoD1. It covers positive, negative, context and recipe invalidation across roles.\n- Use real temp Git repos and ToolTestHarness, with GIT_* masked and fixed identities.\n- Snapshots come from the landed scripts/local-runner/source-export.mjs, under describe.skipIf when scripts/ is absent.\n- Assert exact statuses and reasons; table-driven.\n\nCases:\n- P (C04): a cached read is invalidated by a dirty byte change while `git status --porcelain` stays byte-identical. A relevant config or lockfile change invalidates only its slice.\n- N (C05):\n  - a recorded zero-match search goes 'stale' when an untracked helper is added in scope;\n  - deleting the helper also makes it 'stale';\n  - a truncated or incomplete enumeration is 'unknown', never 'absent';\n  - a fresh store (restart) is 'unknown'.\n- S (C03): an absent or failed analyzer is inconclusive with a literal fallback, and is never recorded as a negative.\n- D (C06):\n  - the worker session gets a delta with explicit removals;\n  - QA and architect reads with no running attempt get a full snapshot;\n  - restart, reattach, epoch change, a different session and a re-claim each give a full snapshot with their exact reasons.\n- R (C09):\n  - a doc changed after the request falls back with docs-replace-hash-mismatch, and the task stays PLANNING;\n  - a changed definition makes assessPostpatch return docs-replace-recipe-mismatch;\n  - changed inputs give docs-replace-inputs-changed;\n  - under deliveryPolicy 'local-branch', a candidate that edits .moe/recipes.json gets protected-check-changed:.moe/recipes.json.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Write packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts for DoD2 and DoD3. A planner call is counted as an architect claim_next_task({statuses:['PLANNING']}) that returns the task.\n\nZero planner calls occur ONLY on these paths:\n- (a) C07 reuse. The plan is approved, the row re-enters PLANNING from BACKLOG, and an unrelated commit lands. The row resumes WORKING with approvedPlanRevision unchanged and never re-stamped, and the architect claim never returns it.\n- (b) An eligible C09 recipe through instantiateRecipe under TURBO. The row reaches WORKING with zero architect claims.\n\nA planner is REQUIRED (the claim returns the task, with the reason visible in planReuse or the fallback system message) for:\n- C07 refresh or reassess: an affected file changed, or an anchor or assumption changed;\n- C07 replan: entry from WORKING or REVIEW;\n- every recipe fallback.\n\nApproval and scope boundaries (DoD3):\n- A CONTROL recipe instantiation stays AWAITING_APPROVAL with no approvedPlanRevision.\n- SPEED approves only after its delay.\n- A DoD or contract change advances planRevision, so the row is not reused.\n- The 'moe-recipe' identity is NOT_ALLOWED for an MCP caller, and a forged recipeInstance is stripped.\n- assessPostpatch refuses extra edits.\n- A delta never crosses a session or attempt boundary.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Fix forward, only where the e2e tests expose a real defect in a prerequisite.\n- Make the smallest fix in the owning module. Call moe.declare_files on it first, and keep or add a regression in the e2e file.\n- Never weaken an assertion, and never work around a defect inside a test.\n- A fix over about 30 lines, or one that changes a contract, gets moe.report_blocked naming the owning task instead.\n- Error handling must stay fail-closed.\n- Record every fix, with its owning task, in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Full regression, once, fresh. This is the epic final, so run every affected suite in an isolated Linux snapshot of HEAD: whole-repo git archive, native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The suites:\n- `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`;\n- `npm run lint` at the root, because C10 changed role docs;\n- `node --test scripts/tests/prompt-cache-launcher.test.mjs`, which C10 extended;\n- `cd packages/moe-proxy && npm test`, only if any CQ-C commit touched packages/moe-proxy. Check with git log --grep 'Moe-Task' over the epic's task ids.\nEvery suite must exit 0. Supply the daemon npm test command, exit code and output tail to complete_task, and list the other results in the summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Whole-epic adversarial review, the last step (load adversarial-self-review). Sweep the ENTIRE CQ-C diff: every epic task's commits on moe/work-2026-10-24, plus C11a's docs read against the code. Check:\n- any approval bypass, or a re-stamped approval;\n- a planner skipped outside valid reuse or an eligible recipe;\n- scope expansion past the approved plan;\n- stale context served as fresh;\n- a cache answering 'absent' on incomplete enumeration, or freshness taken from watchers or status;\n- a delta served across an incarnation;\n- recipe identity impersonation, or a definition changeable without approval;\n- forbidden-pattern tokens, .moe edits, and Git writes outside the wrappers.\nFix small issues within step 4's rules, and list the rest as findings. In the completion summary, list the activation items still deliberately open:\n- the call site for assessPostpatch;\n- seat-side contextEpoch stamping (the compaction keeper and the proxy);\n- C02/C03 providers in served packets.\nThese belong to the rollout (M05/M06), not to C11. Write the epic handoff memory.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/__e2e__/contextInvalidation.e2e.test.ts",
+        "packages/moe-daemon/src/__e2e__/plannerBoundaries.e2e.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,7 +87,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:51.453Z",
-  "updatedAt": "2026-10-29T14:16:40.174Z",
+  "updatedAt": "2026-10-29T16:53:36.472Z",
   "dependsOn": [
     "task-34632f08a9a549a28bcf2b9f6946244b",
     "task-fef5ca575850416ea1052ee1a7b8e22e",
@@ -47,9 +99,44 @@
     "task-93dee42f71db4a6a8e47a8de052ad411",
     "task-f12b03e83a1a491494a08e42c7a58504",
     "task-f9abfd2d170246549e01fa1bcbff4238",
-    "task-311dbda408864b7597852e683076ca24"
+    "task-311dbda408864b7597852e683076ca24",
+    "task-95b610e3726c4e099c84eaedf098602a"
   ],
   "contextFetchedBy": [
-    "architect-e4b7eee0"
-  ]
+    "architect-e4b7eee0",
+    "architect-4ae016fb"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:50:59.555Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2
+  },
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:53:36.364Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Put the docs sweep inside C11. Rejected for size: e2e tests of about 350 lines plus docs of about 120 lines would exceed the 400 net cap. The docs became C11a (task-95b610e3, order 248, docs only), which C11 dependsOn, so the final review still covers them.\n2. Wiring activation into C11 (the assessPostpatch call site, epoch stamping, providers in packets). Rejected: C11's scope line excludes later activation. They are listed as open items for the M05/M06 rollout.\n3. Per-feature e2e files. Rejected: two files grouped by DoD keep the matrix reviewable and within the cap.",
+    "codebaseInsights": "The e2e convention is src/__e2e__/*.e2e.test.ts, picked up by vitest's src/**/*.test.ts include.\n\nPlanned interfaces (all unlanded at plan time; adapt to the landed names):\n- C05: Serena task-task-9ef257f58b7f4c4191f206f67bf3d865-handoff;\n- C06 and C06a: decision-cq-c06-context-deltas;\n- C07: decision-cq-c07-plan-reuse-split;\n- C08: task-f12b03e8's plan (recipe.ts, RECIPE_ACTOR 'moe-recipe', submitRecipePlan, readRecipeInstance);\n- C09: task-task-f9abfd2d170246549e01fa1bcbff4238-handoff;\n- C03b: task-task-465fb4b958934707b311fc0e7731cc7b-handoff.\nC04 is unplanned (PLANNING, architect-e4b7eee0): read its landed module and handoff.",
+    "risks": "- Many prerequisites are unlanded: if one is missing an entry point, call report_blocked on it; never stub it.\n- Flaky timing: SPEED uses a short delay plus vi.waitFor, and Git commands use bounded timeouts.\n- WSL: run the gate only in a Linux-native snapshot.\n- Size: two test files at or under 400 net lines, plus small fixes.\n- Do not edit .moe: .moe/recipes.json exists only in temp repos.",
+    "keyFiles": [
+      "packages/moe-daemon/src/__e2e__/executionContract.e2e.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:53:36.472Z",
+  "approvedPlanRevision": 1
 }
