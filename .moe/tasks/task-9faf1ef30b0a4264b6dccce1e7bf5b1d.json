@@ -78,13 +78,16 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's own diff; this is the final step. Load the adversarial-self-review skill first.\n\nAttack the code on these points:\n- Concurrency: replies arriving out of order; a reply arriving after its timeout; a reconnect while old ids are still pending.\n- Input sizes: inputs that are empty, huge or deeply nested; a line exactly at its limit; a frame exactly at its limit.\n- Prototype-style role names, such as 'constructor'.\n- Any error message that could carry input text.\n- Any blocking call that could stall the loop.\n- Any code path that reads an environment variable other than MOE_ROLE, or opens a socket other than AF_UNIX to AGENT_SOCKET.\n\nThen run mutation probes. Work in a scratch copy: cp -r scripts/local-runner and scripts/tests into a mktemp dir, and never mutate the shared tree. Run each probe as `timeout 120 node --test --test-name-pattern='^SH[0-9] ' <copy>/tests/local-runner-agents.test.mjs`. For the R07 probes, use the matching R07 test name against the copy's local-runner.test.mjs. Score each probe by exit code, never by parsing the pass/fail lines.\n\nEach mutant must be killed by the named row:\n- load_tools skips validation (SH1);\n- the role is ignored, or a non-str role is accepted (SH1);\n- the argument-key check is dropped (SH3);\n- an error message is built from input (SH3);\n- the line bound uses >= instead of > (SH6);\n- the frame bound is dropped (SH6);\n- the in-flight bound is dropped (SH6);\n- deadlines never expire (SH6);\n- the outbox is replaced by sendall (SH6, paused peer);\n- the host length bound is dropped (SH7);\n- an id never assigned is treated as a late reply (SH7);\n- the CODE check on ok:false is dropped (SH7);\n- the socket path comes from an environment variable (SH8);\n- the shimHash check is removed (its R07 row);\n- the shim is written '0755' (the R07 buildUserData row and SH9).\n\nIf a mutant survives, add a test that kills it, unless the mutant is provably equivalent; then say why in the step note. Afterwards, kill any python3 processes you started (match by your own scratch dir path) and remove the scratch dir.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of this task's own diff: shim, tools.json, bootstrap, readiness, both test files and ci.yml. All 7 files are byte-identical to HEAD 90a97db (036a901 plus checkpoint cac652b). No code change was needed and no file was modified in this step.\n\nMUTATION PROBES, fresh, scored by exit code\n- Method: one scratch copy per mutant of the delivered bytes, under /tmp/r10d1-step5.\n- Baselines: SH1-SH9 exit 0 (9 pass); the four R07 rows exit 0.\n- Plan's 15: every one is killed by its named row except 'non-str role accepted'. That one is EQUIVALENT: main() passes os.environ.get -> str or None, and JSON keys are always str, so the mutant `role in table` matches nothing new. Killed mutants and rows:\n  - load_tools skips validation (SH1); role ignored (SH1);\n  - argument-key check dropped (SH3); error message built from input (SH3);\n  - line bound `>=` (SH6); frame bound dropped (SH6); in-flight bound dropped (SH6); deadlines never expire (SH6); sendall instead of the outbox (SH6 paused peer);\n  - host length bound dropped (SH7); an unassigned id treated as a late reply (SH7); CODE check dropped (SH7);\n  - socket path from env (SH8);\n  - shimHash removed (R07 'the supervisor and credential must be root-only files…');\n  - shim written 0755 (the R07 buildUserData row AND SH9).\n- Reopen-round mutants and extras, all killed:\n  - TOOL/KEY fullmatch->match (SH1); CODE fullmatch->match (SH7); `type(id) is int`->isinstance (SH7);\n  - case-insensitive shim digests (R07 uppercase row); shimToolsHash removed; layout 755/644 accepted (R07);\n  - validInputs drops shimToolsSha256 (R07 malformed-digest row);\n  - tools written 0644 (SH9); asset size bound dropped (SH9);\n  - notifications answered (SH2); unknown protocol version echoed (SH2);\n  - fail_bridge leaves pending unanswered (SH7).\n- Total: 30 killed, 1 equivalent. Each kill was checked to be an AssertionError in the intended row, not a syntax or harness failure.\n\nATTACKED, AND HOLDS\n- Concurrency:\n  - Out-of-order replies (SH5). A reply after its timeout is ignored (SH6).\n  - Reconnect while ids are pending: fail_bridge empties pending before any reconnect, and ids are never reused, so a reply from an old connection cannot match.\n  - In one select batch, stdin handling never closes the bridge.\n- Inputs:\n  - Empty and whitespace-only lines are ignored. A line or frame exactly at its limit passes; limit+1 is refused.\n  - Deep nesting raises RecursionError, giving PARSE (or a violation for host frames). An int over 4300 digits gives PARSE.\n  - The roles 'constructor' and 'WORKER' serve none. Lone surrogates use backslashreplace, as encode_frame does.\n- Error text comes only from ERRORS; REFUSED data is a CODE-fullmatched host code.\n- The only env read is MOE_ROLE, and the only socket is AF_UNIX to AGENT_SOCKET (the SH8 AST and the main() recorder).\n\nTHEORETICAL ONLY, NOT FIXED (noted for QA)\n1. A call that times out while its frame is still queued (supervisor not reading for >120 s) is still delivered later, and the host may run it. TIMEOUT means 'outcome unknown', as with any RPC timeout. Only during such a stall can the outbox grow, by at most 8 frames per CALL_TIMEOUT_SECONDS, all from the shim's single same-trust client.\n2. connect() may block up to 5 s (plan-approved). Stdout writes block if the client stops reading, which is inherent to stdio.\n3. A stdin that epoll cannot register (a regular file, /dev/null) exits 74, fail-closed. MCP clients use pipes.\n4. A duplicate host reply for an answered id is ignored like a late reply. EOF drops pending calls, per MCP stdio shutdown. After 2^31-1 calls, every call is UNAVAILABLE (ids are never reused).\n5. Readiness `{ ...bootstrap, info }` keeps the real info last. provision.mjs is the only waitForGuestReady caller, and it passes buildUserData's output.\n\nVERIFY, fresh this session, with the 6-file CI command under env -i and Node 24.21.0:\n- Shared tree: exit 0; 365 tests, 363 pass, 0 fail, 2 skipped (K9 needs root; macOS smoke).\n- git archive of HEAD 90a97db: exit 0; 363 pass, 0 fail.\n\nSize: 648 of 650. Scratch copies are removed and no probe processes are left. The runner, specs and results stay in /tmp/r10d1-step5 for a QA rerun. Other sessions' dirty paths were left untouched.",
+      "startedAt": "2026-10-29T23:35:34.983Z",
+      "completedAt": "2026-10-29T23:47:59.968Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fe18a9a9",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -115,12 +118,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:47:49.228Z",
-  "updatedAt": "2026-10-29T23:32:07.335Z",
+  "updatedAt": "2026-10-29T23:49:02.830Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:50:19.899Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 9,
+    "executedStepCount": 10,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -139,7 +142,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [
     {
@@ -229,32 +233,24 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-29T22:28:14.035Z",
   "lastCommitOutcome": {
-    "outcome": "refused",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-29T23:12:40Z",
-    "at": "2026-10-29T23:23:58.911Z"
+    "sessionId": "worker-fe18a9a9@2026-10-29T23:23:09Z",
+    "at": "2026-10-29T23:32:54.221Z"
   },
-  "reviewStartedAt": "2026-10-29T23:08:33.984Z",
+  "reviewStartedAt": "2026-10-29T23:49:02.828Z",
   "verification": {
     "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs",
     "exitCode": 0,
-    "outputTail": "✔ CJ7 a changed image or supervisor gives a new environment, and evidence observed in the old one is stale (7.088956ms)\n✔ CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run reserved, and nothing foreign (189.23051ms)\nℹ tests 359\nℹ suites 0\nℹ pass 357\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 24963.015539",
-    "reportedAt": "2026-10-29T23:08:33.984Z",
+    "outputTail": "✔ AJ5 a failed session, an unverified sweep, mounts or a refused release keep or release only the pinned lease (81.784869ms)\n✔ AJ6 a reconnect is a new job under a fresh session id, after a verified sweep, on the renewed lease (9.632954ms)\n✔ deleteOwned purges only its owner's launched record, never an unlaunched one, and is idempotent (131.30678ms)\n✔ CJ1 invalid input or an aborted signal refuses before any ledger or provider call (2.682212ms)\n✔ CJ2 a clean run provisions, materializes, reports the environment, runs the approved check and deletes its own VM (3.566549ms)\n✔ CJ3 nothing runs in the VM unless it is provisioned and cleanly ready, and a reserved VM is still deleted (13.357891ms)\n✔ CJ4 a refused no-mount materialization stops the run before the hook and the session, and still deletes the VM (7.439033ms)\n✔ CJ5 the onReady hook gates the session; its error, a timeout or an abort settles only after the delete (30.71247ms)\n✔ CJ6 outcomes pass through after the delete, the approved protected list reaches the guest frame unchanged, and an undeleted pass is inconclusive (20.512004ms)\n✔ CJ7 a changed image or supervisor gives a new environment, and evidence observed in the old one is stale (6.991084ms)\n✔ CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run reserved, and nothing foreign (198.646227ms)\nℹ tests 365\nℹ suites 0\nℹ pass 363\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 26106.242455\n[same command on a git archive of HEAD 90a97db: exit 0; tests 365, pass 363, fail 0, skipped 2]",
+    "reportedAt": "2026-10-29T23:49:02.828Z",
     "source": "agent-reported"
   },
   "filesModified": [
-    "scripts/local-runner/guest-mcp-shim.py",
-    "scripts/local-runner/guest-mcp-tools.json",
     "scripts/tests/local-runner-agents.test.mjs",
-    ".github/workflows/ci.yml",
-    "scripts/local-runner/guest-bootstrap.mjs",
-    "scripts/local-runner/guest-readiness.mjs",
-    "scripts/tests/local-runner.test.mjs",
-    ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
-    ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json"
+    "scripts/tests/local-runner.test.mjs"
   ],
-  "completionSummary": "CQ-R10d1 guest MCP stdio shim.\n\n- scripts/local-runner/guest-mcp-shim.py (new): a stdlib-only MCP stdio server, launched as python3 -I.\n  - Serves tools/list from the tools.json allowlist for MOE_ROLE only.\n  - Relays each allowed tools/call, with allowed argument keys only, as one CQ-R08c request frame on /run/moe/agent.sock. Bounds: line and frame limits, 8 in flight, a 120 s deadline, and a non-blocking outbox.\n  - Validates host frames strictly. Every error text is fixed.\n- guest-mcp-tools.json (new): generated from guest-bridge.mjs TOOLS, with an SH1 drift pin.\n- buildUserData installs the shim (root:root 0555) and tools.json (root 0444), and returns shimSha256 and shimToolsSha256. A missing, empty or oversized asset throws BOOTSTRAP_ASSET_INVALID; input validation still runs first.\n- Readiness changes:\n  - Layout checks the shim at 555 and tools.json at 444.\n  - New shimHash / shimToolsHash probes report SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH.\n  - validInputs requires all three digests as lowercase 64-hex.\n  - The return shape is unchanged.\n- CI runs local-runner-agents.test.mjs (SH1-SH9).\n\nSize (TASK rail, at most 650), against the pre-task HEAD; new files count their line counts:\n\n| File | Lines |\n|---|---|\n| guest-mcp-shim.py | 269 |\n| guest-mcp-tools.json | 1 |\n| local-runner-agents.test.mjs | 306 |\n| guest-bootstrap.mjs | 18+3 |\n| guest-readiness.mjs | 14+10 |\n| ci.yml | 1+1 |\n| local-runner.test.mjs (own delta) | 22+3 |\n| **Total** | **648** |\n\n`git diff --numstat` for local-runner.test.mjs reads 270/4. The shared tree still carries CQ-R11's uncommitted CJ/provisioned() hunk (+248/-1), which its commit bbcd13d did not include; I preserved it untouched.\n\nSelf-review: 14 of 15 planned mutants were killed. \"Non-str role accepted\" is equivalent: main() passes str or None, and JSON keys are always str. Deviation from the plan: digestFailure became a digestCheck(id, file, key, failure) row factory with the same behaviour.",
+  "completionSummary": "CQ-R10d1 guest MCP stdio shim. Reopen round 1 fixes QA's delivery gap; the code is unchanged.\n\nDELIVERY\n- Code: completion 036a901.\n- scripts/tests/local-runner.test.mjs landed in WIP checkpoint cac652b (Moe-Task trailer, numstat 270/4: R10d1 +22/-3 plus R11's carried +248/-1). The hold was released by one Edit-tool edit inside R10d1's own R07 line 1360, which adds the 'an uppercase digest' shim digest row.\n- R11's hunks are intact: `git apply --reverse --check /tmp/qa-r11/r11-tests-only.patch` passes.\n- This completion has no further source diff, because all 7 files have been byte-identical to HEAD since cac652b. Please check `git log --stat --grep task-9faf1ef3` for cac652b instead of the completion's stat.\n\nQA's non-blocking mutants are killed in place, with no size growth:\n- TOOL/KEY fullmatch->match (SH1);\n- CODE fullmatch->match and \"id\": true isinstance (SH7).\n\nSIZE (rail at most 650): ci 1+1, bootstrap 18+3, shim 269, tools.json 1, readiness 14+10, agents test 306, own test delta 22+3. Total 648.\n\nSELF-REVIEW (step 5)\n- 31 mutants, run fresh on the delivered bytes and scored by exit code.\n- 30 are killed by their named rows: the plan's 15, QA's 4 and 11 extras.\n- One is equivalent: 'non-str role accepted', because main() passes str|None.\n- Theoretical notes are in the step-5 note: a timed-out queued frame may still run later; connect() blocks for up to 5 s.\n\nVERIFICATION, fresh, 6-file CI command under env -i, Node 24.21.0:\n- Shared tree: exit 0; 365 tests, 363 pass, 0 fail, 2 skipped (K9 needs root; macOS smoke).\n- git archive of HEAD 90a97db: exit 0; 363 pass, 0 fail.\n\nexecutionReady stays false and verified-local stays unavailable; no isolation claim.",
   "commits": [
     {
       "sha": "036a901249eb0907125c663f271d83398b4134f6",
@@ -283,11 +279,35 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "cac652ba70e1a0b35965eb930d058e632fe5c1f6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T23:23:09Z",
+      "paths": [
+        ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
+        "scripts/tests/local-runner-agents.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T23:32:54.221Z",
+      "treeId": "8f6852f444ad0a4368630bf93d4dab1f612100d4",
+      "status": "WORKING",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-0795112597cb453f93aaa5106e92d023"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
     "scripts/tests/local-runner-agents.test.mjs",
-    "scripts/local-runner/guest-mcp-shim.py"
+    "scripts/local-runner/guest-mcp-shim.py",
+    "scripts/tests/local-runner.test.mjs"
   ],
   "unattributedPaths": [],
   "reviewCompletedAt": "2026-10-29T23:23:08.047Z",
