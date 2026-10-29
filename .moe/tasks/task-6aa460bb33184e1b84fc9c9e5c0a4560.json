@@ -14,18 +14,28 @@
     {
       "stepId": "step-1",
       "description": "Read landed prerequisites, producer assigneeProtected contract, original DoD and baseline ownership memories. Map every path that can collect live working-tree bytes: run_landing/Invoke-MoeLanding, recovery re-entry, teardown_rescue/Invoke-MoeRescueRef, and any precomputed scope passed into them. Do not edit daemon/shared fake proxy in this task. Confirm source-changing paths all funnel through the guard while receipt replay of an already-landed immutable commit remains unchanged.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-27T17:46:42.773Z"
+      "note": "Mapped every working-tree source entrance.\n\nsh:\n- run_landing. Post-flight passes LAND_SCOPE_FILE=''. The pre-flight recovery in preflight_landing reuses the pre-flight scope.json via LAND_SCOPE_FILE; it will be refreshed. The daemon's phase is echo-only.\n- teardown_rescue. It runs its own commit_scope postflight, then resolve_attribution, then rescue_ref teardown. FROZEN_TREE is built only inside run_landing, after the guard point.\n- The gate, peel, commit and ref-contention rescues all run after attribution inside run_landing.\n\nps1:\n- Invoke-MoeLanding, for post-flight and for recovered landings via Invoke-MoeRecoveryCheck and Invoke-MoeIdleRecovery.\n- Invoke-MoeTeardownRescue calls Invoke-MoeRescueRef 'teardown'. Its own scope is used when Attr is null; there is also a frozen-tree branch.\n\nPlan for the guard:\n- One ownership-verdict function per wrapper, placed right after the scope fetch in each landing and teardown entrance, before baseline_landed_flag/BL copy, attribution, peel, private index and rescue.\n- On a refusal: no baseline write, no landed mark, no attempt close (finalize is worker-only and pinned to its own attempt), and MOE_LANDING_DONE/moeLandingDone set.\n- Receipt replay (receipt_replay / Invoke-MoeReceiptReplay) re-reports already-landed immutable commits and stays untouched.\n\nFinalizing-window decision (QA comment on producer task-9a9b46d8): the guard will also refuse with MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE when the task is unassigned or held by an unprotected foreign owner AND .moe/attempts holds a well-formed foreign attempt in phase 'finalizing' for the task. This mirrors the daemon's finalizing hold (util/claimEligibility.ts isHoldingFinalizingAttempt / foreignFinalizingAttempt, which already bars every other seat from claiming that row). DoD #2 still holds: a genuinely orphaned unassigned task, or a dead owner with a closed attempt, still lands.\n\nThe fake proxy has no scope-failure knob, and editing it is out of scope. The disk-fallback scenario will use the fake's documented invalid-knob exit-1 path.\n\nNo files modified.",
+      "startedAt": "2026-10-27T17:46:42.773Z",
+      "completedAt": "2026-10-29T13:06:57.905Z"
     },
     {
       "stepId": "step-2",
       "description": "Use test-driven-development to add compact equivalent postflight scenarios in both harnesses, using the producer's shared fake-proxy controls. Matrix: own assignee allowed; foreign architect/QA/governor vs protected owner refused (include protection true with presence false to represent quiet/open-attempt owner); dead/missing owner with protection false and explicitly unassigned task still checkpoint; foreign owner with omitted/malformed protection refuses. Protected exit must log/record named refusal, create no source commit/rescue/push, leave source hash/dirty status and baseline header/content unchanged, and preserve shared index. In a sequential same-repo scenario, first foreign exit refuses, then rightful worker completion includes the source bytes and reports committed completion/ref/paths instead of nothing; verify ledger completion shape consumed by landing metadata. Cover daemon-failure/disk fallback and teardown after refusal so a signal cannot recover protected bytes. Keep existing orphan/recovery scenarios intact and update counts only for genuinely added cases.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-owner-guard.cjs",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Scope growth: new shared suite scripts/tests/postflight-owner-guard.cjs (same reason as the shared fake proxy: one case list runs on both engines, so sh and ps1 cannot drift). postflight.sh/.ps1 call it after the frozen suite. Cases (12, self-counted): own, active (architect vs live worker), quiet (qa vs alive=0 protected=1), omitted / malformed protection, fallback-owner (RPC down + foreign owner on disk), finalizing (unassigned + foreign finalizing attempt), recovered (pre-flight recovery vs live owner), dead, unassigned, fallback-unassigned, sequential (architect refuses, then the owner's completion commits the bytes: committed completion row with sha/ref/paths, no NOTHING_TO_COMMIT). A refusal must leave refs/HEAD/index/porcelain/owned-file hash/baseline unchanged, push nothing, record refused rows with code/role/session, and print commit=none outcome=refused code=<code>. Frozen suite: new teardown-protected mode (Ctrl+C on a task another worker owns: no rescue/candidate/gate, one refused rescue row with ACTIVE_ASSIGNEE, baseline unchanged). Existing scenarios and counts untouched. RED: sh and ps1 (powershell 5.1) give the same result: own/dead/unassigned/fallback-unassigned pass, the other 8 fail 'a refused exit leaves refs, tree, index and baseline as they were'. Frozen teardown-protected fails 'nothing is parked, frozen or gated' on sh and ps1 (current code writes a rescue ref).",
+      "startedAt": "2026-10-29T13:07:01.597Z",
+      "completedAt": "2026-10-29T13:38:41.152Z"
     },
     {
       "stepId": "step-3",
@@ -57,7 +67,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 2,
+  "planRevision": 5,
   "status": "WORKING",
   "assignedWorkerId": "worker-0062feec",
   "branch": null,
@@ -90,7 +100,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:02:10.593Z",
-  "updatedAt": "2026-10-29T12:54:42.228Z",
+  "updatedAt": "2026-10-29T13:38:41.152Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e",
     "task-5c71dff9ff2a488d8f75ec375c4f99f8",
@@ -100,7 +110,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-26T15:33:36.071Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-1520cc31",
@@ -112,7 +123,10 @@
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T15:39:59.734Z",
   "planningNotes": {
@@ -130,5 +144,35 @@
     ]
   },
   "planApprovedAt": "2026-10-26T15:39:59.837Z",
-  "workStartedAt": "2026-10-27T17:46:42.773Z"
+  "workStartedAt": "2026-10-27T17:46:42.773Z",
+  "commits": [
+    {
+      "sha": "a2441f53f1d231559ce72df584bb0f0991895e9e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:54:34Z",
+      "paths": [
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T12:55:22.597Z",
+      "treeId": "f8da0b463a1207e6866baecddaf26cc71c0dfd83",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0062feec@2026-10-29T12:54:34Z",
+    "at": "2026-10-29T12:55:22.597Z"
+  },
+  "declaredFiles": [
+    "scripts/tests/postflight-owner-guard.cjs"
+  ]
 }
