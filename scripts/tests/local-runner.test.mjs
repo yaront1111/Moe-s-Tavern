@@ -3160,7 +3160,7 @@ os.lstat = lstat`;
 
 // CQ-R09 import rows: importCandidate over a fake guest; exportFrames is what the supervisor's export sends for entries.
 import { importCandidate } from '../local-runner/snapshot-import.mjs';
-import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES } from '../local-runner/source-snapshot.mjs';
+import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, MAX_IMPORT_PATH_BYTES } from '../local-runner/source-snapshot.mjs';
 
 const exportFrames = entries => [...entries.flatMap(entry => (entry.kind !== 'file' ? [entry]
   : [{ kind: 'file', path: entry.path, executable: entry.executable, size: entry.data.length }, ...exportData(entry.data)])),
@@ -3216,6 +3216,7 @@ test('X6 a protocol violation or bound is refused at its frame, and a cut, faile
   const end = entries => ({ kind: 'end', entries });
   const deletes = count => Array.from({ length: count }, (_, at) => ({ kind: 'delete', path: `d${at}` }));
   const chunk = data(Buffer.alloc(65_536).toString('base64')); // one full data frame, so 1 byte of a 65,537-byte file is left
+  const longest = `${'a/'.repeat(MAX_IMPORT_PATH_BYTES / 2 - 1)}ab`; // a valid multi-segment path of exactly MAX_IMPORT_PATH_BYTES
   // The guest writes these frames and then stalls, so only a refusal at the offending frame ends the import in time.
   for (const [label, frames, code = 'IMPORT_PROTOCOL_VIOLATION'] of [
     ['a sha256 key', [head({ sha256: sha('A') }), data('QQ=='), end(1)]], ['an oid key', [head({ oid: 'a'.repeat(40) }), data('QQ=='), end(1)]],
@@ -3229,13 +3230,17 @@ test('X6 a protocol violation or bound is refused at its frame, and a cut, faile
     ['a negative size', [head({ size: -1 })]], ['a string size', [head({ size: '1' }), data('QQ=='), end(1)]],
     ['a count over MAX_IMPORT_ENTRIES', [...deletes(MAX_IMPORT_ENTRIES + 1), end(MAX_IMPORT_ENTRIES + 1)], 'SNAPSHOT_LIMIT_EXCEEDED'],
     ['a declared size over MAX_IMPORT_BYTES', [head({ size: MAX_IMPORT_BYTES + 1 }), data('QQ==')], 'SNAPSHOT_LIMIT_EXCEEDED'],
+    ...[{ kind: 'delete' }, { kind: 'symlink' }, { kind: 'special' }, head()].map(frame => [`a ${frame.kind} path over MAX_IMPORT_PATH_BYTES`,
+      [{ ...frame, path: `${longest}b` }], 'SNAPSHOT_PATH_INVALID']),
+    ['a path over MAX_IMPORT_PATH_BYTES in UTF-8 bytes only', [{ kind: 'delete', path: '\u00e9'.repeat(MAX_IMPORT_PATH_BYTES / 2 + 1) }], 'SNAPSHOT_PATH_INVALID'],
   ]) {
     const t = transferProvider(undefined, proc => proc.stdout.write(framesOf(frames)));
     await assert.rejects(importCandidate({ name: GUEST, provider: t.provider, timeoutMs: 2_000 }), transferRefused(code), label);
     assert.deepEqual([t.proc.kills, t.guest.ids()], [['SIGKILL'], ['info', 'mountinfo']], label);
   }
-  const full = transferProvider(undefined, proc => proc.reply(exportFrames(deletes(MAX_IMPORT_ENTRIES))));
-  assert.equal((await importCandidate({ name: GUEST, provider: full.provider })).candidate.entries.length, MAX_IMPORT_ENTRIES);
+  const full = transferProvider(undefined, proc => proc.reply(exportFrames([...deletes(MAX_IMPORT_ENTRIES - 1), { kind: 'delete', path: longest }])));
+  const admitted = (await importCandidate({ name: GUEST, provider: full.provider })).candidate.entries;
+  assert.deepEqual([admitted.length, admitted[0].path], [MAX_IMPORT_ENTRIES, longest]); // both bounds admit their limit
   for (const [label, respond, code, timeoutMs = 5_000, kills = ['SIGKILL']] of [
     ['a stream ending mid-file', proc => proc.reply([head({ size: 65_537 }), chunk]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],
     ['a missing end', proc => proc.reply([head(), data('QQ==')]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],

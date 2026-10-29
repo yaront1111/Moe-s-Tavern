@@ -5,7 +5,7 @@
 // certification: executionReady is false and verified-local stays unavailable.
 import { invoker } from './lifecycle.mjs';
 import { assertNoMounts, runSupervisorStream, snapshotArgv } from './snapshot-transfer.mjs';
-import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, snapshotError, validateImport } from './source-snapshot.mjs';
+import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, MAX_IMPORT_PATH_BYTES, snapshotError, validateImport } from './source-snapshot.mjs';
 
 const MAX_TIMEOUT_MS = 600_000; // snapshot-transfer.mjs's bound
 // guest-supervisor.py's OUTPUT_CHUNK_BYTES. Every data frame but a file's last is this full, so a file comes in exactly
@@ -33,7 +33,8 @@ export function importError(code) {
 
 // The export stream as R09a entries: data only inside an open file, in full CHUNK_BYTES pieces but the last and never
 // past its size, every other frame only between files, nothing after end. Bounds are checked at each header, before
-// any of its data is buffered.
+// it is kept or any of its data buffered. That includes validateImport's path length rule, with its code: a header path
+// can fill a 256 KiB frame, and 10,000 of them would pin gigabytes before the gate ran.
 function exportReader() {
   const entries = [];
   let count = 0;
@@ -47,6 +48,7 @@ function exportReader() {
   };
   const header = ({ kind, path, executable, size }) => {
     if (typeof path !== 'string') throw violation();
+    if (Buffer.byteLength(path) > MAX_IMPORT_PATH_BYTES) throw snapshotError('SNAPSHOT_PATH_INVALID');
     if (++count > MAX_IMPORT_ENTRIES) throw snapshotError('SNAPSHOT_LIMIT_EXCEEDED');
     if (kind !== 'file') return void entries.push({ kind, path });
     if (typeof executable !== 'boolean' || !Number.isSafeInteger(size) || size < 0) throw violation();

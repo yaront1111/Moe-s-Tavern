@@ -22,13 +22,9 @@
         "scripts/local-runner/guest-supervisor.py",
         "scripts/tests/local-runner.test.mjs"
       ],
-      "modifiedFiles": [
-        "scripts/local-runner/guest-supervisor.py",
-        "scripts/tests/local-runner.test.mjs"
-      ],
-      "note": "Supervisor 'export' mode is in guest-supervisor.py: export(out_fd, workspace, manifest, drop=drop_to_agent), class Export, read_manifest, chunks and drop_to_agent. main() routes ['export'] as root to export(1). The header lists the new mode and exit codes. R09c's contract is unchanged: it reuses WALK, DIGEST, MAX_SNAPSHOT_FILES/BYTES, write_frame and OUTPUT_CHUNK_BYTES.\n\nHow export runs:\n- As root it reads the manifest (O_NOFOLLOW|O_NONBLOCK, regular, at most 16 MiB, exact shape) and opens the root with WALK. Any failure here exits 65.\n- It then calls drop_to_agent (setgroups([]), setgid, setuid). A KeyError or OSError exits 71.\n- The walk goes through dir fds in os.fsencode order. Regular files are opened with READ, and fstat must match S_ISREG plus the lstat's dev/ino, else 74. Size and exec are compared first; when they match, the file is sha-compared, then lseek'd and re-read if changed.\n- Bounds raise ValueError, giving 65: 10,000 entries, 256 MiB of changed bytes (from fstat, before any read), 1024-byte paths and WALK_LIMIT 100,000. Any other OSError gives 74.\n\nInterpretation, recorded on purpose: a manifest path counts as 'seen' only when a NON-directory is at it. So a file replaced by a directory yields file 'a.txt/in' plus delete 'a.txt', which R09a refuses as an ancestor collision. Counting the directory as seen would have admitted 'a.txt/in' alone and silently hidden the base file's removal. X2 pins this.\n\nTests (X1-X3 in a new CQ-R09 section of local-runner.test.mjs, run with python3 -I -B, skipped on win32):\n- X1: CLI surface plus a root routing row (exit 42, '((1,), {})').\n- X2: 10 rows with exact frames: unchanged, a 150 kB edit (3 chunks), a same-size edit (kills the missing-hash and missing-lseek mutants), chmod +x, a nested empty file (no data frame), a delete, a file symlink, a directory symlink (not descended), a FIFO, and a file replaced by a directory.\n- X3: 16 manifest/root refusals (65); the drop order recorded as open, open, getpwnam, setgroups, setgid, setuid, then only dir_fd opens; 71 for no account and for a refused setuid; 10,001 entries giving exactly 10,000 file frames and 65; a 64 GiB sparse file giving 65 with no frame; 1024 bytes passing and 1025 giving 65; WALK_LIMIT 6 giving 0 and 5 giving 65; and 74 for a file swapped in from outside, a FIFO swapped in and a chmod 000 file (skipped as root).\n\nResults: X1-X3 pass (4.4 s). M1-M4 and T1-T7 pass. No __pycache__.\n\nSize so far: supervisor +156/-6, tests +134.\n\nPeers' untracked paths (scripts/local-runner/check-evidence.mjs, scripts/tests/local-runner-check.test.mjs) were not touched.",
-      "startedAt": "2026-10-29T13:44:27.083Z",
-      "completedAt": "2026-10-29T13:54:32.796Z"
+      "note": "QA round 1 rework session. Step 1 was delivered in bfcaa8b and passed QA: X1-X3, plus the drop, dev/ino and bounds mutants killed. The rejection does not touch it, so there are no changes this round.\n\nI re-checked guest-supervisor.py:656-658: directory() refuses any entry whose raw path is over MAX_PATH_BYTES (1024) before its lstat. So an honest export never sends a header path over 1,024 bytes, and the host-side header bound in step 2 cannot refuse an honest stream that validateImport would admit.\n\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-29T14:50:38.797Z",
+      "completedAt": "2026-10-29T14:50:58.527Z"
     },
     {
       "stepId": "step-2",
@@ -44,9 +40,9 @@
         "scripts/local-runner/snapshot-import.mjs",
         "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "New scripts/local-runner/snapshot-import.mjs (104 lines) exports importCandidate and importError. The flow is: validate input with no provider call, assertNoMounts, then runSupervisorStream('export', input [], onFrame = a strict exact-key state machine), then reader.result() (needs end), assertNoMounts again, then validateImport, which is the only admission gate. It returns frozen {instance, candidate, executionReady:false}. R09c's module is unchanged.\n\nDeviations, noted for QA:\n(1) A bad provider record, run or executable is refused by lifecycle.mjs invoker() before any call, with LIFECYCLE_INPUT_INVALID or PROVIDER_INPUT_INVALID. Those are the same codes R09c's assertNoMounts surfaces for that provider. A bad name gets R09c's TRANSFER_INPUT_INVALID via snapshotArgv. A bad spawn or timeoutMs gets IMPORT_INPUT_INVALID, because R09c's streamOptions is not exported and runs only after the first mount check.\n(2) isCanonicalBase64 is copied from guest-bridge.mjs, which does not export it.\n(3) Two rows end with a clean exit 0: 'a stream ending mid-file' and 'a missing end'. They are refused after close because the provider has already exited, so there is nothing to kill (kills []). Every refusal during the stream kills with SIGKILL, and X6 asserts this per row.\n\nTests X4-X6 were added; each hostile stream fails exactly one rule. The two bound rows write their frames and then stall, so a header-time bound that went missing would show up as TRANSFER_TIMEOUT. X5 also covers a lone-surrogate path.\n\nFresh run of env -i ... node --test scripts/tests/local-runner.test.mjs: tests 210, pass 209, skipped 1, fail 0. No scripts/local-runner/__pycache__ exists. The shared checkout's other dirty paths were left untouched.",
-      "startedAt": "2026-10-29T13:54:35.179Z",
-      "completedAt": "2026-10-29T14:02:48.075Z"
+      "note": "Fixes the QA round 1 defect (DoD 1, host memory DoS through header paths).\n\nFix, scripts/local-runner/snapshot-import.mjs:\n- header() now refuses a path whose UTF-8 length is over R09a's MAX_IMPORT_PATH_BYTES with snapshotError('SNAPSHOT_PATH_INVALID'). The check runs right after the typeof check and before the entry is counted or kept, for every header kind (file, delete, symlink, special).\n- SNAPSHOT_PATH_INVALID is validateImport's own code for the same rule. So the bound changes when an over-long path is refused, never the code it gets.\n- Buffer.byteLength alone matches validateImportPath exactly, because UTF-8 bytes >= UTF-16 code units. Every other path rule stays in validateImport.\n- The exportReader comment says why.\n\nTests, X6 in scripts/tests/local-runner.test.mjs. Each new row ends at the offending frame, then the guest stalls:\n- delete, symlink, special and file headers whose path is a valid multi-segment path of MAX_IMPORT_PATH_BYTES + 1 bytes: SNAPSHOT_PATH_INVALID, kills ['SIGKILL'].\n- 'é' x 513: 1,026 UTF-8 bytes but only 513 code units, which pins byte counting.\n- The boundary: the MAX_IMPORT_ENTRIES acceptance row now carries a valid 1,024-byte multi-segment path as one of its 10,000 deletes, and it resolves with that path. Both bounds are admitted at their limit.\n\nRED: against the unfixed module, X6 failed at 'a delete path over MAX_IMPORT_PATH_BYTES' with TRANSFER_TIMEOUT after 2 s.\nGREEN: X1-X7 7/7 pass; X6 takes 123 ms.\n\nQA's own QAPROBE, in my scratch copy /tmp/r09-w3/probe (QA's dir is untouched), 10,000 headers of 262,100 chars, --max-old-space-size=2048:\n- now refused in 5 ms with SNAPSHOT_PATH_INVALID, peak heap 9 MB, RSS 72 MB;\n- QA measured 2,509 MB, or a fatal OOM, before the fix.\n- The worst in-bounds header stream (10,000 paths of 1,024 bytes) peaks at 27 MB heap and 98 MB RSS, then validateImport refuses it.\n\nSize vs 989e87a: 627 (+621/-6), within the proposed 640 cap. All added lines are ASCII; no __pycache__.\n\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-29T14:51:06.313Z",
+      "completedAt": "2026-10-29T14:54:33.768Z"
     },
     {
       "stepId": "step-3",
@@ -58,18 +54,22 @@
       "modifiedFiles": [
         "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "X7 was added to the CQ-R09 section. It is skipped on win32 with NOT_POSIX's reason and has a 120 s async timeout.\n\nThe test makes a real temporary git repo with fixture git isolated from the user's config and GIT_* variables. The repo holds an executable run.sh, a nested src/deep/lib.c and a committed .moe/x. It is then dirtied with a modified README.md, an untracked src/new.c and a deleted notes.txt. exportSourceSnapshot runs on HEAD and the test asserts excluded === 1 plus the exact base and overlay [kind, path] rows.\n\nEach session gets a fresh layoutIn(scratch) and the healthy fakeGuest. Its spawn keeps only the argv's final mode and runs the real m.materialize(0,1,ws,mf,(uid,gid)) or m.export(1,ws,mf,lambda: None) via python3 -I -B, recording every guest stdout byte.\n\nRound trip:\n- materializeSnapshot gives the frozen result, and .moe was never in the workspace.\n- importCandidate on the untouched workspace equals validateImport([]).\n- After the agent's edit, nested add, delete and chmod +x, the result deepEquals validateImport of exactly those 4 entries, with each sha256 equal to sha() of the bytes written.\n\nAttacks, each on a fresh workspace:\n- symlink to /etc/passwd: SYMLINK_DENIED;\n- symlink to a host-only temp file: SYMLINK_DENIED;\n- .git/config: CONTROL_PATH;\n- .moe/state.json: CONTROL_PATH;\n- backslash name: PATH_INVALID;\n- extra row, a non-UTF-8 name: PATH_INVALID (this proves the supervisor's surrogateescape and backslashreplace end-to-end);\n- FIFO: ENTRY_INVALID;\n- a late info mount: TRANSFER_MOUNTS_PRESENT with no export spawn.\n\nThe host-only secret is absent from all captured guest stdout, in both raw and base64 form. A positive control (the agent file's base64) proves the capture saw data frames.\n\nDoD 3 is checked across all 18 launches and every run call:\n- the guest only saw info and mountinfo, with unexpected [];\n- every spawn is ['multipass', snapshotArgv(GUEST, mode), PIPES] with exit 0;\n- every exec is --no-map-working-directory;\n- no argv element is mount, umount or transfer.\n\nCleanup: t.after SIGKILLs any live child, and scratch() removes every repo, workspace and manifest. After the run, no 'moe lifecycle*' dir and no python3 -I -B process remained.\n\nResult: X7 passes (0.8 s). Peer dirty path scripts/tests/postflight-owner-guard.cjs was left untouched.",
-      "startedAt": "2026-10-29T14:02:51.785Z",
-      "completedAt": "2026-10-29T14:06:32.232Z"
+      "note": "Rework round 1. X7 was delivered in bfcaa8b and passed QA, and it is unchanged this round. It still passes against the fixed module: X1-X7 7/7, X7 947 ms.\n\nAn over-long path from the real supervisor is already refused at the guest (exit 65; X3's row). It cannot be built on macOS CI (PATH_MAX is 1024), so the host header bound is pinned only by the step-2 X6 rows. A guest path that is not UTF-8 but is at most 1,024 raw bytes can exceed 1,024 host UTF-8 bytes once escaped (3 per lone surrogate). It now gets SNAPSHOT_PATH_INVALID at the header, the code validateImport gave it before, so X5/X7 outcomes are unchanged.\n\nmodifiedFiles lists the test file only because step 2 edited it; this step made no new edits. Peers' dirty paths are untouched.",
+      "startedAt": "2026-10-29T14:54:39.378Z",
+      "completedAt": "2026-10-29T14:54:45.468Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run it once, fresh, from the repo root:\n`node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs`\nThis is the CI local-runner step, and it includes DoD 4's `node --test scripts/tests/local-runner.test.mjs`.\n\nOn WSL, run it with `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test ...` so the Windows PATH stays out. Exit 0 is required, and its output tail is the complete_task verification evidence.\n\nAlso confirm:\n- no scripts/local-runner/__pycache__ exists;\n- `git diff --numstat` over this task's three files is within the size rail;\n- `pgrep -af 'time[.]sleep[(]600'` shows nothing of yours.\nDo not touch peers' dirty paths: note them in your step note and continue.\n\nError handling for the gate itself: if a test fails, fix the cause with a test, never by weakening or skipping a row, then re-run the whole command.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Fresh gate run from the repo root:\n\nenv -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs\n\nIt exited 0: tests 286, pass 285, fail 0, cancelled 0, skipped 1. The skip is the pre-existing opt-in macOS native smoke, not a row of this task. X1-X7 all pass.\n\nOther checks:\n- No scripts/local-runner/__pycache__ exists.\n- pgrep -af 'time[.]sleep[(]600' shows nothing.\n- No python3 -I -B process is left over.\n\nSize: git diff --numstat gives 605 changed lines (+599/-6):\n- guest-supervisor.py +156/-6\n- new snapshot-import.mjs +103\n- local-runner.test.mjs +340\n\nThat is over the ~430 split-preview estimate, and no CQ-R09 size rail exists yet. After the step-5 review I will propose an EPIC size-exception rail with the final measured numbers, following the R08 and R09c pattern. This step changed no files. Peer dirty paths, such as scripts/tests/postflight-owner-guard.cjs, were left untouched.",
-      "startedAt": "2026-10-29T14:07:09.687Z",
-      "completedAt": "2026-10-29T14:07:52.430Z"
+      "modifiedFiles": [
+        "scripts/local-runner/snapshot-import.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Gate, run fresh from the repo root on WSL: env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs\n- Exit 0: 286 tests, 285 pass, 0 fail, 1 skipped (the pre-existing opt-in macOS native provider smoke), 23.9 s. Log: /tmp/r09-w3/gate-step4.log.\n\nChecks:\n- no scripts/local-runner/__pycache__;\n- pgrep 'time[.]sleep[(]600' finds nothing;\n- size vs 989e87a over the three task files is 627 (+621/-6), within the proposed 640 cap (prop-c71ab9372be841a08c767eded3f1e131, still PENDING per QA);\n- only the two files edited this round are dirty among the task's paths.\n\nPeers' dirty paths are untouched.",
+      "startedAt": "2026-10-29T14:54:50.942Z",
+      "completedAt": "2026-10-29T14:55:30.463Z"
     },
     {
       "stepId": "step-5",
@@ -77,22 +77,21 @@
       "status": "COMPLETED",
       "affectedFiles": [],
       "modifiedFiles": [
-        "scripts/local-runner/guest-supervisor.py",
         "scripts/local-runner/snapshot-import.mjs",
         "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "Adversarial self-review of this task's diff (the three owned files vs 989e87a). It found two real defects and two masked rows; all are fixed with tests.\n\n1. Host memory DoS (hostile supervisor). The reader kept every decoded data chunk until its file closed. A 1-byte chunk costs about 150 B of RSS (measured: 2M chunks gave +300 MB), so a 256 MiB file sent as 1-byte frames could OOM the host before timeoutMs. Fix:\n- snapshot-import.mjs: every data frame but a file's last must carry exactly CHUNK_BYTES (65,536, the supervisor's OUTPUT_CHUNK_BYTES): chunk.length !== Math.min(left, CHUNK_BYTES). A file now arrives in exactly ceil(size/65536) frames.\n- guest-supervisor.py: chunks() loops on short os.read results, so it always sends full chunks.\n- Tests: X6 'a short data frame that is not the last' times out on the old code; X2 'an edit read 1,000 bytes at a time' patches os.read and fails on the old chunks(). X6 'a header inside a file' and 'a stream ending mid-file' were reshaped (65,537-byte file, one full chunk) so the new rule does not mask them.\n2. macOS CI. The local-runner step also runs on macos-latest. Two rows would throw there: X3's 1024-byte relative path (macOS PATH_MAX is 1024 for the whole absolute path) and X7's non-UTF-8 name (APFS refuses one). Both are now skipped on darwin with a reason, and X7's launch count follows (16/18). The guest is Linux, so Linux CI still covers them.\n3. Masked rows that the mutation sweep found. 'data past size' and 'a negative size' now end at the offending frame, so only an immediate refusal passes. A new 'a string size' row pins Number.isSafeInteger; without it, Buffer.concat would reject with a raw TypeError instead of a fixed code.\n\nMutation sweep, in a git-archive scratch copy (HEAD plus my three files), X1-X7 only, harness /tmp/r09-mut/mutate.mjs: 46 of 47 killed. That covers:\n- DoD 1: dev/ino, lstat, NOFOLLOW, the validateImport gate;\n- DoD 2: exact keys;\n- DoD 3: both mount checks and the mode argv;\n- the drop (absent, reordered, no setgroups) and every bound.\nThe one survivor, read_manifest's S_ISREG, is equivalent: a FIFO reads empty and fails as JSON, and a directory gives EISDIR, both 65.\n\nRed check: the new test file against HEAD's code fails X2 and X6, as intended.\n\nConsidered and left as they are (theoretical, or later rows' scope):\n- Two exports at once are read-only and independent.\n- An agent still writing during an export can produce a candidate that never existed as a whole, so R10 must stop the job before import.\n- A hostile delete for a path outside the materialized view passes validateImport, so R12 must check deletes against the base.\n- Build artifacts and ignored files are exported as new files; that is R12 policy.\n- After the drop the agent shares the uid and can signal the export, which only refuses its own candidate. setuid leaves the process non-dumpable, so it cannot be ptraced and /proc/pid/fd stays closed to the agent.\n- A FUSE hang is cut by timeoutMs.\n\nChecks:\n- Fresh gate (4-file command, env -i, node v24.21.0): exit 0; 286 tests, 285 pass, 1 pre-existing macOS skip.\n- The 5th CI file, local-runner-check: 11/11.\n- Native Windows node v24.16.0: X4-X6 pass; X1-X3 and X7 skip.\n- No __pycache__, no sleep(600) or python3 -I -B leftovers.\n- ASCII-only added lines, no forbidden patterns, executionReady false, verified-local untouched.\n- No new mount or transfer argv, no .moe edits, no Git writes.\n\nSize vs 989e87a: 620 changed (+614/-6): supervisor +160/-6, snapshot-import.mjs +107, tests +347. I am proposing an EPIC size-exception rail.\n\nPeer dirty paths (scripts/tests/postflight*.{cjs,ps1,sh}) were not touched.",
-      "startedAt": "2026-10-29T14:10:28.042Z",
-      "completedAt": "2026-10-29T14:29:06.756Z"
+      "note": "Adversarial self-review of this round's diff, plus a re-check of every value the host import keeps. No new defect was found, and no code changed in this step.\n\nRetention, every guest-controlled value the host keeps before validateImport:\n- paths: now at most 1,024 bytes, refused at their header;\n- kinds: one of the six KEYS strings;\n- file data: exact 65,536-byte chunks, at most 256 MiB in total;\n- entries: at most 10,000.\n\nV8 sliced-string check: a 1 KiB path kept from a 256 KiB whitespace-padded frame could pin the frame's text. Measured, it does not.\n- Standalone: 2,000 kept paths parsed from 256 KiB frames with parseBody's TextDecoder plus JSON.parse retain 2 MB.\n- Through the real decoder and importCandidate: 10,000 headers padded to the frame cap (about 2.6 GB on the wire) with 1,024-byte paths peak at 30 MB heap and 113 MB RSS under --max-old-space-size=2048. validateImport then refuses them after 1.9 s.\n\nError paths: no guest value can raise a non-fixed error inside push/header. The typeof check runs before Buffer.byteLength, whose TypeError would echo the value; H14 pins it. There is no shared state, so concurrent imports are independent.\n\nMutation, harness in /tmp/r09-w3/tools (a git archive HEAD plus owned-files scratch, X1-X7 only; never the shared tree):\n- This round, 11/12 killed: the bound removed (bfcaa8b behaviour), file-only, skips delete, skips symlink, skips special, skips file, code units, '>=', utf16le, protocol code, 2x limit. Each new row kills a mutant no other row kills.\n- The survivor, P11, moves the bound after ++count. It is equivalent: both orders refuse at the same frame, before anything is kept, and differ only in which fixed code wins when one header trips both bounds.\n- Round 1's 22 host mutants H01-H22 are all still killed, including the DoD guards: identity keys (H03), both mount checks (H09/H10) and the validateImport bypass (H11).\n\nNative Windows (node v24.16.0 via cmd.exe): X4-X6 pass.\n\nUnchanged: executionReady false, verified-local, no mount or transfer argv, no .moe edit, no Git write.\n\nFinal gate, fresh (env -i, node v24.21.0, the 4-file command): exit 0, 286 tests, 285 pass, 1 pre-existing macOS skip.\nSize vs 989e87a: 627 (+621/-6). No __pycache__ and no python seam children.\n\nKnown v1 limit, unchanged: a maximal honest candidate peaks near 3 x 256 MiB of off-heap Buffers (chunks, the concat, validateImport's private copy). That is R09a's MAX_IMPORT_BYTES design.",
+      "startedAt": "2026-10-29T14:55:35.936Z",
+      "completedAt": "2026-10-29T15:03:09.352Z"
     }
   ],
-  "planRevision": 11,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "planRevision": 22,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-fe18a9a9",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Governor unblock under the human's \"unblock tasks\" instruction (2026-10-27). R09's only unmet prerequisite, CQ-R08, has landed its code (completion b0e59828 on moe/work-2026-10-24) and is in QA. R09a is DONE. Plan R09 against R08's landed code. dependsOn still holds WORKING claims until R08 is DONE.",
+  "reopenCount": 1,
+  "reopenReason": "DoD 1 fails on a typical host: a hostile guest can crash the host process before validateImport refuses its stream.\n\nsnapshot-import.mjs header() keeps each path, up to the 262,144-byte frame cap, until validateImport's 1,024-byte rule runs at the end. QA measured this in a scratch copy of bfcaa8b (QAPROBE row in /tmp/qa-r09/probe/scripts/tests/local-runner.test.mjs). The stream was 10,000 delete headers with 262,100-char paths, then end:\n- default 4 GiB heap: heap peaked at 2,509 MB (RSS 2.68 GB) in 3.3 s, and only then came SNAPSHOT_PATH_INVALID;\n- --max-old-space-size=2048 (about Node's default on an 8 GB machine): \"FATAL ERROR: ... JavaScript heap out of memory\".\n\nSo a '../x' entry padded with 9,999 long paths is never refused with a fixed code. That breaks importCandidate's contract, and it is the same host-memory DoS class the self-review fixed for 1-byte data frames. Fix and test are in the issues. Stay within the proposed 640-line cap (620 now).\n\nSize, not for the worker: 620 (+614/-6) vs 989e87a. No CQ-R09 size rail is approved yet. prop-c71ab9372be841a08c767eded3f1e131 (cap 640) is still PENDING, and the next approval needs it.\n\nPassed:\n- The verification gate re-run (HEAD bfcaa8b): exit 0, 286 tests, 285 pass, 1 pre-existing skip.\n- The 5-file CI command: 297 tests, 296 pass.\n- X1-X7 in a clean git-archive copy.\n- 27/27 independent mutants killed: the drop, dev/ino, lstat, bounds, deletes, identity keys, both mount checks, the validateImport bypass, end and chunk rules, base64.\n- DoD 2 and DoD 3 hold; no forbidden patterns; executionReady false.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "CRITICAL",
@@ -125,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:13.756Z",
-  "updatedAt": "2026-10-29T14:30:01.903Z",
+  "updatedAt": "2026-10-29T15:03:09.352Z",
   "dependsOn": [
     "task-7a77465621dc4d6588d5747394cb0ced",
     "task-491a2d8cff4d45afbdac79539098ebb1",
@@ -136,12 +135,13 @@
     "firstClaimAt": "2026-10-26T05:02:38.723Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-4c57a52b",
-    "architect-bd1eb82d",
-    "worker-5ebbf433"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -160,7 +160,13 @@
     "step-4",
     "step-5"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "Path traversal, symlink escapes and .git/.moe/control-path writes are refused.",
+      "rejectedAt": "2026-10-29T14:47:12.972Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
   "planSubmittedAt": "2026-10-27T16:59:18.715Z",
   "planningNotes": {
     "approachesConsidered": "1) One R09 task under a ~1,250-line size exception. The operator rejected it in the architect REPL on 2026-10-27 in favour of a 3-way split: R09b export (task-697fb2de), R09c materialize (task-4af8b8c1), and this row for export back plus host import.\n2) A host-side diff, with the guest streaming its whole workspace. Rejected: it moves every repository byte on every import and hits R09a's 10,000-entry / 256 MiB caps on medium repos, while the supervisor already holds a root-only manifest of exactly what it materialized.\n3) Guest tar, or `multipass transfer`. Rejected: Node has no tar parser, so the host would have to parse an untrusted archive format, and transfer writes as the default user into a path the host must then trust.\n4) Walking the export as root. Rejected: between lstat and open, an agent could swap a name for a link to a root-only file such as the supervisor credential. Dropping to the agent identity first bounds every read to what the agent could already read, and O_NOFOLLOW plus the dev/ino check still refuse links.\n5) Filtering control paths or symlinks in the guest. Rejected: the host gate must see them and refuse them (DoD 1), so the supervisor reports them and validateImport refuses the whole candidate.",
@@ -237,24 +243,55 @@
       "treeId": "e7081390bd0f8e8f36560c4d4a3b46176fa0ab65",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "bfcaa8b7b51840568b042fa48a17c180fa28a828",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T14:09:23Z",
+      "paths": [
+        ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+        ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+        ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+        ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-import.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T14:30:35.521Z",
+      "treeId": "b9ae20d738ee15403a9c078a592da0b162bf0ded",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/snapshot-import.mjs"
+    "scripts/local-runner/snapshot-import.mjs",
+    ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+    ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
+    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+    ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+    ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "refused",
     "kind": "checkpoint",
-    "sessionId": "worker-5ebbf433@2026-10-29T13:42:45Z",
-    "at": "2026-10-29T14:08:48.271Z"
+    "code": "MOE_COMMIT_REFUSED_OWNER_UNKNOWN",
+    "sessionId": "qa-952969be@2026-10-29T14:30:45Z",
+    "at": "2026-10-29T14:48:04.455Z"
   },
   "workStartedAt": "2026-10-29T13:44:27.083Z",
   "touchedFiles": [
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/local-runner/snapshot-import.mjs"
+    "scripts/local-runner/snapshot-import.mjs",
+    "scripts/tests/local-runner.test.mjs"
   ],
   "reviewStartedAt": "2026-10-29T14:30:01.900Z",
   "verification": {
@@ -264,5 +301,47 @@
     "reportedAt": "2026-10-29T14:30:01.900Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R09 final slice: export back plus host import. Plan rev 1, 5/5 steps.\n\nDelivered:\n- guest-supervisor.py 'export' mode, root only. As root it reads the 0600 manifest (exact shape, at most 16 MiB) and opens the root with O_NOFOLLOW. It then drops to moe-agent (setgroups, setgid, setuid) and walks through dir fds in byte order. Files open O_NOFOLLOW|O_NONBLOCK with an lstat/fstat dev+ino check. It sends file+data only for changed files, plus symlink, special, delete and end frames, with no identity in any frame. Bounds: 10,000 entries, 256 MiB, 1024-byte paths, 100,000 names. Exit codes: 65 data/bounds, 71 drop, 74 I/O.\n- New snapshot-import.mjs, importCandidate: inputs are checked before any provider call, mounts are checked before and after, and an exact-key state machine reads the stream. validateImport is the only gate. Resolves the frozen {instance, candidate, executionReady:false}.\n\nDoD:\n1. Traversal, control paths, symlinks, specials and collisions are refused (X5, plus X7 end to end); a swapped name exits 74 (X3).\n2. Frames carry no sha256, oid or digest, and identities come only from validateImport over the bytes (X4, X6).\n3. Every call is info, mountinfo or snapshotArgv, each exec is unmapped, and a late mount is refused (X4, X7).\n4. Gate exits 0: 286 tests, 285 pass, 1 pre-existing macOS skip.\n\nSelf-review fixes:\n- Host memory DoS: 1-byte data frames cost about 150 B RSS each. Every data frame but a file's last must now be a full 65,536 bytes, and the guest loops on short reads. X2 and X6 rows were added; the new tests fail against the old code.\n- macOS CI: X3's 1024-byte path and X7's non-UTF-8 name are skipped on darwin, because macOS PATH_MAX is 1024 and APFS refuses non-UTF-8 names.\n- Timing-masked X6 rows were reshaped, and a string-size row was added.\n\nMutation sweep in a scratch copy: 46/47 killed. The survivor, read_manifest's S_ISREG, is equivalent.\nNative Windows node 24.16: X4-X6 pass, the others skip.\n\nSize vs 989e87a: 620 changed (+614/-6). E"
+  "completionSummary": "CQ-R09 final slice: export back plus host import. Plan rev 1, 5/5 steps.\n\nDelivered:\n- guest-supervisor.py 'export' mode, root only. As root it reads the 0600 manifest (exact shape, at most 16 MiB) and opens the root with O_NOFOLLOW. It then drops to moe-agent (setgroups, setgid, setuid) and walks through dir fds in byte order. Files open O_NOFOLLOW|O_NONBLOCK with an lstat/fstat dev+ino check. It sends file+data only for changed files, plus symlink, special, delete and end frames, with no identity in any frame. Bounds: 10,000 entries, 256 MiB, 1024-byte paths, 100,000 names. Exit codes: 65 data/bounds, 71 drop, 74 I/O.\n- New snapshot-import.mjs, importCandidate: inputs are checked before any provider call, mounts are checked before and after, and an exact-key state machine reads the stream. validateImport is the only gate. Resolves the frozen {instance, candidate, executionReady:false}.\n\nDoD:\n1. Traversal, control paths, symlinks, specials and collisions are refused (X5, plus X7 end to end); a swapped name exits 74 (X3).\n2. Frames carry no sha256, oid or digest, and identities come only from validateImport over the bytes (X4, X6).\n3. Every call is info, mountinfo or snapshotArgv, each exec is unmapped, and a late mount is refused (X4, X7).\n4. Gate exits 0: 286 tests, 285 pass, 1 pre-existing macOS skip.\n\nSelf-review fixes:\n- Host memory DoS: 1-byte data frames cost about 150 B RSS each. Every data frame but a file's last must now be a full 65,536 bytes, and the guest loops on short reads. X2 and X6 rows were added; the new tests fail against the old code.\n- macOS CI: X3's 1024-byte path and X7's non-UTF-8 name are skipped on darwin, because macOS PATH_MAX is 1024 and APFS refuses non-UTF-8 names.\n- Timing-masked X6 rows were reshaped, and a string-size row was added.\n\nMutation sweep in a scratch copy: 46/47 killed. The survivor, read_manifest's S_ISREG, is equivalent.\nNative Windows node 24.16: X4-X6 pass, the others skip.\n\nSize vs 989e87a: 620 changed (+614/-6). E",
+  "reviewCompletedAt": "2026-10-29T14:47:12.972Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Path traversal, symlink escapes and .git/.moe/control-path writes are refused."
+    ],
+    "issues": [
+      {
+        "type": "security",
+        "file": "scripts/local-runner/snapshot-import.mjs",
+        "line": 49,
+        "description": "header() checks a path only with typeof, so a path up to the 262,144-byte frame cap is kept until validateImport runs. 10,000 such headers pin about 2.5 GB and abort a host with a 2 GiB heap. Fix: at each header (file, delete, symlink, special), refuse a path longer than R09a's MAX_IMPORT_PATH_BYTES before counting or keeping it, with a fixed code (SNAPSHOT_PATH_INVALID or IMPORT_PROTOCOL_VIOLATION). It is a resource bound like the entry and byte checks; leave other path rules to validateImport."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "description": "Add an X6 row that ends at the offending frame: one {kind:'delete'} whose path is MAX_IMPORT_PATH_BYTES + 1 long, then the guest stalls. Only an immediate refusal then beats the 2 s timeout; on today's code the row must fail with TRANSFER_TIMEOUT. Assert the fixed code and kills ['SIGKILL']. Pin the boundary too: a valid multi-segment path of exactly 1,024 bytes is not refused at the header."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DoD 1 fails on a typical host: a hostile guest can crash the host process before validateImport refuses its stream.\n\nsnapshot-import.mjs header() keeps each path, up to the 262,144-byte frame cap, until validateImport's 1,024-byte rule runs at the end. QA measured this in a scratch copy of bfcaa8b (QAPROBE row in /tmp/qa-r09/probe/scripts/tests/local-runner.test.mjs). The stream was 10,000 delete headers with 262,100-char paths, then end:\n- default 4 GiB heap: heap peaked at 2,509 MB (RSS 2.68 GB) in 3.3 s, and only then came SNAPSHOT_PATH_INVALID;\n- --max-old-space-size=2048 (about Node's default on an 8 GB machine): \"FATAL ERROR: ... JavaScript heap out of memory\".\n\nSo a '../x' entry padded with 9,999 long paths is never refused with a fixed code. That breaks importCandidate's contract, and it is the same host-memory DoS class the self-review fixed for 1-byte data frames. Fix and test are in the issues. Stay within the proposed 640-line cap (620 now).\n\nSize, not for the worker: 620 (+614/-6) vs 989e87a. No CQ-R09 size rail is approved yet. prop-c71ab9372be841a08c767eded3f1e131 (cap 640) is still PENDING, and the next approval needs it.\n\nPassed:\n- The verification gate re-run (HEAD bfcaa8b): exit 0, 286 tests, 285 pass, 1 pre-existing skip.\n- The 5-file CI command: 297 tests, 296 pass.\n- X1-X7 in a clean git-archive copy.\n- 27/27 independent mutants killed: the drop, dev/ino, lstat, bounds, deletes, identity keys, both mount checks, the validateImport bypass, end and chunk rules, base64.\n- DoD 2 and DoD 3 hold; no forbidden patterns; executionReady false.",
+      "rejectedAt": "2026-10-29T14:47:12.972Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Path traversal, symlink escapes and .git/.moe/control-path writes are refused."
+      ],
+      "issues": [
+        {
+          "type": "security",
+          "file": "scripts/local-runner/snapshot-import.mjs",
+          "line": 49,
+          "description": "header() checks a path only with typeof, so a path up to the 262,144-byte frame cap is kept until validateImport runs. 10,000 such headers pin about 2.5 GB and abort a host with a 2 GiB heap. Fix: at each header (file, delete, symlink, special), refuse a path longer than R09a's MAX_IMPORT_PATH_BYTES before counting or keeping it, with a fixed code (SNAPSHOT_PATH_INVALID or IMPORT_PROTOCOL_VIOLATION). It is a resource bound like the entry and byte checks; leave other path rules to validateImport."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "description": "Add an X6 row that ends at the offending frame: one {kind:'delete'} whose path is MAX_IMPORT_PATH_BYTES + 1 long, then the guest stalls. Only an immediate refusal then beats the 2 s timeout; on today's code the row must fail with TRANSFER_TIMEOUT. Assert the fixed code and kills ['SIGKILL']. Pin the boundary too: a valid multi-segment path of exactly 1,024 bytes is not refused at the header."
+        }
+      ]
+    }
+  ]
 }
