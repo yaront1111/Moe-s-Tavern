@@ -57,7 +57,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -73,17 +73,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T16:00:42.739Z",
-  "updatedAt": "2026-10-29T17:48:56.231Z",
+  "updatedAt": "2026-10-29T20:19:13.570Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:11:12.195Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 0,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T20:19:13.570Z",
+    "wallClockMs": 212881375
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
     "worker-7d158765",
-    "worker-b5749787"
+    "worker-b5749787",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -214,5 +217,9 @@
     "reportedAt": "2026-10-29T17:48:29.650Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Designated the six CQ epics' final tasks via moe.update_epic finalTaskId on the live daemon (no hand edits; board data only, no code or new tests — logic is covered by task-cd2e4477's tests). Table (task, epic, isEpicFinal, want): F12 72184c65 (CQ-F) true/true; bc8410af (CQ-F top sibling 249.5) false/false; R13 f4811a72 (CQ-R) true/true; 89e10b2a (CQ-R 255.5) false/false; V12 b621ddc9 (CQ-V) true/true; e493ed19 (CQ-V 249.5) false/false; C11 4e0264fc (CQ-C) true/true; 95b610e3 (CQ-C 248) false/false; I06 4e412148 (CQ-I) true/true; 758bb59a (CQ-I 246.5) false/false; M06 ced85748 (CQ-M) true/true; c53999b2 (CQ-M 229.5) false/false. Highest siblings were recomputed at check time with list_tasks: R, V and C differ from the planning snapshot. The 12 checks ran with moe-call.sh get_context (exit 0); an MCP get_context spot-check on F12 also gave true. The other 11 were not run through the MCP tool because each payload is about 116K chars. Epic record diffs: V/C/I/M/R changed only updatedAt+finalTaskId. F: the epicRails diff and epic-3d096d59 were already dirty before this task (peers), left alone. R's update response failed to parse in my helper script (transient); the designation was verified applied afterwards."
+  "completionSummary": "Designated the six CQ epics' final tasks via moe.update_epic finalTaskId on the live daemon (no hand edits; board data only, no code or new tests — logic is covered by task-cd2e4477's tests). Table (task, epic, isEpicFinal, want): F12 72184c65 (CQ-F) true/true; bc8410af (CQ-F top sibling 249.5) false/false; R13 f4811a72 (CQ-R) true/true; 89e10b2a (CQ-R 255.5) false/false; V12 b621ddc9 (CQ-V) true/true; e493ed19 (CQ-V 249.5) false/false; C11 4e0264fc (CQ-C) true/true; 95b610e3 (CQ-C 248) false/false; I06 4e412148 (CQ-I) true/true; 758bb59a (CQ-I 246.5) false/false; M06 ced85748 (CQ-M) true/true; c53999b2 (CQ-M 229.5) false/false. Highest siblings were recomputed at check time with list_tasks: R, V and C differ from the planning snapshot. The 12 checks ran with moe-call.sh get_context (exit 0); an MCP get_context spot-check on F12 also gave true. The other 11 were not run through the MCP tool because each payload is about 116K chars. Epic record diffs: V/C/I/M/R changed only updatedAt+finalTaskId. F: the epicRails diff and epic-3d096d59 were already dirty before this task (peers), left alone. R's update response failed to parse in my helper script (transient); the designation was verified applied afterwards.",
+  "completedAt": "2026-10-29T20:19:13.570Z",
+  "reviewCompletedAt": "2026-10-29T20:19:13.570Z",
+  "reviewSummary": "Board-data-only task, no code/tests (logic coverage lives in task-cd2e4477). Reviewed completion 12fe9cce (on moe/work-2026-10-24; 24 .moe paths, no source LOC, so size cap n/a). Epic diffs: V/C/I/M/R changed only updatedAt+finalTaskId; F also carries a peer's CQ-F04d epicRails entry the daemon had already persisted (not this task's edit). Sibling task diffs are benign (updatedAt, contextFetchedBy stamp, comma reorder). Epic updatedAt stamps 17:46:29-17:46:49Z match the update_epic calls, so no hand edit.\nRe-ran the 12 isEpicFinal checks via scripts/moe-call.sh get_context: exit 0. F12 72184c65, R13 f4811a72, V12 b621ddc9, C11 4e0264fc, I06 4e412148, M06 ced85748 all true. Highest siblings bc8410af (F), 89e10b2a (R), e493ed19 (V), 95b610e3 (C), 758bb59a (I), c53999b2 (M) all false.\nRecomputed the siblings with list_tasks now: V has gained 16628bef (252.5) and 54dc3d38 (251.5) above V12 since the worker's check; both false. R's 89e10b2a is now 260.5 and still false. Explicit designation survives new tasks, as intended.\nDoD 1: six update_epic designations, no hand edits. DoD 2: true x6 and false x6 at check time, with the table in the completion summary. Remaining dirty epic-3d096d59 belongs to a peer. Non-blocking: the worker spot-checked only F12 via MCP get_context (each payload ~116K chars); the rest used the same daemon tool via moe-call.sh.",
+  "requiredCheckAtDone": null
 }
