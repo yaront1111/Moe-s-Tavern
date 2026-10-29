@@ -46,34 +46,63 @@
     {
       "stepId": "step-3",
       "description": "Write the unit tests in a new packages/moe-daemon/src/context/snapshotSource.test.ts. Keep them table-driven to stay inside the 400 net-line budget, tests included.\n\nFixtures:\n- Build raw SourceSnapshots through the LANDED producer: `await import(pathToFileURL(<repo>/scripts/local-runner/source-snapshot.mjs).href)` validateImport, assembled as {version:1, commit, tree, base, overlay, excluded:0}.\n- Resolve the repo root relatively from import.meta.url. Use describe.skipIf on the file's absence for the Docker context.\n- Base: 'src/a.ts', 'src/b.ts', 'docs/x.md', a NUL-bearing 'bin.dat', a non-UTF-8 'latin1.txt', and a 70-byte 'big.txt' with a multibyte char at the cap boundary.\n- Overlay: modify 'src/a.ts', add 'src/new.ts', and delete 'docs/x.md'.\n\nCases. Assert exact status, reason, content and bytes, and check provenance with a sha256 the TEST computes over the bytes:\n- S1: base-only read is served with layer 'base', manifest equal to the overlay-independent base digest, mode and size.\n- S2: overlay-modified read serves the overlay bytes (layer 'overlay', sha256 differs from base).\n- S3: overlay-added read.\n- S4: overlay-deleted read gives 'missing'/'deleted-in-overlay', with content undefined and bytes 0. That proves there is no base fallback.\n- S5: control paths '.moe/project.json', '.GIT/config' and 'src/.git/x' are 'refused'/'control-path'.\n- S6: paths valid for C02 but invalid for R09 ('CON.txt', 'a/PROGRA~1/x', and NFD 'é.ts') are 'refused'/'path-invalid'.\n- S7: '../x' and 'a/../b' throw INVALID_INPUT naming queries[i].path before any verification. A spy/flag fixture is not needed: assert the throw.\n- S8: the directory 'src' gives 'not-a-file', 'src/a.ts/child' gives 'not-in-manifest', and an absent path gives 'not-in-manifest'.\n- S9: 'bin.dat' gives 'binary' and 'latin1.txt' gives 'not-utf8', both with no content. With limits {maxFileBytes: 64}, 'big.txt' gives 'truncated'/'file-byte-cap' with exactly the decodable prefix.\n- S10: unverifiable inputs are each mutated from a good fixture after freezing: a copied entry with a wrong sha256, a wrong layer digest, an overlay entry at '.moe/x', and a {kind:'symlink'} entry. EVERY item, including the base-only path, is 'unavailable' with reason 'snapshot-unverifiable:<CODE>' and no content, limitations include 'snapshot-unverifiable', and complete is false.\n- S11: a request commit mismatch, a request.base mismatch and a request.overlay mismatch each give all items 'unavailable'/'snapshot-stale'. A bad request.base shape throws INVALID_INPUT.\n- S12: a search finds the literal in base-only 'src/b.ts' and overlay-modified 'src/a.ts', sorted by path then line, each with its provenance. A literal present ONLY in the base bytes of the modified 'src/a.ts', or only in deleted 'docs/x.md', is NOT matched.\n- S13: scope 'src' limits matches. Scope '.moe' is 'refused'/'control-path', scope 'docs/x.md' is 'missing'/'deleted-in-overlay', and scope 'nope' is 'missing'/'scope-not-in-manifest'.\n- S14: maxMatches 1 gives 'match-cap' with exactly one match. A tiny maxSearchBytes gives 'search-byte-cap'. A matched line with NUL or invalid UTF-8 gives 'undecodable-match' and is not returned. A CRLF line keeps its '\\r'.\n- S15: a small maxTotalBytes makes later items 'omitted'/'total-byte-cap' with content stripped.\n- S16: timeBudgetMs 1 over a large multi-file snapshot gives 'time-budget' (truncated, then unavailable), and nothing throws.\n- S17: the module source imports no 'node:fs', 'fs', 'child_process' or 'cachedPlanPaths'. Read it as text; this is a static purity check. The input queries array and snapshot are not mutated.\n\nMutation proof, on a scratch copy of the snapshot only:\n- remove the overlay-delete branch: S4 red;\n- drop the stale check: S11 red;\n- serve base when the overlay is unverifiable: S10 red;\n- swap the scope filter: S13 red;\n- remove the NUL guard: S9/S14 red.\nRecord the results in the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/snapshotSource.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotSource.test.ts",
+        "packages/moe-daemon/src/context/snapshotSource.ts"
+      ],
+      "note": "Added snapshotSource.test.ts: 37 cases, all green in the Linux snapshot (e1708ce archive, its own npm ci, env -i, node 24). With repositorySource.test.ts the run is 170/170. tsc --noEmit exit 0.\nFixtures are sealed through the landed R09a validateImport. Imports use a repo-relative URL, with describe.skipIf when scripts/ is absent; S7 runs without the producer.\nCoverage:\n- S1-S3 compare exact items, with a test-computed sha256 and the layer digest.\n- S4-S9 are a table of 13 rows. Each asserts status, reason, bytes 0 and no content, and that provenance appears only on the base-layer binary and not-utf8 files.\n- S10 covers 4 mutants with their exact codes (HASH_MISMATCH, DIGEST_MISMATCH, CONTROL_PATH, SYMLINK_DENIED). The whole result is compared, base-only paths included.\n- S11 covers the 3 mismatches plus the malformed request.base and request.overlay.\n- S12-S17 are as planned. CRLF is pinned in S12.\nDeviation: S16 mocks performance.now (as the handoff advised) instead of timing a large snapshot, so the result is deterministic.\nMutation sweep, in a scratch copy only: 17 mutants, 16 killed by their named tests. The plan's five are all killed: overlay-delete branch to S4/S12/S13, stale check to S11, overlay-unverifiable fall-through to S10, scope filter to S13/S16, and the read and search NUL guards to S9 and S14. Also killed: the stream decode, provenance layer, both deadline checks, capTotal, the classify delete check, the hex check, the match-cap off-by-one, the search byte cap, and the validation order (S7).\nThe one survivor was the query copy. It is equivalent: the function is synchronous, so a caller cannot mutate queries mid-call, and items take only primitive fields. C02 copies only because it awaits Git. I removed that line from snapshotSource.ts (-1).\nThe shared tree's 637 peer paths were not touched.",
+      "startedAt": "2026-10-29T17:05:38.339Z",
+      "completedAt": "2026-10-29T17:11:06.445Z"
     },
     {
       "stepId": "step-4",
       "description": "Add an end-to-end conformance test against the real producer and C02, in the same test file. It is skipped only when scripts/ is absent.\n1. In a mkdtemp git repo (follow repositorySource.test.ts's temp-repo helper pattern: execFileSync git with a scrubbed env, cleaned in afterAll), commit 'keep.ts', 'edit.ts' and 'gone.ts'. Then modify 'edit.ts' and delete 'gone.ts' in the worktree, add an untracked 'add.ts', and add an untracked '.moe/state.json'.\n2. Run the LANDED scripts/local-runner/source-export.mjs exportSourceSnapshot({repoDir, commit}).\n3. Assert through readSnapshotSource:\n- 'keep.ts' content and status equal what readRepositorySource(root, commit, same query) serves. This is C02 parity for committed bytes.\n- 'edit.ts' serves the dirty bytes from the overlay.\n- 'gone.ts' is 'missing'/'deleted-in-overlay'.\n- 'add.ts' is served from the overlay.\n- '.moe/state.json' is 'refused'/'control-path'. R09b excluded it, and the adapter refuses rather than reports it missing.\n- The result manifest's base and overlay equal the export's base.digest and overlay.digest.\nError handling: if the export throws, fail the test with its code. Never skip on an export failure.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotSource.test.ts"
+      ],
+      "note": "Added the E2E describe (skipIf only when scripts/ is absent). It runs a real mkdtemp git repo with a scrubbed GIT_* env, global and system config off, cleaned in afterAll.\nSetup: commit keep/edit/gone.ts, then dirty edit.ts, delete gone.ts, and add untracked add.ts and .moe/state.json. Then the LANDED exportSourceSnapshot runs. An export failure fails the test with its code; it never skips.\nAssertions:\n- keep.ts equals C02 readRepositorySource's item minus oid (status served), with base provenance (export base.digest, test-computed sha256).\n- edit.ts and add.ts serve the dirty bytes with overlay provenance (overlay.digest and sha256).\n- gone.ts is missing/deleted-in-overlay; .moe/state.json is refused/control-path.\n- The manifest equals {commit, tree, base.digest, overlay.digest}; excluded is 1.\nResult: 38/38 green in the Linux snapshot.\nMutation proof, E2E only (-t E2E): the overlay-delete branch and classify delete-check mutants fail it. The provenance-layer mutant (M7) passed the first version, so I tightened the overlay assertion to full provenance, and it now fails too. File is 191 lines. Running diff total is about 340 net across 3 files, under 400.",
+      "startedAt": "2026-10-29T17:11:07.247Z",
+      "completedAt": "2026-10-29T17:11:51.492Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification, once, fresh. In a Linux-native snapshot (whole-repo git archive HEAD, overlay ONLY this task's three files plus the landed C02b1 module if it is not yet in HEAD, symlinked native node_modules, env -i):\n- `cd packages/moe-daemon && npm test` must exit 0.\n- `npx tsc --noEmit` must exit 0.\ncmp the overlaid files against the worktree before citing the run, and supply the npm test output to complete_task.\nKeep the diff at or under 400 net lines including tests: QA's cap, with no size exception for this row.\nIf C02b1's landed names differ from the plan's assumed interface, a one-line consumer adaptation is in scope. Anything larger: moe.report_blocked with blockedOnTaskIds [task-02fd5931f7274a6696ef84e7d3da4efb]. C02b1 does not depend on this row, so there is no cycle.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.ts",
+        "packages/moe-daemon/src/context/snapshotSource.ts",
+        "packages/moe-daemon/src/context/snapshotSource.test.ts"
+      ],
+      "note": "Fresh gate in a Linux-native snapshot: a whole-repo git archive of HEAD 1c9c71a, with ONLY this task's three files overlaid. All three are cmp-equal to the worktree before and after the run.\nSetup:\n- node_modules is symlinked to a native npm ci install; package.json and package-lock.json are equal modulo CR.\n- Run under env -i with node v24.21.0 and NO_COLOR=1.\nResults:\n- `cd packages/moe-daemon && npm test`: exit 0, 177 files, 4831 passed | 16 skipped (4847). snapshotSource.test.ts ran 38/38.\n- `npx tsc --noEmit`: exit 0.\nC02b1's landed names match the plan's assumed interface exactly, so no adaptation was needed.\nSize vs 9a4f22a (before this task): repositorySource.ts +2/-2, snapshotSource.ts +147, snapshotSource.test.ts +189. Total +338/-2, net 336, under the 400 cap.\nNo forbidden tokens. The log is in /tmp/moe-c02b-final-npmtest.log.",
+      "startedAt": "2026-10-29T17:11:52.311Z",
+      "completedAt": "2026-10-29T17:12:56.289Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review: load adversarial-self-review and walk this task's own diff. This is the last step.\n- Can ANY path through readSnapshotSource serve bytes that verification did not cover, or fall back to base after an overlay delete, a refusal, staleness or unverifiability?\n- Can a hostile snapshot make it throw, loop unboundedly or block past timeBudgetMs?\n- Is provenance ever taken from a writer declaration instead of the verified copy?\n- Are C02's statuses and reasons reused verbatim where they apply ('not-in-manifest', 'not-a-file', 'binary', 'not-utf8', 'file-byte-cap', 'match-cap', 'search-byte-cap', 'undecodable-match', 'total-byte-cap'), with the new reasons limited to: 'control-path', 'path-invalid', 'deleted-in-overlay', 'snapshot-unverifiable:<code>', 'snapshot-stale', 'time-budget'?\n- Does any project global forbiddenPattern token appear in the code or tests?\nReport every path in complete_step.modifiedFiles: repositorySource.ts, snapshotSource.ts and snapshotSource.test.ts. Write the task handoff memory with the final interface for C04 and C05.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.ts",
+        "packages/moe-daemon/src/context/snapshotSource.ts",
+        "packages/moe-daemon/src/context/snapshotSource.test.ts"
+      ],
+      "note": "Adversarial self-review of this task's 3-file diff. One real defect was found and fixed.\n\nFIXED: hostile CPU past timeBudgetMs. The search line loop checked the deadline only between files, so one file of many short lines ran synchronously past the budget.\n- Measured: 64 MiB of 'x\\n' took 2.66 s with no cut. A 512 MiB two-layer snapshot would take about 20 s, over the 10 s ceiling.\n- Fix: the deadline is also checked every 4096 lines (+2 lines). With a 200 ms budget the same input now returns truncated/time-budget at 201 ms.\n- New S16 row: a 5000-line file with the needle at line 5000. Removing the check turns it red.\n\nChecked and holding:\n(a) Served bytes come only from the verifier's private copies. A delete is checked before a file, so there is no base fallback. Refusal, stale and unverifiable inputs all return before the view is built.\n(b) The verifier never throws, and the view holds only verifier-made Maps and objects. Work is O(n log n) sort plus native scans; directory checks scan at most 512 x 10k keys.\n(c) provenance.sha256 is the verifier's recomputed `actual` (snapshotManifest.ts:119-121), and manifest is the recomputed layer digest.\n(d) C02's reasons are reused verbatim, including C02's own 'scope-not-in-manifest' (repositorySource.ts:180). The only new reasons are control-path, path-invalid, deleted-in-overlay, snapshot-unverifiable:<code>, snapshot-stale and time-budget.\n(e) No forbidden tokens.\n\nTheoretical, not fixed, matching C02: accessor-bearing query or limits objects are re-read after validation. JSON callers cannot build them.\n\nFresh gate after the fix, on a Linux snapshot of HEAD a52c3b7 with the 3 files cmp-equal: npm test exit 0 (177 files, 4832 passed | 16 skipped); tsc exit 0.\nSize: +348/-2, net 346.\nHandoff memory written.",
+      "startedAt": "2026-10-29T17:12:57.114Z",
+      "completedAt": "2026-10-29T17:15:44.286Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-0062feec",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -98,12 +127,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:11:42.283Z",
-  "updatedAt": "2026-10-29T17:03:21.169Z",
+  "updatedAt": "2026-10-29T17:16:08.735Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:41:48.492Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 2
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
@@ -124,7 +153,11 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T14:42:47.544Z",
@@ -141,5 +174,52 @@
     ]
   },
   "planApprovedAt": "2026-10-29T14:42:47.657Z",
-  "workStartedAt": "2026-10-29T16:58:52.913Z"
+  "workStartedAt": "2026-10-29T16:58:52.913Z",
+  "commits": [
+    {
+      "sha": "4c888975950cb96f01c724c9c7834a5f5a5a8ac4",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T16:57:45Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-7f928d96060341f382d37cf5e22f7d53.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        "packages/moe-daemon/src/context/repositorySource.ts",
+        "packages/moe-daemon/src/context/snapshotSource.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T17:04:20.459Z",
+      "treeId": "f8cb650e75e2d2b0a59cc35c738824ae2268c271",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/context/repositorySource.ts",
+    "packages/moe-daemon/src/context/snapshotSource.ts",
+    "packages/moe-daemon/src/context/snapshotSource.test.ts"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/repositorySource.ts",
+    "packages/moe-daemon/src/context/snapshotSource.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0062feec@2026-10-29T16:57:45Z",
+    "at": "2026-10-29T17:04:20.459Z"
+  },
+  "reviewStartedAt": "2026-10-29T17:16:08.733Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux-native snapshot: whole-repo git archive of HEAD a52c3b7, overlaid with ONLY repositorySource.ts, snapshotSource.ts and snapshotSource.test.ts (cmp-equal to the worktree before and after). Native node_modules, symlinked; package.json and package-lock.json equal modulo CR. env -i, node v24.21.0, NO_COLOR=1.\n ✓ src/context/snapshotSource.test.ts (39 tests) 121ms\n ✓ src/context/repositorySource.test.ts (133 tests) 2417ms\n ✓ src/context/repositorySource.service.test.ts (16 tests) 759ms\n Test Files  177 passed (177)\n      Tests  4832 passed | 16 skipped (4848)\n   Duration  22.67s\nnpm-test-exit=0\nnpx tsc --noEmit: tsc-exit=0",
+    "reportedAt": "2026-10-29T17:16:08.733Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C02b adds the snapshot manifest source adapter. The bounded C02 source queries are now served from R09b's SourceSnapshot, and only after C02b1's verifySourceSnapshot has checked it.\n\nFiles: +348/-2 (net 346, under the 400 cap, no size exception).\n- repositorySource.ts: capTotal is exported as a generic. No behaviour change (2 lines).\n- snapshotSource.ts (new, 149 lines): pure and synchronous. Imports only util/errors, repositorySource and snapshotManifest.\n- snapshotSource.test.ts (new, 197 lines, 39 tests).\n\nInterface for C04/C05: `readSnapshotSource(snapshot: unknown, {commit, base?, overlay?}, queries, {limits})` returns `{manifest {commit, tree, base, overlay}, items, complete, limitations, bytes}`.\n- Caller errors throw INVALID_INPUT before verification.\n- Items and search matches carry provenance `{layer, manifest, sha256}`. manifest is the recomputed layer digest; sha256 is the verifier's recomputed hash of the served private copy.\n\nDoD:\n1. Base and overlay bytes are served with provenance derived from the bytes (S1-S3, S12, E2E). The test computes each sha256 itself.\n2. Refusals:\n- Control paths are refused as 'control-path' and R09-invalid paths as 'path-invalid' (S5/S6).\n- Traversal throws (S7).\n- Symlink, .moe overlay, hash and digest tampering give every item unavailable 'snapshot-unverifiable:<code>' (S10, base-only paths included).\n- The E2E .moe/state.json is refused.\n3. A delete gives 'deleted-in-overlay', and a commit, base or overlay mismatch gives 'snapshot-stale' (S4, S11). There is never a base, worktree or Git fallback.\n- E2E: a real git repo through the landed exportSourceSnapshot, compared with C02 readRepositorySource on committed bytes.\n4. Fresh `npm test` exit 0 (177 files, 4832 passed | 16 skipped); tsc exit 0.\n\nOnly C02's reason strings are reused verbatim. The new reasons are control-path, path-invalid, deleted-in-overlay, snapshot-unverifiable:<code>, snapshot-stale and time-budget.\n\nMutation testing: 19 mutants, 18 killed. The one "
 }

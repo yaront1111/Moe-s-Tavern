@@ -101,6 +101,8 @@ function searchItem(query: SourceQuery & { op: 'search' }, view: View, limits: S
     const data = Buffer.from(served.file.data.buffer, served.file.data.byteOffset, served.file.data.byteLength);
     if (!data.includes(needle)) continue;
     for (let start = 0, line = 1; start < data.length; line += 1) {
+      // A file may hold millions of short lines: re-check the deadline every 4096 of them, not only between files.
+      if (line % 4096 === 0 && performance.now() > deadline) { reason ??= 'time-budget'; break scan; }
       const newline = data.indexOf(10, start);
       const end = newline < 0 ? data.length : newline;
       const text = data.subarray(start, end);
@@ -128,7 +130,6 @@ export function readSnapshotSource(snapshot: unknown, request: SnapshotRequest, 
   for (const [key, value] of [['base', base], ['overlay', overlay]] as const) {
     if (value !== undefined && (typeof value !== 'string' || !HEX64.test(value))) throw invalidInput(`request.${key}`, 'must be a lowercase sha256 hex digest');
   }
-  queries = queries.map(q => (q.op === 'read' ? { ...q } : { ...q, paths: q.paths?.slice() }));
   const limits: SourceLimits = { ...SOURCE_LIMITS, ...options.limits };
   const deadline = performance.now() + limits.timeBudgetMs;
   const unavailable = (reason: string, manifest: SnapshotSource['manifest']) =>
