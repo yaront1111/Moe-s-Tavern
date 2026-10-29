@@ -125,7 +125,7 @@ export async function deleteOwnedInstance(name, provider = {}) {
   } catch (error) { throw commandError(error); }
 }
 
-function validOwner(owner) {
+export function validOwner(owner) {
   return isRecord(owner) && typeof owner.taskId === 'string' && /^task-[A-Za-z0-9]{1,64}$/.test(owner.taskId)
     && typeof owner.attemptId === 'string' && /^attempt-[A-Za-z0-9]{1,64}$/.test(owner.attemptId)
     && Number.isSafeInteger(owner.generation) && owner.generation > 0;
@@ -354,6 +354,23 @@ async function purgeOwned(record, ledger, provider) {
     if (after?.present !== false) throw failure ?? lifecycleError('LIFECYCLE_STATE_UNKNOWN');
   }
   await ledger.update(record, { phase: 'deleted' });
+}
+
+/**
+ * Deletes one owned instance whose life ends with its run (a CQ-R11 check VM), for its owner only and by exact name.
+ * Resolves 'deleted' once the instance is verified absent and its record marked deleted, idempotently. A reserved or
+ * collision record was never launched by us: nothing is deleted ('not-launched'), and a collision stays foreign.
+ */
+export async function deleteOwned({ ledger, name, owner, provider = {} } = {}) {
+  if (typeof ledger?.read !== 'function') throw lifecycleError('LIFECYCLE_INPUT_INVALID');
+  const record = await ledger.read(name);
+  if (owner?.taskId !== record.taskId || owner?.attemptId !== record.attemptId || owner?.generation !== record.generation) {
+    throw lifecycleError('LIFECYCLE_NOT_OWNER');
+  }
+  if (record.phase === 'deleted') return 'deleted';
+  if (!LAUNCHED.has(record.phase)) return 'not-launched';
+  await purgeOwned(record, ledger, provider);
+  return 'deleted';
 }
 
 /**

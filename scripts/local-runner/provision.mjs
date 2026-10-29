@@ -88,6 +88,6 @@ export async function provisionGuest({
   const ready = await waitForGuestReady({ ledger, name, owner, sourceImage: image.sourceImage, bootstrap, provider, sleep });
   return {
     provisioned: true, instance: name, bootstrapReady: ready.bootstrapReady, executionReady: false,
-    prerequisites: pre.prerequisites, image: ready.image, failures: ready.failures,
+    prerequisites: pre.prerequisites, image: ready.image, supervisorSha256: ready.supervisorSha256, failures: ready.failures,
   };
 }

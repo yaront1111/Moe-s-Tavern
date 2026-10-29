@@ -13,9 +13,82 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Producer additions the orchestrator needs, with their tests in scripts/tests/local-runner.test.mjs (reuse harness() at about line 333, fakeMultipass at about 310 and provisionWith at about 1742).\n\n(a) scripts/local-runner/lifecycle.mjs: export deleteOwned({ ledger, name, owner, provider = {} }), for a fresh check VM that ends with its run.\n- Read the record; a different {taskId, attemptId, generation} throws LIFECYCLE_NOT_OWNER.\n- A LAUNCHED-phase record (the existing LAUNCHED set) goes through the existing private purgeOwned: query, delete, verify absent, then ledger phase 'deleted'. Resolve 'deleted'.\n- An already 'deleted' record resolves 'deleted' (idempotent).\n- Any other phase (reserved, collision) resolves 'not-launched' and is NEVER deleted. A collision is a foreign instance; it stays for R06 reconcile.\n- Also export the existing validOwner, so the orchestrator validates owners by the same rule instead of copying its regexes.\nTests:\n- a launched record is purged and marked deleted;\n- a foreign owner gets LIFECYCLE_NOT_OWNER with zero provider calls;\n- a collision or reserved record is never deleted;\n- an instance still present after delete throws LIFECYCLE_STATE_UNKNOWN and the record is NOT marked deleted;\n- a second call is idempotent.\n\n(b) scripts/local-runner/provision.mjs: provisionGuest's provisioned result adds supervisorSha256: ready.supervisorSha256. That is the value R07 readiness verified in the guest (buildUserData's sha256 of the supervisor bytes). Assert it in a provisionGuest test, and update any exact-key assertion of that result.\n\nError handling: only fixed codes; no path, credential or provider text in any message.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "lifecycle.mjs: exported validOwner; new exported deleteOwned({ledger,name,owner,provider}): owner mismatch → LIFECYCLE_NOT_OWNER (0 provider calls), 'deleted' → 'deleted' (idempotent, 0 calls), reserved/collision → 'not-launched' (never deleted), LAUNCHED → private purgeOwned (query, delete, verify absent, ledger 'deleted'). A null ledger gives LIFECYCLE_INPUT_INVALID. provision.mjs: provisionGuest's provisioned result adds supervisorSha256: ready.supervisorSha256. Tests: the provisioned() helper now expects supervisorSha256 (it covers all 6 exact provisionGuest result assertions), plus a new deleteOwned row (4 launched phases + idempotent, absent VM, reserved/collision untouched, 4 foreign owners, delete-succeeded-but-present and delete-error both LIFECYCLE_STATE_UNKNOWN with the record kept, and validOwner). RED: ERR 'does not provide an export named deleteOwned'. GREEN: env -i node 24, local-runner.test.mjs with --test-skip-pattern=\"real hung process\": 223 tests, 222 pass, 1 skip, 0 fail. Shared checkout has many peer dirty paths; untouched.",
+      "startedAt": "2026-10-29T22:24:44.177Z",
+      "completedAt": "2026-10-29T22:27:11.250Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TESTS FIRST (red). Load test-driven-development. In scripts/tests/local-runner.test.mjs, beside R10's AJ1-AJ6, add CJ1-CJ8 for runCheckJob (next step).\n\nCJ1-CJ7 inject fake steps through runCheckJob's second argument. Each fake records its calls in one ordered log, so every test asserts the exact sequence, exact codes and exact values.\n\n- CJ1 input: an unknown key, a bad check (checkFrame rule), a bad snapshot (workspaceEntries rule), budgetMs 0 or over MAX_BUDGET_MS, timeoutMs outside 1-60000, a non-function onReady, a malformed owner or ledger, and a pre-aborted signal each reject before ANY call (empty log): CHECK_JOB_INPUT_INVALID, or CHECK_ABORTED.\n- CJ2 happy path: the order is provision, materialize, onReady(environment), session (its check is the caller's, its budgetMs and signal passed through), remove.\n  - environment equals checkEnvironment({sourceImageSha256: image.source.sha256, providerImageHash: image.provider.imageHash, supervisorSha256, resources: GUEST_RESOURCES}).\n  - The result is frozen {outcome:'passed', exitCode:0, signal:null, outputTail, environment, workspace:'unverified', instance, vm:'deleted', failure:null, executionReady:false}.\n- CJ3 credential and readiness (DoD 1):\n  - bootstrapReady false, or any readiness failure such as a job identity able to read the supervisor credential, gives no materialize, onReady or session; outcome 'infra-failure', failure CHECK_GUEST_NOT_READY, VM removed;\n  - provisioned:false gives CHECK_PROVISION_UNAVAILABLE and vm 'none';\n  - a provision that throws AFTER reserving still removes the reserved name, with the fixed upstream code kept.\n- CJ4 boundaries (DoD 2): a materialize refusal such as TRANSFER_MOUNTS_PRESENT or a digest mismatch gives no onReady and no session; failure is that code; VM removed.\n- CJ5 onReady:\n  - if it throws, no session runs; remove completes BEFORE runCheckJob rejects with the SAME error object;\n  - a hook outliving timeoutMs rejects CHECK_READY_TIMEOUT after the remove;\n  - an abort during the hook resolves failure CHECK_ABORTED after the remove.\n- CJ6 outcomes: code-failure, timeout, skipped (79), inconclusive (80) and infra-failure pass through, with the VM removed each time. A remove failure turns 'passed' into 'inconclusive' with CHECK_VM_DELETE_FAILED and vm 'delete-failed', and leaves non-passing outcomes as they are.\n- CJ7 identity (DoD 3):\n  - a different provider image hash or supervisor sha gives a different environment, and evidenceStatus of the first run's observation against the second's current is 'stale';\n  - identical inputs give 'fresh'.\n- CJ8 real composition: the real provisionGuest (through provisionWith's fakes) and the real deleteOwned over harness().\n  - The name the run reserved is captured through the ledger wrapper and purged (ledger phase 'deleted'), on the happy path and when readiness fails.\n  - A foreign or collision record is untouched.\n\nRun `node --test scripts/tests/local-runner.test.mjs` and confirm the CJ cases fail for the missing module, not for a fixture bug.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Added CJ1-CJ8 at the end of scripts/tests/local-runner.test.mjs. checkHarness() injects provision/materialize/session/remove plus a fake R06 ledger, and records one ordered log ('removed' once the delete settles). Rows:\n- CJ1: about 35 invalid inputs, missing required keys and non-record inputs give CHECK_JOB_INPUT_INVALID; a pre-aborted signal gives CHECK_ABORTED. All have an empty log.\n- CJ2: exact order and args; the wrapped ledger is never the owner's; frozen result; two concurrent runs of one owner use only their own VMs.\n- CJ3: 13 provision/readiness rows (DoD 1).\n- CJ4: TRANSFER_* and unknown materialize refusals.\n- CJ5: the hook's own error (same object, also a non-Error), CHECK_READY_TIMEOUT and aborts all settle after 'removed'.\n- CJ6: outcome pass-through; delete failures make a pass inconclusive; session throw or bogus outcome gives CHECK_SESSION_FAILED. A real runCheckSession over a fake supervisor maps exits 79/80/0 to skipped/inconclusive/passed and sends checkFrame(CHECK) even after the caller edits the check during onReady.\n- CJ7: identity and evidenceStatus fresh/stale.\n- CJ8: real provisionGuest and real deleteOwned over fakeVm (ready, credential readable, launch exhausted, name collision) with foreign and collision records untouched.\n\nDeviations from the plan text: PRIMARY_ is added to the passed-through provision code prefixes (PRIMARY_NAME_CONFLICT is provisionGuest's fixed code); a session throw or an unknown outcome is CHECK_SESSION_FAILED; required keys must be present.\n\nRED: ERR_MODULE_NOT_FOUND check-lifecycle.mjs (the whole file fails at load, as expected).",
+      "startedAt": "2026-10-29T22:28:41.497Z",
+      "completedAt": "2026-10-29T22:34:42.737Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Create scripts/local-runner/check-lifecycle.mjs, modeled on R10's agent-lifecycle.mjs (header comment, exact KEYS, a parse() that copies every input once, fixed-code errors, frozen results, executionReady always false).\n\nExport runCheckJob(input, { provision = provisionGuest, materialize = materializeSnapshot, session = runCheckSession, remove = deleteOwned } = {}). The second argument follows the dependency-injection idiom of cli.mjs and vm-control.mjs.\n\n1. Parse: input keys must be exactly platform, ledger, owner, cacheDir, supervisor, credential, snapshot, check, budgetMs, onReady, provider, signal and timeoutMs (default 30000).\n   - Validate with the existing rules: checkFrame(check); workspaceEntries(snapshot), whose merged copy is dropped before provisioning; validOwner(owner); budgetMs 1..MAX_BUDGET_MS; timeoutMs 1..60000; onReady is a function; the ledger has read, reserve, update and recordImage; the provider is a plain record, copied once; signal is undefined or an AbortSignal.\n   - Invalid input rejects CHECK_JOB_INPUT_INVALID; an already aborted signal rejects CHECK_ABORTED. Both happen before any ledger or provider call.\n2. Capture the reserved name. Pass provision a wrapper ledger, {...ledger, reserve: async owner => { const r = await ledger.reserve(owner); reserved = r.instance; return r; }}, never the owner's ledger directly. A throw after the reservation still knows which VM to delete, and another run's VM is never touched.\n3. Provision with {platform, ledger: wrapped, owner, cacheDir, supervisor, credential, provider}. This includes R07's waitForGuestReady, whose probes deny every job identity the supervisor credential (DoD 1).\n   - provisioned !== true: CHECK_PROVISION_UNAVAILABLE.\n   - bootstrapReady !== true or any failure: CHECK_GUEST_NOT_READY.\n   - A throw keeps a fixed upstream code matching /^(?:PROVISION|BOOTSTRAP|LIFECYCLE|LEDGER|PROVIDER|IMAGE)_[A-Z0-9_]{1,60}$/, else CHECK_PROVISION_FAILED.\n4. environment = checkEnvironment({ sourceImageSha256: image.source.sha256, providerImageHash: image.provider.imageHash, supervisorSha256, resources: GUEST_RESOURCES }).\n   - GUEST_RESOURCES is the launch size (launchResourceArgs), stable across fresh VMs, so identical environments can share fresh evidence (R11d evidenceStatus).\n   - A refusal gives CHECK_ENVIRONMENT_UNKNOWN.\n5. materialize({ name, snapshot, provider }) asserts no mounts before and after. A refusal keeps its TRANSFER_* code, else CHECK_MATERIALIZE_FAILED.\n6. If the signal has aborted, CHECK_ABORTED. Otherwise await onReady(environment), raced against timeoutMs and the signal:\n   - its own error is remembered and rethrown unchanged after the cleanup;\n   - a timeout gives CHECK_READY_TIMEOUT (rejected after cleanup);\n   - an abort gives a resolved CHECK_ABORTED.\n7. session({ name, check, provider, budgetMs, timeoutMs, signal }). runCheckSession never rejects after its input check.\n8. In finally, whenever a name was reserved: vm = await remove({ ledger, name, owner, provider }), where 'not-launched' also counts as nothing left. A throw gives vm 'delete-failed'. With no reservation, vm is 'none'.\n9. Settle only after step 8:\n   - outcome is 'infra-failure' whenever a failure stopped the run before the session;\n   - a 'passed' with vm !== 'deleted' becomes 'inconclusive' with CHECK_VM_DELETE_FAILED, because CHECK_BOUNDARIES.process.vm says 'deleted-after-run';\n   - workspace is always 'unverified'. CQ-R11f (task-5b0a2bcf) adds the root read-only guest verify mode, because export walks as moe-agent and cannot read a moe-check-owned workspace.\n\nThis module's error handling: messages are fixed code text only, never a path, credential, guest byte or upstream message. There is no module-level mutable state; each run reserves its own fresh VM.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/check-lifecycle.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "New scripts/local-runner/check-lifecycle.mjs (126 lines) exports runCheckJob(input, {provision, materialize, session, remove}). Defaults are provisionGuest, materializeSnapshot, runCheckSession and deleteOwned.\n- parse: the keys must be a subset of the 13 KEYS, and every non-optional key must be present. The owner is copied once and checked with validOwner. The check is copied once, with exact keys, and checked with checkFrame on that copy, so a caller edit during onReady cannot change the frame. workspaceEntries(snapshot) only validates. The ledger read/reserve/update/recordImage are copied; the provider is copied and frozen. budgetMs is 1..MAX_BUDGET_MS, timeoutMs is 1..60000, onReady must be a function, and the signal is undefined or an AbortSignal.\n- A wrapper ledger captures this run's reservation.\n- Provision: a throw keeps a code matching /^(PROVISION|BOOTSTRAP|LIFECYCLE|LEDGER|PROVIDER|IMAGE|PRIMARY)_/, else CHECK_PROVISION_FAILED. Then CHECK_PROVISION_UNAVAILABLE; instance !== reserved gives CHECK_PROVISION_FAILED; bootstrapReady !== true or any failure gives CHECK_GUEST_NOT_READY.\n- checkEnvironment uses the observed image/supervisor and GUEST_RESOURCES, else CHECK_ENVIRONMENT_UNKNOWN.\n- Abort check, then materialize (TRANSFER_* kept, else CHECK_MATERIALIZE_FAILED).\n- Abort check, then onReady raced against timeoutMs and the signal.\n- Session: an unknown outcome or a throw gives CHECK_SESSION_FAILED.\n- finally: the remove is normalized to deleted / not-launched / delete-failed, or 'none' when nothing was reserved.\n- Settle: infra-failure on any pre-session code; a pass without a verified delete becomes inconclusive with CHECK_VM_DELETE_FAILED; workspace is 'unverified'; executionReady is false.\n\nCompacted the tests (rows merged, no case dropped). Size: check-lifecycle 126 + test +248/-1 + lifecycle +18/-1 + provision +1/-1 = 396 changed lines.\n\nGREEN: env -i node 24.21, local-runner.test.mjs with the hung-process test skipped: 231 tests, 230 pass, 1 skip, 0 fail.",
+      "startedAt": "2026-10-29T22:34:43.675Z",
+      "completedAt": "2026-10-29T22:38:16.775Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run the DoD command, `node --test scripts/tests/local-runner.test.mjs`. It must exit 0; supply its command, exit code and output tail to complete_task. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"<linux node bin>:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs` with no MOE_* set. python3 must be on PATH, for the real-supervisor tests.\n2. ALSO run, and report: `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-snapshot.test.mjs`. These are the other suites that import lifecycle.mjs, provision.mjs or the check modules.\n3. Mutants, on scratch copies only; restore and cmp afterwards. Each must fail a named case:\n   (i) skip the bootstrapReady check: CJ3;\n   (ii) remove only on the happy path: CJ3 and CJ4;\n   (iii) settle before remove: CJ5;\n   (iv) pass the owner's ledger unwrapped to provision: CJ8's throw-after-reserve row;\n   (v) use the observed memoryTotal instead of GUEST_RESOURCES: CJ2's environment equality;\n   (vi) delete a collision record in deleteOwned: its test;\n   (vii) report 'passed' after a failed delete: CJ6.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY, fresh, with env -i HOME, PATH=node v24.21.0, no MOE_*:\n1. DoD `node --test scripts/tests/local-runner.test.mjs`: exit 0. 232 tests, 231 pass, 0 fail, 1 skipped (the pre-existing opt-in \"native provider smoke on real macOS hardware\"); duration 35.9s.\n2. `node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-snapshot.test.mjs`: exit 0. 59 tests, 58 pass, 0 fail, 1 skipped (pre-existing K9, which needs root for a mount namespace).\n3. Mutants. They ran on a /tmp copy of scripts/ and packages/moe-daemon/src only, never the shared tree. Each site was unique; after each run the file was restored and checked byte-equal, and at the end the copy was cmp-identical to the tree, then removed. Every mutant failed its named case:\n   (i) skip bootstrapReady: CJ3.\n   (ii) remove only on the happy path: CJ3, CJ4 (+CJ5, CJ6, CJ8).\n   (iii) settle before remove: CJ5 (+CJ2-4, CJ6, CJ8).\n   (iv) unwrapped ledger to provision: CJ8 (+CJ2-7).\n   (v) observed memory (GUEST_RESOURCES.memoryBytes - 1 MiB) instead of GUEST_RESOURCES: CJ2 (+CJ4-8). readyGuest carries no observed size, so this stands in for the observed memoryTotal.\n   (vi) deleteOwned purges a collision: the deleteOwned test, plus CJ8.\n   (vii) 'passed' after a failed delete: CJ6.\n   (viii) provision.mjs drops supervisorSha256: 7 provisioned() rows plus CJ8.\nForbidden-pattern grep over the changed files: clean. Size is unchanged at 396 changed lines. No files changed in this step.",
+      "startedAt": "2026-10-29T22:38:17.705Z",
+      "completedAt": "2026-10-29T22:42:10.724Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a candidate check trying to pass without isolation. Check:\n- Is there any path to runCheckSession without a clean R07 readiness, without the no-mount materialization, or before onReady settled?\n- Is there any settle path that skips the delete? Consider onReady hanging, a signal abort mid-step, provision throwing before versus after the reservation, and remove throwing.\n- Can a run delete a VM it did not reserve, or a foreign collision instance?\n- Can the environment be computed from caller-supplied identity instead of the ready guest's observed image and supervisor hash?\n- Do two concurrent runs of the same owner each get their own VM?\n- Can the credential, a guest byte or a path leak into an error or the result?\n- Is executionReady always false, verified-local untouched, and nothing written under .moe?\n- Are the V04b seams (task-340a07b3 comment) satisfied as described: onReady before the session, its error rethrown after the delete, and the workspace field?\n\nReport every path in complete_step.modifiedFiles. Write the Serena handoff memory 'task-task-0795112597cb453f93aaa5106e92d023-handoff' for R11f (task-5b0a2bcf), V04b (task-340a07b3) and R13 (task-f4811a72).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/provision.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW, over `git diff` of the four task paths only. No code change was needed.\n- Session gating: the session is reached only after provisioned===true, instance===the reserved name, bootstrapReady===true with failures===[] (R07: every job identity is denied the credential; SUPERVISOR_HASH_MISMATCH is probed), materializeSnapshot resolved (it checks no mounts before and after), and onReady resolved within timeoutMs with no abort. Mutants i-v prove each gate.\n- Delete on every settle path: the delete runs in `finally` whenever a name was reserved, and the result is built only after it. onReady throwing, hanging (CHECK_READY_TIMEOUT), an abort mid-step, provision throwing after the reservation, and remove throwing (synchronously or not) all delete first, then settle. Mutants ii and iii.\n- Foreign VMs: deleteOwned rechecks the owner against the ledger record, purges only the exact name this run reserved (provisionGuest reserves once, provision.mjs:85), and a collision gives 'not-launched'. Mutant vi; CJ8 seeds a foreign owner and a collision.\n- Environment: computed from the ready guest's pinned source sha256, the observed provider image hash, the supervisor hash the guest itself verified, and GUEST_RESOURCES. CHECK_BOUNDARIES is part of that identity (E4), and nothing comes from the caller. Mutant v; CJ7 covers stale evidence.\n- Two concurrent runs of one owner each reserve, run and delete their own VM (CJ2 twins).\n- Leaks: failure is always a fixed code; provision and transfer codes pass through only when they match the regexes; checkError has fixed text. outputTail is the session's bounded check log by design.\n- executionReady is always false, verified-local is untouched, and no file write happens here (the ledger is injected).\n- V04b seams: onReady(environment) runs before the session, its error is rethrown unchanged after the delete, and the result carries workspace 'unverified'.\nTheoretical, noted for QA:\n(a) When onReady's error is rethrown, the caller does not see vm; a failed delete then leaves a launched, non-deleted ledger record for R06's closed-attempt reclaim.\n(b) remove has no deadline of its own; it is bounded by deleteOwned's provider-call timeouts.\n(c) The snapshot is validated, not copied; materializeSnapshot revalidates it, and the guest checks protected blobs against the frozen approved list (79 gives skipped).\n(d) provisionGuest takes no signal, so an abort mid-provision is seen only after it, and the VM is still deleted.",
+      "startedAt": "2026-10-29T22:42:11.643Z",
+      "completedAt": "2026-10-29T22:43:20.584Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -41,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-29T20:00:02.655Z",
+  "updatedAt": "2026-10-29T22:44:01.045Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",
@@ -51,14 +124,116 @@
     "task-53daa94fa9d7405a831eb727eec803ac"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-29T13:16:35.024Z"
+    "firstClaimAt": "2026-10-29T13:16:35.024Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "architect-e4b7eee0",
+    "worker-5ebbf433"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
-  "blockedAt": null
+  "blockedAt": null,
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:22:53.058Z",
+  "executionContract": {
+    "intendedBehavior": "One isolated check runs in one fresh owned VM.\n\nrunCheckJob does the following, in order:\n- provisions a fresh VM and requires clean R07 readiness, whose probes deny every job identity the supervisor credential;\n- materializes the snapshot with no mounts;\n- reports the environment identity (checkEnvironment over CHECK_BOUNDARIES, the observed image and supervisor, and GUEST_RESOURCES) to the caller's onReady hook before the session;\n- runs the approved check through runCheckSession, whose R11a/R11b guest mode enforces the identity, network, rlimit and protected-path boundaries;\n- deletes the VM before it settles, on every path.\n\nOutcomes use CheckOutcome. A passed run whose VM was not deleted is inconclusive. workspace stays 'unverified' until CQ-R11f.",
+    "acceptanceCriteria": [
+      "DoD 1: no session runs unless provisioning is ready with zero readiness failures (CJ3); the approved protected list reaches the guest frame unchanged, and its 79 or 80 ends map to skipped or inconclusive (CJ6).",
+      "DoD 2: boundaries are reported through the environment identity, and enforced through no-mount materialization, the guest check mode and VM deletion on every path (CJ2, CJ4, CJ5, CJ6, CJ8).",
+      "DoD 3: a changed image or supervisor gives a new environment, and evidenceStatus marks the old observation stale (CJ7).",
+      "DoD 4: `node --test scripts/tests/local-runner.test.mjs` exits 0."
+    ],
+    "invariants": [
+      "The VM is deleted (verified absent, ledger 'deleted') before runCheckJob settles, whenever a name was reserved; only this run's own reserved name is ever deleted.",
+      "No session without clean readiness, no-mount materialization and a settled onReady.",
+      "executionReady is always false; verified-local stays unavailable; nothing is written under .moe.",
+      "Errors and results carry fixed codes only; never the credential, a path, a guest byte or upstream text."
+    ],
+    "compatibility": [
+      "provisionGuest's existing result keys are unchanged apart from the added supervisorSha256.",
+      "cleanupOwned, reconcileOwned and every existing lifecycle behavior are unchanged; deleteOwned reuses purgeOwned."
+    ],
+    "approvedScope": [
+      "New scripts/local-runner/check-lifecycle.mjs: runCheckJob(input, { provision, materialize, session, remove }).",
+      "scripts/local-runner/lifecycle.mjs: export deleteOwned and validOwner.",
+      "scripts/local-runner/provision.mjs: provisionGuest's result gains supervisorSha256.",
+      "Tests: the CJ1-CJ8 and deleteOwned cases in scripts/tests/local-runner.test.mjs."
+    ],
+    "reuse": [
+      "scripts/local-runner/agent-lifecycle.mjs structure for the new module.",
+      "scripts/local-runner/lifecycle.mjs purgeOwned and validOwner, exported rather than copied.",
+      "scripts/tests/local-runner.test.mjs harness(), fakeMultipass and provisionWith for the CJ8 and deleteOwned tests."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/agent-lifecycle.mjs runAgentJob is the R10 orchestration pattern: exact KEYS, parse once, fixed codes, frozen result, executionReady false.",
+      "scripts/local-runner/provision.mjs provisionGuest reserves through ledger.reserve(owner), runs provisionOwned and waitForGuestReady, and returns {provisioned, instance, bootstrapReady, image, failures}.",
+      "scripts/local-runner/guest-readiness.mjs waitForGuestReady returns image.source.sha256, image.provider.imageHash and supervisorSha256.",
+      "scripts/local-runner/lifecycle.mjs purgeOwned (private) does query, delete, verify absent and ledger 'deleted'; LAUNCHED is {launching, owned, absent, failed}; reserveRecord creates a fresh random name per call.",
+      "scripts/local-runner/snapshot-transfer.mjs materializeSnapshot asserts no mounts before and after; workspaceEntries validates a SourceSnapshot.",
+      "scripts/local-runner/check-session.mjs runCheckSession({name, check, provider, budgetMs, timeoutMs, signal}) resolves {outcome, exitCode, signal, outputTail} and never rejects after its input check.",
+      "scripts/local-runner/check-evidence.mjs checkEnvironment and evidenceStatus; scripts/local-runner/guest-bootstrap.mjs GUEST_RESOURCES.",
+      "scripts/local-runner/guest-supervisor.py export() walks after drop_to_agent, so it cannot read a moe-check-owned workspace; hence workspace 'unverified' and CQ-R11f."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs",
+      "node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-vm-control.test.mjs scripts/tests/local-runner-snapshot.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Post-run workspace integrity via the R09 export mode: rejected. export() drops to AGENT_IDENTITY, but the check job leaves a moe-check-owned tree (root 0700, umask 077), so export fails with EX_IOERR. That seam is split out as CQ-R11f (task-5b0a2bcf), a root read-only guest 'verify' mode. R11 reports workspace 'unverified', which V04b already treats as not passing.\n- Diffing ledger.list() to find the VM a failed provision reserved: rejected. A concurrent run of the same owner could be deleted. A wrapper ledger that captures reserve()'s instance is exact.\n- cleanupOwned for the post-run delete: rejected. Its holdReason preserves records whose attempt is active, which ours is. A per-record deleteOwned reuses purgeOwned instead.\n- Observed VM size in the environment: rejected. memoryTotal and diskTotal vary per boot, so the environment would never be fresh twice. GUEST_RESOURCES, the launch size, is what R11d's note allows.\n- A job lease or a sweep, as R10 does: not needed. A fresh VM per run is private, and deleting it ends every process.",
+    "codebaseInsights": "All prerequisites are LANDED: R09 6ab00df, R09c efffad6, R11a b71c0fd, R11b b8fd203, R11c 2f2b5e4, R11d fdaf5ff, R06/R07, R10 1b9ca19.\n\nNames used:\n- provisionGuest({platform, ledger, owner, cacheDir, supervisor, credential, provider});\n- waitForGuestReady -> {bootstrapReady, image:{source:{sha256}, provider:{imageHash}}, supervisorSha256, failures};\n- materializeSnapshot({name, snapshot, provider, timeoutMs});\n- runCheckSession({name, check, provider, budgetMs, timeoutMs, signal});\n- checkFrame(check{id, command, protected});\n- checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources});\n- evidenceStatus;\n- GUEST_RESOURCES {cpus, memoryBytes, diskBytes};\n- purgeOwned / validOwner / LAUNCHED in lifecycle.mjs;\n- test helpers harness() ~333, fakeMultipass ~310, provisionWith ~1742; R10's AJ tests at ~3679.\n\nThe V04b consumer contract (comment on task-340a07b3): onReady(environment) before the session, its error rethrown after the delete; result.workspace; the VM deleted before settling.",
+    "risks": "- A hung onReady or step that leaves the VM alive: bound the hook with timeoutMs and the signal, and delete in finally.\n- Deleting a collision (foreign) instance: deleteOwned must refuse non-LAUNCHED phases.\n- Doubling peak memory by validating the snapshot: workspaceEntries' copy is dropped before provisioning.\n- Leaking the credential or guest text through upstream errors: pass through only codes matching the fixed pattern.\n- Running the real-supervisor tests without python3, or with the inherited Windows PATH on WSL: use env -i with a Linux PATH.\n- The R epic is at 41 rows (advisory ceiling 40); no further splits here.",
+    "keyFiles": [
+      "scripts/local-runner/agent-lifecycle.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/check-session.mjs",
+      "scripts/local-runner/check-evidence.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:22:53.149Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T22:24:44.177Z",
+  "reviewStartedAt": "2026-10-29T22:44:01.042Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ CJ3 nothing runs in the VM unless it is provisioned and cleanly ready, and a reserved VM is still deleted (18.630317ms)\n✔ CJ4 a refused no-mount materialization stops the run before the hook and the session, and still deletes the VM (9.270318ms)\n✔ CJ5 the onReady hook gates the session; its error, a timeout or an abort settles only after the delete (34.38677ms)\n✔ CJ6 outcomes pass through after the delete, the approved protected list reaches the guest frame unchanged, and an undeleted pass is inconclusive (33.448702ms)\n✔ CJ7 a changed image or supervisor gives a new environment, and evidence observed in the old one is stale (10.858884ms)\n✔ CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run reserved, and nothing foreign (398.557457ms)\nℹ tests 232\nℹ suites 0\nℹ pass 231\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 35901.643403\n(skipped: the pre-existing opt-in 'native provider smoke on real macOS hardware')",
+    "reportedAt": "2026-10-29T22:44:01.042Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/lifecycle.mjs",
+    "scripts/local-runner/provision.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/check-lifecycle.mjs"
+  ],
+  "completionSummary": "CQ-R11: one isolated check per fresh owned VM. 396 changed lines.\n- NEW scripts/local-runner/check-lifecycle.mjs runCheckJob(input, deps). Its steps:\n  - provisionGuest, through a ledger wrapper that captures this run's reserved name;\n  - a clean R07 gate (provisioned, instance === reserved, bootstrapReady, no failures);\n  - checkEnvironment from the guest's image hashes, the supervisor hash it verified, and GUEST_RESOURCES;\n  - no-mount materializeSnapshot;\n  - onReady(environment), bounded by timeoutMs and the signal;\n  - runCheckSession with a check frozen at parse.\n  Then deleteOwned runs in finally, before the run settles.\n- Result: frozen {outcome, exitCode, signal, outputTail, environment, workspace:'unverified', instance, vm, failure, executionReady:false}.\n  - Every pre-session stop is infra-failure with a fixed code.\n  - A pass without a verified delete becomes inconclusive with failure CHECK_VM_DELETE_FAILED.\n  - onReady's error, or CHECK_READY_TIMEOUT, is rethrown after the delete.\n- lifecycle.mjs: exports validOwner, and adds deleteOwned. deleteOwned checks the owner, deletes by exact name, is idempotent, and returns 'not-launched' for a reserved or collision record.\n- provision.mjs: the result carries supervisorSha256.\n- Deviations from the plan text:\n  - PRIMARY_* codes pass through;\n  - a session throw or unknown outcome gives CHECK_SESSION_FAILED;\n  - all non-optional keys are required;\n  - vm can also be 'not-launched';\n  - an extra abort check runs before materialize;\n  - an instance mismatch gives CHECK_PROVISION_FAILED.\n- Tests: the deleteOwned test plus CJ1-CJ8 (CJ8 uses the real provisionGuest and deleteOwned with foreign records).\n- Verification:\n  - DoD: exit 0, 231 pass, 1 pre-existing skip.\n  - check/vm-control/snapshot suites: exit 0, 58 pass, 1 pre-existing root-only skip (K9).\n  - Mutants i-viii, on a /tmp copy, were all killed by their named rows.\n- Theoretical, for QA:\n  (a) when onReady's error is rethrown, vm is hidden from the call"
 }

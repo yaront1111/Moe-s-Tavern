@@ -12,9 +12,40 @@
   "taskRails": [
     "JetBrains only: no moe-vscode, daemon or wire changes; the captured revision is never replaced or retried automatically."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Load test-driven-development.\n\nIn moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt, add a section '// ---- a lost connection (CQ-I06a)'. Reuse the existing helpers snapshot(revision, status, present), rendered(revision) and dialogSource(). Assert exact values (Phase, key constants, Decision), never truthiness. Cases:\n- C1 `a lost connection while pending re-arms the same rendered revision`:\n  rendered(4L), then onApproveClicked(true, snapshot(4L)) == Send(taskId, 4L). Then onConnectionLost() returns true. Phase is READY, noticeKey is CONNECTION_LOST_KEY, approveEnabled is true, capturedPlanRevision is still 4L.\n- C2 `a lost connection outside pending changes nothing`:\n  A table over five machines:\n  - AWAITING_RENDER: a fresh PlanReviewApprovalState;\n  - READY: rendered(4L);\n  - INVALIDATED: rendered(4L) plus onStateUpdate(snapshot(5L));\n  - FINISHED: click, then onStateUpdate(snapshot(4L, STATUS_WORKING));\n  - DISPOSED: rendered plus onDisposed().\n  For each, record phase and noticeKey, call onConnectionLost(), and assert it returned false and both values are unchanged.\n- C3 `a reconnect snapshot at the rendered revision approves the same revision again`:\n  Click, lost, then onStateUpdate(snapshot(4L)) returns false (no repaint) and approveEnabled is true. Then onApproveClicked(true, snapshot(4L)) == Send(taskId, 4L), and the phase is PENDING again.\n- C4 `work found after a lost connection is never this reviewer's approval`:\n  Click, lost, then onStateUpdate(snapshot(4L, STATUS_WORKING)) returns true. Phase is INVALIDATED and noticeKey is STATUS_CHANGED_KEY. Also assert it is NOT FINISHED. A second WORKING update leaves it INVALIDATED.\n- C5 `a repeated lost connection is a no-op`:\n  After C1's lost, a second onConnectionLost() returns false. The notice is still CONNECTION_LOST_KEY.\n- C6 `the dialog releases a pending approval only when the connection drops`:\n  Use dialogSource(). Take the onStatus body: substringAfter(\"override fun onStatus(\") and substringBefore(\"override fun onError(\"). Assert all of:\n  - it contains \"approval.onConnectionLost()\";\n  - it contains \"applyApprovalState()\" and \"invokeLater\";\n  - it does not contain \"close(\";\n  - Regex(\"if \\\\(connected\") matches before the onConnectionLost call. connected=true must never release.\n\nAlso update the bundle guard `every message key the machine can emit is defined in the bundle`:\n- change the pinned count 11 to 12. This is an expected edit for a new key, not a weakening;\n- assert allMessageKeys() contains CONNECTION_LOST_KEY;\n- assertEquals the exact text \"The connection to the Moe daemon dropped before the approval was confirmed - approve again once it reconnects.\"\n\nRED: the file must fail to compile because onConnectionLost and CONNECTION_LOST_KEY do not exist yet. Say so in the step note. Run the focused class under the jetbrains-gradle lease: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <tree>\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.PlanReviewApprovalStateTest\"` (`mem:gotcha-jetbrains-gradle-from-wsl`). Release the lease after every run.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "MINIMUM IMPLEMENTATION, three files. Report each in modifiedFiles.\n\n1. moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt:\n   - Add `fun onConnectionLost(): Boolean = releasePending(CONNECTION_LOST_KEY)` next to onSendFailed.\n   - Give it a KDoc. A dropped connection leaves a PENDING approval's fate unknown, so it is NOT confirmed. The machine returns to READY for the SAME captured revision. That revision is never replaced and nothing is retried automatically. A later WORKING snapshot latches as status-changed and is never FINISHED, matching the VS Code plan review (PlanReviewPanel.handleConnectionChange).\n   - Add `const val CONNECTION_LOST_KEY = \"moe.message.planReview.connectionLost\"` with the other keys, and append it to allMessageKeys(). releasePending already returns false outside PENDING, so do not add another phase check.\n2. moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt: replace the no-op `override fun onStatus(connected: Boolean, message: String) {}` with a body that mirrors onError:\n   ```\n   if (connected || !approval.onConnectionLost()) return\n   SwingUtilities.invokeLater {\n       if (isDisposed) return@invokeLater\n       try { applyApprovalState() } catch (ex: Exception) { log.warn(\"Failed to apply the lost connection to the plan review\", ex) }\n   }\n   ```\n   Error handling: the callback must never throw into the dispatcher, and it is a no-op after disposal. Do not show the daemon's status text: `message` stays unused, because the notice is a fixed bundle key.\n3. moe-jetbrains/src/main/resources/messages/MoeBundle.properties: add, next to moe.message.planReview.sendFailed, the line `moe.message.planReview.connectionLost=The connection to the Moe daemon dropped before the approval was confirmed - approve again once it reconnects.` Use ASCII only, with no {0} slot.\n\nRun the focused class again: C1-C6 and the bundle guard must now pass, and the existing PlanReviewApprovalStateTest cases must stay green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, never the shared tree, then restore it and cmp-verify. Run the focused class under the lease. Each mutant must fail the named case:\n   - M1: onConnectionLost returns false without releasing. Must fail C1 and C3.\n   - M2: onConnectionLost moves PENDING to FINISHED, or to INVALIDATED. Must fail C1, C3 and C4.\n   - M3: onConnectionLost releases in every phase, not only PENDING. Must fail C2.\n   - M4: onStatus drops the `connected` guard. Must fail C6.\n   - M5: the bundle line is removed. Must fail the bundle guard.\n2. THE GATE. Run it fresh, holding the `jetbrains-gradle` lease, and release the lease even on failure: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <tree>\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. This is the Windows equivalent of `cd moe-jetbrains && ./gradlew test`, because WSL has no JDK.\n   - If .git/MERGE_HEAD exists or moe-jetbrains holds conflict markers, gate in a `git archive HEAD moe-jetbrains` snapshot. Overlay exactly this task's four files and cmp-verify them (`mem:gotcha-jetbrains-gate-snapshot`).\n   - Exit must be 0. Use the build/test-results/test/TEST-*.xml timestamps and counts to confirm that PlanReviewApprovalStateTest ran this time.\n3. Size: `git diff --numstat` over the four files must stay well under 400 net lines. The expected total is about 110.\n4. Supply to complete_task the gate command, labelled as the Windows equivalent, with its exit code and output tail.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review. Read this diff as an attacker. Check each of these:\n- Threads: onStatus arrives through the dispatcher's invokeLater, while onStateUpdate runs on the daemon message thread. Every transition sits under the machine's one lock, and the repaint is EDT-only.\n- Ordering: WORKING at the captured revision arrives BEFORE the disconnect. The machine must be FINISHED and stay FINISHED, and the later lost is a no-op.\n- Ordering: disconnect, then a late ERROR or a send-failed callback. Both must be no-ops in READY.\n- Spurious status(false) frames during startup or a daemon restart ('Starting daemon...', 'Waiting for daemon...'). These must be no-ops unless the machine is PENDING.\n- Duplicate disconnects.\n- After the lost, a click must still quote the captured revision only, never a newer one.\n- No automatic resend.\n- No text built from the daemon's status message.\n- Rails: JetBrains only (no moe-vscode, daemon or wire edits), no .moe edits, no Git writes, and none of globalRails.forbiddenPatterns.\nThen write the Serena memory 'task-task-b20f7a40efbd4f56b457888612cd52a8-handoff' for CQ-I06b. It must record:\n- the new API (onConnectionLost and CONNECTION_LOST_KEY);\n- the corpus mapping: a 'connection lost' event calls onConnectionLost(), and the verdicts are rearmed = READY with approveEnabled, latched = INVALIDATED, confirmed = FINISHED, pending = PENDING;\n- the residual: on an ERROR frame JetBrains re-arms without codeName.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -30,5 +61,62 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:32.385Z",
-  "updatedAt": "2026-10-29T22:33:32.385Z"
+  "updatedAt": "2026-10-29T22:41:37.647Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:40:00.876Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:41:37.542Z",
+  "executionContract": {
+    "intendedBehavior": "When the daemon connection drops while a JetBrains plan-review approval is PENDING, the approval is not confirmed. The dialog re-arms for the SAME rendered revision and shows a fixed notice. A reconnect snapshot of AWAITING_APPROVAL at that revision lets the reviewer approve it again. A reconnect snapshot of WORKING latches as status-changed and is never reported as this reviewer's approval. This matches VS Code's PlanReviewPanel.handleConnectionChange.",
+    "acceptanceCriteria": [
+      "onConnectionLost() releases only PENDING. Its return values and the phase/notice outcomes in every phase are pinned by named tests.",
+      "Neither reconnect path (AWAITING_APPROVAL or WORKING at the captured revision) can reach FINISHED after a lost connection.",
+      "PlanReviewDialog.onStatus releases only when connected=false. A source-pin test guards this, following the file's existing dialogSource pattern.",
+      "`cd moe-jetbrains && ./gradlew test` (or its labelled Windows equivalent) exits 0 fresh."
+    ],
+    "invariants": [
+      "The captured revision is never reassigned, and the machine never resends automatically.",
+      "FINISHED is reachable only from PENDING observing WORKING at the captured revision.",
+      "Late callbacks after INVALIDATED, FINISHED or DISPOSED are no-ops.",
+      "No moe-vscode, daemon, wire, .moe or Git-write changes."
+    ],
+    "compatibility": [
+      "Existing PlanReviewApprovalStateTest cases stay unchanged. Only the bundle guard's key count moves from 11 to 12 for the new key.",
+      "Every other MoeStateListener implementer keeps its onStatus behaviour."
+    ],
+    "checkRefs": [
+      "cd moe-jetbrains && ./gradlew test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Keep JetBrains as it is and change VS Code to keep pending across a disconnect: rejected. That keeps the JetBrains wedge: a reconnect snapshot at AWAITING_APPROVAL with the same revision stays PENDING forever. It also contradicts the VS Code recovery the human confirmed on 2026-09-11, where a transport failure is not confirmed.\n- Release on disconnect, then confirm a later WORKING at the same revision anyway: rejected. A WORKING frame after a release cannot prove this reviewer's approval landed; it could be another approver, or a queued message. VS Code reports it as not confirmed.\n- A new Phase value: unnecessary. releasePending already gives exactly PENDING -> READY with a notice, as onSendFailed does.",
+    "codebaseInsights": "- PlanReviewApprovalState.kt:\n  - releasePending(key) returns false unless the phase is PENDING;\n  - onStateUpdate: READY plus WORKING goes through unusableReason, which gives STATUS_CHANGED_KEY and INVALIDATED;\n  - allMessageKeys() feeds the bundle guard test, which pins the count at 11.\n- PlanReviewDialog.kt:\n  - line 289 `override fun onStatus(connected: Boolean, message: String) {}` is the no-op;\n  - onError (line 296) is the pattern to mirror: machine first, then SwingUtilities.invokeLater with an isDisposed guard and a try/log;\n  - showNotice formats MoeBundle.message(key, lastErrorMessage), so a key without {0} is fine.\n- Status publishing: MoeMessageDispatcher.publishStatus (invokeLater) fires onStatus(false, ...) on disconnect ('Not connected to daemon'), on daemon shutdown, and during startup or restart. All of these are no-ops unless PENDING.\n- The test file already has a dialogSource() helper and source-pin tests ('the approve action sends without closing the dialog'), so the dialog wiring can be pinned the same way. The dialog itself is not headless-constructible.\n- VS Code parity: PlanReviewPanel.handleConnectionChange runs reportApprovalFailure(false, 'The connection dropped before the approval was confirmed...'). The webview then disables approval until the next same-revision render.",
+    "risks": "- MoeBundle.properties was also touched by CQ-I03 (REVIEW, landed). This task dependsOn I03 so the path is not contested.\n- The bundle count pin (11 to 12) is an expected test edit. Mention it in the step note so QA does not read it as weakening.\n- If the shared tree is mid-merge, gate in a snapshot (`mem:gotcha-jetbrains-gate-snapshot`).\n- The Kotlin compiler here rejects `arrayOf(stringValue, intValue)`; use `arrayOf<Any>`. The C2 table may need this.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+      "moe-vscode/src/panels/PlanReviewPanel.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:41:37.647Z",
+  "approvedPlanRevision": 1
 }
