@@ -77,7 +77,7 @@
     }
   ],
   "planRevision": 9,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -93,16 +93,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T17:11:48.140Z",
-  "updatedAt": "2026-10-29T13:47:17.996Z",
+  "updatedAt": "2026-10-29T13:52:51.441Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:32:40.190Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T13:52:51.441Z",
+    "wallClockMs": 159611251
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "worker-ac765af7"
+    "worker-ac765af7",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -174,5 +177,9 @@
     "kind": "completion",
     "sessionId": "worker-ac765af7@2026-10-29T13:33:11Z",
     "at": "2026-10-29T13:47:17.996Z"
-  }
+  },
+  "completedAt": "2026-10-29T13:52:51.441Z",
+  "reviewCompletedAt": "2026-10-29T13:52:51.441Z",
+  "reviewSummary": "Reviewed completion d9cdc684 (tree 9629f1b9) on moe/work-2026-10-24; branch containment confirmed, no later drift. Diff: two new files, context/planReuse.ts +194 and planReuse.test.ts +206 = 400 net LOC (at the cap), plus the board record. No state writes, no claim/wait/get_context edits, no forbidden patterns.\n\nRe-ran in a fresh Linux snapshot of `git archive d9cdc684` (native npm ci, env -i, node v22.23.4): `cd packages/moe-daemon && npm test` exit 0, 173 files, 4575 passed / 16 skipped (planReuse.test.ts 39). `tsc --noEmit` exit 0.\n\nDoD:\n1. The planReuseView table covers every rule, including the entrySeq and planRevision mismatches.\n2. Real-Git cases: reuse, refresh, assumption-changed/deleted, affected-file-deleted, unanchored, new-file-present.\n3. Non-Git root, missing basis, injected failure, gitlink and 257 paths (no spawn) all reassess without throwing.\n4. Candidate current / target-moved / target-unresolved (including '-x'), decision unchanged.\n5. Gate green.\n\nDropping -r from ls-tree follows the approved plan. I confirmed on git 2.43 that pathspecs match on path boundaries and that the ancestor layering is needed.\n\nMutants killed: layering, --literal-pathspecs, entrySeq check, target reasons made hard, HEAD listing, unanchored, assumption-changed.\n\nNon-blocking:\n(a) Removing the basis self-resolve check survives: no test uses a valid non-commit basis such as a tree or tag oid. C07 or the hardening task should add one.\n(b) The '-' target guard survives because --end-of-options already covers it; the worker documented this.",
+  "requiredCheckAtDone": null
 }
