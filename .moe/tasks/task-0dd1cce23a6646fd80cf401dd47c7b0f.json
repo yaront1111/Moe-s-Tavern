@@ -74,13 +74,21 @@
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff only (load the adversarial-self-review skill). Read the diff as each attacker in turn:\n- A hostile supervisor: any frame order, a duplicate or missing end, oversized declarations, non-canonical base64, extra identity keys, and paths that collide or traverse.\n- A hostile agent in the workspace: swapping a file for a symlink or FIFO between lstat and open, a hardlink, a 100 GB sparse file, chmod 000, a 2,000-deep tree, 10,001 entries, and non-UTF-8 or control-character names.\n- The environment: two exports at once on one VM, host EOF, timeouts, and a missing agent account.\n\nCheck that:\n- the privilege drop precedes every workspace read;\n- every fd closes on every path;\n- error handling never leaks a path, guest text or byte;\n- DoD 1-3 each have a test that fails if its guard is removed. Spot-check by deleting one guard at a time in a scratch copy (git archive into a temp dir), never in the shared tree;\n- verified-local and executionReady are unchanged;\n- there is no new mount or transfer argv, no .moe edit and no Git write.\n\nFix anything found with a test, then re-run step 4's command and supply that fresh output to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-import.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Adversarial self-review of this task's diff (the three owned files vs 989e87a). It found two real defects and two masked rows; all are fixed with tests.\n\n1. Host memory DoS (hostile supervisor). The reader kept every decoded data chunk until its file closed. A 1-byte chunk costs about 150 B of RSS (measured: 2M chunks gave +300 MB), so a 256 MiB file sent as 1-byte frames could OOM the host before timeoutMs. Fix:\n- snapshot-import.mjs: every data frame but a file's last must carry exactly CHUNK_BYTES (65,536, the supervisor's OUTPUT_CHUNK_BYTES): chunk.length !== Math.min(left, CHUNK_BYTES). A file now arrives in exactly ceil(size/65536) frames.\n- guest-supervisor.py: chunks() loops on short os.read results, so it always sends full chunks.\n- Tests: X6 'a short data frame that is not the last' times out on the old code; X2 'an edit read 1,000 bytes at a time' patches os.read and fails on the old chunks(). X6 'a header inside a file' and 'a stream ending mid-file' were reshaped (65,537-byte file, one full chunk) so the new rule does not mask them.\n2. macOS CI. The local-runner step also runs on macos-latest. Two rows would throw there: X3's 1024-byte relative path (macOS PATH_MAX is 1024 for the whole absolute path) and X7's non-UTF-8 name (APFS refuses one). Both are now skipped on darwin with a reason, and X7's launch count follows (16/18). The guest is Linux, so Linux CI still covers them.\n3. Masked rows that the mutation sweep found. 'data past size' and 'a negative size' now end at the offending frame, so only an immediate refusal passes. A new 'a string size' row pins Number.isSafeInteger; without it, Buffer.concat would reject with a raw TypeError instead of a fixed code.\n\nMutation sweep, in a git-archive scratch copy (HEAD plus my three files), X1-X7 only, harness /tmp/r09-mut/mutate.mjs: 46 of 47 killed. That covers:\n- DoD 1: dev/ino, lstat, NOFOLLOW, the validateImport gate;\n- DoD 2: exact keys;\n- DoD 3: both mount checks and the mode argv;\n- the drop (absent, reordered, no setgroups) and every bound.\nThe one survivor, read_manifest's S_ISREG, is equivalent: a FIFO reads empty and fails as JSON, and a directory gives EISDIR, both 65.\n\nRed check: the new test file against HEAD's code fails X2 and X6, as intended.\n\nConsidered and left as they are (theoretical, or later rows' scope):\n- Two exports at once are read-only and independent.\n- An agent still writing during an export can produce a candidate that never existed as a whole, so R10 must stop the job before import.\n- A hostile delete for a path outside the materialized view passes validateImport, so R12 must check deletes against the base.\n- Build artifacts and ignored files are exported as new files; that is R12 policy.\n- After the drop the agent shares the uid and can signal the export, which only refuses its own candidate. setuid leaves the process non-dumpable, so it cannot be ptraced and /proc/pid/fd stays closed to the agent.\n- A FUSE hang is cut by timeoutMs.\n\nChecks:\n- Fresh gate (4-file command, env -i, node v24.21.0): exit 0; 286 tests, 285 pass, 1 pre-existing macOS skip.\n- The 5th CI file, local-runner-check: 11/11.\n- Native Windows node v24.16.0: X4-X6 pass; X1-X3 and X7 skip.\n- No __pycache__, no sleep(600) or python3 -I -B leftovers.\n- ASCII-only added lines, no forbidden patterns, executionReady false, verified-local untouched.\n- No new mount or transfer argv, no .moe edits, no Git writes.\n\nSize vs 989e87a: 620 changed (+614/-6): supervisor +160/-6, snapshot-import.mjs +107, tests +347. I am proposing an EPIC size-exception rail.\n\nPeer dirty paths (scripts/tests/postflight*.{cjs,ps1,sh}) were not touched.",
+      "startedAt": "2026-10-29T14:10:28.042Z",
+      "completedAt": "2026-10-29T14:29:06.756Z"
     }
   ],
-  "planRevision": 9,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5ebbf433",
+  "planRevision": 11,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -117,7 +125,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:13.756Z",
-  "updatedAt": "2026-10-29T14:07:52.430Z",
+  "updatedAt": "2026-10-29T14:30:01.903Z",
   "dependsOn": [
     "task-7a77465621dc4d6588d5747394cb0ced",
     "task-491a2d8cff4d45afbdac79539098ebb1",
@@ -128,7 +136,7 @@
     "firstClaimAt": "2026-10-26T05:02:38.723Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
@@ -149,7 +157,8 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-27T16:59:18.715Z",
@@ -209,26 +218,51 @@
       "treeId": "34cc5f0b8c541b99f5ad820c3f4027bca2ed30af",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "18523e52c49e937ca92b24d5917dc49b7bc95349",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T13:42:45Z",
+      "paths": [
+        ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+        ".moe/tasks/task-685d8a8e6e5d42d2bf68db4d791de972.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/local-runner/snapshot-import.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T14:08:48.271Z",
+      "treeId": "e7081390bd0f8e8f36560c4d4a3b46176fa0ab65",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-001d8ab383ef41088e045b2e41ed0e1e.json",
-    ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
-    ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
-    ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
-    ".moe/tasks/task-7f928d96060341f382d37cf5e22f7d53.json",
-    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
-    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
-    ".moe/tasks/task-e493ed19006d4be4a96e3ca2f80a5ab4.json",
-    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
-    ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/snapshot-import.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-5ebbf433@2026-10-29T13:30:52Z",
-    "at": "2026-10-29T13:42:43.451Z"
+    "sessionId": "worker-5ebbf433@2026-10-29T13:42:45Z",
+    "at": "2026-10-29T14:08:48.271Z"
   },
-  "workStartedAt": "2026-10-29T13:44:27.083Z"
+  "workStartedAt": "2026-10-29T13:44:27.083Z",
+  "touchedFiles": [
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/local-runner/snapshot-import.mjs"
+  ],
+  "reviewStartedAt": "2026-10-29T14:30:01.900Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ X1 the supervisor CLI takes exactly export, only as root, and routes it to export(1)\n✔ X2 export reports exactly the changed files, deletes, symlinks and specials, and no identity\n✔ X3 export refuses a bad manifest or root, drops to the agent before any entry, and fails closed on a bound or a swap\n✔ X4 a clean export resolves exactly what validateImport derives from the transferred bytes, between two mount checks\n✔ X5 a well-formed hostile export is refused by validateImport with its R09a code and no candidate\n✔ X6 a protocol violation or bound is refused at its frame, and a cut, failed or hung stream is refused, each with a fixed code\n✔ X7 end to end, a dirty checkout round-trips through the real supervisor and only the agent changes come back, never a refused one (888.790113ms)\n﹣ opt-in native provider smoke on real macOS hardware establishes support # native provider smoke not run: macOS support is NOT established by this run\nℹ tests 286\nℹ suites 0\nℹ pass 285\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 27239.694291",
+    "reportedAt": "2026-10-29T14:30:01.900Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-R09 final slice: export back plus host import. Plan rev 1, 5/5 steps.\n\nDelivered:\n- guest-supervisor.py 'export' mode, root only. As root it reads the 0600 manifest (exact shape, at most 16 MiB) and opens the root with O_NOFOLLOW. It then drops to moe-agent (setgroups, setgid, setuid) and walks through dir fds in byte order. Files open O_NOFOLLOW|O_NONBLOCK with an lstat/fstat dev+ino check. It sends file+data only for changed files, plus symlink, special, delete and end frames, with no identity in any frame. Bounds: 10,000 entries, 256 MiB, 1024-byte paths, 100,000 names. Exit codes: 65 data/bounds, 71 drop, 74 I/O.\n- New snapshot-import.mjs, importCandidate: inputs are checked before any provider call, mounts are checked before and after, and an exact-key state machine reads the stream. validateImport is the only gate. Resolves the frozen {instance, candidate, executionReady:false}.\n\nDoD:\n1. Traversal, control paths, symlinks, specials and collisions are refused (X5, plus X7 end to end); a swapped name exits 74 (X3).\n2. Frames carry no sha256, oid or digest, and identities come only from validateImport over the bytes (X4, X6).\n3. Every call is info, mountinfo or snapshotArgv, each exec is unmapped, and a late mount is refused (X4, X7).\n4. Gate exits 0: 286 tests, 285 pass, 1 pre-existing macOS skip.\n\nSelf-review fixes:\n- Host memory DoS: 1-byte data frames cost about 150 B RSS each. Every data frame but a file's last must now be a full 65,536 bytes, and the guest loops on short reads. X2 and X6 rows were added; the new tests fail against the old code.\n- macOS CI: X3's 1024-byte path and X7's non-UTF-8 name are skipped on darwin, because macOS PATH_MAX is 1024 and APFS refuses non-UTF-8 names.\n- Timing-masked X6 rows were reshaped, and a string-size row was added.\n\nMutation sweep in a scratch copy: 46/47 killed. The survivor, read_manifest's S_ISREG, is equivalent.\nNative Windows node 24.16: X4-X6 pass, the others skip.\n\nSize vs 989e87a: 620 changed (+614/-6). E"
 }

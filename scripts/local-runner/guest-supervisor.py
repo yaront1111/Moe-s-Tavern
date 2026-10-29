@@ -587,12 +587,16 @@ READ = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK  # never through a link, and 
 
 
 def chunks(fd, size):
-    # Exactly size bytes in OUTPUT_CHUNK_BYTES reads; a file that shrinks meanwhile is an I/O failure.
+    # Exactly size bytes as full OUTPUT_CHUNK_BYTES chunks and a shorter last one, the only split the host admits, however
+    # short each read is; a file that shrinks meanwhile is an I/O failure.
     while size:
-        chunk = os.read(fd, min(size, OUTPUT_CHUNK_BYTES))
-        if not chunk:
-            raise OSError('the file shrank while it was read')
-        size -= len(chunk)
+        chunk, want = b'', min(size, OUTPUT_CHUNK_BYTES)
+        while len(chunk) < want:
+            data = os.read(fd, want - len(chunk))
+            if not data:
+                raise OSError('the file shrank while it was read')
+            chunk += data
+        size -= want
         yield chunk
 
 

@@ -3054,9 +3054,11 @@ test('X2 export reports exactly the changed files, deletes, symlinks and special
   const edit = Buffer.alloc(150_000, 'e');
   const end = entries => ({ kind: 'end', entries });
   const file = (name, executable, size) => ({ kind: 'file', path: name, executable, size });
-  for (const [label, change, frames] of [
+  for (const [label, change, frames, setup] of [
     ['unchanged', () => {}, [end(0)]],
     ['an edit', at => writeFileSync(at('src/main.c'), edit), [file('src/main.c', false, 150_000), ...exportData(edit), end(1)]],
+    ['an edit read 1,000 bytes at a time still goes out in full chunks', at => writeFileSync(at('src/main.c'), edit),
+      [file('src/main.c', false, 150_000), ...exportData(edit), end(1)], 'real = os.read\nos.read = lambda fd, n: real(fd, min(n, 1000))'],
     ['a same-size edit', at => writeFileSync(at('src/util.c'), 'v'), [file('src/util.c', false, 1), ...exportData('v'), end(1)]],
     ['a chmod +x', at => chmodSync(at('a.txt'), 0o755), [file('a.txt', true, 1), ...exportData('A'), end(1)]],
     ['a new nested empty file', at => { mkdirSync(at('new/deep'), { recursive: true }); writeFileSync(at('new/deep/x'), ''); },
@@ -3070,7 +3072,7 @@ test('X2 export reports exactly the changed files, deletes, symlinks and special
   ]) {
     const paths = workspaceIn(t);
     change(name => path.join(paths.workspace, name));
-    const run = exportIn(paths);
+    const run = exportIn(paths, setup);
     assert.deepEqual([run.status, createFrameDecoder().push(run.stdout)], [0, frames], `${label} ${run.stderr}`);
   }
 });
@@ -3125,14 +3127,16 @@ def deny(value):\n    raise PermissionError(1, 'injected')\nos.setuid = deny`;
   const sparse = workspaceIn(t);
   truncateSync(path.join(sparse.workspace, 'a.txt'), 2 ** 36);
   refused(exportIn(sparse), 65, 'a sparse file');
-  const deep = workspaceIn(t);
-  const folder = path.join(deep.workspace, ...Array(4).fill('d'.repeat(250)));
-  mkdirSync(folder, { recursive: true });
-  writeFileSync(path.join(folder, 'f'.repeat(20)), '');
-  const fits = exportIn(deep);
-  assert.deepEqual([fits.status, Buffer.byteLength(createFrameDecoder().push(fits.stdout)[0].path)], [0, 1024]);
-  renameSync(path.join(folder, 'f'.repeat(20)), path.join(folder, 'f'.repeat(21)));
-  refused(exportIn(deep), 65, 'a 1025-byte path');
+  if (process.platform !== 'darwin') { // macOS caps a whole path at 1024 bytes; the guest is Linux
+    const deep = workspaceIn(t);
+    const folder = path.join(deep.workspace, ...Array(4).fill('d'.repeat(250)));
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(path.join(folder, 'f'.repeat(20)), '');
+    const fits = exportIn(deep);
+    assert.deepEqual([fits.status, Buffer.byteLength(createFrameDecoder().push(fits.stdout)[0].path)], [0, 1024]);
+    renameSync(path.join(folder, 'f'.repeat(20)), path.join(folder, 'f'.repeat(21)));
+    refused(exportIn(deep), 65, 'a 1025-byte path');
+  }
   for (const [limit, status] of [[6, 0], [5, 65]]) assert.equal(exportIn(workspaceIn(t), `m.WALK_LIMIT = ${limit}`).status, status);
   // A name swapped between lstat and open, for a file from outside or a FIFO, and a file the agent made unreadable: 74.
   const swap = `real = os.lstat
@@ -3211,16 +3215,18 @@ test('X6 a protocol violation or bound is refused at its frame, and a cut, faile
   const data = text => ({ kind: 'data', data: text });
   const end = entries => ({ kind: 'end', entries });
   const deletes = count => Array.from({ length: count }, (_, at) => ({ kind: 'delete', path: `d${at}` }));
+  const chunk = data(Buffer.alloc(65_536).toString('base64')); // one full data frame, so 1 byte of a 65,537-byte file is left
   // The guest writes these frames and then stalls, so only a refusal at the offending frame ends the import in time.
   for (const [label, frames, code = 'IMPORT_PROTOCOL_VIOLATION'] of [
     ['a sha256 key', [head({ sha256: sha('A') }), data('QQ=='), end(1)]], ['an oid key', [head({ oid: 'a'.repeat(40) }), data('QQ=='), end(1)]],
-    ['data before a header', [data('QQ=='), head(), data('QQ=='), end(1)]], ['data past size', [head(), data('QUE='), end(1)]],
-    ['a header inside a file', [head({ size: 2 }), data('QQ=='), head({ path: 'b' }), data('QQ=='), end(2)]],
+    ['data before a header', [data('QQ=='), head(), data('QQ=='), end(1)]], ['data past size', [head(), data('QUE=')]],
+    ['a short data frame that is not the last', [head({ size: 2 }), data('QQ=='), data('QQ=='), end(1)]],
+    ['a header inside a file', [head({ size: 65_537 }), chunk, head({ path: 'b' }), data('QQ=='), end(2)]],
     ['non-canonical base64', [head(), data('QR=='), end(1)]], ['empty data', [head(), data(''), data('QQ=='), end(1)]],
     ['an end count mismatch', [head(), data('QQ=='), end(2)]], ['a frame after end', [head(), data('QQ=='), end(1), end(1)]],
     ['an unknown kind', [{ kind: 'directory', path: 'd' }, end(1)]], ['an array kind', [{ kind: ['delete'], path: 'd' }, end(1)]],
     ['a numeric path', [{ kind: 'delete', path: 1 }, end(1)]], ['a numeric executable', [head({ executable: 1 }), data('QQ=='), end(1)]],
-    ['a negative size', [head({ size: -1 }), end(1)]],
+    ['a negative size', [head({ size: -1 })]], ['a string size', [head({ size: '1' }), data('QQ=='), end(1)]],
     ['a count over MAX_IMPORT_ENTRIES', [...deletes(MAX_IMPORT_ENTRIES + 1), end(MAX_IMPORT_ENTRIES + 1)], 'SNAPSHOT_LIMIT_EXCEEDED'],
     ['a declared size over MAX_IMPORT_BYTES', [head({ size: MAX_IMPORT_BYTES + 1 }), data('QQ==')], 'SNAPSHOT_LIMIT_EXCEEDED'],
   ]) {
@@ -3231,7 +3237,7 @@ test('X6 a protocol violation or bound is refused at its frame, and a cut, faile
   const full = transferProvider(undefined, proc => proc.reply(exportFrames(deletes(MAX_IMPORT_ENTRIES))));
   assert.equal((await importCandidate({ name: GUEST, provider: full.provider })).candidate.entries.length, MAX_IMPORT_ENTRIES);
   for (const [label, respond, code, timeoutMs = 5_000, kills = ['SIGKILL']] of [
-    ['a stream ending mid-file', proc => proc.reply([head({ size: 2 }), data('QQ==')]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],
+    ['a stream ending mid-file', proc => proc.reply([head({ size: 65_537 }), chunk]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],
     ['a missing end', proc => proc.reply([head(), data('QQ==')]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],
     ['a nonzero exit', proc => proc.reply(exportFrames([]), 65), 'TRANSFER_EXIT_FAILED'], ['a hang', () => {}, 'TRANSFER_TIMEOUT', 50],
   ]) {
@@ -3328,7 +3334,8 @@ test('X7 end to end, a dirty checkout round-trips through the real supervisor an
       ['a written .git/config', at => { mkdirSync(at('.git')); writeFileSync(at('.git/config'), '[core]\n'); }, 'SNAPSHOT_CONTROL_PATH'],
       ['a written .moe/state.json', at => { mkdirSync(at('.moe')); writeFileSync(at('.moe/state.json'), '{}'); }, 'SNAPSHOT_CONTROL_PATH'],
       ['a backslash name', at => writeFileSync(at('a\\b.txt'), 'x'), 'SNAPSHOT_PATH_INVALID'],
-      ['a non-UTF-8 name', at => writeFileSync(Buffer.concat([Buffer.from(at('bad-')), Buffer.from([0xff])]), 'x'), 'SNAPSHOT_PATH_INVALID'],
+      ...(process.platform === 'darwin' ? [] : [['a non-UTF-8 name', // APFS refuses one; the guest is Linux
+        at => writeFileSync(Buffer.concat([Buffer.from(at('bad-')), Buffer.from([0xff])]), 'x'), 'SNAPSHOT_PATH_INVALID']]),
       ['a FIFO', at => mkfifo(at('pipe')), 'SNAPSHOT_ENTRY_INVALID'],
     ]) {
       const attacked = session();
@@ -3348,7 +3355,7 @@ test('X7 end to end, a dirty checkout round-trips through the real supervisor an
     // DoD 3 across every run: only info, the mountinfo probe and the two supervisor argvs, each exec unmapped, no mount or transfer.
     const launches = sessions.flatMap(s => s.launches);
     assert.deepEqual([sessions.flatMap(s => s.guest.unexpected), new Set(sessions.flatMap(s => s.guest.ids())), launches.length],
-      [[], new Set(['info', 'mountinfo']), 18]);
+      [[], new Set(['info', 'mountinfo']), process.platform === 'darwin' ? 16 : 18]);
     for (const { call: [executable, argv, options], child } of launches) {
       assert.deepEqual([executable, argv, options, child.exitCode], ['multipass', snapshotArgv(GUEST, argv.at(-1)), PIPES, 0]);
     }

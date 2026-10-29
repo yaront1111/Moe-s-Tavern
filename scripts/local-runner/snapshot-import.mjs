@@ -8,6 +8,9 @@ import { assertNoMounts, runSupervisorStream, snapshotArgv } from './snapshot-tr
 import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, snapshotError, validateImport } from './source-snapshot.mjs';
 
 const MAX_TIMEOUT_MS = 600_000; // snapshot-transfer.mjs's bound
+// guest-supervisor.py's OUTPUT_CHUNK_BYTES. Every data frame but a file's last is this full, so a file comes in exactly
+// ceil(size / CHUNK_BYTES) frames and a stream of tiny frames cannot make the host keep one Buffer per byte.
+const CHUNK_BYTES = 65_536;
 // The exact sorted keys of each export frame kind, so a sha256, oid or digest key is a violation like any other.
 const KEYS = {
   file: 'executable,kind,path,size', data: 'data,kind', delete: 'kind,path', symlink: 'kind,path', special: 'kind,path',
@@ -28,8 +31,9 @@ export function importError(code) {
   return Object.assign(new Error(MESSAGES[known]), { code: known });
 }
 
-// The export stream as R09a entries: data only inside an open file and never past its size, every other frame only
-// between files, nothing after end. Bounds are checked at each header, before any of its data is buffered.
+// The export stream as R09a entries: data only inside an open file, in full CHUNK_BYTES pieces but the last and never
+// past its size, every other frame only between files, nothing after end. Bounds are checked at each header, before
+// any of its data is buffered.
 function exportReader() {
   const entries = [];
   let count = 0;
@@ -58,7 +62,7 @@ function exportReader() {
     }
     if (kind === 'data') {
       const chunk = file && isCanonicalBase64(frame.data) ? Buffer.from(frame.data, 'base64') : null;
-      if (!chunk || chunk.length > file.left) throw violation();
+      if (!chunk || chunk.length !== Math.min(file.left, CHUNK_BYTES)) throw violation();
       file.chunks.push(chunk);
       file.left -= chunk.length;
       if (file.left === 0) close();
