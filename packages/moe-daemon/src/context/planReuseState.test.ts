@@ -8,9 +8,7 @@ import { submitPlanTool } from '../tools/submitPlan.js';
 import { updateTask } from '../state/taskStore.js';
 import type { Task, TaskStatus } from '../types/schema.js';
 import { MoeErrorCode } from '../util/errors.js';
-import {
-  planSourceGit, readPlanningEntry, readPlanReuseRecord, readPlanSourceBasis, validatePlanReuseRecord,
-} from './planReuseState.js';
+import { planSourceGit, readPlanningEntry, readPlanReuseRecord, readPlanSourceBasis, validatePlanReuseRecord } from './planReuseState.js';
 
 type Row = Record<string, unknown>;
 const AT = '2026-10-27T10:00:00.000Z';
@@ -21,12 +19,8 @@ const record = (): Row => ({ version: 1, decision: 'refresh', planRevision: 3, e
 const set = (base: Row, key: string, value: unknown): Row => ({ ...base, [key]: value });
 const drop = (base: Row, key: string): Row => { const v = { ...base }; delete v[key]; return v; };
 /** A non-enumerable required key plus an enumerable extra: assigned AFTER defineProperty (spread drops hidden keys). */
-const hidden = (base: Row, key: string): Row => {
-  const v = drop(base, key);
-  Object.defineProperty(v, key, { value: base[key], enumerable: false });
-  v.extra = 1;
-  return v;
-};
+const hidden = (base: Row, key: string): Row =>
+  Object.assign(Object.defineProperty(drop(base, key), key, { value: base[key], enumerable: false }), { extra: 1 });
 class Instance { version = 1; }
 const shared = (base: () => Row, key: string): [string, unknown][] => [
   ['an extra key', set(base(), 'extra', 1)], ['a missing key', drop(base(), key)],
@@ -125,8 +119,7 @@ describe('planningEntry stamp', () => {
     await move('PLANNING'); expect(row().planningEntry?.seq).toBe(1);
   });
   it('createTask never stamps', async () => {
-    const created = await h.state.createTask({ epicId: 'epic-1', title: 'new', status: 'PLANNING',
-      planningEntry: { from: 'BACKLOG', at: AT, seq: 1 } });
+    const created = await h.state.createTask({ epicId: 'epic-1', title: 'new', status: 'PLANNING', planningEntry: entry() as never });
     expect(Object.hasOwn(created, 'planningEntry')).toBe(false);
   });
 });
@@ -167,15 +160,11 @@ describe('plan-reuse state ownership', () => {
 });
 
 describe('submit_plan planSourceBasis capture', () => {
-  function git(...args: string[]): string {
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
-    return execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.hooksPath=', ...args], {
-      cwd: h.testDir, encoding: 'utf8', env: { ...env, GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-        GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.test',
-        GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.test' },
-    }).trim();
-  }
+  // GIT_* stripped, system/global config masked; identity and line endings pinned per call.
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_'))),
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' };
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.hooksPath=',
+    '-c', 'user.name=Test', '-c', 'user.email=test@example.test', ...args], { cwd: h.testDir, encoding: 'utf8', env }).trim();
   const commit = (message: string) => {
     fs.appendFileSync(path.join(h.testDir, 'file.ts'), `${message}\n`); git('add', 'file.ts'); git('commit', '-qm', message);
   };

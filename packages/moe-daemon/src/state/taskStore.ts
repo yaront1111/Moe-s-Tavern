@@ -426,10 +426,8 @@ export function assertNoFinalizingAttempt(state: StateManager, taskId: string): 
 
 export async function updateTask(
   state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string,
-  daemonOwned?: {
-    requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number;
-    planSourceBasis?: { commit: string }; planReuse?: PlanReuseRecord;
-  },
+  daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number;
+    planSourceBasis?: { commit: string }; planReuse?: PlanReuseRecord },
 ): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {

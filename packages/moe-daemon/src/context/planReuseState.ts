@@ -1,12 +1,9 @@
 /**
- * Daemon-owned plan-reuse facts (CQ-C07a): the commit an approved plan was
- * submitted against, how the task last entered PLANNING, and a recorded reuse
- * assessment. No decision logic. The readers decode untrusted persisted state
- * and never throw. None of these facts is approval, readiness or evidence.
+ * Daemon-owned plan-reuse facts (CQ-C07a): the commit an approved plan was submitted against, how the
+ * task last entered PLANNING, and a recorded reuse assessment. No decision logic. The readers decode
+ * untrusted persisted state and never throw. None of these facts is approval, readiness or evidence.
  */
-import type {
-  PlanningEntry, PlanReuseDecision, PlanReuseRecord, PlanSourceBasis, Task, TaskStatus,
-} from '../types/schema.js';
+import type { PlanningEntry, PlanReuseDecision, PlanReuseRecord, PlanSourceBasis, Task, TaskStatus } from '../types/schema.js';
 import { normalizeAffectedFile } from '../util/affectedFiles.js';
 import { openProjectGit, runGit } from '../util/cachedPlanPaths.js';
 import { invalidInput, MoeError } from '../util/errors.js';
@@ -34,11 +31,8 @@ const isPath = (v: unknown) => {
   try { return typeof v === 'string' && !CONTROL.test(v) && normalizeAffectedFile(v) === v; } catch { return false; }
 };
 
-/**
- * Each enumerable own field, read exactly once, of a plain object whose
- * enumerable key SET is every required key plus only known optional keys
- * (count + hasOwn would let a hidden required key mask an extra one).
- */
+// Each enumerable own field, read exactly once, of a plain object whose enumerable key SET is every required
+// key plus only known optional keys (count + hasOwn would let a hidden required key mask an extra one).
 function fieldsOf(value: unknown, required: readonly string[], optional: readonly string[] = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const proto: unknown = Object.getPrototypeOf(value);
@@ -84,35 +78,27 @@ function decodeRecord(value: unknown): PlanReuseRecord {
   if (!isCount(planRevision) || !isCount(entrySeq)) throw fail('planRevision and entrySeq must be non-negative safe integers');
   if (!reasons) throw fail('reasons must be 0-32 strings of 1-300 chars without control characters');
   if (!isIso(assessedAt)) throw fail('assessedAt must be a canonical ISO time');
-  const record: PlanReuseRecord = {
-    version: 1, decision: decision as PlanReuseDecision, planRevision, entrySeq, reasons, assessedAt,
-  };
+  const record: PlanReuseRecord = { version: 1, decision: decision as PlanReuseDecision, planRevision, entrySeq,
+    reasons, assessedAt };
+  // Each optional key: valid -> copied, present but invalid -> refused, absent -> left out.
   for (const key of ['basisCommit', 'headCommit'] as const) {
-    if (!f.has(key)) continue;
     const commit = f.get(key);
-    if (!isCommit(commit)) throw fail(`${key} must be 40 or 64 lowercase hex`);
-    record[key] = commit;
+    if (isCommit(commit)) record[key] = commit;
+    else if (f.has(key)) throw fail(`${key} must be 40 or 64 lowercase hex`);
   }
-  if (f.has('changedPaths')) {
-    const paths = listOf(f.get('changedPaths'), 64, isPath);
-    if (!paths) throw fail('changedPaths must be at most 64 normalized repo-relative paths');
-    record.changedPaths = paths;
-  }
-  if (f.has('candidate')) {
-    const candidate = f.get('candidate');
-    if (candidate !== 'current' && candidate !== 'revalidate') throw fail('unknown candidate');
-    record.candidate = candidate;
-  }
+  const paths = listOf(f.get('changedPaths'), 64, isPath);
+  if (paths) record.changedPaths = paths;
+  else if (f.has('changedPaths')) throw fail('changedPaths must be at most 64 normalized repo-relative paths');
+  const candidate = f.get('candidate');
+  if (candidate === 'current' || candidate === 'revalidate') record.candidate = candidate;
+  else if (f.has('candidate')) throw fail('unknown candidate');
   return record;
 }
 
 /** The detached, validated record; throws INVALID_INPUT and nothing else. */
 export function validatePlanReuseRecord(value: unknown): PlanReuseRecord {
-  try {
-    return decodeRecord(value);
-  } catch (error) {
-    if (error instanceof MoeError) throw error;
-    throw invalidInput('planReuse', 'the value could not be read');
+  try { return decodeRecord(value); } catch (error) {
+    throw error instanceof MoeError ? error : invalidInput('planReuse', 'the value could not be read');
   }
 }
 

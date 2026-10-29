@@ -746,10 +746,9 @@ export interface RequiredCheckSnapshot {
   entries: { path: string; oid: string }[];
 }
 
-/** The commit `HEAD^{commit}` resolved to when submit_plan ran, and the planRevision that write committed. */
+/** The full 40/64-hex commit `HEAD^{commit}` resolved to when submit_plan ran, and the planRevision that write committed. */
 export interface PlanSourceBasis {
   version: 1;
-  /** Full 40- or 64-hex commit id. */
   commit: string;
   planRevision: number;
 }
@@ -874,22 +873,19 @@ export interface Task {
    */
   requiredCheckSnapshot?: RequiredCheckSnapshot;
   /**
-   * Daemon-owned, written only by taskStore.updateTask in the PLAN_SUBMITTED
-   * write (submit_plan's capture). Stripped from caller updates and listed in
-   * the /ws denylist. Decode with readPlanSourceBasis (context/planReuseState).
+   * Daemon-owned, written only by taskStore.updateTask in the PLAN_SUBMITTED write (submit_plan's capture).
+   * Stripped from caller updates and the /ws denylist. Decode with readPlanSourceBasis (context/planReuseState).
    * Never approval, readiness or evidence.
    */
   planSourceBasis?: PlanSourceBasis;
   /**
-   * Daemon-owned, stamped only by taskStore.updateTask on a status change into
-   * PLANNING. Stripped from caller updates and listed in the /ws denylist.
-   * Decode with readPlanningEntry. Never approval, readiness or evidence.
+   * Daemon-owned, stamped only by taskStore.updateTask on a status change into PLANNING. Stripped from caller
+   * updates and the /ws denylist. Decode with readPlanningEntry. Never approval, readiness or evidence.
    */
   planningEntry?: PlanningEntry;
   /**
-   * Daemon-owned, written only through taskStore.updateTask's private
-   * daemonOwned argument. Stripped from caller updates and listed in the /ws
-   * denylist. Decode with readPlanReuseRecord. Never approval, readiness or evidence.
+   * Daemon-owned, written only through taskStore.updateTask's private daemonOwned argument. Stripped from caller
+   * updates and the /ws denylist. Decode with readPlanReuseRecord. Never approval, readiness or evidence.
    */
   planReuse?: PlanReuseRecord;
   status: TaskStatus;
