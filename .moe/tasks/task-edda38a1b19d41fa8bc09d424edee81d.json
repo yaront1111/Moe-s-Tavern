@@ -9,9 +9,35 @@
     "The stubs delegate to the existing moe_rpc / Invoke-MoeRpc fixtures, so the retained (held=task-fixture) case still asserts that no governor page is sent"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "GATE, then the two-line fix. Edit only scripts/tests/taskless-binding-notice.test.mjs. Never touch scripts/moe-agent.sh or scripts/moe-agent.ps1 (DoD 2). Never revert, stash or stage peers' dirty paths.\n\nA. Gate, before any edit. The task text says to start only after governor-693b7073's merge of main lands. At planning time it had not landed: the merge is 3f6817f1 in an isolated worktree (parents d9e71f7 + 2c306fbf), and the governor lands it after c2a900aa, CQ-I06c and CQ-R10d1 land.\n- `git merge-base --is-ancestor f1c04b15 HEAD` exits 0.\n- `git log -1 --format='%h %s' -- scripts/tests/taskless-binding-notice.test.mjs` shows f1c04b15 or newer, not 4495a153.\n- `grep -c 'retained holds must not repeatedly page governors' scripts/tests/taskless-binding-notice.test.mjs` prints 1. That marks main's version of the test (blob 744d086e).\n- `git diff --quiet HEAD -- scripts/tests/taskless-binding-notice.test.mjs` exits 0. If it doesn't, read the diff. Continue only if its sole hunks are the two stub lines below (a resumed session of this task). Otherwise report_blocked naming the foreign hunk, and never overwrite it.\nIf any of the first three checks fails, the merge has not landed. Make no edit. Call moe.report_blocked with exactly this reason, which names no task ids, so nothing is auto-parsed into blockedOnTaskIds: \"Waiting for governor-693b7073's merge of main into moe/work-2026-10-24 (prepared as 3f6817f1). This fix must sit on main's version of scripts/tests/taskless-binding-notice.test.mjs (f1c04b15, 90c8b9c3), which only that merge brings. Unblock with moe.set_task_status WORKING once git merge-base --is-ancestor f1c04b15 moe/work-2026-10-24 succeeds.\" Then end the session. Do not port main's test edits by hand.\nRecord `git hash-object scripts/moe-agent.sh scripts/moe-agent.ps1` for step 3.\n\nB. Root cause. CQ-F10 (13177535) moved the adoption boundary's get_context read to the unserved twins: moe_rpc_unserved in moe-agent.sh (`moe_rpc_unserved() { MOE_SESSION_ID= moe_rpc \"$@\"; }`) and Invoke-MoeRpcUnserved in moe-agent.ps1. The fixture stubs only moe_rpc and Invoke-MoeRpc. The block's own error handling hides the undefined helper: sh runs `$(moe_rpc_unserved get_context \"$ADOPT_ARGS\" 2>/dev/null || echo \"\")`, and ps1 wraps the call in try/catch. So ADOPT_RESULT is empty, nothing prints, and no notice.json is written.\n\nC. Fix: add exactly two lines. Each delegates to the existing stub, so every RPC still reaches the one NOTICE_FILE sink.\n- In the bash template literal, on the line right after `moe_rpc() { ... }`:\n  moe_rpc_unserved() { moe_rpc \"$@\"; }\n- In the ps1 template literal, on the line right after the closing `}` of the `function Invoke-MoeRpc { ... }` stub:\n  function Invoke-MoeRpcUnserved { param($Tool, [Alias('Args')]$RpcArgs) Invoke-MoeRpc -Tool $Tool -Args $RpcArgs }\nRules:\n- Both lines sit inside JS template literals. Write \"$@\", never \"${@}\" (dollar-brace is JS interpolation), and add no backticks.\n- The ps1 stub reuses the existing stub's [Alias('Args')]$RpcArgs, so the boundary's `-Args @{...}` binds without shadowing the automatic $args. Verified on powershell.exe 5.1 and pwsh 7.\n- Don't give the twin its own get_context answer. Delegation is what lets the held=task-fixture case's `existsSync(notice) === false` assert catch a governor page sent through either helper (DoD 3).\n- Don't copy the real helper's MOE_SESSION_ID blanking. prompt-cache-launcher.test.mjs already pins that the boundary calls the twins and what they do (its moe_rpc_unserved and Invoke-MoeRpcUnserved cases).\n- If `grep -c 'moe_rpc_unserved()' scripts/tests/taskless-binding-notice.test.mjs` already prints 1, the stubs arrived with the merge. Skip the edit and say so in complete_task.\n- Use the Edit tool, with old_string limited to the anchor lines. Never include the writeFileSync line that prepends the BOM escape: the Edit tool turns a backslash-u escape into the literal character. Afterwards `LC_ALL=C grep -nP '[^[:ascii:]]' scripts/tests/taskless-binding-notice.test.mjs` must print nothing.\nReport scripts/tests/taskless-binding-notice.test.mjs in complete_step.modifiedFiles.",
+      "status": "IN_PROGRESS",
+      "affectedFiles": [
+        "scripts/tests/taskless-binding-notice.test.mjs"
+      ],
+      "startedAt": "2026-10-29T23:48:04.122Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VERIFY (DoD 1). Run each command fresh from the repo root. Read the exit code before any filtering, and quote it with the `ℹ tests / pass / fail / skipped` lines.\n- Linux. This is the task's one verification command; use it for complete_task.verification: `node --test scripts/tests/taskless-binding-notice.test.mjs`. Expect exit 0, tests 7, pass 4, fail 0, skipped 3. WSL has no pwsh, so its 3 cases skip.\n- Windows, from the WSL seat, with no cmd layer: `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-binding-notice.test.mjs`. Expect exit 0, tests 10, pass 10, fail 0, skipped 0. The engines are Git Bash at C:/Program Files/Git/bin/bash.exe, powershell.exe 5.1 and the Store pwsh.exe. If pwsh.exe is gone, expect pass 7 / skipped 3 and say so.\n- Keep the test path relative, with forward slashes. node --test treats it as a glob, so a backslash path or a UNC path fails with \"Could not find\".\n- A run that prints no `ℹ tests` line did not run, whatever its exit code. A Git Bash `cmd /c \"...\"` drops its command and exits 0.\n- On a native Windows seat, run the Linux half through WSL: `wsl.exe -d Ubuntu-24.04 -- bash -ic 'cd /mnt/d/projexts/moes && node --test scripts/tests/taskless-binding-notice.test.mjs'`. Node is nvm-managed there, hence -i.\n- Baselines from planning, on 3f6817f1's wrappers plus main's unpatched test: Linux pass 1 / fail 3 / skipped 3; Windows pass 1 / fail 9. With the two stubs, the figures above.\n- If a case fails outside the adoption boundary, don't edit a wrapper. The shared tree's moe-agent.{sh,ps1} carry peers' dirty edits. Re-run on a clean snapshot instead: `D=$(mktemp -d) && git archive HEAD scripts | tar -x -C \"$D\" && cp scripts/tests/taskless-binding-notice.test.mjs \"$D/scripts/tests/\" && (cd \"$D\" && node --test scripts/tests/taskless-binding-notice.test.mjs); rm -rf \"$D\"`. Report both runs.\nQuote both commands, their exit codes and counts in complete_task (DoD 1).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/taskless-binding-notice.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADVERSARIAL SELF-REVIEW of this task's diff. Run each check and quote its result.\n1. Scope (DoD 2).\n   - `git diff f1c04b15 -- scripts/tests/taskless-binding-notice.test.mjs` shows only the two added stub lines. If the landed merge resolved this file differently from main's f1c04b15 version, diff against the merge commit's copy instead.\n   - `git hash-object scripts/moe-agent.sh scripts/moe-agent.ps1` matches step 1's record. If a peer changed one meanwhile, say so; this task didn't.\n   - complete_step.modifiedFiles names only the test file.\n2. Mutation proof, in a scratch copy outside the repo. Never edit scripts/moe-agent.* in the shared tree.\n   - Set up: `M=$(mktemp -d); mkdir -p \"$M/scripts/tests\"; cp scripts/moe-agent.sh scripts/moe-agent.ps1 \"$M/scripts/\"; cp scripts/tests/taskless-binding-notice.test.mjs \"$M/scripts/tests/\"`.\n   - Run `(cd \"$M\" && node --test scripts/tests/taskless-binding-notice.test.mjs)` once per mutant, restoring the copy between them.\n   - (a) Delete the `moe_rpc_unserved() {` line from the scratch test. All 3 bash cases must fail with the original symptom: ENOENT on notice.json, or empty stdout.\n   - (b) In the scratch moe-agent.sh, remove ` && [ \"$ADOPTED_BINDING\" != retained ]`. Only held=task-fixture may fail, with \"retained holds must not repeatedly page governors\". This proves DoD 3: the delegate keeps the page observable.\n   - Both must go red; quote the failing case names. Then `rm -rf \"$M\"`. At planning, mutant (b) went red on Linux exactly this way.\n3. Checklist.\n   - Concurrent runs are safe: each case has its own mkdtemp dir and NOTICE_FILE, and the stubs hold no state.\n   - The finally block still removes temp files on every path.\n   - A future rename of either twin fails loudly again instead of passing.\n   - The ps1 BOM write line is unchanged.\n   - The file is still ASCII-only (step 1's grep).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/taskless-binding-notice.test.mjs"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,5 +50,80 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:40:15.453Z",
-  "updatedAt": "2026-10-29T22:40:15.453Z"
+  "updatedAt": "2026-10-29T23:48:09.588Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:33:24.539Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:47:30.209Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/taskless-binding-notice.test.mjs passes again on Linux and Windows. Its fixtures define moe_rpc_unserved (bash) and Invoke-MoeRpcUnserved (ps1) as one-line delegates to the existing moe_rpc / Invoke-MoeRpc stubs. The adoption boundary's unserved get_context read then resolves the fixture task. Every RPC, a governor page included, still lands in the one NOTICE_FILE sink.",
+    "acceptanceCriteria": [
+      "Linux: node --test scripts/tests/taskless-binding-notice.test.mjs exits 0 with tests 7, pass 4, fail 0, skipped 3 (WSL has no pwsh).",
+      "Windows: \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-binding-notice.test.mjs exits 0 with tests 10, pass 10, fail 0, skipped 0 (Git Bash, powershell.exe, pwsh).",
+      "The held=task-fixture case still asserts that no governor page is sent (no notice.json), and a scratch mutant without the wrapper's retained guard turns it red.",
+      "The task's diff is exactly two added lines in scripts/tests/taskless-binding-notice.test.mjs."
+    ],
+    "invariants": [
+      "scripts/moe-agent.sh and scripts/moe-agent.ps1 are untouched.",
+      "main's assertions in the test (from f1c04b15 and 90c8b9c3) are unchanged.",
+      "Both stubs delegate; neither answers an RPC on its own."
+    ],
+    "compatibility": [
+      "Test-only change: no runtime, wire or .moe/ state shape changes."
+    ],
+    "approvedScope": [
+      "Fixture only: one bash function moe_rpc_unserved and one PowerShell function Invoke-MoeRpcUnserved inside the test's generated scripts."
+    ],
+    "reuse": [
+      "The existing moe_rpc / Invoke-MoeRpc fixture stubs and their NOTICE_FILE sink.",
+      "prompt-cache-launcher.test.mjs already pins the twins' MOE_SESSION_ID behaviour and that the boundary calls them."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh defines moe_rpc_unserved() { MOE_SESSION_ID= moe_rpc \"$@\"; }, and the adoption boundary runs ADOPT_RESULT=$(moe_rpc_unserved get_context \"$ADOPT_ARGS\" 2>/dev/null || echo \"\").",
+      "scripts/moe-agent.ps1 defines Invoke-MoeRpcUnserved (params Tool, Args), which forwards to Invoke-MoeRpc. The boundary calls it inside try/catch with -Args @{ workerId = $WorkerId }.",
+      "Both boundaries page #general through the served moe_rpc / Invoke-MoeRpc chat_send, and only when the binding is not retained.",
+      "main's test (blob 744d086e at f1c04b15, identical in merge 3f6817f1) reaches the branch only through governor-693b7073's merge of main."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/taskless-binding-notice.test.mjs",
+      "\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/taskless-binding-notice.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Port main's f1c04b15 and 90c8b9c3 test edits into this task now. Rejected: the task text says to start after the merge lands. A git merge-file simulation (base f3060b81, ours = main plus stubs, theirs = main) showed the later merge would still come out clean, as main plus stubs. But this task's commit would then carry main's lines and blur their provenance. (2) A standalone twin stub that answers get_context itself. Rejected: it would bypass the one NOTICE_FILE sink. If the boundary ever sent its page through the twin, the retained no-page assert would pass vacuously. (3) Point the wrapper back at moe_rpc. Rejected: CQ-F10 requires the unserved read (no served-context receipt), and DoD 2 forbids wrapper edits. (4) Mirror the MOE_SESSION_ID blanking in the stub. Unnecessary: prompt-cache-launcher.test.mjs already pins it.",
+    "codebaseInsights": "- The test slices the real adoption boundary from both launchers (from '        # -------- Adoption boundary' to '        # -------- End adoption boundary') and puts fixture stubs in front of it. Every helper the block calls must be stubbed. Otherwise it fails silently, because the sh `2>/dev/null || echo \"\"` and the ps1 try/catch swallow it.\n- On the merged tree (3f6817f1), the ps1 block is byte-identical to the current shared tree. The sh block differs only in main's bash-3.2 `ADOPT_CHAT_ARGS=$(...)` form for chat_send.\n- The governor page still goes through the served moe_rpc chat_send / Invoke-MoeRpc chat_send, and only when binding != retained.\n- main's test version (blob 744d086e, identical in 3f6817f1):\n  - adds a powershell.exe engine on win32;\n  - writes the ps1 with a BOM;\n  - uses PYTHON_CMD=python on win32, since Git Bash has no python3;\n  - asserts that a retained hold writes no notice.json.\n- The two planned stubs were verified in scratch copies against 3f6817f1's wrappers: Linux 4 pass / 3 skipped, exit 0; Windows 10/10, exit 0, via both cmd.exe and node.exe run directly from WSL. On Linux they also pass against the current shared-tree wrappers.",
+    "risks": "- Under TURBO a worker may claim before the merge lands. The step 1 gate then blocks with no task ids, and the governor clears it after landing the merge. governor-693b7073 is told in #governors.\n- The shared tree's moe-agent.{sh,ps1} carry peers' dirty edits, and the test reads the working-tree copies. Use step 2's clean-snapshot fallback; never edit a wrapper.\n- Windows: run node.exe directly, because a Git Bash `cmd /c` is a false green. Keep forward slashes, and expect 3 pwsh skips on WSL.\n- The Edit tool turns a backslash-u escape into the literal character. Keep edits off the BOM line, and check the file is ASCII-only.\n- Never list the wrappers in a step's files. Completed steps' affectedFiles are ASSERTED landing paths, so peers' wrapper bytes could land under this task.",
+    "keyFiles": [
+      "scripts/tests/taskless-binding-notice.test.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/prompt-cache-launcher.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:47:30.306Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:48:04.122Z",
+  "blockedReason": "Waiting for governor-693b7073's merge of main into moe/work-2026-10-24 (prepared as 3f6817f1). This fix must sit on main's version of scripts/tests/taskless-binding-notice.test.mjs (f1c04b15, 90c8b9c3), which only that merge brings. Unblock with moe.set_task_status WORKING once git merge-base --is-ancestor f1c04b15 moe/work-2026-10-24 succeeds.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-29T23:48:09.587Z"
 }

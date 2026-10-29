@@ -1,0 +1,31 @@
+{
+  "id": "task-5e816f2cafe8490596af56d9a5108efe",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "bug: VS Code keeps a pending plan approval through a non-AA, non-WORKING frame, so a later WORKING at the same revision reports 'Plan approved'; JetBrains latches",
+  "description": "Repro, as scratch corpus rows that fail only in VS Code (CQ-I06b round 2): render AA rev 4, click Approve, push PLANNING rev 4 then WORKING rev 4. That is row A26 = latched; A27, PLANNING 4 alone, is also latched. JetBrains PlanReviewApprovalState goes PENDING -> INVALIDATED (STATUS_CHANGED) on the PLANNING frame. VS Code PlanReviewPanel.settlePendingApproval acts only on WORKING or a vanished task, so pendingApprovalRevision survives and the WORKING 4 announces success.\nFix: clear the pending approval when the task is present but neither AWAITING_APPROVAL nor WORKING (about 2 lines), and add A26/A27 to moe-jetbrains/src/test/resources/client-verdicts.json. Both clients' corpus runners already consume those rows.",
+  "definitionOfDone": [
+    "Corpus rows A26 (PLANNING 4, then WORKING 4) and A27 (PLANNING 4), both latched, pass in both clients' corpus runners.",
+    "VS Code PlanReviewPanel ends a pending approval unconfirmed when the task is present but neither AWAITING_APPROVAL nor WORKING. Existing plan-review sections stay green.",
+    "Fresh `cd moe-vscode && npm test && npm run compile` plus the JetBrains `./gradlew test` (or its labelled Windows equivalent) exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-f2d3d553bd684eff997498a55c564f13"
+  ],
+  "priority": "LOW",
+  "order": 249.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T23:47:56.377Z",
+  "updatedAt": "2026-10-29T23:47:56.377Z"
+}
