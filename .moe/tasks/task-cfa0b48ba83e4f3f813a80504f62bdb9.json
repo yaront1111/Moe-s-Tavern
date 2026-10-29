@@ -118,7 +118,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:52:06.809Z",
-  "updatedAt": "2026-10-29T14:02:42.528Z",
+  "updatedAt": "2026-10-29T14:03:28.666Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:02:29.181Z",
     "plannedStepCount": 6,
@@ -183,7 +183,9 @@
     "docs/MCP_SERVER.md",
     "docs/roles/governor.md",
     "packages/moe-daemon/src/generated/initFiles.ts",
-    ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json"
+    ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json",
+    ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+    ".moe/tasks/task-685d8a8e6e5d42d2bf68db4d791de972.json"
   ],
   "completionSummary": "Option B: record_commit now reports held contested paths and explains the remedy. The attribution predicate, ledger, response, stored fields, schema and tool inputs are unchanged.\n\nCode: recordCommit.ts +60/-3\n- New private heldContestedPaths() classifies a hold from the skipped codes only: exactly MOE_ATTR_CONTESTED, or /^MOE_ATTR_CONTESTED_UNTOUCHED\\((task-[A-Za-z0-9_-]+)\\)$/. The contested list is used only to name a strict hold's peer, else '?'.\n- Paths are normalized with tolerantNormalizePath and pathKey; malformed entries are ignored and duplicates merged.\n- On any outcome it appends one line: MOE_CONTESTED_HELD task=<id>: p(peer), … (+N more) — <constant remedy>, with at most 5 paths.\n  - UNTOUCHED remedy: the owning assignee's own session edits with a wrapper-observed editing tool (not a shell write), or the stale peer is legitimately finished.\n  - STRICT remedy: the peer only, never a TOOL bypass.\n  - Both say declaring, unblocking, a shell touch or a policy change does not release it.\n- alertGovernors gains held.length>0, inside the existing shared 24h window. Chat stays try/catch.\n\nProse:\n- declareFiles.ts: the description and new-path message carry the contested caveat; the union is unchanged.\n- docs/MCP_SERVER.md: +9/-2.\n- docs/roles/governor.md: a MOE_CONTESTED_HELD row, and 3 declare_files mentions amended.\n- initFiles.ts: regenerated through Windows Git Bash; only the governor.md entry changed (marker sha, body, one shipped sha).\n\nTests: recordCommit.test.ts +190, 22 new tests:\n- untouched on committed; strict on nothing with peer/'?'; refused and failed;\n- contested-but-landed; 11 near-match codes; malformed entries; truncation;\n- the shared window; chat failure; ledger and response equality;\n- the declare_files caveat with an unchanged union.\nThey failed before the implementation. declareFiles.test.ts and the existing tests are unedited and pass.\n\nGate: exit 0 on HEAD 29216f5 plus the 6 paths. vitest 173 files, 4597 passed, 16 skipped; tsc clean; ",
   "commits": [
@@ -207,6 +209,23 @@
       "treeId": "c307c54441751a462270e44184766ff0852e2c0e",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "64ca64fc607945fa0944fafcb9bd9016287ede40",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T13:59:23Z",
+      "paths": [
+        ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+        ".moe/tasks/task-685d8a8e6e5d42d2bf68db4d791de972.json",
+        ".moe/tasks/task-cfa0b48ba83e4f3f813a80504f62bdb9.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T14:03:28.666Z",
+      "treeId": "9b54c40b74ca65b55a1e3c3773103c83fcad582d",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -219,9 +238,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-ac765af7@2026-10-29T13:47:51Z",
-    "at": "2026-10-29T13:58:47.527Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T13:59:23Z",
+    "at": "2026-10-29T14:03:28.666Z"
   },
   "completedAt": "2026-10-29T14:02:42.528Z",
   "reviewCompletedAt": "2026-10-29T14:02:42.528Z",

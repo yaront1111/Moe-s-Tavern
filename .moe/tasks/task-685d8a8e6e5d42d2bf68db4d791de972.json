@@ -76,7 +76,7 @@
     }
   ],
   "planRevision": 10,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,12 +92,14 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T13:43:14.603Z",
-  "updatedAt": "2026-10-29T14:01:16.195Z",
+  "updatedAt": "2026-10-29T14:05:57.096Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T14:09:45.464Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T14:05:57.096Z",
+    "wallClockMs": 172571632
   },
   "tier": "standard",
   "effort": "high",
@@ -124,7 +126,8 @@
   },
   "planApprovedAt": "2026-10-27T14:10:31.246Z",
   "contextFetchedBy": [
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "workStartedAt": "2026-10-29T13:58:45.197Z",
   "reviewStartedAt": "2026-10-29T14:00:38.145Z",
@@ -175,5 +178,9 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-29T13:57:41Z",
     "at": "2026-10-29T14:01:16.195Z"
-  }
+  },
+  "completedAt": "2026-10-29T14:05:57.096Z",
+  "reviewCompletedAt": "2026-10-29T14:05:57.096Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 9aa3322 (on moe/work-2026-10-24, pushed, recorded in task.commits). Owned src diff is 3 files, +147/-1 (utils.ts +33, utils.test.ts +83, index.test.ts +32), well under the 400 LOC cap; proxy tree unchanged between 9aa3322 and HEAD 64ca64f. Re-ran the gate myself from a fresh git-archive snapshot of HEAD with native npm ci (never in the shared checkout): `(cd packages/moe-proxy && npm test)` exit 0, 4 files, 168/168 passed; the shared packages/moe-proxy/dist/index.js stat was identical before and after (1792606998 24357). DoD: (1) 65536-byte file parses and the 65537-byte file returns { info:null, retryable:false, error:'daemon.json is larger than 64 KiB' } (pinned as literals, utils.test.ts). (2) readBounded does openSync + one Buffer.alloc(MAX+1) + looped readSync + closeSync in finally; the 8 MiB test asserts the readSync total is exactly 65537, no readFileSync on the path, one open, one close, and an EIO test proves the fd is closed on the throw path. No readFileSync is left in non-test src. (3) Missing file stays retryable (existsSync path untouched); malformed and mismatch tests pass unchanged. (4) Gate green from an isolated snapshot. Mutation check: reverting the read to the old readFileSync in the snapshot fails 3 of the new utils.test.ts cases (65537 refusal, 8 MiB bounded read, EIO close) and leaves the other 82 passing, so the tests have teeth; the spawned-proxy index.test case (exit 1, error.message) is covered by the 168/168 run. Empty file still falls to JSON.parse and the existing invalid path, as before. The safety amendment was honoured (no /dev/zero case). Residuals as the worker noted, pre-existing and out of scope: a file removed between existsSync and open reports invalid details; opening a FIFO would block.",
+  "requiredCheckAtDone": null
 }
