@@ -766,7 +766,13 @@ All seven are required; `additionalProperties` is `false`.
 - The same SHA can have distinct checkpoint/rescue/completion events. An explicit completion report adds its own provenance/ref/push evidence without rewriting the earlier event; a checkpoint alone is never promoted automatically. Same-kind replays retain the original event and only upgrade pushed/treeId evidence. Git reachability is still verified by the caller, not by this tool.
 - Every outcome — including `nothing`, `refused` and `failed` — sets `task.lastCommitOutcome = { outcome, kind, code?, sessionId, at }`, so "the wrapper never got here" is distinguishable from "it refused".
 - Persisted with activity event `TASK_COMMIT_RECORDED`; refreshes the calling worker's `lastActivityAt`.
-- Chat: one line to the task channel for every call; a `#governors` line (rate-limited to once per task per 24h) when `unattributedPaths` is non-empty, `kind` is `rescue`, or `outcome` is not `committed`/`nothing`. Chat failures never fail the record.
+- Chat: one line to the task channel for every call; a `#governors` line (rate-limited to once per task per 24h, one window shared by every reason) when `unattributedPaths` is non-empty, `kind` is `rescue`, `outcome` is not `committed`/`nothing`, or a contested path was held. Chat failures never fail the record.
+- **Held contested paths** (`MOE_CONTESTED_HELD`): on any outcome, a `skipped` entry whose `code` is exactly `MOE_ATTR_CONTESTED` or matches `MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>)` adds the task-channel line `MOE_CONTESTED_HELD task=<id>: <path>(<peer>), … (+N more) — <remedy>` (at most 5 distinct normalized paths; a strict hold names the peer from the `contested` entry for the same path, else `?`) and alerts `#governors` even on `committed`/`nothing` with no `unattributedPaths`. Only the skip codes classify a hold: `contested` alone never does, because a witnessed or `contested: "commit"` path lands with a `Moe-Contested` trailer. The remedy is constant text:
+  - `MOE_ATTR_CONTESTED_UNTOUCHED` (`attribution.contested: "skip-untouched"`): verify the bytes are this task's and coordinate any live peer, then before the next landing either the owning assignee's own session edits the path with a wrapper-observed successful editing tool (the supported tools are listed under `attribution.contested` in `docs/CONFIGURATION.md`; a shell write leaves no witness), or the stale peer task is legitimately completed or archived.
+  - `MOE_ATTR_CONTESTED` (`attribution.contested: "skip"`): no editing tool releases it; only resolving or legitimately completing or archiving the peer task does.
+  - Declaring the path, plainly unblocking a task or touching the file from a shell does not release a hold, and changing the policy is not the fix.
+
+  The response, the stored records and the inputs are unchanged.
 - `warning` when `kind === "completion"` and `paths` is empty.
 - **Guard-exempt and status-agnostic**: allowed in every task status (`DONE`, `BLOCKED`, unassigned). See **Ownership & Ordering**.
 
@@ -987,7 +993,7 @@ Sending the identical report again, for example from a wrapper that crashed befo
 
 ### moe.declare_files
 
-Assert that paths belong to a task. Unions `paths` into `task.declaredFiles`, which the wrapper treats as the **ASSERTED** attribution tier — the next post-flight of that task commits them regardless of the baseline. That makes them the one asserted source that needs no evidence the task produced the dirty bytes: a path asserted only by history (`filesModified`, completed steps, earlier commits) is held as `MOE_ATTR_ASSERTED_FOREIGN` when its bytes predate the session and are untouched since, so declare a path only when its current bytes are the task's. This is the governor/worker lever for "these edits are mine, land them" (a path listed in `get_context.unattributedPaths`, a helper file the plan never named, debris a DONE task left dirty) and replaces hand-landed `chore(...)` commits.
+Assert that paths belong to a task. Unions `paths` into `task.declaredFiles`, which the wrapper treats as the **ASSERTED** attribution tier — the next post-flight of that task commits them regardless of the baseline, unless another nonterminal task also declares the path. That makes them the one asserted source that needs no evidence the task produced the dirty bytes: a path asserted only by history (`filesModified`, completed steps, earlier commits) is held as `MOE_ATTR_ASSERTED_FOREIGN` when its bytes predate the session and are untouched since, so declare a path only when its current bytes are the task's. This is the governor/worker lever for "these edits are mine, land them" (a path listed in `get_context.unattributedPaths`, a helper file the plan never named, debris a DONE task left dirty) and replaces hand-landed `chore(...)` commits.
 
 **Parameters:**
 ```typescript
@@ -1008,6 +1014,7 @@ Assert that paths belong to a task. Unions `paths` into `task.declaredFiles`, wh
 - No ownership guard: a governor declares onto tasks it never owns. Activity event: `TASK_FILES_DECLARED`.
 - Declaring does not commit anything by itself — the assigned agent's next session exit (or the BLOCKED-hold idle path, which lands lingering baselines with no CLI launched) lands it. Declare onto a task that will still get a session; a `DONE` task never runs a post-flight again.
 - A declared path that no longer exists on disk and is not in HEAD is reported as `MOE_ATTR_MISSING` at landing, never committed as a deletion.
+- Declaring never overrides `attribution.contested`: a path another open task also declares is still held at landing (`MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>)` / `MOE_ATTR_CONTESTED`), and `moe.record_commit`'s `MOE_CONTESTED_HELD` line names the remedy. The new-path `message` says so.
 
 **Errors:**
 - `taskId is required` / `paths is required` (non-empty array)

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { recordCommitTool, resetRecordCommitGovernorRateLimit } from './recordCommit.js';
+import { declareFilesTool } from './declareFiles.js';
 import { getActivityLogTool } from './getActivityLog.js';
 import { getTools } from './index.js';
 import { MAX_COMMITS_PER_TASK } from '../state/validators.js';
@@ -353,5 +354,194 @@ describe('moe.record_commit', () => {
     await expect(tool.handler({ ...base, taskId: 'nope' }, h.state)).rejects.toThrow('Task not found');
     // Nothing was written by the rejected calls.
     expect(h.state.getTask('task-1')!.commits).toBeUndefined();
+  });
+
+  describe('held contested paths (MOE_CONTESTED_HELD)', () => {
+    const UNTOUCHED = (peer: string) => `MOE_ATTR_CONTESTED_UNTOUCHED(${peer})`;
+    let sys: ReturnType<typeof vi.spyOn>;
+    let gov: ReturnType<typeof vi.spyOn>;
+
+    async function seedSpied(taskOverrides: Record<string, unknown> = {}) {
+      await seed(taskOverrides);
+      sys = vi.spyOn(h.state, 'postSystemMessage').mockResolvedValue(undefined);
+      gov = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+    }
+    const taskText = () => sys.mock.calls.map((c) => String(c[1])).join('\n');
+
+    it('reports an untouched hold on a committed landing with no unattributed paths, and alerts #governors once', async () => {
+      await seedSpied();
+      await record({ paths: ['src/a.ts'], skipped: [{ path: 'src/held.ts', code: UNTOUCHED('task-peer') }] });
+      const line = taskText().split('\n').find((l) => l.startsWith('MOE_CONTESTED_HELD'));
+      expect(line).toContain('MOE_CONTESTED_HELD task=task-1: src/held.ts(task-peer) — ');
+      expect(line).toContain('wrapper-observed successful editing tool');
+      expect(line).toContain('own assignee session');
+      expect(line).toContain('not a shell write');
+      expect(line).toContain('legitimately completed or archived');
+      expect(line).toContain('declare_files, unblocking or a shell touch alone does not release');
+      expect(line).not.toContain('attribution.contested=skip');
+      expect(gov).toHaveBeenCalledTimes(1);
+      expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining(line!));
+    });
+
+    it('reports a strict hold on a nothing outcome with the peer-only remedy, and "?" when no contested entry names the path', async () => {
+      await seedSpied();
+      await record({
+        outcome: 'nothing', kind: 'checkpoint', sha: undefined, ref: undefined, code: 'MOE_COMMIT_NOTHING_TO_COMMIT',
+        skipped: [{ path: './src/strict.ts', code: 'MOE_ATTR_CONTESTED' }, { path: 'src/orphan.ts', code: 'MOE_ATTR_CONTESTED' }],
+        contested: [{ path: 'src/other.ts', taskId: 'task-x' }, { path: 'src\\strict.ts', taskId: 'task-peer2' }],
+      });
+      const line = taskText().split('\n').find((l) => l.startsWith('MOE_CONTESTED_HELD'))!;
+      expect(line).toContain('MOE_CONTESTED_HELD task=task-1: src/strict.ts(task-peer2), src/orphan.ts(?) — ');
+      expect(line).toContain('attribution.contested=skip');
+      expect(line).toContain('only resolving or legitimately completing or archiving the peer task releases it');
+      expect(line).not.toContain('editing tool');
+      expect(line).toContain('never change the policy');
+      expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining('MOE_CONTESTED_HELD task=task-1'));
+      expect(h.state.getTask('task-1')!.lastCommitOutcome).toMatchObject({ outcome: 'nothing', code: 'MOE_COMMIT_NOTHING_TO_COMMIT' });
+    });
+
+    it('reports a hold on refused and failed outcomes too', async () => {
+      await seedSpied();
+      await record({ outcome: 'refused', sha: undefined, ref: undefined, code: 'MOE_COMMIT_REFUSED_NO_OWNED_PATHS',
+        skipped: [{ path: 'src/only.ts', code: UNTOUCHED('task-peer') }] });
+      await record({ outcome: 'failed', sha: undefined, ref: undefined, code: 'MOE_COMMIT_FAILED_REF_CONTENTION',
+        skipped: [{ path: 'src/only.ts', code: UNTOUCHED('task-peer') }] });
+      expect(taskText().match(/MOE_CONTESTED_HELD task=task-1: src\/only\.ts\(task-peer\)/g)).toHaveLength(2);
+    });
+
+    it('never reports a contested path that landed (contested entry, no contested skip code)', async () => {
+      await seedSpied();
+      await record({ paths: ['src/b.ts'], contested: [{ path: 'src/b.ts', taskId: 'task-peer' }] });
+      expect(taskText()).not.toContain('MOE_CONTESTED_HELD');
+      expect(gov).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'MOE_ATTR_PEER_DECLARED', 'MOE_ATTR_PREEXISTING', 'moe_attr_contested', 'MOE_ATTR_CONTESTEDX', 'XMOE_ATTR_CONTESTED',
+      'MOE_ATTR_CONTESTED_UNTOUCHED', 'MOE_ATTR_CONTESTED_UNTOUCHED()', 'MOE_ATTR_CONTESTED_UNTOUCHED(peer)',
+      'MOE_ATTR_CONTESTED_UNTOUCHED(task-a)x', 'MOE_ATTR_CONTESTED_UNTOUCHED(task-a)(task-b)', 'MOE_ATTR_CONTESTED_UNTOUCHED(task-a b)',
+    ])('ignores the near-match or unrelated skip code %s', async (code) => {
+      await seedSpied();
+      await record({ paths: ['src/a.ts'], skipped: [{ path: 'src/held.ts', code }], contested: [{ path: 'src/held.ts', taskId: 'task-peer' }] });
+      expect(taskText()).not.toContain('MOE_CONTESTED_HELD');
+      expect(gov).not.toHaveBeenCalled();
+    });
+
+    it('ignores malformed skipped entries and still records the landing', async () => {
+      await seedSpied();
+      const code = UNTOUCHED('task-peer');
+      const result = await record({
+        paths: ['src/a.ts'],
+        skipped: ['src/x.ts', null, [], { code }, { path: 'src/blank.ts', code: '  ' }, { path: 42, code },
+          { path: '/etc/x', code }, { path: '../x', code }],
+      });
+      expect(result.success).toBe(true);
+      expect(taskText()).not.toContain('MOE_CONTESTED_HELD');
+      expect(gov).not.toHaveBeenCalled();
+      expect(h.state.getTask('task-1')!.commits).toHaveLength(1);
+    });
+
+    it('shows at most 5 distinct held paths, then +N more', async () => {
+      await seedSpied();
+      const skipped = Array.from({ length: 7 }, (_, i) => ({ path: `src/h${i}.ts`, code: UNTOUCHED('task-peer') }));
+      skipped.push({ path: './src/h0.ts', code: UNTOUCHED('task-other') });
+      await record({ paths: ['src/a.ts'], skipped });
+      const line = taskText().split('\n').find((l) => l.startsWith('MOE_CONTESTED_HELD'))!;
+      expect(line.match(/\(task-peer\)/g)).toHaveLength(5);
+      expect(line).toContain('src/h0.ts(task-peer), src/h1.ts(task-peer), src/h2.ts(task-peer), src/h3.ts(task-peer), src/h4.ts(task-peer) … (+2 more) — ');
+      expect(line).not.toContain('task-other');
+      expect(line).not.toContain('src/h5.ts');
+    });
+
+    it('shares the per-task #governors window with every other alert reason', async () => {
+      await seedSpied();
+      const held = { skipped: [{ path: 'src/held.ts', code: UNTOUCHED('task-peer') }] };
+      await record({ paths: ['src/a.ts'], ...held });
+      await record({ sha: SHA_B, kind: 'checkpoint', paths: ['src/a.ts'], ...held });
+      expect(gov).toHaveBeenCalledTimes(1);
+      expect(taskText().match(/MOE_CONTESTED_HELD task=task-1/g)).toHaveLength(2);
+
+      h.createTask({ id: 'task-2', status: 'WORKING' });
+      await h.state.load();
+      await record({ taskId: 'task-2', paths: ['src/a.ts'], ...held });
+      expect(gov).toHaveBeenCalledTimes(2);
+
+      // An unattributed alert for task-1 falls in the held alert's window.
+      await record({ sha: SHA_B, kind: 'checkpoint', paths: ['src/a.ts'], unattributedPaths: ['src/u.ts'] });
+      expect(gov).toHaveBeenCalledTimes(2);
+
+      resetRecordCommitGovernorRateLimit();
+      await record({ paths: ['src/a.ts'], ...held });
+      expect(gov).toHaveBeenCalledTimes(3);
+    });
+
+    it('a failed chat post never fails the call or changes the stored outcome', async () => {
+      await seed();
+      vi.spyOn(h.state, 'postSystemMessage').mockRejectedValue(new Error('chat down'));
+      const rejected = vi.spyOn(h.state, 'postToRoleChannel').mockRejectedValue(new Error('chat down'));
+      const result = await record({ paths: ['src/a.ts'], skipped: [{ path: 'src/held.ts', code: 'MOE_ATTR_CONTESTED' }] });
+      expect(result.success).toBe(true);
+      expect(rejected).toHaveBeenCalledTimes(1);
+      const task = h.state.getTask('task-1')!;
+      expect(task.commits).toHaveLength(1);
+      expect(task.lastCommitOutcome).toMatchObject({ outcome: 'committed', kind: 'completion' });
+    });
+
+    it('leaves the ledger, path unions and response exactly as without the held entries', async () => {
+      await seedSpied();
+      h.createTask({ id: 'task-2', status: 'REVIEW', assignedWorkerId: 'qa-1', filesModified: ['src/existing.ts'] });
+      await h.state.load();
+      const args = { paths: ['src/a.ts', 'src/m.ts'], inferredPaths: ['src/m.ts'], unattributedPaths: [],
+        contested: [{ path: 'src/held.ts', taskId: 'task-peer' }] };
+      const plain = await record({ ...args });
+      const withHeld = await record({ ...args, taskId: 'task-2',
+        skipped: [{ path: 'src/held.ts', code: 'MOE_ATTR_CONTESTED' }, { path: 'src/h2.ts', code: UNTOUCHED('task-peer') }] });
+      expect({ ...withHeld, taskId: 'task-1' }).toEqual(plain);
+      const strip = (id: string) => {
+        const t = h.state.getTask(id)!;
+        const { recordedAt: _r, ...commit } = t.commits![0];
+        return { commit, filesModified: t.filesModified, inferredPaths: t.inferredPaths, unattributedPaths: t.unattributedPaths };
+      };
+      expect(strip('task-2')).toEqual(strip('task-1'));
+    });
+  });
+});
+
+describe('moe.declare_files contested-hold caveat', () => {
+  const h = new ToolTestHarness();
+  beforeEach(async () => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING' });
+    await h.state.load();
+  });
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  async function declare(paths: string[]) {
+    return await declareFilesTool(h.state).handler({ taskId: 'task-1', paths }, h.state) as {
+      declaredFiles: string[]; addedPaths: string[]; alreadyDeclared: string[]; message: string;
+    };
+  }
+
+  it('the tool description says declaring does not release a contested hold', () => {
+    const { description } = declareFilesTool(h.state);
+    expect(description).toContain('regardless of the pre-task baseline');
+    expect(description).toContain('does not override a contested hold');
+    expect(description).toContain('MOE_ATTR_CONTESTED_UNTOUCHED(<peer>)');
+    expect(description).toContain('MOE_CONTESTED_HELD');
+  });
+
+  it('unions exactly as before and the new-path message carries the caveat', async () => {
+    const first = await declare(['src/a.ts']);
+    expect(first.message).toContain('unless another open task also declares one (a contested hold; declaring does not release it)');
+    const second = await declare(['src/a.ts', 'src/b.ts']);
+    expect(second.declaredFiles).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(second.addedPaths).toEqual(['src/b.ts']);
+    expect(second.alreadyDeclared).toEqual(['src/a.ts']);
+    expect(second.message).toBe('Declared 1 new path(s) on task-1; the wrapper commits them under the task on its next exit unless another open task also declares one (a contested hold; declaring does not release it).');
+    const repeat = await declare(['src/b.ts']);
+    expect(repeat.message).toBe('All 1 path(s) were already declared on task-1.');
+    expect(h.state.getTask('task-1')!.declaredFiles).toEqual(['src/a.ts', 'src/b.ts']);
   });
 });

@@ -2,7 +2,8 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { Task, TaskCommit, TaskCommitKind, TaskCommitOutcome } from '../types/schema.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
-import { PathSet, unionPaths } from '../util/attributionTiers.js';
+import { PathSet, tolerantNormalizePath, unionPaths } from '../util/attributionTiers.js';
+import { pathKey } from '../util/affectedFiles.js';
 import { UNIDENTIFIED_RELEASER } from '../util/claimGuards.js';
 import { trimCommits } from '../state/validators.js';
 import { SHA_RE } from '../state/candidateStore.js';
@@ -16,6 +17,13 @@ const MAX_MESSAGE_CHARS = 2000;
 const MAX_SHORT_STRING = 255;
 const MAX_ROLE_CHARS = 64;
 const UNRESOLVED_PATHS_SHOWN = 20;
+/** Same bound as the wrapper's session-ended held= suffix. */
+const HELD_PATHS_SHOWN = 5;
+const CONTESTED_STRICT_CODE = 'MOE_ATTR_CONTESTED';
+const CONTESTED_UNTOUCHED_RE = /^MOE_ATTR_CONTESTED_UNTOUCHED\((task-[A-Za-z0-9_-]+)\)$/;
+const HELD_REMEDY_UNTOUCHED = 'MOE_ATTR_CONTESTED_UNTOUCHED: verify these bytes are this task\'s and coordinate any live peer, then before the next landing either this task\'s own assignee session edits the path with a wrapper-observed successful editing tool (Claude Edit/Write family or a supported Serena editor, not a shell write), or the stale peer task is legitimately completed or archived.';
+const HELD_REMEDY_STRICT = 'MOE_ATTR_CONTESTED (attribution.contested=skip) holds the path whatever the session\'s tools did: only resolving or legitimately completing or archiving the peer task releases it.';
+const HELD_REMEDY_NEVER = 'declare_files, unblocking or a shell touch alone does not release a hold; never change the policy as the fix.';
 /** #governors gets at most one commit alert per task per window; the task channel gets every line. */
 const GOVERNOR_ALERT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -94,6 +102,52 @@ function readRecordList<T extends Record<string, string>>(
   return out;
 }
 
+interface HeldPath {
+  path: string;
+  peer: string | null;
+  strict: boolean;
+}
+
+/**
+ * Own contested paths this landing held back, read from the skip codes only:
+ * `contested` also names paths that landed (TOOL witness, contested=commit),
+ * so it is used solely to name a strict hold's peer. Malformed paths are
+ * ignored; the first entry per normalized path wins.
+ */
+function heldContestedPaths(
+  skipped: readonly { path: string; code: string }[],
+  contested: readonly { path: string; taskId: string }[]
+): HeldPath[] {
+  const keyOf = (raw: string): string | null => {
+    const normalized = tolerantNormalizePath(raw);
+    return normalized === null ? null : pathKey(normalized);
+  };
+  const held = new Map<string, HeldPath>();
+  for (const entry of skipped) {
+    const strict = entry.code === CONTESTED_STRICT_CODE;
+    const untouched = strict ? null : CONTESTED_UNTOUCHED_RE.exec(entry.code);
+    if (!strict && !untouched) continue;
+    const path = tolerantNormalizePath(entry.path);
+    if (path === null || held.has(pathKey(path))) continue;
+    const peer = untouched
+      ? untouched[1]
+      : contested.find((c) => keyOf(c.path) === pathKey(path))?.taskId ?? null;
+    held.set(pathKey(path), { path, peer, strict });
+  }
+  return Array.from(held.values());
+}
+
+function heldContestedLine(taskId: string, held: readonly HeldPath[]): string {
+  const shown = held.slice(0, HELD_PATHS_SHOWN).map((h) => `${h.path}(${h.peer ?? '?'})`);
+  const more = held.length > shown.length ? ` … (+${held.length - shown.length} more)` : '';
+  const remedy = [
+    ...(held.some((h) => !h.strict) ? [HELD_REMEDY_UNTOUCHED] : []),
+    ...(held.some((h) => h.strict) ? [HELD_REMEDY_STRICT] : []),
+    HELD_REMEDY_NEVER,
+  ].join(' ');
+  return `MOE_CONTESTED_HELD task=${taskId}: ${shown.join(', ')}${more} — ${remedy}`;
+}
+
 /** Same commit when equal, or when one abbreviated sha is a prefix of the other. */
 function sameSha(a: string, b: string): boolean {
   const x = a.toLowerCase();
@@ -104,7 +158,7 @@ function sameSha(a: string, b: string): boolean {
 export function recordCommitTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.record_commit',
-    description: 'Record the outcome of the agent wrapper\'s git landing for a task — a completion commit (feat|fix on the shared branch), a wip checkpoint, or a rescue ref (refs/moe/rescue/<taskId>/<ts>) — including refused/failed/nothing outcomes. On committed: appends task.commits (idempotent by sha and kind, capped, newest kept), unions the non-inferred paths into task.filesModified, and keeps task.inferredPaths / touchedFiles / unattributedPaths current; every outcome stamps task.lastCommitOutcome. Guard-exempt (runs after complete_task when QA may already own the REVIEW task, and on unassigned BLOCKED tasks) and allowed in every status. Posts one line to the task channel and a rate-limited #governors alert on unattributed paths, rescue refs, or refused/failed outcomes.',
+    description: 'Record the outcome of the agent wrapper\'s git landing for a task — a completion commit (feat|fix on the shared branch), a wip checkpoint, or a rescue ref (refs/moe/rescue/<taskId>/<ts>) — including refused/failed/nothing outcomes. On committed: appends task.commits (idempotent by sha and kind, capped, newest kept), unions the non-inferred paths into task.filesModified, and keeps task.inferredPaths / touchedFiles / unattributedPaths current; every outcome stamps task.lastCommitOutcome. Guard-exempt (runs after complete_task when QA may already own the REVIEW task, and on unassigned BLOCKED tasks) and allowed in every status. Posts one line to the task channel and a rate-limited #governors alert on unattributed paths, held contested paths (MOE_CONTESTED_HELD, from the skipped codes), rescue refs, or refused/failed outcomes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -332,9 +386,12 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
         const more = unattributed.length > shown.length ? ` … (+${unattributed.length - shown.length} more)` : '';
         lines.push(`MOE_ATTRIBUTION_UNRESOLVED task=${task.id}: ${shown.join(', ')}${more}`);
       }
+      const held = heldContestedPaths(skipped, contested);
+      if (held.length > 0) lines.push(heldContestedLine(task.id, held));
       try { await state.postSystemMessage(task.id, lines.join('\n')); } catch { /* never block tool */ }
 
-      const alertGovernors = unattributed.length > 0 || rescueLanded || (outcome !== 'committed' && outcome !== 'nothing');
+      const alertGovernors = unattributed.length > 0 || rescueLanded || held.length > 0
+        || (outcome !== 'committed' && outcome !== 'nothing');
       if (alertGovernors) {
         const nowMs = Date.now();
         const last = governorAlertAt.get(task.id);
