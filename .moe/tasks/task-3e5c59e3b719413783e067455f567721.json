@@ -1,0 +1,108 @@
+{
+  "id": "task-3e5c59e3b719413783e067455f567721",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "[CQ-C03a] Immutable commit materialization for analyzers",
+  "description": "Objective: materialize one exact commit's committed bytes into a private throwaway directory, using read-only Git only. An analyzer such as CQ-C03's Serena adapter can then index immutable input instead of the shared, mutable worktree.\n\nSplit out of CQ-C03 (task-8d009716) by architect-e4b7eee0 on 2026-10-29. C03 whole is about 650 lines, so it becomes a materializer (this row), an MCP client (CQ-C03b) and the adapter (C03).\n\nInterface (CQ-C03 plans against these exact names):\n- New module packages/moe-daemon/src/context/commitMaterializer.ts.\n- `export interface MaterializeLimits { readonly maxFiles: number; readonly maxBytes: number; readonly timeBudgetMs: number }`.\n- `export const MATERIALIZE_LIMITS: Readonly<MaterializeLimits>`, defaulting to {maxFiles: 10000, maxBytes: 67108864, timeBudgetMs: 20000}. An override must be a positive safe integer at or below its default ceiling (timeBudgetMs up to 60000). It is refused with invalidInput, never clamped.\n- `export interface MaterializedCommit { readonly dir: string; readonly commit: string; readonly tree: string; readonly files: number; readonly bytes: number; readonly skipped: Readonly<{ control: number; unportable: number; symlink: number; submodule: number }>; dispose(): Promise<void> }`. dispose is idempotent and removes only dir.\n- `export type MaterializeResult = { readonly ok: true; readonly materialized: MaterializedCommit } | { readonly ok: false; readonly reason: string }`.\n- `export async function materializeCommit(projectRoot: string, commit: string, options?: { limits?: Partial<MaterializeLimits>; tmpRoot?: string }): Promise<MaterializeResult>`. A caller-shape error (a commit that is not a full lowercase id, or bad limits) throws invalidInput before any IO. A repository, Git or filesystem failure returns { ok: false, reason } and never throws.\n\nRules:\n- Git:\n  - Read-only Git only, inside the daemon's existing envelope: openProjectGit's trust checks plus the readOnlyGitEnv/readOnlyGitArgs settings in util/cachedPlanPaths.ts. If one cat-file --batch stream needs stdin, this row may add a stdin-capable runner beside runGit that reuses that envelope. The CQ-C02 epic rail covers only C02's own landed bytes.\n  - Verify the commit with rev-parse --verify --end-of-options <commit>^{commit}.\n  - List with ls-tree -r -z -l --full-tree.\n  - Read blobs through one cat-file --batch stream with exact '<oid> blob <size>' header checks, as R09b does.\n  - Never use archive, checkout, checkout-index, read-tree, worktree, filters, textconv or attributes. Never write to the repository.\n- Skipping: paths refused by CQ-C02b1 snapshotPathRefusal (task-02fd5931) are counted as control or unportable. Symlinks (120000) and gitlinks (160000) are skipped and counted, never followed or created.\n- Bounds are checked from the listing BEFORE any blob is read.\n- Output directory: a fresh fs.mkdtemp(path.join(tmpRoot ?? os.tmpdir(), 'moe-materialize-')), mode 0700, never inside projectRoot. Files are written with exclusive-create flags and executable bits are preserved on POSIX.\n- On any failure after mkdtemp, the directory is removed before returning.\n\nScope boundaries: materialization and its regression tests only. No analyzer, no activation, no MCP tool, no .moe state. Approved full CQ-01–CQ-08 rollout (2026-10-24). Daemon owns state, wrappers own host Git writes; the daemon writes no Git state. Strong profile stays disabled. Never directly edit .moe.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "A materialized directory holds exactly the commit's portable regular files with their committed bytes and executable bits. Dirty worktree bytes, staged changes and local attribute or filter configuration never change what is written; a real-Git test pins each one.",
+    "Control and unportable paths, symlinks and gitlinks are skipped and counted, never followed or created, and the bounds refuse before any blob is read. Each skip and refusal has a named test.",
+    "Nothing is written to the repository or projectRoot (git status, index and .git are unchanged). Every failure path and dispose() removes the private directory, and the read failures that are tested return { ok: false, reason } without throwing.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Expose the daemon's read-only Git envelope for reuse. In packages/moe-daemon/src/util/cachedPlanPaths.ts, add `export` to the existing private helpers readOnlyGitEnv() and readOnlyGitArgs(cwd, args).\n- Nothing else changes: no behavior change, and runGit and runGitHead stay byte-identical.\n- The CQ-C02 epic rail covers only C02's own landed bytes, as this row's description says.\nConfirm that src/util/cachedPlanPaths.test.ts and the repositorySource tests still pass in the Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement packages/moe-daemon/src/context/commitMaterializer.ts, exporting EXACTLY the names in this row's description: MaterializeLimits, MATERIALIZE_LIMITS, MaterializedCommit, MaterializeResult and materializeCommit. CQ-C03 (task-8d009716) is already planned against them.\n\nFlow:\n1. Pure validation BEFORE any IO, throwing invalidInput:\n   - commit matches /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;\n   - each limits override is a positive safe integer at or below its ceiling (maxFiles 10000, maxBytes 67108864, timeBudgetMs 60000; default 20000); refused, never clamped;\n   - tmpRoot, when given, is an absolute string.\n2. One deadline (timeBudgetMs) for everything. Call openProjectGit(projectRoot, runGit, budget), the shared trust checks: realpath, toplevel equals root, partial-clone/promisor/core.worktree refused. A failure gives {ok:false, reason:`repository: <first line>`}.\n3. Peel and list:\n   - rev-parse --verify --end-of-options <commit>^{commit} must equal commit, else 'commit-invalid'. A tree or blob id lands here too.\n   - tree = <commit>^{tree}.\n   - ls-tree -r -z -l --full-tree <commit>, with maxBuffer sized for 10000 entries of 1024-byte paths (about 16 MiB). Parse records exactly as R09b's LS_TREE regex does; an unparsable record gives 'git-failed:ls-tree'.\n4. Classify each record:\n   - mode 120000: skipped.symlink;\n   - mode 160000: skipped.submodule;\n   - CQ-C02b1 snapshotPathRefusal(path) === 'SNAPSHOT_CONTROL_PATH': skipped.control;\n   - 'SNAPSHOT_PATH_INVALID': skipped.unportable;\n   - 100644 or 100755 blob: wanted.\n   Then refuse a case-folded duplicate among the wanted paths (foldCase upper-then-lower) as 'path-collision'. Deterministic on every filesystem, and consistent with R09a.\n5. Bounds BEFORE any blob read: wanted.length > maxFiles gives 'limit-exceeded:files'; the sum of sizes > maxBytes gives 'limit-exceeded:bytes'.\n6. Create the directory with fs.mkdtemp(path.join(realpath(tmpRoot ?? os.tmpdir()), 'moe-materialize-')).\n   - If the real tmp base is equal to or inside the real projectRoot, return 'tmp-inside-project' WITHOUT creating anything.\n   - chmod the directory 0700 (POSIX).\n7. Read the blobs: ONE `cat-file --batch` stream through a local stdin runner.\n   - It uses execFile(gitExecutable(), readOnlyGitArgs(root, args), {cwd: root, env: readOnlyGitEnv(), timeout: remaining, killSignal: 'SIGKILL', windowsHide: true, encoding: 'buffer', maxBuffer}) with child.stdin.on('error', noop).end(input), mirroring scripts/local-runner/source-export.mjs gitRunner.\n   - input is the wanted oids, one per line. maxBuffer is the exact sum of header + size + 1.\n   - Verify each record header byte for byte as `${oid} blob ${size}\\n` and the trailing LF. A mismatch gives 'git-failed:cat-file'.\n   - Never pass --filters or --textconv. Never use archive, checkout, checkout-index, read-tree or worktree.\n8. Write each file:\n   - fs.mkdir(parent, {recursive: true, mode: 0o700});\n   - fs.writeFile(path.join(dir, ...segments), bytes, {flag: 'wx', mode: executable ? 0o755 : 0o644}). Exclusive create; nothing is followed, and no symlink is ever created.\n9. Return {ok:true, materialized}:\n   - a frozen {dir, commit, tree, files, bytes, skipped: frozen counts, dispose};\n   - dispose is idempotent and runs fs.rm(dir, {recursive: true, force: true}) only after asserting that dir is the exact path mkdtemp returned.\n\nError handling: every failure after mkdtemp removes dir before returning {ok:false, reason}, where reason is a short code plus the first line, never file bytes. Git, filesystem and timeout errors never throw.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/commitMaterializer.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Write the tests in a new packages/moe-daemon/src/context/commitMaterializer.test.ts, using real temp git repos (follow repositorySource.test.ts's mkdtemp repo pattern: execFileSync git with GIT_* scrubbed from env, cleaned in afterAll). Each test gets its own tmpRoot dir so leftovers can be listed.\n\nCases:\n- M1: commit 'a.ts' and 'dir/b.ts' (100755 via git update-index --chmod=+x). Then rewrite a.ts in the worktree, stage different bytes for dir/b.ts, and add an untracked c.ts. The materialized dir holds exactly a.ts and dir/b.ts with the bytes `git cat-file blob <commit>:<path>` prints. On POSIX, b.ts has an exec bit and a.ts does not. c.ts is absent, and files/bytes are counted correctly.\n- M2: the commit carries .gitattributes `* filter=evil text eol=crlf` and an LF file. Local config sets filter.evil.smudge to a command that creates a marker file, plus core.autocrlf=true and .git/info/attributes. The materialized bytes equal the raw blob (LF) and the marker is never created. That proves no filter, attribute or eol path runs.\n- M3: index entries built with `git update-index --add --cacheinfo` (portable, no filesystem symlink needed): a 120000 symlink, a 160000 gitlink, '.moe/x.json', 'CON.txt' and a '.GIT/y'-style control path. Expect skipped {symlink:1, submodule:1, control:2, unportable:1}. None is written, and lstat finds no link anywhere under dir.\n- M4: limits {maxFiles: 1} over 2 files gives 'limit-exceeded:files'. M5: {maxBytes: 4} gives 'limit-exceeded:bytes'. Proof that the refusal comes before any blob is read: delete one blob's loose object file in the repo first. The reason is still limit-exceeded, never git-failed, and no moe-materialize-* dir exists under tmpRoot.\n- M6: with the bounds passing and a loose blob object deleted, the result is ok:false starting with 'git-failed', no dir is left under tmpRoot, and nothing throws.\n- M7: tmpRoot equal to or inside projectRoot gives 'tmp-inside-project', and nothing is created.\n- M8: around a successful call, `git status --porcelain=v1 -z`, the sha256 of .git/index, `git for-each-ref` and the projectRoot listing are byte-equal before and after.\n- M9: dispose() twice does not throw, dir is gone, and a sibling dir under tmpRoot survives.\n- M10: each of these throws INVALID_INPUT before any IO, with no dir created under tmpRoot: commit 'HEAD', an uppercase id, a 39-char id, maxFiles 0, maxBytes 67108865, timeBudgetMs 60001, and a relative tmpRoot.\n- M11: case-folded 'A.ts' and 'a.ts' (built through --cacheinfo plus git write-tree and commit-tree on a scratch index via GIT_INDEX_FILE in the TEST only) give 'path-collision', with the dir removed.\n- M12: a tree id or blob id gives 'commit-invalid'.\n\nMutation proof, on a scratch snapshot copy only:\n- pass --filters: M2 red;\n- drop the symlink or gitlink skip: M3 red;\n- move the bounds after the read: M4/M5 red;\n- skip cleanup on failure: M6 red;\n- swap 'wx' for 'w': no test needed, but argue it in the note;\n- drop the tmp-inside check: M7 red.\nRecord the results.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/commitMaterializer.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, once, fresh. In a Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate: whole-repo git archive HEAD, overlay ONLY this task's three files plus the landed C02b1 snapshotManifest.ts if it is not yet in HEAD, symlinked native node_modules, env -i with the nvm node bin on PATH, NO_COLOR=1):\n- `cd packages/moe-daemon && npm test` must exit 0.\n- `npx tsc --noEmit` must exit 0.\ncmp the overlaid files against the worktree before citing the run, and supply the npm test output to complete_task.\nIf the environment allows, also run the new test file once on native Windows node (mem pattern-qa-windows-native-vitest-from-wsl) and record the result: M1's exec bits are POSIX-only, and M3 must hold on NTFS.\nKeep the diff at or under 400 net lines including tests.\nIf C02b1 landed snapshotPathRefusal under a different name, a one-line adaptation is in scope. Anything larger: moe.report_blocked with blockedOnTaskIds [task-02fd5931f7274a6696ef84e7d3da4efb]. C02b1 does not depend on this row, so there is no cycle.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review: load adversarial-self-review and walk this task's own diff. This is the last step.\n- Can ANY code path write into the repository, the index, refs or projectRoot?\n- Can it run a filter, smudge, textconv or hook, or follow or create a symlink?\n- Can it leave a temp dir behind (every return and throw path)?\n- Can it read blobs before the bounds check?\n- Can a hostile tree (unicode, case folds, huge counts) make it throw instead of returning a reason?\n- Is the cat-file stream parsed exactly, with a trailing-LF and header check per record?\n- Does any project global forbiddenPattern token appear in the code or tests?\nReport all three files in complete_step.modifiedFiles, and write the task handoff memory with the final API for CQ-C03.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-02fd5931f7274a6696ef84e7d3da4efb"
+  ],
+  "priority": "HIGH",
+  "order": 224.1,
+  "comments": [
+    {
+      "id": "comment-26a2226f741e43aca6e332b07b877bea",
+      "author": "architect-e4b7eee0",
+      "content": "Architect clarifications for the worker, from Serena gotchas read after submit. Both fit inside the existing steps; this is not a scope change.\n(1) Step 2, ls-tree overflow. Size ls-tree maxBuffer from the ceilings, not from caller limits. A rejection with code ERR_CHILD_PROCESS_STDIO_MAXBUFFER maps deterministically to reason 'limit-exceeded:files'. This happens before mkdtemp, so there is nothing to clean, and it never throws. (mem gotcha-git-tree-read-pathspec-and-maxbuffer)\n(2) Step 3, M2 fixture hygiene. `git add` and `git status` RUN the clean filter, so your own setup can create the marker. Set the filter.evil.* and core.autocrlf config only AFTER the commit is made. Delete any marker immediately before materializeCommit, and assert it is absent right after the call. Run M8's status/index probes in a separate repo with no filter config. (mem gotcha-git-read-local-config-shapes-output, QA round 3)\nAlso confirmed against mem gotcha-local-runner-execfile-stdin: attach the stdin 'error' listener BEFORE .end(input). A cat-file that dies early otherwise crashes the daemon with an unhandled EPIPE, so it must stay a 'git-failed:cat-file' reason.",
+      "timestamp": "2026-10-29T14:55:58.884Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T14:49:02.792Z",
+  "updatedAt": "2026-10-29T14:55:58.884Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T14:52:10.212Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T14:53:34.784Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Use `git archive` and parse the tar. Rejected: archive consults attributes (export-ignore, export-subst, and possibly $GIT_DIR/info/attributes), which are mutable local state. It would also need a tar and pax parser.\n2. Use checkout-index or read-tree into a temp index. Rejected: smudge filters from local config run arbitrary commands, and checkout writes eol conversions.\n3. Run `cat-file blob` once per file. Rejected: up to 10,000 process spawns.\n4. Add a whole new runner to cachedPlanPaths.ts. Rejected: exporting the two envelope helpers and keeping the stdin runner in the new module keeps C02's file to a two-word change.\nChosen: ls-tree plus ONE cat-file --batch stream, exactly R09b's proven approach (scripts/local-runner/source-export.mjs readBase), inside the daemon's read-only envelope.",
+    "codebaseInsights": "- openProjectGit(projectRoot, run, budgetMs) gives the realpath and toplevel checks and refuses partial-clone, promisor and core.worktree repositories.\n- readOnlyGitEnv strips GIT_*, masks system and global config, and sets GIT_NO_LAZY_FETCH and GIT_TERMINAL_PROMPT=0. readOnlyGitArgs adds --no-optional-locks, --no-replace-objects, protocol.allow=never and safe.directory=<root>. Both are private today; step 1 exports them.\n- runGit is promisified execFile without stdin. R09b's gitRunner shows the stdin pattern (child.stdin.on('error', noop).end(input)) and the exact batch header verification.\n- Assumed C02b1 interface (task-02fd5931, not landed): snapshotPathRefusal(path) returns 'SNAPSHOT_PATH_INVALID', 'SNAPSHOT_CONTROL_PATH' or null.\n- The consumer is CQ-C03 (task-8d009716, planned): readSemanticSource calls materializeCommit and passes materialized.dir to Serena as --project, then disposes it.",
+    "risks": "- Memory: up to 64 MiB of blob bytes buffered at once (maxBytes). That is acceptable, and refused before the read when exceeded.\n- Windows: there are no exec bits, and 'wx' plus fs.rm behave the same. NTFS case-insensitivity is covered by the pre-write case-fold refusal.\n- Tests that build trees with update-index --cacheinfo and a scratch GIT_INDEX_FILE must do it only in their own temp repos, never in the shared checkout.\n- Size: about 140 runtime plus 220 test lines. Keep it table-driven, at or under 400 net.\n- The C02 epic rail names cachedPlanPaths.ts. This task adds only two export keywords, and QA should read the rail as covering C02's own bytes.\n- Rails: no forbidden tokens, no .moe edits, no Git writes to any repository the daemon serves.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "scripts/local-runner/source-export.mjs",
+      "packages/moe-daemon/src/context/repositorySource.ts",
+      "packages/moe-daemon/src/context/repositorySource.test.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T14:53:34.881Z"
+}

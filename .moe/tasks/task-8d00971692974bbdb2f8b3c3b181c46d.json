@@ -13,9 +13,52 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Implement packages/moe-daemon/src/context/semanticSource.ts, the optional Serena read adapter. It is a library call, invoked OUTSIDE the state mutex like C02's readRepositorySource.\n\nAPI:\n- `export type SemanticQuery = { id: string; purpose: SourcePurpose } & ({ op: 'symbol'; name: string; path?: string } | { op: 'references'; name: string; path: string } | { op: 'overview'; path: string })`.\n- `export interface SemanticItem { id; purpose; op; status: SourceItemStatus; reason?: string; tool?: string; content?: string; bytes: number; inconclusive?: true; fallback?: SourceItem }`.\n- `export interface SemanticSource { manifest: { commit: string; analyzer: { name: string; version: string; protocolVersion: string } | null }; items: SemanticItem[]; complete: boolean; limitations: string[]; bytes: number }`.\n- `export const SEMANTIC_TOOLS = Object.freeze({ symbol: 'find_symbol', references: 'find_referencing_symbols', overview: 'get_symbols_overview' })`. This is the ONLY allowlist passed to openAnalyzerSession: no write, memory or shell tool, ever.\n- `export const SEMANTIC_LIMITS`: maxQueries 16, timeBudgetMs 60000 (ceiling 120000), maxResponseBytes 65536, maxTotalBytes 262144. An override outside its range is refused, never clamped.\n- `export async function readSemanticSource(projectRoot, commit, queries, options = {})`.\n- options holds limits, serenaPath, and test seams: materialize (default C03a materializeCommit), open (default C03b openAnalyzerSession), fallback (default C02 readRepositorySource) and launcher { command, prefixArgs }.\n\nOrder of operations:\n1. Pure validation BEFORE any IO, throwing invalidInput:\n   - commit is a full lowercase id;\n   - 1..maxQueries queries with unique ids;\n   - op is known and purpose is valid;\n   - name is non-empty, at most 200 chars and has no NUL/CR/LF;\n   - every path passes C02's normalizedPath rules (exact normalized relative path, no '..');\n   - references requires a path.\n2. Resolve the analyzer: options.serenaPath, else MOE_SERENA_PATH, else ~/.local/bin/serena ('serena.exe' on win32). It must exist as a file and be executable on POSIX; otherwise the cause is 'analyzer-absent'.\n3. materializeCommit(projectRoot, commit). A failure gives cause `materialize-failed:<reason>`.\n4. Create a private Serena home with fs.mkdtemp under os.tmpdir(), separate from the materialized dir.\n   - Measured 2026-10-29 on Serena 1.6.2.dev0: Serena registers every --project in ~/.serena/serena_config.yml (the 'projects:' list) and keeps memories and logs under its home. SERENA_HOME overrides that home (serena/config/serena_config.py SerenaPaths).\n   - When the real <home>/.serena/language_servers exists, link it in as <private>/language_servers (POSIX symlink, Windows junction), so the cached language-server binaries are reused. Nothing else is shared.\n5. openAnalyzerSession(launch, Object.values(SEMANTIC_TOOLS)):\n   - command: the analyzer or launcher.command; args: [...prefixArgs, 'start-mcp-server', '--context', 'agent', '--project', materialized.dir, '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false', '--open-web-dashboard', 'false'];\n   - cwd = materialized.dir;\n   - env = an explicit allowlist copied from process.env when present: PATH, HOME, USERPROFILE, SystemRoot, TEMP, TMP, TMPDIR, LANG, LC_ALL, plus SERENA_HOME = the private home. No MOE_*, GIT_* or credentials;\n   - timeoutMs = the remaining budget; maxResponseBytes from limits.\n   A failure gives cause `analyzer-failed:<reason>`.\n6. Capability check per needed tool, from session.tools:\n   - missing gives `capability-missing:<tool>`;\n   - the inputSchema.properties must hold the params we send. For symbol, the first of 'name_path_pattern' or 'name_path' (Serena 1.6.2 find_symbol uses name_path_pattern); for references, 'name_path'; and 'relative_path'. Otherwise `capability-mismatch:<tool>`.\n7. Per query, call the tool:\n   - args: {name_path_pattern|name_path: name, relative_path: path ?? ''}, or {relative_path} for an overview.\n   - ok gives 'served' with the text as content and the tool name; truncated gives 'truncated'/'response-byte-cap'.\n   - An empty answer is served as returned, never rewritten into a claim of absence.\n   - A failure gives cause `tool-failed:<reason>`.\n   - Running out of budget gives cause 'time-budget' for that and every later query.\n8. Fallback (DoD 1). For every query whose cause is set, the item is 'unavailable' with reason `semantic-unavailable:<cause>`, inconclusive: true, and fallback = the C02 readRepositorySource(projectRoot, commit, ...) item at the SAME commit:\n   - symbol and references: a literal search for the name's last '/' segment, scoped to [path] when given;\n   - overview: a read of path.\n   - Limitations then include 'semantic-unavailable' and 'literal-search-fallback'.\n   - A failing fallback is just its own explicit C02 status. Nothing is ever reported as 'helper absent'.\n9. Total-byte cap: later items become 'omitted'/'total-byte-cap' with content stripped, using a local loop (do not depend on C02b's capTotal export).\n10. complete = every item served. manifest.analyzer = session.server or null.\n11. finally, always and once each: session.close(), materialized.dispose(), and rm of the private home (guarded to the created path). A cleanup error is logged, never thrown over the result.\n\nError handling: hostile analyzer output can only produce statuses. Only caller-shape errors throw.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/semanticSource.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Write the unit tests in a new packages/moe-daemon/src/context/semanticSource.test.ts, table-driven, using the seams: a fake materialize returning a temp dir, a fake open returning a scripted session, and a call-recording fallback. Run them in a real temp git repo where a fallback needs C02 (repositorySource.test.ts temp-repo pattern, cleaned in afterAll).\n\nCases. Assert exact status, reason, inconclusive, fallback status and limitations:\n- T1: each invalid input throws INVALID_INPUT with ZERO seam calls (bad commit, 0 or 17 queries, a duplicate id, an unknown op, references without a path, a '..' path, a NUL in a name).\n- T2: a non-existent serenaPath gives every item 'unavailable'/'semantic-unavailable:analyzer-absent', inconclusive, and a C02 fallback. For a symbol present in the commit, fallback.matches is non-empty. manifest.analyzer is null. Both limitations are present. materialize is never called.\n- T3: materialize {ok:false, reason:'boom'} gives 'materialize-failed:boom', and open is never called.\n- T4: open {ok:false, reason:'exited:1'} gives 'analyzer-failed:exited:1', and dispose is called exactly once.\n- T5: tools lacking find_referencing_symbols send ONLY the references items to fallback ('capability-missing:find_referencing_symbols'); the symbol items are served.\n- T6: a find_symbol schema with neither name_path_pattern nor name_path gives 'capability-mismatch:find_symbol'. An old schema that has only name_path is served, and the recorded args use name_path.\n- T7: one call {ok:false, reason:'timeout'} gives that item 'semantic-unavailable:tool-failed:timeout'; the others are served.\n- T8: a served item carries content, tool and bytes. truncated:true gives 'truncated'/'response-byte-cap'. The allowlist passed to open equals exactly the three SEMANTIC_TOOLS. The recorded args match the mapping.\n- T9: an empty answer ('[]') is served unchanged, with no inconclusive flag and no fallback.\n- T10: close, dispose and the private-home rm each run exactly once on success, on every failure branch, and when a seam throws unexpectedly. The private home directory no longer exists afterwards.\n- T11: the launch env holds only allowlisted keys plus SERENA_HOME. With MOE_WORKER_ID, GIT_DIR and ANTHROPIC_API_KEY stubbed in process.env (vi.stubEnv), none of them reach the env. SERENA_HOME is never the real ~/.serena.\n- T12: limits outside their range throw. The budget exhausting mid-run gives 'time-budget' for the remaining items, each with a fallback.\n\nMutation proof, on a scratch snapshot copy only:\n- drop the fallback attach: T2 red;\n- invert the capability check: T5/T6 red;\n- leak process.env: T11 red;\n- skip dispose: T10 red;\n- rewrite an empty answer: T9 red.\nRecord the results.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/semanticSource.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add an integration test (DoD 2 and DoD 3) to semanticSource.test.ts, using the REAL C03a materializeCommit and the REAL C03b openAnalyzerSession against a fake stdio MCP server.\n\nThe fake server is a small node script the test writes to a temp file, launched through the launcher seam {command: process.execPath, prefixArgs: [script]}. It:\n- answers initialize and tools/list with Serena 1.6.2-shaped inputSchemas;\n- implements find_symbol by reading <--project dir>/<relative_path> and returning the lines that contain name_path_pattern;\n- ALSO writes <project>/.serena/cache.txt and $SERENA_HOME/serena_config.yml, to mimic Serena's side effects.\n\nFixture: a temp git repo commits src/util.ts holding `export function helperOld`; the worktree then rewrites the file to `helperNew` (dirty, uncommitted).\n\nAssert:\n(a) A symbol query for 'helperOld' is served with the COMMITTED line, and one for 'helperNew' is served empty. The analyzer only ever saw the immutable commit, never the worktree.\n(b) After the call, the projectRoot tree, git status --porcelain and .git/index bytes are unchanged, and projectRoot has no .serena directory.\n(c) The materialized dir and the private SERENA_HOME no longer exist.\n(d) A fake HOME (vi.stubEnv HOME and USERPROFILE to a temp dir) has no .serena written to it. No native knowledge store is recreated anywhere persistent.\n(e) The fake server and any grandchild it spawns have exited.\nError handling: any setup failure fails the test with its message; never skip on a failure.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Real-Serena check: a manual step, recorded in the step note, not an automated test. Seats' own Serena sessions write ~/.serena concurrently, so a test on the real home would be flaky.\nIf ~/.local/bin/serena or MOE_SERENA_PATH exists in the worker environment:\n1. Run readSemanticSource from a tiny scratch script (in the Linux snapshot, or tsx in the snapshot) against a small temp git repo, with one symbol query.\n2. Record manifest.analyzer (name, version, protocolVersion), the discovered tool names and the served or fallback outcome.\n3. Record a sha256 of the real ~/.serena/serena_config.yml before and after, expected to be equal because SERENA_HOME was private, and confirm the private home was removed.\n4. If Serena downloaded language servers anyway, or wrote outside the private home, record it. Change the env or link handling only within this task's file, and re-run.\nIf Serena is unavailable, say so explicitly. The automated tests still cover the contract.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, once, fresh. In a Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate: whole-repo git archive HEAD, overlay ONLY this task's two files plus the landed C03a, C03b and C02b1 modules if they are not yet in HEAD, symlinked native node_modules, env -i with the nvm node bin on PATH, NO_COLOR=1):\n- `cd packages/moe-daemon && npm test` must exit 0.\n- `npx tsc --noEmit` must exit 0.\ncmp the overlaid files against the worktree before citing the run, and supply the npm test output to complete_task.\nKeep the diff at or under 400 net lines including tests.\nIf C03a or C03b landed different names than the interfaces in their descriptions, a one-line consumer adaptation is in scope. Anything larger: moe.report_blocked with blockedOnTaskIds naming that row. Neither depends on this row, so there is no cycle.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review: load adversarial-self-review and walk this task's own diff. This is the last step.\n- Can ANY path report a helper as absent, or return an empty 'served' result, when the analyzer was absent, failed, timed out or lacked a capability?\n- Can the analyzer ever see the mutable worktree, a writer-supplied path outside the materialized dir, or a non-allowlisted tool?\n- Is any temp dir, process or private home leaked on any branch, including an unexpected throw?\n- Does any env var beyond the allowlist reach the child?\n- Are the fallback results labelled as literal evidence, never as semantic?\n- Does any project global forbiddenPattern token appear in the code or tests?\nReport both files in complete_step.modifiedFiles. Write the task handoff memory with the final API and the measured real-Serena facts for C04, C05 and C11.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,25 +68,57 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 224.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-0e84ea5eb08a4b27a22b6fccce072fb4",
+      "author": "architect-e4b7eee0",
+      "content": "Architect note from planning CQ-C03b (task-465fb4b9, now WORKING). These are the client semantics this adapter consumes. All fit inside C03's existing steps.\n(1) launch.command MUST be absolute; a relative one throws INVALID_INPUT. The reason: on Windows, libuv runs <cwd>\\name.exe before PATH, and cwd is the materialized repository content. In step 2, path.resolve options.serenaPath / MOE_SERENA_PATH, or treat a non-absolute value as 'analyzer-absent' BEFORE the file check, so openAnalyzerSession never throws on it.\n(2) maxResponseBytes caps the ANSWER text. Over the cap, the text is cut at a UTF-8 character boundary with truncated:true, which is exactly what your T8 'response-byte-cap' expects. A separate fixed MCP_FRAME_LIMIT_BYTES (4 MiB) caps every JSON line, including tools/list. Only that one fails the session, with 'response-too-large'.\n(3) The reason codes you may see, mapped through 'analyzer-failed:<r>' and 'tool-failed:<r>': spawn-failed:<errno>, exited:<code|signal>, protocol-violation, response-too-large, timeout (session-fatal), rpc-error:<code>, tool-error, tool-not-allowed, tool-not-listed, closed.\n(4) The client negotiates protocolVersion '2025-06-18', and server.protocolVersion is whatever the server returns. Serena 1.6.2 bundles mcp 1.28.1.",
+      "timestamp": "2026-10-29T15:02:05.709Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:31.065Z",
-  "updatedAt": "2026-10-27T16:48:12.547Z",
+  "updatedAt": "2026-10-29T15:02:05.709Z",
   "dependsOn": [
     "task-b23c65b0bb3548fc95d46973b9d589cb",
-    "task-e6411b76f42a43c5b679c725947336af"
+    "task-e6411b76f42a43c5b679c725947336af",
+    "task-3e5c59e3b719413783e067455f567721",
+    "task-465fb4b958934707b311fc0e7731cc7b"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-25T10:44:30.707Z"
+    "firstClaimAt": "2026-10-25T10:44:30.707Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
-    "architect-1520cc31"
+    "architect-1520cc31",
+    "architect-e4b7eee0"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "Missing prerequisite contract; not REPL silence and not dirty files.\n\nC03 adds an ISOLATED Serena read adapter whose queries consume immutable inputs. The rollout made it depend on CQ-R10 (Isolated agent lifecycle: owned attempt workspaces, scoped credentials, cancellation, fresh-session identity). CQ-R10 is BACKLOG and unplanned, behind CQ-R09, CQ-F10 and CQ-F11. Where the analyzer runs, which immutable workspace it reads and how it is cancelled are CQ-R10 deliverables, so planning now would invent them. This task auto-unblocks when CQ-R10 is DONE.\n\nThen plan against the landed CQ-R10 lifecycle and CQ-C02's landed repositorySource, which supplies the explicit immutable-commit search fallback:\n- Capability and version discovery come from MCP initialize plus tools/list, with a read-only tool allowlist.\n- An absent, failed or timed-out analyzer yields an explicit limitation, never \"no helper exists\".\n- No persistent index or memory store.\n\nThe alternative needs a human decision: re-slice like CQ-C02, with a host-side adapter over immutable commits now and VM integration later. No source changes. Full notes are in this task's Serena handoff memory."
+  "priorBlockedReason": "Missing prerequisite contract; not REPL silence and not dirty files.\n\nC03 adds an ISOLATED Serena read adapter whose queries consume immutable inputs. The rollout made it depend on CQ-R10 (Isolated agent lifecycle: owned attempt workspaces, scoped credentials, cancellation, fresh-session identity). CQ-R10 is BACKLOG and unplanned, behind CQ-R09, CQ-F10 and CQ-F11. Where the analyzer runs, which immutable workspace it reads and how it is cancelled are CQ-R10 deliverables, so planning now would invent them. This task auto-unblocks when CQ-R10 is DONE.\n\nThen plan against the landed CQ-R10 lifecycle and CQ-C02's landed repositorySource, which supplies the explicit immutable-commit search fallback:\n- Capability and version discovery come from MCP initialize plus tools/list, with a read-only tool allowlist.\n- An absent, failed or timed-out analyzer yields an explicit limitation, never \"no helper exists\".\n- No persistent index or memory store.\n\nThe alternative needs a human decision: re-slice like CQ-C02, with a host-side adapter over immutable commits now and VM integration later. No source changes. Full notes are in this task's Serena handoff memory.",
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T14:51:56.439Z",
+  "planningNotes": {
+    "approachesConsidered": "1. Block until R10 lands so Serena runs in the guest VM. Rejected:\n- The governor's 2026-10-27 plan-don't-park directive.\n- The context packet is built by the HOST daemon (rollout section 4: get_context is the context authority), so a host-side adapter is the consumer-facing seam.\n- The operator made the same call for C02 (a host-side provider over immutable commits now, the R09 snapshot later via C02b).\n- So this is host-side and process-isolated over an immutable materialized commit. VM placement is later activation, out of scope.\n- The R10 edge is kept per the directive but NOT consumed, so a governor may relax it.\n2. One task. Rejected at about 650 lines: split into C03a (materializer, task-3e5c59e3), C03b (MCP stdio client, task-465fb4b9) and this adapter, each under 400.\n3. Point Serena at the shared worktree, or use git worktree / checkout-index. Rejected:\n- the worktree is mutable writer state (DoD 2);\n- worktree and checkout write .git;\n- checkout-index runs smudge filters from local config.\n4. Parse Serena's result text into structured symbols. Rejected as version-fragile. Content passes through, bounded, and the capability check uses tools/list inputSchemas instead of a pinned version.\n5. Let Serena use the real ~/.serena. Rejected: measured on Serena 1.6.2.dev0, it registers every started --project in ~/.serena/serena_config.yml and stores memories and logs there (DoD 3, plus pollution). SERENA_HOME is honored, so the adapter uses a private home and links only the language-server cache.",
+    "codebaseInsights": "- C02 readRepositorySource (landed) is the explicit fallback, at the SAME commit. Its statuses and limitations are reused.\n- Interfaces this plan assumes from rows not yet landed (exact names in their descriptions):\n  - C03a: materializeCommit(projectRoot, commit, {limits, tmpRoot}) gives {ok:true, materialized:{dir, commit, tree, files, bytes, skipped, dispose()}} or {ok:false, reason}.\n  - C03b: openAnalyzerSession(launch {command, args, cwd, env, timeoutMs, maxResponseBytes}, allowedTools) gives {ok:true, session:{server{name, version, protocolVersion}, tools[{name, inputSchema}], call(tool, args) -> {ok, text, truncated} | {ok:false, reason}, close()}} or {ok:false, reason}.\n- Serena facts measured 2026-10-29 (WSL, ~/.local/bin/serena -> uv tool serena-agent, version 1.6.2.dev0):\n  - start-mcp-server takes --project, --context, --enable-web-dashboard, --enable-gui-log-window, --open-web-dashboard, --log-level and --tool-timeout.\n  - Read tools: find_symbol(name_path_pattern, depth, relative_path, include_body, ...), find_referencing_symbols(name_path, relative_path, ...), get_symbols_overview(relative_path, depth, ...).\n  - SERENA_HOME overrides ~/.serena.\n  - The language-server cache is <home>/language_servers.\n- The wrappers launch Serena with the same flags (providers/codexDescriptor.ts).",
+    "risks": "- Serena startup and language-server indexing can be slow: the budget defaults to 60 s with a 120 s ceiling, and exhaustion gives explicit time-budget fallbacks.\n- The language-server cache link writes only to Serena's cache. If it is absent, Serena may try a download, and the real-Serena step records it.\n- Windows: a junction is needed for the cache link, and executability is checked as a file only. C03b handles taskkill /T.\n- Dependencies: C03a needs C02b1 (snapshotPathRefusal); C03b is independent. If their landed names differ, adapt in one line or block on them (no cycle).\n- Size: 400 net including tests, table-driven.\n- No real-home writes in automated tests: stub HOME and USERPROFILE.\n- Rails: no forbidden tokens, no .moe edits, no Git writes; read-only Git only, through C03a and C02.\n- Do not claim isolation or verified-local: this is process isolation over immutable input, not VM isolation.",
+    "keyFiles": [
+      "packages/moe-daemon/src/context/repositorySource.ts",
+      "packages/moe-daemon/src/context/repositorySource.test.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "packages/moe-daemon/src/providers/codexDescriptor.ts",
+      "packages/moe-daemon/src/benchmarks/baselineRun.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T14:51:56.524Z"
 }
