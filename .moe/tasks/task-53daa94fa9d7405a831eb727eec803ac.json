@@ -129,7 +129,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:28.562Z",
-  "updatedAt": "2026-10-29T20:00:02.576Z",
+  "updatedAt": "2026-10-29T20:01:10.246Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:49:58.492Z",
     "plannedStepCount": 6,
@@ -197,7 +197,9 @@
     ".moe/tasks/task-649edbbbb9c046548017d6acf413a9f9.json",
     ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
     ".moe/tasks/task-9048e7ec78c34af1a7805c4c4129196e.json",
-    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
+    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json",
+    ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+    ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
   ],
   "completionSummary": "CQ-R11c host check session: 400 changed lines (30 + 223 + 147).\n\nguest-bridge.mjs adds checkArgv(name) and checkFrame(check).\n- checkArgv is frozen: the bridge argv with 'check' in place of 'bridge', for owned names only.\n- checkFrame builds the byte-exact {kind:'check',version:1,id,command,protected} frame or throws BRIDGE_INPUT_INVALID.\n  - Its rules mirror read_check plus R11b's JS-trim path rule: at most 2000 entries, read once and copied; 40-hex oids; paths strictly ascending by UTF-8 bytes.\n  - C2 drives 24 rows through the real read_check.\n\nNew check-session.mjs exports runCheckSession plus PROTECTED_MISMATCH=79, PROTECTED_CHANGED=80, MAX_BUDGET_MS and MAX_CHECK_TAIL_BYTES=16384.\n- Invalid input rejects CHECK_SESSION_INPUT_INVALID before spawn.\n- The frame is the first and only stdin write, and stdin stays open.\n- Outcome order: timeout (budget); then infra-failure (failure, kill, unwritten or no clean EOF); then skipped (79 with no frame); then infra-failure (no hello or no observation); then inconclusive (80); then infra-failure (other nonzero code); then passed or code-failure from the observation.\n- A request frame, a duplicate hello, a second observation or output after the observation stops the session as infra-failure.\n- Every path settles once and clears its timers and the abort listener.\n- outputTail is a fixed 32 KiB ring, cut like checkRunStore boundOutputTail (last 16384 bytes, then skip continuation bytes).\n\nTests C1-C7 in local-runner-check.test.mjs. C7 runs the real supervisor's check mode and gets passed, code-failure (tail 'boom\\n'), skipped and inconclusive.\n\nMutation sweep: 36 mutants, 35 killed. The one survivor, kill-as-clean, is a proven equivalent (a kill always settles with code null, which maps to infra-failure). The sweep found one gap (stop not guarded by settled); a new row, 'close before EOF', now kills it.\n\nTheoretical, not fixed: an abort fired synchronously inside provider.spawn is missed (guest-session has the same gap).\n\nexec",
   "commits": [
@@ -223,6 +225,24 @@
       "recordedAt": "2026-10-29T19:28:46.226Z",
       "treeId": "2ef22f73b83f7a12a54943accb07ed60cc62c4ef",
       "status": "REVIEW",
+      "pushed": true
+    },
+    {
+      "sha": "ccf81ec6b415d2667a7fa621bbfbff5d68fda571",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T19:52:41Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+        ".moe/tasks/task-53daa94fa9d7405a831eb727eec803ac.json",
+        ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T20:01:10.246Z",
+      "treeId": "79e25e6980ecfc9f2c988b52d9152cc9927bce2b",
+      "status": "DONE",
       "pushed": true
     }
   ],
@@ -284,9 +304,9 @@
   ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fe18a9a9@2026-10-29T19:00:37Z",
-    "at": "2026-10-29T19:28:46.226Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T19:52:41Z",
+    "at": "2026-10-29T20:01:10.246Z"
   },
   "completedAt": "2026-10-29T20:00:02.575Z",
   "reviewCompletedAt": "2026-10-29T20:00:02.575Z",
