@@ -14,6 +14,10 @@
 # SIGTERM, SIGHUP or SIGINT (child group killed, no observation); 76 host protocol violation (child group killed); 77 not
 # root. A bridge refusal before hello (65, 66, 74, and 71 for a missing account or session home) writes no frame, nor
 # does 77.
+# Mode 'check' (CQ-R11a): one host check frame on stdin, then that approved command as the CHECK_IDENTITY account. It
+# shares the bridge's codes, and none writes a frame: 65 also for a non-empty protected list (until CQ-R11b) or a
+# workspace entry reown refuses, 66 no workspace, 71 no CHECK_IDENTITY account, a failed re-own or no session home, and
+# 74 EOF before the check frame.
 import base64
 import hashlib
 import json
@@ -53,6 +57,8 @@ EX_TERMINATED = os.EX_TEMPFAIL
 # EOF once this process is gone. argv[3] is the job's Popen identity, groups, umask and cwd as JSON (CQ-R10b); the job's
 # environment is this process's own, so a credential travels in no argv or file. On Linux the job, and anything it
 # execs, can never gain privileges (PR_SET_NO_NEW_PRIVS); a guard that cannot set the bit never starts the job.
+# CQ-R11a: a check job's argv[3] also carries its rlimits and network namespace, which this process applies to itself
+# before the Popen, for the job to inherit; a guard that cannot apply them never starts the job either.
 GUARD = '''import json, os, resource, signal, subprocess, sys, threading
 life, start = int(sys.argv[1]), int(sys.argv[2])
 for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
@@ -65,11 +71,23 @@ def watch():
         released.set()
 threading.Thread(target=watch, daemon=True).start()
 try:
+    spawn = json.loads(sys.argv[3])
     if sys.platform == 'linux':
         import ctypes
         if ctypes.CDLL(None, use_errno=True).prctl(38, *map(ctypes.c_ulong, (1, 0, 0, 0))):  # PR_SET_NO_NEW_PRIVS
             raise OSError(ctypes.get_errno(), 'PR_SET_NO_NEW_PRIVS')
-    job = subprocess.Popen(sys.argv[4:], **json.loads(sys.argv[3]))  # in C, after fork: groups, gid, uid, then exec
+    if spawn.pop('netns', False):
+        # Root in the Linux guest only (Python 3.12+ os.unshare; a non-root test passes netns False); CQ-R13 certifies it
+        # on a real VM. This thread forks the job into the new namespace, whose own loopback comes up: SIOCGIFFLAGS, then
+        # SIOCSIFFLAGS with IFF_UP, on a 40-byte ifreq.
+        import fcntl, socket, struct
+        os.unshare(os.CLONE_NEWNET)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            flags = struct.unpack_from('16sH', fcntl.ioctl(sock, 0x8913, struct.pack('16sH22x', b'lo', 0)))[1]
+            fcntl.ioctl(sock, 0x8914, struct.pack('16sH22x', b'lo', flags | 1))
+    for name, value in spawn.pop('rlimits', {}).items():
+        resource.setrlimit(getattr(resource, name), (value, value))  # soft = hard; root is exempt from NPROC at fork
+    job = subprocess.Popen(sys.argv[4:], **spawn)  # in C, after fork: groups, gid, uid, then exec
 except Exception:
     os._exit(1)  # no '+': the supervisor reports EX_OSERR
 try:
@@ -758,11 +776,15 @@ def read_exact(fd, size):
     return bytes(data)
 
 
-def read_job(in_fd, jobs):
+def read_frame(in_fd):
     length = struct.unpack('>I', read_exact(in_fd, 4))[0]
     if not 0 < length <= MAX_HOST_FRAME_BYTES:
         raise ValueError('frame length outside its limit')  # before any body byte is read
-    frame = json.loads(read_exact(in_fd, length).decode('utf-8'))
+    return json.loads(read_exact(in_fd, length).decode('utf-8'))
+
+
+def read_job(in_fd, jobs):
+    frame = read_frame(in_fd)
     secret = frame.get('credential') if type(frame) is dict else None
     # type(cli) before `in jobs`: an unhashable cli must be refused, never raise TypeError.
     if not (type(frame) is dict and frame.keys() == {'kind', 'version', 'cli', 'role', 'credential'}
@@ -824,10 +846,103 @@ def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
     return relay([jobs[frame['cli']][0]], out_fd, in_fd, agent_socket, uid, peer_uid, job={'env': env, 'spawn': spawn})
 
 
-# geteuid and start_job's keywords (seams) are injectable from Python only (tests), never from argv or the environment.
-# No refusal writes to stdout.
+# CQ-R11a: one approved check per fresh check VM. CHECK_IDENTITY is JOB_IDENTITIES[1] in guest-bootstrap.mjs; the id,
+# command and protected rules mirror the daemon's validateRequiredChecks, and CHECK_RLIMITS (each soft = hard) is
+# check-evidence.mjs CHECK_BOUNDARIES.resources.rlimits, which local-runner-check.test.mjs K2 pins.
+CHECK_IDENTITY = 'moe-check'
+CHECK_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
+CHECK_CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')  # the daemon's CHECK_CONTROL_CHARACTERS
+CHECK_BLANK = re.compile(r'[\s\ufeff]*')  # what JavaScript's trim() removes
+MAX_CHECK_COMMAND = 1000  # UTF-16 code units, the daemon's String.length
+CHECK_RLIMITS = {'RLIMIT_CORE': 0, 'RLIMIT_FSIZE': 1073741824, 'RLIMIT_NOFILE': 4096, 'RLIMIT_NPROC': 2048}
+
+
+def read_check(in_fd):
+    frame = read_frame(in_fd)
+    command = frame.get('command') if type(frame) is dict else None
+    # utf-16-le raises UnicodeEncodeError, a ValueError, for a lone surrogate, which could never reach argv.
+    if not (type(frame) is dict and frame.keys() == {'kind', 'version', 'id', 'command', 'protected'}
+            and frame['kind'] == 'check' and type(frame['version']) is int and frame['version'] == 1
+            and type(frame['id']) is str and CHECK_ID.fullmatch(frame['id'])
+            and type(command) is str and not CHECK_BLANK.fullmatch(command) and not CHECK_CONTROL.search(command)
+            and len(command.encode('utf-16-le')) // 2 <= MAX_CHECK_COMMAND
+            and frame['protected'] == []):  # only a list equals []; CQ-R11b admits {path, oid} entries
+        raise ValueError('not a check frame')
+    return frame
+
+
+# Hands the materialized (agent-owned) tree to the check identity through directory fds only, never a path, so nothing
+# is followed. Each entry is opened without following a link and must still be the inode lstat saw; a symlink, FIFO,
+# socket or device, or a hard-linked file (its inode may live outside), raises ValueError before any chown of it. No
+# WALK_LIMIT: the root materialized this tree from at most MAX_SNAPSHOT_FILES files in a fresh check VM where no job
+# identity has run yet, and MAX_PATH_BYTES, checked before descending, bounds its depth and open fds.
+def reown(fd, uid, gid, prefix=b''):
+    os.fchown(fd, uid, gid)
+    for name in os.listdir(fd):
+        raw = prefix + os.fsencode(name)
+        if len(raw) > MAX_PATH_BYTES:
+            raise ValueError('a path over its limit')
+        info = os.lstat(name, dir_fd=fd)
+        if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+            raise ValueError('not a file or directory')
+        child = os.open(name, WALK if stat.S_ISDIR(info.st_mode) else READ, dir_fd=fd)
+        try:
+            now = os.fstat(child)
+            if ((now.st_dev, now.st_ino) != (info.st_dev, info.st_ino) or stat.S_IFMT(now.st_mode) != stat.S_IFMT(info.st_mode)
+                    or stat.S_ISREG(now.st_mode) and now.st_nlink != 1):
+                raise ValueError('the entry was replaced, or is linked elsewhere')
+            if stat.S_ISDIR(now.st_mode):
+                reown(child, uid, gid, raw + b'/')
+            else:
+                os.fchown(child, uid, gid)
+        finally:
+            os.close(child)
+
+
+# One check session runs one check job: the host's approved command, never candidate bytes, as ['/bin/sh', '-c',
+# command] in the materialized WORKSPACE, with no agent socket. identity is (uid, gid, groups) as in start_job; netns
+# False skips GUARD's network namespace, for a non-root test only. workspace, sessions, identity and netns are injectable
+# from Python only (tests). A refusal writes no frame and starts no job: 74 host EOF, 65 a malformed or disallowed
+# frame, 71 no account, 66 no workspace, 65 a workspace entry reown refuses, 71 a failed re-own or no session home.
+def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, netns=True):
+    try:
+        frame = read_check(in_fd)
+    except (EOFError, OSError):
+        return os.EX_IOERR
+    except (ValueError, RecursionError):  # JSON, UTF-8 and UTF-16 errors are ValueErrors
+        return os.EX_DATAERR
+    if identity is None:
+        try:
+            entry = pwd.getpwnam(CHECK_IDENTITY)
+        except KeyError:
+            return os.EX_OSERR
+        identity = (entry.pw_uid, entry.pw_gid, [])
+    uid, gid, groups = identity
+    try:
+        root = os.open(workspace, WALK)  # never through a symlink
+    except OSError:
+        return os.EX_NOINPUT
+    try:
+        reown(root, uid, gid)
+        home = session_home(sessions, uid, gid)
+    except (ValueError, RecursionError):
+        return os.EX_DATAERR
+    except OSError:
+        return os.EX_OSERR
+    finally:
+        os.close(root)
+    env = {'PATH': JOB_PATH, 'HOME': home, 'USER': CHECK_IDENTITY, 'LOGNAME': CHECK_IDENTITY, 'LANG': 'C.UTF-8',
+           'MOE_CHECK_ID': frame['id']}
+    spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace, 'rlimits': CHECK_RLIMITS,
+             'netns': netns}
+    return relay(['/bin/sh', '-c', frame['command']], out_fd, in_fd, job={'env': env, 'spawn': spawn})
+
+
+# geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
+# the environment. No refusal writes to stdout.
 def main(argv, geteuid=os.geteuid, **seams):
-    if argv not in (['bridge'], ['materialize'], ['export']):  # bridgeArgv and snapshotArgv pass exactly these
+    # bridgeArgv and snapshotArgv pass exactly these, and CQ-R11c's checkArgv will pass ['check'].
+    if argv not in (['bridge'], ['check'], ['materialize'], ['export']):
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
@@ -835,6 +950,8 @@ def main(argv, geteuid=os.geteuid, **seams):
         return materialize(0, 1)
     if argv == ['export']:
         return export(1)
+    if argv == ['check']:
+        return check_job(0, 1, **seams)
     return start_job(0, 1, **seams)
 
 

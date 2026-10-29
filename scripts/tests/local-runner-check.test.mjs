@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { CHECK_BOUNDARIES, checkEnvironment, evidenceStatus } from '../local-runner/check-evidence.mjs';
+import { MAX_HOST_FRAME_BYTES, createFrameDecoder, encodeFrame, parseGuestFrame } from '../local-runner/guest-bridge.mjs';
 
 const MESSAGE = 'Check environment input was invalid.';
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -281,3 +286,246 @@ test('E5 a throwing accessor or Proxy trap refuses with the fixed refusal and ca
   refuses(new Proxy(fresh(), { get: boom }), 'throwing get trap');
   assert.doesNotMatch(caught(() => checkEnvironment(new Proxy(fresh(), { get: boom }))).message, new RegExp(secret));
 });
+
+// CQ-R11a: the guest supervisor's check mode. The real guest-supervisor.py runs under the host's python3 -I -B, loaded
+// with importlib as R09c's PY_LOAD does (-B: a __pycache__ in scripts/local-runner would ship in both IDE bundles).
+const NO_GUEST = process.platform === 'win32' && 'the guest supervisor runs only in the Linux guest (POSIX python3)';
+const SUPERVISOR = fileURLToPath(new URL('../local-runner/guest-supervisor.py', import.meta.url));
+const PY_LOAD = `import importlib.util, json, os, sys, types
+spec = importlib.util.spec_from_file_location('moe_supervisor', sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+`;
+// A fresh dir holds ws, a regular file and a link to ws; sessions does not exist yet.
+const CHECK_DIRS = `os.umask(0o022)  # sudo's, under which the guest supervisor runs
+base = sys.argv[2]
+workspace, sessions = os.path.join(base, sys.argv[3]), os.path.join(base, 'sessions')
+os.makedirs(os.path.join(base, 'ws'))
+open(os.path.join(base, 'file'), 'w').close()
+os.symlink(os.path.join(base, 'ws'), os.path.join(base, 'link'))
+`;
+// m.pwd answers every name with the test user. The recorders stand in for relay() and wrap os.chown; they write only to
+// stderr, so stdout is the supervisor's own.
+const CHECK_RECORD = `asked = []
+m.pwd = types.SimpleNamespace(getpwnam=lambda name: asked.append(name) or types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid()))
+def record(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=None, *, job):
+    call = {'argv': argv, 'out_fd': out_fd, 'in_fd': in_fd, 'agent_socket': agent_socket, 'agent_uid': agent_uid, 'job': job}
+    print('RELAY ' + json.dumps(call), file=sys.stderr)
+    return 42
+m.relay = record
+os.chown = lambda path, uid, gid, chown=os.chown: print('CHOWN ' + json.dumps([path, uid, gid]), file=sys.stderr) or chown(path, uid, gid)
+`;
+const GONE = 'def gone(name):\n    raise KeyError(name)\nm.pwd = types.SimpleNamespace(getpwnam=gone)\n';
+const CHECK = Object.freeze({ kind: 'check', version: 1, id: 'unit-1', command: 'true', protected: [] });
+const checkFrame = value => encodeFrame(value, MAX_HOST_FRAME_BYTES);
+const header = length => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(length); return bytes; };
+const framed = body => Buffer.concat([header(Buffer.byteLength(body)), Buffer.from(body)]);
+const TAGGED = /^(RELAY|ASKED|CHOWN|OWNED) /;
+
+function checkRun(input, { workspace = 'ws', setup = '', seams = '', call = "['check'], geteuid=lambda: 0" } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'moe-r11a-'));
+  const code = `${PY_LOAD}${CHECK_DIRS}${CHECK_RECORD}${setup}
+code = m.main(${call}, workspace=workspace, sessions=sessions${seams})
+print('ASKED ' + json.dumps(asked), file=sys.stderr)
+sys.exit(code)
+`;
+  const run = spawnSync('python3', ['-I', '-B', '-c', code, SUPERVISOR, dir, workspace], { input, maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
+  const lines = String(run.stderr).split('\n').filter(Boolean);
+  const tagged = tag => lines.filter(line => line.startsWith(`${tag} `)).map(line => JSON.parse(line.slice(tag.length + 1)));
+  const sessions = join(dir, 'sessions');
+  return Object.assign(run, { dir, sessions, homes: existsSync(sessions) ? readdirSync(sessions) : [], relays: tagged('RELAY'),
+    asked: tagged('ASKED')[0], chowns: tagged('CHOWN'), owned: tagged('OWNED'), stray: lines.filter(line => !TAGGED.test(line)) });
+}
+
+test('K1 a malformed, disallowed or cut check frame, or no account, workspace or home, fails before hello with no frame, job or home',
+  { skip: NO_GUEST, timeout: 120_000 }, t => {
+    const patched = patch => checkFrame({ ...CHECK, ...patch });
+    const job = { kind: 'job', version: 1, cli: 'claude', role: 'worker', credential: { name: 'ANTHROPIC_API_KEY', value: 'sk-R11a' } };
+    const malformed = [header(0), header(MAX_HOST_FRAME_BYTES + 1), framed('{'), framed('['.repeat(100_000) + ']'.repeat(100_000)),
+      framed(Buffer.concat([Buffer.from('{"kind":"'), Buffer.from([0xff]), Buffer.from('"}')])), checkFrame(job),
+      framed(JSON.stringify(CHECK).replace('"version":1', '"version":1.0')),
+      ...[{ extra: 1 }, { protected: undefined }, { kind: 'checks' }, ...[2, true, '1'].map(version => ({ version })),
+        ...['', '-a', 'a b', '\u00e9', 'a\n', 7, 'a'.repeat(65)].map(id => ({ id })),
+        ...['', '   ', '\ufeff', 7, null, 'x'.repeat(1001), '\u{1F600}'.repeat(501), 'a\ud800b',
+          ...['\x00', '\n', '\x1f', '\x7f', '\x9f', '\u2028', '\u2029'].map(control => `a${control}b`)].map(command => ({ command })),
+        ...[null, {}, 'x', [{ path: 'a.txt', oid: '0'.repeat(40) }]].map(value => ({ protected: value }))].map(patched)];
+    const cases = [...malformed.map(input => [65, input, {}]),
+      [74, Buffer.alloc(0), {}], [74, header(9).subarray(0, 2), {}], [74, checkFrame(CHECK).subarray(0, 20), {}], [74, Buffer.alloc(0), { workspace: 'absent' }],
+      [71, checkFrame(CHECK), { setup: GONE }], [71, checkFrame(CHECK), { setup: GONE, workspace: 'absent' }],
+      ...['absent', 'file', 'link'].map(workspace => [66, checkFrame(CHECK), { workspace }]),
+      ...['0o730', '0o703'].map(mode => [71, checkFrame(CHECK), { setup: `os.mkdir(sessions)\nos.chmod(sessions, ${mode})\n` }]),
+      [77, checkFrame(CHECK), { call: "['check'], geteuid=lambda: 1000" }]];
+    for (const [status, input, options] of cases) {
+      const run = checkRun(input, options);
+      t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+      // The frame comes first and the account next: a refusal before the account lookup asks for no name.
+      const asked = [66, 71].includes(status) && options.setup !== GONE ? ['moe-check'] : [];
+      assert.deepEqual([run.status, run.stdout.length, run.relays, run.homes, run.asked, run.stray], [status, 0, [], [], asked, []],
+        `${status} ${input.subarray(0, 80)} ${JSON.stringify(options)} ${run.stderr}`);
+    }
+    for (const args of [['check', 'x'], ['CHECK'], ...(process.getuid() === 0 ? [] : [['check']])]) {
+      const run = spawnSync('python3', ['-I', '-B', SUPERVISOR, ...args], { input: checkFrame(CHECK), timeout: 30_000, killSignal: 'SIGKILL' });
+      assert.deepEqual([run.status, run.stdout.length], [args.length === 1 && args[0] === 'check' ? 77 : 64, 0], `${args} ${run.stderr}`);
+    }
+    for (const patch of [{ id: 'a'.padEnd(64, '9._-Z') }, { command: 'x'.repeat(1000) }, { command: '\u{1F600}'.repeat(500) }, { command: 'a\xa0b' }]) {
+      const run = checkRun(patched(patch));
+      t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+      assert.deepEqual([run.status, run.stdout.length, run.stray, run.relays.length], [42, 0, [], 1], `${JSON.stringify(patch)} ${run.stderr}`);
+      const [{ argv, job: { env } }] = run.relays;
+      assert.deepEqual([argv[2], env.MOE_CHECK_ID], [patch.command ?? CHECK.command, patch.id ?? CHECK.id]);
+    }
+  });
+
+test('K2 main() routes a root check to relay as sh -c command under the CHECK_BOUNDARIES identity, rlimits and private network, with no agent socket',
+  { skip: NO_GUEST, timeout: 30_000 }, t => {
+    const command = 'npm test -- --grep "a b" && echo $HOME';
+    const run = checkRun(checkFrame({ ...CHECK, command }));
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    assert.deepEqual([run.status, run.stdout.length, run.stray, run.relays.length], [42, 0, [], 1], String(run.stderr));
+    const [{ job, ...call }] = run.relays;
+    assert.deepEqual(call, { argv: ['/bin/sh', '-c', command], out_fd: 1, in_fd: 0, agent_socket: null, agent_uid: null });
+    // Drift: every enforced boundary is read from CHECK_BOUNDARIES, never retyped; R11d's E1 pins its literal values.
+    const { identity, network, resources } = CHECK_BOUNDARIES;
+    const [uid, gid, home] = [process.getuid(), process.getgid(), job.env.HOME];
+    assert.deepEqual(job, {
+      env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, USER: identity.user, LOGNAME: identity.user, LANG: 'C.UTF-8', MOE_CHECK_ID: CHECK.id },
+      spawn: { user: uid, group: gid, extra_groups: identity.supplementaryGroups, umask: parseInt(identity.umask, 8), cwd: join(run.dir, 'ws'),
+        rlimits: resources.rlimits, netns: network.namespace === 'private' },
+    });
+    assert.deepEqual(run.asked, [identity.user]);
+    assert.deepEqual([dirname(home), run.homes, run.chowns], [run.sessions, [basename(home)], [[home, uid, gid]]]);
+    const info = statSync(home);
+    assert.deepEqual([info.isDirectory(), info.mode & 0o7777, info.uid], [true, 0o700, uid]);
+  });
+
+// The recorder wraps os.fchown: one OWNED line per call, the fd's [st_dev, st_ino] as strings (an inode number can pass
+// 2 ** 53) and the uid and gid. Call number `fail` raises PermissionError instead; 0 fails none.
+const OWN_RECORDER = fail => `calls = []
+def fchown(fd, uid, gid, real=os.fchown):
+    calls.append(fd)
+    if len(calls) == ${fail}:
+        raise PermissionError('denied')
+    info = os.fstat(fd)
+    print('OWNED ' + json.dumps([str(info.st_dev), str(info.st_ino), uid, gid]), file=sys.stderr)
+    real(fd, uid, gid)
+os.fchown = fchown
+`;
+const TREE = `for name in ('a.txt', 'bin/run', 'src/lib/deep.c'):
+    os.makedirs(os.path.dirname(os.path.join(workspace, name)), exist_ok=True)
+    open(os.path.join(workspace, name), 'w').close()
+os.chmod(os.path.join(workspace, 'bin', 'run'), 0o755)
+os.mkdir(os.path.join(workspace, 'empty'))
+os.makedirs(os.path.join(base, 'outdir'))
+open(os.path.join(base, 'outdir', 'secret'), 'w').close()
+`;
+// A file whose workspace-relative path is exactly MAX_PATH_BYTES + extra bytes: 200-byte directories, then the rest.
+const DEEP = extra => `parts, left = [], m.MAX_PATH_BYTES + ${extra}
+while left > 255:
+    parts.append('d' * 200)
+    left -= 201
+os.makedirs(os.path.join(workspace, *parts))
+open(os.path.join(workspace, *parts, 'f' * left), 'w').close()
+`;
+const inode = path => { const info = lstatSync(path, { bigint: true }); return `${info.dev} ${info.ino}`; };
+
+test('K4 the workspace is re-owned through directory fds, each entry once, and a planted link, FIFO or over-long path is refused unfollowed',
+  { skip: NO_GUEST, timeout: 60_000 }, t => {
+    const ran = (setup, fail = 0) => {
+      const run = checkRun(checkFrame(CHECK), { setup: `${TREE}${setup}${OWN_RECORDER(fail)}`, seams: ', identity=(os.getuid(), os.getgid(), None)' });
+      t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+      return Object.assign(run, { inodes: run.owned.map(([dev, ino]) => `${dev} ${ino}`) });
+    };
+    const refused = (run, status, label) => assert.deepEqual([run.status, run.stdout.length, run.relays, run.homes, run.stray],
+      [status, 0, [], [], []], `${label} ${run.stderr}`);
+    const run = ran('');
+    assert.deepEqual([run.status, run.stdout.length, run.stray, run.relays.length], [42, 0, [], 1], String(run.stderr));
+    const entries = ['', 'a.txt', 'bin', 'bin/run', 'src', 'src/lib', 'src/lib/deep.c', 'empty'].map(name => inode(join(run.dir, 'ws', name)));
+    assert.deepEqual([...run.inodes].sort(), [...entries].sort());
+    assert.deepEqual(run.owned.map(([, , ...ids]) => ids), entries.map(() => [process.getuid(), process.getgid()]));
+    assert.ok(String(run.stderr).lastIndexOf('OWNED ') < String(run.stderr).indexOf('RELAY '), 'every entry is re-owned before relay()');
+    const planted = ["os.symlink(os.path.join(base, 'file'), os.path.join(workspace, 'src', 'link'))\n",
+      "os.symlink(os.path.join(base, 'outdir'), os.path.join(workspace, 'dlink'))\n",
+      "os.link(os.path.join(base, 'file'), os.path.join(workspace, 'bin', 'hard'))\n", "os.mkfifo(os.path.join(workspace, 'fifo'))\n"];
+    for (const setup of planted) {
+      const plant = ran(setup);
+      refused(plant, 65, setup);
+      const outside = ['file', 'outdir', 'outdir/secret'].map(name => inode(join(plant.dir, name)));
+      assert.deepEqual(plant.inodes.filter(id => outside.includes(id)), [], setup);
+    }
+    // An entry swapped between its lstat and its open: the opened inode is not the one lstat saw.
+    refused(ran(`open(os.path.join(workspace, 'swap.txt'), 'w').close()
+def swapping(path, flags, mode=0o777, *, dir_fd=None, real=os.open):
+    if path == 'a.txt' and dir_fd is not None:
+        os.replace('swap.txt', 'a.txt', src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    return real(path, flags, mode, dir_fd=dir_fd)
+os.open = swapping
+`), 65, 'a swapped entry');
+    if (process.platform !== 'darwin') { // macOS caps a whole path at 1024 bytes (PATH_MAX), so tmpdir cannot hold one this deep
+      const exact = ran(DEEP(0));
+      assert.deepEqual([exact.status, exact.relays.length, exact.stray], [42, 1, []], String(exact.stderr));
+      refused(ran(DEEP(1)), 65, 'one byte over MAX_PATH_BYTES');
+    }
+    refused(ran('', 2), 71, 'a failing fchown');
+  });
+
+// The probe reports on the job. dash forks the last command of sh -c and exports PWD to it, so the job is the probe's
+// parent: its /proc environ is the environment it was started with.
+const PROBE = `import json, os
+job = os.getppid()
+def read(name):
+    return open('/proc/%d/%s' % (job, name), 'rb').read().decode()
+print(json.dumps({'cmdline': read('cmdline').split('\\0')[:-1], 'cwd': os.readlink('/proc/%d/cwd' % job),
+                  'env': dict(entry.split('=', 1) for entry in read('environ').split('\\0') if entry),
+                  'status': [line for line in read('status').splitlines() if line.startswith(('Umask:', 'NoNewPrivs:'))],
+                  'limits': read('limits').splitlines()}))
+`;
+// The harness is the supervisor: it moves stdin into a pipe whose write end it keeps, so relay() sees no host EOF. A
+// non-root runner cannot setgroups or unshare, so it passes groups None and netns False; K2 pins the production values.
+const HELD = `data = b''.join(iter(lambda: os.read(0, 65536), b''))
+r, w = os.pipe()
+os.write(w, data)
+os.dup2(r, 0)
+with open(os.path.join(workspace, 'probe.py'), 'w') as f:
+    f.write(sys.argv[4])
+sys.exit(m.main(['check'], geteuid=lambda: 0, workspace=workspace, sessions=sessions, identity=(os.getuid(), os.getgid(), None), netns=False))
+`;
+const LIMIT_ROWS = { RLIMIT_CORE: 'Max core file size', RLIMIT_FSIZE: 'Max file size', RLIMIT_NOFILE: 'Max open files', RLIMIT_NPROC: 'Max processes' };
+// RLIMIT_NPROC counts every task of the job's real uid, here the test user's, against the job's own fork.
+const userTasks = () => readdirSync('/proc').filter(name => /^\d+$/.test(name)).reduce((sum, pid) => {
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, 'utf8');
+    return Number(/^Uid:\s+(\d+)/m.exec(status)[1]) === process.getuid() ? sum + Number(/^Threads:\s+(\d+)/m.exec(status)[1]) : sum;
+  } catch { return sum; } // the task has exited
+}, 0);
+
+test('K3 a real check job is sh -c command with exactly the allowlisted environment, the workspace, umask 077, NoNewPrivs and CHECK_BOUNDARIES rlimits',
+  { skip: NO_GUEST || (process.platform !== 'linux' && 'the job probes read /proc'), timeout: 30_000 }, t => {
+    const { identity, resources: { rlimits } } = CHECK_BOUNDARIES;
+    const tasks = userTasks();
+    if (tasks >= 1792) return t.skip(`the test user already runs ${tasks} tasks, too near RLIMIT_NPROC ${rlimits.RLIMIT_NPROC}`);
+    const dir = mkdtempSync(join(tmpdir(), 'moe-r11a-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const command = 'python3 -I probe.py';
+    const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}${CHECK_DIRS}${HELD}`, SUPERVISOR, dir, 'ws', PROBE],
+      { input: checkFrame({ ...CHECK, command }), maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
+    assert.equal(run.status, 0, String(run.error ?? run.stderr));
+    const decoder = createFrameDecoder();
+    const frames = decoder.push(run.stdout).map(parseGuestFrame);
+    decoder.end();
+    assert.deepEqual([frames[0], frames.at(-1)], [{ kind: 'hello', protocol: 1 }, { kind: 'observation', type: 'exit', code: 0, signal: null }]);
+    const outputs = frames.slice(1, -1);
+    assert.deepEqual(outputs.filter(frame => frame.kind !== 'output'), []);
+    const text = stream => Buffer.concat(outputs.filter(frame => frame.stream === stream).map(frame => frame.data)).toString();
+    assert.equal(text('stderr'), '');
+    const probe = JSON.parse(text('stdout'));
+    const homes = readdirSync(join(dir, 'sessions'));
+    assert.equal(homes.length, 1);
+    assert.deepEqual(probe.cmdline, ['/bin/sh', '-c', command]);
+    assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'sessions', homes[0]), USER: identity.user,
+      LOGNAME: identity.user, LANG: 'C.UTF-8', MOE_CHECK_ID: CHECK.id });
+    assert.deepEqual([probe.cwd, probe.status], [realpathSync(join(dir, 'ws')), [`Umask:\t0${identity.umask}`, 'NoNewPrivs:\t1']]);
+    for (const [name, value] of Object.entries(rlimits)) {
+      const row = probe.limits.find(line => line.startsWith(`${LIMIT_ROWS[name]} `));
+      assert.deepEqual(row?.slice(LIMIT_ROWS[name].length).trim().split(/\s+/).slice(0, 2), [String(value), String(value)], `${name}: ${row}`);
+    }
+  });
