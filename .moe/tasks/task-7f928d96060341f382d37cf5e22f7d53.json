@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -93,16 +93,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:24.217Z",
-  "updatedAt": "2026-10-29T17:02:28.313Z",
+  "updatedAt": "2026-10-29T17:14:18.736Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T12:30:39.180Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T17:14:18.736Z",
+    "wallClockMs": 17019556
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -212,5 +215,9 @@
   "completionSummary": "CQ-R10b delivered: a root `moe-supervisor bridge` reads one job frame before hello and runs that agent CLI as moe-agent. 78 is retired.\n\nguest-supervisor.py (+118/-20):\n- JOBS[cli] = (executable, credential names), with JOB_ROLES, JOB_PATH, SESSIONS and CREDENTIAL.\n- read_exact never over-reads. read_job refuses the length before the body and checks the exact shape (type(cli) before `in jobs`), with fixed error text.\n- session_home: makedirs 0711; lstat must show a dir owned by the euid with no g/o write; mkdtemp 0700, chown; homes are kept.\n- start_job: frame 74/65, then account 71, then workspace lstat 66, then home 71, then relay(job=).\n- main(argv, geteuid, **seams) routes bridge to start_job(0, 1, **seams).\n- relay(job=None) gives GUARD env=job['env'] and the spawn JSON in argv[3]. On Linux GUARD sets PR_SET_NO_NEW_PRIVS (ctypes, c_ulong, fail closed), then Popen(argv[4:], user, group, extra_groups, umask 077, cwd).\n\nTests (+152/-1):\n- J1: 47 rows of 65/74/66 with empty stdout and stderr, no job and no sessions dir.\n- J2: byte-exact reads, a body of exactly MAX_HOST_FRAME_BYTES, a 4096-char value.\n- J3: recorder with a stubbed pwd and a recording os.chown; the exact call, extra_groups [], AGENT_SOCKET, m.peer_uid; fresh kept 0700 homes, sessions 0711; 71 rows.\n- J4 (Linux): the real job sees exactly the 7 env keys, cwd = workspace, umask 077, NoNewPrivs 1, and no cmdline holds the credential. Non-root, groups [] gives 71 with hello only.\n- DoD 4 exception (architect comment): only S7's row changes, 78 to 74. Every other B/S/I/H test is byte-identical and passes.\n\nEvidence:\n- Gate: exit 0, 290 tests, 289 pass, 1 pre-existing macOS skip (baseline 286/285/1).\n- Size: 291 changed lines (cap 400). LF only, no __pycache__, no leftover sleep(600).\n- Mutants: 43/44 killed (/tmp/r10b-mut-tools). The survivor is equivalent: sessions without S_ISDIR, masked by a symlink's 0777 mode and by makedirs.\n- The sweep found a gap: a dropped os.chown survived. J3 now pins the chow",
   "touchedFiles": [
     "scripts/local-runner/guest-supervisor.py"
-  ]
+  ],
+  "completedAt": "2026-10-29T17:14:18.736Z",
+  "reviewCompletedAt": "2026-10-29T17:14:18.736Z",
+  "reviewSummary": "Reviewed completion commit 3c25abd (on moe/work-2026-10-24, pushed). Source diff: guest-supervisor.py +118/-20 and local-runner-bridge.test.mjs +152/-1, 291 changed lines (cap 400). Neither file has been touched since. Checkpoint a16ca47 is .moe-only. LF only, no __pycache__.\n\nGate re-run fresh from a full-tree `git archive 3c25abd`, with env -i, nvm node v24.21.0 and python 3.12.3: exit 0, 290 tests, 289 pass, 0 fail, 1 pre-existing macOS skip. J1-J4 and S7 pass.\n\n- DoD 1: J1 gives 65/74/66 with empty stdout and stderr, no recorder call and no sessions dir. My own probes also give 65 for a 5000-digit version, NaN, a list role or name, a dict kind and a lone surrogate.\n- DoD 2: J4 (Linux) shows exactly 7 env keys, cwd = workspace, umask 077 and NoNewPrivs 1. The credential is in no cmdline of the job, GUARD or supervisor.\n- DoD 3: J3 pins getpwnam('moe-agent'), extra_groups [], AGENT_SOCKET, the JOBS executable, distinct kept 0700 homes and sessions 0711.\n- DoD 4: the test file's only removed line is S7's 78->74 row, the architect's documented exception (78 is retired). Every other B/S/I/H test is unchanged and passes.\n\nMy mutation sweep: 33 mutants on scratch copies, scored by exit code with ^(J[1-4]|S7). All 33 killed, covering the shape checks, length+1, over-read, lstat->stat, the owner and g/o checks, check order, groups, umask, env, NNP, chown and seams. No leftover processes.\n\nNo verified-local, executionReady or host JS change. Residuals carried to R10 final, as the worker reported: homes stay moe-agent-owned; all jobs share one uid; a slow partial header blocks before hello; a signal before hello takes the default action, not 75.",
+  "requiredCheckAtDone": null
 }
