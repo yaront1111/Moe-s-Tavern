@@ -7,6 +7,7 @@ import com.moe.toolwindow.PlanReviewApprovalState.RevisionToken
 import com.moe.toolwindow.PlanReviewApprovalState.TaskSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -672,6 +673,105 @@ class PlanReviewApprovalStateTest {
         )
     }
 
+    // ---- a lost connection (CQ-I06a)
+
+    private fun lostAt(revision: Long): PlanReviewApprovalState {
+        val state = rendered(revision)
+        assertEquals(Decision.Send(taskId, revision), state.onApproveClicked(true, snapshot(revision)))
+        assertTrue(state.onConnectionLost())
+        return state
+    }
+
+    @Test
+    fun `a lost connection while pending re-arms the same rendered revision`() {
+        val state = rendered(4L)
+        assertEquals(Decision.Send(taskId, 4L), state.onApproveClicked(true, snapshot(4L)))
+        assertEquals(PlanReviewApprovalState.Phase.PENDING, state.currentPhase)
+
+        assertTrue(state.onConnectionLost())
+
+        assertEquals(PlanReviewApprovalState.Phase.READY, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.CONNECTION_LOST_KEY, state.noticeKey)
+        assertTrue(state.approveEnabled)
+        assertEquals(4L, state.capturedPlanRevision)
+    }
+
+    @Test
+    fun `a lost connection outside pending changes nothing`() {
+        val finished = rendered(4L).also {
+            it.onApproveClicked(true, snapshot(4L))
+            it.onStateUpdate(snapshot(4L, PlanReviewApprovalState.STATUS_WORKING))
+        }
+        val invalidated = rendered(4L).also { it.onStateUpdate(snapshot(5L)) }
+        val disposed = rendered(4L).also { it.onDisposed() }
+        val machines = listOf(
+            PlanReviewApprovalState.Phase.AWAITING_RENDER to PlanReviewApprovalState(taskId),
+            PlanReviewApprovalState.Phase.READY to rendered(4L),
+            PlanReviewApprovalState.Phase.INVALIDATED to invalidated,
+            PlanReviewApprovalState.Phase.FINISHED to finished,
+            PlanReviewApprovalState.Phase.DISPOSED to disposed
+        )
+        for ((expectedPhase, state) in machines) {
+            assertEquals(expectedPhase, state.currentPhase)
+            val noticeBefore = state.noticeKey
+
+            assertFalse("$expectedPhase must not release", state.onConnectionLost())
+
+            assertEquals(expectedPhase, state.currentPhase)
+            assertEquals("$expectedPhase notice", noticeBefore, state.noticeKey)
+        }
+    }
+
+    @Test
+    fun `a reconnect snapshot at the rendered revision approves the same revision again`() {
+        val state = lostAt(4L)
+
+        assertFalse("a same-revision snapshot asks for no repaint", state.onStateUpdate(snapshot(4L)))
+        assertTrue(state.approveEnabled)
+
+        assertEquals(Decision.Send(taskId, 4L), state.onApproveClicked(true, snapshot(4L)))
+        assertEquals(PlanReviewApprovalState.Phase.PENDING, state.currentPhase)
+    }
+
+    @Test
+    fun `work found after a lost connection is never this reviewer's approval`() {
+        val state = lostAt(4L)
+
+        assertTrue(state.onStateUpdate(snapshot(4L, PlanReviewApprovalState.STATUS_WORKING)))
+
+        assertEquals(PlanReviewApprovalState.Phase.INVALIDATED, state.currentPhase)
+        assertNotEquals(PlanReviewApprovalState.Phase.FINISHED, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.STATUS_CHANGED_KEY, state.noticeKey)
+        assertFalse(state.onStateUpdate(snapshot(4L, PlanReviewApprovalState.STATUS_WORKING)))
+        assertEquals(PlanReviewApprovalState.Phase.INVALIDATED, state.currentPhase)
+    }
+
+    @Test
+    fun `a repeated lost connection is a no-op`() {
+        val state = lostAt(4L)
+
+        assertFalse(state.onConnectionLost())
+
+        assertEquals(PlanReviewApprovalState.Phase.READY, state.currentPhase)
+        assertEquals(PlanReviewApprovalState.CONNECTION_LOST_KEY, state.noticeKey)
+    }
+
+    @Test
+    fun `the dialog releases a pending approval only when the connection drops`() {
+        val body = dialogSource()
+            .substringAfter("override fun onStatus(")
+            .substringBefore("override fun onError(")
+
+        val release = body.indexOf("approval.onConnectionLost()")
+        assertTrue("onStatus must release through the machine", release >= 0)
+        assertTrue("onStatus must repaint through applyApprovalState()", body.contains("applyApprovalState()"))
+        assertTrue("the repaint must run on the EDT", body.contains("invokeLater"))
+        assertFalse("a lost connection must not close the dialog", body.contains("close("))
+        val guard = Regex("if \\(connected").find(body)
+        assertNotNull("onStatus must guard on connected", guard)
+        assertTrue("connected=true must never release", guard!!.range.first < release)
+    }
+
     // ------------------------------------------------- bundle key guard
 
     @Test
@@ -684,7 +784,8 @@ class PlanReviewApprovalStateTest {
 
         val keys = PlanReviewApprovalState.allMessageKeys()
         assertEquals("allMessageKeys must not repeat a key", keys.size, keys.toSet().size)
-        assertEquals(11, keys.size)
+        assertEquals(12, keys.size)
+        assertTrue(keys.contains(PlanReviewApprovalState.CONNECTION_LOST_KEY))
         for (key in keys) {
             val value = bundle.getProperty(key)
             assertNotNull("$key is missing from MoeBundle.properties", value)
@@ -695,6 +796,10 @@ class PlanReviewApprovalStateTest {
         assertEquals(
             "Plan changed - close and reopen to review the current plan.",
             bundle.getProperty(PlanReviewApprovalState.PLAN_CHANGED_KEY)
+        )
+        assertEquals(
+            "The connection to the Moe daemon dropped before the approval was confirmed - approve again once it reconnects.",
+            bundle.getProperty(PlanReviewApprovalState.CONNECTION_LOST_KEY)
         )
         assertTrue(
             "the daemon error notice must carry the message parameter",

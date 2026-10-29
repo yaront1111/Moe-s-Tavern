@@ -157,6 +157,17 @@ class PlanReviewApprovalState(private val taskId: String) {
     fun onSendFailed(): Boolean = releasePending(SEND_FAILED_KEY)
 
     /**
+     * The daemon connection dropped. A pending approval's fate is unknown, so it is
+     * NOT confirmed: back to [Phase.READY] for the SAME captured revision, which is
+     * never replaced, and nothing is retried automatically. A later `WORKING`
+     * snapshot then latches as status-changed and is never [Phase.FINISHED],
+     * matching the VS Code plan review (PlanReviewPanel.handleConnectionChange).
+     *
+     * @return true only when a pending approval was released.
+     */
+    fun onConnectionLost(): Boolean = releasePending(CONNECTION_LOST_KEY)
+
+    /**
      * A daemon ERROR frame arrived. Any error while an approval is in flight is
      * read as "this approval did not happen": re-arming a reviewer whose approval
      * did land is a visible annoyance, while reporting a success that never
@@ -217,6 +228,7 @@ class PlanReviewApprovalState(private val taskId: String) {
         const val SEND_FAILED_KEY = "moe.message.planReview.sendFailed"
         const val DAEMON_ERROR_KEY = "moe.message.planReview.daemonError"
         const val CLOSED_KEY = "moe.message.planReview.closed"
+        const val CONNECTION_LOST_KEY = "moe.message.planReview.connectionLost"
 
         /**
          * Maps [com.moe.model.Task.planRevision] onto a token. The parser already
@@ -252,7 +264,8 @@ class PlanReviewApprovalState(private val taskId: String) {
             NOT_RENDERED_KEY,
             SEND_FAILED_KEY,
             DAEMON_ERROR_KEY,
-            CLOSED_KEY
+            CLOSED_KEY,
+            CONNECTION_LOST_KEY
         )
     }
 }

@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:23.379Z",
-  "updatedAt": "2026-10-29T22:45:39.321Z",
+  "updatedAt": "2026-10-29T22:46:21.950Z",
   "dependsOn": [
     "task-df5384bf7fbd4b7ba3dedb43d7373ffa",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -197,7 +197,9 @@
     ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
     ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
     ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
-    ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json"
+    ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+    ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+    ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
   ],
   "completionSummary": "CQ-I03 delivered (plan rev 1, 5/5 steps): a JetBrains 'Managed VMs' tab that consumes CQ-I03a's vm-control.mjs.\n- ManagedVmPresentation.kt is pure. decode(command, stdout, exit, timedOut) never throws.\n  - Unreadable(fixed key): timeout, nonzero exit, more than 64 KiB, more than one line, non-strict JSON, trailing data, schema/command mismatch, a bad field, phase or state, a bad code.\n  - Unreadable(NOT_OWNED): any foreign or repeated VM name.\n  - Refused(code): a top-level producer code.\n  - readiness() gives 3 separate lines (provider, execution, verification); only a literal JSON true counts.\n  - strongProfile() is always blocked. Actions are refresh, reconcile and cleanup only, single flight. Commands take no instance argument.\n  - Fixed refusal text for 13 codes and 4 preserve reasons.\n- ManagedVmPanel.kt: all IO runs in a Task.Backgroundable.\n  - It resolves the bundled script and resolves node exactly as the supervisor does per profile; under PROTECTED the env is scrubbed.\n  - ProcessBuilder(arg list, stderr DISCARD) runs through CapturingProcessHandler.runProcessWithProgressIndicator: 120 s, or 20 min for cleanup.\n  - Cleanup asks for confirmation. A refresh follows each action. dispose cancels the run. No .moe writes and no settings changes.\n- Wiring: MoeToolWindowPanel +3; TerminalAgentLauncher.resolveBundledPath made internal; MoeBundle +54. MoeDaemonSupervisor.kt is untouched, because it holds a peer's merge conflict.\nDoD: 1 P1 plus mutants M1/M2. 2 P2 plus M3a/M3b; the producer ledger is the only ownership source. 3 P4 plus M5; there is no activation entry. 4 Gate above. Mutants: 8/8 killed by their named cases.\nSIZE: +619/-1, 618 net, over the 400 cap. EPIC size-exception rail prop-30944337eea941b7b76576c1aa0938c5 filed, PENDING human; #governors pinged.\nResiduals: unbounded stdout capture until the timeout (the producer caps at 64 KiB); a killed node can leave a multipass delete running (reconcile repairs it); WSL bindHost 0.0.0.0 preserves everything",
   "commits": [
@@ -239,6 +241,23 @@
       "treeId": "fd41f36283b80dd098ef20e5d85fa749cdb7cb1d",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "5cd1c5ae82634bec4370e4e69ee5abda066b9e25",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T22:42:31Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        ".moe/tasks/task-c53999b2dd2c4ad08bacb73c50371cfa.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T22:46:21.950Z",
+      "treeId": "61b5cfaf2392f86bfc1adf2445eaf18f2fc75725",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -250,8 +269,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-952969be@2026-10-29T20:34:17Z",
-    "at": "2026-10-29T20:40:53.352Z"
+    "sessionId": "qa-952969be@2026-10-29T22:42:31Z",
+    "at": "2026-10-29T22:46:21.950Z"
   },
   "completedAt": "2026-10-29T22:45:39.320Z",
   "reviewCompletedAt": "2026-10-29T22:45:39.320Z",

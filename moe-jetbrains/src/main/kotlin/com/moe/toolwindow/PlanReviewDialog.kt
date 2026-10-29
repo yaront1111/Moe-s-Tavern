@@ -286,7 +286,21 @@ class PlanReviewDialog(
         }
     }
 
-    override fun onStatus(connected: Boolean, message: String) {}
+    /**
+     * A dropped connection ends a pending approval as not confirmed. The notice is
+     * a fixed bundle key, so the daemon's status text is deliberately not used.
+     */
+    override fun onStatus(connected: Boolean, message: String) {
+        if (connected || !approval.onConnectionLost()) return
+        SwingUtilities.invokeLater {
+            if (isDisposed) return@invokeLater
+            try {
+                applyApprovalState()
+            } catch (ex: Exception) {
+                log.warn("Failed to apply the lost connection to the plan review", ex)
+            }
+        }
+    }
 
     /**
      * A daemon ERROR frame. Only meaningful while an approval is in flight, and
