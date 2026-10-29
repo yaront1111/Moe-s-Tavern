@@ -43,39 +43,47 @@ function records(buffer) {
   try { return utf8.decode(buffer).split('\0').slice(0, -1); } catch { throw snapshotError('SNAPSHOT_PATH_INVALID'); }
 }
 
-// One deadline covers every command; only the canonical root is trusted, and no GIT_* variable is inherited.
-function gitRunner(git, root, timeoutMs) {
+// One deadline covers every command; only the canonical root is trusted, and no GIT_* variable is inherited. CQ-R12
+// admission adds its own -c options (prefix, before args), environment (over the sanitized one) and failure code.
+export function gitRunner(git, root, timeoutMs, { prefix = [], env: extra = {}, fail = () => exportError('EXPORT_GIT_FAILED') } = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
-    GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' });
+    GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' }, extra);
   const deadline = Date.now() + timeoutMs;
   // Resolves stdout on exit 0, or null on exit 1 if allowed. execFile kills the child at the deadline or on overflow.
   return (args, { exit1 = false, input = '', maxBuffer = 64 * 1024 * 1024 } = {}) => new Promise((resolve, reject) => {
     const timeout = deadline - Date.now();
-    if (timeout <= 0) throw exportError('EXPORT_GIT_FAILED');
+    if (timeout <= 0) throw fail();
     const options = { cwd: root, env, timeout, killSignal: 'SIGKILL', windowsHide: true, encoding: 'buffer', maxBuffer };
-    const child = execFile(git, [...GIT_PREFIX, '-c', `safe.directory=${root}`, ...args], options, (error, stdout) => {
+    const child = execFile(git, [...GIT_PREFIX, '-c', `safe.directory=${root}`, ...prefix, ...args], options, (error, stdout) => {
       if (!error) resolve(stdout);
       else if (error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') reject(snapshotError('SNAPSHOT_LIMIT_EXCEEDED'));
       else if (exit1 && error.code === 1 && !error.killed) resolve(null);
-      else reject(exportError('EXPORT_GIT_FAILED'));
+      else reject(fail());
     });
     child.stdin.on('error', () => {}).end(input); // A child that exits early fails this write; its exit status decides.
   });
 }
 
 // repoDir must really be the toplevel, never ending '/*'. No config scope left unmasked (local, worktree, -c: `--local` skips
-// config.worktree) may set a partial clone, promisor, core.worktree or filter driver (diff-index runs one). A tag or tree fails the peel.
-async function openCommit({ repoDir, commit, git, timeoutMs }) {
-  const unsupported = () => exportError('EXPORT_REPOSITORY_UNSUPPORTED');
+// config.worktree) may set a partial clone, promisor, core.worktree or filter driver (diff-index runs one). Resolves
+// {root, run}; the second argument holds the caller's refusal (unsupported) and its gitRunner options.
+export async function openRepository({ repoDir, git, timeoutMs },
+  { unsupported = () => exportError('EXPORT_REPOSITORY_UNSUPPORTED'), ...runner } = {}) {
   const root = await realpath(repoDir).catch(() => { throw unsupported(); });
   if (root.replace(/\\/g, '/').endsWith('/*')) throw unsupported();
-  const run = gitRunner(git, root, timeoutMs);
+  const run = gitRunner(git, root, timeoutMs, runner);
   const top = await run(['rev-parse', '--show-toplevel']).then(out => realpath(utf8.decode(out).replace(/\n$/, '')))
     .catch(() => { throw unsupported(); });
   if (pathKey(top) !== pathKey(root)) throw unsupported();
   if (await run(['config', '--includes', '--get-regexp',
     '^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.worktree|filter\\..*)$'], { exit1: true }) !== null) throw unsupported();
+  return { root, run };
+}
+
+// A tag or tree fails the peel.
+async function openCommit({ repoDir, commit, git, timeoutMs }) {
+  const { root, run } = await openRepository({ repoDir, git, timeoutMs });
   const peel = async type => {
     const out = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${commit}^{${type}}`], { exit1: true });
     const id = out === null ? '' : out.toString('latin1').replace(/\n$/, '');

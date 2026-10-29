@@ -3371,3 +3371,219 @@ test('X7 end to end, a dirty checkout round-trips through the real supervisor an
       assert.equal(argv.some(arg => ['mount', 'umount', 'transfer'].includes(arg)), false, argv.join(' '));
     }
   });
+
+// CQ-R12 host admission rows: admitCandidate over scratch repositories built with the test's own git.
+import { admitCandidate } from '../local-runner/admission.mjs';
+
+const WIN = process.platform === 'win32';
+// An absolute git (admission refuses a bare 'git'): Git's own exec-path copy, else the first one on PATH.
+const GIT_BIN = [execFileSync('git', ['--exec-path']).toString().trim(), ...(process.env.PATH ?? '').split(path.delimiter)]
+  .filter(dir => path.isAbsolute(dir)).map(dir => path.join(dir, WIN ? 'git.exe' : 'git')).find(file => existsSync(file));
+const deleteOf = name => ({ kind: 'delete', path: name });
+// Sets process.env keys for one test (undefined deletes one) and restores them after it.
+function withEnv(t, changes) {
+  const apply = values => Object.entries(values).forEach(([key, value]) => (value === undefined ? delete process.env[key] : (process.env[key] = value)));
+  const saved = Object.fromEntries(Object.keys(changes).map(key => [key, process.env[key]]));
+  t.after(() => apply(saved));
+  apply(changes);
+}
+// Points os.tmpdir() at a fresh dir and lists what admission left there. Make every other scratch dir first.
+const isolateTmp = t => {
+  const dir = scratch(t);
+  withEnv(t, { TMPDIR: dir, TEMP: dir, TMP: dir });
+  return { dir, left: () => readdirSync(dir) };
+};
+// POSIX only: a git that logs each argv with its GIT_* environment, then execs the real git (R09b's E2 technique).
+function logGit(t) {
+  const dir = scratch(t);
+  const log = path.join(dir, 'log');
+  writeFileSync(path.join(dir, 'git'), `#!/bin/sh\nprintf '%s | %s\\n' "$(env | grep '^GIT_' | sort | tr '\\n' ' ')" "$*" >> '${log}'\n`
+    + `exec '${GIT_BIN}' "$@"\n`, { mode: 0o755 });
+  return { git: path.join(dir, 'git'), lines: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []) };
+}
+// A committed scratch repository, driven by the test's own git with system and global config masked.
+function admitRepo(t, files, init = []) {
+  const dir = realpathSync(scratch(t));
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))),
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: WIN ? 'NUL' : '/dev/null' };
+  const git = (args, input) => execFileSync(GIT_BIN, ['-c', 'user.name=moe', '-c', 'user.email=moe@test', ...args],
+    { cwd: dir, env, input, stdio: 'pipe' }).toString().replace(/\n$/, '');
+  git(['init', '-q', ...init]);
+  const put = ([name, data]) => { mkdirSync(path.dirname(path.join(dir, name)), { recursive: true }); writeFileSync(path.join(dir, name), data); };
+  Object.entries(files).forEach(put);
+  git(['add', '-A']);
+  git(['commit', '-q', '--allow-empty', '-m', 'base']);
+  return { dir, git, tree: () => git(['rev-parse', 'HEAD^{tree}']), bytes: args => execFileSync(GIT_BIN, args, { cwd: dir, env }) };
+}
+// [mode, path, bytes or gitlink id] of every leaf of a tree, in Git's order.
+const leaves = (repo, tree) => repo.git(['ls-tree', '-r', '-z', tree]).split('\0').filter(Boolean).map(record => {
+  const [, mode, oid, name] = /^([0-7]{6}) [a-z]+ ([0-9a-f]+)\t(.+)$/s.exec(record);
+  return [mode, name, mode === '160000' ? oid : repo.bytes(['cat-file', 'blob', oid])];
+});
+const asLeaves = entries => validateImport(entries).entries.filter(({ kind }) => kind === 'file')
+  .map(({ path: name, executable, data }) => [executable ? '100755' : '100644', name, Buffer.from(data)]);
+// [name, sha256 or 'dir'] of every entry below dir that keep() admits.
+const filesUnder = (dir, keep) => readdirSync(dir, { recursive: true }).filter(keep).sort()
+  .map(name => [name, statSync(path.join(dir, name)).isFile() ? sha(readFileSync(path.join(dir, name))) : 'dir']);
+// The worktree, .git minus objects/ (index, HEAD, refs, packed-refs, logs, config) and the refs, which admission never changes.
+const repoState = repo => [filesUnder(repo.dir, name => name.split(path.sep)[0] !== '.git'),
+  filesUnder(path.join(repo.dir, '.git'), name => name.split(path.sep)[0] !== 'objects'), repo.git(['for-each-ref'])];
+const admitIn = (repo, entries, extra = {}) => admitCandidate({ repoDir: repo.dir, baseTree: repo.tree(), candidate: validateImport(entries),
+  git: GIT_BIN, ...extra });
+
+test('A1 invalid input is refused before any temp dir or Git process: a bare git, a relative repo, a forged candidate', async t => {
+  const repo = admitRepo(t, { a: 'a\n' });
+  const logged = WIN ? null : logGit(t);
+  const { left } = isolateTmp(t);
+  const good = validateImport([fileOf('a', 'new\n')]);
+  const edited = validateImport([fileOf('a', 'new\n')]);
+  edited.entries[0].data[0] = 0x4e; // A TypedArray cannot be frozen.
+  const forged = (entries, digest = good.digest) => Object.freeze({ entries: Object.freeze(entries), digest });
+  const base = { repoDir: repo.dir, baseTree: repo.tree(), candidate: good, git: logged?.git ?? GIT_BIN };
+  const planted = path.join(repo.dir, 'git'); // Repository code though absolute; a relative git the cwd resolves is refused too.
+  writeFileSync(planted, readFileSync(base.git), { mode: 0o755 });
+  const changes = [{ git: 'git' }, { git: path.relative(process.cwd(), fileURLToPath(import.meta.url)) }, { git: '' }, { git: 7 },
+    { git: `${base.git}\n` }, { git: planted }, { git: path.join(repo.dir, 'missing') },
+    { repoDir: 'relative' }, { repoDir: `${repo.dir}\u0000` }, { baseTree: base.baseTree.slice(1) }, { baseTree: base.baseTree.toUpperCase() },
+    { baseTree: 'HEAD' }, { baseTree: `${base.baseTree}\n` }, { timeoutMs: 0 }, { timeoutMs: 600_001 }, { timeoutMs: 1.5 },
+    { candidate: { ...good } }, { candidate: Object.freeze({ ...good, extra: 1 }) }, { candidate: Object.freeze({ entries: good.entries }) },
+    { candidate: Object.freeze({ entries: [...good.entries], digest: good.digest }) }, { candidate: forged(good.entries, '0'.repeat(64)) },
+    { candidate: forged([Object.freeze({ ...good.entries[0], sha256: '0'.repeat(64) })]) },
+    { candidate: forged([Object.freeze({ ...good.entries[0], size: 9 })]) }, { candidate: edited }, { candidate: null }];
+  for (const input of [null, 'x', [], ...changes.map(change => ({ ...base, ...change }))]) {
+    await assert.rejects(admitCandidate(input), transferRefused('ADMISSION_INPUT_INVALID'), JSON.stringify(input));
+  }
+  // validateImport's own refusals pass through with their R09a code.
+  await assert.rejects(admitCandidate({ ...base, candidate: forged([Object.freeze({ kind: 'symlink', path: 'l' })]) }),
+    transferRefused('SNAPSHOT_SYMLINK_DENIED'));
+  assert.deepEqual([logged?.lines() ?? [], left()], [[], []]);
+  assert.equal((await admitCandidate(base)).digest, good.digest, 'positive control');
+  assert.deepEqual([logged === null || logged.lines().length > 0, left()], [true, []]);
+});
+
+test('A2 a candidate must fit its base: a delete names a base blob, and a file never replaces, covers or sits beneath a non-blob', async t => {
+  const repo = admitRepo(t, { a: 'a\n', 'd/x': 'x\n' });
+  // m is a gitlink and l a symlink, staged without touching the worktree.
+  const links = [`160000,${repo.git(['rev-parse', 'HEAD'])},m`, `120000,${repo.git(['hash-object', '-w', '--stdin'], 'a')},l`];
+  for (const info of links) repo.git(['update-index', '--add', '--cacheinfo', info]);
+  repo.git(['commit', '-q', '-m', 'links']);
+  const conflicts = [[deleteOf('nope')], [deleteOf('d')], [deleteOf('m')], [deleteOf('l')], [fileOf('m', 'x')], [fileOf('m/x', 'x')],
+    [fileOf('l', 'x')], [fileOf('l/x', 'x')], [fileOf('a/b', 'x')], [fileOf('d', 'x')]];
+  for (const entries of conflicts) {
+    await assert.rejects(admitIn(repo, entries), transferRefused('ADMISSION_ENTRY_CONFLICT'), JSON.stringify(entries.map(e => e.path)));
+  }
+  // A directory/file swap never reaches admission: validateImport refuses a delete above or below a file.
+  assert.throws(() => validateImport([deleteOf('a'), fileOf('a/b', 'x')]), { code: 'SNAPSHOT_PATH_COLLISION' });
+  await admitIn(repo, [deleteOf('d/x'), fileOf('a', 'A'), fileOf('d/y', 'y'), fileOf('n/e/w', 'w')]);
+  const wide = admitRepo(t, { a: 'a\n' }, ['--object-format=sha256']);
+  const ids = ['a'.repeat(64), repo.git(['rev-parse', 'HEAD:a']), repo.git(['rev-parse', 'HEAD']), 'f'.repeat(40)];
+  for (const [at, baseTree] of [...ids.map(id => [repo, id]), [wide, repo.tree()], [wide, wide.git(['rev-parse', 'HEAD'])]]) {
+    await assert.rejects(admitIn(at, [], { baseTree }), transferRefused('ADMISSION_BASE_INVALID'), baseTree);
+  }
+  await assert.rejects(admitIn(repo, [], { repoDir: path.join(repo.dir, 'd') }), transferRefused('ADMISSION_REPOSITORY_UNSUPPORTED'));
+  repo.git(['config', 'extensions.worktreeConfig', 'true']); // `config --local` would skip .git/config.worktree.
+  repo.git(['config', '--worktree', 'filter.x.clean', 'cat']);
+  await assert.rejects(admitIn(repo, []), transferRefused('ADMISSION_REPOSITORY_UNSUPPORTED'));
+});
+
+test('A3 the admitted tree is the base minus deletes plus files, byte for byte, with no autocrlf, eol or ident conversion', async t => {
+  const repo = admitRepo(t, { '.gitattributes': '* text eol=crlf ident\n', a: 'a\n', 'd/x': 'x\n', 'd/z': 'z\n', 'run.sh': 'echo\n' });
+  repo.git(['config', 'core.autocrlf', 'true']);
+  const crlf = Buffer.from('one\r\ntwo\r\n$Id: 0123456789abcdef $\r\n');
+  const candidate = [fileOf('a', crlf), deleteOf('d/x'), fileOf('d/new', 'n\n'), fileOf('e/f/g', ''), fileOf('run.sh', 'echo\r\n', true)];
+  const admitted = await admitIn(repo, candidate);
+  assert.deepEqual([Object.keys(admitted), admitted.baseTree, admitted.digest, Object.isFrozen(admitted)],
+    [['baseTree', 'tree', 'digest'], repo.tree(), validateImport(candidate).digest, true]);
+  assert.deepEqual(leaves(repo, admitted.tree), [['100644', '.gitattributes', Buffer.from('* text eol=crlf ident\n')],
+    ['100644', 'a', crlf], ['100644', 'd/new', Buffer.from('n\n')], ['100644', 'd/z', Buffer.from('z\n')], ['100644', 'e/f/g', Buffer.alloc(0)],
+    ['100755', 'run.sh', Buffer.from('echo\r\n')]]);
+  assert.equal((await admitIn(repo, [])).tree, repo.tree(), 'an empty candidate is the base itself');
+  const both = await Promise.all(['c1', 'c2'].map(name => admitIn(repo, [fileOf(name, name)])));
+  assert.deepEqual(both.map(({ tree }) => leaves(repo, tree).map(([, name]) => name).filter(name => /^c\d$/.test(name))), [['c1'], ['c2']]);
+  const wide = admitRepo(t, { a: 'a\n' }, ['--object-format=sha256']);
+  const sha256 = await admitIn(wide, [fileOf('b', 'b\r\n', true)]);
+  assert.deepEqual([sha256.tree.length, leaves(wide, sha256.tree)], [64, asLeaves([fileOf('a', 'a\n'), fileOf('b', 'b\r\n', true)])]);
+});
+
+test('A4 admission changes no ref, index or worktree byte and runs no candidate file: the active controller stays in place', async t => {
+  const controller = ['scripts/moe-agent.sh', 'scripts/local-runner/admission.mjs'];
+  const source = name => fileURLToPath(new URL(`../../${name}`, import.meta.url));
+  const repo = admitRepo(t, Object.fromEntries(controller.map(name => [name, readFileSync(source(name))])));
+  for (const args of [['tag', 'v1'], ['branch', 'side'], ['pack-refs', '--all'], ['branch', 'loose']]) repo.git(args);
+  const marker = path.join(scratch(t), 'ran');
+  const hostile = `#!/bin/sh\ntouch '${marker}'\n`;
+  const state = () => [...repoState(repo), sha(readFileSync(source(controller[1])))];
+  const before = state();
+  const candidate = [fileOf(controller[0], hostile, true), fileOf(controller[1], `import '${marker}';\n`), fileOf('scripts/postinstall.sh', hostile, true)];
+  const { tree } = await admitIn(repo, candidate);
+  assert.deepEqual([state(), existsSync(marker), leaves(repo, tree)], [before, false, asLeaves(candidate)]);
+  // The module imports only node: built-ins and its two ./ siblings, never dynamically.
+  const text = readFileSync(source('scripts/local-runner/admission.mjs'), 'utf8');
+  assert.deepEqual([...text.matchAll(/^import [^;]* from '([^']+)';$/gm)].map(([, spec]) => spec),
+    ['node:crypto', 'node:fs/promises', 'node:os', 'node:path', './source-export.mjs', './source-snapshot.mjs']);
+  assert.equal(/\bimport\s*\(|\brequire\s*\(/.test(text), false);
+});
+
+test('A5 hostile hooks, fsmonitor, package scripts, inherited GIT_* and a hostile HOME never run or redirect admission', async t => {
+  const marks = mkdtempSync(path.join(tmpdir(), 'moe-marks-')); // No space: Git runs core.fsmonitor through the shell.
+  t.after(() => rmSync(marks, { recursive: true, force: true }));
+  const ran = () => readdirSync(marks).filter(name => name.startsWith('ran-'));
+  const touch = label => `#!/bin/sh\ntouch '${path.join(marks, `ran-${label}`)}'\n`;
+  const script = label => {
+    writeFileSync(path.join(marks, `${label}.sh`), touch(label), { mode: 0o755 });
+    return path.join(marks, `${label}.sh`);
+  };
+  const scripts = Object.fromEntries(['test', 'prepare', 'postinstall'].map(name => [name, touch(name).split('\n')[1]]));
+  const repo = admitRepo(t, { a: 'a\n', 'package.json': JSON.stringify({ name: 'hostile', scripts }) });
+  const decoy = admitRepo(t, { a: 'decoy\n' });
+  const hooksPath = path.join(marks, 'hooks');
+  mkdirSync(hooksPath);
+  const hooks = ['post-index-change', 'reference-transaction', 'pre-commit', 'post-commit', 'post-checkout', 'fsmonitor-watchman'];
+  for (const [at, dir] of [path.join(repo.dir, '.git', 'hooks'), hooksPath].entries()) {
+    for (const hook of hooks) writeFileSync(path.join(dir, hook), touch(`${hook}-${at}`), { mode: 0o755 });
+  }
+  repo.git(['config', 'core.hooksPath', hooksPath]);
+  repo.git(['config', 'core.fsmonitor', script('fsmonitor')]);
+  const home = path.join(marks, 'home');
+  const hostileConfig = `[core]\n\thooksPath = ${hooksPath}\n\tfsmonitor = ${script('global-fsmonitor')}\n[filter "x"]\n\tclean = ${script('filter')}\n`;
+  mkdirSync(path.join(home, 'xdg', 'git'), { recursive: true });
+  for (const file of [path.join(home, '.gitconfig'), path.join(home, 'xdg', 'git', 'config')]) writeFileSync(file, hostileConfig);
+  if (!WIN) { // Positive control: outside the envelope this repository's fsmonitor and hooksPath hooks do run.
+    repo.git(['status']);
+    repo.git(['read-tree', 'HEAD']);
+    assert.deepEqual(ran(), ['ran-fsmonitor', 'ran-post-index-change-1']);
+    ran().forEach(name => rmSync(path.join(marks, name)));
+  }
+  const before = repoState(repo);
+  withEnv(t, { GIT_DIR: path.join(decoy.dir, '.git'), GIT_WORK_TREE: decoy.dir, GIT_INDEX_FILE: path.join(repo.dir, '.git', 'index'),
+    GIT_OBJECT_DIRECTORY: path.join(decoy.dir, '.git', 'objects'), GIT_CONFIG_PARAMETERS: `'core.hooksPath'='${hooksPath}'`,
+    GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: script('env-fsmonitor'),
+    GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), GIT_CONFIG_SYSTEM: path.join(home, '.gitconfig'), HOME: home,
+    XDG_CONFIG_HOME: path.join(home, 'xdg') });
+  const candidate = [fileOf('a', 'admitted\n'), fileOf('b/c', 'c\n')];
+  const { tree } = await admitIn(repo, candidate);
+  assert.deepEqual([ran(), repoState(repo), leaves(repo, tree).slice(0, 2)], [[], before, asLeaves(candidate)]);
+  assert.throws(() => decoy.git(['cat-file', '-e', tree]), 'the tree went to the right repository only');
+  repo.git(['config', 'filter.x.clean', script('local-filter')]);
+  const filtered = repoState(repo);
+  await assert.rejects(admitIn(repo, candidate), transferRefused('ADMISSION_REPOSITORY_UNSUPPORTED'));
+  assert.deepEqual([ran(), repoState(repo)], [[], filtered]);
+});
+
+test('A6 every Git call runs in the admission envelope with plumbing subcommands only, and the temp dir goes',
+  { skip: WIN && 'needs a POSIX /bin/sh git wrapper' }, async t => {
+    const repo = admitRepo(t, { a: 'a\n', 'd/x': 'x\n' });
+    const logged = logGit(t);
+    const tmp = isolateTmp(t);
+    await admitIn(repo, [fileOf('a', 'A'), deleteOf('d/x'), fileOf('n', 'n', true)], { git: logged.git });
+    const lines = logged.lines();
+    const key = `GIT_INDEX_FILE=${path.join(tmp.dir, 'moe-admission-')}`;
+    const temp = path.join(tmp.dir, `moe-admission-${lines[0].split(key)[1]?.slice(0, 6)}`);
+    const prefix = `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 GIT_INDEX_FILE=${path.join(temp, 'index')} GIT_NO_LAZY_FETCH=1 `
+      + 'GIT_TERMINAL_PROMPT=0  | --no-optional-locks --no-replace-objects -c protocol.allow=never -c core.fsmonitor=false '
+      + `-c safe.directory=${repo.dir} -c core.hooksPath=${path.join(temp, 'hooks')} -c core.splitIndex=false -c index.sparse=false `;
+    assert.deepEqual(lines.filter(line => !line.startsWith(prefix)), []);
+    assert.deepEqual([...new Set(lines.map(line => line.slice(prefix.length).split(' ')[0]))],
+      ['rev-parse', 'config', 'ls-tree', 'hash-object', 'read-tree', 'update-index', 'write-tree']);
+    assert.deepEqual([existsSync(temp), tmp.left()], [false, []]);
+  });

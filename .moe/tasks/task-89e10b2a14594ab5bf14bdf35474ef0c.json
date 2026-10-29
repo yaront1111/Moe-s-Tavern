@@ -1,0 +1,31 @@
+{
+  "id": "task-89e10b2a14594ab5bf14bdf35474ef0c",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: source-export accepts a bare or in-repository git binary",
+  "description": "scripts/local-runner/source-export.mjs (R09b exportSourceSnapshot, openCommit/openRepository) accepts `git: 'git'` and an absolute git inside repoDir. On Windows, a bare 'git' resolves against the repository cwd (task-d72fe292), so repository code can run during export. admission.mjs (CQ-R12, task-44a9e97b) already refuses both before any spawn (see admitCandidate and row A1); export should apply the same guard. Evidence: export with git:'git' and cwd=repoDir runs.",
+  "definitionOfDone": [
+    "exportSourceSnapshot refuses a non-absolute git, and an absolute git whose realpath is inside repoDir, with a fixed EXPORT_* code before any process spawns",
+    "A row in scripts/tests/local-runner-snapshot.test.mjs covers the bare, relative and in-repo git cases",
+    "Fresh `node --test scripts/tests/local-runner-snapshot.test.mjs` exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-44a9e97be68a4166822b64416cea7ab5"
+  ],
+  "priority": "HIGH",
+  "order": 255.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:33:41.147Z",
+  "updatedAt": "2026-10-29T17:33:41.147Z"
+}
