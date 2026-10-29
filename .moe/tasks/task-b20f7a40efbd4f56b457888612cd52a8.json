@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:32.385Z",
-  "updatedAt": "2026-10-29T22:49:04.027Z",
+  "updatedAt": "2026-10-29T22:49:29.982Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:40:00.876Z",
     "plannedStepCount": 4,
@@ -165,7 +165,48 @@
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+    ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+    ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json"
+  ],
+  "completionSummary": "CQ-I06a delivered. PlanReviewApprovalState.onConnectionLost() releases only PENDING to READY (same captured revision) with new CONNECTION_LOST_KEY (in allMessageKeys, bundle text mirrors VS Code). PlanReviewDialog.onStatus(false) calls it and repaints on the EDT like onError; onStatus(true) is a no-op. Tests C1-C6 plus bundle guard (11->12, expected for the new key) in PlanReviewApprovalStateTest. After a lost connection, WORKING at the captured revision ends INVALIDATED/STATUS_CHANGED, never FINISHED; AWAITING_APPROVAL at that revision lets the next click send the captured revision. Mutants M1-M5 (scratch copy) all killed. Size +136/-3 over 4 JetBrains files. Gate is the Windows gradlew.bat equivalent of ./gradlew test (WSL has no JDK), run under the jetbrains-gradle lease (released): exit 0, 22 suites/322 tests/0 failures; PlanReviewApprovalStateTest 52 tests.",
+  "commits": [
+    {
+      "sha": "9eef776721fea45db5acba7de1c418c0bfab147d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T22:46:10Z",
+      "paths": [
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+        ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T22:49:29.982Z",
+      "treeId": "52081827552ca90153a7fbc3fcd7e563fcc9f78f",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
   ],
-  "completionSummary": "CQ-I06a delivered. PlanReviewApprovalState.onConnectionLost() releases only PENDING to READY (same captured revision) with new CONNECTION_LOST_KEY (in allMessageKeys, bundle text mirrors VS Code). PlanReviewDialog.onStatus(false) calls it and repaints on the EDT like onError; onStatus(true) is a no-op. Tests C1-C6 plus bundle guard (11->12, expected for the new key) in PlanReviewApprovalStateTest. After a lost connection, WORKING at the captured revision ends INVALIDATED/STATUS_CHANGED, never FINISHED; AWAITING_APPROVAL at that revision lets the next click send the captured revision. Mutants M1-M5 (scratch copy) all killed. Size +136/-3 over 4 JetBrains files. Gate is the Windows gradlew.bat equivalent of ./gradlew test (WSL has no JDK), run under the jetbrains-gradle lease (released): exit 0, 22 suites/322 tests/0 failures; PlanReviewApprovalStateTest 52 tests."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T22:46:10Z",
+    "at": "2026-10-29T22:49:29.982Z"
+  }
 }

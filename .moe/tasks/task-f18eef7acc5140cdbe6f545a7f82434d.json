@@ -13,9 +13,63 @@
   "taskRails": [
     "Packaging only: never change what a production module does at runtime; never remove an asset a wrapper or IDE loads by path."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Load test-driven-development. Edit only scripts/tests/local-runner-bundle.test.mjs. It runs the ACTUAL moe-vscode bundler in a temp repo (fixture()) and slices scripts/tests/onboarding.mjs up to `const require = createRequire(proxyEntry);` to get its packaged checks.\n\nFixture and list changes:\n- Add 'vm-control.mjs' to the `required` array. The existing byte-identity test and the onboarding missing-file loop then cover it.\n- In fixture(), also plant compiled-test files in the fake dists: packages/moe-proxy/dist/index.test.js, packages/moe-proxy/dist/index.test.d.ts, packages/moe-proxy/dist/utils.spec.js and packages/moe-daemon/dist/tools/sample.test.js. Every bundle run then exercises the filter.\n\nNew or changed tests. Assert exact statuses and paths; never assert truthiness.\n- T1 'actual bundler drops compiled tests and specs from both dists': the four planted files are absent under work.output (proxy/..., daemon/tools/...), while proxy/index.js and daemon/index.js are present.\n- T2: turn 'actual bundler refuses a missing required provider asset' into a loop over ['doctor.mjs', 'vm-control.mjs']. Each case expects status 1 and stderr matching /local-runner.*<name>/.\n- T3 'bundled onboarding loads the packaged vm-control import closure':\n  - the clean bundle passes (status 0);\n  - delete output scripts/local-runner/lifecycle.mjs. It is in vm-control's closure but not in `required`. Expect status !== 0 and stderr matching /vm-control/. Restore it;\n  - replace output vm-control.mjs with `process.stdout.write('{\"code\":\"OTHER\"}\\n'); process.exit(2);`. Expect it to be refused, which proves stdout is checked and not only the exit code.\n- T4 'bundled onboarding refuses any test artifact outside node_modules':\n  - Plant each of these one at a time: daemon/tools/toolTestHarness.js, proxy/utils.test.js, scripts/local-runner/fixtures/data.json and scripts/mods/example/__tests__/x.mjs. Each must be refused, with stderr matching /test artifact/ and naming that relative path. Remove each after its case.\n  - Then plant daemon/node_modules/dependency/test/a.test.js and proxy/node_modules/dep/__tests__/b.js. Status must stay 0.\n- T5 (static) 'Gradle requires vm-control and drops compiled tests': read moe-jetbrains/build.gradle.kts and check three things:\n  - the requireBundledAssets local-runner listOf(...) names \"vm-control.mjs\";\n  - the `from(bundledDaemonDir) {` block contains `exclude(\"**/*.test.*\", \"**/*.spec.*\")`;\n  - the `from(bundledProxyDir) {` block contains the same exclude.\n  Slice each block up to its closing `}` the way the existing Gradle test does.\n- T6 (static) 'daemon build excludes the test-only tool harness': JSON.parse packages/moe-daemon/tsconfig.json and assert that exclude contains both 'src/**/*.test.ts' and 'src/tools/toolTestHarness.ts'.\n\nRED: run `node --test scripts/tests/local-runner-bundle.test.mjs` with Linux node via `env -i` (`mem:gotcha-local-runner-tests`). T1-T6 and the vm-control onboarding-missing case must fail before step 2; record the counts in the step note. Do NOT touch the CI-regex test.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "RED recorded (Linux node v24.21.0 under env -i): 12 tests, 5 pass, 7 fail. Failing, each for the intended reason: T1 'drops compiled tests' (Leaked compiled test proxy/index.test.js); T2 missing-asset loop (vm-control.mjs bundled without refusal); existing onboarding missing-file loop (Onboarding accepted missing vm-control.mjs); T3 closure ('accepted a broken vm-control import closure'); T4 test-artifact scan (accepted daemon/tools/toolTestHarness.js); T5 Gradle (requireBundledAssets must name vm-control.mjs); T6 tsconfig (must exclude src/tools/toolTestHarness.ts). The 5 passing are the pre-existing tests, incl. the untouched CI-regex test. Also planted near-miss production names (latest.js, attestation.js) in the fixture dists and assert they survive the filter. Shared checkout has many peer-dirty paths (incl. untracked scripts/local-runner/guest-mcp-*), none touched.",
+      "startedAt": "2026-10-29T22:44:42.132Z",
+      "completedAt": "2026-10-29T22:45:59.902Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "MINIMUM IMPLEMENTATION, four files. Keep each file's existing LF and UTF-8 encoding, and report every file.\n\n1. packages/moe-daemon/tsconfig.json: `\"exclude\": [\"src/**/*.test.ts\", \"src/tools/toolTestHarness.ts\"]`. Only *.test.ts files import the harness; grep shows no production importer. So dist stops shipping a test fixture and nothing at runtime changes.\n2. moe-jetbrains/build.gradle.kts:\n   - add \"vm-control.mjs\" to requireBundledAssets' local-runner listOf(...);\n   - in prepareSandbox, add `exclude(\"**/*.test.*\", \"**/*.spec.*\")` inside BOTH `from(bundledDaemonDir) { ... }` and `from(bundledProxyDir) { ... }`, with a one-line comment: moe-proxy's tsconfig compiles src/*.test.ts, and compiled tests never ship.\n   - Do not touch the node_modules, scripts or docs copies.\n3. moe-vscode/scripts/bundle-assets.mjs:\n   - add 'vm-control.mjs' to the required local-runner list;\n   - give copyDir an `excludeTests` option. Its filter rejects a file whose path.basename matches /\\.(test|spec)\\./. Pass it only for `copyDir(asset.dist, distOut, { excludeTests: true })`;\n   - keep the excludeBin semantics for deps unchanged.\n4. scripts/tests/onboarding.mjs: inside `if (bundle) { ... }` and BEFORE the `const require = createRequire(proxyEntry);` boundary, because the bundle test slices up to it:\n   - Add 'local-runner/vm-control.mjs' to the bundled-file list.\n   - Run the packaged producer with no arguments: `spawnSync(process.execPath, [path.join(bundle, 'scripts/local-runner/vm-control.mjs')], { encoding: 'utf8', windowsHide: true, timeout: 30_000 })`. Add spawnSync to the existing child_process import.\n     - assert status === 2, with a message naming vm-control and quoting stderr;\n     - assert stdout === '{\"code\":\"VM_CONTROL_INPUT_INVALID\"}\\n'.\n     - Usage validation happens before any read, so nothing touches Multipass, the ledger or the daemon. ESM loads the whole static import closure first, so a pass proves the closure.\n   - Scan for test artifacts. A small recursive readdirSync(withFileTypes) walk over the bundle's daemon/, proxy/ and scripts/:\n     - skip any directory named node_modules;\n     - flag a directory named tests, __tests__, fixtures, __fixtures__, __e2e__ or __acceptance__;\n     - flag a file whose name matches /\\.(test|spec)\\.|testharness/i;\n     - collect '/'-joined relative paths, and finish with `assert.deepEqual(found, [], 'Bundled test artifact(s): ' + found.join(', '))`.\n\nError handling: every refusal is an assert that fails the run with an exact, path-naming message. The scan never follows node_modules, and a missing top-level directory is reported rather than skipped silently.\n\nRun the step 1 file again: all of it must pass, including the existing tests. Then run node scripts/tests/onboarding.mjs's existing unbundled mode only if dist builds exist; that is optional here.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/tsconfig.json",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/tsconfig.json",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "note": "GREEN: `node --test scripts/tests/local-runner-bundle.test.mjs` (Linux node v24.21.0, env -i) = 12 tests, 12 pass, 0 fail. Implemented: daemon tsconfig excludes src/tools/toolTestHarness.ts; build.gradle.kts requires vm-control.mjs and excludes **/*.test.* + **/*.spec.* in both the daemon and proxy dist copies; bundle-assets.mjs requires vm-control.mjs and copyDir gains excludeTests (basename /\\.(test|spec)\\./) used only for the dist copies; onboarding.mjs packaged block requires vm-control.mjs, execs it with no args (asserts exit 2 + exact stdout {\"code\":\"VM_CONTROL_INPUT_INVALID\"}), and scans daemon/ proxy/ scripts/ (skipping node_modules dirs) for test artifacts; the scan sits before the createRequire boundary. Deviation from the plan wording, noted for QA: a flagged test directory (fixtures, __tests__) is reported once as the directory, not once per file inside it, so T4 asserts the flagged directory path for those two cases and the file path for the other two. Peers' dirty paths untouched.",
+      "startedAt": "2026-10-29T22:46:01.074Z",
+      "completedAt": "2026-10-29T22:46:50.346Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report every edited file in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, never the shared tree, then restore it and cmp-verify. Each must fail the named test:\n   - M1: no excludeTests on the VS Code dist copy. Fails T1 and T4 through the scan.\n   - M2: 'vm-control.mjs' dropped from the bundler's required list. Fails T2.\n   - M3: onboarding without the vm-control exec. Fails T3.\n   - M4: onboarding checks only the exit status. Fails T3, the stdout case.\n   - M5: the scan descends into node_modules. Fails T4, the ignored case.\n   - M6: the scan covers daemon/ only. Fails T4.\n   - M7: the Gradle proxy exclude removed. Fails T5.\n   - M8: the tsconfig harness exclude removed. Fails T6.\n2. DoD 1 and a real-dist proof, in a Linux snapshot (`mem:gotcha-daemon-linux-snapshot-gate`): git archive HEAD of the whole repo, overlay exactly this task's 5 files, and cmp them.\n   - Use native Linux deps for packages/moe-daemon. For packages/moe-proxy, build with the daemon's native tsc (`mem:gotcha-wire-contract-change-onboarding-smoke`). Never overwrite the Windows node_modules.\n   - Run `npm run build` in packages/moe-daemon. Then `test ! -e dist/tools/toolTestHarness.js`, and `npx tsc --noEmit` must exit 0.\n   - Build the proxy, run `node moe-vscode/scripts/bundle-assets.mjs`, then `node scripts/tests/onboarding.mjs moe-vscode/bundled`. It must end with its PASS line.\n   - `find moe-vscode/bundled -path '*/node_modules' -prune -o -type f \\( -name '*.test.*' -o -name '*.spec.*' -o -iname '*testharness*' \\) -print` must print nothing.\n   - Delete the snapshot afterwards.\n3. THE GATE, fresh: `node --test scripts/tests/local-runner-bundle.test.mjs`, with Linux node under `env -i` and a Linux-only PATH. Exit 0, with every test passing.\n4. Size: `git diff --numstat` over the 5 files must stay well under 400 net. Expect about 130.\n5. Give complete_task the gate command, its exit code and its output tail, plus the step 2 build and onboarding lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "No file edits this step; verification only. (1) Mutants, run on a /tmp scratch copy and cmp-restored: M1-M8 plus extras M9 (naive /(test|spec)/ filter), M10 (Gradle daemon exclude removed), M11 (Gradle required list without vm-control), M12 (onboarding file list without vm-control) are ALL killed by their named tests; no survivors. (2) Linux snapshot (git archive HEAD + the 5 owned files overlay, cmp-ok; native npm ci, locks byte-equal to the tree): daemon `npm run build` exit 0, `test ! -e dist/tools/toolTestHarness.js` true, `npx tsc --noEmit` exit 0; RED control: the HEAD tsconfig under the same tsc DOES emit tools/toolTestHarness.js. Proxy `npm run build` exit 0 (its dist still holds compiled tests, as the out-of-scope tsconfig is unchanged). `node moe-vscode/scripts/bundle-assets.mjs` exit 0, vm-control.mjs byte-identical, the test-artifact find printed nothing, and `node scripts/tests/onboarding.mjs moe-vscode/bundled` printed `PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence` (exit 0). The real mods/ dir passes the new scan. Snapshot and scratch deleted. (3) GATE fresh in the shared tree: `node --test scripts/tests/local-runner-bundle.test.mjs` under env -i + Linux node v24.21.0 = tests 12, pass 12, fail 0, exit 0. (4) Size: git diff --numstat over the 5 files = +130/-17, net 113 (< 400).",
+      "startedAt": "2026-10-29T22:46:51.414Z",
+      "completedAt": "2026-10-29T22:48:39.225Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review. Read the diff as someone trying to ship a broken package. Check each of these:\n- Could the dist filter drop a production module? Grep packages/moe-daemon/src and packages/moe-proxy/src for production imports of a *.test or *.spec path. There must be none.\n- Production file names that merely contain 'test' without the dots must survive, for example latest.js or attestation.js.\n- The required-asset lists (taskRail) still name every asset a wrapper or IDE loads by path. JetBrains resolves scripts/local-runner/vm-control.mjs, moe-agent.ps1/.sh, daemon/index.js and proxy/index.js. VS Code resolves bundled/daemon/index.js, proxy/index.js and scripts/moe-agent.*.\n- Windows: path.sep inside the filters; the relative paths in the scan message are '/'-joined; the exec uses an argument array with no shell; windowsHide is set.\n- A missing bundle directory (no scripts/) must fail loudly rather than pass an empty scan.\n- The node_modules skip applies only to directories named exactly node_modules.\n- Running vm-control needs no network and no daemon, and touches no ledger. Usage validation comes first.\n- CI: the 'Verify packaged JetBrains onboarding' step now proves the same checks against the real JetBrains zip.\n- Rails: packaging only, no runtime behaviour change, no .moe edits, no Git writes, and none of globalRails.forbiddenPatterns.\nThen write the Serena memory 'task-task-f18eef7acc5140cdbe6f545a7f82434d-handoff' for CQ-I06. It covers the guards, the scan rule, the mutant list, and the residual that the npm moe-proxy package still ships compiled tests.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review done (no source edits; the 5 task files were already reported in steps 1-2: packages/moe-daemon/tsconfig.json, moe-jetbrains/build.gradle.kts, moe-vscode/scripts/bundle-assets.mjs, scripts/tests/onboarding.mjs, scripts/tests/local-runner-bundle.test.mjs). Findings: no production import of a *.test/*.spec path in daemon/proxy src, and no non-test importer of toolTestHarness anywhere (src, scripts, both IDE sources, Dockerfile, package.json); no other daemon tsconfig. Near-miss names (latest.js, attestation.js) survive both filters (tested, M9 killed). Every by-path asset stays bundled and required: vm-control.mjs added; moe-agent.ps1/.sh, daemon/index.js, proxy/index.js untouched and verified present in the real VS Code bundle. Windows: filters use path.basename, scan paths are '/'-joined, exec uses an argv array with no shell and windowsHide. A missing top-level bundle dir throws ENOENT loudly. node_modules skip applies only to directories named exactly node_modules. vm-control no-arg run needs no network, daemon or ledger (usage validation first; verified by running it). JetBrains scripts/ copy includes only named files + local-runner/** + mods/** minus tests/fixtures/*.test.ts, so CI's real-zip onboarding step should pass; read from build.gradle.kts only. Theoretical/not fixed, noted in the handoff: Gradle was not executed (no Java here), only static checks; the scan does not follow symlinked dirs; the VS Code filter is case-sensitive while the scan is not; the npm-published moe-proxy still ships compiled tests. No forbidden patterns, no .moe edits, no Git writes. Handoff memory written: task-task-f18eef7acc5140cdbe6f545a7f82434d-handoff, plus gotcha-packaged-bundle-test-artifacts.",
+      "startedAt": "2026-10-29T22:48:40.320Z",
+      "completedAt": "2026-10-29T22:49:39.494Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,5 +82,88 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:43.274Z",
-  "updatedAt": "2026-10-29T22:33:43.274Z"
+  "updatedAt": "2026-10-29T22:49:53.091Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:41:53.026Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:44:16.324Z",
+  "executionContract": {
+    "intendedBehavior": "Both IDE packages refuse to build without scripts/local-runner/vm-control.mjs. Neither copies compiled tests or specs from the daemon and proxy dists, and the daemon build stops emitting tools/toolTestHarness.js. The onboarding packaged checks prove two things against a real bundle: the packaged vm-control import closure loads (usage refusal exit 2), and no test artifact exists outside node_modules. CI's existing 'Verify packaged JetBrains onboarding' step then enforces the same rules on the real JetBrains zip.",
+    "acceptanceCriteria": [
+      "T1-T6 and the vm-control onboarding-missing case in scripts/tests/local-runner-bundle.test.mjs fail before the change and pass after it. The mutants M1-M8 are each killed by their named test.",
+      "A fresh Linux daemon build has no dist/tools/toolTestHarness.js, and `npx tsc --noEmit` stays green.",
+      "A real VS Code bundle built from fresh dists passes `node scripts/tests/onboarding.mjs moe-vscode/bundled`, and the test-artifact find over it prints nothing.",
+      "`node --test scripts/tests/local-runner-bundle.test.mjs` exits 0 fresh."
+    ],
+    "invariants": [
+      "No production module's runtime behaviour changes.",
+      "Every asset a wrapper or IDE loads by path stays bundled and required.",
+      "The node_modules copies and their .bin exclusion are unchanged.",
+      "No .moe edits and no Git writes by the agent."
+    ],
+    "compatibility": [
+      "The proxy tsconfig is unchanged, so `npm run build` still typechecks proxy tests.",
+      "The existing bundle, exclusion and onboarding tests keep passing unchanged, apart from the added 'vm-control.mjs' entry and the doctor-only refusal test that becomes a two-name loop."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-bundle.test.mjs",
+      "node scripts/tests/onboarding.mjs moe-vscode/bundled"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Fixing the proxy at source, with a tsconfig exclude for tests: rejected. The proxy would lose build-time typechecking of its tests, because vitest does not typecheck. Bundler filters fix the packaged plugins, which is this DoD. The npm package residual is recorded for CQ-I06.\n- Renaming toolTestHarness.ts: it has 89 importers, so that is too much churn. A tsconfig exclude is one line, and the daemon already excludes its tests.\n- Hard-coding vm-control's whole import closure in the required lists: it would go stale. Instead the packaged usage-refusal exec proves the static closure at once, because ESM resolves every static import before running.\n- Scanning node_modules too: third-party packages legitimately ship tests, so the scan skips node_modules by design.",
+    "codebaseInsights": "Verified 2026-10-30:\n- packages/moe-proxy/dist holds index/input-framing/utils/workerType .test.js plus .d.ts and .map files, and packages/moe-daemon/dist/tools holds toolTestHarness.{js,d.ts,d.ts.map}. These are the ONLY hits of the planned artifact pattern across the daemon and proxy dists, scripts/local-runner and scripts/mods, so the pattern has no false positives today.\n- Gradle copies dists wholesale: build.gradle.kts:144 from(bundledDaemonDir) and :151 from(bundledProxyDir). requireBundledAssets lists 4 local-runner assets (:82).\n- In bundle-assets.mjs, copyDir(asset.dist, distOut) has no filter. The required list is at :122. The local-runner copy already filters tests, specs and fixtures.\n- onboarding.mjs: the packaged block is lines 23-35, and the boundary used by the bundle test is `const require = createRequire(proxyEntry);`.\n- vm-control.mjs with no arguments prints `{\"code\":\"VM_CONTROL_INPUT_INVALID\"}` and exits 2 before reading anything. Its static closure is cli, doctor, multipass, the three platform modules, guest-session, guest-bootstrap, guest-bridge and lifecycle, plus certified-provider.json.\n- CI uses Node 24 everywhere. All five files are LF; build.gradle.kts and bundle-assets.mjs are UTF-8 with non-ASCII text, so keep the encoding.",
+    "risks": "- The Linux snapshot proxy build: TypeScript 7 is a native binary, and the Windows install fails on Linux. Use the daemon's native tsc (`mem:gotcha-wire-contract-change-onboarding-smoke`).\n- `mem:gotcha-local-runner-tests`: local-runner-bundle.test.mjs fails in a partial archive. Archive the whole repo, or run it at the repo root.\n- Peers (R13, V04b) may edit other scripts/tests files concurrently. Touch only this task's five files.\n- Contested paths: no open task holds these five files (scan on 2026-10-30).",
+    "keyFiles": [
+      "scripts/tests/local-runner-bundle.test.mjs",
+      "scripts/tests/onboarding.mjs",
+      "moe-vscode/scripts/bundle-assets.mjs",
+      "moe-jetbrains/build.gradle.kts",
+      "packages/moe-daemon/tsconfig.json",
+      "scripts/local-runner/vm-control.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:44:16.436Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T22:44:42.132Z",
+  "reviewStartedAt": "2026-10-29T22:49:53.088Z",
+  "verification": {
+    "command": "env -i HOME=$HOME PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bundle.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ actual bundler drops compiled tests and specs from both dists (184.9ms)\n✔ actual bundler refuses a missing required provider asset (310.5ms)\n✔ actual bundled onboarding asset checks refuse each missing provider file (398.5ms)\n✔ bundled onboarding loads the packaged vm-control import closure (393.5ms)\n✔ bundled onboarding refuses any test artifact outside node_modules (510.1ms)\n✔ Gradle requires vm-control and drops compiled tests from the daemon and proxy dist copies (2.4ms)\n✔ daemon build excludes the test-only tool harness (2.1ms)\n✔ cross-platform CI permanently runs provider and actual bundle regressions (2.5ms)\nℹ tests 12\nℹ pass 12\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ duration_ms 2419.5\ngate-exit=0\n\nLinux snapshot (git archive HEAD + 5 owned files, native npm ci): daemon `npm run build` exit 0; `test ! -e dist/tools/toolTestHarness.js` true (HEAD tsconfig under the same tsc DOES emit it); `npx tsc --noEmit` exit 0; `node moe-vscode/scripts/bundle-assets.mjs` exit 0, vm-control.mjs byte-identical, test-artifact find printed nothing; `node scripts/tests/onboarding.mjs moe-vscode/bundled` -> PASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence (exit 0).",
+    "reportedAt": "2026-10-29T22:49:53.088Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "packages/moe-daemon/tsconfig.json",
+    "moe-jetbrains/build.gradle.kts",
+    "moe-vscode/scripts/bundle-assets.mjs",
+    "scripts/tests/onboarding.mjs"
+  ],
+  "completionSummary": "Packaged IDE bundles are now test-free and require vm-control.mjs. (1) packages/moe-daemon/tsconfig.json excludes src/tools/toolTestHarness.ts, so dist stops emitting it (Linux snapshot: absent; HEAD tsconfig emits it; tsc --noEmit exit 0). (2) moe-jetbrains/build.gradle.kts: requireBundledAssets names vm-control.mjs; both from(bundledDaemonDir) and from(bundledProxyDir) exclude **/*.test.* and **/*.spec.*. (3) moe-vscode/scripts/bundle-assets.mjs: vm-control.mjs is required, and copyDir gains excludeTests, used only for the dist copies. (4) scripts/tests/onboarding.mjs packaged block requires vm-control.mjs, runs it with no args (asserts exit 2 and exact stdout {\\\"code\\\":\\\"VM_CONTROL_INPUT_INVALID\\\"}, proving the import closure loads), and scans daemon/, proxy/, scripts/ for test artifacts, skipping node_modules. (5) scripts/tests/local-runner-bundle.test.mjs: 12 tests, 12 pass; RED was 7 failing; 12 mutants (M1-M8 plus 4 extras) are all killed by named tests. A real VS Code bundle from fresh dists passes onboarding with its PASS line and an empty test-artifact find. Size +130/-17 (net 113). Notes for QA: (a) Gradle was not executed (no Java on this PATH), so it is pinned by static checks and CI's real-zip onboarding step; (b) a flagged test directory is reported once as the directory, so T4 asserts the directory path for the fixtures/__tests__ cases; (c) the npm-published moe-proxy still ships compiled tests, since the proxy tsconfig is intentionally unchanged. Handoff: Serena memories task-task-f18eef7acc5140cdbe6f545a7f82434d-handoff and gotcha-packaged-bundle-test-artifacts."
 }

@@ -2,7 +2,7 @@
 // First build packages/moe-daemon and packages/moe-proxy, then run:
 // node scripts/tests/onboarding.mjs [extracted IDE bundle directory]
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -24,9 +24,31 @@ if (bundle) {
   const cacheHelper = path.join(bundle, 'scripts/prompt-cache.mjs');
   for (const file of ['prompt-cache.mjs', 'prompt-cache-policy.mjs', 'prompt-cache-usage.mjs',
     'usage-receipt.mjs', 'usage-session.mjs', 'usage-report.mjs', 'analyze-usage.mjs', 'moe-account-lease.mjs',
-    'local-runner/certified-provider.json', 'local-runner/multipass.mjs', 'local-runner/doctor.mjs', 'local-runner/cli.mjs']) {
+    'local-runner/certified-provider.json', 'local-runner/multipass.mjs', 'local-runner/doctor.mjs', 'local-runner/cli.mjs',
+    'local-runner/vm-control.mjs']) {
     assert.ok(fs.existsSync(path.join(bundle, 'scripts', file)), `Missing bundled ${file}`);
   }
+  // Usage validation precedes every read, so this touches no Multipass, ledger or daemon; ESM resolves the
+  // whole static import closure before running, so exit 2 proves it all loads from the bundle.
+  const control = spawnSync(process.execPath, [path.join(bundle, 'scripts/local-runner/vm-control.mjs')],
+    { encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  assert.equal(control.status, 2, `Bundled vm-control.mjs did not refuse usage with exit 2 (status ${control.status}): ${control.stderr}`);
+  assert.equal(control.stdout, '{"code":"VM_CONTROL_INPUT_INVALID"}\n', `Bundled vm-control.mjs usage refusal changed: ${control.stdout}`);
+  // Compiled tests, fixtures and the test harness never ship; dependencies legitimately carry their own tests.
+  const TEST_DIRS = new Set(['tests', '__tests__', 'fixtures', '__fixtures__', '__e2e__', '__acceptance__']);
+  const found = [];
+  const scan = (directory, relative) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const name = `${relative}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules') continue;
+        if (TEST_DIRS.has(entry.name)) found.push(name);
+        else scan(path.join(directory, entry.name), name);
+      } else if (/\.(test|spec)\.|testharness/i.test(entry.name)) found.push(name);
+    }
+  };
+  for (const top of ['daemon', 'proxy', 'scripts']) scan(path.join(bundle, top), top);
+  assert.deepEqual(found, [], `Bundled test artifact(s): ${found.join(', ')}`);
   const report = execFileSync(process.execPath, [cacheHelper, 'codex-stream'], {
     input: JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 900 } }),
     encoding: 'utf8', windowsHide: true,

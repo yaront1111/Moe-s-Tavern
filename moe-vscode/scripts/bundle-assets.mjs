@@ -50,10 +50,12 @@ async function newestSourceMtime(dir) {
   return newest;
 }
 
-async function copyDir(src, dest, { excludeBin } = {}) {
+async function copyDir(src, dest, { excludeBin, excludeTests } = {}) {
   await cp(src, dest, {
     recursive: true,
     filter: (filePath) => {
+      // moe-proxy's tsconfig compiles src/*.test.ts, and compiled tests never ship.
+      if (excludeTests && /\.(test|spec)\./.test(path.basename(filePath))) return false;
       if (!excludeBin) return true;
       const binSegment = `${path.sep}.bin${path.sep}`;
       if (filePath.includes(binSegment)) return false;
@@ -89,7 +91,7 @@ async function main() {
     const distOut = asset.out;
     const depsOut = path.join(asset.out, 'node_modules');
     await mkdir(distOut, { recursive: true });
-    await copyDir(asset.dist, distOut);
+    await copyDir(asset.dist, distOut, { excludeTests: true });
     await copyDir(asset.deps, depsOut, { excludeBin: true });
     // Both dists are ESM; without "type": "module" beside them only
     // node >= 22.7 (ESM syntax auto-detection) can run the .js files.
@@ -119,7 +121,7 @@ async function main() {
   }
   // Ship prerequisite modules/manifest without activating a runner or copying test fixtures.
   const localRunnerSource = path.join(repoRoot, 'scripts', 'local-runner');
-  for (const name of ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs']) {
+  for (const name of ['certified-provider.json', 'multipass.mjs', 'doctor.mjs', 'cli.mjs', 'vm-control.mjs']) {
     const asset = path.join(localRunnerSource, name);
     if (!(await exists(asset)) || !(await stat(asset)).isFile()) {
       throw new Error(`Required local-runner/${name} asset not found at ${localRunnerSource}.`);

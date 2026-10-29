@@ -80,7 +80,7 @@ fun requireBundledAssets() {
     check(bundledCallScriptSh.exists()) {
         "Bundled moe-call.sh not found at ${bundledCallScriptSh}."
     }
-    listOf("certified-provider.json", "multipass.mjs", "doctor.mjs", "cli.mjs").forEach { name ->
+    listOf("certified-provider.json", "multipass.mjs", "doctor.mjs", "cli.mjs", "vm-control.mjs").forEach { name ->
         check(bundledLocalRunnerDir.resolve(name).isFile) {
             "Bundled local-runner/$name not found at $bundledLocalRunnerDir."
         }
@@ -141,8 +141,10 @@ val pluginContentRoot = "${rootProject.name}"
 
 tasks.named<PrepareSandboxTask>("prepareSandbox") {
     doFirst { requireBundledAssets() }
+    // moe-proxy's tsconfig compiles src/*.test.ts, and compiled tests never ship.
     from(bundledDaemonDir) {
         into("$pluginContentRoot/daemon")
+        exclude("**/*.test.*", "**/*.spec.*")
     }
     from(bundledDaemonModules) {
         into("$pluginContentRoot/daemon/node_modules")
@@ -150,6 +152,7 @@ tasks.named<PrepareSandboxTask>("prepareSandbox") {
     }
     from(bundledProxyDir) {
         into("$pluginContentRoot/proxy")
+        exclude("**/*.test.*", "**/*.spec.*")
     }
     from(bundledProxyModules) {
         into("$pluginContentRoot/proxy/node_modules")
