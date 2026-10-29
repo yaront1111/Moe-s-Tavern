@@ -69,7 +69,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,16 +82,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:43.274Z",
-  "updatedAt": "2026-10-29T22:50:20.241Z",
+  "updatedAt": "2026-10-29T22:59:54.017Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:41:53.026Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T22:59:54.016Z",
+    "wallClockMs": 1080990
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -210,5 +213,9 @@
     "kind": "completion",
     "sessionId": "worker-0062feec@2026-10-29T22:44:17Z",
     "at": "2026-10-29T22:50:20.241Z"
-  }
+  },
+  "completedAt": "2026-10-29T22:59:54.016Z",
+  "reviewCompletedAt": "2026-10-29T22:59:54.016Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 5143b4c (on moe/work-2026-10-24, pushed); all 7 recorded paths landed, and the 5 code files match HEAD.\n\nRe-ran the gate (env -i, Linux node v24.21.0): `node --test scripts/tests/local-runner-bundle.test.mjs` gave 12 pass, 0 fail, exit 0.\n\nFresh Linux `git archive 5143b4c` snapshot with native npm ci:\n- Daemon `npm run build` exit 0; dist/tools/toolTestHarness.js absent. Control: the old tsconfig does emit it. `npx tsc --noEmit` exit 0 (DoD 1).\n- `node moe-vscode/scripts/bundle-assets.mjs` exit 0; vm-control.mjs byte-identical; test-artifact find printed nothing; dist/index.js kept in both outputs. `node scripts/tests/onboarding.mjs moe-vscode/bundled` printed PASS, exit 0 (DoD 2, 3).\n\nMutants on a scratch snapshot, restored and re-verified green:\n- No excludeTests fails 4 tests.\n- A scan descending into node_modules fails the artifact test.\n- Unchecked stdout fails the vm-control closure test.\n- A daemon-only scan fails the artifact test.\nThe worker reports all 12 mutants killed.\n\nDoD 4: the Gradle static checks pin vm-control.mjs in requireBundledAssets and the test/spec exclude in both dist from() blocks. DoD 5: the gate above.\n\nRails: packaging only, no runtime change. By-path assets remain bundled and required. Near-miss names (latest.js, attestation.js) survive. toolTestHarness has no non-test importer. scripts/mods and local-runner hold only *.test.ts files, which both bundlers already exclude. No .moe edits, no forbidden patterns. Size +130/-17, net 113.\n\nNon-blocking gaps, disclosed by the worker:\n- Gradle was not executed (no Java here); it is covered by the static pins and CI's real-zip onboarding step.\n- The npm-published moe-proxy still ships compiled tests (out of scope).\n- The scan does not follow symlinked dirs.\n- The VS Code filter is case-sensitive while the scan is not.",
+  "requiredCheckAtDone": null
 }

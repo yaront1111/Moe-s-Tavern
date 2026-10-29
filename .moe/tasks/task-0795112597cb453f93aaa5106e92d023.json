@@ -114,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-29T22:54:27.684Z",
+  "updatedAt": "2026-10-29T22:55:12.048Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",
@@ -239,7 +239,16 @@
     "scripts/local-runner/check-lifecycle.mjs",
     ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
     ".moe/tasks/task-93dee42f71db4a6a8e47a8de052ad411.json",
-    ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json"
+    ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+    ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+    ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+    ".moe/tasks/task-41fc271bec774d0b910c88691b18a2ea.json",
+    ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+    ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+    ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
   ],
   "completionSummary": "CQ-R11: one isolated check per fresh owned VM. 396 changed lines.\n- NEW scripts/local-runner/check-lifecycle.mjs runCheckJob(input, deps). Its steps:\n  - provisionGuest, through a ledger wrapper that captures this run's reserved name;\n  - a clean R07 gate (provisioned, instance === reserved, bootstrapReady, no failures);\n  - checkEnvironment from the guest's image hashes, the supervisor hash it verified, and GUEST_RESOURCES;\n  - no-mount materializeSnapshot;\n  - onReady(environment), bounded by timeoutMs and the signal;\n  - runCheckSession with a check frozen at parse.\n  Then deleteOwned runs in finally, before the run settles.\n- Result: frozen {outcome, exitCode, signal, outputTail, environment, workspace:'unverified', instance, vm, failure, executionReady:false}.\n  - Every pre-session stop is infra-failure with a fixed code.\n  - A pass without a verified delete becomes inconclusive with failure CHECK_VM_DELETE_FAILED.\n  - onReady's error, or CHECK_READY_TIMEOUT, is rethrown after the delete.\n- lifecycle.mjs: exports validOwner, and adds deleteOwned. deleteOwned checks the owner, deletes by exact name, is idempotent, and returns 'not-launched' for a reserved or collision record.\n- provision.mjs: the result carries supervisorSha256.\n- Deviations from the plan text:\n  - PRIMARY_* codes pass through;\n  - a session throw or unknown outcome gives CHECK_SESSION_FAILED;\n  - all non-optional keys are required;\n  - vm can also be 'not-launched';\n  - an extra abort check runs before materialize;\n  - an instance mismatch gives CHECK_PROVISION_FAILED.\n- Tests: the deleteOwned test plus CJ1-CJ8 (CJ8 uses the real provisionGuest and deleteOwned with foreign records).\n- Verification:\n  - DoD: exit 0, 231 pass, 1 pre-existing skip.\n  - check/vm-control/snapshot suites: exit 0, 58 pass, 1 pre-existing root-only skip (K9).\n  - Mutants i-viii, on a /tmp copy, were all killed by their named rows.\n- Theoretical, for QA:\n  (a) when onReady's error is rethrown, vm is hidden from the call",
   "commits": [
@@ -268,6 +277,36 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "0514ecf1caac84e8ba39dc7763f582ce60492cdd",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T22:46:55Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-1e7f5a2dc15b4de5b384a814c4505ed8.json",
+        ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+        ".moe/tasks/task-41fc271bec774d0b910c88691b18a2ea.json",
+        ".moe/tasks/task-4359d60bbc9b4d1b83353edfbdaa518a.json",
+        ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+        ".moe/tasks/task-71516084821845a29f79570b0a63f274.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
+        ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T22:55:12.048Z",
+      "treeId": "d46e8b0728915ff24f3de8b47ed63aec7d62e428",
+      "status": "BLOCKED",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -276,8 +315,8 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-29T22:22:52Z",
-    "at": "2026-10-29T22:44:22.755Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T22:46:55Z",
+    "at": "2026-10-29T22:55:12.048Z"
   }
 }
