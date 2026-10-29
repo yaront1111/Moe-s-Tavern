@@ -204,6 +204,28 @@ class MoeDaemonSupervisorTest {
         assertEquals(listOf("existing-first", "existing-second", nodeBin.absolutePath, agentBin.absolutePath), path.split(File.pathSeparator))
     }
 
+    @Test
+    fun `Windows daemon PATH extends the existing Path instead of adding a Node-only PATH`() {
+        val home = temporaryFolder.newFolder("windows-path")
+        val node = File(home, "nodejs/node.exe").absolutePath
+        val env = mutableMapOf("Path" to "git-cmd", "SystemRoot" to "windows")
+
+        supervisor(home).applyDaemonPath(env, node, windows = true)
+
+        assertEquals(listOf("Path"), env.keys.filter { it.equals("PATH", ignoreCase = true) })
+        assertEquals(listOf(File(home, "nodejs").absolutePath, "git-cmd"), env.getValue("Path").split(File.pathSeparator))
+    }
+
+    @Test
+    fun `Windows daemon PATH keeps one spelling when the IDE already has two`() {
+        val home = temporaryFolder.newFolder("windows-two-paths")
+        val env = mutableMapOf("Path" to "second", "PATH" to "first")
+
+        supervisor(home).applyDaemonPath(env, null, windows = true)
+
+        assertEquals(mapOf("PATH" to "first"), env)
+    }
+
     private fun supervisor(
         root: File,
         onStatus: (Boolean, String) -> Unit = { _, _ -> },

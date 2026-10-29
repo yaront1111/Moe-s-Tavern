@@ -105,8 +105,7 @@ class MoeDaemonSupervisor(
                 }
             }
             pb.redirectErrorStream(true)
-            val env = pb.environment()
-            env["PATH"] = daemonPath(env["PATH"] ?: "", direct?.firstOrNull())
+            applyDaemonPath(pb.environment(), direct?.firstOrNull())
             val process = processStarter(pb)
             val oldProcess = spawnedDaemonProcess
             if (oldProcess != null) {
@@ -281,6 +280,19 @@ class MoeDaemonSupervisor(
         ).filter { it.isDirectory }.map { it.absolutePath } else emptyList()
         return (listOfNotNull(nodeDir?.absolutePath) + current.split(File.pathSeparator) + bootstrapDirs)
             .filter { it.isNotBlank() }.distinct().joinToString(File.pathSeparator)
+    }
+
+    // Windows names the variable "Path", and ProcessBuilder.environment() keys
+    // stay case-sensitive there. Writing "PATH" beside "Path" gave the daemon a
+    // second PATH holding only Node's directory; Node keeps the lexicographically
+    // first spelling, so every git the daemon ran failed with "spawn git ENOENT".
+    // Keep one spelling, the one Node would read.
+    internal fun applyDaemonPath(env: MutableMap<String, String>, nodeCommand: String?, windows: Boolean = isWindows()) {
+        val names = if (windows) env.keys.filter { it.equals("PATH", ignoreCase = true) }.sorted() else listOf("PATH")
+        val name = names.firstOrNull() ?: "PATH"
+        val current = env[name] ?: ""
+        names.drop(1).forEach { env.remove(it) }
+        env[name] = daemonPath(current, nodeCommand, windows = windows)
     }
 
     internal fun resolveNodeExecutable(

@@ -96,6 +96,24 @@ node -e "require('./.moe/project.json')"
 # Or manually create .moe/project.json
 ```
 
+### `submit_plan` refusal ends with `spawn git ENOENT` (Windows, JetBrains)
+
+**Symptom:** On Windows, `moe.submit_plan` refuses an affected path that is missing from a stale checkout,
+and the refusal ends with ``The cached-origin fallback also failed: `git rev-parse --show-toplevel: ENOENT:
+spawn git ENOENT` ``, although `git` runs fine in a terminal. Handoff notes also lose their disk-state
+fingerprint, because `util/diskState.ts` reads the same failure as "unknown".
+
+**Cause:** Plugin builds before 2026-10-29 started the daemon with a PATH holding only Node's directory.
+Windows names the variable `Path`, and `ProcessBuilder.environment()` keys stay case-sensitive there, so
+the plugin read no `PATH` and added a second `PATH` key beside `Path`. Node keeps the lexicographically
+first spelling, so every `git` the daemon spawned failed to resolve.
+
+**Fix:** rebuild and reinstall the plugin (`.\scripts\install-all.ps1 -BuildPlugin -InstallPlugin
+-IdeVersion <IDE folder>`), then restart the IDE. A running daemon keeps the environment it started with,
+and the plugin reuses any daemon whose `.moe/daemon.json` pid and port are still live. That pid is the
+`_run` child, which can outlive the IDE, so after closing the IDE confirm that no
+`node.exe … moe-jetbrains\daemon\index.js` process is left before reopening the project.
+
 ---
 
 ## Plugin Issues
