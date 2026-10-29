@@ -91,7 +91,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -117,14 +117,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T17:11:22.617Z",
-  "updatedAt": "2026-10-29T13:22:25.614Z",
+  "updatedAt": "2026-10-29T13:33:17.268Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:16:47.252Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 8,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T13:33:17.268Z",
+    "wallClockMs": 159390016
   },
   "contextFetchedBy": [
     "governor-693b7073",
@@ -311,7 +313,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "CQ-C07a round 2: resubmits the SAME landed bytes; nothing changed. QA's round-1 reject was size-only (net 418 > 400; substance passed). Per the governor's 12:17Z comment, no trim, split or second waiver. The governor's EPIC waiver prop-af8be424a8694c2ab4aa7701a56fb06e (94cfc66 + 8677661, 8 paths, +425/-7) is PENDING the human. Park this row from REVIEW until it is APPROVED.\n\nBytes are unchanged: for all 8 owned packages/moe-daemon paths, the HEAD (f0fac16) blob, the 8677661 blob and the worktree hash-object are equal. `git log 8677661..HEAD` is empty and git status is clean. There is no new code commit; any completion the wrapper lands is board-only (mem gotcha-qa-same-bytes-resubmit-no-completion-commit).\n\nFresh gate in a Linux snapshot: npm test exit 0 (172 files, 4536 passed, 16 skipped); tsc --noEmit exit 0.\n\nWorker mutation proof (snapshot only; files restored and cmp-verified afterwards): 10 of 11 killed:\n- denylist line; caller strip; BLOCKED exception; else-delete of the basis;\n- submitPlan basis not passed; daemonOwned planReuse unvalidated; seq wrap;\n- control-character ban; negative count; commit regex.\n\nNon-blocking: M10 survives. Removing fieldsOf's prototype check fails no test, because the 'a class instance' fixture lacks the valid keys and the key-set check refuses it first. Behaviour stays safe: the readers return fresh literals, and stored rows come from JSON.parse. It is left unfixed to keep the waived slice exact. If QA requires it, it is a one-line fixture change, which the waiver's \"QA-required fixes\" clause allows.\n\nSelf-review found no defect: refusals happen before any write, the stamp is judged on the stored row, concurrent submits stay consistent, and nothing outside the 8 paths was touched. DoD 1-5 each map to named passing cases. Handoff: mem task-task-a50bf5b5d9a4442b88a33554ee5b967f-handoff.",
-  "reviewCompletedAt": "2026-10-29T12:15:56.041Z",
+  "reviewCompletedAt": "2026-10-29T13:33:17.268Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -340,5 +342,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "QA park (qa-952969be, 2026-10-29 12:45Z): the substance passes. The row waits only on the human's decision on EPIC size waiver prop-af8be424a8694c2ab4aa7701a56fb06e, which is still PENDING. No rail in allRails.epic waives the 400 net-LOC cap yet, so QA cannot approve, and a second size-only reject would only burn a reopen.\nBytes are unchanged since the round-1 review: 94cfc66 + 8677661, 8 packages/moe-daemon paths, +425/-7 (net 418), each file's count equal to the waiver text. The HEAD 9978b61 blobs, the 8677661 blobs and the worktree are equal. The round-2 completion d224ff4 is board-only.\nFresh gate on a pure git archive of HEAD (npm ci, node v22.23.4, env -i): `cd packages/moe-daemon && npm test` exit 0, 172 files, 4536 passed, 16 skipped; `npx tsc --noEmit` exit 0. Each of DoD 1-5 maps to a named passing case.\nRoute:\n- APPROVED: set_task_status REVIEW. QA then confirms the rail text, re-gates and approves, naming net 418.\n- REJECTED: set_task_status PLANNING for route (b): trim at least 19 net lines without dropping a named DoD case, or split the review scope.\nunblock_worker cannot reach this unassigned parked row. The full evidence is in the row's latest QA comment.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-29T13:33:17.268Z",
+  "reviewSummary": "QA r3 APPROVE.\nSIZE: net 418 (+425/-7) over 8 packages/moe-daemon paths, above the 400 cap, waived by the CQ-C07a epic rail now in allRails.epic (waiver prop-af8be424). Its per-file counts equal `git diff --numstat 94cfc66^ 8677661`: runtime 198 net, tests 220. No QA-required fixes.\nBYTES: code is 94cfc66 + 8677661, and d224ff4 is this round's board-only completion. All are on moe/work-2026-10-24. The 8 paths are blob-equal at HEAD a16ca47, at 8677661 and in the worktree. `git log 8677661..a16ca47 -- <paths>` is empty.\nGATE: pure git archive of a16ca47, owned files cmp-equal to 8677661, npm ci, node v22.23.4, env -i. `cd packages/moe-daemon && npm test` exit 0: 172 files, 4536 passed, 16 skipped. `npx tsc --noEmit` exit 0.\nMUTANTS (snapshot only, restored), all killed:\n- no denylist entries: the WS spy case fails;\n- no BLOCKED(PLANNING) exception: 'keeps the earlier entry' fails;\n- submitPlan omits the basis: 2 DoD-1 cases fail.\nDoD:\n1. Real-Git capture and refresh; non-Git, injected-failure and unborn-HEAD cases store no basis, remove the old one and add no warnings.\n2. Six named stamp cases.\n3. Strip of forged and null values, the WS spy case, and malformed input throwing INVALID_INPUT with no write or emit.\n4. Decoder tables.\n5. Gate above.\nREVIEW: refusals are synchronous and before writeEntity. The stamp is judged on the stored row. The capture runs once per call, outside the mutex. No test was weakened; the executionContract change is the plan's order-agnostic 3/-3.\nNon-blocking: the M10 prototype guard is not pinned alone; ponytail found nothing to cut.",
+  "requiredCheckAtDone": null
 }
