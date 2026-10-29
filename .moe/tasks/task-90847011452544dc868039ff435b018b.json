@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +28,31 @@
   ],
   "priority": "HIGH",
   "order": 252.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a560f43015cb49d3b6355af1c5eaedf4",
+      "author": "architect-bd1eb82d",
+      "content": "Split on 2026-10-29 (architect-bd1eb82d), SPIDR by interface, after two human decisions in the architect REPL:\n1. CLI binaries come from a HOST pinned cache plus a copy-only supervisor stream. The guest never downloads.\n2. FULL ACCESS INSIDE THE VM: claude runs with --dangerously-skip-permissions, and codex with --sandbox danger-full-access.\n\nThis row is now the orchestrator. It keeps its DoD and is BLOCKED on the slices, which form a serialized chain because they share files:\n- CQ-R10d1 task-9faf1ef3: guest MCP stdio shim, tools.json, and its readiness hashes. It creates scripts/tests/local-runner-agents.test.mjs and adds it to CI.\n- CQ-R10d2 task-4017cf1d: host pinned agent CLI cache (agent-binaries.json, agent-cache.mjs).\n- CQ-R10d3 task-b8e7ad92: guest 'agents' copy-only install at /opt/moe/agents/<cli> (root 0555), plus readiness AGENT_MISSING and AGENT_HASH_MISMATCH.\n- CQ-R10d4 task-60626bee: JOBS headless argv, the per-role prompt starting with moe.get_context, and the session MCP config naming only the shim. No resume or continue flag.\n\nPlan this row once all four land. It composes them and tests them end to end through the real supervisor and the shim, with fake CLIs. The details are in the Serena memory decision-cq-r10d-split.",
+      "timestamp": "2026-10-29T17:48:56.899Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:53.451Z",
-  "updatedAt": "2026-10-29T13:30:35.109Z"
+  "updatedAt": "2026-10-29T17:49:04.808Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:00:53.601Z"
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "blockedReason": "This is now the orchestrator. It was split into CQ-R10d1 (task-9faf1ef30b0a4264b6dccce1e7bf5b1d, shim), CQ-R10d2 (task-4017cf1d0cab459eb98f488ea7e3a047, host pinned cache), CQ-R10d3 (task-b8e7ad927dc04d69b47906b291d30a41, guest install and readiness) and CQ-R10d4 (task-60626bee13034a178fed55c697d14d06, headless launch spec), after two human decisions in the REPL: a host pinned cache with a copy-only stream, and full access inside the VM. Plan the composition and end-to-end test once all four are DONE. See the task comment and the Serena memory decision-cq-r10d-split.",
+  "blockedOnTaskIds": [
+    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d",
+    "task-4017cf1d0cab459eb98f488ea7e3a047",
+    "task-b8e7ad927dc04d69b47906b291d30a41",
+    "task-60626bee13034a178fed55c697d14d06"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-29T17:49:04.808Z"
 }
