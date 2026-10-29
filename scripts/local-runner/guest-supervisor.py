@@ -3,11 +3,14 @@
 # GUEST_LAYOUT.supervisor, and guest-bridge.mjs is the protocol source of truth. This process is the ONLY writer of
 # its stdout: child bytes reach the host only inside base64 'output' frames, and termination only as this process's
 # own 'observation' frame from waitpid. Standard library only; the guest has python3 for cloud-init and no Node.
-# Modes: 'bridge' (CQ-R08b/c) and 'materialize' (CQ-R09c: one snapshot from host frames on stdin into WORKSPACE).
-# Exit codes: 0 relay or materialization complete; 64 usage; 65 malformed or mismatched snapshot stream; 71 the job could
-# not start (child or agent socket: hello, then EOF, no observation; or no AGENT_IDENTITY account); 73 the workspace or
-# its manifest already exists; 74 I/O failure or host EOF (child group killed); 75 SIGTERM, SIGHUP or SIGINT (child group
-# killed, no observation); 76 host protocol violation (child group killed); 77 not root; 78 root bridge with no job.
+# Modes: 'bridge' (CQ-R08b/c), 'materialize' (CQ-R09c: one snapshot from host frames on stdin into WORKSPACE) and
+# 'export' (CQ-R09: WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
+# Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
+# unreadable export manifest or workspace root, or an export over its bounds; 71 the job could not start (child or agent
+# socket: hello, then EOF, no observation; or no AGENT_IDENTITY account, or the export could not become it); 73 the
+# workspace or its manifest already exists; 74 I/O failure or host EOF (child group killed); 75 SIGTERM, SIGHUP or SIGINT
+# (child group killed, no observation); 76 host protocol violation (child group killed); 77 not root; 78 root bridge with
+# no job.
 import base64
 import hashlib
 import json
@@ -574,14 +577,161 @@ def materialize(in_fd, out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST,
             shutil.rmtree(staging, ignore_errors=True)
 
 
+# CQ-R09 export. The host derives every size and hash from the bytes it receives (validateImport), so no frame carries
+# one. The walk runs as the AGENT_IDENTITY account: a name the agent swaps for a link between lstat and open can then
+# reach only what the agent could read itself, never a root-only file such as the supervisor credential.
+MAX_MANIFEST_BYTES = 16777216
+MAX_PATH_BYTES = 1024  # mirrors source-snapshot.mjs; checked before descending, it bounds depth and open fds
+WALK_LIMIT = 100000  # names visited, so a tree of empty directories still ends
+READ = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK  # never through a link, and a FIFO cannot block the open
+
+
+def chunks(fd, size):
+    # Exactly size bytes in OUTPUT_CHUNK_BYTES reads; a file that shrinks meanwhile is an I/O failure.
+    while size:
+        chunk = os.read(fd, min(size, OUTPUT_CHUNK_BYTES))
+        if not chunk:
+            raise OSError('the file shrank while it was read')
+        size -= len(chunk)
+        yield chunk
+
+
+def manifest_row(row):
+    return (type(row) is list and len(row) == 3 and type(row[0]) is bool and type(row[1]) is int and row[1] >= 0
+            and type(row[2]) is str and DIGEST.fullmatch(row[2]) is not None)
+
+
+def read_manifest(path):
+    fd = os.open(path, READ)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_MANIFEST_BYTES:
+            raise ValueError('not a bounded manifest file')
+        stored = json.loads(b''.join(chunks(fd, info.st_size)).decode('utf-8'))
+    finally:
+        os.close(fd)
+    if not (type(stored) is dict and stored.keys() == {'version', 'digest', 'files'} and type(stored['version']) is int
+            and stored['version'] == 1 and type(stored['digest']) is str and DIGEST.fullmatch(stored['digest'])
+            and type(stored['files']) is dict and all(map(manifest_row, stored['files'].values()))):
+        raise ValueError('a malformed manifest')
+    return stored['files']
+
+
+def drop_to_agent():
+    # Irreversible: as root, setuid sets the real, effective and saved uid. The groups go first, while root may set them.
+    entry = pwd.getpwnam(AGENT_IDENTITY)
+    os.setgroups([])
+    os.setgid(entry.pw_gid)
+    os.setuid(entry.pw_uid)
+
+
+class Export:
+    """One depth-first walk through directory fds only, each directory's names in byte order. It emits file (then its
+    data) for each regular file whose [executable, size, sha256] is not the manifest's, symlink and special for the
+    rest, then a delete per manifest path with no non-directory left at it, then end."""
+
+    def __init__(self, out_fd, known):
+        self.out_fd, self.known, self.seen = out_fd, known, set()
+        self.entries = self.bytes = self.visited = 0
+
+    def emit(self, frame):
+        self.entries += 1
+        if self.entries > MAX_SNAPSHOT_FILES:
+            raise ValueError('more entries than an import admits')
+        write_frame(self.out_fd, frame)
+
+    def directory(self, fd, prefix):
+        names = []
+        with os.scandir(fd) as listing:
+            for entry in listing:
+                self.visited += 1
+                if self.visited > WALK_LIMIT:
+                    raise ValueError('more names than a walk visits')
+                names.append(entry.name)
+        for name in sorted(names, key=os.fsencode):
+            raw = prefix + os.fsencode(name)
+            if len(raw) > MAX_PATH_BYTES:
+                raise ValueError('a path over its limit')
+            info = os.lstat(name, dir_fd=fd)
+            # Never strict UTF-8: encode_frame carries an undecodable byte's escape to the host, which refuses it.
+            path = raw.decode('utf-8', 'surrogateescape')
+            if stat.S_ISDIR(info.st_mode):
+                child = os.open(name, WALK, dir_fd=fd)
+                try:
+                    self.directory(child, raw + b'/')
+                finally:
+                    os.close(child)
+                continue
+            self.seen.add(path)  # a directory at a manifest path leaves that path to a delete
+            if stat.S_ISREG(info.st_mode):
+                self.regular(fd, name, path, info)
+            else:
+                self.emit({'kind': 'symlink' if stat.S_ISLNK(info.st_mode) else 'special', 'path': path})
+
+    def regular(self, parent, name, path, info):
+        fd = os.open(name, READ, dir_fd=parent)
+        try:
+            now = os.fstat(fd)
+            if not stat.S_ISREG(now.st_mode) or (now.st_dev, now.st_ino) != (info.st_dev, info.st_ino):
+                raise OSError('the name was replaced between lstat and open')
+            executable, size = bool(now.st_mode & 0o100), now.st_size
+            if self.known.get(path, [])[:2] == [executable, size]:
+                sha = hashlib.sha256()
+                for chunk in chunks(fd, size):
+                    sha.update(chunk)
+                if sha.hexdigest() == self.known[path][2]:
+                    return
+                os.lseek(fd, 0, os.SEEK_SET)
+            self.bytes += size
+            if self.bytes > MAX_SNAPSHOT_BYTES:
+                raise ValueError('more changed bytes than an import admits')  # from fstat, before reading them
+            self.emit({'kind': 'file', 'path': path, 'executable': executable, 'size': size})
+            for chunk in chunks(fd, size):
+                write_frame(self.out_fd, {'kind': 'data', 'data': base64.b64encode(chunk).decode('ascii')})
+        finally:
+            os.close(fd)
+
+    def finish(self):
+        for path in sorted(self.known.keys() - self.seen, key=lambda path: path.encode('utf-8')):
+            self.emit({'kind': 'delete', 'path': path})
+        write_frame(self.out_fd, {'kind': 'end', 'entries': self.entries})
+
+
+# Reads the root-only manifest and opens the workspace root while still root, then drops to the agent before any entry
+# is opened. A failure before the drop exits 65, the drop 71, a bound 65 and I/O 74, each with no end frame.
+def export(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, drop=drop_to_agent):
+    try:
+        known = read_manifest(manifest)
+        root = os.open(workspace, WALK)
+    except (OSError, ValueError, RecursionError):  # JSON and UTF-8 errors are ValueErrors
+        return os.EX_DATAERR
+    try:
+        try:
+            drop()
+        except (KeyError, OSError):  # KeyError: no AGENT_IDENTITY account
+            return os.EX_OSERR
+        walk = Export(out_fd, known)
+        walk.directory(root, b'')
+        walk.finish()
+        return 0
+    except (ValueError, RecursionError):
+        return os.EX_DATAERR
+    except OSError:
+        return os.EX_IOERR  # an unreadable or replaced entry, or a gone host
+    finally:
+        os.close(root)
+
+
 # geteuid is injectable from Python only (tests), never from argv or the environment. No path writes to stdout.
 def main(argv, geteuid=os.geteuid):
-    if argv not in (['bridge'], ['materialize']):  # bridgeArgv and snapshotArgv pass exactly these
+    if argv not in (['bridge'], ['materialize'], ['export']):  # bridgeArgv and snapshotArgv pass exactly these
         return os.EX_USAGE
     if geteuid() != 0:
         return os.EX_NOPERM
     if argv == ['materialize']:
         return materialize(0, 1)
+    if argv == ['export']:
+        return export(1)
     # The job a bridge session runs comes from the CQ-R10/R11 job tables; until one exists a root bridge fails closed.
     return os.EX_CONFIG
 

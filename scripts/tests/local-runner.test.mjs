@@ -3019,3 +3019,343 @@ test('T7 end to end, materializeSnapshot copies the merged view through the real
     assert.deepEqual([launches.length, launches[1].child.exitCode, guest.ids().length], [2, 73, 6]);
     assertMaterialized(paths, merged); // the first workspace is untouched
   });
+
+// CQ-R09 export rows: export() walks a workspace that materialize() built, changed as the agent would.
+import { chmodSync, renameSync, truncateSync } from 'node:fs';
+
+const EXPORT_BASE = [fileOf('a.txt', 'A'), fileOf('bin/run', '#!/bin/sh\n', true), fileOf('src/main.c', 'int main;\n'), fileOf('src/util.c', 'u')];
+const exportData = bytes => Array.from({ length: Math.ceil(Buffer.from(bytes).length / 65_536) },
+  (_, at) => ({ kind: 'data', data: Buffer.from(bytes).subarray(at * 65_536, (at + 1) * 65_536).toString('base64') }));
+const mkfifo = file => assert.equal(spawnSync('mkfifo', [file]).status, 0);
+function workspaceIn(t) {
+  const run = materializeIn(scratch(t), framesOf([...hostFrames(workspaceEntries(snapshotOf(EXPORT_BASE)))]));
+  assert.equal(run.status, 0, String(run.stderr));
+  return run;
+}
+// export() into stdout with a no-op drop, or the real drop_to_agent when drop is null; setup runs first in the harness.
+function exportIn(paths, setup = '', drop = 'lambda: None', ...extra) {
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.export(1, sys.argv[2], sys.argv[3]${drop ? `, ${drop}` : ''}))`;
+  return spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest, ...extra], { maxBuffer: 64 << 20, timeout: 60_000 });
+}
+
+test('X1 the supervisor CLI takes exactly export, only as root, and routes it to export(1)', { skip: NOT_POSIX }, () => {
+  for (const args of [['export', 'x'], ['EXPORT']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...args]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
+  }
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}sys.exit(m.main(['export'], geteuid=lambda: 1000))`, PY_SUPERVISOR]);
+  assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
+  const routed = `${PY_LOAD}m.export = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.main(['export'], geteuid=lambda: 0))`;
+  const root = spawnSync('python3', ['-I', '-B', '-c', routed, PY_SUPERVISOR]);
+  assert.deepEqual([root.status, String(root.stderr), root.stdout.length], [42, '((1,), {})', 0]);
+});
+
+test('X2 export reports exactly the changed files, deletes, symlinks and specials, and no identity', { skip: NOT_POSIX }, t => {
+  const edit = Buffer.alloc(150_000, 'e');
+  const end = entries => ({ kind: 'end', entries });
+  const file = (name, executable, size) => ({ kind: 'file', path: name, executable, size });
+  for (const [label, change, frames] of [
+    ['unchanged', () => {}, [end(0)]],
+    ['an edit', at => writeFileSync(at('src/main.c'), edit), [file('src/main.c', false, 150_000), ...exportData(edit), end(1)]],
+    ['a same-size edit', at => writeFileSync(at('src/util.c'), 'v'), [file('src/util.c', false, 1), ...exportData('v'), end(1)]],
+    ['a chmod +x', at => chmodSync(at('a.txt'), 0o755), [file('a.txt', true, 1), ...exportData('A'), end(1)]],
+    ['a new nested empty file', at => { mkdirSync(at('new/deep'), { recursive: true }); writeFileSync(at('new/deep/x'), ''); },
+      [file('new/deep/x', false, 0), end(1)]],
+    ['a delete', at => rmSync(at('src/util.c')), [{ kind: 'delete', path: 'src/util.c' }, end(1)]],
+    ['a symlink to a file', at => symlinkSync('src/main.c', at('link')), [{ kind: 'symlink', path: 'link' }, end(1)]],
+    ['a symlink to a directory, never descended', at => symlinkSync('src', at('dir')), [{ kind: 'symlink', path: 'dir' }, end(1)]],
+    ['a FIFO', at => mkfifo(at('pipe')), [{ kind: 'special', path: 'pipe' }, end(1)]],
+    ['a file replaced by a directory', at => { rmSync(at('a.txt')); mkdirSync(at('a.txt')); writeFileSync(at('a.txt/in'), 'I'); },
+      [file('a.txt/in', false, 1), ...exportData('I'), { kind: 'delete', path: 'a.txt' }, end(2)]],
+  ]) {
+    const paths = workspaceIn(t);
+    change(name => path.join(paths.workspace, name));
+    const run = exportIn(paths);
+    assert.deepEqual([run.status, createFrameDecoder().push(run.stdout)], [0, frames], `${label} ${run.stderr}`);
+  }
+});
+
+test('X3 export refuses a bad manifest or root, drops to the agent before any entry, and fails closed on a bound or a swap', { skip: NOT_POSIX }, t => {
+  const refused = (run, status, label) => assert.deepEqual([run.status, run.stdout.length], [status, 0], `${label} ${run.stderr}`);
+  const rewrite = edit => paths => writeFileSync(paths.manifest, JSON.stringify(edit(JSON.parse(readFileSync(paths.manifest, 'utf8')))));
+  const row = value => rewrite(stored => ({ ...stored, files: { ...stored.files, 'a.txt': value(stored.files['a.txt']) } }));
+  const relink = file => { renameSync(file, `${file}.real`); symlinkSync(`${file}.real`, file); };
+  for (const [label, change] of [
+    ['a missing manifest', paths => rmSync(paths.manifest)], ['a symlinked manifest', paths => relink(paths.manifest)],
+    ['a FIFO manifest', paths => { rmSync(paths.manifest); mkfifo(paths.manifest); }],
+    ['an oversize manifest', paths => writeFileSync(paths.manifest, readFileSync(paths.manifest, 'utf8').padEnd(2 ** 24 + 1))],
+    ['not JSON', paths => writeFileSync(paths.manifest, '{')], ['version 2', rewrite(stored => ({ ...stored, version: 2 }))],
+    ['version true', rewrite(stored => ({ ...stored, version: true }))], ['an extra key', rewrite(stored => ({ ...stored, extra: 1 }))],
+    ['an uppercase digest', rewrite(stored => ({ ...stored, digest: stored.digest.toUpperCase() }))],
+    ['files as a list', rewrite(stored => ({ ...stored, files: [] }))],
+    ['a numeric executable', row(([, size, sha256]) => [0, size, sha256])], ['a negative size', row(([executable, , sha256]) => [executable, -1, sha256])],
+    ['a short sha256', row(([executable, size, sha256]) => [executable, size, sha256.slice(1)])], ['a fourth field', row(value => [...value, 0])],
+    ['a missing workspace', paths => rmSync(paths.workspace, { recursive: true })], ['a symlinked workspace', paths => relink(paths.workspace)],
+  ]) {
+    const paths = workspaceIn(t);
+    change(paths);
+    refused(exportIn(paths), 65, label);
+  }
+  // The real drop_to_agent with the account lookup and set*id calls recorded: the manifest and root opens come first,
+  // as root, then setgroups, setgid and setuid in that order, and only then any entry open.
+  const recorder = `import atexit, json
+log = []
+real = os.open
+os.open = lambda name, flags, mode=0o777, *, dir_fd=None: log.append('open' if dir_fd is None else 'at') or real(name, flags, mode, dir_fd=dir_fd)
+for call in ('setgroups', 'setgid', 'setuid'):
+    setattr(os, call, lambda value, call=call: log.append([call, value]))
+m.pwd.getpwnam = lambda name: log.append(['getpwnam', name]) or m.types.SimpleNamespace(pw_uid=1234, pw_gid=5678)
+atexit.register(lambda: sys.stderr.write(json.dumps(log)))`;
+  const dropped = exportIn(workspaceIn(t), recorder, null);
+  assert.deepEqual([dropped.status, createFrameDecoder().push(dropped.stdout), JSON.parse(dropped.stderr)], [0, [{ kind: 'end', entries: 0 }],
+    ['open', 'open', ['getpwnam', 'moe-agent'], ['setgroups', []], ['setgid', 5678], ['setuid', 1234], ...Array(6).fill('at')]]);
+  const deny = `os.setgroups = os.setgid = lambda value: None\nm.pwd.getpwnam = lambda name: m.types.SimpleNamespace(pw_uid=1234, pw_gid=5678)
+def deny(value):\n    raise PermissionError(1, 'injected')\nos.setuid = deny`;
+  for (const [label, setup] of [['no agent account', "m.AGENT_IDENTITY = 'moe-no-such-account'"], ['a refused setuid', deny]]) {
+    refused(exportIn(workspaceIn(t), setup, null), 71, label);
+  }
+  // Bounds, with no end frame: 10,001 new entries stop after exactly 10,000 frames; a 64 GiB sparse file and a 1025-byte
+  // path stop before their frame; WALK_LIMIT counts every name visited.
+  const flood = workspaceIn(t);
+  mkdirSync(path.join(flood.workspace, 'many'));
+  for (let index = 0; index <= 10_000; index += 1) writeFileSync(path.join(flood.workspace, 'many', `${index}`), '');
+  const many = exportIn(flood);
+  const sent = createFrameDecoder().push(many.stdout);
+  assert.deepEqual([many.status, sent.length, sent.every(frame => frame.kind === 'file')], [65, 10_000, true]);
+  const sparse = workspaceIn(t);
+  truncateSync(path.join(sparse.workspace, 'a.txt'), 2 ** 36);
+  refused(exportIn(sparse), 65, 'a sparse file');
+  const deep = workspaceIn(t);
+  const folder = path.join(deep.workspace, ...Array(4).fill('d'.repeat(250)));
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(path.join(folder, 'f'.repeat(20)), '');
+  const fits = exportIn(deep);
+  assert.deepEqual([fits.status, Buffer.byteLength(createFrameDecoder().push(fits.stdout)[0].path)], [0, 1024]);
+  renameSync(path.join(folder, 'f'.repeat(20)), path.join(folder, 'f'.repeat(21)));
+  refused(exportIn(deep), 65, 'a 1025-byte path');
+  for (const [limit, status] of [[6, 0], [5, 65]]) assert.equal(exportIn(workspaceIn(t), `m.WALK_LIMIT = ${limit}`).status, status);
+  // A name swapped between lstat and open, for a file from outside or a FIFO, and a file the agent made unreadable: 74.
+  const swap = `real = os.lstat
+def lstat(name, *, dir_fd=None):
+    info = real(name, dir_fd=dir_fd)
+    if name == 'a.txt':
+        os.unlink(name, dir_fd=dir_fd)
+        if sys.argv[4] == 'fifo':
+            os.mkfifo(name, dir_fd=dir_fd)
+        else:
+            os.rename(sys.argv[4], name, dst_dir_fd=dir_fd)
+    return info
+os.lstat = lstat`;
+  const outside = path.join(scratch(t), 'outside');
+  writeFileSync(outside, 'host-only secret');
+  for (const [label, setup, extra] of [['a swapped-in file', swap, outside], ['a swapped-in FIFO', swap, 'fifo'],
+    ...(process.getuid() === 0 ? [] : [['an unreadable file', 'os.chmod(sys.argv[2] + "/a.txt", 0)', '']])]) {
+    refused(exportIn(workspaceIn(t), setup, 'lambda: None', extra), 74, label);
+  }
+});
+
+// CQ-R09 import rows: importCandidate over a fake guest; exportFrames is what the supervisor's export sends for entries.
+import { importCandidate } from '../local-runner/snapshot-import.mjs';
+import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES } from '../local-runner/source-snapshot.mjs';
+
+const exportFrames = entries => [...entries.flatMap(entry => (entry.kind !== 'file' ? [entry]
+  : [{ kind: 'file', path: entry.path, executable: entry.executable, size: entry.data.length }, ...exportData(entry.data)])),
+{ kind: 'end', entries: entries.length }];
+
+test('X4 a clean export resolves exactly what validateImport derives from the transferred bytes, between two mount checks', async () => {
+  const entries = [fileOf('src/big.bin', BIG, true), fileOf('empty', ''), { kind: 'delete', path: 'old.txt' }];
+  const t = transferProvider(undefined, proc => proc.reply(exportFrames(entries)));
+  const result = await importCandidate({ name: GUEST, provider: t.provider });
+  assert.deepEqual(result, { instance: GUEST, candidate: validateImport(entries), executionReady: false });
+  assert.equal(Object.isFrozen(result), true);
+  assert.deepEqual([t.proc.before, t.guest.ids(), t.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
+  assert.deepEqual([t.proc.calls, t.proc.kills, t.proc.written], [[['multipass', snapshotArgv(GUEST, 'export'), PIPES]], [], []]);
+  await assert.rejects(importCandidate(), transferRefused('TRANSFER_INPUT_INVALID'));
+  for (const [label, options, code] of [
+    ['primary', { name: 'primary' }, 'TRANSFER_INPUT_INVALID'], ['provider', { provider: [] }, 'LIFECYCLE_INPUT_INVALID'],
+    ['executable', { provider: { executable: 'a\tb' } }, 'PROVIDER_INPUT_INVALID'], ['spawn', { provider: { spawn: 'spawn' } }, 'IMPORT_INPUT_INVALID'],
+    ...[0, 1.5, 600_001].map(timeoutMs => [`timeout ${timeoutMs}`, { timeoutMs }, 'IMPORT_INPUT_INVALID']),
+  ]) {
+    const refused = transferProvider();
+    await assert.rejects(importCandidate({ name: GUEST, provider: refused.provider, ...options }), transferRefused(code), label);
+    assert.deepEqual([refused.guest.calls, refused.proc.calls], [[], []], label);
+  }
+  for (const [label, options, code] of [['provider mount', { info: guestDetail({ mounts: HOST_MOUNT }) }, 'TRANSFER_MOUNTS_PRESENT'],
+    ['unknown', { answers: healthy({ mountinfo: { code: 0, stdout: '' } }) }, 'TRANSFER_MOUNTS_UNKNOWN']]) {
+    const early = transferProvider(options, proc => proc.reply(exportFrames(entries)));
+    await assert.rejects(importCandidate({ name: GUEST, provider: early.provider }), transferRefused(code), label);
+    assert.deepEqual([early.guest.ids(), early.proc.calls], [['info', 'mountinfo'], []], label);
+  }
+  const late = transferProvider({ answers: healthy({ mountinfo: [mountinfo(), mountinfo([...MOUNTS, SHARED_LINE('virtiofs')])] }) },
+    proc => proc.reply(exportFrames(entries)));
+  await assert.rejects(importCandidate({ name: GUEST, provider: late.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+  assert.deepEqual([late.proc.calls.length, late.guest.ids()], [1, ['info', 'mountinfo', 'info', 'mountinfo']]);
+});
+
+test('X5 a well-formed hostile export is refused by validateImport with its R09a code and no candidate', async () => {
+  for (const [label, entries, code] of [
+    ...['../x', '/abs', 'a/../b', 'a\\b', 'GIT~1/config', '\udcff'].map(name => [name, [fileOf(name, 'x')], 'SNAPSHOT_PATH_INVALID']),
+    ...['.git/config', '.moe/x', 'sub/.Claude/settings.json'].map(name => [name, [fileOf(name, 'x')], 'SNAPSHOT_CONTROL_PATH']),
+    ['a symlink', [{ kind: 'symlink', path: 'link' }], 'SNAPSHOT_SYMLINK_DENIED'], ['a special file', [{ kind: 'special', path: 'pipe' }], 'SNAPSHOT_ENTRY_INVALID'],
+    ['case-folded duplicates', [fileOf('A', 'x'), fileOf('a', 'y')], 'SNAPSHOT_PATH_COLLISION'],
+    ['an ancestor collision', [fileOf('a', 'x'), fileOf('a/b', 'y')], 'SNAPSHOT_PATH_COLLISION'],
+  ]) {
+    const t = transferProvider(undefined, proc => proc.reply(exportFrames(entries)));
+    await assert.rejects(importCandidate({ name: GUEST, provider: t.provider }), transferRefused(code), label);
+    assert.equal(t.proc.calls.length, 1, label);
+  }
+});
+
+test('X6 a protocol violation or bound is refused at its frame, and a cut, failed or hung stream is refused, each with a fixed code', async () => {
+  const head = (changes = {}) => ({ kind: 'file', path: 'a', executable: false, size: 1, ...changes });
+  const data = text => ({ kind: 'data', data: text });
+  const end = entries => ({ kind: 'end', entries });
+  const deletes = count => Array.from({ length: count }, (_, at) => ({ kind: 'delete', path: `d${at}` }));
+  // The guest writes these frames and then stalls, so only a refusal at the offending frame ends the import in time.
+  for (const [label, frames, code = 'IMPORT_PROTOCOL_VIOLATION'] of [
+    ['a sha256 key', [head({ sha256: sha('A') }), data('QQ=='), end(1)]], ['an oid key', [head({ oid: 'a'.repeat(40) }), data('QQ=='), end(1)]],
+    ['data before a header', [data('QQ=='), head(), data('QQ=='), end(1)]], ['data past size', [head(), data('QUE='), end(1)]],
+    ['a header inside a file', [head({ size: 2 }), data('QQ=='), head({ path: 'b' }), data('QQ=='), end(2)]],
+    ['non-canonical base64', [head(), data('QR=='), end(1)]], ['empty data', [head(), data(''), data('QQ=='), end(1)]],
+    ['an end count mismatch', [head(), data('QQ=='), end(2)]], ['a frame after end', [head(), data('QQ=='), end(1), end(1)]],
+    ['an unknown kind', [{ kind: 'directory', path: 'd' }, end(1)]], ['an array kind', [{ kind: ['delete'], path: 'd' }, end(1)]],
+    ['a numeric path', [{ kind: 'delete', path: 1 }, end(1)]], ['a numeric executable', [head({ executable: 1 }), data('QQ=='), end(1)]],
+    ['a negative size', [head({ size: -1 }), end(1)]],
+    ['a count over MAX_IMPORT_ENTRIES', [...deletes(MAX_IMPORT_ENTRIES + 1), end(MAX_IMPORT_ENTRIES + 1)], 'SNAPSHOT_LIMIT_EXCEEDED'],
+    ['a declared size over MAX_IMPORT_BYTES', [head({ size: MAX_IMPORT_BYTES + 1 }), data('QQ==')], 'SNAPSHOT_LIMIT_EXCEEDED'],
+  ]) {
+    const t = transferProvider(undefined, proc => proc.stdout.write(framesOf(frames)));
+    await assert.rejects(importCandidate({ name: GUEST, provider: t.provider, timeoutMs: 2_000 }), transferRefused(code), label);
+    assert.deepEqual([t.proc.kills, t.guest.ids()], [['SIGKILL'], ['info', 'mountinfo']], label);
+  }
+  const full = transferProvider(undefined, proc => proc.reply(exportFrames(deletes(MAX_IMPORT_ENTRIES))));
+  assert.equal((await importCandidate({ name: GUEST, provider: full.provider })).candidate.entries.length, MAX_IMPORT_ENTRIES);
+  for (const [label, respond, code, timeoutMs = 5_000, kills = ['SIGKILL']] of [
+    ['a stream ending mid-file', proc => proc.reply([head({ size: 2 }), data('QQ==')]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],
+    ['a missing end', proc => proc.reply([head(), data('QQ==')]), 'IMPORT_PROTOCOL_VIOLATION', undefined, []],
+    ['a nonzero exit', proc => proc.reply(exportFrames([]), 65), 'TRANSFER_EXIT_FAILED'], ['a hang', () => {}, 'TRANSFER_TIMEOUT', 50],
+  ]) {
+    const t = transferProvider(undefined, respond);
+    await assert.rejects(importCandidate({ name: GUEST, provider: t.provider, timeoutMs }), transferRefused(code), label);
+    assert.deepEqual(t.proc.kills, kills, label);
+  }
+});
+
+// CQ-R09 round trip: the real R09b exporter, R09c transfer and supervisor, and importCandidate, over one fake guest each.
+import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { exportSourceSnapshot } from '../local-runner/source-export.mjs';
+
+const SEAM_CALLS = {
+  materialize: 'm.materialize(0, 1, sys.argv[2], sys.argv[3], (os.getuid(), os.getgid()))',
+  export: 'm.export(1, sys.argv[2], sys.argv[3], lambda: None)',
+};
+// A committed checkout with an executable, a nested path and a committed .moe/x, then a modified, an untracked and a deleted file.
+function dirtyRepo(t) {
+  const dir = realpathSync(scratch(t));
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/i.test(key))),
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' };
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=moe', '-c', 'user.email=moe@test', '-c', 'core.autocrlf=false', ...args],
+    { cwd: dir, env, stdio: 'pipe' }).toString().trim();
+  const put = (name, data) => { mkdirSync(path.dirname(path.join(dir, name)), { recursive: true }); writeFileSync(path.join(dir, name), data); };
+  git('init', '-q');
+  Object.entries({ 'run.sh': '#!/bin/sh\necho base\n', 'src/deep/lib.c': 'int lib;\n', 'README.md': 'base readme\n',
+    'notes.txt': 'to be deleted\n', '.moe/x': 'control\n' }).forEach(([name, data]) => put(name, data));
+  chmodSync(path.join(dir, 'run.sh'), 0o755);
+  git('add', '-A');
+  git('update-index', '--chmod=+x', 'run.sh');
+  git('commit', '-q', '-m', 'base');
+  put('README.md', 'dirty readme\n');
+  put('src/new.c', 'int added;\n');
+  rmSync(path.join(dir, 'notes.txt'));
+  return { dir, head: git('rev-parse', 'HEAD') };
+}
+
+test('X7 end to end, a dirty checkout round-trips through the real supervisor and only the agent changes come back, never a refused one',
+  { skip: NOT_POSIX, timeout: 120_000 }, async t => {
+    const sessions = [];
+    const stdout = [];
+    t.after(() => sessions.flatMap(s => s.launches).forEach(({ child }) => child.exitCode === null && child.signalCode === null
+      && child.kill('SIGKILL')));
+    const { dir, head } = dirtyRepo(t);
+    const snapshot = await exportSourceSnapshot({ repoDir: dir, commit: head });
+    assert.deepEqual([snapshot.excluded, [...snapshot.base.entries, ...snapshot.overlay.entries].map(({ kind, path: name }) => [kind, name])],
+      [1, [['file', 'README.md'], ['file', 'notes.txt'], ['file', 'run.sh'], ['file', 'src/deep/lib.c'],
+        ['file', 'README.md'], ['delete', 'notes.txt'], ['file', 'src/new.c']]]);
+    const merged = workspaceEntries(snapshot);
+    // One fresh layout and fake guest per session. The spawn keeps only the argv's final mode and runs that real supervisor
+    // function on the child's stdio, recording every guest stdout byte.
+    const session = guestOptions => {
+      const paths = layoutIn(scratch(t));
+      const s = { guest: fakeGuest(guestOptions), launches: [], at: name => path.join(paths.workspace, name) };
+      const spawn = (executable, argv, options) => {
+        const code = `${PY_LOAD}sys.exit(${SEAM_CALLS[argv.at(-1)]})`;
+        const child = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, paths.workspace, paths.manifest], options);
+        child.stdout.on('data', chunk => stdout.push(chunk));
+        s.launches.push({ call: [executable, argv, options], child });
+        return child;
+      };
+      const provider = { run: s.guest.run, spawn };
+      s.copy = () => materializeSnapshot({ name: GUEST, snapshot, provider, timeoutMs: 30_000 });
+      s.take = () => importCandidate({ name: GUEST, provider, timeoutMs: 30_000 });
+      sessions.push(s);
+      return s;
+    };
+    const main = session();
+    assert.deepEqual(await main.copy(), { instance: GUEST, digest: merged.digest, files: 4,
+      bytes: merged.entries.reduce((sum, entry) => sum + entry.size, 0), executionReady: false });
+    assert.equal(existsSync(main.at('.moe')), false);
+    assert.deepEqual(await main.take(), { instance: GUEST, candidate: validateImport([]), executionReady: false });
+    // The agent edits a file, adds a nested one, deletes one and makes one executable.
+    writeFileSync(main.at('src/deep/lib.c'), 'int lib = 2;\n');
+    mkdirSync(main.at('src/added/deep'), { recursive: true });
+    writeFileSync(main.at('src/added/deep/file.txt'), 'added by agent\n');
+    rmSync(main.at('README.md'));
+    chmodSync(main.at('src/new.c'), 0o755);
+    const changed = await main.take();
+    assert.deepEqual(changed, { instance: GUEST, executionReady: false, candidate: validateImport([fileOf('src/deep/lib.c', 'int lib = 2;\n'),
+      fileOf('src/added/deep/file.txt', 'added by agent\n'), { kind: 'delete', path: 'README.md' }, fileOf('src/new.c', 'int added;\n', true)]) });
+    assert.deepEqual(changed.candidate.entries.map(({ kind, path: name, executable, sha256 }) => [kind, name, executable, sha256]), [
+      ['delete', 'README.md', undefined, undefined], ['file', 'src/added/deep/file.txt', false, sha('added by agent\n')],
+      ['file', 'src/deep/lib.c', false, sha('int lib = 2;\n')], ['file', 'src/new.c', true, sha('int added;\n')]]);
+    // Each attack plants one thing in a freshly materialized workspace; the guest reports it and the host refuses it.
+    const SECRET = 'host-only-secret-0123456';
+    const hostOnly = path.join(scratch(t), 'host-only.txt');
+    writeFileSync(hostOnly, SECRET);
+    for (const [label, plant, code] of [
+      ['a symlink to /etc/passwd', at => symlinkSync('/etc/passwd', at('passwd')), 'SNAPSHOT_SYMLINK_DENIED'],
+      ['a symlink to a host-only file', at => symlinkSync(hostOnly, at('src/leak')), 'SNAPSHOT_SYMLINK_DENIED'],
+      ['a written .git/config', at => { mkdirSync(at('.git')); writeFileSync(at('.git/config'), '[core]\n'); }, 'SNAPSHOT_CONTROL_PATH'],
+      ['a written .moe/state.json', at => { mkdirSync(at('.moe')); writeFileSync(at('.moe/state.json'), '{}'); }, 'SNAPSHOT_CONTROL_PATH'],
+      ['a backslash name', at => writeFileSync(at('a\\b.txt'), 'x'), 'SNAPSHOT_PATH_INVALID'],
+      ['a non-UTF-8 name', at => writeFileSync(Buffer.concat([Buffer.from(at('bad-')), Buffer.from([0xff])]), 'x'), 'SNAPSHOT_PATH_INVALID'],
+      ['a FIFO', at => mkfifo(at('pipe')), 'SNAPSHOT_ENTRY_INVALID'],
+    ]) {
+      const attacked = session();
+      await attacked.copy();
+      plant(attacked.at);
+      await assert.rejects(attacked.take(), transferRefused(code), label);
+      assert.deepEqual(attacked.launches.map(({ call }) => call[1].at(-1)), ['materialize', 'export'], label);
+    }
+    const late = session({ info: [guestDetail(), guestDetail(), guestDetail({ mounts: HOST_MOUNT })] });
+    await late.copy();
+    await assert.rejects(late.take(), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+    assert.deepEqual(late.launches.map(({ call }) => call[1].at(-1)), ['materialize']);
+    // The host-only bytes never crossed, while the agent's bytes did (so the capture saw the data frames).
+    const seen = Buffer.concat(stdout);
+    assert.deepEqual([SECRET, Buffer.from(SECRET).toString('base64'), Buffer.from('added by agent\n').toString('base64')]
+      .map(needle => seen.includes(needle)), [false, false, true]);
+    // DoD 3 across every run: only info, the mountinfo probe and the two supervisor argvs, each exec unmapped, no mount or transfer.
+    const launches = sessions.flatMap(s => s.launches);
+    assert.deepEqual([sessions.flatMap(s => s.guest.unexpected), new Set(sessions.flatMap(s => s.guest.ids())), launches.length],
+      [[], new Set(['info', 'mountinfo']), 18]);
+    for (const { call: [executable, argv, options], child } of launches) {
+      assert.deepEqual([executable, argv, options, child.exitCode], ['multipass', snapshotArgv(GUEST, argv.at(-1)), PIPES, 0]);
+    }
+    for (const argv of [...sessions.flatMap(s => s.guest.calls.map(({ executable, args }) => [executable, ...args])),
+      ...launches.map(({ call: [executable, argv] }) => [executable, ...argv])]) {
+      assert.equal(argv[0], 'multipass');
+      assert.equal(argv[1] === 'info' || (argv[1] === 'exec' && argv[2] === '--no-map-working-directory'), true, argv.join(' '));
+      assert.equal(argv.some(arg => ['mount', 'umount', 'transfer'].includes(arg)), false, argv.join(' '));
+    }
+  });
