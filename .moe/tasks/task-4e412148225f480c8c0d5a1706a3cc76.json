@@ -42,10 +42,20 @@
       "stepId": "step-4",
       "description": "ADVERSARIAL WHOLE-EPIC REVIEW, once, last. Load adversarial-self-review. Read the whole CQ-I diff: list the commits for I01, I02, I03a, I03, I04, I05, I06a, I06b and I06c with `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'`. Hunt for what the slices got wrong about each other.\n- Producer/consumer drift:\n  - vm-control schemas and codes against both decoders. Codes without specific text render 'unknown code <CODE>'; confirm that this is consistent;\n  - approval revision semantics;\n  - CLIENT_HELLO: the daemon supports it and no IDE sends it, by decision. Confirm that the F04b token-free refusal stays actionable in both IDEs.\n- Activation surface:\n  - grep both clients: no path sends executionProfile or deliveryPolicy in UPDATE_SETTINGS;\n  - no IDE offers verified-local, and the strong profile is always blocked.\n- Reconnect:\n  - a disconnect while an approval is pending is not confirmed in either IDE (the corpus rows);\n  - the daemon resets per-socket negotiation on reconnect (I01 tests).\n- Windows:\n  - vm-control receives project paths with spaces and drive letters as argument arrays, with no shell (JetBrains ProcessBuilder list, VS Code execFile array);\n  - note the Windows-vs-WSL ledger split.\n- Packaging: no test artifacts, and every required helper is present (runs 5 and 10).\n- Residuals: give each one an owning task id, or mark it 'unowned: human decision'. Search with moe.search_tasks first. Known so far:\n  - profile/evidence status UI (I02 note; depends on V06);\n  - the JetBrains transient re-arm after PLAN_REVISION_MISMATCH (no codeName plumbing);\n  - VS Code's JSON.parse accepting lossy literals the daemon never emits;\n  - cleanup preserving everything below Node 22 and on bindHost 0.0.0.0;\n  - the npm moe-proxy package shipping compiled tests;\n  - SettingsPanel showing 'Settings saved.' when the send failed (I04 note);\n  - five producer codes with no bundle text.\n  File new defect tasks only for real defects, outside this epic unless they break DoD 1 or 2; in that case, report_blocked on them.\n- Rails: no .moe edits, no Git writes, none of globalRails.forbiddenPatterns in the epic diff, and verified-local untouched.\nThen write the Serena memory 'task-task-4e412148225f480c8c0d5a1706a3cc76-handoff' covering the evidence for each run, the owner of each residual, and what remains uncertified.",
       "status": "PENDING",
-      "affectedFiles": []
+      "affectedFiles": [],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "ADVERSARIAL WHOLE-EPIC REVIEW, once, last. Load adversarial-self-review.\n\nRead the whole CQ-I diff. Find its commits with `git log moe/work-2026-10-24 --grep 'Moe-Task: <id>'` for I01, I02, I03a, I03, I04, I05, I06a, I06d, I06b and I06c. Look for what the slices got wrong about each other.\n\n- Producer/consumer drift:\n  - vm-control schemas and codes against both decoders. A code with no specific text renders as 'unknown code <CODE>'; confirm that is consistent across both.\n  - Approval revision semantics, plus error correlation: both IDEs now act only on APPROVE_TASK errors whose context.taskId is theirs, and latch on PLAN_REVISION_MISMATCH.\n  - CLIENT_HELLO: the daemon supports it and neither IDE sends it, by decision. Confirm the F04b token-free refusal is still actionable in both IDEs.\n- Activation surface:\n  - Grep both clients: no path sends executionProfile or deliveryPolicy in UPDATE_SETTINGS.\n  - Neither IDE offers verified-local, and the strong profile is always blocked.\n- Reconnect:\n  - A disconnect while an approval is pending leaves it unconfirmed in both IDEs (corpus rows A21-A23).\n  - The daemon resets per-socket negotiation on reconnect (I01 tests).\n- Windows:\n  - vm-control receives a project path with spaces and a drive letter as argument arrays, with no shell (JetBrains ProcessBuilder list, VS Code execFile array).\n  - Note the Windows-vs-WSL ledger split.\n- Packaging: no test artifacts, and every required helper is present (runs 5 and 10).\n- Residuals: give each one an owning task id, or mark it 'unowned: human decision'. Search moe.search_tasks first. Known so far:\n  - profile/evidence status UI (I02 note, depends on V06);\n  - VS Code JSON.parse accepts lossy literals the daemon never emits;\n  - cleanup preserves everything below Node 22 and when bindHost is 0.0.0.0;\n  - the npm moe-proxy package ships compiled tests;\n  - SettingsPanel says 'Settings saved.' when the send failed (I04 note);\n  - five producer codes have no bundle text.\n  File new defect tasks only for real defects. File them outside this epic unless they break DoD 1 or 2; if they do, report_blocked on them.\n- Rails: no .moe edits, no Git writes, none of globalRails.forbiddenPatterns in the epic diff, verified-local untouched.\n\nThen write the Serena memory 'task-task-4e412148225f480c8c0d5a1706a3cc76-handoff', recording the evidence per run, the owner of each residual, and what remains uncertified.",
+          "reason": "CQ-I06d (task-6dbeb971, JetBrains approval error correlation) was split out after this plan was written. Add it to the reviewed commit set, and drop the residual it resolves: the JetBrains re-arm on PLAN_REVISION_MISMATCH / uncorrelated ERROR frames.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T22:56:36.334Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     }
   ],
-  "planRevision": 1,
+  "planRevision": 2,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -66,7 +76,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:32.720Z",
-  "updatedAt": "2026-10-29T22:47:18.898Z",
+  "updatedAt": "2026-10-29T22:56:36.334Z",
   "dependsOn": [
     "task-758bb59a61bd443382e02aea44b515c9",
     "task-f4811a729f9e436ba129a65c12d348c1",
