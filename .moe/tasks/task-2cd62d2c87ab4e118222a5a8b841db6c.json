@@ -1,0 +1,32 @@
+{
+  "id": "task-2cd62d2c87ab4e118222a5a8b841db6c",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V10a] Pure architecture rule engine",
+  "description": "Objective: the pure, IO-free core of CQ-V10 (changed-code architecture rules). It parses versioned project import rules, extracts imports from changed source text, surfaces dynamic uncertainty, and evaluates forbidden edges for only the rules the changed code selects. Split out of CQ-V10 (task-db328cda) by architect-4ae016fb on 2026-10-29 as a size split: V10 owns the candidate and CLI wiring and plans against these exact names.\n\nInterface, a new module packages/moe-daemon/src/delivery/architectureRules.ts, importing only util/errors.js and util/affectedFiles.js:\n- `export interface ArchitectureRule { readonly id: string; readonly from: readonly string[]; readonly forbid: readonly string[]; readonly reason: string }`.\n- `export interface ArchitectureRules { readonly version: 1; readonly rules: readonly ArchitectureRule[] }`.\n- `export function parseArchitectureRules(text: string): ArchitectureRules`. It throws invalidInput, naming the field, unless all of these hold:\n  - the JSON has exactly the keys {version, rules} and version is 1;\n  - there are 1-100 rules, each with exactly the keys {id, from, forbid, reason};\n  - ids are unique and match ^[a-z0-9][a-z0-9._-]{0,63}$;\n  - from and forbid are non-empty lists of at most 32 normalized repo-relative path prefixes (normalizeAffectedFile(p) === p);\n  - reason is 1-300 characters.\n- `export interface ImportRef { readonly line: number; readonly specifier: string }`.\n- `export interface ImportUncertainty { readonly line: number; readonly reason: 'dynamic-import' | 'non-literal-require' | 'unresolved-relative' }`.\n- `export function extractImports(text: string): { imports: ImportRef[]; uncertain: ImportUncertainty[] }`.\n  - It finds string-literal specifiers of: `import ... from`, side-effect `import`, `export ... from`, `import()` and `require()`, including type-only imports.\n  - A non-literal `import(expr)` gives 'dynamic-import', and a non-literal `require(expr)` gives 'non-literal-require'. Neither is ever dropped.\n  - Comments and string contents are not scanned as code.\n  - Line numbers are 1-based.\n- `export function resolveImport(fromPath: string, specifier: string, treePaths: ReadonlySet<string>): string | null`.\n  - Relative specifiers only. A '.js' specifier maps to '.ts', '.tsx', '.js' or '.mjs' in that order, and a directory resolves to its '/index' file.\n  - A bare package specifier gives null (external).\n  - A relative specifier that matches nothing gives null; the evaluator reports it as 'unresolved-relative'.\n- `export interface ArchitectureFinding { readonly ruleId: string; readonly file: string; readonly line: number; readonly specifier: string; readonly resolved: string }`.\n- `export interface ArchitectureResult { readonly outcome: 'passed' | 'failed' | 'inconclusive'; readonly selectedRules: readonly string[]; readonly violations: readonly ArchitectureFinding[]; readonly uncertain: readonly (ImportUncertainty & { readonly file: string })[] }`.\n- `export function evaluateArchitecture(rules: ArchitectureRules, changed: readonly { path: string; text: string }[], treePaths: ReadonlySet<string>): ArchitectureResult`.\n  - A rule is selected iff one of its `from` prefixes covers at least one changed path. Coverage compares whole segments: equal to the prefix, or starting with it plus '/'.\n  - Only changed .ts, .tsx, .js, .mjs and .cjs files covered by a selected rule are scanned.\n  - A resolved import covered by that rule's `forbid` is a violation.\n  - Every uncertainty in a scanned file is surfaced.\n  - Outcome precedence: any violation gives failed; else any uncertainty gives inconclusive; else passed.\n  - Output is sorted deterministically.\n\nScope boundaries: this module and its unit tests only. No Git, no IO, no CLI, no store or schema change. Never directly edit .moe.\n\nVerification command (fresh, exit0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "parseArchitectureRules accepts the documented shape and refuses each malformed variant (wrong version, extra keys, duplicate or invalid ids, empty or non-normalized prefixes, over-limit lists, bad reason) with INVALID_INPUT naming the field, one test per variant.",
+    "extractImports finds every static, side-effect, re-export, type-only, literal dynamic-import and literal require specifier with its line. It reports non-literal import() and require() as uncertainty, never dropped, and ignores comments and string contents.",
+    "evaluateArchitecture selects only rules whose from covers a changed path. It reports forbidden resolved imports as violations with rule, file and line, surfaces unresolved-relative and dynamic uncertainty, and applies the precedence failed > inconclusive > passed, with deterministic ordering.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 8.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:02:38.354Z",
+  "updatedAt": "2026-10-29T17:02:38.354Z"
+}

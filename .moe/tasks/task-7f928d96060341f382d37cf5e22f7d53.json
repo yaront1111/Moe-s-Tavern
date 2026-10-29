@@ -93,7 +93,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:24.217Z",
-  "updatedAt": "2026-10-29T17:01:52.665Z",
+  "updatedAt": "2026-10-29T17:02:28.313Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T12:30:39.180Z",
     "plannedStepCount": 4,
@@ -155,18 +155,50 @@
       "treeId": "316ccf32127ef9236a2473a844ee90440330bcee",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "3c25abd8ad58fa62b30ea48ae78006f082007cca",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T16:46:45Z",
+      "paths": [
+        ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+        ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+        ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+        ".moe/tasks/task-7d0f7f082b6349cab75c62af3c8b1da4.json",
+        ".moe/tasks/task-7f928d96060341f382d37cf5e22f7d53.json",
+        ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+        ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T17:02:28.313Z",
+      "treeId": "57dacc1fbe7b17b8f4c694aacfeee62d92aa6465",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/tests/local-runner-bridge.test.mjs"
+    "scripts/tests/local-runner-bridge.test.mjs",
+    ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+    ".moe/tasks/task-16bbf8ff071d485aa27ab5b92049c600.json",
+    ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+    ".moe/tasks/task-7d0f7f082b6349cab75c62af3c8b1da4.json",
+    ".moe/tasks/task-7f928d96060341f382d37cf5e22f7d53.json",
+    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
+    ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+    ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-bd1eb82d@2026-10-29T12:39:58Z",
-    "at": "2026-10-29T13:29:59.164Z"
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T16:46:45Z",
+    "at": "2026-10-29T17:02:28.313Z"
   },
   "workStartedAt": "2026-10-29T16:47:54.425Z",
   "reviewStartedAt": "2026-10-29T17:01:52.663Z",
@@ -177,5 +209,8 @@
     "reportedAt": "2026-10-29T17:01:52.663Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R10b delivered: a root `moe-supervisor bridge` reads one job frame before hello and runs that agent CLI as moe-agent. 78 is retired.\n\nguest-supervisor.py (+118/-20):\n- JOBS[cli] = (executable, credential names), with JOB_ROLES, JOB_PATH, SESSIONS and CREDENTIAL.\n- read_exact never over-reads. read_job refuses the length before the body and checks the exact shape (type(cli) before `in jobs`), with fixed error text.\n- session_home: makedirs 0711; lstat must show a dir owned by the euid with no g/o write; mkdtemp 0700, chown; homes are kept.\n- start_job: frame 74/65, then account 71, then workspace lstat 66, then home 71, then relay(job=).\n- main(argv, geteuid, **seams) routes bridge to start_job(0, 1, **seams).\n- relay(job=None) gives GUARD env=job['env'] and the spawn JSON in argv[3]. On Linux GUARD sets PR_SET_NO_NEW_PRIVS (ctypes, c_ulong, fail closed), then Popen(argv[4:], user, group, extra_groups, umask 077, cwd).\n\nTests (+152/-1):\n- J1: 47 rows of 65/74/66 with empty stdout and stderr, no job and no sessions dir.\n- J2: byte-exact reads, a body of exactly MAX_HOST_FRAME_BYTES, a 4096-char value.\n- J3: recorder with a stubbed pwd and a recording os.chown; the exact call, extra_groups [], AGENT_SOCKET, m.peer_uid; fresh kept 0700 homes, sessions 0711; 71 rows.\n- J4 (Linux): the real job sees exactly the 7 env keys, cwd = workspace, umask 077, NoNewPrivs 1, and no cmdline holds the credential. Non-root, groups [] gives 71 with hello only.\n- DoD 4 exception (architect comment): only S7's row changes, 78 to 74. Every other B/S/I/H test is byte-identical and passes.\n\nEvidence:\n- Gate: exit 0, 290 tests, 289 pass, 1 pre-existing macOS skip (baseline 286/285/1).\n- Size: 291 changed lines (cap 400). LF only, no __pycache__, no leftover sleep(600).\n- Mutants: 43/44 killed (/tmp/r10b-mut-tools). The survivor is equivalent: sessions without S_ISDIR, masked by a symlink's 0777 mode and by makedirs.\n- The sweep found a gap: a dropped os.chown survived. J3 now pins the chow"
+  "completionSummary": "CQ-R10b delivered: a root `moe-supervisor bridge` reads one job frame before hello and runs that agent CLI as moe-agent. 78 is retired.\n\nguest-supervisor.py (+118/-20):\n- JOBS[cli] = (executable, credential names), with JOB_ROLES, JOB_PATH, SESSIONS and CREDENTIAL.\n- read_exact never over-reads. read_job refuses the length before the body and checks the exact shape (type(cli) before `in jobs`), with fixed error text.\n- session_home: makedirs 0711; lstat must show a dir owned by the euid with no g/o write; mkdtemp 0700, chown; homes are kept.\n- start_job: frame 74/65, then account 71, then workspace lstat 66, then home 71, then relay(job=).\n- main(argv, geteuid, **seams) routes bridge to start_job(0, 1, **seams).\n- relay(job=None) gives GUARD env=job['env'] and the spawn JSON in argv[3]. On Linux GUARD sets PR_SET_NO_NEW_PRIVS (ctypes, c_ulong, fail closed), then Popen(argv[4:], user, group, extra_groups, umask 077, cwd).\n\nTests (+152/-1):\n- J1: 47 rows of 65/74/66 with empty stdout and stderr, no job and no sessions dir.\n- J2: byte-exact reads, a body of exactly MAX_HOST_FRAME_BYTES, a 4096-char value.\n- J3: recorder with a stubbed pwd and a recording os.chown; the exact call, extra_groups [], AGENT_SOCKET, m.peer_uid; fresh kept 0700 homes, sessions 0711; 71 rows.\n- J4 (Linux): the real job sees exactly the 7 env keys, cwd = workspace, umask 077, NoNewPrivs 1, and no cmdline holds the credential. Non-root, groups [] gives 71 with hello only.\n- DoD 4 exception (architect comment): only S7's row changes, 78 to 74. Every other B/S/I/H test is byte-identical and passes.\n\nEvidence:\n- Gate: exit 0, 290 tests, 289 pass, 1 pre-existing macOS skip (baseline 286/285/1).\n- Size: 291 changed lines (cap 400). LF only, no __pycache__, no leftover sleep(600).\n- Mutants: 43/44 killed (/tmp/r10b-mut-tools). The survivor is equivalent: sessions without S_ISDIR, masked by a symlink's 0777 mode and by makedirs.\n- The sweep found a gap: a dropped os.chown survived. J3 now pins the chow",
+  "touchedFiles": [
+    "scripts/local-runner/guest-supervisor.py"
+  ]
 }
