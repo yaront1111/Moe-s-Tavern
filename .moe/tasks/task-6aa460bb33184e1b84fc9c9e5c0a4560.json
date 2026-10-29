@@ -88,14 +88,16 @@
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review (adversarial-self-review skill) of producer plus wrapper diffs: assignment changes after preflight, protected owner quiet or missing worker record but open attempt, foreign closed attempt, malformed/null/string booleans, RPC exceptions, concurrent source edits, baseline owned by another session, signals/refusal cleanup and shared index. Check all working-tree rescue entrances honor the same predicate and no refusal marks a foreign baseline landed, closes its attempt or reports a phantom committed row. Confirm own completion and orphan recovery still land; audit actual modified paths versus intended landing. State the residual cross-process scope-read/CAS timing limitation rather than claiming atomic daemon/Git authorization. Any review fixes require the identical final gate again before complete_task.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-29T15:02:40.697Z"
+      "note": "Adversarial self-review done; no defects, NO byte changes in this step (owned paths clean, identical to checkpoint 37ed6ae; diff vs bb35a16^ = +427/-29, net 398). Covered: assignment changing after preflight (guard re-reads get_commit_scope at landing/teardown time; preflight recovery uses a fresh scope); protected owner that is quiet or has no worker record but an open attempt (assigneeProtected -> ACTIVE_ASSIGNEE); a foreign closed attempt (only a well-formed foreign `finalizing` attempt blocks, so a closed one lands); malformed/null/string booleans, missing/malformed owner, taskId mismatch, disk fallback (all except JSON false -> OWNER_UNKNOWN); RPC/python/PS exceptions (fail closed -> OWNER_UNKNOWN); concurrent source edits, baseline owned by another session, shared index (refusal runs before any baseline/snapshot/temp-index/ref work and touches none of them); signals (refusal sets MOE_LANDING_DONE / $moeLandingDone, so the trap/finally does not re-land). Every working-tree landing entrance runs the same predicate: post-flight landing, pre-flight recovery, teardown rescue (sh+ps1). No refusal marks a baseline landed, closes an attempt, or records a phantom row: record_commit outcome=refused has no sha/ref/push/paths. Own completion, plus orphan recovery for a dead or absent owner or an unassigned task, still land (owner-guard cases own/dead/unassigned/fallback-unassigned/recovered/sequential). Landed checkpoints a2441f5/bb35a16/309c1dd/37ed6ae carry only owned paths + board JSON. Known limits, no fix: (1) the scope read and the branch CAS are two steps, not an atomic daemon/Git check (documented in scripts/CLAUDE.md); (2) a catchable throw inside ps1 Send-MoeOwnerRefusal would reach the finally rescue (practically unreachable); (3) the finalizing scan reads all .moe/attempts (~1.3 s for 551 files on /mnt/d), only when the owner is null or unprotected; (4) the OWNER_UNKNOWN WARN says 'not its owner'; (5) teardown refused rows differ in status/cliExit between sh and ps1, as their old rescue rows did; (6) a deleted task record refuses and leaves the bytes dirty; (7) a stale finalizing attempt blocks non-owner landing until finalize_attempt; (8) a daemon without assigneeProtected refuses foreign-owner landing, by design. Filed bug task-3d0be568 (sh vs ps1 ledger ref form). Identical final gate re-running fresh on HEAD 7c7ce76 (owned+harness sha256 == run 1).",
+      "startedAt": "2026-10-29T15:02:40.697Z",
+      "completedAt": "2026-10-29T16:41:37.261Z"
     }
   ],
-  "planRevision": 12,
+  "planRevision": 13,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-fe18a9a9",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -126,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:02:10.593Z",
-  "updatedAt": "2026-10-29T15:03:48.548Z",
+  "updatedAt": "2026-10-29T16:41:37.261Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e",
     "task-5c71dff9ff2a488d8f75ec375c4f99f8",
@@ -137,13 +139,14 @@
     "firstClaimAt": "2026-10-26T15:33:36.071Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-1520cc31",
     "architect-2c9d5121",
     "worker-3729a0d6",
-    "worker-0062feec"
+    "worker-0062feec",
+    "worker-fe18a9a9"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -154,7 +157,8 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T15:39:59.734Z",
