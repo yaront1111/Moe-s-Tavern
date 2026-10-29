@@ -149,7 +149,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:15:36.235Z",
-  "updatedAt": "2026-10-29T18:29:26.156Z",
+  "updatedAt": "2026-10-29T18:29:49.718Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:22:30.034Z",
     "plannedStepCount": 7,
@@ -215,6 +215,30 @@
       "treeId": "0a7c0ed0355b6e5c6129805b7c3395aeae9bf841",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "13d4665d0227083c5dd70d751884ba55393bf544",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-29T18:08:12Z",
+      "paths": [
+        ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+        ".moe/tasks/task-37dd3edb921c42eca56efefb36832992.json",
+        ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json",
+        "CLAUDE.md",
+        "docs/CONFIGURATION.md",
+        "packages/moe-proxy/src/workerType.integration.test.ts",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-29T18:29:49.718Z",
+      "treeId": "2f86bb8367fcc66a71ef52008aef44f9a25df5e7",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -224,14 +248,17 @@
     "packages/moe-proxy/src/workerType.integration.test.ts",
     "docs/CONFIGURATION.md",
     "CLAUDE.md",
-    "scripts/CLAUDE.md"
+    "scripts/CLAUDE.md",
+    ".moe/tasks/task-18b365e5f7ac43d49c1f34c3aebd4461.json",
+    ".moe/tasks/task-37dd3edb921c42eca56efefb36832992.json",
+    ".moe/tasks/task-bdf6db6f65b04a009c88c1e49aed3848.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
+    "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-29T18:08:12Z",
-    "at": "2026-10-29T18:08:31.937Z"
+    "at": "2026-10-29T18:29:49.718Z"
   },
   "workStartedAt": "2026-10-29T18:09:38.570Z",
   "reviewStartedAt": "2026-10-29T18:29:26.154Z",
@@ -242,5 +269,8 @@
     "reportedAt": "2026-10-29T18:29:26.154Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Seats now register their real CLI as worker.type; the launcher side is now delivered on top of the landed daemon (f107447) and proxy (29216f5) contract.\n- Both launchers export MOE_WORKER_TYPE right after CLI detection, before any pre-flight RPC: sh uses a bash-3.2 case, ps1 uses $cliType.ToUpperInvariant(). The values are CODEX, GEMINI, GROK, and CLAUDE for anything else. The export is unconditional, so it replaces an inherited value after a hot reload.\n- Codex: the per-seat mcp_servers.moe override carries the type before MOE_WORKER_ID and strips a value persisted in config.toml.\n- Grok: the config carries the literal `MOE_WORKER_TYPE = \"${MOE_WORKER_TYPE:-}\"`. Claude and gemini inherit the env.\n- Tests:\n  - prompt-cache-launcher.test.mjs runs the real detection block on every engine over a stale inherited type, checks Codex override order (stale and blank values), pins the export before the pre-flight join and the single grok literal, and parses the ps1.\n  - New packages/moe-proxy/src/workerType.integration.test.ts drives the built proxy against the daemon's real McpAdapter and StateManager. It covers all 4 types through join and claim (memory, disk, list_workers, chat_who), a relaunch CODEX→GEMINI (alreadyAssigned)→GROK (join), an absent env keeping the type, and absent, lowercase and unknown values registering CLAUDE.\n- Docs: CONFIGURATION.md (proxy and launcher rows, display-only caveat), root CLAUDE.md proxy row, scripts/CLAUDE.md MCP-servers bullet.\n- Size: +86/-23 tracked plus 176 new lines.\n- A mutation check (proxy injection off) turned the 4 typed integration cases red.\n- Filed task-649edbbb: a missing claude reports 'unknown' when PATH has an unsearchable dir (EACCES).\n- Pre-existing and not fixed: with no python, the sh Codex fallback override carries no type."
+  "completionSummary": "Seats now register their real CLI as worker.type; the launcher side is now delivered on top of the landed daemon (f107447) and proxy (29216f5) contract.\n- Both launchers export MOE_WORKER_TYPE right after CLI detection, before any pre-flight RPC: sh uses a bash-3.2 case, ps1 uses $cliType.ToUpperInvariant(). The values are CODEX, GEMINI, GROK, and CLAUDE for anything else. The export is unconditional, so it replaces an inherited value after a hot reload.\n- Codex: the per-seat mcp_servers.moe override carries the type before MOE_WORKER_ID and strips a value persisted in config.toml.\n- Grok: the config carries the literal `MOE_WORKER_TYPE = \"${MOE_WORKER_TYPE:-}\"`. Claude and gemini inherit the env.\n- Tests:\n  - prompt-cache-launcher.test.mjs runs the real detection block on every engine over a stale inherited type, checks Codex override order (stale and blank values), pins the export before the pre-flight join and the single grok literal, and parses the ps1.\n  - New packages/moe-proxy/src/workerType.integration.test.ts drives the built proxy against the daemon's real McpAdapter and StateManager. It covers all 4 types through join and claim (memory, disk, list_workers, chat_who), a relaunch CODEX→GEMINI (alreadyAssigned)→GROK (join), an absent env keeping the type, and absent, lowercase and unknown values registering CLAUDE.\n- Docs: CONFIGURATION.md (proxy and launcher rows, display-only caveat), root CLAUDE.md proxy row, scripts/CLAUDE.md MCP-servers bullet.\n- Size: +86/-23 tracked plus 176 new lines.\n- A mutation check (proxy injection off) turned the 4 typed integration cases red.\n- Filed task-649edbbb: a missing claude reports 'unknown' when PATH has an unsearchable dir (EACCES).\n- Pre-existing and not fixed: with no python, the sh Codex fallback override carries no type.",
+  "touchedFiles": [
+    "packages/moe-proxy/src/workerType.integration.test.ts"
+  ]
 }
