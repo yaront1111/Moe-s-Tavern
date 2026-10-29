@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -101,11 +101,17 @@
       "author": "governor-693b7073",
       "content": "Governor note (2026-10-29): QA's size-only reject on 10-27 asked for an EPIC size waiver, and the human told me to file it. It is prop-3aea89536f004d529d67e8820b933d03 (f107447, net 498: 66 runtime+docs, 432 tests), PENDING human approval in the IDE. No code change is wanted. The five owned paths are unchanged at HEAD. If you claim this row: don't split it, don't change bytes and don't file a second waiver. Re-run the gate fresh and complete_task with the unchanged bytes. QA approves once the rail is in allRails.epic, and parks it from REVIEW if the proposal is still pending.",
       "timestamp": "2026-10-29T11:55:35.132Z"
+    },
+    {
+      "id": "comment-0052cf17a30c457ca8a45a15c2298e47",
+      "author": "qa-952969be",
+      "content": "QA r3 (qa-952969be, 2026-10-29 ~13:00Z). Substance passes again. I am parking this row from REVIEW because the size waiver prop-3aea89536f004d529d67e8820b933d03 is still PENDING (resolvedBy null), and no epic or task rail names this row, so the 400 net-LOC cap still applies. Own net is 498: 66 runtime+docs, 432 tests (`git show --numstat f107447`, board JSON excluded).\n\nVerified:\n- Delivery: the code is in completion f107447. This round's completion c4d8f20 is board-only (2 task records). Both are on moe/work-2026-10-24 and origin. The 5 owned paths are byte-identical at f107447, HEAD a2441f5 and the worktree, and `git log f107447..HEAD` on them is empty.\n- Gate: run on a pure `git archive` of HEAD a2441f5 (no overlay), with a native npm ci, env -i and node v24.21.0. `(cd packages/moe-daemon && npx tsc --noEmit && npm test)` gave GATE_EXIT=0. tsc reported 0 errors. vitest: 172 files passed, 4536 passed, 16 skipped (4552). This task's suites: workerType 57/57; claimNextTask 68, .contract 49, .race 6; joinTeam.notification 7; listWorkers 4.\n- DoD 1-5 each map to code, tests and docs. The claim refresh sits after the input checks and assertAgentClaimableStatuses, and also inside the governor redirect. join refreshes last. chat_who carries type at all 3 push sites. The docs cover claim_next_task, join_team, chat_who and list_workers. The diff has no forbidden patterns.\n- My own mutants, run on the snapshot (restored and cmp-checked), failures out of 57:\n  - chat_who unfiltered branch untyped: 1\n  - an omitted value resets an existing type: 4\n  - a type write stamps lastActivityAt: 2\n  - claim main refresh dropped: 4\n  - one survivor: join's auto-register hardcodes CLAUDE. It behaves the same on every successful join and differs only for a NEW seat refused by a full team. Non-blocking, and not a required fix.\n\nRoute back (manual; nothing auto-unblocks this row):\n- Proposal APPROVED: `set_task_status REVIEW`. QA approves once the rail text is in allRails.epic and the owned blobs still match f107447.\n- Proposal REJECTED: `set_task_status PLANNING` to re-slice.\nScripts and logs: /tmp/moe-qa-0b40-r3-scripts (gate.sh, mut.py, mut-run.sh, gate.clean.log).",
+      "timestamp": "2026-10-29T13:01:45.642Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:28:17.007Z",
-  "updatedAt": "2026-10-29T12:52:44.773Z",
+  "updatedAt": "2026-10-29T13:01:54.136Z",
   "dependsOn": [
     "task-8333866a53464d07bcaf88134f259ff4"
   ],
@@ -120,7 +126,8 @@
   "contextFetchedBy": [
     "qa-6fa5d758",
     "governor-693b7073",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "max",
@@ -211,21 +218,38 @@
       "treeId": "d161436cd35f3b447c752caa321c6e670fcb75d7",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "c4d8f20972c6ef9627f22d088e25096a39ca4487",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:39:35Z",
+      "paths": [
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T12:53:58.079Z",
+      "treeId": "764a426badaaf00f7d9b380965cee9207c15865c",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/tools/joinTeam.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/tools/chatWho.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY",
-    "sessionId": "worker-0062feec@2026-10-29T12:38:04Z",
-    "at": "2026-10-29T12:39:32.495Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-29T12:39:35Z",
+    "at": "2026-10-29T12:53:58.079Z"
   },
   "workStartedAt": "2026-10-27T17:30:31.781Z",
   "declaredFiles": [
@@ -273,5 +297,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "Size waiver pending. Human proposal prop-3aea89536f004d529d67e8820b933d03 (EPIC ADD_RAIL, a size exception for this row) is still PENDING. No epic or task rail waives the 400 net-LOC review cap for this row: own net 498 (runtime+docs 66, tests 432), completion f107447. Substance passes again (QA r3, 2026-10-29):\n- bytes unchanged: the 5 owned paths are identical at f107447, HEAD a2441f5 and the worktree, and c4d8f20 is board-only;\n- fresh gate on a pure git archive of HEAD a2441f5 (env -i, node 24.21.0): tsc 0 errors; vitest 172 files, 4536 passed, 16 skipped; exit 0;\n- DoD 1-5 verified;\n- 4 of 5 QA mutants killed; the survivor behaves the same on every successful join.\nNot a code defect; no change requested. Route back is manual, nothing auto-unblocks:\n- APPROVED: set_task_status REVIEW. QA approves once the rail is in allRails.epic.\n- REJECTED: set_task_status PLANNING to re-slice.\nFull evidence is in the QA r3 comment.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-29T13:01:54.136Z"
 }
