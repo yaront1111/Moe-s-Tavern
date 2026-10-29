@@ -1,0 +1,32 @@
+{
+  "id": "task-ab029075e214413483456f26eef0269a",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e3] Host offline npm dependency cache",
+  "description": "Objective: from a candidate's package-lock.json files, the host builds an offline npm dependency cache in which every package is verified by the lockfile's OWN integrity hash. The network-isolated check VM can then install dependencies with no network at all. This is the dependency half of the human's CQ-R11e decision (architect REPL, 2026-10-30): an offline cache, with `npm ci --offline --ignore-scripts` in the guest.\n\nSplit from CQ-R11e (task-001d8ab3) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R11e1 (task created alongside this one) for the shared bounded https downloader that agent-cache.mjs exports.\n\nDeliverable: a new scripts/local-runner/dependency-cache.mjs exporting buildDependencyCache({ lockfiles: [{dir, bytes}], cpu, cacheDir }, { fetch }).\n- Parse each lockfile; only lockfileVersion 2 or 3 is accepted.\n- Accept ONLY registry tarball entries: a `resolved` https URL on the fixed registry host registry.npmjs.org, plus an sha512 `integrity`.\n- Refuse git, file, link, http, other-host, alias-to-tarball and integrity-less entries with fixed codes, BEFORE any download.\n- Skip optional entries whose os/cpu fields exclude linux plus the guest cpu.\n- Download each package through CQ-R11e1's shared downloader, and verify the SRI sha512 before keeping it. Per-file bytes, total bytes and entry count are all bounded.\n- Write an npm-compatible offline form, deterministic for a given lockfile set. Choose and document ONE of:\n  - npm's cacache layout, which `--offline --cache <dir>` reads;\n  - tarballs a loopback-only registry can serve inside the guest's netns, with npm's replace-registry-host.\n- Resolve a frozen {cacheDir, digest, packages, bytes}.\n- The host never runs npm, node scripts or candidate code to BUILD the cache.\n\nTests, in scripts/tests/local-runner-check.test.mjs:\n- fixture lockfiles and an injected fetch;\n- refusal rows;\n- one end-to-end row proving that the host's own npm accepts the result. `npm ci --offline --ignore-scripts` (or the loopback-registry form) installs the fixture lockfile in a temp project with no network: npm_config_registry is pointed at an unroutable address, and the test fails if npm reaches out.\n\nScope boundaries:\n- No streaming into the guest and no install phase (CQ-R11e4).\n- No toolchain (CQ-R11e1/R11e2), no orchestration (CQ-R11e).\n- No .moe edits; no verified-local claim.\n- Fixed error codes, with no URL, path or body in any message.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "Only lockfile v2/v3 registry entries whose resolved URL is https on the fixed registry host, with sha512 integrity, are accepted. Every other entry kind fails closed with a fixed code before any download. Shown by tests.",
+    "Each tarball is kept only when its bytes match its lockfile integrity. A mismatch, an oversized body, a non-https redirect or an interrupted transfer fails closed with nothing partial kept. Shown by tests with an injected fetch.",
+    "The produced cache lets npm install the fixture lockfile offline with --ignore-scripts and no network reachable. Shown by an end-to-end test.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "priority": "HIGH",
+  "order": 253.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:37:19.825Z",
+  "updatedAt": "2026-10-29T22:37:19.825Z"
+}

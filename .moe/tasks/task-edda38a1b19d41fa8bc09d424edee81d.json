@@ -1,0 +1,28 @@
+{
+  "id": "task-edda38a1b19d41fa8bc09d424edee81d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: taskless-binding-notice.test.mjs stubs only moe_rpc/Invoke-MoeRpc, but the adoption boundary now calls the Unserved variants, so its bash cases fail",
+  "description": "Observed on moe/work-2026-10-24 at HEAD d9e71f7, before the main merge. `node --test scripts/tests/taskless-binding-notice.test.mjs` gives pass 1 / fail 3, failing on bash held=unknown, held=task-other and held=task-fixture. Every failure is the same: the adoption-boundary block prints nothing, notice.json is never written (ENOENT), and the stdout assert for MOE_COMMIT_REFUSED_ADOPTED_NO_BASELINE fails. The test is in the CI node-test list, so a PR to main would fail on it.\n\nRoot cause, verified with bash -x on the sliced block: CQ-F10 (13177535, 2026-10-26, task-b15bbbe5) changed the adoption boundary's get_context call. It now uses `moe_rpc_unserved` in bash (`moe_rpc_unserved() { MOE_SESSION_ID= moe_rpc \"$@\"; }`) and `Invoke-MoeRpcUnserved` in ps1. The test defines only `moe_rpc` and `Invoke-MoeRpc`. The Unserved call hits an undefined function and its `|| echo ''` fallback swallows that, so ADOPT_RESULT is empty and no notice is built. main's copy of the test passes against main's wrapper, which has no Unserved variant. The governor's main merge did not cause this: the failure is identical at HEAD and in the merged tree.\n\nFix in the TEST only: add stubs that delegate, `moe_rpc_unserved() { moe_rpc \"$@\"; }` for bash and an `Invoke-MoeRpcUnserved` that forwards to the `Invoke-MoeRpc` stub for ps1. Do not change scripts/moe-agent.{sh,ps1}. Start from the branch after governor-693b7073's merge of main lands, because that merge brings main's edits to this test file (f1c04b15, 90c8b9c3). Check `git log -1 -- scripts/tests/taskless-binding-notice.test.mjs` before editing.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/taskless-binding-notice.test.mjs` passes on Linux (bash cases) and on Windows (bash and powershell.exe cases; pwsh when installed), with the exit code and the pass/fail counts quoted",
+    "Only scripts/tests/taskless-binding-notice.test.mjs changes; scripts/moe-agent.sh and scripts/moe-agent.ps1 are untouched",
+    "The stubs delegate to the existing moe_rpc / Invoke-MoeRpc fixtures, so the retained (held=task-fixture) case still asserts that no governor page is sent"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 264.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:40:15.453Z",
+  "updatedAt": "2026-10-29T22:40:15.453Z"
+}

@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -121,7 +121,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:38.745Z",
-  "updatedAt": "2026-10-29T22:19:46.567Z",
+  "updatedAt": "2026-10-29T22:41:15.676Z",
   "dependsOn": [
     "task-9ef257f58b7f4c4191f206f67bf3d865",
     "task-72184c6505cc41e8b6066732011ffb70",
@@ -132,13 +132,16 @@
     "firstClaimAt": "2026-10-27T16:46:29.052Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T22:41:15.676Z",
+    "wallClockMs": 194086624
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
     "architect-e4b7eee0",
     "worker-b5749787",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -270,5 +273,9 @@
     "reportedAt": "2026-10-29T22:19:08.132Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-C07: approved-plan reuse decision. It consumes C07a's state and C07b's library. Net 339 lines (cap 400).\n\nFiles:\n- context/planReuseJob.ts (new, 127 lines).\n- planReuseJob.test.ts (new, 193 lines, 14 tests).\n- claimNextTask.ts +9.\n- waitForTask.ts +7/-1.\n- getContext.ts +4: it holds only this hunk; C06's bytes landed first.\n\nBehaviour:\n- The ranked claim pool and the wait matcher both filter out awaitingPlanReuse, an unassigned PLANNING row with decision 'pending'. Evaluating such a row starts a deduped, detached assessment. That is the only trigger: no timer, queue or scheduler.\n- apply revalidates under the lock (status, assignee, revision, approval, entry seq, basis, still pending).\n- reuse or refresh resumes the row to WORKING with the record. reassess records the decision for the architect.\n- A MoeError refusal records resume-refused:<code>, and any job failure records reassess. No throw escapes.\n- planReuse is served in the claim_next_task reply and in get_context, never role-trimmed.\n- Explicit taskId claims are unchanged.\n\nDoD:\n1. S1: the architect's ranked claim gets hasNext:false and the row resumes WORKING. planRevision, approvedPlanRevision, planSubmittedAt and planApprovedAt are unchanged. The worker's claim and get_context both serve planReuse.\n2. E1: an unrelated commit gives reuse, with headCommit != basis.\n3. Assumption changes, unavailability and target movement:\n   - E2: assumption-changed:<path> gives reassess, which goes to the architect's claim and get_context.\n   - E3 and J1: source-unavailable / assessment-failed give reassess.\n   - E4: a moved target gives candidate revalidate (reason target-moved); an unchanged one gives current. Reuse is kept in both.\n4. Gate EXIT 0: 186 files, 5193 passed / 16 skipped (C05 baseline 5159 + C06 + these 14). Test-file tsc and source tsc both EXIT 0.\n\nMutants, 12 of 12 killed:\n- detach: J4\n- claim filter: S1, E1-E4\n- wait filter: S3\n- revalidation: J2\n- WORKING on reassess: J1, S3, E2, E3\n- failure fallbac"
+  "completionSummary": "CQ-C07: approved-plan reuse decision. It consumes C07a's state and C07b's library. Net 339 lines (cap 400).\n\nFiles:\n- context/planReuseJob.ts (new, 127 lines).\n- planReuseJob.test.ts (new, 193 lines, 14 tests).\n- claimNextTask.ts +9.\n- waitForTask.ts +7/-1.\n- getContext.ts +4: it holds only this hunk; C06's bytes landed first.\n\nBehaviour:\n- The ranked claim pool and the wait matcher both filter out awaitingPlanReuse, an unassigned PLANNING row with decision 'pending'. Evaluating such a row starts a deduped, detached assessment. That is the only trigger: no timer, queue or scheduler.\n- apply revalidates under the lock (status, assignee, revision, approval, entry seq, basis, still pending).\n- reuse or refresh resumes the row to WORKING with the record. reassess records the decision for the architect.\n- A MoeError refusal records resume-refused:<code>, and any job failure records reassess. No throw escapes.\n- planReuse is served in the claim_next_task reply and in get_context, never role-trimmed.\n- Explicit taskId claims are unchanged.\n\nDoD:\n1. S1: the architect's ranked claim gets hasNext:false and the row resumes WORKING. planRevision, approvedPlanRevision, planSubmittedAt and planApprovedAt are unchanged. The worker's claim and get_context both serve planReuse.\n2. E1: an unrelated commit gives reuse, with headCommit != basis.\n3. Assumption changes, unavailability and target movement:\n   - E2: assumption-changed:<path> gives reassess, which goes to the architect's claim and get_context.\n   - E3 and J1: source-unavailable / assessment-failed give reassess.\n   - E4: a moved target gives candidate revalidate (reason target-moved); an unchanged one gives current. Reuse is kept in both.\n4. Gate EXIT 0: 186 files, 5193 passed / 16 skipped (C05 baseline 5159 + C06 + these 14). Test-file tsc and source tsc both EXIT 0.\n\nMutants, 12 of 12 killed:\n- detach: J4\n- claim filter: S1, E1-E4\n- wait filter: S3\n- revalidation: J2\n- WORKING on reassess: J1, S3, E2, E3\n- failure fallbac",
+  "completedAt": "2026-10-29T22:41:15.676Z",
+  "reviewCompletedAt": "2026-10-29T22:41:15.676Z",
+  "reviewSummary": "CQ-C07 approved. Reviewed commits e9a8613 (checkpoint) and b646059 (completion), both on moe/work-2026-10-24; the 5 owned files are unchanged up to HEAD 856bfac. Size: net 339 LOC, within 400 (job +127, test +193, claimNextTask +9, waitForTask +7/-1, getContext +4).\n\nGate, re-run by me: fresh Linux snapshot of HEAD 856bfac. Owned files cmp-equal; native node_modules with lock f6a0d4b5 equal; env -i; node v24.21.0.\n- npm test EXIT 0: 186 files, 5193 passed, 16 skipped. Matches the worker's evidence.\n- Test-file tsc and source tsc both EXIT 0.\n\nMutants, by me:\n- dropping the detach turns J4 red;\n- dropping the claim filter turns S1, S2 and E1-E4 red;\n- dropping the wait filter turns S3 red.\n\nDoD:\n1. S1 (real TURBO submit_plan, park, re-enter PLANNING): the architect's claim gets hasNext:false and the row resumes WORKING. Plan revision and approval stamps are unchanged; the worker's claim and get_context serve planReuse.\n2. E1: an unrelated commit gives reuse, with headCommit != basis.\n3. E2 assumption-changed, E3/J1 unavailable or failed: reassess, served to the architect. E4: a moved target gives revalidate, an unchanged one gives current, and reuse is kept in both.\n4. Gate green.\n\nCode:\n- decidePlanReuse never returns replan, so the resume branch is safe.\n- The detach is ALS exit.\n- apply revalidates under the lock.\n- No timer or scheduler, no new event or field. Explicit claims are unchanged.\n- Rails: no hand .moe edits, no agent Git writes, verified-local not enabled.\n\nNot blocking, for final task-4e0264fc: dropping apply's assignedWorkerId clause or its still-pending clause leaves all 14 tests green.\n- Still-pending is effectively unreachable (dedupe plus a single writer).\n- The assignee clause guards a real race: an explicit-taskId claim while a job is in flight. It is correct by inspection but not test-pinned.\n\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

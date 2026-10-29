@@ -1,0 +1,35 @@
+{
+  "id": "task-b799056d744749ba8ca9e4888f3452c4",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e1] Host pinned Node toolchain cache",
+  "description": "Objective: the host obtains the exact pinned official Node.js Linux release tarball, for x64 and arm64, to serve as the check VM's toolchain. It is verified by sha256 and cached controller-private, and the network is never trusted for its identity. This is the toolchain half of the human's CQ-R11e decision, made in the architect REPL on 2026-10-30: an OFFLINE CACHE, so the check guest never touches the network.\n\nSplit from CQ-R11e (task-001d8ab3) by architect-e4b7eee0 on 2026-10-30. It depends on CQ-R10d2 (task-4017cf1d), whose downloader it shares.\n\nDeliverable:\n- A new scripts/local-runner/toolchain.json: {schemaVersion:1, node:{x64:{version, url, sha256, size}, arm64:{...}}}.\n  - Each url must equal the fixed template https://nodejs.org/dist/v<version>/node-v<version>-linux-<x64|arm64>.tar.xz. A .tar.gz is acceptable instead; pick ONE form and pin it.\n  - The worker picks the current Active LTS, downloads each file once, cross-checks nodejs.org's SHASUMS256.txt, and records the version, hashes and sizes in the step note.\n- Refactor scripts/local-runner/agent-cache.mjs (CQ-R10d2) to EXPORT its bounded https download-and-verify core: manual https-only redirects, a size bound, an exclusive .part, an atomic rename, and re-verification on a cache hit. fetchAgentBinary's behavior and every R10d2 test stay unchanged.\n- A new scripts/local-runner/toolchain-cache.mjs with loadToolchainManifest() and fetchNodeToolchain({arch, cacheDir}, {fetch, manifest}), which resolves a frozen {file, sha256, size, version}. The tarball stays WHOLE; CQ-R11e2 extracts it in the guest.\n- Tests use an injected fetch, never the network. They live in scripts/tests/local-runner-check.test.mjs, and scripts/tests/local-runner-bundle.test.mjs's `required` list gains toolchain.json and toolchain-cache.mjs.\n\nScope boundaries:\n- No guest install (CQ-R11e2), no dependency cache (CQ-R11e3), no orchestration or environment identity (CQ-R11e).\n- No .moe edits; no verified-local or isolation claim.\n- Fixed error codes, with no URL, path or body in any message.\n- If the official files cannot be downloaded from this environment, report_blocked; never invent a hash.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "The toolchain manifest loader accepts only the exact pinned shape, with the fixed nodejs.org https URL template, and refuses anything else with a fixed code. Shown by tests.",
+    "fetchNodeToolchain keeps a tarball only when its bytes match the pinned sha256 and size. A mismatch, an oversized body, a non-https redirect or an interrupted transfer fails closed with no file left, and a cache hit is re-verified. Shown by tests with an injected fetch.",
+    "fetchAgentBinary's behavior and every CQ-R10d2 test are unchanged by the shared-downloader refactor.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "dependsOn": [
+    "task-4017cf1d0cab459eb98f488ea7e3a047"
+  ],
+  "priority": "HIGH",
+  "order": 253.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:37:06.800Z",
+  "updatedAt": "2026-10-29T22:37:06.800Z"
+}
