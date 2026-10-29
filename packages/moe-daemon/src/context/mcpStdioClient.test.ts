@@ -44,6 +44,7 @@ require('readline').createInterface({ input: process.stdin }).on('line', line =>
   const m = JSON.parse(line);
   if (m.method === undefined) { replies.add(m.id); if (replies.size === 2) text(held.id, 'ok'); return; }
   if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: m.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1.0' } } });
+  if (m.method === 'tools/list' && mode === 'endless') return send({ id: m.id, result: { tools: [], nextCursor: 'c' + m.id } });
   if (m.method === 'tools/list') send({ id: m.id, result: m.params.cursor === 'p2' ? { tools: [tool('get_symbols_overview')] }
     : { tools: [tool('find_symbol', ${JSON.stringify(SCHEMA)}), tool('write_memory')], nextCursor: 'p2' } });
   if (m.method !== 'tools/call') return;
@@ -97,6 +98,13 @@ describe('openAnalyzerSession', () => {
     const sent = await frames(log);
     expect(sent.map(frame => frame.method)).toEqual(['initialize', 'notifications/initialized', 'tools/list', 'tools/list', 'tools/call']);
     expect([sent[0].params.clientInfo.name, sent[2].params, sent[3].params]).toEqual(['moe-daemon', {}, { cursor: 'p2' }]);
+  });
+
+  it('S16 stops an endless tools/list at the 16-page cap with protocol-violation and kills the server', async () => {
+    const { log, spec } = launch('endless');
+    await expect(openAnalyzerSession(spec, ALLOWED)).resolves.toEqual({ ok: false, reason: 'protocol-violation' });
+    const pages = (await frames(log)).filter(frame => frame.method === 'tools/list');
+    expect([pages.length, await gone(await readPid(`${log}.pid`))]).toEqual([16, true]);
   });
 
   it('S2 accepts CRLF-terminated replies and skips blank lines', async () => {
@@ -194,12 +202,21 @@ describe('openAnalyzerSession', () => {
   it.skipIf(process.platform === 'win32')('S14 signals an exited leader group once, at exit, never on a later close()', async () => {
     const { session, pid } = await open();
     const kill = vi.spyOn(process, 'kill');
+    const groupKills = () => kill.mock.calls.filter(([target]) => target === -pid);
     try {
       expect(await find(session, 'crash')).toEqual({ ok: false, reason: 'exited:3' });
+      expect(groupKills()).toEqual([[-pid, 'SIGKILL']]);
       await session.close();
-      expect(kill.mock.calls.filter(([target]) => target === -pid)).toEqual([[-pid, 'SIGKILL']]);
+      expect(groupKills()).toEqual([[-pid, 'SIGKILL']]);
     } finally { kill.mockRestore(); }
   });
+
+  it.skipIf(process.platform === 'win32')('S15 a crash kills the server and its grandchild at exit, before any close()', async () => {
+    const { session, log, pid } = await open('grandchild');
+    const grandchild = await readPid(`${log}.gc`);
+    expect(await find(session, 'crash')).toEqual({ ok: false, reason: 'exited:3' });
+    expect([await gone(pid), await gone(grandchild)]).toEqual([true, true]);
+  }, 10000);
 
   it('S13 close() is idempotent and settles pending and later calls as closed', async () => {
     const { session } = await open();

@@ -100,7 +100,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:26:31.537Z",
-  "updatedAt": "2026-10-29T13:48:09.184Z",
+  "updatedAt": "2026-10-29T17:49:43.810Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T13:30:37.641Z",
     "plannedStepCount": 5,
@@ -157,7 +157,10 @@
     ".github/workflows/ci.yml",
     ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
     ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json",
-    ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json"
+    ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
+    ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+    ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+    ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
   ],
   "completionSummary": "Added scripts/local-runner/check-evidence.mjs (pure, no provider call). CHECK_BOUNDARIES is deep-frozen and pins identity moe-check, a loopback-only private network namespace, VM size from GUEST_RESOURCES, rlimits CORE 0 / FSIZE 1073741824 / NOFILE 4096 / NPROC 2048, session-group teardown, a fresh VM per run, a fresh 0700 home, protected paths verified before and after the run, a 0400 supervisor credential that job identities are denied, and a host-enforced budget. checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources}) returns 'moe-local-vm-v1:' + the sha256 of a sorted-key canonical JSON of boundaries and inputs (80 characters). It uses an exact enumerable key set, a typeof string check plus a lowercase 64-hex regex, a safe integer >= 1 for each resource, and one read per value. Any invalid input, extra key, or throwing accessor/Proxy trap refuses with CHECK_INPUT_INVALID and the fixed text. evidenceStatus(observation, current) returns 'fresh' only when environment, treeSha, definitionDigest and planRevision are all own, valid and strictly equal on both sides; otherwise 'stale', and it never throws. New scripts/tests/local-runner-check.test.mjs has 11 tests (E1-E8) and is appended at the end of the CI local-runner run line in .github/workflows/ci.yml, which the bundle test's prefix check still accepts. Mutation probes: 43 mutants in a scratch copy, 40 killed and 3 equivalent survivors judged. Diff is 397 changed lines. executionReady stays false and verified-local stays unavailable; nothing claims isolation.",
   "commits": [
@@ -195,6 +198,29 @@
       "treeId": "e66f3804e2111107450324ba949c22dfe16d1005",
       "status": "DONE",
       "pushed": true
+    },
+    {
+      "sha": "ba49cb3cbaf3156fd820dca8eb9d30027f2e8f94",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "architect",
+      "sessionId": "architect-bd1eb82d@2026-10-29T13:30:35Z",
+      "paths": [
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-90847011452544dc868039ff435b018b.json",
+        ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json"
+      ],
+      "recordedBy": "architect-bd1eb82d",
+      "recordedAt": "2026-10-29T17:49:43.810Z",
+      "treeId": "01d5c8dc24fefb762c54fce7a4e45a216ea728e0",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-check.test.mjs",
+          "taskId": "task-37dd3edb921c42eca56efefb36832992"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -206,8 +232,8 @@
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "qa-952969be@2026-10-29T13:46:25Z",
-    "at": "2026-10-29T13:48:09.184Z"
+    "sessionId": "architect-bd1eb82d@2026-10-29T13:30:35Z",
+    "at": "2026-10-29T17:49:43.810Z"
   },
   "completedAt": "2026-10-29T13:47:44.984Z",
   "reviewCompletedAt": "2026-10-29T13:47:44.984Z",
