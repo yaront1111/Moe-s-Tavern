@@ -1,0 +1,35 @@
+{
+  "id": "task-4017cf1d0cab459eb98f488ea7e3a047",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d2] Host pinned agent CLI cache",
+  "description": "Objective: the host obtains exact pinned Linux claude and codex CLI binaries, for x64 and arm64, without trusting the network for their identity. A manifest pins each release file's URL and sha256. A controller-private cache downloads them, verifies them and serves them, like R03's image-cache.mjs for the Ubuntu image.\n\nSplit from CQ-R10d (task-90847011) on 2026-10-29. The human chose a host pinned cache plus a copy-only stream into the guest; the guest never downloads. It depends on CQ-R10d1 (task-9faf1ef3) only because both edit scripts/tests/local-runner-agents.test.mjs.\n\nContract:\n- A new scripts/local-runner/agent-binaries.json, in the style of certified-provider.json:\n  - schemaVersion 1;\n  - for each cli (claude, codex, the CQ-R10b JOBS keys) and each arch (x64, arm64): {version, url, sha256, size};\n  - when the release file is an archive, also the member path and the member's own sha256 and size.\n  - The worker picks current stable releases, downloads them once, records their hashes and sizes, and documents the versions in the step note.\n- A new scripts/local-runner/agent-cache.mjs:\n  - a strict loader for the manifest's exact shape, accepting only fixed https URLs;\n  - fetchAgentBinary({cli, arch, cacheDir, ...injectable download}), which resolves a verified {file, sha256, size} in a controller-private cacheDir;\n  - a cache hit is re-verified, and a corrupt entry is removed and downloaded once more;\n  - archive extraction, if any, is bounded and extracts only the pinned member;\n  - fixed error codes, with no URL, path or body in a message;\n  - image-cache.mjs's download and verify pattern is reused where it fits.\n- Tests use a local HTTP fixture server or an injected download, never the network.\n\nOut of scope: copying into the guest and readiness (CQ-R10d3), the argv and MCP config (CQ-R10d4), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "The manifest loader accepts only the exact pinned shape with fixed https URLs, and refuses anything else with a fixed code. Shown by tests.",
+    "A download is kept only when its bytes match the pinned sha256 and size, and an archive member only when it matches its own pin. A mismatch, an oversized body, a non-https redirect or an interrupted transfer fails closed and leaves no file in the cache. Shown by tests with a local fixture.",
+    "A cache hit is re-verified, and a corrupted cached file is removed and downloaded once more. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
+  ],
+  "priority": "HIGH",
+  "order": 252.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:48:04.014Z",
+  "updatedAt": "2026-10-29T17:48:04.014Z"
+}

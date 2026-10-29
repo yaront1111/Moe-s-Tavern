@@ -1,0 +1,32 @@
+{
+  "id": "task-9faf1ef30b0a4264b6dccce1e7bf5b1d",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d1] Guest MCP stdio shim",
+  "description": "Objective: give an in-guest agent CLI its only route to Moe. That route is a stdlib Python MCP stdio server. It maps MCP tools/call onto CQ-R08c bridge request frames over the agent socket (/run/moe/agent.sock), and only for the role's allowlisted tools.\n\nSplit from CQ-R10d (task-90847011) on 2026-10-29. Human decisions in the architect REPL: the CLI binaries come from a host pinned cache through a copy-only stream (CQ-R10d2/R10d3), and the CLIs run with full access inside the VM (CQ-R10d4). This slice depends on nothing unlanded.\n\nContract:\n- A new scripts/local-runner/guest-mcp-shim.py: python3 -I, standard library only, LF line endings.\n  - guest-bootstrap.mjs buildUserData installs it at /opt/moe/bin/moe-mcp-shim, root:root 0555.\n  - Beside it goes a generated tools.json, root 0444: the role -> tool -> argument-keys table from guest-bridge.mjs TOOLS.\n  - R07 readiness probes the sha256 of both files, and a mismatch is a readiness failure code.\n- MCP stdio protocol (newline-delimited JSON-RPC 2.0):\n  - initialize, with protocol-version negotiation, capabilities {tools: {}} and serverInfo;\n  - notifications/initialized and ping;\n  - tools/list: exactly the MOE_ROLE's allowlisted tools, each with an inputSchema built from its argument keys and additionalProperties false;\n  - tools/call: argument keys must be within the allowlist. The shim sends {kind:'request', id, tool, args} as a length-prefixed frame on the agent socket, and answers with the response's result or a fixed error.\n  - Any other method or message gets a JSON-RPC error with fixed text.\n- Bounds:\n  - a stdin line has a maximum size;\n  - frames stay within guest-bridge.mjs's MAX_GUEST_FRAME_BYTES and MAX_HOST_FRAME_BYTES;\n  - in-flight requests are bounded, with a per-call timeout;\n  - errors are fixed codes and never echo guest text.\n- The shim connects only to the fixed socket path. It never opens a network socket, and reads no environment variable except MOE_ROLE.\n- Tests go in a NEW scripts/tests/local-runner-agents.test.mjs, which every later CQ-R10d slice extends. Each row uses a python3 -I -B importlib harness and a fake socket peer, and skips on win32 with a reason. Add the file to the CI local-runner step's file list, appended at the end of the run line (local-runner-bundle.test.mjs pins its prefix).\n\nOut of scope: the CLI binaries (CQ-R10d2, R10d3), the argv, prompt and MCP config (CQ-R10d4), host session changes, and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "tools/list returns exactly the MOE_ROLE's allowlisted tools, and an unknown or missing role serves none. A drift test compares the generated tools.json with guest-bridge.mjs TOOLS. Shown by tests.",
+    "tools/call reaches Moe only as a bridge request frame on the agent socket, and only for allowlisted tools and argument keys. Any other call, an oversized line or frame, or a malformed message gets a fixed JSON-RPC error. Shown by tests.",
+    "buildUserData installs the shim root:root 0555 and tools.json root 0444, and readiness fails on a hash mismatch of either. Shown by tests.",
+    "The CI local-runner step runs scripts/tests/local-runner-agents.test.mjs, and the verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 252.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:47:49.228Z",
+  "updatedAt": "2026-10-29T17:47:49.228Z"
+}

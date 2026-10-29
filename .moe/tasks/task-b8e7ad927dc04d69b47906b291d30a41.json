@@ -1,0 +1,35 @@
+{
+  "id": "task-b8e7ad927dc04d69b47906b291d30a41",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d3] Guest agent CLI install and readiness",
+  "description": "Objective: copy the cache-verified CLI binaries into the guest at /opt/moe/agents/<cli>, root:root 0555 and never agent-writable, through a copy-only supervisor stream like R09c's materialize. Readiness reports a hash mismatch.\n\nSplit from CQ-R10d (task-90847011) on 2026-10-29, following the human's choice of a host pinned cache plus a copy-only stream. It depends on CQ-R10d2 (task-4017cf1d), for the pins and the cache. That serializes it after R10d1, which edits guest-readiness.mjs, and lets it share the test file.\n\nContract:\n- guest-supervisor.py gets a root 'agents' mode:\n  - it reads frames: one {kind:'agent', cli, size, sha256} per binary, each followed by its data frames;\n  - each binary goes to a root 0700 staging file, opened O_EXCL|O_NOFOLLOW and fsynced;\n  - its size and sha256 must match. Then fchmod 0555 and root ownership, then a rename onto /opt/moe/agents/<cli>. The directory is root 0755.\n  - It refuses a cli that is not a JOBS key, a size or hash mismatch, a duplicate, and any extra frame, each with a fixed exit code and no partial install.\n- Host side: installAgents({name, binaries, provider, timeoutMs}), streaming only fetchAgentBinary-verified bytes through snapshot-transfer.mjs's runSupervisorStream, with assertNoMounts before and after.\n- guest-readiness.mjs: a probe that hashes each /opt/moe/agents/<cli> against the pins, reporting AGENT_MISSING or AGENT_HASH_MISMATCH.\n\nOut of scope: the cache (CQ-R10d2), the argv and MCP config (CQ-R10d4), the VM lifecycle (CQ-R10), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "The agents mode installs each binary root:root 0555 only after its size and sha256 match. It never leaves a partial or agent-writable file, and it refuses an unknown cli, a mismatch, a duplicate or an extra frame with a fixed exit code. Shown by tests through the real supervisor.",
+    "installAgents streams only cache-verified bytes, checks mounts before and after, and maps every failure to a fixed code. Shown by tests.",
+    "Readiness reports AGENT_HASH_MISMATCH for a changed binary and AGENT_MISSING for an absent one. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4017cf1d0cab459eb98f488ea7e3a047"
+  ],
+  "priority": "HIGH",
+  "order": 252.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:48:17.692Z",
+  "updatedAt": "2026-10-29T17:48:17.692Z"
+}

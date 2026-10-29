@@ -1,0 +1,36 @@
+{
+  "id": "task-60626bee13034a178fed55c697d14d06",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d4] Agent headless launch spec",
+  "description": "Objective: make CQ-R10b's JOBS start the real CLIs headless, with the CQ-R10d1 shim as their only MCP server and a per-role prompt that begins with moe.get_context.\n\nSplit from CQ-R10d (task-90847011) on 2026-10-29. The human chose FULL ACCESS INSIDE THE VM. The VM, the moe-agent identity, NoNewPrivs and the scoped bridge are the boundary: claude runs with --dangerously-skip-permissions, and codex with --sandbox danger-full-access, because codex 0.148+ refuses every MCP tool under any sandbox when approval is 'never' (scripts/CLAUDE.md). It depends on:\n- CQ-R10d1 (task-9faf1ef3), for the shim path /opt/moe/bin/moe-mcp-shim;\n- CQ-R10d3 (task-b8e7ad92), which edits guest-supervisor.py first.\n\nContract (scripts/local-runner/guest-supervisor.py):\n- JOBS[cli] gains a fixed argv template beside its executable and credential names. Keep the shape CQ-R10c's AGENT_JOBS drift test reads, or update that test in the same diff.\n- claude:\n  - start_job writes <home>/.moe-mcp.json naming only {\"mcpServers\": {\"moe\": {\"command\": \"/opt/moe/bin/moe-mcp-shim\"}}};\n  - argv is [exe, '-p', PROMPT[role], '--mcp-config', <that file>, '--strict-mcp-config', '--dangerously-skip-permissions'].\n- codex:\n  - CODEX_HOME=<home>/.codex, whose config.toml has only the moe server pointing at the shim, with tool approval 'approve';\n  - argv is [exe, 'exec', '--sandbox', 'danger-full-access', PROMPT[role]].\n- Never a --resume, --continue or resume subcommand.\n- The job runs in WORKSPACE. The config files are created in the fresh session home and owned by the agent, and no other MCP config is reachable: no user or project MCP files.\n- PROMPT[role] are fixed strings for worker and qa, each starting with an instruction to call moe.get_context.\n\nOut of scope: the binaries (CQ-R10d2/R10d3), lifecycle, leases and termination (CQ-R10), certification (CQ-R13), and any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-agents.test.mjs (on WSL: env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "Each cli and role starts with exactly its fixed argv: headless, full access, no resume or continue flag, and the role's prompt beginning with moe.get_context. A recorder test pins it.",
+    "The session MCP configuration names only the shim (claude with --strict-mcp-config; codex's config.toml with only the moe server). It is created in the fresh session home and owned by the agent. Shown by tests.",
+    "A real job through main() with a fake CLI shows the argv, cwd WORKSPACE and the configuration file contents. Shown by tests.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b8e7ad927dc04d69b47906b291d30a41",
+    "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
+  ],
+  "priority": "HIGH",
+  "order": 252.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:48:35.352Z",
+  "updatedAt": "2026-10-29T17:48:35.352Z"
+}
