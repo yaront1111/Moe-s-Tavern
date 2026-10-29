@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:23.379Z",
-  "updatedAt": "2026-10-29T22:18:15.662Z",
+  "updatedAt": "2026-10-29T22:45:39.321Z",
   "dependsOn": [
     "task-df5384bf7fbd4b7ba3dedb43d7373ffa",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -123,7 +123,9 @@
     "firstClaimAt": "2026-10-26T09:31:27.237Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T22:45:39.320Z",
+    "wallClockMs": 306852083
   },
   "contextFetchedBy": [
     "architect-26fd4d71",
@@ -250,5 +252,9 @@
     "kind": "checkpoint",
     "sessionId": "qa-952969be@2026-10-29T20:34:17Z",
     "at": "2026-10-29T20:40:53.352Z"
-  }
+  },
+  "completedAt": "2026-10-29T22:45:39.320Z",
+  "reviewCompletedAt": "2026-10-29T22:45:39.320Z",
+  "reviewSummary": "CQ-I03 approved on re-gate, per the human-approved size rail (prop-30944337).\n\nSIZE: 618 net (+619/-1) over moe-jetbrains, from `git diff --numstat d53c62e~1 d53c62e`. That is above the default 400 cap, and each file matches the rail exactly, so there was no growth.\n\nDELIVERY: completion d53c62e on moe/work-2026-10-24 (branch --contains confirms it; pushed). It is the last commit touching moe-jetbrains, so HEAD equals d53c62e there. The merge is resolved: no MERGE_HEAD and no dirty moe-jetbrains paths.\n\nGATE (QA re-run): the Windows equivalent of the pinned `cd moe-jetbrains && ./gradlew test`, since WSL has no JDK. It ran under the jetbrains-gradle lease (released) in a fresh `git archive d53c62e` snapshot: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes-i03-qa2\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. Exit 0, BUILD SUCCESSFUL, 11/11 tasks executed. XMLs: 22 suites, 316 tests, 0 failures, 0 errors, 0 skipped. ManagedVmPresentationTest 7/7 @22:45:03Z.\n\nDoD:\n1. readiness() gives 3 separate lines, and only a literal JSON boolean true counts (P1).\n2. args() has no instance parameter. A non-`moe-vm-[0-9a-f]{20}` or duplicate name makes the whole report Unreadable(NOT_OWNED) (P2).\n3. strongProfile() is always STRONG_PROFILE_BLOCKED. ManagedVmActions holds only refresh, reconcile and cleanup (P4).\n4. The gate above exits 0.\nRound 1: 5/5 QA mutants killed (comment-b764a5aa).\n\nRAILS: no .moe, settings or Git writes; IO in a Task.Backgroundable; stderr DISCARD; list args with no shell; verified-local never enabled.\n\nNotes (not blocking): stdout capture is unbounded until the timeout. Only headless tests ran, so the Swing panel has had no runtime UI check.",
+  "requiredCheckAtDone": null
 }

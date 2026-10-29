@@ -114,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-29T22:44:01.045Z",
+  "updatedAt": "2026-10-29T22:44:22.756Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",
@@ -233,7 +233,48 @@
     "scripts/local-runner/lifecycle.mjs",
     "scripts/local-runner/provision.mjs",
     "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/check-lifecycle.mjs",
+    ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+    ".moe/tasks/task-93dee42f71db4a6a8e47a8de052ad411.json",
+    ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json"
+  ],
+  "completionSummary": "CQ-R11: one isolated check per fresh owned VM. 396 changed lines.\n- NEW scripts/local-runner/check-lifecycle.mjs runCheckJob(input, deps). Its steps:\n  - provisionGuest, through a ledger wrapper that captures this run's reserved name;\n  - a clean R07 gate (provisioned, instance === reserved, bootstrapReady, no failures);\n  - checkEnvironment from the guest's image hashes, the supervisor hash it verified, and GUEST_RESOURCES;\n  - no-mount materializeSnapshot;\n  - onReady(environment), bounded by timeoutMs and the signal;\n  - runCheckSession with a check frozen at parse.\n  Then deleteOwned runs in finally, before the run settles.\n- Result: frozen {outcome, exitCode, signal, outputTail, environment, workspace:'unverified', instance, vm, failure, executionReady:false}.\n  - Every pre-session stop is infra-failure with a fixed code.\n  - A pass without a verified delete becomes inconclusive with failure CHECK_VM_DELETE_FAILED.\n  - onReady's error, or CHECK_READY_TIMEOUT, is rethrown after the delete.\n- lifecycle.mjs: exports validOwner, and adds deleteOwned. deleteOwned checks the owner, deletes by exact name, is idempotent, and returns 'not-launched' for a reserved or collision record.\n- provision.mjs: the result carries supervisorSha256.\n- Deviations from the plan text:\n  - PRIMARY_* codes pass through;\n  - a session throw or unknown outcome gives CHECK_SESSION_FAILED;\n  - all non-optional keys are required;\n  - vm can also be 'not-launched';\n  - an extra abort check runs before materialize;\n  - an instance mismatch gives CHECK_PROVISION_FAILED.\n- Tests: the deleteOwned test plus CJ1-CJ8 (CJ8 uses the real provisionGuest and deleteOwned with foreign records).\n- Verification:\n  - DoD: exit 0, 231 pass, 1 pre-existing skip.\n  - check/vm-control/snapshot suites: exit 0, 58 pass, 1 pre-existing root-only skip (K9).\n  - Mutants i-viii, on a /tmp copy, were all killed by their named rows.\n- Theoretical, for QA:\n  (a) when onReady's error is rethrown, vm is hidden from the call",
+  "commits": [
+    {
+      "sha": "bbcd13dcab908a56726a381b51898b48894f40de",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T22:22:52Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-93dee42f71db4a6a8e47a8de052ad411.json",
+        ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+        "scripts/local-runner/check-lifecycle.mjs",
+        "scripts/local-runner/lifecycle.mjs",
+        "scripts/local-runner/provision.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T22:44:22.755Z",
+      "treeId": "e2a5b784f88ff5f251e2703d9720e1864f2ae674",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-9faf1ef30b0a4264b6dccce1e7bf5b1d"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/local-runner/check-lifecycle.mjs"
   ],
-  "completionSummary": "CQ-R11: one isolated check per fresh owned VM. 396 changed lines.\n- NEW scripts/local-runner/check-lifecycle.mjs runCheckJob(input, deps). Its steps:\n  - provisionGuest, through a ledger wrapper that captures this run's reserved name;\n  - a clean R07 gate (provisioned, instance === reserved, bootstrapReady, no failures);\n  - checkEnvironment from the guest's image hashes, the supervisor hash it verified, and GUEST_RESOURCES;\n  - no-mount materializeSnapshot;\n  - onReady(environment), bounded by timeoutMs and the signal;\n  - runCheckSession with a check frozen at parse.\n  Then deleteOwned runs in finally, before the run settles.\n- Result: frozen {outcome, exitCode, signal, outputTail, environment, workspace:'unverified', instance, vm, failure, executionReady:false}.\n  - Every pre-session stop is infra-failure with a fixed code.\n  - A pass without a verified delete becomes inconclusive with failure CHECK_VM_DELETE_FAILED.\n  - onReady's error, or CHECK_READY_TIMEOUT, is rethrown after the delete.\n- lifecycle.mjs: exports validOwner, and adds deleteOwned. deleteOwned checks the owner, deletes by exact name, is idempotent, and returns 'not-launched' for a reserved or collision record.\n- provision.mjs: the result carries supervisorSha256.\n- Deviations from the plan text:\n  - PRIMARY_* codes pass through;\n  - a session throw or unknown outcome gives CHECK_SESSION_FAILED;\n  - all non-optional keys are required;\n  - vm can also be 'not-launched';\n  - an extra abort check runs before materialize;\n  - an instance mismatch gives CHECK_PROVISION_FAILED.\n- Tests: the deleteOwned test plus CJ1-CJ8 (CJ8 uses the real provisionGuest and deleteOwned with foreign records).\n- Verification:\n  - DoD: exit 0, 231 pass, 1 pre-existing skip.\n  - check/vm-control/snapshot suites: exit 0, 58 pass, 1 pre-existing root-only skip (K9).\n  - Mutants i-viii, on a /tmp copy, were all killed by their named rows.\n- Theoretical, for QA:\n  (a) when onReady's error is rethrown, vm is hidden from the call"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T22:22:52Z",
+    "at": "2026-10-29T22:44:22.755Z"
+  }
 }
