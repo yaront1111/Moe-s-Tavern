@@ -98,7 +98,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:31.065Z",
-  "updatedAt": "2026-10-29T20:03:32.988Z",
+  "updatedAt": "2026-10-29T20:16:12.264Z",
   "dependsOn": [
     "task-b23c65b0bb3548fc95d46973b9d589cb",
     "task-e6411b76f42a43c5b679c725947336af",
@@ -135,13 +135,16 @@
     "firstClaimAt": "2026-10-25T10:44:30.707Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T20:16:12.263Z",
+    "wallClockMs": 379901556
   },
   "contextFetchedBy": [
     "architect-6e3edf85",
     "architect-1520cc31",
     "architect-e4b7eee0",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -222,5 +225,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-29T19:31:57Z",
     "at": "2026-10-29T20:03:32.988Z"
-  }
+  },
+  "completedAt": "2026-10-29T20:16:12.263Z",
+  "reviewCompletedAt": "2026-10-29T20:16:12.263Z",
+  "reviewSummary": "CQ-C03 approved. Reviewed completion commit 34337ba (on moe/work-2026-10-24): semanticSource.ts +203 and test +197, 400 net LOC (at the cap, not over).\n\nQA re-run: fresh git archive of 34337ba (no overlay), native npm ci, node v24.21.0, env -i. `cd packages/moe-daemon && npm test` exit 0: 182 files, 5074 passed, 16 skipped; semanticSource 33/33. Matches task.verification. `tsc --noEmit` exit 0. No temp leftovers.\n\nQA mutants, each RED:\n- .serena scrub removed: T8/T10;\n- fallback attach dropped: 13 tests, T2 among them;\n- empty-not-absence limitation removed: T8/T9;\n- env leak: T11;\n- inconclusive dropped: 13 tests.\n\nDoD:\n(1) Every analyzer failure path yields 'unavailable' + inconclusive + a C02 literal fallback at the same commit. Empty answers are served as returned and labelled.\n(2) The analyzer sees only the C03a-materialized commit (symlinks skipped, committed .serena scrubbed). Queries are validated before IO via C02. The real-client integration test serves the dirty-only helperNew as '[]', and projectRoot is unchanged.\n(3) The private SERENA_HOME is removed; only the language_servers cache link is shared; nothing persists.\n(4) Evidence reproduced.\n\nRails: no forbidden tokens; no isolation claim. The architect's C03b/C04 notes are honored.\n\nNon-blocking notes:\n- A failed cache unlink leaks the /tmp home (logged).\n- A late-opened session closes after the home is removed; C03b's timeout bounds it.\n- Real Serena on Windows is unverified (no APPDATA).\n- Committed tsconfig and other language-server config remain for R10 isolation.\n- The one-line loop at :159 is dense (taste).",
+  "requiredCheckAtDone": null
 }

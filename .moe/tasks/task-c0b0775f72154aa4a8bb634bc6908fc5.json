@@ -122,7 +122,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T19:15:35.382Z",
-  "updatedAt": "2026-10-29T20:09:36.338Z",
+  "updatedAt": "2026-10-29T20:10:33.047Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T19:18:39.892Z",
     "plannedStepCount": 6,
@@ -189,7 +189,8 @@
     ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
     ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
     ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
-    ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json"
+    ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json",
+    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json"
   ],
   "completionSummary": "CQ-I03a delivered: scripts/local-runner/vm-control.mjs (new, 182 lines), scripts/tests/local-runner-vm-control.test.mjs (new, 215 lines), and one word in cli.mjs (`export` on hostPrerequisites, +1/-1). That is 398 added lines, at most 400.\n\nCLI: `vm-control.mjs <status|reconcile|cleanup> --project <abs>` takes exactly 3 argv entries and prints one JSON line under 64 KiB, exiting 0. Schemas are moe-vm-{status,reconcile,cleanup}-v1. Any other argv gives VM_CONTROL_INPUT_INVALID with exit 2, before anything is read. Other codes: VM_CONTROL_FAILED, VM_CONTROL_REPORT_TOO_LARGE, LEDGER_UNREADABLE. stderr is always empty.\n\n- ownedLedgerDir is <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/sha256(canonical)[:32]/vms, created 0700, and is refused if it resolves inside the project. D:/, D:\\ and /mnt/d spellings reach one directory.\n- status lists ledger records only, each queried by its own name; state is 'Unknown' or 'Absent' when the query fails or finds nothing. Provider readiness is separate, and executionReady and verified are always false.\n- cleanup:\n  - Owner attempt closed: servedContext.attemptId differs from it or is null. identity-unreadable or malformed gives unknown.\n  - Lease free: a fresh list_resources read per record, held iff it has holders. A record not listed is free; a failure counts as held.\n  - The daemon is reached over loopback /mcp. daemon.json must be bounded, loopback, and for the same project. Node 22+ WebSocket is required; otherwise everything is preserved.\n\nDeviations:\n- `invalid` is a count in every report: ledger file names are not fixed codes.\n- There is one fresh lease read per record, not a per-run cache. Adversarial review found a cache would go stale across 120 s deletes.\n\nVerification:\n- Gate: 8/8, exit 0, also under env -i with Node 24.21.\n- Also 8/8 on Windows Node 24.16 and on Node 18/20/22.\n- local-runner.test.mjs: 222 pass, 1 pre-existing skip.\n- 36/36 mutants killed: the plan's 7 plus 29 extra.\n\nResiduals, recorded in the header and",
   "commits": [
@@ -213,6 +214,22 @@
       "treeId": "775612a0e51ee76e059990d19755bc4910bad9cd",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "91731a6b5765d88efed36cbaabd17e4657bd9b58",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T20:01:43Z",
+      "paths": [
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-c0b0775f72154aa4a8bb634bc6908fc5.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T20:10:33.047Z",
+      "treeId": "1ac7660001fea40b683ae9bedd1607c116668b99",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -222,9 +239,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b5749787@2026-10-29T19:22:30Z",
-    "at": "2026-10-29T19:51:36.145Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T20:01:43Z",
+    "at": "2026-10-29T20:10:33.047Z"
   },
   "completedAt": "2026-10-29T20:09:36.338Z",
   "reviewCompletedAt": "2026-10-29T20:09:36.338Z",
