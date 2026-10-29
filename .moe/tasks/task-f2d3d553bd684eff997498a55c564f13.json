@@ -71,10 +71,17 @@
   ],
   "priority": "HIGH",
   "order": 246.8,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-c7cc9024e3814b638ad122f57a1d6d0c",
+      "author": "qa-952969be",
+      "content": "QA hand-forward from CQ-I05 (task-758bb59a, approved at 14ee8f86). Two of my independent mutants against moe-vscode/src/util/ManagedVm.ts survive the I05 suite, though the code itself is correct. Please put matching rows in the client-verdicts corpus (VM rows) so both clients pin them:\n1. Delete the `if (schema === undefined) { fail(); }` line in parse(). A report with no schema and no code, e.g. {\"provider\":{\"ready\":true},\"executionReady\":false,\"verified\":false,\"instances\":[],\"invalid\":0} run as status, must be Unreadable(malformed). JetBrains does this with `if (schema == null) fail()`.\n2. Derive verified from executionReady (`verified: root.verified === true || root.executionReady === true`). The rows {executionReady:true, verified:false} and {executionReady:false, verified:true} must each give distinct execution and verification lines.\nAlso: the unknown-code wording is a known text difference. VS Code says 'Unknown code X: …' and JetBrains says 'Refusal code X; …'. Compare verdict kinds, not rendered text.",
+      "timestamp": "2026-10-29T23:07:46.460Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:55.625Z",
-  "updatedAt": "2026-10-29T22:56:03.353Z",
+  "updatedAt": "2026-10-29T23:07:46.460Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:52:30.571Z",
     "plannedStepCount": 5,
