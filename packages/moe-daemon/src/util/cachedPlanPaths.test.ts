@@ -108,6 +108,15 @@ describe('cached plan source evidence', () => {
       expect(run).toHaveBeenCalledTimes(2);
     });
 
+  it('reads every unmasked config scope: the config call carries no scope flag', async () => {
+    const run = runner();
+    await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run);
+    const call = run.mock.calls.find(c => c[0][0] === 'config');
+    expect(call?.[0]).toEqual(['config', '--includes', '--get-regexp',
+      '^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.worktree)$']);
+    expect(call?.[0]).not.toContain('--local');
+  });
+
   it.each(['timeout', 'ENOENT', 'output overflow', 'object absent'])('keeps uncertainty as missing: %s', async message => {
     const run = vi.fn<PlanPathGitRunner>().mockRejectedValue(new Error(message));
     expect(await findCachedPlanPaths(root, 'main', ['src/existing.ts'], run)).toEqual({

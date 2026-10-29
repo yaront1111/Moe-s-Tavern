@@ -130,8 +130,10 @@ export async function openProjectGit(
     throw new Error(`Git toplevel ${top} is not the project root ${root}`);
   }
   // Older Git ignores GIT_NO_LAZY_FETCH: reject all hydratable/redirected repos,
-  // including included local config, rather than risking an implicit fetch.
-  const special = await git('config --get-regexp', ['config', '--local', '--includes', '--get-regexp',
+  // including included config, rather than risking an implicit fetch. No scope
+  // flag: --local never reads $GIT_DIR/config.worktree, which Git applies once
+  // extensions.worktreeConfig=true. System and global stay masked by readOnlyGitEnv.
+  const special = await git('config --get-regexp', ['config', '--includes', '--get-regexp',
     '^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.worktree)$']);
   if (special.trim()) {
     throw new Error(`local Git config sets ${special.trim().split(/\s+/)[0]}; partial-clone, promisor and core.worktree repositories are never trusted`);

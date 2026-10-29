@@ -1,0 +1,162 @@
+{
+  "id": "task-3b4e3833e3c74927b4cdf455663cf6b4",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V03a] Runner channel identity",
+  "description": "Objective: the daemon derives a trusted runner identity ONLY from an authenticated host-side channel, never from tool arguments. This is the protected-channel slice of CQ-V03 (task-9cc13170), split out by architect-e4b7eee0 on 2026-10-29 (SPIDR Interface). CQ-V03b (store) and CQ-V03 (runner-channel tools) consume these exact names.\n\nWhy a host-only key:\n- docs/plans/2026-10-24-ai-code-quality-and-context.md section 5 requires the runner's capability to sit outside the writer's readable and writable boundary.\n- Under verified-local, agents run in guest VMs that reach the daemon only through the R08 bridge (scripts/local-runner/guest-bridge.mjs). Its allowlist forwards no check tool, and no daemon token ever enters a guest. A key in the HOST user's home therefore meets that boundary.\n- Under legacy and observe, a host agent can read the key: that is the documented 'secret in a shared environment' limit. No trust is claimed there, and verified-local stays unavailable.\n\nInterface: a new module packages/moe-daemon/src/server/runnerChannel.ts.\n- `export const RUNNER_KEY_HEADER = 'x-moe-runner-key'`.\n- `export interface RunnerIdentity { readonly runnerId: string }`.\n- `export function runnerKeyPath(projectPath: string): string` returns `<dir>/<first 32 hex of sha256(projectPath)>.key`.\n  - dir is MOE_RUNNER_KEY_DIR (resolved absolute) when set, else `<os.homedir()>/.moe/runner-keys`.\n  - projectPath is exactly the string the daemon records in .moe/daemon.json, so a host runner derives the same path.\n  - The key never lives under the project tree, so it is never committed, snapshotted or IDE-synced.\n- `export async function ensureRunnerKey(projectPath: string): Promise<string>` returns the key file path.\n  - It creates the directory (0700) and writes 32 random bytes as base64url (43 characters) with mode 0600, using an exclusive temp create plus an atomic rename.\n  - It reuses a valid existing key, so runnerId is stable across restarts, and replaces only a malformed one.\n  - The key never appears in a log, an error, a response or daemon.json.\n- `export function authenticateRunner(req: IncomingMessage, projectPath: string): RunnerIdentity | null` returns an identity only when all of these hold:\n  - req.socket.remoteAddress is loopback (127.0.0.0/8, ::1, or ::ffff:127.x);\n  - exactly one RUNNER_KEY_HEADER value is present, and it is 43 base64url characters;\n  - the key file reads and is valid, read fresh on each call so a rotation takes effect;\n  - crypto.timingSafeEqual over the sha256 digests of the presented and stored keys succeeds.\n  - Otherwise it returns null. runnerId = 'runner-' + the first 16 hex of sha256(key).\n- src/server/WebSocketServer.ts gets a new `/runner` path, matched explicitly before the plugin default branch.\n  - authenticateRunner runs in onConnection, before any message handler is attached.\n  - A failure closes the socket with 1008 'runner authentication failed', with a warning that carries no key material.\n  - A success serves MCP exactly as /mcp does, passing `runner` in the McpAdapter options.\n- src/server/McpAdapter.ts: `McpHandleOptions.runner?: RunnerIdentity` is forwarded unchanged into the handler context. ToolCallContext in src/tools/index.ts gains `runner?: { readonly runnerId: string }`. /mcp and /ws never set it, whatever a request's arguments or headers say.\n- src/index.ts calls ensureRunnerKey before the server is created (near `new MoeWebSocketServer`). A failure is logged, and the daemon keeps running without the runner channel.\n\nScope boundaries: no new MCP tool, store or schema change, and no consumer of context.runner (those are CQ-V03b and CQ-V03). No wrapper or local-runner client (CQ-V04). Do not enable verified-local. Never edit .moe directly.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "Each refusal has its own test: a /runner connection is closed with 1008 before any tool runs when the header is missing, wrong, malformed or repeated, when the remote address is not loopback, or when the key file is missing.",
+    "A tool call on an authenticated /runner connection receives context.runner {runnerId: 'runner-<16 hex>'} derived from the key. A /mcp call never receives context.runner, even when it sends the header or runnerId and source arguments.",
+    "ensureRunnerKey creates a 43-character base64url key, mode 0600 in a 0700 directory on POSIX. It reuses that key across calls, so runnerId is stable, and replaces a malformed one. Tests assert the key never appears in log calls or responses.",
+    "Tests point MOE_RUNNER_KEY_DIR at a temp directory, and no test touches the real ~/.moe/runner-keys.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "Never log, return or persist the runner key outside its 0600 key file."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate packages/moe-daemon/src/server/runnerChannel.test.ts.\n- beforeEach: point MOE_RUNNER_KEY_DIR at a fresh fs.mkdtemp directory. afterEach: restore the previous value (delete it if it was unset) and remove the directory. No test may touch the real ~/.moe/runner-keys.\n- Assert exact values, never truthiness.\n\nCases:\n- K1 runnerKeyPath:\n  - with the env set: `<tmp>/<first 32 hex of sha256(projectPath)>.key`;\n  - with it unset: exactly path.join(os.homedir(), '.moe', 'runner-keys', <same>.key), comparing the path only and touching no file;\n  - with it set to '' or whitespace: the same default.\n- K2 ensureRunnerKey:\n  - it creates the file with content matching /^[A-Za-z0-9_-]{43}$/ and no newline;\n  - on POSIX (skip on win32): file mode & 0o777 === 0o600 and directory mode 0o700;\n  - a second call returns the same path and byte-identical content;\n  - a malformed file ('short' plus a newline) is replaced with a valid key;\n  - no *.tmp file is left in the directory.\n- A1 authenticateRunner, with fake requests `{ socket: { remoteAddress }, headersDistinct: { 'x-moe-runner-key': [...] } }` cast to IncomingMessage:\n  - the valid key from '127.0.0.1', '127.0.0.2', '::1' and '::ffff:127.0.0.1' returns exactly { runnerId: 'runner-' + sha256hex(key).slice(0, 16) };\n  - each of these returns null, one test each: header absent; a different well-formed key; 42 characters; '=' padding; inner whitespace; two header values; remote '10.0.0.5', '::ffff:10.0.0.5' or undefined; key file missing; key file malformed;\n  - a request with no socket returns null and never throws.\n- M1 McpAdapter:\n  - Inject a probe tool into a real `new McpAdapter(state)` through its private tools map (a test-only cast). Its handler returns `{ runner: context?.runner ?? null }`.\n  - handle(tools/call probe, { runner: { runnerId: 'runner-x' } }) returns exactly that object.\n  - Without options, and with arguments { runnerId: 'forged', source: 'runner-observed' }, it returns runner null.\n- W1 WebSocketServer end-to-end, built like WebSocketServer.test.ts: createServer, listen(0, '127.0.0.1'), new MoeWebSocketServer(httpServer, state, adapterWithProbe), after ensureRunnerKey.\n  - `/runner` with no header, a wrong key, a malformed key or two values: each gets a close event with code 1008 and reason 'runner authentication failed', and the probe handler is never called.\n  - `/runner` with the key: the probe returns the expected runnerId.\n  - `/mcp` sending the same valid header: the probe returns runner null.\n  - Spy on the logger methods: no call argument, serialized, contains the key.\n  - Close every socket and the server in afterEach.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/runnerChannel.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/server/runnerChannel.ts. Its imports are node:crypto (randomBytes, createHash, timingSafeEqual), node:fs, node:os and node:path, plus the IncomingMessage type from node:http. It has no logger import, so the module can never log the key. Exports:\n\n- `RUNNER_KEY_HEADER = 'x-moe-runner-key'`, `interface RunnerIdentity { readonly runnerId: string }`, and a private `KEY_RE = /^[A-Za-z0-9_-]{43}$/`, the unpadded base64url of 32 bytes.\n\n- `runnerKeyPath(projectPath)`: the directory is path.resolve(MOE_RUNNER_KEY_DIR) when it is non-blank after trimming, else path.join(os.homedir(), '.moe', 'runner-keys'). The file is the first 32 hex of sha256(projectPath) + '.key'.\n\n- `async ensureRunnerKey(projectPath): Promise<string>`. Error handling:\n  1. mkdir the directory recursively with mode 0o700. On POSIX, chmod it to 0o700 (skip on win32, where the user profile ACL is the boundary).\n  2. Read the file. If the content passes KEY_RE exactly, chmod it to 0o600 on POSIX and return the path. This reuse keeps runnerId stable across restarts.\n  3. On ENOENT or malformed content, write randomBytes(32).toString('base64url') to `<file>.<pid>.<8 random hex>.tmp` with { flag: 'wx', mode: 0o600 }, then rename it over the file atomically.\n  4. If the rename fails, unlink the temp file and rethrow.\n  5. Any other read error (EACCES and the like) propagates.\n  No error message or return value ever includes key bytes.\n\n- `authenticateRunner(req, projectPath): RunnerIdentity | null`. It NEVER throws; everything is inside try/catch, returning null on failure. It returns an identity only when ALL of these hold:\n  1. req.socket.remoteAddress is '::1', or starts with '127.' or '::ffff:127.' (case-insensitive).\n  2. req.headersDistinct[RUNNER_KEY_HEADER] is an array of exactly one value, and that value passes KEY_RE.\n  3. The stored key, read fresh with fs.readFileSync on every call so a rotation takes effect, passes KEY_RE.\n  4. timingSafeEqual(sha256(presented), sha256(stored)) is true; both are 32-byte digests, so the lengths are always equal.\n  The identity is { runnerId: 'runner-' + sha256hex(stored).slice(0, 16) }.\n\nAdd a header comment covering why the key is host-only (CQ doc section 5; R08: no daemon token enters a guest) and the documented legacy limit: a host agent can read it, so no trust is claimed until verified-local is certified.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/runnerChannel.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Context plumbing. Keep both edits minimal and preserve peers' bytes.\n\n- packages/moe-daemon/src/tools/index.ts: add to ToolCallContext `runner?: { readonly runnerId: string };`, with a one-line comment: set only by an authenticated /runner connection (server/runnerChannel.ts), never from arguments. Define it structurally, with no import from server/, to avoid a tools-server cycle.\n- packages/moe-daemon/src/server/McpAdapter.ts: McpHandleOptions gains `runner?: RunnerIdentity` (a type import from './runnerChannel.js'). At the tools/call invoke site, add `...(options.runner ? { runner: options.runner } : {})` to the context literal. Forward it UNCHANGED. Never read it from params.arguments, and never default it.\n\nMake M1 pass with `npx vitest run src/server/runnerChannel.test.ts -t M1`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Endpoint and provisioning.\n\npackages/moe-daemon/src/server/WebSocketServer.ts, in onConnection:\n1. Compute the pathname with `new URL(req.url || '/', 'http://localhost').pathname` and match '/runner' EXACTLY (a query string is ignored), before the plugin default branch. The existing /mcp startsWith check is left as is.\n2. Error handling: if authenticateRunner(req, this.state.projectPath) returns null:\n   - logger.warn({ endpoint: 'runner', remoteAddress: req.socket.remoteAddress }, 'Runner channel authentication failed'), with no header value logged;\n   - ws.close(1008, 'runner authentication failed');\n   - return before any message handler is attached.\n3. On success, attach exactly the /mcp handling: mcpClients membership, the message, close and error handlers, and cleanupMcpWorkers. Do it through one small private helper shared with the /mcp branch, so the two never drift. handleMcpMessage gains an optional `runner` parameter and passes `runner` in the mcpAdapter.handle options. The /mcp branch passes none.\n\npackages/moe-daemon/src/index.ts, just before `new MoeWebSocketServer(httpServer, state, mcpAdapter)`:\n- `try { await ensureRunnerKey(projectPath) }`.\n- Error handling: catch, then logger.warn({ error: <message only> }, 'Runner channel key unavailable; /runner refuses every connection'), and continue. The daemon must still start.\n- No other change. index.ts is busy (V10 adds one case later), so preserve peers' bytes.\n\nW1 must pass with `npx vitest run src/server/runnerChannel.test.ts`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/index.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. Drop the loopback check: the A1 remote cases fail.\n   2. Compare the keys with === instead of timingSafeEqual over digests, and accept a different key: A1 fails. Also inspect the code for the timing-safe compare.\n   3. Accept headers['x-moe-runner-key'] joined values: the A1 two-values case fails.\n   4. Read runner from arguments in McpAdapter: M1 fails.\n   5. Attach the message handler before authenticating: the W1 probe-never-called case fails.\n   6. Use startsWith('/runner'): add a '/runnerx' W1 case if needed.\n2. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo.\n   - Overlay ONLY this task's 6 files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME set to a SCRATCH directory (so even a stray default path cannot reach the real home), NO_COLOR=1 and the nvm node bin on a Linux-only PATH.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0.\n   - `cmp` the overlay against the worktree.\n3. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n4. Supply the npm test command, its exit code and the output tail (the Test Files and Tests lines) to complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an agent trying to obtain a runner identity:\n\n1. Forgery:\n   - any path that reaches context.runner without authenticateRunner;\n   - /mcp or /ws setting it;\n   - an argument or header on /mcp influencing it;\n   - '/runner/..', '/RUNNER' or a query string bypassing the exact match.\n2. Network: WSL agent mode binds 0.0.0.0, and the loopback check must hold for IPv4, IPv6 and v4-mapped addresses.\n3. Leaks: the key in logs, close reasons, error messages, daemon.json or test output. The key file mode and the temp file left after a failure.\n4. Robustness:\n   - two concurrent ensureRunnerKey calls (the last rename wins; both callers end with a valid key on disk);\n   - an unreadable key file (null, never a throw in onConnection);\n   - the daemon still starts when provisioning fails.\n5. Rails: no .moe edits, no Git writes, no forbidden-pattern tokens, and verified-local untouched.\n\nWrite the Serena handoff memory 'task-task-3b4e3833e3c74927b4cdf455663cf6b4-handoff' with the landed names for CQ-V03 (task-9cc13170) and CQ-V04 (task-a9d1a74d). A host runner connects to ws://127.0.0.1:<daemon.json port>/runner with header x-moe-runner-key read from runnerKeyPath(daemon.json projectPath).",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-9cc131704d214e66afc8a51a524b35c2",
+  "priority": "HIGH",
+  "order": 226.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:38:23.882Z",
+  "updatedAt": "2026-10-29T17:43:24.974Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:41:30.489Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:43:24.868Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon gains a loopback-only `/runner` WebSocket path that serves MCP like /mcp, but only after authenticateRunner verifies a host-only key presented in the x-moe-runner-key header.\n- The key lives at runnerKeyPath(projectPath) in the user's home and is provisioned by ensureRunnerKey at daemon start.\n- An authenticated connection's tool calls carry ToolCallContext.runner = { runnerId: 'runner-<16 hex of sha256(key)>' }.\n- Unauthenticated /runner connections are closed with 1008 before any handler runs.\n- /mcp and /ws never carry a runner identity, whatever their arguments or headers.",
+    "acceptanceCriteria": [
+      "A /runner connection with a missing, wrong, malformed or repeated key header, from a non-loopback address, or with no key file is closed with 1008 'runner authentication failed', and no tool runs.",
+      "An authenticated /runner tool call receives exactly the key-derived runnerId. A /mcp call never receives context.runner, even when it sends the header or identity arguments.",
+      "ensureRunnerKey creates a 43-character base64url key (0600 file in a 0700 directory on POSIX), reuses it, replaces a malformed one, and leaves no temp file. The key never appears in logs or responses.",
+      "In a fresh Linux snapshot, `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` both exit 0."
+    ],
+    "invariants": [
+      "context.runner is set ONLY from authenticateRunner's result on a /runner connection, never from arguments, never on /mcp or /ws, and never defaulted.",
+      "authenticateRunner never throws; it fails closed to null.",
+      "No key byte is logged, returned, included in an error or written outside its key file.",
+      "The daemon still starts when key provisioning fails; /runner then refuses everything.",
+      "The existing /mcp and /ws behavior is byte-identical."
+    ],
+    "compatibility": [
+      "Every existing MCP client (moe-proxy over /mcp) and IDE plugin (/ws) is unaffected.",
+      "Tools ignore context.runner until CQ-V03 adds its consumers."
+    ],
+    "approvedScope": [
+      "New server/runnerChannel.ts: RUNNER_KEY_HEADER, RunnerIdentity, runnerKeyPath, ensureRunnerKey and authenticateRunner, plus its test.",
+      "ToolCallContext.runner in tools/index.ts, and McpHandleOptions.runner forwarded by McpAdapter.",
+      "The /runner path in WebSocketServer.onConnection, sharing the /mcp attach logic through one private helper.",
+      "One ensureRunnerKey call in index.ts before the server is created."
+    ],
+    "reuse": [
+      "The /mcp attach and handleMcpMessage path in packages/moe-daemon/src/server/WebSocketServer.ts is reused for /runner through one helper.",
+      "The ToolCallContext plumbing in packages/moe-daemon/src/server/McpAdapter.ts and packages/moe-daemon/src/tools/index.ts is extended by one field.",
+      "The machine-level ~/.moe location follows the accounts precedent (MOE_ACCOUNTS_FILE in packages/moe-daemon/vitest.config.ts)."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts: onConnection routes url.startsWith('/mcp') to MCP and everything else to the plugin branch; handleMcpMessage(ws, raw) calls mcpAdapter.handle(request, options).",
+      "packages/moe-daemon/src/server/McpAdapter.ts: McpHandleOptions {shouldContinue?, onWaiterRegistered?}, and the tools/call invoke builds the handler context literal.",
+      "packages/moe-daemon/src/tools/index.ts: ToolCallContext {shouldContinue?, onWaiterRegistered?}; ToolHandler = (args, state, context?).",
+      "packages/moe-daemon/src/index.ts creates `new MoeWebSocketServer(httpServer, state, mcpAdapter)` inside an async startup function."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Trust a caller-asserted source or runnerId: forbidden by CQ-V03 DoD 1.\n2. A key header on the existing /mcp path. Rejected: a separate exact path keeps proxy and agent traffic structurally unable to become runner traffic, and makes the refusal a connection-level close.\n3. A per-call HMAC signature. Rejected: the key is host-held either way, and canonicalization adds risk without adding boundary.\n4. OS peer credentials (SO_PEERCRED, named-pipe PIDs). Rejected as platform-specific.\n5. A key in .moe/. Rejected: it needs gitignore and init churn (root .gitignore, generate-init-files.ts and initFiles.test.ts) and sits inside the project tree. The machine-level home location follows the ~/.moe/claude-accounts.json precedent.\n6. CHOSEN: a home-dir key file plus a loopback-only /runner path, authenticated once at connection time into ToolCallContext.runner.",
+    "codebaseInsights": "- WebSocketServer.onConnection routes `/mcp` by startsWith; everything else becomes a plugin client (line ~285).\n- handleMcpMessage calls mcpAdapter.handle(request, {shouldContinue, onWaiterRegistered}) (line ~1165).\n- McpAdapter's tools/call invoke builds the ToolCallContext literal (line ~301); options flow through handle, then handleSingleWithRateLimit, then handleSingle.\n- ToolCallContext lives in tools/index.ts (line ~77).\n- index.ts creates `new MoeWebSocketServer` at line ~614, inside an async function.\n- WebSocketServer.test.ts shows the real-socket setup: createServer, listen(0, '127.0.0.1').\n- StateManager.projectPath is public and readonly.\n- vitest.config.ts sets only MOE_ACCOUNTS_FILE globally, so this task's tests set MOE_RUNNER_KEY_DIR themselves.",
+    "risks": "- Node joins duplicate custom headers with ', ' in req.headers. Use req.headersDistinct (Node >= 18.3), which keeps them separate.\n- On win32, chmod is advisory; skip the mode assertions there (the CI matrix includes windows).\n- A real-socket test can hang: use bounded waits on close events and close everything in afterEach.\n- The probe-tool injection relies on McpAdapter's private tools map. Keep it test-only.\n- index.ts is shared with the planned V10 (which transitively depends on this task): touch only the provisioning lines.\n- No consumer of context.runner exists yet; V03 and V03b build on it.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/tools/index.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:43:24.974Z",
+  "approvedPlanRevision": 1
+}
