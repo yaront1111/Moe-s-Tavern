@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,16 +85,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:13:24.679Z",
-  "updatedAt": "2026-10-29T23:28:28.974Z",
+  "updatedAt": "2026-10-29T23:38:15.089Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:16:35.949Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T23:38:15.089Z",
+    "wallClockMs": 1299140
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -200,5 +203,9 @@
     "kind": "completion",
     "sessionId": "worker-0062feec@2026-10-29T23:19:56Z",
     "at": "2026-10-29T23:28:28.974Z"
-  }
+  },
+  "completedAt": "2026-10-29T23:38:15.089Z",
+  "reviewCompletedAt": "2026-10-29T23:38:15.089Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit e3566bd (on moe/work-2026-10-24; both owned files equal HEAD; diff --check clean). Size 142 + 145 = 287 lines (cap 400).\n\nRe-ran fresh: `env -i HOME=$HOME PATH=<nvm node24>:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs` -> exit 0, 34 tests, 33 pass, 0 fail, 1 skip (K9, pre-existing). DA1-DA5 ran and passed; E/K/C rows untouched (test diff is additions only).\n\nDoD: (1) read admitEntries against the spec: every non-registry/non-canonical source -> SOURCE_UNSUPPORTED, bad keys -> LOCATION_INVALID, bad integrity -> INTEGRITY_INVALID (DA3). (2) root/inBundle/optional-os-cpu skips, libc unfiltered, dedup by sha512 + smallest url, sorted, frozen, order-independent (DA4). (3) bounds with fixed codes, size checked before decode via the intrinsic getter, no message echoes input (DA1/DA5). (4) only import is ./source-snapshot.mjs; the repo lockfile is admitted (DA5). (5) exit 0.\n\nMy own probes: moe-daemon 88, moe-proxy 46 (x64+arm64), moe-vscode 298 admitted; moe-claude-plugin refused (documented, out of scope). Hostile ~1 MB keys refuse in 4-16 ms (linear regexes). 10 mutants on a scratch copy (link order, non-fatal decode, largest-url, checkList negation/'any', canonical re-encode, cap+1, spoofable byteLength, cpu filter) all killed; one survivor, `optional === true` -> `!== undefined`, is a minor test gap (no optional:false row), not a defect.\n\nThe one deviation (link refusal before the inBundle/optional skips) is justified: I reproduced that npm 12.2.0 `npm ci --offline --ignore-scripts` still creates node_modules/evil -> ../../target for {link:true,inBundle:true}, so a later nested key could extract through it. It only tightens, matches DoD 1, and two DA3 rows pin it.\n\nUnverified, out of scope: download/cacache (R11e3), guest install (R11e4/e5), workspaces; R11e5 must not honor workspaces/links admission did not see. verified-local stays unavailable; no isolation claim.",
+  "requiredCheckAtDone": null
 }
