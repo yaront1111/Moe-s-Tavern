@@ -303,7 +303,7 @@ class PlanReviewApprovalStateTest {
         val state = rendered(4L)
         state.onApproveClicked(true, snapshot(4L))
 
-        assertTrue(state.onDaemonError("APPROVE_TASK", "plan revision is stale"))
+        assertTrue(state.onDaemonError("APPROVE_TASK", taskId, null))
 
         assertEquals(Phase.READY, state.currentPhase)
         assertEquals(PlanReviewApprovalState.DAEMON_ERROR_KEY, state.noticeKey)
@@ -315,7 +315,7 @@ class PlanReviewApprovalStateTest {
         val state = rendered(4L)
 
         assertFalse(state.onSendFailed())
-        assertFalse(state.onDaemonError("APPROVE_TASK", "unrelated"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
 
         assertEquals(Phase.READY, state.currentPhase)
         assertNull(state.noticeKey)
@@ -459,7 +459,7 @@ class PlanReviewApprovalStateTest {
         val state = pendingAt(4L)
         state.onStateUpdate(working(5L))
 
-        assertFalse(state.onDaemonError("APPROVE_TASK", "plan revision is stale"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
         assertFalse(state.onSendFailed())
 
         assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
@@ -468,7 +468,7 @@ class PlanReviewApprovalStateTest {
     @Test
     fun `an error before a mismatching working update never re-arms a stale approval`() {
         val state = pendingAt(4L)
-        assertTrue(state.onDaemonError("APPROVE_TASK", "plan revision is stale"))
+        assertTrue(state.onDaemonError("APPROVE_TASK", taskId, null))
         assertEquals(Phase.READY, state.currentPhase)
 
         assertTrue(state.onStateUpdate(working(5L)))
@@ -483,7 +483,7 @@ class PlanReviewApprovalStateTest {
     @Test
     fun `an error before a same revision working update is not an approval and does not retry`() {
         val state = pendingAt(4L)
-        state.onDaemonError("APPROVE_TASK", "ambiguous")
+        state.onDaemonError("APPROVE_TASK", taskId, null)
 
         state.onStateUpdate(working(4L))
 
@@ -541,7 +541,7 @@ class PlanReviewApprovalStateTest {
         assertNull(state.noticeKey)
         assertFalse(state.onStateUpdate(snapshot(5L)))
         assertFalse(state.onSendFailed())
-        assertFalse(state.onDaemonError("APPROVE_TASK", "late"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
         assertFalse(state.onRendered(snapshot(4L)))
         assertEquals(
             Decision.Blocked(PlanReviewApprovalState.CLOSED_KEY),
@@ -760,7 +760,7 @@ class PlanReviewApprovalStateTest {
     fun `the dialog releases a pending approval only when the connection drops`() {
         val body = dialogSource()
             .substringAfter("override fun onStatus(")
-            .substringBefore("override fun onError(")
+            .substringBefore("override fun onDaemonError(")
 
         val release = body.indexOf("approval.onConnectionLost()")
         assertTrue("onStatus must release through the machine", release >= 0)
@@ -770,6 +770,132 @@ class PlanReviewApprovalStateTest {
         val guard = Regex("if \\(connected").find(body)
         assertNotNull("onStatus must guard on connected", guard)
         assertTrue("connected=true must never release", guard!!.range.first < release)
+    }
+
+    // ---- daemon error correlation (CQ-I06d)
+
+    /** The approval is untouched: still pending, and WORKING at 4 still confirms it. */
+    private fun assertStillPendingThenConfirmed(state: PlanReviewApprovalState) {
+        assertEquals(Phase.PENDING, state.currentPhase)
+        assertNull(state.noticeKey)
+        assertEquals(4L, state.capturedPlanRevision)
+
+        assertTrue(state.onStateUpdate(working(4L)))
+
+        assertEquals(Phase.FINISHED, state.currentPhase)
+        assertNull(state.noticeKey)
+    }
+
+    @Test
+    fun `an error for another operation leaves a pending approval pending`() {
+        val state = pendingAt(4L)
+
+        assertFalse(state.onDaemonError("UPDATE_SETTINGS", taskId, null))
+        assertFalse(state.onDaemonError("UPDATE_TASK", taskId, "PLAN_REVISION_MISMATCH"))
+        assertFalse(state.onDaemonError("approve_task", taskId, null))
+
+        assertStillPendingThenConfirmed(state)
+    }
+
+    @Test
+    fun `an error for another task leaves a pending approval pending`() {
+        val state = pendingAt(4L)
+
+        assertFalse(state.onDaemonError("APPROVE_TASK", "task-other", "PLAN_REVISION_MISMATCH"))
+        assertFalse(state.onDaemonError("APPROVE_TASK", "task-other", null))
+
+        assertStillPendingThenConfirmed(state)
+    }
+
+    @Test
+    fun `an error without context leaves a pending approval pending`() {
+        val state = pendingAt(4L)
+
+        assertFalse(state.onDaemonError(null, null, null))
+        assertFalse(state.onDaemonError("APPROVE_TASK", null, null))
+        assertFalse(state.onDaemonError(null, taskId, "PLAN_REVISION_MISMATCH"))
+
+        assertStillPendingThenConfirmed(state)
+    }
+
+    @Test
+    fun `a correlated PLAN_REVISION_MISMATCH latches as plan changed`() {
+        val state = pendingAt(4L)
+
+        assertTrue(state.onDaemonError("APPROVE_TASK", taskId, "PLAN_REVISION_MISMATCH"))
+
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+        // Latched for good: a later confirmation at the same revision, another
+        // error or a transport result can neither finish nor re-arm it.
+        assertFalse(state.onStateUpdate(working(4L)))
+        assertFalse(state.onDaemonError("APPROVE_TASK", taskId, null))
+        assertFalse(state.onSendFailed())
+        assertFalse(state.onConnectionLost())
+        assertNotEquals(Phase.FINISHED, state.currentPhase)
+        assertInvalidated(state, PlanReviewApprovalState.PLAN_CHANGED_KEY, captured = 4L)
+    }
+
+    @Test
+    fun `any other correlated code re-arms with the daemon error notice`() {
+        // Exact, case-sensitive and untrimmed: only the daemon's own code latches.
+        val codes = listOf(
+            null,
+            "INVALID_INPUT",
+            "TASK_NOT_FOUND",
+            "plan_revision_mismatch",
+            " PLAN_REVISION_MISMATCH",
+            "PLAN_REVISION_MISMATCH "
+        )
+        for (code in codes) {
+            val state = pendingAt(4L)
+
+            assertTrue("code $code", state.onDaemonError("APPROVE_TASK", taskId, code))
+
+            assertEquals("code $code", Phase.READY, state.currentPhase)
+            assertEquals("code $code", PlanReviewApprovalState.DAEMON_ERROR_KEY, state.noticeKey)
+            assertTrue("code $code", state.approveEnabled)
+            assertEquals("code $code", 4L, state.capturedPlanRevision)
+            assertEquals("code $code", Decision.Send(taskId, 4L), state.onApproveClicked(true, snapshot(4L)))
+        }
+    }
+
+    @Test
+    fun `a correlated error outside pending changes nothing`() {
+        val finished = pendingAt(4L).also { it.onStateUpdate(working(4L)) }
+        val invalidated = rendered(4L).also { it.onStateUpdate(snapshot(5L)) }
+        val disposed = rendered(4L).also { it.onDisposed() }
+        val machines = listOf(
+            Phase.AWAITING_RENDER to PlanReviewApprovalState(taskId),
+            Phase.READY to rendered(4L),
+            Phase.INVALIDATED to invalidated,
+            Phase.FINISHED to finished,
+            Phase.DISPOSED to disposed
+        )
+        for ((expectedPhase, state) in machines) {
+            assertEquals(expectedPhase, state.currentPhase)
+            val noticeBefore = state.noticeKey
+
+            assertFalse("$expectedPhase mismatch", state.onDaemonError("APPROVE_TASK", taskId, "PLAN_REVISION_MISMATCH"))
+            assertFalse("$expectedPhase other", state.onDaemonError("APPROVE_TASK", taskId, null))
+
+            assertEquals(expectedPhase, state.currentPhase)
+            assertEquals("$expectedPhase notice", noticeBefore, state.noticeKey)
+        }
+    }
+
+    @Test
+    fun `the dialog routes only correlated daemon errors into the machine`() {
+        val source = dialogSource()
+        val signature = "override fun onDaemonError(error: DaemonError)"
+        assertTrue("the dialog must override onDaemonError", source.contains(signature))
+        val body = source.substringAfter(signature).substringBefore("override fun dispose()")
+
+        assertTrue(body.contains("approval.onDaemonError(error.operation, error.taskId, error.codeName)"))
+        assertTrue("the daemon text stays bounded", body.contains("error.message.take(MAX_ERROR_CHARS)"))
+        assertTrue("the repaint goes through applyApprovalState()", body.contains("applyApprovalState()"))
+        assertTrue("the repaint must run on the EDT", body.contains("invokeLater"))
+        assertFalse("the uncorrelated route is gone", source.contains("approval.onDaemonError(operation, message)"))
+        assertFalse("the dialog no longer handles uncorrelated errors", source.contains("override fun onError("))
     }
 
     // ------------------------------------------------- bundle key guard

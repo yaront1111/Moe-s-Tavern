@@ -168,16 +168,26 @@ class PlanReviewApprovalState(private val taskId: String) {
     fun onConnectionLost(): Boolean = releasePending(CONNECTION_LOST_KEY)
 
     /**
-     * A daemon ERROR frame arrived. Any error while an approval is in flight is
-     * read as "this approval did not happen": re-arming a reviewer whose approval
-     * did land is a visible annoyance, while reporting a success that never
-     * happened is a silent lie.
+     * A daemon ERROR frame arrived. Only an [APPROVE_OPERATION] error for THIS
+     * task, while an approval is in flight, says anything about it; every other
+     * error leaves the machine alone, so a later `WORKING` at the captured
+     * revision still confirms it. Parity reference: VS Code
+     * PlanReviewPanel.handleClientError.
      *
-     * [operation] and [message] are the daemon's own and the dialog shows them
-     * unchanged; they are not inspected here.
+     * A correlated [PLAN_REVISION_MISMATCH] latches as plan changed: the daemon
+     * holds a newer plan than the one read. Any other correlated error is read as
+     * "this approval did not happen" and re-arms the same captured revision.
+     * Matching is exact: no trimming and no case folding.
+     *
+     * @return true when the dialog must repaint.
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun onDaemonError(operation: String, message: String): Boolean = releasePending(DAEMON_ERROR_KEY)
+    fun onDaemonError(operation: String?, errorTaskId: String?, codeName: String?): Boolean = synchronized(lock) {
+        if (operation != APPROVE_OPERATION || errorTaskId != taskId || phase != Phase.PENDING) return false
+        if (codeName != PLAN_REVISION_MISMATCH) return releasePending(DAEMON_ERROR_KEY)
+        phase = Phase.INVALIDATED
+        notice = PLAN_CHANGED_KEY
+        true
+    }
 
     /** Terminal. Every later callback is a no-op, so nothing can send after teardown. */
     fun onDisposed() = synchronized(lock) {
@@ -213,6 +223,10 @@ class PlanReviewApprovalState(private val taskId: String) {
     companion object {
         const val STATUS_AWAITING_APPROVAL = "AWAITING_APPROVAL"
         const val STATUS_WORKING = "WORKING"
+
+        /** The daemon's ERROR-frame correlation values, matched exactly. */
+        const val APPROVE_OPERATION = "APPROVE_TASK"
+        const val PLAN_REVISION_MISMATCH = "PLAN_REVISION_MISMATCH"
 
         /** A task whose payload carried no stamp at all is approvable at 0. */
         const val LEGACY_EFFECTIVE_REVISION = 0L
