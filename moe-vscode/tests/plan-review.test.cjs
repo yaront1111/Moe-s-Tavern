@@ -995,3 +995,86 @@ test('K: a second createOrShow while the panel is open reveals it instead of reb
         assert.equal(h.htmlWrites.length, 1);
     } finally { panel.dispose(); }
 });
+
+// ===========================================================================
+// (L) shared client verdict corpus (CQ-I06b)
+// ===========================================================================
+// The same bytes JetBrains ClientVerdictCorpusTest runs. Verdicts and probes are
+// the corpus's own: a row the two clients disagree on is fixed or filed, never
+// given an expectation of this client's.
+
+const CORPUS = JSON.parse(fs.readFileSync(path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-verdicts.json'), 'utf8'));
+if (!Array.isArray(CORPUS.approval) || CORPUS.approval.length === 0) { throw new Error('client-verdicts.json has no approval rows'); }
+
+/** A daemon task frame: the corpus holds the raw planRevision literal, absent when the field is. */
+const corpusTask = (status, literal) =>
+    makeTask({ id: CORPUS.taskId, status, planRevision: literal == null ? undefined : JSON.parse(literal) });
+
+async function playCorpusEvent(h, event) {
+    if (event.task === null) {
+        h.setTasks(); h.emitState(); h.flushTimers();
+    } else if (event.task) {
+        pushUpdate(h, corpusTask(event.task.status, event.task.planRevision));
+    } else if (event.error) {
+        const { operation, task, codeName } = event.error;
+        if (task !== null && task !== 'self' && task !== 'other') { throw new Error('unknown error task ' + task); }
+        h.emitError({
+            message: 'refused',
+            ...(operation === null ? {} : { operation }),
+            ...(codeName === null ? {} : { codeName }),
+            ...(task === null ? {} : { context: { taskId: task === 'self' ? CORPUS.taskId : 'task-other' } })
+        });
+    } else if (event.connection === 'lost') {
+        h.emitConnection('disconnected');
+    } else {
+        throw new Error('unknown corpus event ' + JSON.stringify(event));
+    }
+    await h.settle();
+}
+
+async function checkCorpusVerdict(h, row, send) {
+    const probe = async status => { pushUpdate(h, corpusTask(status, row.rendered)); await h.settle(); };
+    switch (row.verdict) {
+        case 'confirmed':
+            assert.deepEqual(h.infoMessages, ['Plan approved']);
+            assert.equal(h.panelDisposeCount, 1);
+            return;
+        case 'pending':
+            assert.deepEqual(h.infoMessages, []);
+            await probe('WORKING');
+            assert.deepEqual(h.infoMessages, ['Plan approved'], 'a WORKING probe at the rendered revision confirms');
+            return;
+        case 'latched':
+            assert.deepEqual(h.infoMessages, []);
+            assert.equal(h.webview.approveDisabled(), true);
+            await probe('WORKING');
+            assert.deepEqual(h.infoMessages, [], 'a WORKING probe at the rendered revision must not confirm');
+            return;
+        case 'rearmed':
+            assert.deepEqual(h.infoMessages, []);
+            await probe('AWAITING_APPROVAL');
+            assert.equal(h.webview.approveDisabled(), false);
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.deepEqual(h.approveCalls, [send, send], 'the probe click resends exactly the rendered revision');
+            return;
+        default:
+            throw new Error('unknown corpus verdict ' + row.verdict);
+    }
+}
+
+for (const row of CORPUS.approval) {
+    test(`L ${row.id}: ${row.verdict}`, async () => {
+        const h = createHarness();
+        h.setTasks(corpusTask('AWAITING_APPROVAL', row.rendered));
+        const panel = h.open(CORPUS.taskId);
+        try {
+            const send = [CORPUS.taskId, row.rendered === null ? 0 : JSON.parse(row.rendered)];
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.deepEqual(h.approveCalls, [send]);
+            for (const event of row.events) { await playCorpusEvent(h, event); }
+            await checkCorpusVerdict(h, row, send);
+        } finally { panel.dispose(); }
+    });
+}

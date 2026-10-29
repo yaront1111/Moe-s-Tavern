@@ -155,7 +155,9 @@ export class PlanReviewPanel implements vscode.Disposable {
         if (this.disposed || pending === undefined) { return; }
 
         const task = this.findTask();
-        if (!task || task.status !== 'WORKING') { return; }
+        // A vanished task ends the approval unconfirmed (JetBrains TASK_MISSING parity).
+        if (!task) { this.pendingApprovalRevision = undefined; return; }
+        if (task.status !== 'WORKING') { return; }
 
         const current = effectivePlanRevision(task);
         if (current === pending) {

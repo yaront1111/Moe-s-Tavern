@@ -87,7 +87,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:47:04.182Z",
-  "updatedAt": "2026-10-29T23:11:28.692Z",
+  "updatedAt": "2026-10-29T23:12:05.279Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:47:23.657Z",
     "plannedStepCount": 4,
@@ -176,7 +176,8 @@
     "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
-    ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json"
+    ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+    ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json"
   ],
   "completionSummary": "CQ-I06d delivered (JetBrains only; no daemon, wire, moe-vscode or .moe edits).\n- MoeStateListener gains the top-level `data class DaemonError(operation?, codeName?, taskId?, message)` and a default `onDaemonError(error)`, delivered AFTER onError. The legacy onError implementers are untouched, and the tool window notification still fires.\n- MoeMessageDispatcher keeps `publishError(operation, errorMessage)` byte-identical, then publishes DaemonError through a strict `stringOrNull()`. Only a JSON string primitive counts; context is read only when it is an object. A non-string value gives null and never throws.\n- PlanReviewApprovalState.onDaemonError(operation?, errorTaskId?, codeName?) acts only on APPROVE_TASK for its own task while PENDING:\n  - an exact PLAN_REVISION_MISMATCH latches INVALIDATED with PLAN_CHANGED_KEY, keeping the captured revision;\n  - any other correlated error re-arms with DAEMON_ERROR_KEY.\n  This matches VS Code PlanReviewPanel.handleClientError.\n- PlanReviewDialog drops its onError override and adds onDaemonError(error), with the same bounded message and EDT repaint.\n\nTests:\n- New MoeMessageDispatcherErrorTest: E1-E3, 5 tests.\n- PlanReviewApprovalStateTest grows from 52 to 59 tests with D1-D7.\n  - The six old onDaemonError(\"APPROVE_TASK\", text) calls were migrated mechanically to (\"APPROVE_TASK\", taskId, null), with unchanged semantics.\n  - The I06a C6 pin delimiter was retargeted from onError( to onDaemonError(.\n- RED was a compile failure; GREEN was the focused classes passing.\n- Mutants M1-M7 plus an extra M8 were all killed by the named cases, run in a scratch snapshot that was removed afterwards.\n\nGate: the Windows gradlew.bat equivalent (WSL has no JDK), run under the jetbrains-gradle lease, now released. Exit 0, with 23 suites / 334 tests / 0 failures / 0 skipped in fresh XML.\n\nSize: +320/-21 over 6 files (production +61/-14).\n\nResidual (pre-existing, out of scope): safeAsString throws on an object-valued message or operation before either",
   "commits": [
@@ -200,6 +201,22 @@
       "treeId": "16a8a25bf62abbd3a3a3a7c4d3bdab14097044a9",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "8675a185f6db18de24409fa85d2c0d69142e31c1",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T23:09:13Z",
+      "paths": [
+        ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+        ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T23:12:05.279Z",
+      "treeId": "aee25e234726c48e6ebd5a7995ddc3cbf5d08a2c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -213,9 +230,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-29T22:57:04Z",
-    "at": "2026-10-29T23:05:47.996Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T23:09:13Z",
+    "at": "2026-10-29T23:12:05.279Z"
   },
   "completedAt": "2026-10-29T23:11:28.692Z",
   "reviewCompletedAt": "2026-10-29T23:11:28.692Z",

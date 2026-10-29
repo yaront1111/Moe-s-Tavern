@@ -85,11 +85,17 @@
       "author": "worker-73c29a03",
       "content": "From CQ-V10a, round 2 (worker-73c29a03): what V10 must handle or document about the engine it consumes (architectureRules.ts, landed in 7664bbba).\n\nFail-closed refusals: map each of these INVALID_INPUT refusals to exit 2.\n- parseArchitectureRules refuses with context.field one of: architectureRules, version, <unknownKey>, rules, rules[i], rules[i].<key>, rules[i].id, rules[i].from[j], rules[i].forbid[j], rules[i].reason.\n- evaluateArchitecture refuses with changed[i].path when a path is not normalized, is a duplicate, is absolute, contains '..', has a drive letter, or is over 500 characters.\n\nOpen bugs, both filed in BACKLOG with dependsOn V10a:\n1. task-16628bef427b426aa9d8fc6ac1d19534 (HIGH). A lexer desync hides imports on LATER lines, with no uncertainty. The plan assumed \"line-local recovery\"; that is false whenever template or `/* */` state flips.\n   - Triggers: a division misread as a regex after `}`, postfix ++/-- or TS `!` (QA's advisory 1, which also covers the same-line case); a regex read as division after `extends` or `export default`; an Annex-B `<!--` comment in CJS; a backtick in TSX text.\n   - Six repros are in the task. Do not treat 'passed' as trusted until this is resolved.\n2. task-54dc3d385ef542a08a0a8e9aa2ce8969 (MEDIUM, QA's advisory 2). resolveImport tries joined+ext before the directory index for '.', '..', a trailing '/' and a trailing '/.'. A decoy sibling src/state.ts makes `'../state/'` resolve to the decoy, so the outcome is 'passed' instead of 'failed'.\n\nAccepted residuals to document:\n- JSX text is lexed as code.\n- A regex after a non-control `)` reads as division.\n- Path aliases are treated as external.\n- Runtime indirection (an aliased require, createRequire) is out of reach.\n- .mts, .cts and .jsx files are not scanned.\n- A target that exists only as a .d.ts is unresolved.",
       "timestamp": "2026-10-29T19:25:32.862Z"
+    },
+    {
+      "id": "comment-34a19fe47a244d0e8d00b49dbfc9b7d0",
+      "author": "architect-32ff5555",
+      "content": "Architect note, 2026-10-30: task-16628bef (plan rev 1, now WORKING; this task depends on it) widens ImportUncertainty.reason with 'ambiguous-syntax'.\n\nThe new reason marks a line inside a multi-line template-text or block-comment region that would import if it were code. It is reported after an earlier lexing ambiguity: a code-position '/', '<!--' or '-->' with a backtick, '/*', or a '}' inside a substitution later on its line, or a JSX-like '<'.\n\nevaluateArchitecture still maps any uncertainty to 'inconclusive', so V10 should surface 'ambiguous-syntax' as a named exit-2 reason next to the existing three, and its docs should explain it. Same-line misreads stay an accepted V10a residual, so document them too.",
+      "timestamp": "2026-10-29T23:22:50.050Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:07.154Z",
-  "updatedAt": "2026-10-29T22:31:28.441Z",
+  "updatedAt": "2026-10-29T23:22:50.050Z",
   "dependsOn": [
     "task-a9d1a74d845b4d3d83f359bf864f8651",
     "task-9ef257f58b7f4c4191f206f67bf3d865",

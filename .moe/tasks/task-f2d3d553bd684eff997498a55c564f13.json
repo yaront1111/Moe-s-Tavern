@@ -16,46 +16,75 @@
     {
       "stepId": "step-1",
       "description": "CORPUS + JETBRAINS CONSUMER. JetBrains is the reference client, so it goes first. Load test-driven-development.\n\n1. NEW moe-jetbrains/src/test/resources/client-verdicts.json: ASCII, LF, one row per line, about 70 lines. Shape: {\"version\":1, \"taskId\":\"task-corpus\", \"approval\":[...], \"vm\":[...]}.\n\n   APPROVAL row: {\"id\", \"rendered\", \"events\", \"verdict\"}.\n   - `rendered` is the RAW JSON literal TEXT of the AWAITING_APPROVAL task's planRevision, or null when the field is absent.\n   - Event kinds:\n     - {\"task\":{\"status\":S,\"planRevision\":\"<raw literal>\"}}: a state frame. Omit the key for an absent field.\n     - {\"task\":null}: the task has left the snapshot.\n     - {\"error\":{\"operation\":O|null,\"task\":\"self\"|\"other\"|null,\"codeName\":C|null}}\n     - {\"connection\":\"lost\"}\n   - Rows. `rendered` is \"4\" unless stated. W = WORKING, AA = AWAITING_APPROVAL.\n     - Revision values:\n       - A01 W \"4\" -> confirmed\n       - A02 W \"5\" -> latched\n       - A03 W \"3\" -> latched\n       - A04 W absent -> latched\n       - A05 rendered null, W absent -> confirmed\n       - A06 rendered \"0\", W \"0\" -> confirmed\n       - A07 W \"\\\"4\\\"\" -> latched\n       - A08 W \"null\" -> latched\n       - A09 W \"4.5\" -> latched\n       - A10 W \"-1\" -> latched\n       - A11 W \"9007199254740992\" -> latched\n       - A12 rendered \"9007199254740991\", W \"9007199254740991\" -> confirmed\n     - Frames and daemon errors:\n       - A13 AA \"4\" -> pending\n       - A14 AA \"5\", then error APPROVE_TASK/self/PLAN_REVISION_MISMATCH -> latched\n       - A15 error APPROVE_TASK/self/PLAN_REVISION_MISMATCH -> latched\n       - A16 error APPROVE_TASK/self/INVALID_INPUT -> rearmed\n       - A17 error APPROVE_TASK/self/null -> rearmed\n       - A18 error UPDATE_SETTINGS/self/INVALID_INPUT -> pending\n       - A19 error APPROVE_TASK/other/PLAN_REVISION_MISMATCH -> pending\n       - A20 error null/null/null -> pending\n     - Lost connection and removed task:\n       - A21 lost -> rearmed\n       - A22 lost, then AA \"4\" -> rearmed\n       - A23 lost, then W \"4\" -> latched\n       - A24 task null -> latched\n       - A25 W \"4\", then lost -> confirmed\n\n   VERDICTS. Always render the AA task at `rendered` first, then click Approve; the click must send exactly the rendered revision (absent = 0). Then apply the events in order.\n   - confirmed: success is reported.\n   - pending: no success. A probe W frame at `rendered` then confirms.\n   - latched: no success, and Approve is unusable. A probe W frame at `rendered` still does NOT confirm.\n   - rearmed: no success. A probe AA frame at `rendered` makes Approve usable, and the next click sends exactly the rendered revision.\n\n   VM row: {\"id\", \"command\" (status|reconcile|cleanup), \"stdout\" (exact text ending \"\\n\") or \"oversize\":N (N bytes of 'x'), \"exit\", \"timedOut\", \"running\", \"verdict\", optional \"readiness\":[provider,execution,verified] booleans, optional \"rows\" (the visible row count), \"actions\":[refresh,reconcile,cleanup] for the given running}. The verdict is one of: status, report, refused:<CODE>, or unreadable:<malformed|not-owned|too-large|failed|timed-out>.\n   - Names a, b and c are \"moe-vm-\" followed by 20 of 'a', 'b' or 'c'. A row is {\"instance\",\"phase\",\"state\",\"launchTries\",\"taskId\":\"task-1\"}.\n   - ready = {\"ready\":true,\"code\":\"PROVIDER_PREREQUISITES_READY\",\"platform\":\"linux\"}. missing = {\"ready\":false,\"code\":\"PROVIDER_NOT_FOUND\",\"platform\":\"windows\"}.\n   - Rows:\n     - Status reports:\n       - V01 status, ready, [a owned Running 1] -> status, readiness [t,f,f], rows 1, actions [t,t,t]\n       - V02 status, missing, [] -> status, readiness [f,f,f], rows 0, actions [t,f,f]\n       - V03 ready with executionReady:true and verified:true -> status, readiness [t,t,t]\n       - V04 ready with executionReady:\"true\" and verified:1 -> status, readiness [t,f,f]\n       - V05 ready, [a reserved Unknown 0] -> rows 1, actions [t,t,f]\n       - V06 ready, [a owned, b collision, c deleted] -> rows 1, actions [t,t,t]\n     - Bad status reports:\n       - V07 name \"my-vm\" -> unreadable:not-owned\n       - V08 a twice -> unreadable:not-owned\n       - V09 the V01 line twice (two lines) -> malformed\n       - V10 the V01 line plus \" x\\n\" -> malformed\n       - V11 the status command given V16's cleanup line -> malformed\n       - V12 V01 with exit 1 -> failed\n       - V13 V01 with timedOut -> timed-out\n       - V14 oversize 65537 -> too-large\n     - Refusals, cleanup and reconcile:\n       - V15 {\"schema\":\"moe-vm-status-v1\",\"code\":\"LEDGER_UNREADABLE\",\"instances\":[],\"executionReady\":false,\"verified\":false} -> refused:LEDGER_UNREADABLE, actions [t,f,f]\n       - V16 cleanup {deleted:[a], preserved:[{b, attempt-active}], errors:[{c, PROVIDER_TIMEOUT}], invalid:0} -> report, actions [t,f,f]\n       - V17 cleanup with deleted [\"my-vm\"] -> not-owned\n       - V18 reconcile {reconciled:[{a, launching->owned}], unknown:[], invalid:0} -> report\n       - V19 {\"code\":\"VM_CONTROL_INPUT_INVALID\"} with exit 2 -> failed\n       - V20 V01 with running:true -> status, actions [f,f,f]\n   - EVERY row also asserts the strong-profile line is the blocked one.\n\n2. NEW moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt. Load the corpus with `javaClass.getResourceAsStream(\"/client-verdicts.json\")`.\n   - Error handling: a missing or unparseable corpus fails with a message naming the resource, never a skip or an empty pass.\n   - Integrity test:\n     - ids are unique;\n     - there are at least 25 approval rows and at least 20 VM rows;\n     - every verdict is in the vocabulary, so an unknown verdict or an empty corpus fails.\n   - Approval runner:\n     - Build each frame TEXT by splicing the raw literal: `{\"id\":\"task-corpus\",\"status\":\"S\"`, then `,\"planRevision\":<literal>` when present, then `}`. Call MoeJson.parseTask(JsonParser.parseString(text).asJsonObject). Gson keeps the literal (LazilyParsedNumber).\n     - The snapshot is TaskSnapshot(true, task.status, PlanReviewApprovalState.tokenOf(task.planRevision)). A null task gives TaskSnapshot(false, null, tokenOf(null)), the dialog's snapshotOf mapping.\n     - Events:\n       - task: onStateUpdate;\n       - error: onDaemonError(operation, self -> \"task-corpus\" / other -> \"task-other\" / null, codeName), the CQ-I06d API;\n       - lost: onConnectionLost(), the CQ-I06a API.\n     - Verdict mapping: confirmed = FINISHED, pending = PENDING, latched = INVALIDATED, rearmed = READY with approveEnabled. Apply the probes above.\n   - VM runner:\n     - decode(ManagedVmCommand.valueOf(command.uppercase()), stdout, exit, timedOut);\n     - map Status to status, Outcome to report, Refused(code) to refused:code, and Unreadable(key) to the vocabulary;\n     - readiness() maps READY/VERIFIED keys to true;\n     - rows is rows().size; actions is actions(report, running); also check strongProfile().\n   - Collect every failing row id and fail once with the full list.\n   - Run the focused class under the jetbrains-gradle lease. Every row must pass, because CQ-I03, CQ-I06a and CQ-I06d have landed. A failing row is a real JetBrains divergence: fix it forward or file it, per the task description.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-jetbrains/src/test/resources/client-verdicts.json",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-verdicts.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
+      ],
+      "note": "Corpus (53 lines, ASCII/LF, one row per line) + JetBrains consumer. Rows: A01-A25 (approval) and V01-V23 (VM). Deviations from the plan's row text, made so the DoD-named mutants actually kill their rows: (1) A08 uses rendered null (absent) with W \"null\" -> latched, because with rendered 4 MJ1 (tokenOf null -> LegacyMissing) still latches (0 != 4) and would survive; (2) V11 is the V01 status body stamped with schema moe-vm-cleanup-v1, because V16's cleanup line fails status parsing on the missing provider anyway, so MV4 (schema check removed) would survive. Added V21-V23 per the QA hand-forward on this task (no schema/no code -> malformed; executionReady/verified distinct both ways). Every VM row carries verdict, readiness, rows, actions (all mandatory) and both runners assert the blocked strong-profile line. JB runner maps phase -> verdict (FINISHED/PENDING/INVALIDATED/READY) then applies the verdict's probe; collects all failing ids and fails once. Focused run (Windows gradlew.bat test --tests ClientVerdictCorpusTest --rerun, jetbrains-gradle lease, released): exit 0, XML 3 tests 0 failures @23:18:59Z. Shared tree has no MERGE_HEAD.",
+      "startedAt": "2026-10-29T23:15:56.616Z",
+      "completedAt": "2026-10-29T23:19:13.521Z"
     },
     {
       "stepId": "step-2",
       "description": "VS CODE APPROVAL CONSUMER, plus the one known VS Code parity fix.\n\n1. moe-vscode/tests/plan-review.test.cjs: append a section '(K) shared client verdict corpus (CQ-I06b)'.\n   - Read `JSON.parse(fs.readFileSync(path.join(__dirname, '../../moe-jetbrains/src/test/resources/client-verdicts.json'), 'utf8'))`. Error handling: a missing or unparseable corpus must throw at load time so the file fails. Never skip it.\n   - Emit one `test` per approval row, named by the row id. Each test:\n     - opens with the existing harness: openOn(makeTask({planRevision: <JSON.parse(rendered), or undefined when rendered is null>})), then h.webview.click('approveBtn') and await h.settle();\n     - plays the events, awaiting h.settle() after each:\n       - task: pushUpdate(h, makeTask({status, planRevision: JSON.parse(literal) or undefined}));\n       - task null: h.setTasks(); h.emitState(); h.flushTimers();\n       - error: h.emitError({operation, message: 'refused', codeName, context: self ? {taskId: TASK_ID} : other ? {taskId: 'task-other'} : undefined}), dropping null keys;\n       - lost: h.emitConnection('disconnected');\n     - checks the verdict:\n       - confirmed: infoMessages deepEqual ['Plan approved'] and panelDisposeCount === 1;\n       - pending: infoMessages [] after the events, and ['Plan approved'] after the W probe;\n       - latched: infoMessages [] and approveDisabled() === true, and still no 'Plan approved' after the W probe;\n       - rearmed: infoMessages []; after the AA probe approveDisabled() === false, and a click makes the last approveCalls entry carry exactly the rendered revision.\n   - Assert exact values. Dispose the panel in finally.\n2. KNOWN PARITY FIX, row A24: moe-vscode/src/panels/PlanReviewPanel.ts settlePendingApproval.\n   - Today a vanished task keeps pendingApprovalRevision set, so a task reappearing as WORKING would confirm it. JetBrains latches TASK_MISSING.\n   - Split the early return:\n     ```\n     if (!task) { this.pendingApprovalRevision = undefined; return; }\n     if (task.status !== 'WORKING') { return; }\n     ```\n   - Add a one-line comment naming JetBrains TASK_MISSING parity.\n   - Add no imports: peer vm harnesses load this module with strict require maps (`mem:gotcha-vscode-panel-strict-require-map`). The page already shows its 'taskRemoved' notice.\n3. Run `cd moe-vscode && npm test`. Every corpus row and every existing plan-review case must be green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/plan-review.test.cjs",
         "moe-vscode/src/panels/PlanReviewPanel.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/plan-review.test.cjs",
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "note": "Appended section (L) to plan-review.test.cjs, named L because the file already has a K. It reads the corpus bytes from ../../moe-jetbrains/src/test/resources/client-verdicts.json; a missing or unparseable corpus, or one with no approval rows, throws at load. There is one test per approval row, run through the real panel+page harness with the corpus taskId. Each test asserts the first click sends exactly [taskId, rendered], or 0 when rendered is absent. The verdict probes follow the plan; rearmed asserts approveCalls deepEqual [send, send], so a click swallowed while still pending cannot pass as rearmed. RED: before the fix, only A24 failed (\"Plan approved\" after the WORKING probe). GREEN: the A24 fix in PlanReviewPanel.settlePendingApproval splits the early return; a missing task clears pendingApprovalRevision, with a one-line JetBrains TASK_MISSING parity comment and no imports. `npm test` gives 200/200 (175 baseline + 25 corpus rows). Filed out-of-scope parity bug task-3287014af13b4d1dbaac5622de4c1fc6 (LOW): when a task leaves AWAITING_APPROVAL or vanishes and then returns at the same revision, the VS Code page re-enables Approve but JetBrains stays latched. The corpus's latched probe is a WORKING frame, so no corpus row covers this.",
+      "startedAt": "2026-10-29T23:19:15.864Z",
+      "completedAt": "2026-10-29T23:20:16.175Z"
     },
     {
       "stepId": "step-3",
       "description": "VS CODE VM CONSUMER: NEW moe-vscode/tests/managed-vm-verdicts.test.cjs (node:test).\n- Compile CQ-I05's src/util/ManagedVm.ts with typescript.transpileModule, the same way tests/settings-wire.test.cjs and I05's own managed-vm test do.\n- Read the same corpus bytes from `../../moe-jetbrains/src/test/resources/client-verdicts.json`. Error handling: a missing or unparseable corpus throws, and is never skipped.\n- Emit one test per VM row, named by its id. For `oversize`, use 'x'.repeat(N).\n- Call the landed pure API: decode (passing the command if it takes one), readiness, rows, actions(report, running) and strongProfile.\n- A small adapter maps the landed report kinds and Unreadable reasons onto the corpus vocabulary. It maps names only and never changes an outcome.\n- Assert verdict, readiness, rows, actions and the blocked strong-profile text exactly.\n\nKnown risk: I05 planned decode(stdout, exitCode, timedOut) with no command. A parity note asked I05 to bind schema to command (comment-5c9de848 on task-758bb59a).\n- If V11, V14 or V15 still diverge, fix it forward in ManagedVm.ts: owning module only, at most 20 lines, reported in modifiedFiles.\n- If the fix is bigger, create a defect task and report_blocked on it.\n- Never encode a per-client expectation (task rail).\n\nRun `cd moe-vscode && npm test && npm run compile`. Every VM row passes and tsc exits 0.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/tests/managed-vm-verdicts.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/managed-vm-verdicts.test.cjs"
+      ],
+      "note": "NEW tests/managed-vm-verdicts.test.cjs. It loads ManagedVm.ts the same way managed-vm.test.cjs does: transpileModule plus runInThisContext with a require that throws, so assertions stay in one realm. It reads the same corpus bytes; a missing or unparseable corpus, or one with no vm rows, throws at load. There is one test per VM row, and an unknown command fails the row. Each test makes one exact deepEqual over {verdict, readiness booleans by line position, rows, actions [refresh, reconcile, cleanup], the exact blocked strong-profile text}. The adapter maps kind names only: status, outcome to report, refused:code, unreadable:reason. All 23 rows passed on the first run, so ManagedVm.ts needed no fix-forward: I05 landed with command-bound schema, top-level code refusal, LAUNCHED cleanup and a distinct too-large reason. `npm test` gives 223/223 (200 + 23); `npm run compile` (tsc) exits 0.",
+      "startedAt": "2026-10-29T23:20:16.901Z",
+      "completedAt": "2026-10-29T23:20:52.568Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report every file in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, never the shared tree, then restore and cmp-verify. Each must fail the named row in the client it mutates.\n   JetBrains:\n   - MJ1: tokenOf maps null (malformed) to LegacyMissing. Must fail A08.\n   - MJ2: onConnectionLost never releases. Must fail A21 and A22.\n   - MJ3: ManagedVmPresentation drops the duplicate-name check. Must fail V08.\n   VS Code:\n   - MV1: effectivePlanRevision coerces with Number(raw). Must fail A07.\n   - MV2: the A24 fix is removed. Must fail A24.\n   - MV3: handleClientError skips the operation check. Must fail A18.\n   - MV4: ManagedVm accepts any schema for any command. Must fail V11.\n   - MV5: the cleanup action needs only one instance. Must fail V05.\n   Corpus:\n   - MC1: flip A13's verdict to confirmed. BOTH clients must fail A13, which proves both consumers read the same row.\n2. THE GATE, fresh.\n   - Run `cd moe-vscode && npm test && npm run compile`. This runs natively in WSL in seconds (the CQ-I04 precedent).\n   - Run the JetBrains half under the `jetbrains-gradle` lease, and release it even on failure: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <tree>\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. This is the Windows equivalent of `./gradlew test`, because WSL has no JDK.\n   - If the shared tree is mid-merge, gate in a whole-repo `git archive HEAD` snapshot that includes BOTH moe-vscode and moe-jetbrains, with this task's files overlaid and cmp-verified (`mem:gotcha-jetbrains-gate-snapshot`). The VS Code tests read the corpus from moe-jetbrains.\n   - Both halves must exit 0. Confirm that ClientVerdictCorpusTest ran (TEST-*.xml) and that every corpus row ran (node:test counts).\n3. Size: `git diff --numstat` over the 5 files must stay under 400 net. Budget: corpus about 70, Kotlin about 110, the plan-review section about 60, the VM test about 70, the panel fix about 6.\n4. Error handling for this step: release the lease and delete scratch copies on every exit path.\n5. Supply both commands to complete_task with exit codes and output tails, labelled 'WSL npm' and 'Windows gradle equivalent'.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verify step. This step changed no files.\n\nMUTANTS: each ran in a scratch copy, never the shared tree; all killed.\n- VS Code (in /tmp, with node_modules symlinked):\n  - MV1 (Number(raw)) failed L A07, plus A08 and an existing I2 case.\n  - MV2 (A24 fix reverted) failed L A24.\n  - MV3 (operation check dropped) failed L A18, plus an existing H case.\n  - MV4 (schema check dropped) failed V11.\n  - MV5 (cleanup on any row) failed V05.\n  - Bonus QA hand-forward mutants: QA1 (schema-required dropped) failed V21; QA2 (verified derived from executionReady) failed V22.\n  - MC1 (A13 flipped to confirmed) failed L A13.\n- JetBrains, in a `git archive HEAD moe-jetbrains` snapshot at D:\\projexts\\moes-i06b-mut with this task's 2 files overlaid and cmp-verified; one gradlew run per mutant; restored, cmp-verified, then deleted:\n  - MJ1 (tokenOf null -> LegacyMissing) failed A08.\n  - MJ2 (onConnectionLost no-op) failed A21 and A22, plus A23.\n  - MJ3 (duplicate check dropped) failed V08.\n  - MC1 failed A13.\n- MC1 therefore fails A13 in BOTH clients.\n\nGATE (fresh):\n- WSL npm: `cd moe-vscode && npm test && npm run compile` exit 0. 223/223 pass; 48 corpus rows ran (25 L A.. + 23 V..); tsc clean.\n- Windows gradle equivalent, in the shared tree (no MERGE_HEAD), under the jetbrains-gradle lease (released): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, BUILD SUCCESSFUL. XML: 24 suites, 337 tests, 0 failures/errors/skipped. ClientVerdictCorpusTest 3/0 at 23:22:34Z.\n\nSIZE: +347/-1 = 346 net over the 5 files, under 400.\n- Kotlin 164: over the ~110 budget, because every VM row asserts all 5 fields and every verdict has its probe.\n- Corpus 53, plan-review +83, VM test 44, panel +3/-1.\n\nDisclosure: to measure the untracked files I ran `git add -N` on my 3 new paths, which wrote intent-to-add entries to the index. I removed them at once with `git reset -q -- <those 3 paths>`. The index now matches its prior state: only the peers' 2 pre-staged files remain staged. No commits.",
+      "startedAt": "2026-10-29T23:20:53.385Z",
+      "completedAt": "2026-10-29T23:23:06.334Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review. Read the diff the way a reviewer would hunt for a corpus that proves nothing. Check each of these:\n- Every runner reads only the corpus bytes. No expectation is hard-coded per client. A client-specific skip, tolerance, or adapter that changes an outcome breaks the rail.\n- The probes really tell pending apart from latched.\n- Every row is asserted on exact values.\n- The frame literals survive parsing: Gson LazilyParsedNumber in Kotlin, JSON.parse in JS.\n- The ordering-sensitive rows (A14, A25) keep their order.\n- An id typo fails loudly.\n- The corpus is a test resource, so it is excluded from the plugin jar. Test resources never ship, and CQ-I06c's packaged scan would flag a 'fixtures' path.\n- The VS Code vsix (.vscodeignore) never includes ../moe-jetbrains.\n- The A24 fix is minimal and adds no imports.\n- Rails: no .moe edits, no Git writes, none of globalRails.forbiddenPatterns, and verified-local is untouched.\nThen write the Serena memory 'task-task-f2d3d553bd684eff997498a55c564f13-handoff' for CQ-I06. Record:\n- the corpus path and row ids;\n- the verdict and probe semantics;\n- every fix-forward that was made;\n- the residuals. Literals that JSON.parse handles lossily, such as 4.0000000000000001 and 1e-400, are deliberately absent, because the daemon never emits them.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
+      ],
+      "note": "Adversarial self-review over my 5 paths only. Results:\n- Runners read only the corpus bytes. Each VS Code adapter maps kind names only. There is no per-client expectation, skip or tolerance.\n- The WORKING probe tells pending apart from latched in both clients. Rearmed requires [send, send] in VS Code, plus the READY phase and Decision.Send in JetBrains.\n- Every assertion is exact: deepEqual, and data-class or list equality.\n- Literals survive parsing: Gson parseString keeps them, MJ1 kills A08, and JSON.parse handles the JS side.\n- A14 and A25 keep their event-array order.\n- FIX: an id typo now fails loudly. The integrity test checks the A\\d\\d / V\\d\\d shape in addition to uniqueness (+3 lines Kotlin).\n- The corpus is a test resource. It is absent from the rebuilt jar (unzip -l shows 0 hits), and the vsix ignores tests/** with moe-vscode as its root.\n- The A24 fix is 3 lines with no imports.\n- No .moe edits, no forbidden patterns, verified-local untouched. Git: the one `git add -N` index write was reverted, as disclosed in step 4.\n\nTheoretical residual: if the task vanishes and reappears within the 200 ms debounce, the page keeps approvalPending set. Approve then stays disabled with no notice, which fails safe.\n\nFRESH FINAL GATE, run after the edit:\n- WSL npm 223/223 (48 corpus rows), tsc exit 0.\n- Windows gradlew.bat test --rerun exit 0: 24 suites, 337 tests, 0 failures. ClientVerdictCorpusTest 3/0 @23:23:48Z. Lease released.\n\nWrote Serena memories task-task-f2d3d553...-handoff and gotcha-size-measure-untracked.",
+      "startedAt": "2026-10-29T23:23:07.283Z",
+      "completedAt": "2026-10-29T23:24:23.856Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,20 +110,28 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:55.625Z",
-  "updatedAt": "2026-10-29T23:07:46.460Z",
+  "updatedAt": "2026-10-29T23:24:45.346Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:52:30.571Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-b5749787"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T22:56:03.232Z",
   "executionContract": {
@@ -140,5 +177,22 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T22:56:03.353Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:15:56.616Z",
+  "reviewStartedAt": "2026-10-29T23:24:45.344Z",
+  "verification": {
+    "command": "WSL npm: cd moe-vscode && npm test && npm run compile ; Windows gradle equivalent of `cd ../moe-jetbrains && ./gradlew test` (WSL has no JDK; jetbrains-gradle lease, released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "[WSL npm] exit 0\nℹ tests 223\nℹ pass 223\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\n(48 corpus rows ran: 25 'L Axx' + 23 'Vxx')\nnpm notice run tsc -p ./   (exit 0)\n[Windows gradle equivalent] exit 0\n> Task :test\nBUILD SUCCESSFUL in 6s\n11 actionable tasks: 3 executed, 8 up-to-date\nTEST-*.xml: 24 suites, 337 tests, 0 failures, 0 errors, 0 skipped\nClientVerdictCorpusTest tests=3 failures=0 errors=0 timestamp=2026-10-29T23:23:48Z",
+    "reportedAt": "2026-10-29T23:24:45.344Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-verdicts.json",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
+    "moe-vscode/tests/plan-review.test.cjs",
+    "moe-vscode/src/panels/PlanReviewPanel.ts",
+    "moe-vscode/tests/managed-vm-verdicts.test.cjs"
+  ],
+  "completionSummary": "CQ-I06b delivered: one client-neutral corpus run by both IDEs through their real decision code.\n\nFiles:\n- NEW moe-jetbrains/src/test/resources/client-verdicts.json: 53 lines, ASCII; test resource only (not in the jar; the vsix ignores tests/**).\n- NEW ClientVerdictCorpusTest.kt (MoeJson.parseTask + PlanReviewApprovalState; ManagedVmPresentation).\n- moe-vscode/tests/plan-review.test.cjs section (L): real PlanReviewPanel + planReview.js harness. It is (L), not K, because the file already has a K.\n- NEW moe-vscode/tests/managed-vm-verdicts.test.cjs (ManagedVm.ts).\n- Fix-forward: PlanReviewPanel.settlePendingApproval clears the pending approval when the task vanishes (A24, JetBrains TASK_MISSING parity). 3 lines, no imports.\n\nRows:\n- A01-A25 approval; V01-V23 VM.\n- A08 uses rendered absent + W null, and V11 is a status-shaped body stamped with the cleanup schema, so MJ1 and MV4 actually flip them.\n- V21-V23 are QA's I05 hand-forward rows.\n\nDoD:\n1. Each row has exactly one expectation. VM rows assert verdict, readiness, rows, actions and the blocked strong profile.\n2. JetBrains maps phase to verdict, then probes. Integrity checks: unique ids shaped A##/V##, at least 25/20 rows, verdict vocabulary. All failing ids are reported in one failure.\n3. VS Code runs the same bytes.\n   - Mutants killed on their rows: MJ1 A08; MJ2 A21/A22; MJ3 V08; MV1 A07; MV2 A24; MV3 A18; MV4 V11; MV5 V05.\n   - Bonus: QA1 V21; QA2 V22.\n   - MC1 (A13 flipped) fails in BOTH clients.\n   - All mutants ran in scratch copies, restored and cmp-verified.\n4. Gate above: 223/223, tsc clean; Gradle 337 tests, 0 failures.\n\nSize: about +350/-1 over 5 files (under 400).\n\nFiled task-3287014a (LOW): the VS Code page re-enables Approve when a task leaves AA or vanishes and then returns AA at the same revision; JetBrains latches. No corpus row covers this.\n\nDisclosure: a measuring `git add -N` on my 3 new paths was reverted at once (`git reset -- paths`). The index matches its prior state; no commits."
 }
