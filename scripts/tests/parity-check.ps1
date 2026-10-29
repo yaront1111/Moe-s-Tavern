@@ -69,13 +69,31 @@ $required = [ordered]@{
         'MOE_COMPACT_WINDOW_DEFAULT', 'CLAUDE_CODE_PLUGIN_DIRS', 'MOE_DISABLE_COMPACTION_KEEPER', 'MOE_DISABLE_ACCOUNT_SWITCH_MOD',
         'CLAUDE_CONFIG_DIR', 'MOE_ACCOUNT_ID', 'MOE_ACCOUNT_SAMPLE_FILE')
     'launch-failure prose' = @('run the printed Command by hand', 'a CLI auto-update dropped a flag the wrapper passes')
+    # Launch outage prose: the local lines, the @governors line, the launch
+    # probe's prompt and the release's handoff note (what the next claimer
+    # reads, and what releaseTask.ts must never count as an empty-progress
+    # refusal), spelled identically in both.
+    'launch outage prose' = @('[launch-outage]', 'launch failures in a row: entering launch outage mode.',
+        'After this post-flight the held task is released for another seat, and this seat claims no new task until a launch probe succeeds.',
+        ' for another seat', 'Could not release ', ', so this seat still holds it', 'it is BLOCKED, and a resource-blocked task keeps its seat',
+        'No task was bound to these launches, so none was released',
+        '; this seat claims no new task until a launch probe succeeds (probes back off up to ',
+        'before the next launch probe (streak ', '; this seat holds no task and claims none until a probe launches. (Ctrl+C to stop)',
+        'this seat holds no task, so it calls no claim_next_task until a launch probe succeeds.',
+        'MOE_LAUNCH_PROBE role=', ' - launch outage: launching a taskless launch probe; claiming resumes once a launch succeeds.',
+        'This is a launch probe for workerId=',
+        'after repeated launch failures: the wrapper launched it to see whether this CLI starts at all, and no task is bound to it (no task baseline or delivery tracking). If routed mentions are supplied, reply to each via moe.chat_send; otherwise reply OK. Then end your turn immediately.',
+        ' Launch outage over: claiming resumes.', ': launch outage over, claiming resumes.',
+        'seat launch outage', "Seat outage, not a task refusal: this seat's CLI exited within ",
+        '), so this seat did no work in those launches; earlier progress on the task ', '(completed steps, commits, handoff notes) is untouched.',
+        'Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.', 'NO_ANSWER')
     'resume-budget prose' = @('resume budget re-armed')
     # Claude account rotation: the helper both wrappers call and the lease, wait
     # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
     # compared above).
     'account rotation prose' = @('moe-account-lease.mjs', '[account] ', 'launching without rotation.', 'every signed-in account is spent; the held task stays held. (Ctrl+C to stop)', 'relaunching on the next account; the held task stays held.', 'Relaunching now on the next account.')
     'baseline / index' = @('#moe-baseline v1', 'moe/baseline', ':(literal)', '--porcelain=v1 -z --untracked-files=all --no-renames', 'hash-object --stdin-paths', 'update-index --no-assume-unchanged --no-skip-worktree -z --stdin')
-    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt', 'lease_account', 'report_account_usage')
+    'RPC tools' = @('get_commit_scope', 'record_commit', 'record_candidate', 'record_check_run', 'finalize_attempt', 'lease_account', 'report_account_usage', 'release_task')
     'candidate evidence fields' = @('attemptId', 'generation', 'candidateId', 'treeSha', 'runnerId', 'runner-observed')
     # The landing outcomes finalize_attempt carries: both wrappers map every exit
     # (the interrupted one included) onto the same words. 'failed' is too common a

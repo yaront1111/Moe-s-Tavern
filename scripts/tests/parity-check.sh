@@ -114,6 +114,27 @@ for prose in 'run the printed Command by hand' 'a CLI auto-update dropped a flag
   require_both "launch-failure prose" "$prose"
 done
 
+# Launch outage prose: the local lines, the @governors line, the launch probe's
+# prompt and the release's handoff note (what the next claimer reads, and what
+# releaseTask.ts must never count as an empty-progress refusal), spelled
+# identically in both.
+for prose in '[launch-outage]' 'launch failures in a row: entering launch outage mode.' \
+  'After this post-flight the held task is released for another seat, and this seat claims no new task until a launch probe succeeds.' \
+  ' for another seat' 'Could not release ' ', so this seat still holds it' 'it is BLOCKED, and a resource-blocked task keeps its seat' \
+  'No task was bound to these launches, so none was released' \
+  '; this seat claims no new task until a launch probe succeeds (probes back off up to ' \
+  'before the next launch probe (streak ' '; this seat holds no task and claims none until a probe launches. (Ctrl+C to stop)' \
+  'this seat holds no task, so it calls no claim_next_task until a launch probe succeeds.' \
+  'MOE_LAUNCH_PROBE role=' ' - launch outage: launching a taskless launch probe; claiming resumes once a launch succeeds.' \
+  'This is a launch probe for workerId=' \
+  'after repeated launch failures: the wrapper launched it to see whether this CLI starts at all, and no task is bound to it (no task baseline or delivery tracking). If routed mentions are supplied, reply to each via moe.chat_send; otherwise reply OK. Then end your turn immediately.' \
+  ' Launch outage over: claiming resumes.' ': launch outage over, claiming resumes.' \
+  'seat launch outage' "Seat outage, not a task refusal: this seat's CLI exited within " \
+  '), so this seat did no work in those launches; earlier progress on the task ' '(completed steps, commits, handoff notes) is untouched.' \
+  'Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.' NO_ANSWER; do
+  require_both "launch outage prose" "$prose"
+done
+
 # Resume-budget prose: a session that completed a plan step re-arms the budget.
 require_both "resume-budget prose" 'resume budget re-armed'
 
@@ -175,7 +196,7 @@ require_both "codex per-task hint" 'Per-task model/effort (launch.codex hint)'
 require_both "codex per-task effort" 'model_reasoning_effort='
 
 # MCP tools the wrappers call for the ledger.
-for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt lease_account report_account_usage; do
+for tool in get_commit_scope record_commit record_candidate record_check_run finalize_attempt lease_account report_account_usage release_task; do
   require_both "RPC tool" "$tool"
 done
 

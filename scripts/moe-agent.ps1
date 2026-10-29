@@ -5227,7 +5227,7 @@ function Update-ResumeBudgetOnProgress {
 # three minutes, posted "pausing auto-resume" and then idled for hours after
 # the limit had reset -- twice in one night. Such exits are NOT counted against
 # the resume budget; the relaunch backs off exponentially instead (the held
-# task stays held, so nothing needs a release).
+# task stays held until the third one, when launch outage mode below releases it).
 $script:LaunchFailStreak = 0
 $script:LaunchFailBackoffSec = 0
 $script:CliLaunchedAt = $null
@@ -5237,6 +5237,90 @@ $launchBackoffBaseSec = 60
 if ($env:MOE_LAUNCH_BACKOFF_BASE_SEC -match '^\d+$') { $launchBackoffBaseSec = [int]$env:MOE_LAUNCH_BACKOFF_BASE_SEC }
 $launchBackoffMaxSec = 900
 if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [int]$env:MOE_LAUNCH_BACKOFF_MAX_SEC }
+
+# Launch outage mode (sh twin: the LAUNCH_OUTAGE block). Measured 2026-10-29: a
+# codex seat whose credit was spent kept a HIGH task with 0/4 steps done behind
+# the backoff above while an idle healthy seat waited, and earlier that day
+# three codex tabs held two rows from ~01:53Z to 08:43Z, each ending a "CLI
+# exit=1" session every ~15 min, until a human closed the tabs. Keeping the
+# task assumed a launch failure clears in minutes; a spent credit or a broken
+# credential lasts hours. So at the third launch failure in a row a claiming
+# seat (AutoClaim, never a governor) enters outage mode: once that iteration's
+# post-flight has landed and finalized the task as it was, the seat releases it
+# for another seat (never with force: a refusal, or a BLOCKED hold, keeps it),
+# claims no new task, and relaunches as a taskless launch probe on the same
+# backoff. The first launch that runs ends the outage and claiming resumes.
+# Claude seats that rotate accounts relaunch on the next account instead
+# ($script:AccountRelaunch resets the streak).
+$script:LaunchOutage = $false
+# The task the seat still holds in outage, '' for none: pre-flight then skips
+# claim_next_task, which CLAIMS a task for a worker that holds none.
+$script:LaunchOutageHeldTaskId = ''
+# The last task this outage tried to release: a held task gets one attempt.
+$script:LaunchOutageReleaseTried = ''
+# Set on the iteration that enters the outage, for the line its post-flight posts.
+$script:LaunchOutageAnnounce = $false
+$script:LaunchOutageReleaseCode = ''
+$script:LaunchFailHead = ''
+
+# Invoke-MoeLaunchOutageRelease TASK_ID -- moe.release_task with an outage
+# handoff, fenced by the pinned attempt when there is one. $true = released;
+# $false = refused or unanswered, with the daemon's codeName (else NO_ANSWER)
+# in $script:LaunchOutageReleaseCode. Never force: RELEASE_NOT_ASSIGNEE,
+# STEP_LEASE_HELD or ATTEMPT_SUPERSEDED mean the row is not this seat's to
+# drop. whatIsDone must not read as an empty-progress handoff (releaseTask.ts
+# isEmptyProgressHandoff: "nothing", "none", "no progress ..."): three of those
+# in 24h park the task in BACKLOG, and a seat outage is not a task refusal.
+# Twin: launch_outage_release.
+function Invoke-MoeLaunchOutageRelease([string]$TaskId) {
+    $script:LaunchOutageReleaseCode = 'NO_ANSWER'
+    $note = @{
+        whatIsDone  = "Seat outage, not a task refusal: this seat's CLI exited within ${launchFailSec}s of launch $($script:LaunchFailStreak) times in a row (last exit code $cliExitForLaunch), so this seat did no work in those launches; earlier progress on the task (completed steps, commits, handoff notes) is untouched."
+        whatRemains = 'Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.'
+    }
+    $releaseArgs = @{ taskId = $TaskId; workerId = $WorkerId; reason = 'seat launch outage'; handoffNote = $note }
+    if ($script:MoeAttemptId -and (Test-MoeGeneration $script:MoeAttemptGeneration)) {
+        $releaseArgs.attemptId = $script:MoeAttemptId
+        $releaseArgs.generation = $script:MoeAttemptGeneration
+    }
+    $released = $null
+    try { $released = Invoke-MoeRpc -Tool 'release_task' -Args $releaseArgs } catch { $script:MoeRpcFailure = 'transport' }
+    if ($null -ne $released) { return $true }
+    # Invoke-MoeRpc keeps a daemon refusal's data.codeName.
+    if ($script:MoeRpcFailure -eq 'daemon refusal' -and $script:MoeRpcCodeName) { $script:LaunchOutageReleaseCode = [string]$script:MoeRpcCodeName }
+    return $false
+}
+
+# Invoke-MoeLaunchOutagePostflight -- runs once the iteration's post-flight is
+# done, so the landing and finalize saw the task as it was. A failed launch that
+# held a task this outage has not tried yet releases it (a BLOCKED one keeps its
+# seat), and the iteration that entered the outage posts the @governors line
+# with what actually happened. Twin: launch_outage_postflight.
+function Invoke-MoeLaunchOutagePostflight {
+    $what = ''
+    if ($moeCurrentLaunchFailed -and $preflightTaskId -and [string]$preflightTaskId -ne $script:LaunchOutageReleaseTried) {
+        if ([string]$finalStatus -eq 'BLOCKED') {
+            $script:LaunchOutageHeldTaskId = [string]$preflightTaskId
+            $what = "Kept ${preflightTaskId}: it is BLOCKED, and a resource-blocked task keeps its seat"
+        } else {
+            $script:LaunchOutageReleaseTried = [string]$preflightTaskId
+            if (Invoke-MoeLaunchOutageRelease ([string]$preflightTaskId)) {
+                $script:LaunchOutageHeldTaskId = ''
+                $what = "Released $preflightTaskId for another seat"
+            } else {
+                $script:LaunchOutageHeldTaskId = [string]$preflightTaskId
+                $what = "Could not release $preflightTaskId ($($script:LaunchOutageReleaseCode)), so this seat still holds it"
+            }
+        }
+        Write-Host "[launch-outage] $what." -ForegroundColor Yellow
+    }
+    if (-not $script:LaunchOutageAnnounce) { return }
+    $script:LaunchOutageAnnounce = $false
+    if (-not $what) { $what = 'No task was bound to these launches, so none was released' }
+    if (-not $generalChannelId) { return }
+    $msg = "$($script:LaunchFailHead) $what; this seat claims no new task until a launch probe succeeds (probes back off up to ${launchBackoffMaxSec}s, next in $($script:LaunchFailBackoffSec)s)."
+    try { Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $msg } | Out-Null } catch {}
+}
 
 # --- Claude account rotation (docs/TROUBLESHOOTING.md "Claude Account Rotation
 # Issues"). Twin of the moe-agent.sh block of the same name. Before every claude
@@ -5404,7 +5488,11 @@ do {
     if (-not $firstRun) {
         Write-Host ""
         if ($script:LaunchFailBackoffSec -gt 0) {
-            Write-Host "[launch-failure] Backing off $($script:LaunchFailBackoffSec)s before relaunching (streak $($script:LaunchFailStreak)); the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
+            if ($script:LaunchOutage -and -not $script:LaunchOutageHeldTaskId) {
+                Write-Host "[launch-outage] Backing off $($script:LaunchFailBackoffSec)s before the next launch probe (streak $($script:LaunchFailStreak)); this seat holds no task and claims none until a probe launches. (Ctrl+C to stop)" -ForegroundColor Yellow
+            } else {
+                Write-Host "[launch-failure] Backing off $($script:LaunchFailBackoffSec)s before relaunching (streak $($script:LaunchFailStreak)); the held task stays held. (Ctrl+C to stop)" -ForegroundColor Yellow
+            }
             Start-Sleep -Seconds $script:LaunchFailBackoffSec
         } elseif ($script:AccountRelaunch) {
             Write-Host "[account] Relaunching now on the next account." -ForegroundColor Yellow
@@ -5506,6 +5594,8 @@ do {
     $moeLandingDone = $false
     $moeStopLoop = $false
     $moeCurrentLaunchFailed = $false
+    # This iteration's launch is a taskless launch probe (launch outage mode).
+    $moeLaunchProbe = $false
     $script:MoeToolWritten = @{}
     $script:MoeToolPending = [hashtable]::new([StringComparer]::Ordinal)
     $script:MoeToolSettled = [hashtable]::new([StringComparer]::Ordinal)
@@ -5558,7 +5648,16 @@ do {
         } else {
             # A seat the startup join left teamless re-joins before it claims.
             if (-not $teamJoined) { [void](Invoke-MoeTeamJoinRetry) }
-            $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args $claimRpcArgs
+            if ($script:LaunchOutage -and -not $script:LaunchOutageHeldTaskId) {
+                # Launch outage, nothing held: claim_next_task CLAIMS a task for a
+                # worker that holds none, and the next fast exit would strand it.
+                # Answer it the empty way, as the governor branch above does; the
+                # launch below is a taskless launch probe.
+                Write-Host "[launch-outage] Launch outage (streak $($script:LaunchFailStreak)): this seat holds no task, so it calls no claim_next_task until a launch probe succeeds." -ForegroundColor Yellow
+                $claim = [pscustomobject]@{ hasNext = $false }
+            } else {
+                $claim = Invoke-MoeRpc -Tool "claim_next_task" -Args $claimRpcArgs
+            }
             # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
             # empty queue: say so, or the [no-task] banner below reads as "no work".
             # The daemon is the authority on membership, so the next claim poll
@@ -5617,9 +5716,10 @@ do {
         # Skipped for: a claim that already succeeded or that reported a held
         # task (the resume path owns that), the governor (never claims;
         # taskless is its normal state), AutoClaim=false (the operator opted
-        # out of the whole claim/baseline/landing path), and a pending unread
-        # mention (answered by a chat-only session below instead of waited on).
-        if ($AutoClaim -and $Role -ne 'governor' -and -not $preflightHasUnreadMention -and $null -ne $claim) {
+        # out of the whole claim/baseline/landing path), a pending unread
+        # mention (answered by a chat-only session below instead of waited on),
+        # and a launch outage (the seat claims no new task until a probe launches).
+        if ($AutoClaim -and $Role -ne 'governor' -and -not $script:LaunchOutage -and -not $preflightHasUnreadMention -and $null -ne $claim) {
             $claimHeldTaskId = ""
             if ($claim.PSObject.Properties['alreadyAssigned'] -and $claim.alreadyAssigned -and $claim.alreadyAssigned.taskId) {
                 $claimHeldTaskId = [string]$claim.alreadyAssigned.taskId
@@ -5828,11 +5928,19 @@ do {
                 Write-Host "[OK] Pre-flight complete. ${preflightVerb}: $preflightTaskId ($preflightTaskTitle)" -ForegroundColor Green
             } else {
                 $preflightNoTask = $true
-                if (Test-MoeSeatTeamless) {
+                if ($script:LaunchOutage) {
+                    # No wait ran: the launch decision below names the launch probe.
+                } elseif (Test-MoeSeatTeamless) {
                     Write-Host "[WARN] No task claimed for role $Role after the wrapper-side wait, and this seat is TEAMLESS (moe.join_team: $teamJoinLastError), so claims skip every epic+status a live worker already holds." -ForegroundColor Yellow
                 } else {
                     Write-Host "[INFO] No claimable task for role $Role after the wrapper-side wait." -ForegroundColor Yellow
                 }
+            }
+            # Launch outage: whenever a claim answered, keep what it says the seat
+            # holds (its task, a suppressed BLOCKED or capped hold, or nothing),
+            # so a seat the daemon left holding nothing stops claiming.
+            if ($script:LaunchOutage -and $claim -isnot [string]) {
+                $script:LaunchOutageHeldTaskId = if ($preflightTaskId) { [string]$preflightTaskId } else { [string]$preflightHeldTaskId }
             }
         } elseif ($AutoClaim -and $Role -ne 'governor') {
             # Same hole as the taskless prompt, different trigger: an
@@ -5840,6 +5948,9 @@ do {
             # which is a CLI editing with no baseline and no landing. Back off
             # and let the outer loop retry instead.
             $preflightClaimFailed = $true
+            # In a launch outage this is an iteration with no task, so every CLI
+            # branch gets the launch probe prompt, never a legacy claim chain.
+            if ($script:LaunchOutage) { $preflightNoTask = $true }
             Write-Host "[WARN] Pre-flight claim RPC failed; not falling back to an in-agent claim (that session would have no baseline and would land nothing)." -ForegroundColor Yellow
         } else {
             Write-Host "[WARN] Pre-flight claim RPC failed; falling back to in-agent claim." -ForegroundColor Yellow
@@ -5908,7 +6019,13 @@ do {
     # postflight, both keyed to the preflight task id. Return to the wrapper.
     $notificationPrompt = $null
     if ($AutoClaim -and ($preflightNoTask -or $preflightClaimFailed) -and -not $preflightOk -and $Role -ne 'governor') {
-        $notificationPrompt = "This is a notification-only session for workerId=$WorkerId. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+        if ($script:LaunchOutage) {
+            # Launch outage: this taskless session is the launch probe (see the
+            # single taskless launch decision below); it only has to start and answer.
+            $notificationPrompt = "This is a launch probe for workerId=$WorkerId after repeated launch failures: the wrapper launched it to see whether this CLI starts at all, and no task is bound to it (no task baseline or delivery tracking). If routed mentions are supplied, reply to each via moe.chat_send; otherwise reply OK. Then end your turn immediately. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+        } else {
+            $notificationPrompt = "This is a notification-only session for workerId=$WorkerId. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+        }
     }
     if ($preflightOk) {
         # get_context owns role scoping and bounded sections. Preserve its
@@ -6236,11 +6353,18 @@ $mentionsJson
     # $loopEnabled -- a -NoLoop run has already done its waiting in the
     # wrapper, so launching an unbound CLI here would be the very defect this
     # closes rather than a fallback. Governor keeps its terminal; AutoClaim=false
-    # is the operator owning the session.
+    # is the operator owning the session. A launch outage is the one taskless
+    # launch with nothing to answer: the probe (its prompt is $notificationPrompt
+    # above) shows whether the CLI starts again, and the outer loop's
+    # launch-failure backoff paces the probes.
     $moeSkipLaunch = $false
-    if ($AutoClaim -and ($preflightNoTask -or $preflightClaimFailed) -and -not $preflightOk -and $Role -ne 'governor' `
-        -and ($preflightRoutedMentions.Count -eq 0)) {
-        $moeSkipLaunch = $true
+    if ($AutoClaim -and ($preflightNoTask -or $preflightClaimFailed) -and -not $preflightOk -and $Role -ne 'governor') {
+        if ($script:LaunchOutage) {
+            $moeLaunchProbe = $true
+            Write-Host "MOE_LAUNCH_PROBE role=$Role worker=$WorkerId streak=$($script:LaunchFailStreak) - launch outage: launching a taskless launch probe; claiming resumes once a launch succeeds." -ForegroundColor Yellow
+        } elseif ($preflightRoutedMentions.Count -eq 0) {
+            $moeSkipLaunch = $true
+        }
     }
     if (-not $moeSkipLaunch -and $cliType -in @('claude', 'codex')) {
         # Settings can change between tasks in a long-lived wrapper.
@@ -7061,7 +7185,13 @@ $mentionsJson
             }
         }
     }
-    if ($script:AccountRelaunch) {
+    if ($moeSkipLaunch) {
+        # No CLI ran (MOE_TASKLESS_NO_LAUNCH above set CliExitCode=0): neither
+        # a launch that ran nor a launch failure. Read as a success it zeroed the
+        # streak and its backoff, and after three failures it posted a false
+        # "CLI launches again" line. The streak, its backoff and the launch
+        # outage state stay as they were.
+    } elseif ($script:AccountRelaunch) {
         # The account ran out or signed out, not the session: give the resume
         # attempt back and skip the launch-failure backoff. A fast exit is still
         # a launch that did no work, which is what the landing reads the flag for.
@@ -7078,17 +7208,40 @@ $mentionsJson
         $launchBackoffPow = [math]::Min($script:LaunchFailStreak - 1, 10)
         $script:LaunchFailBackoffSec = [int][math]::Min($launchBackoffMaxSec, $launchBackoffBaseSec * [math]::Pow(2, $launchBackoffPow))
         Write-Host "[launch-failure] CLI exited $cliExitForLaunch after ${cliElapsedSec}s, before doing any work (streak $($script:LaunchFailStreak)): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in $($script:LaunchFailBackoffSec)s." -ForegroundColor Yellow
-        if ($script:LaunchFailStreak -eq 3 -and $generalChannelId) {
-            $launchFailMsg = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem. Wrapper is backing off up to ${launchBackoffMaxSec}s between relaunches and keeps its task; no release needed."
-            try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchFailMsg } | Out-Null } catch {}
+        if ($script:LaunchFailStreak -eq 3) {
+            $script:LaunchFailHead = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem."
+            if ($AutoClaim -and $Role -ne 'governor') {
+                # Launch outage mode (declared above the loop). The release and
+                # its @governors line wait for this iteration's post-flight
+                # (Invoke-MoeLaunchOutagePostflight), so the landing and finalize
+                # see the task as it was.
+                if (-not $script:LaunchOutage) {
+                    $script:LaunchOutage = $true
+                    $script:LaunchOutageAnnounce = $true
+                    $script:LaunchOutageReleaseTried = ''
+                    $script:LaunchOutageHeldTaskId = if ($preflightTaskId) { [string]$preflightTaskId } else { [string]$preflightHeldTaskId }
+                    Write-Host "[launch-outage] $($script:LaunchFailStreak) launch failures in a row: entering launch outage mode. After this post-flight the held task is released for another seat, and this seat claims no new task until a launch probe succeeds." -ForegroundColor Yellow
+                }
+            } elseif ($generalChannelId) {
+                $launchFailMsg = "$($script:LaunchFailHead) Wrapper is backing off up to ${launchBackoffMaxSec}s between relaunches and keeps its task; no release needed."
+                try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchFailMsg } | Out-Null } catch {}
+            }
         }
     } else {
-        if ($script:LaunchFailStreak -ge 3 -and $generalChannelId) {
+        if (($script:LaunchFailStreak -ge 3 -or $script:LaunchOutage) -and $generalChannelId) {
             $launchOkMsg = "${WorkerId}: CLI launches again (ran ${cliElapsedSec}s, exit $cliExitForLaunch) after $($script:LaunchFailStreak) launch failures."
+            if ($script:LaunchOutage) { $launchOkMsg += ' Launch outage over: claiming resumes.' }
             try { Invoke-MoeRpc -Tool "chat_send" -Args @{ channel = $generalChannelId; workerId = $WorkerId; content = $launchOkMsg } | Out-Null } catch {}
+        }
+        if ($script:LaunchOutage) {
+            Write-Host "[launch-outage] The CLI launches again (ran ${cliElapsedSec}s, exit $cliExitForLaunch): launch outage over, claiming resumes." -ForegroundColor Green
         }
         $script:LaunchFailStreak = 0
         $script:LaunchFailBackoffSec = 0
+        $script:LaunchOutage = $false
+        $script:LaunchOutageHeldTaskId = ''
+        $script:LaunchOutageReleaseTried = ''
+        $script:LaunchOutageAnnounce = $false
     }
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
@@ -7323,13 +7476,18 @@ $mentionsJson
     # the landing; the loop `break` for gate/peel failures happens after it.
     Invoke-PostFlight
     if ($moeStopLoop) { break }
+    # Launch outage: the release and the outage line, now that this iteration's
+    # post-flight is done (a stopping seat above deregisters on exit instead).
+    if ($script:LaunchOutage) { Invoke-MoeLaunchOutagePostflight }
     # -------- End post-flight --------
     # A launch failure never started a session, so even a single-shot seat
     # (codex/gemini/grok TUI) relaunches after the backoff it just announced,
-    # unless the caller asked for one run with -NoLoop. An account relaunch
-    # (the account ran out or signed out) never finished its session either,
-    # so it relaunches too, at once, even under -NoLoop.
-} while ($loopEnabled -or ($moeCurrentLaunchFailed -and -not $NoLoop) -or $script:AccountRelaunch)
+    # unless the caller asked for one run with -NoLoop. A launch probe never
+    # started one either: once it launches, the seat goes on to claim the
+    # session it is for. An account relaunch (the account ran out or signed
+    # out) never finished its session either, so it relaunches too, at once,
+    # even under -NoLoop.
+} while ($loopEnabled -or (($moeCurrentLaunchFailed -or $moeLaunchProbe) -and -not $NoLoop) -or $script:AccountRelaunch)
 } finally {
     # Teardown rescue FIRST (before the deregister releases the task): when
     # this session ends without its post-flight having landed (Ctrl+C during

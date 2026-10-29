@@ -5782,7 +5782,8 @@ rearm_resume_on_progress() { # $1 = the post-session get_context JSON
 # limit made every claude seat exit 1 at launch; each wrapper burned its resume
 # budget in about three minutes, posted "pausing auto-resume" and idled for
 # hours after the limit had reset. Such exits are NOT counted against the
-# resume budget; the relaunch backs off exponentially instead.
+# resume budget; the relaunch backs off exponentially instead (the held task
+# stays held until the third one, when launch outage mode below releases it).
 LAUNCH_FAIL_STREAK=0
 LAUNCH_FAIL_BACKOFF_SEC=0
 CLI_LAUNCHED_AT=""
@@ -5792,6 +5793,108 @@ LAUNCH_BACKOFF_BASE_SEC="${MOE_LAUNCH_BACKOFF_BASE_SEC:-60}"
 case "$LAUNCH_BACKOFF_BASE_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_BASE_SEC=60 ;; esac
 LAUNCH_BACKOFF_MAX_SEC="${MOE_LAUNCH_BACKOFF_MAX_SEC:-900}"
 case "$LAUNCH_BACKOFF_MAX_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_MAX_SEC=900 ;; esac
+
+# Launch outage mode (PS twin: the $script:LaunchOutage* block). Measured
+# 2026-10-29: a codex seat whose credit was spent kept a HIGH task with 0/4
+# steps done behind the backoff above while an idle healthy seat waited, and
+# earlier that day three codex tabs held two rows from ~01:53Z to 08:43Z, each
+# ending a "CLI exit=1" session every ~15 min, until a human closed the tabs.
+# Keeping the task assumed a launch failure clears in minutes; a spent credit
+# or a broken credential lasts hours. So at the third launch failure in a row a
+# claiming seat (AUTO_CLAIM, never a governor) enters outage mode: once that
+# iteration's post-flight has landed and finalized the task as it was, the seat
+# releases it for another seat (never with force: a refusal, or a BLOCKED hold,
+# keeps it), claims no new task, and relaunches as a taskless launch probe on
+# the same backoff. The first launch that runs ends the outage and claiming
+# resumes. Claude seats that rotate accounts relaunch on the next account
+# instead (ACCOUNT_RELAUNCH resets the streak).
+LAUNCH_OUTAGE=false
+# The task the seat still holds in outage, "" for none: pre-flight then skips
+# claim_next_task, which CLAIMS a task for a worker that holds none.
+LAUNCH_OUTAGE_HELD_TASK_ID=""
+# The last task this outage tried to release: a held task gets one attempt.
+LAUNCH_OUTAGE_RELEASE_TRIED=""
+# Set on the iteration that enters the outage, for the line its post-flight posts.
+LAUNCH_OUTAGE_ANNOUNCE=false
+LAUNCH_OUTAGE_RELEASE_CODE=""
+
+# launch_outage_release TASK_ID -- moe.release_task with an outage handoff,
+# fenced by the pinned attempt when there is one. 0 = released; 1 = refused or
+# unanswered, with the daemon's codeName (else NO_ANSWER) in
+# LAUNCH_OUTAGE_RELEASE_CODE. Never force: RELEASE_NOT_ASSIGNEE,
+# STEP_LEASE_HELD or ATTEMPT_SUPERSEDED mean the row is not this seat's to
+# drop. whatIsDone must not read as an empty-progress handoff (releaseTask.ts
+# isEmptyProgressHandoff: "nothing", "none", "no progress ..."): three of those
+# in 24h park the task in BACKLOG, and a seat outage is not a task refusal.
+# Twin: Invoke-MoeLaunchOutageRelease.
+launch_outage_release() {
+    local args err
+    LAUNCH_OUTAGE_RELEASE_CODE=NO_ANSWER
+    args=$($PYTHON_CMD - "$1" "$WORKER_ID" "${MOE_ATTEMPT_ID:-}" "${MOE_ATTEMPT_GENERATION:-}" "$LAUNCH_FAIL_SEC" "$LAUNCH_FAIL_STREAK" "$CLI_EXIT_FOR_LAUNCH" <<'PY' 2>/dev/null
+import json, sys
+task, worker, aid, gen, sec, streak, code = sys.argv[1:]
+p = {'taskId': task, 'workerId': worker, 'reason': 'seat launch outage', 'handoffNote': {
+    'whatIsDone': ("Seat outage, not a task refusal: this seat's CLI exited within %ss of launch %s times in a row "
+                   "(last exit code %s), so this seat did no work in those launches; earlier progress on the task "
+                   "(completed steps, commits, handoff notes) is untouched." % (sec, streak, code)),
+    'whatRemains': 'Everything the task had left before those launches: continue from its context, completed steps and earlier handoffs.'}}
+if aid and gen.isdigit():
+    p['attemptId'] = aid
+    p['generation'] = int(gen)
+print(json.dumps(p))
+PY
+    ) || return 1
+    if err=$(moe_rpc release_task "$args" 2>&1 >/dev/null); then return 0; fi
+    # moe_rpc prints a JSON-RPC error on stderr; a daemon refusal carries data.codeName.
+    LAUNCH_OUTAGE_RELEASE_CODE=$($PYTHON_CMD -c '
+import json, sys
+for line in reversed(sys.stdin.read().strip().splitlines()):
+    try:
+        e = json.loads(line)
+    except Exception:
+        continue
+    d = e.get("data") if isinstance(e, dict) and isinstance(e.get("data"), dict) else {}
+    if d.get("codeName"):
+        print(d["codeName"])
+        break
+' <<< "$err" 2>/dev/null || true)
+    [ -n "$LAUNCH_OUTAGE_RELEASE_CODE" ] || LAUNCH_OUTAGE_RELEASE_CODE=NO_ANSWER
+    return 1
+}
+
+# launch_outage_postflight -- runs once the iteration's post-flight is done, so
+# the landing and finalize saw the task as it was. A failed launch that held a
+# task this outage has not tried yet releases it (a BLOCKED one keeps its
+# seat), and the iteration that entered the outage posts the @governors line
+# with what actually happened. Twin: Invoke-MoeLaunchOutagePostflight.
+launch_outage_postflight() {
+    local what="" msg args
+    if [ "$CURRENT_LAUNCH_FAILED" = true ] && [ -n "${PREFLIGHT_TASK_ID:-}" ] \
+        && [ "$PREFLIGHT_TASK_ID" != "$LAUNCH_OUTAGE_RELEASE_TRIED" ]; then
+        if [ "${FINAL_STATUS:-}" = BLOCKED ]; then
+            LAUNCH_OUTAGE_HELD_TASK_ID="$PREFLIGHT_TASK_ID"
+            what="Kept $PREFLIGHT_TASK_ID: it is BLOCKED, and a resource-blocked task keeps its seat"
+        else
+            LAUNCH_OUTAGE_RELEASE_TRIED="$PREFLIGHT_TASK_ID"
+            if launch_outage_release "$PREFLIGHT_TASK_ID"; then
+                LAUNCH_OUTAGE_HELD_TASK_ID=""
+                what="Released $PREFLIGHT_TASK_ID for another seat"
+            else
+                LAUNCH_OUTAGE_HELD_TASK_ID="$PREFLIGHT_TASK_ID"
+                what="Could not release $PREFLIGHT_TASK_ID ($LAUNCH_OUTAGE_RELEASE_CODE), so this seat still holds it"
+            fi
+        fi
+        echo -e "${YELLOW}[launch-outage]${NC} $what."
+    fi
+    [ "$LAUNCH_OUTAGE_ANNOUNCE" = true ] || return 0
+    LAUNCH_OUTAGE_ANNOUNCE=false
+    [ -n "$what" ] || what="No task was bound to these launches, so none was released"
+    [ -n "${GENERAL_CHANNEL_ID:-}" ] || return 0
+    msg="$LAUNCH_FAIL_HEAD $what; this seat claims no new task until a launch probe succeeds (probes back off up to ${LAUNCH_BACKOFF_MAX_SEC}s, next in ${LAUNCH_FAIL_BACKOFF_SEC}s)."
+    args=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$msg" 2>/dev/null || true)
+    moe_rpc chat_send "$args" > /dev/null 2>&1 || true
+    return 0
+}
 
 # --- Claude account rotation (docs/TROUBLESHOOTING.md "Claude Account Rotation
 # Issues"). Twin of the moe-agent.ps1 block of the same name. Before every
@@ -5962,7 +6065,11 @@ while [ "$LOOP_RUNNING" = true ]; do
     if [ "$FIRST_RUN" = false ]; then
         echo ""
         if [ "${LAUNCH_FAIL_BACKOFF_SEC:-0}" -gt 0 ]; then
-            echo -e "${YELLOW}[launch-failure]${NC} Backing off ${LAUNCH_FAIL_BACKOFF_SEC}s before relaunching (streak $LAUNCH_FAIL_STREAK); the held task stays held. (Ctrl+C to stop)"
+            if [ "$LAUNCH_OUTAGE" = true ] && [ -z "$LAUNCH_OUTAGE_HELD_TASK_ID" ]; then
+                echo -e "${YELLOW}[launch-outage]${NC} Backing off ${LAUNCH_FAIL_BACKOFF_SEC}s before the next launch probe (streak $LAUNCH_FAIL_STREAK); this seat holds no task and claims none until a probe launches. (Ctrl+C to stop)"
+            else
+                echo -e "${YELLOW}[launch-failure]${NC} Backing off ${LAUNCH_FAIL_BACKOFF_SEC}s before relaunching (streak $LAUNCH_FAIL_STREAK); the held task stays held. (Ctrl+C to stop)"
+            fi
             sleep "$LAUNCH_FAIL_BACKOFF_SEC"
         elif [ "$ACCOUNT_RELAUNCH" = true ]; then
             account_say "Relaunching now on the next account."
@@ -6013,6 +6120,8 @@ while [ "$LOOP_RUNNING" = true ]; do
 
     CLI_EXIT_CODE=0
     CURRENT_LAUNCH_FAILED=false
+    # This iteration's launch is a taskless launch probe (launch outage mode).
+    LAUNCH_PROBE=false
 
     # -------- Pre-flight: perform startup rituals BEFORE spawning the CLI --------
     # Claim the next task, fetch context, read chat backlog.
@@ -6127,7 +6236,16 @@ except Exception:
         else
             # A seat the startup join left teamless re-joins before it claims.
             [ "$TEAM_JOINED" = true ] || retry_team_join || true
-            CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
+            if [ "$LAUNCH_OUTAGE" = true ] && [ -z "$LAUNCH_OUTAGE_HELD_TASK_ID" ]; then
+                # Launch outage, nothing held: claim_next_task CLAIMS a task for a
+                # worker that holds none, and the next fast exit would strand it.
+                # Answer it the empty way, as the governor branch above does; the
+                # launch below is a taskless launch probe.
+                echo -e "${YELLOW}[launch-outage]${NC} Launch outage (streak $LAUNCH_FAIL_STREAK): this seat holds no task, so it calls no claim_next_task until a launch probe succeeds."
+                CLAIM_RESULT='{"hasNext":false}'
+            else
+                CLAIM_RESULT=$(moe_rpc claim_next_task "$CLAIM_RPC_JSON" 2>/dev/null || echo "")
+            fi
             # A teamless seat is refused with code NO_TEAM_MEMBERSHIP, which is not an
             # empty queue: say so, or the [no-task] banner below reads as "no work".
             # The daemon is the authority on membership, so the next claim poll
@@ -6199,8 +6317,9 @@ PYEOF
         # Skipped for: a claim that already succeeded or that reported a held
         # task (the resume path owns that), the governor (never claims;
         # taskless is its normal state), AUTO_CLAIM=false (the operator opted
-        # out of the whole claim/baseline/landing path), and a pending unread
-        # mention (answered by a chat-only session below instead of waited on).
+        # out of the whole claim/baseline/landing path), a pending unread
+        # mention (answered by a chat-only session below instead of waited on),
+        # and a launch outage (the seat claims no new task until a probe launches).
         # NOT moe.wait_for_task, and that is measured rather than preferred:
         # moe_rpc pipes ONE json line into a fresh moe-proxy and closes stdin,
         # and the proxy treats stdin EOF as shutdown, erroring every still-open
@@ -6209,7 +6328,7 @@ PYEOF
         # blocking long-poll therefore cannot survive this transport in either
         # wrapper, so the wait is a bounded CLAIM poll over the same
         # non-blocking RPC the pre-flight already uses.
-        if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] \
+        if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] && [ "$LAUNCH_OUTAGE" != true ] \
             && [ "$PREFLIGHT_HAS_UNREAD_MENTION" = false ] && [ -n "$CLAIM_RESULT" ] && [ -n "$PYTHON_CMD" ]; then
             CLAIM_WAIT_NEEDED=$($PYTHON_CMD -c "
 import json, sys
@@ -6531,7 +6650,9 @@ except Exception:
                 fi
             elif [ "$HAS_NEXT" = "false" ]; then
                 PREFLIGHT_NO_TASK=true
-                if seat_is_teamless; then
+                if [ "$LAUNCH_OUTAGE" = true ]; then
+                    : # No wait ran: the launch decision below names the launch probe.
+                elif seat_is_teamless; then
                     echo -e "${YELLOW}[WARN]${NC} No task claimed for role $ROLE after the wrapper-side wait, and this seat is TEAMLESS (moe.join_team: $TEAM_JOIN_LAST_ERROR), so claims skip every epic+status a live worker already holds."
                 else
                     echo -e "${YELLOW}[INFO]${NC} No claimable task for role $ROLE after the wrapper-side wait."
@@ -6539,12 +6660,21 @@ except Exception:
             else
                 echo -e "${YELLOW}[WARN]${NC} Pre-flight claim returned unparseable response; falling back to in-agent claim."
             fi
+            # Launch outage: whenever a claim answered, keep what it says the seat
+            # holds (its task, a suppressed BLOCKED or capped hold, or nothing),
+            # so a seat the daemon left holding nothing stops claiming.
+            if [ "$LAUNCH_OUTAGE" = true ] && { [ "$HAS_NEXT" = true ] || [ "$HAS_NEXT" = false ]; }; then
+                LAUNCH_OUTAGE_HELD_TASK_ID="${PREFLIGHT_TASK_ID:-$PREFLIGHT_HELD_TASK_ID}"
+            fi
         elif [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ]; then
             # Same hole as the taskless prompt, different trigger: an
             # unanswered claim RPC used to render the in-agent claim chain,
             # which is a CLI editing with no baseline and no landing. Back off
             # and let the outer loop retry instead.
             PREFLIGHT_CLAIM_FAILED=true
+            # In a launch outage this is an iteration with no task, so every CLI
+            # branch gets the launch probe prompt, never a legacy claim chain.
+            if [ "$LAUNCH_OUTAGE" = true ]; then PREFLIGHT_NO_TASK=true; fi
             echo -e "${YELLOW}[WARN]${NC} Pre-flight claim RPC failed; not falling back to an in-agent claim (that session would have no baseline and would land nothing)."
         else
             echo -e "${YELLOW}[WARN]${NC} Pre-flight claim RPC failed (daemon/proxy error); falling back to in-agent claim."
@@ -6822,7 +6952,13 @@ Run: bash $moe_call --help for full list."
     # postflight, both keyed to the preflight task id. Return to the wrapper.
     NOTIFICATION_PROMPT=""
     if [ "$AUTO_CLAIM" = true ] && { [ "$PREFLIGHT_NO_TASK" = true ] || [ "$PREFLIGHT_CLAIM_FAILED" = true ]; } && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != governor ]; then
-        NOTIFICATION_PROMPT="This is a notification-only session for workerId=$WORKER_ID. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+        if [ "$LAUNCH_OUTAGE" = true ]; then
+            # Launch outage: this taskless session is the launch probe (see the
+            # single taskless launch decision below); it only has to start and answer.
+            NOTIFICATION_PROMPT="This is a launch probe for workerId=$WORKER_ID after repeated launch failures: the wrapper launched it to see whether this CLI starts at all, and no task is bound to it (no task baseline or delivery tracking). If routed mentions are supplied, reply to each via moe.chat_send; otherwise reply OK. Then end your turn immediately. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+        else
+            NOTIFICATION_PROMPT="This is a notification-only session for workerId=$WORKER_ID. No task was claimed at preflight and this session has no task baseline or delivery tracking. Reply to the supplied routed mentions via moe.chat_send FIRST; answer any supplied pending questions via moe.add_comment. Then end your turn immediately so the wrapper can claim and baseline a task in a fresh session. Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session, even if a reply or nextAction recommends claiming."
+        fi
     fi
     if [ "$PREFLIGHT_OK" = true ]; then
         # Compute compact unread counts so we don't embed the full chat-read
@@ -7080,12 +7216,19 @@ $PROMPT_BODY"
     # LOOP_ENABLED -- a --no-loop run has already done its waiting in the
     # wrapper, so launching an unbound CLI here would be the very defect this
     # closes rather than a fallback. Governor keeps its terminal;
-    # AUTO_CLAIM=false is the operator owning the session.
+    # AUTO_CLAIM=false is the operator owning the session. A launch outage is
+    # the one taskless launch with nothing to answer: the probe (its prompt is
+    # NOTIFICATION_PROMPT above) shows whether the CLI starts again, and the
+    # outer loop's launch-failure backoff paces the probes.
     MOE_SKIP_LAUNCH=false
     if [ "$AUTO_CLAIM" = true ] && { [ "$PREFLIGHT_NO_TASK" = true ] || [ "$PREFLIGHT_CLAIM_FAILED" = true ]; } \
-        && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != "governor" ] \
-        && [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
-        MOE_SKIP_LAUNCH=true
+        && [ "$PREFLIGHT_OK" != true ] && [ "$ROLE" != "governor" ]; then
+        if [ "$LAUNCH_OUTAGE" = true ]; then
+            LAUNCH_PROBE=true
+            echo "MOE_LAUNCH_PROBE role=$ROLE worker=$WORKER_ID streak=$LAUNCH_FAIL_STREAK - launch outage: launching a taskless launch probe; claiming resumes once a launch succeeds."
+        elif [ "${PREFLIGHT_ROUTED_MENTIONS_COUNT:-0}" -eq 0 ] 2>/dev/null; then
+            MOE_SKIP_LAUNCH=true
+        fi
     fi
 
     if [ "$MOE_SKIP_LAUNCH" != true ] && { [ "$CLI_TYPE" = claude ] || [ "$CLI_TYPE" = codex ]; }; then
@@ -7944,7 +8087,14 @@ PYEOF
     if [ -n "$CLI_LAUNCHED_AT" ]; then CLI_ELAPSED_SEC=$(( $(date +%s) - CLI_LAUNCHED_AT )); fi
     CLI_EXIT_FOR_LAUNCH="${CLI_EXIT_CODE:-0}"
     account_after_exit "$CLI_EXIT_FOR_LAUNCH"
-    if [ "$ACCOUNT_RELAUNCH" = true ]; then
+    if [ "$MOE_SKIP_LAUNCH" = true ]; then
+        # No CLI ran (MOE_TASKLESS_NO_LAUNCH above set CLI_EXIT_CODE=0): neither
+        # a launch that ran nor a launch failure. Read as a success it zeroed the
+        # streak and its backoff, and after three failures it posted a false
+        # "CLI launches again" line. The streak, its backoff and the launch
+        # outage state stay as they were.
+        :
+    elif [ "$ACCOUNT_RELAUNCH" = true ]; then
         # The account ran out or signed out, not the session: give the resume
         # attempt back and skip the launch-failure backoff. A fast exit is still
         # a launch that did no work, which is what the landing reads the flag for.
@@ -7963,19 +8113,44 @@ PYEOF
         LAUNCH_FAIL_BACKOFF_SEC=$(( LAUNCH_BACKOFF_BASE_SEC * (1 << LAUNCH_BACKOFF_POW) ))
         if [ "$LAUNCH_FAIL_BACKOFF_SEC" -gt "$LAUNCH_BACKOFF_MAX_SEC" ]; then LAUNCH_FAIL_BACKOFF_SEC="$LAUNCH_BACKOFF_MAX_SEC"; fi
         echo -e "${YELLOW}[launch-failure]${NC} CLI exited $CLI_EXIT_FOR_LAUNCH after ${CLI_ELAPSED_SEC}s, before doing any work (streak $LAUNCH_FAIL_STREAK): provider usage limit, credential, a crash at launch, or an argv the installed CLI version rejects (exit 2 from codex; run the printed Command by hand). Not counted against the resume budget; next relaunch in ${LAUNCH_FAIL_BACKOFF_SEC}s."
-        if [ "$LAUNCH_FAIL_STREAK" -eq 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
-            LAUNCH_FAIL_MSG="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem. Wrapper is backing off up to ${LAUNCH_BACKOFF_MAX_SEC}s between relaunches and keeps its task; no release needed."
-            LAUNCH_FAIL_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_FAIL_MSG" 2>/dev/null || true)
-            moe_rpc chat_send "$LAUNCH_FAIL_ARGS" > /dev/null 2>&1 || true
+        if [ "$LAUNCH_FAIL_STREAK" -eq 3 ]; then
+            LAUNCH_FAIL_HEAD="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem."
+            if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ]; then
+                # Launch outage mode (declared above the loop). The release and
+                # its @governors line wait for this iteration's post-flight
+                # (launch_outage_postflight), so the landing and finalize see the
+                # task as it was.
+                if [ "$LAUNCH_OUTAGE" != true ]; then
+                    LAUNCH_OUTAGE=true
+                    LAUNCH_OUTAGE_ANNOUNCE=true
+                    LAUNCH_OUTAGE_RELEASE_TRIED=""
+                    LAUNCH_OUTAGE_HELD_TASK_ID="${PREFLIGHT_TASK_ID:-$PREFLIGHT_HELD_TASK_ID}"
+                    echo -e "${YELLOW}[launch-outage]${NC} $LAUNCH_FAIL_STREAK launch failures in a row: entering launch outage mode. After this post-flight the held task is released for another seat, and this seat claims no new task until a launch probe succeeds."
+                fi
+            elif [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+                LAUNCH_FAIL_MSG="$LAUNCH_FAIL_HEAD Wrapper is backing off up to ${LAUNCH_BACKOFF_MAX_SEC}s between relaunches and keeps its task; no release needed."
+                LAUNCH_FAIL_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_FAIL_MSG" 2>/dev/null || true)
+                moe_rpc chat_send "$LAUNCH_FAIL_ARGS" > /dev/null 2>&1 || true
+            fi
         fi
     else
-        if [ "$LAUNCH_FAIL_STREAK" -ge 3 ] && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
+        if { [ "$LAUNCH_FAIL_STREAK" -ge 3 ] || [ "$LAUNCH_OUTAGE" = true ]; } && [ -n "${GENERAL_CHANNEL_ID:-}" ]; then
             LAUNCH_OK_MSG="$WORKER_ID: CLI launches again (ran ${CLI_ELAPSED_SEC}s, exit $CLI_EXIT_FOR_LAUNCH) after $LAUNCH_FAIL_STREAK launch failures."
+            if [ "$LAUNCH_OUTAGE" = true ]; then
+                LAUNCH_OK_MSG="$LAUNCH_OK_MSG Launch outage over: claiming resumes."
+            fi
             LAUNCH_OK_ARGS=$($PYTHON_CMD -c "import json,sys; print(json.dumps({'channel':sys.argv[1],'workerId':sys.argv[2],'content':sys.argv[3]}))" "$GENERAL_CHANNEL_ID" "$WORKER_ID" "$LAUNCH_OK_MSG" 2>/dev/null || true)
             moe_rpc chat_send "$LAUNCH_OK_ARGS" > /dev/null 2>&1 || true
         fi
+        if [ "$LAUNCH_OUTAGE" = true ]; then
+            echo -e "${GREEN}[launch-outage]${NC} The CLI launches again (ran ${CLI_ELAPSED_SEC}s, exit $CLI_EXIT_FOR_LAUNCH): launch outage over, claiming resumes."
+        fi
         LAUNCH_FAIL_STREAK=0
         LAUNCH_FAIL_BACKOFF_SEC=0
+        LAUNCH_OUTAGE=false
+        LAUNCH_OUTAGE_HELD_TASK_ID=""
+        LAUNCH_OUTAGE_RELEASE_TRIED=""
+        LAUNCH_OUTAGE_ANNOUNCE=false
     fi
 
     # -------- Post-flight: shutdown rituals after CLI exits --------
@@ -8365,13 +8540,18 @@ except Exception:
     if [ "$POSTFLIGHT_BREAK" = true ]; then
         break
     fi
+    # Launch outage: the release and the outage line, now that this iteration's
+    # post-flight is done (a stopping seat above deregisters on exit instead).
+    if [ "$LAUNCH_OUTAGE" = true ]; then launch_outage_postflight || true; fi
     # -------- End post-flight --------
 
     # A launch failure never started a session, so even a single-shot seat
     # (codex/gemini/grok TUI) relaunches after the backoff it just announced,
-    # unless the caller asked for one run with --no-loop. An account relaunch
-    # moves it onto the next account at once, even under --no-loop.
-    if [ "$LOOP_ENABLED" = false ] && { [ "$NO_LOOP" = true ] || [ "$CURRENT_LAUNCH_FAILED" != true ]; } && [ "$ACCOUNT_RELAUNCH" != true ]; then
+    # unless the caller asked for one run with --no-loop. A launch probe never
+    # started one either: once it launches, the seat goes on to claim the
+    # session it is for. An account relaunch moves it onto the next account at
+    # once, even under --no-loop.
+    if [ "$LOOP_ENABLED" = false ] && { [ "$NO_LOOP" = true ] || { [ "$CURRENT_LAUNCH_FAILED" != true ] && [ "$LAUNCH_PROBE" != true ]; }; } && [ "$ACCOUNT_RELAUNCH" != true ]; then
         break
     fi
 done

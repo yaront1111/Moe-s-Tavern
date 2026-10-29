@@ -603,6 +603,20 @@ switch (tool) {
     break;
   }
   case 'declare_files': ok({ success: true, taskId: args.taskId, declaredFiles: args.paths || [], addedPaths: args.paths || [] }); break;
+  case 'release_task': {
+    // releaseTask.ts in miniature for scenario AC: every call is logged in
+    // order with the other RPCs; FAKE_RELEASE_REFUSE=<codeName> refuses it the
+    // way the ownership and fencing gates do, before anything is written.
+    appendRpc();
+    const refuse = process.env.FAKE_RELEASE_REFUSE;
+    if (refuse) {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32003,message:'['+refuse+'] fixture release refused',
+        data:{tool:'moe.release_task',codeName:refuse}}}) + '\n');
+      break;
+    }
+    ok({ success: true, taskId: args.taskId, previousWorkerId: args.workerId, releasedBy: args.workerId, status: 'WORKING', message: `Task ${args.taskId} released from ${args.workerId}` });
+    break;
+  }
   case 'deregister_worker': {
     // The EXIT-trap deregister; scenario W proves it still runs after the
     // teardown rescue.
@@ -4530,12 +4544,202 @@ EOF
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AB2] ok"
 
+  # Scenario AC -- launch outage mode (twin: scenario AC in postflight.ps1). A
+  # codex TUI worker whose CLI exits 1 at once, the way a spent provider credit
+  # makes it (measured 2026-10-29: such seats kept their tasks for hours behind
+  # the launch-failure backoff, ending a "CLI exit=1" session every ~15 min). A
+  # codex TUI does not loop, so its launch failures are what keep this
+  # single-shot seat running. Run 1: the third fast exit releases the held task
+  # exactly once, and only AFTER that iteration's landing (its record_commit
+  # comes first), unforced, fenced by the pinned attempt, with a "Seat outage,
+  # not a task refusal:" handoff that releaseTask.ts's refusal cascade cannot
+  # count; the @governors line says the task was released; the next iteration
+  # calls no claim_next_task and launches a taskless probe; that probe runs past
+  # MOE_LAUNCH_FAIL_SEC and exits 0, which ends the outage, and the seat claims
+  # again and runs the session it is for. Run 2: a refused release keeps the
+  # task, says so with the daemon's code, and the resumed launch is the probe,
+  # with no second release. Run 3: a launch the wrapper skipped (nothing to do)
+  # keeps the streak's backoff instead of reading as a launch that ran.
+  echo "[scenario AC] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs"
+  OUTAGE_BIN="$TMP_DIR/outage-bin"
+  mkdir -p "$OUTAGE_BIN"
+  OUTAGE_CLI="$OUTAGE_BIN/codex"
+  cat > "$OUTAGE_CLI" <<'EOF'
+#!/usr/bin/env bash
+# Launch N of this run: 1..FAKE_OUTAGE_FAILS exit 1 at once; after that a launch
+# probe sleeps FAKE_OUTAGE_PROBE_SEC (past MOE_LAUNCH_FAIL_SEC) and exits 0, and
+# any other launch exits 0 at once. Each launch is logged into the fake daemon's
+# RPC log, so its order against the claim, landing and release calls is on
+# record.
+moe="$MOE_PROJECT_PATH/.moe"
+n=$(( $(cat "$moe/outage-launches" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$moe/outage-launches"
+prompt="${*: -1}"
+kind=task
+case "$prompt" in *'This is a launch probe for workerId='*) kind=probe ;; esac
+printf '%s\n' "$prompt" > "$moe/outage-prompt-$n.txt"
+printf '{"tool":"cli-launch","args":{"n":%s,"kind":"%s"}}\n' "$n" "$kind" >> "$moe/evidence-rpcs.jsonl"
+[ "$n" -gt "${FAKE_OUTAGE_FAILS:-3}" ] || exit 1
+[ "$kind" != probe ] || sleep "${FAKE_OUTAGE_PROBE_SEC:-4}"
+exit 0
+EOF
+  chmod +x "$OUTAGE_CLI"
+  OUTAGE_CHECK="$TMP_DIR/outage-check.cjs"
+  cat > "$OUTAGE_CHECK" <<'OUTAGEJS'
+// One scenario AC run (twin: the same checker in postflight.ps1):
+//   node outage-check.cjs <run> <exit> <wrapper out> <project dir> <worker id> <MOE_LAUNCH_FAIL_SEC>
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const [run, code, outFile, dir, worker, failSec] = process.argv.slice(2);
+const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
+// Windows PowerShell 5.1 seeds the chat file with a BOM and CRLF.
+const lines = (file) => read(file).split('\n').map((line) => line.replace(/^\uFEFF/, '').trim()).filter(Boolean);
+const out = read(outFile).replace(/\x1b\[[0-9;]*m/g, '');
+const rows = lines(path.join(dir, '.moe', 'evidence-rpcs.jsonl')).map((line) => JSON.parse(line));
+// c = claim_next_task, L = a task launch, P = a launch probe, k = record_commit (a landing), R = release_task
+const seq = rows.map((r) => ({ claim_next_task: 'c', record_commit: 'k', release_task: 'R' })[r.tool]
+  || (r.tool === 'cli-launch' ? (r.args.kind === 'probe' ? 'P' : 'L') : '')).join('');
+const chat = lines(path.join(dir, '.moe', 'messages', 'chan-general.jsonl')).map((line) => JSON.parse(line).content);
+const prompt = (n) => read(path.join(dir, '.moe', `outage-prompt-${n}.txt`));
+const has = (text) => assert.ok(out.includes(text), `expected '${text}' in the wrapper output`);
+const said = (text) => assert.ok(chat.some((c) => c.includes(text)), `expected a #general line with '${text}'`);
+try {
+  assert.equal(code, '0', `wrapper exited with ${code}`);
+  const releases = rows.filter((r) => r.tool === 'release_task').map((r) => r.args);
+  assert.equal(releases.length, 1, `expected exactly one release_task, got ${releases.length}`);
+  const [rel] = releases;
+  const task = run === 'released' ? 'task-postflight' : 'task-resume';
+  assert.equal(rel.taskId, task);
+  assert.equal(rel.workerId, worker);
+  assert.equal(rel.force, undefined, 'the outage release must never force');
+  assert.equal(rel.attemptId, 'attempt-postflight', 'the release must carry the pinned attempt');
+  assert.equal(rel.generation, 7);
+  const done = rel.handoffNote && rel.handoffNote.whatIsDone;
+  assert.ok(typeof done === 'string' && done.startsWith('Seat outage, not a task refusal:'), `whatIsDone: ${done}`);
+  // releaseTask.ts isEmptyProgressHandoff: these shapes feed the BACKLOG refusal cascade.
+  const lowered = done.trim().toLowerCase();
+  assert.ok(!['nothing', 'none', 'n/a', 'na'].includes(lowered) && !/^nothing\b/.test(lowered) && !/^no progress\b/.test(lowered),
+    'whatIsDone reads as an empty-progress refusal');
+  for (const text of [`exited within ${failSec}s of launch 3 times in a row (last exit code 1)`, 'did no work', 'is untouched']) {
+    assert.ok(done.includes(text), `whatIsDone lacks '${text}': ${done}`);
+  }
+  assert.ok(typeof rel.handoffNote.whatRemains === 'string' && rel.handoffNote.whatRemains.trim(), 'whatRemains is required');
+  assert.ok(!chat.some((c) => c.includes('keeps its task; no release needed')), 'the outage line still says the task is kept');
+  said(`@governors ${worker}: CLI exits within ${failSec}s of launch (exit 1, 3 in a row)`);
+  said('a CLI auto-update dropped a flag the wrapper passes');
+  said('this seat claims no new task until a launch probe succeeds (probes back off up to 1s, next in 1s)');
+  said('Launch outage over: claiming resumes.');
+  has('entering launch outage mode');
+  has('launch outage over, claiming resumes.');
+  switch (run) {
+    case 'released':
+      // The landing (k) comes before the release (R); no claim (c) between the
+      // release and the probe (P); claiming resumes after the probe.
+      assert.equal(seq, 'cLkcLkcLkRPcLk', `RPC sequence ${seq}`);
+      said(`Released ${task} for another seat; this seat claims no new task`);
+      has(`[launch-outage] Released ${task} for another seat.`);
+      has('so it calls no claim_next_task until a launch probe succeeds');
+      has(`MOE_LAUNCH_PROBE role=worker worker=${worker} streak=3`);
+      has('Backing off 1s before the next launch probe (streak 3); this seat holds no task and claims none until a probe launches.');
+      assert.ok(!out.slice(out.indexOf('[launch-outage] Released')).includes('the held task stays held'),
+        'a seat that holds no task printed "the held task stays held"');
+      for (const text of [`This is a launch probe for workerId=${worker} after repeated launch failures`, 'otherwise reply OK. Then end your turn immediately.',
+        'Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session']) {
+        assert.ok(prompt(4).includes(text), `the probe prompt lacks '${text}'`);
+      }
+      assert.ok(prompt(5).includes('Task task-postflight is claimed'), 'the launch after the probe must be a claimed task session');
+      break;
+    case 'refused':
+      // The seat still holds the task, so its resumed launch is the probe: the
+      // claim runs (alreadyAssigned) and nothing is released twice.
+      assert.equal(seq, 'cLkcLkcLkRcLkcLk', `RPC sequence ${seq}`);
+      said(`Could not release ${task} (RELEASE_NOT_ASSIGNEE), so this seat still holds it; this seat claims no new task`);
+      assert.ok(!out.includes('MOE_LAUNCH_PROBE'), 'a seat that still holds its task resumes it instead of a taskless probe');
+      assert.ok(prompt(4).includes(`RESUME: you are workerId ${worker}`), 'the launch after a refused release must resume the held task');
+      break;
+    default:
+      throw new Error(`unknown run ${run}`);
+  }
+} catch (error) {
+  console.error(out);
+  console.error(`rpc sequence: ${seq}\nchat: ${JSON.stringify(chat, null, 1)}`);
+  console.error(`[scenario AC] ${run}: ${error.message}`);
+  process.exit(1);
+}
+OUTAGEJS
+  # run_outage_wrapper DIR OUT WORKER_ID [VAR=value...] -- a codex TUI worker
+  # (single-shot: neither --loop nor --no-loop) with a 5s launch window (the
+  # elapsed time is whole seconds of the clock, so a 2s exit can read as 3s on a
+  # loaded box) and 1s backoffs.
+  OUTAGE_FAIL_SEC=5
+  run_outage_wrapper() {
+    local dir="$1" out="$2" wid="$3"
+    shift 3
+    env -u MOE_CODEX_SANDBOX -u MOE_CODEX_REASONING_EFFORT -u MOE_DAEMON_HOST -u FAKE_CLAIM_MODE -u FAKE_CLAIM_LIMIT \
+      -u FAKE_CLAIM_ONCE -u FAKE_RELEASE_REFUSE -u FAKE_OUTAGE_FAILS -u FAKE_OUTAGE_PROBE_SEC \
+      PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 \
+      MOE_LAUNCH_FAIL_SEC="$OUTAGE_FAIL_SEC" FAKE_OUTAGE_PROBE_SEC="$((OUTAGE_FAIL_SEC + 1))" MOE_LAUNCH_BACKOFF_BASE_SEC=1 \
+      MOE_LAUNCH_BACKOFF_MAX_SEC=1 FAKE_TASK_STATUS=WORKING "$@" timeout "$((POSTFLIGHT_TIMEOUT_SEC * 2))s" \
+      "$WRAPPER" --project "$dir" --worker-id "$wid" --role worker --team Smoke --no-start-daemon \
+      --command "$OUTAGE_CLI" --interactive --poll-interval 1 >"$out" 2>&1
+  }
+  SCOPE_AC_DIR="$TMP_DIR/scope-ac"
+  make_scope_project "$SCOPE_AC_DIR" '[]' WORKING
+  set +e
+  run_outage_wrapper "$SCOPE_AC_DIR" "$TMP_DIR/scope-ac.out" worker-scope-ac
+  scope_ac_code=$?
+  set -e
+  "$NODE_FOR_TEST" "$OUTAGE_CHECK" released "$scope_ac_code" "$TMP_DIR/scope-ac.out" "$SCOPE_AC_DIR" worker-scope-ac "$OUTAGE_FAIL_SEC" || exit 1
+  SCOPE_AC2_DIR="$TMP_DIR/scope-ac2"
+  make_scope_project "$SCOPE_AC2_DIR" '[]' WORKING
+  set +e
+  run_outage_wrapper "$SCOPE_AC2_DIR" "$TMP_DIR/scope-ac2.out" worker-scope-ac2 \
+    FAKE_CLAIM_MODE=resume FAKE_RELEASE_REFUSE=RELEASE_NOT_ASSIGNEE FAKE_OUTAGE_FAILS=4
+  scope_ac2_code=$?
+  set -e
+  "$NODE_FOR_TEST" "$OUTAGE_CHECK" refused "$scope_ac2_code" "$TMP_DIR/scope-ac2.out" "$SCOPE_AC2_DIR" worker-scope-ac2 "$OUTAGE_FAIL_SEC" || exit 1
+  # Run 3: one fast exit (streak 1, backoff 1s), then idle polls that launch
+  # nothing. The backoff must survive them: the old classifier read a skipped
+  # launch as a launch that ran, zeroed the streak and went back to idle polls.
+  # A looping claude seat, stopped once its second backoff line is out.
+  FAIL_CLI="$OUTAGE_BIN/fail-cli"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$FAIL_CLI"
+  chmod +x "$FAIL_CLI"
+  SCOPE_AC3_DIR="$TMP_DIR/scope-ac3"
+  make_scope_project "$SCOPE_AC3_DIR" '[]' WORKING
+  env -u FAKE_CLAIM_MODE -u FAKE_CLAIM_ONCE -u FAKE_RELEASE_REFUSE \
+    PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" MOE_DISABLE_HEARTBEAT=1 FAKE_CLAIM_LIMIT=1 \
+    MOE_LAUNCH_FAIL_SEC=30 MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1 FAKE_TASK_STATUS=WORKING \
+    "$WRAPPER" --project "$SCOPE_AC3_DIR" --worker-id worker-scope-ac3 --role worker --team Smoke --no-start-daemon \
+    --command "$FAIL_CLI" --loop --poll-interval 1 >"$TMP_DIR/scope-ac3.out" 2>&1 &
+  scope_ac3_pid=$!
+  scope_ac3_live_before="$LIVE_PIDS"
+  LIVE_PIDS="$LIVE_PIDS $scope_ac3_pid"
+  scope_ac3_backoffs() { grep -Fc 'Backing off 1s before relaunching (streak 1)' "$TMP_DIR/scope-ac3.out" 2>/dev/null || true; }
+  scope_ac3_deadline=$((SECONDS + POSTFLIGHT_TIMEOUT_SEC))
+  while [ "$SECONDS" -lt "$scope_ac3_deadline" ] && [ "$(scope_ac3_backoffs)" -lt 2 ] && kill -0 "$scope_ac3_pid" 2>/dev/null; do
+    sleep 0.5
+  done
+  kill -TERM "$scope_ac3_pid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$scope_ac3_pid" 2>/dev/null || break; sleep 0.5; done
+  kill -KILL "$scope_ac3_pid" 2>/dev/null || true
+  wait "$scope_ac3_pid" 2>/dev/null || true
+  LIVE_PIDS="$scope_ac3_live_before"
+  grep -Fq 'MOE_TASKLESS_NO_LAUNCH reason=idle' "$TMP_DIR/scope-ac3.out" \
+    || scope_fail AC "run 3 never reached a skipped (taskless) launch" "$TMP_DIR/scope-ac3.out"
+  [ "$(scope_ac3_backoffs)" -ge 2 ] \
+    || scope_fail AC "a skipped launch reset the launch-failure streak and its backoff" "$TMP_DIR/scope-ac3.out"
+  if grep -Fq 'Agent idle, checking for tasks' "$TMP_DIR/scope-ac3.out"; then
+    scope_fail AC "a skipped launch read as a launch that ran: the backoff was zeroed and the seat went back to idle polls" "$TMP_DIR/scope-ac3.out"
+  fi
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AC] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  if [ "$SCOPE_SCENARIOS_RUN" -ne 34 ]; then
-    echo "Expected 34 commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2); ran $SCOPE_SCENARIOS_RUN" >&2
+  if [ "$SCOPE_SCENARIOS_RUN" -ne 35 ]; then
+    echo "Expected 35 commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

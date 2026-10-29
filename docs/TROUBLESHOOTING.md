@@ -280,9 +280,15 @@ exits at once with
 error: unexpected argument '--full-auto' found
 ```
 
-and the wrapper reports `[launch-failure] CLI exited 2 after 0s, before doing any work (streak N)`, backs
-off (60 s, 120 s, … up to 15 min) and relaunches forever. The held task stays WORKING (correct — nothing
-was lost, the checkpoint landed), but no code gets written.
+and the wrapper reports `[launch-failure] CLI exited 2 after 0s, before doing any work (streak N)` and backs
+off (60 s, 120 s, … up to 15 min). From the third failure in a row a claiming worker or QA seat enters
+launch outage mode (`[launch-outage]`): once that iteration's post-flight has landed the checkpoint, it
+releases the held task once, with a handoff that names the seat outage. The task stays claimable in place
+(WORKING stays WORKING), so another seat resumes it; a BLOCKED task, or a release the daemon refuses, stays
+held. The seat then claims no new task and relaunches only as a taskless launch probe on the same backoff;
+the first launch that runs ends the outage and claiming resumes. A governor seat, or one with auto-claim
+off, relaunches on the backoff with its task still held. Either way this seat writes no code until the fix
+below.
 
 **Cause:** codex-cli 0.147.0 (August 2026) hard-removed `--full-auto`
 ([openai/codex#36054](https://github.com/openai/codex/pull/36054), after the

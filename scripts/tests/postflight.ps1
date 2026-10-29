@@ -582,6 +582,20 @@ switch (tool) {
     break;
   }
   case 'declare_files': ok({ success: true, taskId: args.taskId, declaredFiles: strList(args.paths) }); break;
+  case 'release_task': {
+    // releaseTask.ts in miniature for scenario AC: every call is logged in
+    // order with the other RPCs; FAKE_RELEASE_REFUSE=<codeName> refuses it the
+    // way the ownership and fencing gates do, before anything is written.
+    appendRpc();
+    const refuse = process.env.FAKE_RELEASE_REFUSE;
+    if (refuse) {
+      process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:req.id,error:{code:-32003,message:'['+refuse+'] fixture release refused',
+        data:{tool:'moe.release_task',codeName:refuse}}}) + '\n');
+      break;
+    }
+    ok({ success: true, taskId: args.taskId, previousWorkerId: args.workerId, releasedBy: args.workerId, status: 'WORKING', message: `Task ${args.taskId} released from ${args.workerId}` });
+    break;
+  }
   case 'chat_send': {
     const dir = path.join(moe, 'messages');
     ensureDir(dir);
@@ -3811,11 +3825,228 @@ else {
                 $scopeScenariosRun++
                 Write-Host '[scenario AB2] ok'
 
+                # Scenario AC -- launch outage mode (twin: scenario AC in
+                # postflight.sh). A codex TUI worker whose CLI exits 1 at once,
+                # the way a spent provider credit makes it (measured 2026-10-29:
+                # such seats kept their tasks for hours behind the launch-failure
+                # backoff, ending a "CLI exit=1" session every ~15 min). A codex
+                # TUI does not loop, so its launch failures are what keep this
+                # single-shot seat running. Run 1: the third fast exit releases
+                # the held task exactly once, and only AFTER that iteration's
+                # landing (its record_commit comes first), unforced, fenced by
+                # the pinned attempt, with a "Seat outage, not a task refusal:"
+                # handoff that releaseTask.ts's refusal cascade cannot count; the
+                # @governors line says the task was released; the next iteration
+                # calls no claim_next_task and launches a taskless probe; that
+                # probe runs past MOE_LAUNCH_FAIL_SEC and exits 0, which ends the
+                # outage, and the seat claims again and runs the session it is
+                # for. Run 2: a refused release keeps the task, says so with the
+                # daemon's code, and the resumed launch is the probe, with no
+                # second release. Run 3: a launch the wrapper skipped (nothing to
+                # do) keeps the streak's backoff instead of reading as a launch
+                # that ran. The launch window is 10s here, not the sh twin's 5s:
+                # a Windows PowerShell child takes seconds to start, and the
+                # wrapper rounds the elapsed time instead of truncating it.
+                Write-Host '[scenario AC] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs'
+                $outageBin = Join-Path $tempRoot 'outage-bin'
+                New-Item -ItemType Directory -Force -Path $outageBin | Out-Null
+                # The codex.cmd front above, in its own directory (the wrapper
+                # matches the basename). Launch N of this run: 1..FAKE_OUTAGE_FAILS
+                # exit 1 at once; after that a launch probe sleeps
+                # FAKE_OUTAGE_PROBE_SEC (past MOE_LAUNCH_FAIL_SEC) and exits 0, and
+                # any other launch exits 0 at once. Each launch is logged into the
+                # fake daemon's RPC log, so its order against the claim, landing
+                # and release calls is on record.
+                Set-Content -Path (Join-Path $outageBin 'codex-impl.ps1') -Encoding ASCII -Value @'
+$moe = Join-Path $env:MOE_PROJECT_PATH '.moe'
+$countFile = Join-Path $moe 'outage-launches'
+$n = 1
+if (Test-Path -LiteralPath $countFile) { $n = [int]([IO.File]::ReadAllText($countFile).Trim()) + 1 }
+[IO.File]::WriteAllText($countFile, [string]$n)
+$prompt = if ($args.Count -gt 0) { [string]$args[$args.Count - 1] } else { '' }
+$kind = if ($prompt.Contains('This is a launch probe for workerId=')) { 'probe' } else { 'task' }
+[IO.File]::WriteAllText((Join-Path $moe "outage-prompt-$n.txt"), $prompt + "`n")
+[IO.File]::AppendAllText((Join-Path $moe 'evidence-rpcs.jsonl'), '{"tool":"cli-launch","args":{"n":' + $n + ',"kind":"' + $kind + '"}}' + "`n")
+$fails = 3
+if ($env:FAKE_OUTAGE_FAILS -match '^\d+$') { $fails = [int]$env:FAKE_OUTAGE_FAILS }
+if ($n -le $fails) { exit 1 }
+$probeSec = 4
+if ($env:FAKE_OUTAGE_PROBE_SEC -match '^\d+$') { $probeSec = [int]$env:FAKE_OUTAGE_PROBE_SEC }
+if ($kind -eq 'probe') { Start-Sleep -Seconds $probeSec }
+exit 0
+'@
+                $outageCmd = Join-Path $outageBin 'codex.cmd'
+                Set-Content -Path $outageCmd -Encoding ASCII -Value ("@echo off`r`n" +
+                    "powershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0codex-impl.ps1`" %*`r`n" +
+                    "exit /b %ERRORLEVEL%`r`n")
+                $outageCheck = Join-Path $tempRoot 'outage-check.cjs'
+                [IO.File]::WriteAllText($outageCheck, @'
+// One scenario AC run (twin: the same checker in postflight.ps1):
+//   node outage-check.cjs <run> <exit> <wrapper out> <project dir> <worker id> <MOE_LAUNCH_FAIL_SEC>
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const [run, code, outFile, dir, worker, failSec] = process.argv.slice(2);
+const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '');
+// Windows PowerShell 5.1 seeds the chat file with a BOM and CRLF.
+const lines = (file) => read(file).split('\n').map((line) => line.replace(/^\uFEFF/, '').trim()).filter(Boolean);
+const out = read(outFile).replace(/\x1b\[[0-9;]*m/g, '');
+const rows = lines(path.join(dir, '.moe', 'evidence-rpcs.jsonl')).map((line) => JSON.parse(line));
+// c = claim_next_task, L = a task launch, P = a launch probe, k = record_commit (a landing), R = release_task
+const seq = rows.map((r) => ({ claim_next_task: 'c', record_commit: 'k', release_task: 'R' })[r.tool]
+  || (r.tool === 'cli-launch' ? (r.args.kind === 'probe' ? 'P' : 'L') : '')).join('');
+const chat = lines(path.join(dir, '.moe', 'messages', 'chan-general.jsonl')).map((line) => JSON.parse(line).content);
+const prompt = (n) => read(path.join(dir, '.moe', `outage-prompt-${n}.txt`));
+const has = (text) => assert.ok(out.includes(text), `expected '${text}' in the wrapper output`);
+const said = (text) => assert.ok(chat.some((c) => c.includes(text)), `expected a #general line with '${text}'`);
+try {
+  assert.equal(code, '0', `wrapper exited with ${code}`);
+  const releases = rows.filter((r) => r.tool === 'release_task').map((r) => r.args);
+  assert.equal(releases.length, 1, `expected exactly one release_task, got ${releases.length}`);
+  const [rel] = releases;
+  const task = run === 'released' ? 'task-postflight' : 'task-resume';
+  assert.equal(rel.taskId, task);
+  assert.equal(rel.workerId, worker);
+  assert.equal(rel.force, undefined, 'the outage release must never force');
+  assert.equal(rel.attemptId, 'attempt-postflight', 'the release must carry the pinned attempt');
+  assert.equal(rel.generation, 7);
+  const done = rel.handoffNote && rel.handoffNote.whatIsDone;
+  assert.ok(typeof done === 'string' && done.startsWith('Seat outage, not a task refusal:'), `whatIsDone: ${done}`);
+  // releaseTask.ts isEmptyProgressHandoff: these shapes feed the BACKLOG refusal cascade.
+  const lowered = done.trim().toLowerCase();
+  assert.ok(!['nothing', 'none', 'n/a', 'na'].includes(lowered) && !/^nothing\b/.test(lowered) && !/^no progress\b/.test(lowered),
+    'whatIsDone reads as an empty-progress refusal');
+  for (const text of [`exited within ${failSec}s of launch 3 times in a row (last exit code 1)`, 'did no work', 'is untouched']) {
+    assert.ok(done.includes(text), `whatIsDone lacks '${text}': ${done}`);
+  }
+  assert.ok(typeof rel.handoffNote.whatRemains === 'string' && rel.handoffNote.whatRemains.trim(), 'whatRemains is required');
+  assert.ok(!chat.some((c) => c.includes('keeps its task; no release needed')), 'the outage line still says the task is kept');
+  said(`@governors ${worker}: CLI exits within ${failSec}s of launch (exit 1, 3 in a row)`);
+  said('a CLI auto-update dropped a flag the wrapper passes');
+  said('this seat claims no new task until a launch probe succeeds (probes back off up to 1s, next in 1s)');
+  said('Launch outage over: claiming resumes.');
+  has('entering launch outage mode');
+  has('launch outage over, claiming resumes.');
+  switch (run) {
+    case 'released':
+      // The landing (k) comes before the release (R); no claim (c) between the
+      // release and the probe (P); claiming resumes after the probe.
+      assert.equal(seq, 'cLkcLkcLkRPcLk', `RPC sequence ${seq}`);
+      said(`Released ${task} for another seat; this seat claims no new task`);
+      has(`[launch-outage] Released ${task} for another seat.`);
+      has('so it calls no claim_next_task until a launch probe succeeds');
+      has(`MOE_LAUNCH_PROBE role=worker worker=${worker} streak=3`);
+      has('Backing off 1s before the next launch probe (streak 3); this seat holds no task and claims none until a probe launches.');
+      assert.ok(!out.slice(out.indexOf('[launch-outage] Released')).includes('the held task stays held'),
+        'a seat that holds no task printed "the held task stays held"');
+      for (const text of [`This is a launch probe for workerId=${worker} after repeated launch failures`, 'otherwise reply OK. Then end your turn immediately.',
+        'Do NOT call moe.wait_for_task or moe.claim_next_task, edit project files, run task gates, or perform task work in this session']) {
+        assert.ok(prompt(4).includes(text), `the probe prompt lacks '${text}'`);
+      }
+      assert.ok(prompt(5).includes('Task task-postflight is claimed'), 'the launch after the probe must be a claimed task session');
+      break;
+    case 'refused':
+      // The seat still holds the task, so its resumed launch is the probe: the
+      // claim runs (alreadyAssigned) and nothing is released twice.
+      assert.equal(seq, 'cLkcLkcLkRcLkcLk', `RPC sequence ${seq}`);
+      said(`Could not release ${task} (RELEASE_NOT_ASSIGNEE), so this seat still holds it; this seat claims no new task`);
+      assert.ok(!out.includes('MOE_LAUNCH_PROBE'), 'a seat that still holds its task resumes it instead of a taskless probe');
+      assert.ok(prompt(4).includes(`RESUME: you are workerId ${worker}`), 'the launch after a refused release must resume the held task');
+      break;
+    default:
+      throw new Error(`unknown run ${run}`);
+  }
+} catch (error) {
+  console.error(out);
+  console.error(`rpc sequence: ${seq}\nchat: ${JSON.stringify(chat, null, 1)}`);
+  console.error(`[scenario AC] ${run}: ${error.message}`);
+  process.exit(1);
+}
+'@, [Text.UTF8Encoding]::new($false))
+                $outageFailSec = '10'
+                # Invoke-OutageWrapper DIR OUT WORKER_ID [ENV] -- a codex TUI
+                # worker (single-shot: neither -Loop nor -NoLoop) with a 10s
+                # launch window and 1s backoffs; ENV adds the run's FAKE_* knobs.
+                function Invoke-OutageWrapper([string]$dir, [string]$outFile, [string]$workerId, [hashtable]$runEnv = @{}) {
+                    foreach ($key in $runEnv.Keys) { Set-Item "Env:$key" $runEnv[$key] }
+                    try {
+                        return (Invoke-WrapperProcess @('-Project', $dir, '-WorkerId', $workerId, '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $outageCmd, '-Interactive', '-PollInterval', '1') $outFile ($wrapperTimeoutSec * 4))
+                    } finally {
+                        foreach ($key in $runEnv.Keys) { Remove-Item "Env:$key" -ErrorAction SilentlyContinue }
+                    }
+                }
+                $outagePrevEnv = @{}
+                foreach ($name in @('MOE_CODEX_SANDBOX', 'MOE_CODEX_REASONING_EFFORT', 'MOE_DAEMON_HOST', 'MOE_SERENA_PATH', 'MOE_DISABLE_HEARTBEAT',
+                        'MOE_LAUNCH_FAIL_SEC', 'MOE_LAUNCH_BACKOFF_BASE_SEC', 'MOE_LAUNCH_BACKOFF_MAX_SEC', 'FAKE_TASK_STATUS', 'FAKE_CLAIM_MODE',
+                        'FAKE_CLAIM_LIMIT', 'FAKE_CLAIM_ONCE', 'FAKE_RELEASE_REFUSE', 'FAKE_OUTAGE_FAILS', 'FAKE_OUTAGE_PROBE_SEC')) {
+                    $outagePrevEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+                    Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+                }
+                $scopeAC3Proc = $null
+                try {
+                    $env:MOE_SERENA_PATH = $trueCmd
+                    $env:MOE_DISABLE_HEARTBEAT = '1'
+                    $env:MOE_LAUNCH_FAIL_SEC = $outageFailSec
+                    $env:MOE_LAUNCH_BACKOFF_BASE_SEC = '1'
+                    $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
+                    $env:FAKE_TASK_STATUS = 'WORKING'
+                    $env:FAKE_OUTAGE_PROBE_SEC = '11'
+                    $scopeACDir = Join-Path $tempRoot 'scope-ac'
+                    New-ScopeProject $scopeACDir @() -Status 'WORKING'
+                    $scopeACOut = Join-Path $tempRoot 'scope-ac.out'
+                    $scopeACCode = Invoke-OutageWrapper $scopeACDir $scopeACOut 'worker-scope-ac'
+                    & node $outageCheck released $scopeACCode $scopeACOut $scopeACDir worker-scope-ac $outageFailSec
+                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AC FAILED: run 1 (released); log $scopeACOut" }
+                    $scopeAC2Dir = Join-Path $tempRoot 'scope-ac2'
+                    New-ScopeProject $scopeAC2Dir @() -Status 'WORKING'
+                    $scopeAC2Out = Join-Path $tempRoot 'scope-ac2.out'
+                    $scopeAC2Code = Invoke-OutageWrapper $scopeAC2Dir $scopeAC2Out 'worker-scope-ac2' @{ FAKE_CLAIM_MODE = 'resume'; FAKE_RELEASE_REFUSE = 'RELEASE_NOT_ASSIGNEE'; FAKE_OUTAGE_FAILS = '4' }
+                    & node $outageCheck refused $scopeAC2Code $scopeAC2Out $scopeAC2Dir worker-scope-ac2 $outageFailSec
+                    if ($LASTEXITCODE -ne 0) { throw "SCENARIO AC FAILED: run 2 (refused); log $scopeAC2Out" }
+                    # Run 3: one fast exit (streak 1, backoff 1s), then idle polls
+                    # that launch nothing. The backoff must survive them: the old
+                    # classifier read a skipped launch as a launch that ran, zeroed
+                    # the streak and went back to idle polls. A looping claude seat,
+                    # stopped once its third claim is on record (the second backoff
+                    # line comes before it).
+                    $outageFailCli = Join-Path $outageBin 'fail-cli.cmd'
+                    Set-Content -Path $outageFailCli -Encoding ASCII -Value "@echo off`r`nexit /b 1`r`n"
+                    $scopeAC3Dir = Join-Path $tempRoot 'scope-ac3'
+                    New-ScopeProject $scopeAC3Dir @() -Status 'WORKING'
+                    $scopeAC3Out = Join-Path $tempRoot 'scope-ac3.out'
+                    $scopeAC3Rpc = Join-Path $scopeAC3Dir '.moe\evidence-rpcs.jsonl'
+                    $env:FAKE_CLAIM_LIMIT = '1'
+                    $env:MOE_LAUNCH_FAIL_SEC = '30'
+                    $scopeAC3Args = @('-NoProfile', '-File', $wrapper, '-Project', $scopeAC3Dir, '-WorkerId', 'worker-scope-ac3', '-Role', 'worker', '-Team', 'Smoke', '-NoStartDaemon', '-Command', $outageFailCli, '-Loop', '-PollInterval', '1') |
+                        ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+                    Remove-Item -LiteralPath $scopeAC3Out, "$scopeAC3Out.err" -Force -ErrorAction SilentlyContinue
+                    $scopeAC3Proc = Start-Process -FilePath $psExe -ArgumentList $scopeAC3Args -RedirectStandardOutput $scopeAC3Out -RedirectStandardError "$scopeAC3Out.err" -PassThru -NoNewWindow
+                    $null = $scopeAC3Proc.Handle
+                    $scopeAC3Deadline = (Get-Date).AddSeconds($wrapperTimeoutSec * 2)
+                    while ((Get-Date) -lt $scopeAC3Deadline -and -not $scopeAC3Proc.HasExited) {
+                        $scopeAC3Claims = 0
+                        try { $scopeAC3Claims = @(Get-Content -LiteralPath $scopeAC3Rpc -ErrorAction Stop | Where-Object { $_ -like '*"tool":"claim_next_task"*' }).Count } catch {}
+                        if ($scopeAC3Claims -ge 3) { break }
+                        Start-Sleep -Milliseconds 250
+                    }
+                } finally {
+                    if ($scopeAC3Proc -and -not $scopeAC3Proc.HasExited) { & taskkill /T /F /PID $scopeAC3Proc.Id 2>&1 | Out-Null; $scopeAC3Proc.WaitForExit(5000) | Out-Null }
+                    foreach ($name in $outagePrevEnv.Keys) {
+                        if ($null -ne $outagePrevEnv[$name]) { Set-Item "Env:$name" $outagePrevEnv[$name] }
+                        else { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+                    }
+                }
+                $scopeAC3Text = [string](Get-Content -Raw -LiteralPath $scopeAC3Out -ErrorAction SilentlyContinue) + [string](Get-Content -Raw -LiteralPath "$scopeAC3Out.err" -ErrorAction SilentlyContinue)
+                $scopeAC3Backoffs = ([regex]::Matches($scopeAC3Text, [regex]::Escape('Backing off 1s before relaunching (streak 1)'))).Count
+                if (-not $scopeAC3Text.Contains('MOE_TASKLESS_NO_LAUNCH reason=idle')) { Write-Host $scopeAC3Text; throw 'SCENARIO AC FAILED: run 3 never reached a skipped (taskless) launch' }
+                if ($scopeAC3Backoffs -lt 2) { Write-Host $scopeAC3Text; throw 'SCENARIO AC FAILED: a skipped launch reset the launch-failure streak and its backoff' }
+                if ($scopeAC3Text.Contains('Agent idle, checking for tasks')) { Write-Host $scopeAC3Text; throw 'SCENARIO AC FAILED: a skipped launch read as a launch that ran: the backoff was zeroed and the seat went back to idle polls' }
+                $scopeScenariosRun++
+                Write-Host '[scenario AC] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                if ($scopeScenariosRun -ne 34) {
-                    throw "Expected 34 commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2); ran $scopeScenariosRun"
+                if ($scopeScenariosRun -ne 35) {
+                    throw "Expected 35 commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
