@@ -5,8 +5,14 @@ import { reattachAttemptTool } from './reattachAttempt.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { StateManager } from '../state/StateManager.js';
 import { getAttempt, openAttempt, reconcileRunningAttempts, setAttemptPhase } from '../state/attemptStore.js';
-import { applyDelta, type ContextDelta } from '../context/contextDelta.js';
+import { applyDelta, diffPackets, type ContextDelta } from '../context/contextDelta.js';
 import type { ExecutionAttempt } from '../types/schema.js';
+
+// Pass-through: every case diffs for real unless a test overrides one call.
+vi.mock('../context/contextDelta.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../context/contextDelta.js')>();
+  return { ...actual, diffPackets: vi.fn(actual.diffPackets) };
+});
 
 // CQ-C06: get_context serves a delta only against the exact base this receiving
 // session acknowledged, in this daemon process, on this attempt incarnation.
@@ -171,7 +177,7 @@ describe('moe.get_context acknowledged deltas', () => {
   });
 
   it('D8: a read presenting neither field is the legacy packet, even over a stored base', async () => {
-    await acknowledge();
+    const base = await acknowledge();
     const legacy = await read();
     expect(legacy).not.toHaveProperty('delta');
     expect(legacy.servedContext).toStrictEqual({
@@ -179,6 +185,23 @@ describe('moe.get_context acknowledged deltas', () => {
       receiptStatus: 'recorded', receiptId: expect.stringMatching(/^ctxreceipt-/), packetId: sha(body(legacy)),
     });
     expect(body(legacy)).not.toHaveProperty('contextDelta');
+    // A legacy read leaves the stored base alone: only a read presenting a field writes or clears it.
+    expect((await read({ basePacketId: base, contextEpoch: 0 })).servedContext.contextDelta).toStrictEqual({ served: 'delta' });
+  });
+
+  it('a diff failure serves the full packet (diff-failed), and that packet becomes the next base', async () => {
+    const base = await acknowledge();
+    await h.state.updateTask('task-1', { reopenReason: 'third round' });
+    vi.mocked(diffPackets).mockImplementationOnce(() => { throw new RangeError('forced diff failure'); });
+    const failed = await read({ basePacketId: base, contextEpoch: 0 });
+    expect(failed.servedContext.contextDelta).toStrictEqual(full('diff-failed'));
+    expect(failed).not.toHaveProperty('delta');
+    expect(body(failed).task).toMatchObject({ reopenReason: 'third round' });
+    expect(sha(body(failed))).toBe(failed.servedContext.packetId);
+    const next = await read({ basePacketId: failed.servedContext.packetId, contextEpoch: 0 });
+    expect(next.delta).toStrictEqual({
+      basePacketId: failed.servedContext.packetId, packetId: failed.servedContext.packetId, changed: [], removed: [],
+    });
   });
 
   it.each<[string, Record<string, unknown>, string]>([
