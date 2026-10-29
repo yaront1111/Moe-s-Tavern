@@ -1,0 +1,28 @@
+{
+  "id": "task-a60a1616ec5c414fa1ed8d13c1e0ae95",
+  "epicId": "epic-be924fb8",
+  "title": "bug: `moe-daemon status` run from WSL against a Windows-owned daemon deletes the live .moe/daemon.json",
+  "description": "Observed 2026-10-29 16:45Z. The live daemon was running on Windows (supervisor spawned by PyCharm, `D:/projexts/moes`, bindHost 0.0.0.0). From WSL I ran `node packages/moe-daemon/dist/index.js status --project /mnt/d/projexts/moes`. It logged \"Daemon not running (stale daemon.json removed: pid dead)\" and \"Cleaning up stale daemon lifecycle files, reason: projectPath mismatch\", then deleted the running daemon's .moe/daemon.json. New seats lost discovery until the daemon was restarted about 60s later.\n\nRoot cause, in packages/moe-daemon/src/index.ts:\n1. `isSameProjectPath` / `canonicalProjectPath` has no `/mnt/<drive>/…` ↔ `<DRIVE>:/…` mapping. moe-proxy and the moe-agent.sh pre-flight already treat those as the same project.\n2. `isProcessAlive` cannot see a Windows pid from inside WSL.\n3. `statusDaemon` calls `cleanupStaleDaemonFiles` on ANY failed validation, so a status query is destructive.\n\nThe sh wrapper already avoids this: it detects a Windows-owned daemon.json, probes /health over loopback and then the WSL gateway, and refuses to delete. The daemon CLI should be at least as careful, especially `status`.",
+  "definitionOfDone": [
+    "`status` (and any other non-stop CLI path) never deletes .moe/daemon.json or other lifecycle files unless the recorded daemon is proven gone by a check that is valid on this platform. A daemon.json owned by the other side of WSL/Windows is reported, not removed.",
+    "`isSameProjectPath` treats `/mnt/<d>/x` and `<D>:/x` (including backslash and drive-case variants) as the same project, matching moe-proxy's rule. Unit tests cover both directions.",
+    "Regression test: `status` against a daemon.json whose pid is not visible but whose /health answers leaves the file in place and exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 258.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T16:47:48.719Z",
+  "updatedAt": "2026-10-29T16:47:48.719Z"
+}

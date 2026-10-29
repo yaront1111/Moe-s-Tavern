@@ -13,9 +13,49 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Protected entries in the check frame, pre-run blob verification, and root-owned protected files. Rows K5-K6 in scripts/tests/local-runner-check.test.mjs (DoD 1).\n\nRead first: the LANDED CQ-R11a code (read_check, check_job, reown, its K1-K4 rows, and the stderr RELAY/ASKED/OWNED recorder harness) plus R09's WALK, READ and chunks(). This plan follows R11a plan rev 1; if the landed code differs, follow it and record the deviation in your step note.\n\nscripts/local-runner/guest-supervisor.py:\n- Constants: MAX_PROTECTED = 2000; MAX_PROTECTED_PATH = 500 (the daemon's MAX_PATH_LEN, in UTF-16 units); OID = re.compile(r'[0-9a-f]{40}'); PROTECTED_MISMATCH = 79; PROTECTED_CHANGED = 80.\n- read_check: retire R11a's non-empty-protected refusal. protected must be a list of at most MAX_PROTECTED entries. Each entry needs type dict, keys == {path, oid}, type(oid) is str with OID.fullmatch, and type(path) is str with:\n  - path.encode('utf-8') succeeding (a lone surrogate raises a ValueError);\n  - at most MAX_PROTECTED_PATH UTF-16 units;\n  - no '\\\\', no '�' and no CHECK_CONTROL character;\n  - every '/'-segment not '', '.' or '..'.\n  Paths must be strictly ascending by UTF-8 bytes, which gives uniqueness and mirrors readRequiredCheckSnapshot. The daemon's normalizedPath is stricter (trim, drive letters), so every approved entry passes. ValueError gives 65.\n- blob_oid(root_fd, path) returns hex or None:\n  - open every directory segment with WALK via dir_fd (no symlink is ever followed), then the last segment with READ;\n  - fstat must show S_ISREG;\n  - sha1(b'blob %d\\0' % st_size), then the bytes from chunks(fd, st_size), then os.read(fd, 1) == b'' (no growth);\n  - any OSError gives None. Close every fd in a finally.\n  A protected ls-tree symlink entry (mode 120000) can never be materialized, because R09a refuses symlinks. It therefore gives None and 79, which is correct: the candidate does not carry the approved bytes.\n- check_job: right after the workspace root opens (66), and before reown, any entry whose blob_oid differs from its oid returns PROTECTED_MISMATCH, with no frame, no home, no job and no mount.\n- reown(..., protected=frozenset(paths)):\n  - a protected regular file gets os.fchown(fd, os.geteuid(), os.getegid()), which is root, since main() requires euid 0;\n  - then os.fchmod(fd, 0o555 if st_mode & 0o100 else 0o444). The task's DoD says 0444, but the exec bit is kept on purpose so a protected script the command runs directly stays runnable; nothing is ever writable;\n  - it is never handed to the check identity. All other entries are unchanged from R11a.\n- Header: 79 means a protected path is missing, not a regular file, reached through a symlink, or has another blob oid (before hello, no frame). 80 is step 3's.\n\nError handling: every refusal maps to one fixed exit code (65, 79), writes no byte to stdout, starts no job and creates no home. No traceback, path or file byte reaches stdout.\n\nTests (CQ-R11b section, R11a's harness):\n- Remove ONLY R11a's K1 row that expects 65 for a well-formed non-empty protected list; git diff must show no other removed line. Compute oids in Node with sha1('blob N\\0' + bytes). Stub m.protect_mounts with a recorder in every row (step 2 adds it; until then, use hasattr to guard the stub).\n- K5 (shape, 65, empty stdout, no RELAY):\n  - protected {} or null;\n  - 2001 entries;\n  - an extra key; a missing oid;\n  - oid uppercase, 39, 41, non-hex and 7;\n  - path '', '/a', 'a/', 'a//b', './a', '.', '..', 'a/../b', 'a\\\\b', 'a\\x00b', 'a\\nb', '�', '\u2028', a lone '\\ud800' and 501 'a's;\n  - ['b','a'] unsorted; ['a','a'] duplicated.\n  2000 sorted entries and a 500-unit path pass shape validation, so they reach verification and give 79, not 65.\n- K6 (pre-run, 79, empty stdout, no RELAY, no home, no mount call):\n  - a flipped oid character; a missing file; a directory at the path; a symlink to a matching copy; an ancestor symlinked to a directory holding a matching copy; a FIFO (O_NONBLOCK, no hang).\n  - Positive: matching files, including an empty one (e69de29bb2d1d6434b8b29ae775ad8c2e48c5391), reach RELAY.\n  - A recorder row replaces os.fchown and os.fchmod with no-op recorders, injects identity (12345, 12346, None), and stubs m.session_home to return a temp dir. OWNED must show:\n    - each protected file once with (os.geteuid(), os.getegid()) and fchmod 0o444, or 0o555 for an executable one;\n    - every other entry with (12345, 12346) and no fchmod.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "The private mount namespace and bind mounts, plus rows K7 (recorder, fail closed) and K9 (root-only real refusal) (DoD 2).\n\nDeliberate deviation from DoD 2's wording: the ROOT SUPERVISOR sets up the namespace in check_job, just before relay() starts GUARD, and GUARD and the job inherit it. GUARD itself does not. GUARD's only channel is its argv, and Linux caps one argument at MAX_ARG_STRLEN = 128 KiB, so up to 2000 paths of up to 500 units cannot reach it. Done here, it also fails closed BEFORE hello. Every protection the DoD names is kept: root, a private namespace, read-only file binds, ancestor binds, fail closed, recorder-pinned. Say so in a code comment and in your step note.\n\nIn guest-supervisor.py:\n- Constants: CLONE_NEWNS = 0x00020000; MS_RDONLY = 1; MS_REMOUNT = 32; MS_BIND = 4096; MS_REC = 16384; MS_PRIVATE = 1 << 18.\n- mount(source, target, flags): libc = ctypes.CDLL(None, use_errno=True), with argtypes (c_char_p, c_char_p, c_char_p, c_ulong, c_void_p). A nonzero return raises OSError(ctypes.get_errno(), 'mount').\n- protect_mounts(workspace, paths):\n  1. os.unshare(CLONE_NEWNS). The supervisor runs no threads, and CLONE_NEWNS is per-thread anyway.\n  2. mount(None, b'/', MS_REC | MS_PRIVATE), so nothing propagates back to the guest's root namespace.\n  3. Self-bind every ancestor directory (each proper '/'-prefix of each path, deduplicated, sorted by UTF-8 bytes so a parent precedes its children): mount(t, t, MS_BIND). The directory stays writable but can no longer be renamed: a mount point gives EBUSY.\n  4. Then each file: mount(t, t, MS_BIND), then mount(None, t, MS_BIND | MS_REMOUNT | MS_RDONLY).\n  Targets are os.fsencode(os.path.join(workspace, rel)). Path-based mounting is safe here because reown has already refused every symlink in the workspace.\n- check_job calls protect_mounts after session_home, and only when protected is non-empty. R11a's empty-list runs, and their non-root K-rows, never unshare. The namespace ends with the supervisor's process tree.\n\nError handling: any OSError from unshare or mount gives EX_OSERR (71) before hello, with no frame and no job. A partial setup is never used: the job is never started on it.\n\nTests:\n- K7, Linux and macOS:\n  - os.unshare and m.mount are replaced by recorders, relay by R11a's RELAY recorder. protected is ['a/b/c.txt', 'a/d.txt', 'e.txt'] with matching files.\n  - The recorded calls must be exactly: unshare(0x20000); mount(None, b'/', 16384|262144); binds of W/a and W/a/b (4096); then for each file mount(F, F, 4096) followed by mount(None, F, 4096|32|1). All of them come before RELAY.\n  - Fail closed: unshare raising PermissionError, and mount raising OSError on its 3rd call, each give 71 with empty stdout and no RELAY.\n  - An empty protected list records no call.\n- K9, root-only. Skip with the reason 'needs root for a mount namespace; CQ-R13 certifies it on real guests' unless process.getuid() === 0 on Linux.\n  - Real run through main with identity (0, 0, None), so DAC cannot explain any refusal, and protected ['dir/p.txt'].\n  - probe.py, run by the job, records errno names for: open('dir/p.txt', 'a') -> EROFS; os.rename('dir/p.txt', 'dir/q.txt') -> EBUSY; os.unlink('dir/p.txt') -> EBUSY; os.rename('dir', 'moved') -> EBUSY. Creating dir/new.txt succeeds.\n  - The run exits 0. Afterwards the test process's /proc/self/mountinfo lists no workspace path, which proves private propagation.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Post-run verification, plus row K8 (DoD 3).\n\nIn check_job, after relay() returns:\n- When relay returned 0 (an observation frame was written) and protected is non-empty, re-open the workspace root with WALK and re-verify every entry with blob_oid. Any difference, or a failure to open, returns PROTECTED_CHANGED (80). This is written after the observation, and CQ-R11c classifies it as inconclusive.\n- Otherwise return relay's code unchanged. A failed relay is already a failure, so nothing is re-checked.\n- Header: 80 means a protected path changed during the job (after the observation).\n- Say in a comment that the mounts are the boundary and this check is the second line: a swap restored before exit is invisible to it, and that is why step 2 exists.\n\nError handling: an OSError while re-verifying counts as a change (80), never as a pass.\n\nK8, portable:\n- A fake relay writes b'OBS' to fd 1, applies a mutation to the workspace and returns 0. m.protect_mounts is stubbed.\n  - unchanged: exit 0, stdout b'OBS';\n  - content changed, deleted, replaced by a symlink to an identical copy, replaced by a directory, or an ancestor renamed away and replaced by a symlinked identical tree: each gives 80 with stdout exactly b'OBS', so the code comes after the observation;\n  - an ancestor renamed away and back, identical: 0, which documents why step 2's mounts exist;\n  - a fake relay returning 74 after changing a file: 74.\n- One real Linux row with mounts stubbed: the command 'rm -f a.txt' with protected ['a.txt'].\n  - Skip it like R11a's K3, by the same busy-host RLIMIT_NPROC guard, since sh forks rm.\n  - Decode stdout: hello and exactly one observation with exit code 0. The supervisor exits 80.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run this once, fresh, from the repo root: `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`.\n\nOn WSL, run `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`. Exit 0 is required, and its output tail is the complete_task verification evidence (DoD 4). K9 skips there with its reason, since it is not root.\n\nAlso confirm the following. They are not evidence.\n- No edit to local-runner-bridge.test.mjs.\n- The check test file's only removed line is R11a's retired K1 row.\n- No scripts/local-runner/__pycache__.\n- git diff --numstat of the two files totals at most 400 changed lines; the estimate is about 250.\n- `pgrep -af 'time[.]sleep[(]600'` shows nothing of yours, and LF line endings are kept.\n\nNote peers' dirty paths and continue. Error handling for the gate itself: if anything fails, fix the cause with a test, never by weakening or skipping a row, then re-run the whole command.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff only. Load the adversarial-self-review skill first, then read the diff as each attacker in turn:\n- A hostile frame: traversal, '.' or empty segments, control or U+2028 characters, lone surrogates, unsorted or duplicate paths, 2001 entries.\n- A tampered workspace: symlinked ancestors, FIFOs, a file that grows.\n- A hostile check job, root-free with NNP. Can it:\n  - write, truncate, chmod, unlink or rename a protected file;\n  - rename an ancestor;\n  - hard-link a protected inode;\n  - escape through a new user namespace? Inherited mounts are MNT_LOCKED there;\n  - make the post-run check hang or pass falsely?\n\nCheck that:\n- 79 and 80 are each reachable only as documented;\n- every pre-run refusal writes nothing and starts nothing;\n- an empty protected list behaves exactly as R11a's;\n- the mounts never propagate out of the namespace;\n- verified-local, executionReady and isolation claims are untouched;\n- there is no .moe edit and no Git write.\n\nMutation spot-check in a scratch `git archive HEAD | tar -x` copy (recipes in the Serena memories gotcha-local-runner-supervisor-tests and gotcha-local-runner-tests), scored by exit code with --test-name-pattern='^K[5-9] ' and a timeout. Mutants, and the row that should kill each:\n- no sort check: K5;\n- segment check missing '.': K5;\n- MAX_PROTECTED off by one: K5;\n- following symlinks in blob_oid: K6;\n- no S_ISREG check: K6;\n- no growth check: K6;\n- protected files re-owned to the identity: K6;\n- dropping MS_PRIVATE: K7;\n- binding files before ancestors: K7;\n- swallowing a mount error: K7;\n- no post-run check: K8;\n- post-run check after a failed relay: K8.\nK9 runs only as root; say so in the step note.\n\nFix anything found with a test, then re-run step 4's command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +68,49 @@
   ],
   "priority": "HIGH",
   "order": 105.3,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-3960e37889054322a568f75c6795ed97",
+      "author": "architect-bd1eb82d",
+      "content": "Architect note for QA. The plan departs from the DoD wording in two places, both on purpose.\n\n1. DoD 2 says root GUARD sets up the mount namespace. In this plan, the root supervisor sets it up inside check_job, just before relay() starts GUARD, and GUARD and the job inherit it. The reason: GUARD's only input channel is its argv, and Linux caps a single argument at MAX_ARG_STRLEN (128 KiB). That is too small for up to 2000 protected paths of up to 500 units each. Setting up in the supervisor also fails closed before hello (71, no frame). Every protection DoD 2 names is still there:\n   - it is set up by root;\n   - the namespace is private (MS_REC|MS_PRIVATE);\n   - each protected file gets a read-only self bind;\n   - each ancestor directory gets a self bind;\n   - it fails closed;\n   - K7 pins the exact calls, and K9 proves the refusals as root.\n2. The description says protected files are 0444. A protected file that was executable stays executable (0555), so a protected script the command runs directly still works. No protected file is writable by anyone, and each one stays root-owned.\n\nA protected ls-tree symlink entry (mode 120000) can never be materialized, because R09a refuses symlinks. Such an entry gives 79 by design.",
+      "timestamp": "2026-10-29T16:49:48.700Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:10.200Z",
-  "updatedAt": "2026-10-29T13:27:10.200Z"
+  "updatedAt": "2026-10-29T16:49:48.700Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:42:48.551Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:49:40.328Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected these options:\n1) Mounts inside GUARD, as the DoD wording says. GUARD's argv cannot carry up to 2000 paths (MAX_ARG_STRLEN 128 KiB per argument). A memfd or pipe channel would add plumbing to R10b's run_bridge. In the supervisor, setup is smaller, fails closed before hello, and GUARD and the job inherit it.\n2) Ownership plus mode alone. moe-check owns the ancestor directories, so it could unlink or rename the file itself; mount points give EBUSY.\n3) Strict 0444. That breaks directly-run protected scripts, so the exec bit is kept and the file is never writable.\n4) Validating paths exactly like the daemon's normalizedPath (trim, drive letters). The supervisor keeps the safety-relevant rules; every approved entry still passes.\n5) A post-run check only. A swap restored before exit is invisible to it, so the mounts are the boundary.",
+    "codebaseInsights": "- Daemon snapshot entries (requiredChecks.ts parseEntries) are ls-tree blob records of modes 100644, 100755 and 120000, sorted by UTF-8 bytes, unique, at most 2000, with normalizedPath (MAX_PATH_LEN 500).\n- R09's chunks(fd, size) reads exactly size bytes and raises on shrink. Growth needs an extra read(1).\n- os.CLONE_NEWNS = 0x20000 on Linux. It is defined as a constant so the K7 recorder also runs on macOS.\n- ASSUMED from R11a plan rev 1 (task-37dd3edb, not landed): read_check, check_job's order (frame, account, workspace open, reown, session_home, relay), reown(fd, uid, gid, prefix), the K1-K4 rows, and the RELAY/ASKED/OWNED stderr recorder harness.",
+    "risks": "- R11a may land with different names. Adapt to them, but remove only the retired K1 row.\n- K9 and the namespace code are runtime-untested non-root, and CQ-R13 certifies them. K7 pins the exact calls and the flag values.\n- A non-root real-job row is RLIMIT_NPROC-sensitive (see R11a K3), so reuse its busy-host skip.\n- Recorder masking:\n  - stubbing os.fchown without also stubbing session_home turns the row into a 71;\n  - a fake relay must write its sentinel BEFORE mutating, to prove the ordering.\n- forbiddenPatterns apply to test strings.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner-check.test.mjs",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts",
+      "packages/moe-daemon/src/util/affectedFiles.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:49:40.457Z",
+  "approvedPlanRevision": 1
 }

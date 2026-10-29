@@ -13,9 +13,46 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). C06 is the get_context wiring of the LANDED C06a module, packages/moe-daemon/src/context/contextDelta.ts (task-7d0f7f08): diffPackets, applyDelta, DeltaBaseStore, deltaBaseKey and decideDelta. Adapt to its landed names.\n\nCreate tools/getContextDelta.test.ts.\n- Copy getContextReceipt.test.ts's fixture: ToolTestHarness, a worker that owns the task's RUNNING attempt, and get_context called with sessionId S.\n- Assert exact objects and reasons, never truthiness.\n\nCases:\n- D1, DoD1. Read 1 passes contextEpoch 0 and gets the full packet, with servedContext.contextDelta {served:'full', reason:'base-unavailable'}. Then change the task so that one served key disappears; pick a real present-then-absent key in the packet. Read 2 passes basePacketId = read 1's packetId and epoch 0.\n  - It returns `delta` (C06a ContextDelta) in place of the packet body, with servedContext.contextDelta {served:'delta'}.\n  - The vanished key's pointer is in `removed`.\n  - applyDelta(parse(read 1 packet), delta) deep-equals a full read taken right after.\n  - servedContext.packetId is that full result's packetId, and the receipt records it.\n- D2: a basePacketId of an older packet gives full, base-mismatch.\n- D3: a read with an epoch but no basePacketId gives full, no-base.\n- D4, restart: a new harness/StateManager over the same .moe, where the persisted receipt still names the base, gives full, base-unavailable.\n- D5, compaction: epoch 1 against a base stored under 0 gives full, epoch-changed. No epoch gives full, epoch-missing.\n- D6, VM replacement or re-claim: a new attempt generation gives attempt-mismatch. A different sessionId gives session-mismatch.\n- D7, DoD3: move the attempt to reconciling and back through moe.reattach_attempt in the SAME process. A basePacketId that the receipt and the stored base both name still gives full, phase-changed.\n- D8, legacy: a read with neither basePacketId nor contextEpoch is byte-identical to today's packet, with no contextDelta key.\n- D9: an unrecorded read (no sessionId, or a non-owner) that presents a base gives full, with the reason = its receiptStatus. Nothing is stored.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Wire deltas into packages/moe-daemon/src/tools/getContext.ts.\n\nError handling: caller-shape errors throw INVALID_INPUT, and everything else falls back to a full packet; a delta path never throws.\n\nInput schema:\n- `basePacketId`: string, pattern ^sha256:[0-9a-f]{64}$.\n- `contextEpoch`: integer, minimum 0. The receiving session's compaction counter; a seat must advance it on every compaction.\nValidate both before any read.\n\nIn servedContextIdentity, only on the 'recorded' path, after recordContextReceipt for the full result packet (text and packetId exactly as today):\n- current = {attemptId, generation, sessionId, lastPhaseAt: attempt.lastPhaseAt, runner: processStartedAt and host ? `${processStartedAt}@${host}` : null}.\n- stored = the store's get(deltaBaseKey(...)). The store comes from a module-level WeakMap<StateManager, DeltaBaseStore>, so a new StateManager (a restart) starts empty and tests stay isolated.\n- decision = decideDelta({basePacketId, contextEpoch}, current, stored).\n- When contextEpoch was presented, set the new base {packetId, text, ...current, contextEpoch}. Without an epoch, store nothing, so a later delta is impossible (fail closed).\n- On a delta: return {delta: diffPackets(basePacketId, stored.text, packetId, text), servedContext: {...identity, receiptStatus:'recorded', receiptId, packetId, contextDelta:{served:'delta'}}}.\n- Otherwise: return the full packet, with contextDelta {served:'full', reason} ONLY when the request presented basePacketId or contextEpoch. Unrecorded reads that present them get reason = receiptStatus.\n\nDo not change the receipt shape, F06's packetId rule, view:'status', or reads that present neither field. Add one sentence to the tool description. docs/MCP_SERVER.md is left to the epic final C11's docs sweep; note that in the completion summary.\n\nMake D1-D9 green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once. get_context is a shared wire contract, so run the FULL gate fresh, in an isolated Linux snapshot of HEAD:\n- whole-repo git archive, overlaying only this task's files plus the landed C06a module if it is not yet in HEAD;\n- native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate).\nThe gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0. cmp the overlaid files first. Supply the npm test command, exit code and output tail to complete_task.\n\nMutants, on scratch copies, each restored and cmp'd afterwards:\n1. store a base without an epoch: D5;\n2. skip the lastPhaseAt check, by passing a stale current: D7;\n3. a process-global store instead of the WeakMap: D4;\n4. emit contextDelta on legacy reads: D8.\nKeep the diff at or under 400 net lines.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "One adversarial self-review of this task's diff, the last step (load adversarial-self-review). Check:\n- Can a delta be served when the session might not hold the base? Consider compaction without an epoch bump, a restart, a reattach, a re-claim, a VM replacement and a different session.\n- Could a delta's reconstruction differ from the full packet, for example through key order or an undefined value?\n- Do two concurrent reads by one session race the store? The last write wins, and a mismatch falls back to a full packet.\n- Does the memory bound hold?\n- Do legacy reads stay byte-identical?\n- Does any forbidden-pattern token appear, or any .moe edit or Git write happen?\nWrite the handoff memory, noting that seat-side epoch reporting (the compaction keeper mod plus the proxy) is activation, not part of C06.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,21 +72,51 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:35.608Z",
-  "updatedAt": "2026-10-29T14:15:09.956Z",
+  "updatedAt": "2026-10-29T16:49:40.671Z",
   "dependsOn": [
-    "task-9ef257f58b7f4c4191f206f67bf3d865"
+    "task-9ef257f58b7f4c4191f206f67bf3d865",
+    "task-7d0f7f082b6349cab75c62af3c8b1da4"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-26T09:52:21.677Z"
+    "firstClaimAt": "2026-10-26T09:52:21.677Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "architect-4ae016fb"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "Not plannable yet, because its contract inputs have not landed. This is not REPL silence.\n(1) The declared dependency CQ-C05 (negative search provenance) is BLOCKED and has no plan, behind C04, C03 and C02b and the R-chain. Under the rollout contract (docs/plans/2026-10-24-ai-code-quality-and-context.md, Session deltas and context receipts), each delta carries updated source references and new evidence, and their change identity comes from the C04/C05 provenance contract.\n(2) DoD2 binds deltas to the receiver process incarnation and requires full snapshots on VM replacement. The isolated fresh-session identity is a CQ-R10 deliverable, and R10 is still in BACKLOG.\nThe row auto-returns to PLANNING when both are DONE. Then plan against the landed C01 packet, F06 served-context receipts and packetId, F09-F12a proxy-stamped session and attempt identity, R10 incarnation identity and C04/C05 provenance fields. Open design points: the compaction signal (the moe-compaction-keeper session.compact hook is the only seat-side hook), and that attempt reattachment is never a base acknowledgement. Details are in the task comment and in this task's Serena handoff memory."
+  "priorBlockedReason": "Not plannable yet, because its contract inputs have not landed. This is not REPL silence.\n(1) The declared dependency CQ-C05 (negative search provenance) is BLOCKED and has no plan, behind C04, C03 and C02b and the R-chain. Under the rollout contract (docs/plans/2026-10-24-ai-code-quality-and-context.md, Session deltas and context receipts), each delta carries updated source references and new evidence, and their change identity comes from the C04/C05 provenance contract.\n(2) DoD2 binds deltas to the receiver process incarnation and requires full snapshots on VM replacement. The isolated fresh-session identity is a CQ-R10 deliverable, and R10 is still in BACKLOG.\nThe row auto-returns to PLANNING when both are DONE. Then plan against the landed C01 packet, F06 served-context receipts and packetId, F09-F12a proxy-stamped session and attempt identity, R10 incarnation identity and C04/C05 provenance fields. Open design points: the compaction signal (the moe-compaction-keeper session.compact hook is the only seat-side hook), and that attempt reattachment is never a base acknowledgement. Details are in the task comment and in this task's Serena handoff memory.",
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:49:40.563Z",
+  "planningNotes": {
+    "approachesConsidered": "1. One task holding the pure module plus the wiring. About 400 lines over 4 files, right at the cap on a shared wire contract. Split: the pure module became C06a (task-7d0f7f08, with the exact interface in its description), and C06 is the wiring.\n2. Detecting compaction in the daemon. Impossible: compaction happens inside one CLI process, with the same MOE_SESSION_ID. So the contract requires an explicit contextEpoch that the seat advances on compaction, and the absence of an epoch never gives a delta (fail closed). Seat-side reporting (the moe-compaction-keeper session.compact hook plus proxy stamping) is activation and a client consumer, so it is out of scope.\n3. Persisting bases. Rejected: in memory means a restart naturally gives a full snapshot (DoD2), and there is no new store.\n4. Treating reattach as continuity. Rejected by DoD3. lastPhaseAt changes on every reconcile and reattach, so a base served before one never matches after it, without editing reattach_attempt.\n5. C05 is kept in dependsOn per the directive, but NOT consumed: deltas are generic JSON diffs, so source-reference and evidence changes appear as changed fields.",
+    "codebaseInsights": "Landed:\n- getContext.ts servedContextIdentity records a receipt only on the 'recorded' path (sessionId, a running attempt, owner = caller = assignee). packetId = sha256 of JSON.stringify(packet without servedContext).\n- The attemptStore receipt is attempt.contextReceipt (latest wins). It records attemptId, generation, workerId, sessionId, packetId and planRevision.\n- ExecutionAttempt.lastPhaseAt changes on every phase transition. processStartedAt and host are the runner identity.\n- The seat sessionId is MOE_SESSION_ID `<workerId>@<preflight-iso>`, one per CLI launch, and stays the same across compactions.\n\nAssumed: the C06a names in task-7d0f7f08's description.",
+    "risks": "- The epoch is client-asserted. Until a seat stamps it mechanically, nothing sends contextEpoch, so no delta is ever served: safe by construction.\n- Key order: diff and apply only by pointer, never by comparing text.\n- Receipt semantics: the receipt names the reconstructed full packet, which is what the session now holds (base + delta).\n- Size is at most 400 net lines.\n- Shared contract: run the full suite.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getContext.ts",
+      "packages/moe-daemon/src/tools/getContextReceipt.test.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/types/schema.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T16:49:40.671Z",
+  "approvedPlanRevision": 1
 }

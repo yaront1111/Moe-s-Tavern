@@ -13,9 +13,46 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 7,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Review slice, so NO new code. The implementation is already complete in checkpoint 9d05921 (moe/work-2026-10-24): mcpStdioClient.ts +279 and mcpStdioClient.test.ts +212, 491 net. Size-exception rail proposal prop-7dd6d59a55b24ac49d4e39cf57febd54 is pending human approval.\n\nConfirm that both files are byte-identical to 9d05921 (`git diff --quiet 9d05921 -- <file>`) and that nothing else changed. If they differ, restore nothing: report the diff in the step note and call moe.report_blocked.\n\nRead the prior evidence: the task comment and Serena task-task-465fb4b958934707b311fc0e7731cc7b-handoff. Re-check that the three review fixes keep their named tests:\n- the nested-id RangeError: S7 deepid;\n- the stdin backlog cap: S7 flood;\n- the reaped guard: S14.\nThe error handling must stay unchanged: open and call never throw past invalidInput.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/mcpStdioClient.ts",
+        "packages/moe-daemon/src/context/mcpStdioClient.test.ts"
+      ],
+      "note": "Review only; no edits. HEAD = 9d05921. `git diff --quiet 9d05921` reports both files identical, and the worktree has neither file dirty. numstat vs 7c7ce76: mcpStdioClient.ts +279/-0 and mcpStdioClient.test.ts +212/-0, 491 net.\n\nReview fixes keep named tests:\n- nested-id RangeError (isName/Number.isFinite id echo guard, line 190): S7 deepid.\n- stdin backlog cap (writableLength > MCP_FRAME_LIMIT_BYTES, line 190): S7 flood.\n- reaped guard (killTree line 146): S14.\n\nError handling is unchanged:\n- open throws only invalidInput, from snapshotLaunch/snapshotAllowed before spawn.\n- spawn is try-wrapped, and the handshake returns reason strings.\n- call throws only invalidInput, for a non-string tool or non-plain args, which is caller shape.\n\nOther sessions' dirty paths were left untouched.",
+      "startedAt": "2026-10-29T16:47:05.012Z",
+      "completedAt": "2026-10-29T16:47:19.765Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify once, fresh, on the exact bytes.\n- Run the gate in an isolated Linux snapshot of HEAD: whole-repo git archive, the two files cmp-identical, native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0.\n- If a native Windows node is reachable (mem:pattern-qa-windows-native-vitest-from-wsl), re-run `npx vitest run src/context/mcpStdioClient.test.ts` there for the taskkill path (S11). Otherwise cite the recorded 25 passed / 2 skipped run, and say that it was not re-run.\n- Supply the npm test command, exit code and output tail to complete_task.\n- The summary must contain the numstat (+279/-0, +212/-0 = 491 net), the size-rail proposal id, and a note that QA approval needs prop-7dd6d59a approved by a human.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/mcpStdioClient.ts",
+        "packages/moe-daemon/src/context/mcpStdioClient.test.ts"
+      ],
+      "note": "Fresh gate on the exact HEAD 9d05921 bytes, with no edits.\n\nLinux snapshot /tmp/moe-c03b-gate.njTiot:\n- Whole-repo git archive. Both owned files cmp-identical. package.json and package-lock.json equal modulo CR.\n- Native `npm ci` under env -i with node v24.21.0, so MOE_* unset and PATH Linux-only.\n- `cd packages/moe-daemon && npm test` exit 0: 175 files passed, 4744 passed and 16 skipped (4760). mcpStdioClient.test.ts ran 27 tests.\n- `npx tsc --noEmit` exit 0.\n\nNative Windows node v24.16.0, re-run (not cited):\n- Scratch copy of the snapshot with robocopied Windows node_modules. The lockfile sha256 matches HEAD.\n- `vitest run src/context/mcpStdioClient.test.ts` exit 0: 25 passed and 2 skipped. The skips are S12 and S14, which are POSIX-only.\n- S11 (taskkill /T path) and S5 (libuv env superset) passed.\n- No leftover moe-mcp-stdio-* temp dirs. Scratch removed.",
+      "startedAt": "2026-10-29T16:47:26.700Z",
+      "completedAt": "2026-10-29T16:49:02.965Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "One adversarial self-review of the two files, the last step. Check:\n- every failure path kills the whole tree;\n- the child env is exactly launch.env on POSIX, and the documented libuv superset on win32;\n- no frame reaches the server for a refused tool;\n- no unbounded buffer exists in stdout, stdin or stderr;\n- a throw inside a stream handler cannot crash the daemon.\nAlso confirm that no forbidden-pattern token appears, and that no .moe edits or Git writes happen.\nIf QA later requires fixes, grow the files only by those fixes, as the size rail states.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/mcpStdioClient.ts",
+        "packages/moe-daemon/src/context/mcpStdioClient.test.ts"
+      ],
+      "note": "Adversarial self-review of the two files at 9d05921. No defects, so no edits.\n\nChecked:\n- Whole-tree kill on every failure path. fail() defaults to kill=true for protocol-violation, response-too-large and timeout. The exit handler group-kills once, through the reaped guard. A handshake failure runs fail+close. On POSIX, shutdown does killTree then SIGKILL; on win32 it runs taskkill /T before stdin EOF.\n- Child env is exactly launch.env, copied through Object.fromEntries (S5 asserts toEqual on POSIX, and the libuv superset on win32 is documented).\n- A refused tool sends no frame: the allowed and listed checks run before conn.request (S6 asserts against the server log).\n- Buffers are bounded:\n  - stdout: the partial line is capped at MCP_FRAME_LIMIT_BYTES (S7 huge).\n  - stdin: server-request replies are refused past a writableLength of MCP_FRAME_LIMIT_BYTES (S7 flood). Our own request backlog is bounded by the session-fatal timeout.\n  - stderr is 'ignore', so there is no buffer at all.\n- Stream-handler throws:\n  - JSON.parse and the fatal decode are inside try.\n  - The echoed id is only a string of at most 256 chars or a finite number (S7 deepid).\n  - settle and listTools only do type checks.\n  - killTree's process.kill is wrapped in try, and execFile errors go to its callback.\n- Forbidden-pattern grep: 0 hits. No .moe edits and no Git writes.\n\nTheoretical only, recorded for QA:\n1. The POSIX child is detached, so it outlives a daemon crash until stdin EOF. CQ-C03 must call close() on shutdown.\n2. Windows grandchildren of a self-crashed root are unreachable (no Job Objects).\n3. The exit-time kill(-pid) races pid reuse only if the whole group is already gone, which is negligible.\n\nSpec reading for QA: the task description's 'a response line over maxResponseBytes fails the session' follows the approved plan rev 1 step-1 split. Lines over MCP_FRAME_LIMIT_BYTES (4 MiB) fail with response-too-large. An answer over maxResponseBytes gets truncated:true, cut on a character boundary (S3). Otherwise `truncated` could never be true. This matches C03's T8 'response-byte-cap'.",
+      "startedAt": "2026-10-29T16:49:05.429Z",
+      "completedAt": "2026-10-29T16:50:17.582Z"
+    }
+  ],
+  "planRevision": 8,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,36 +72,39 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:49:19.527Z",
-  "updatedAt": "2026-10-29T16:42:07.577Z",
+  "updatedAt": "2026-10-29T16:50:44.010Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T14:55:59.479Z",
-    "plannedStepCount": 4,
+    "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 2
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-0062feec"
+    "worker-0062feec",
+    "architect-4ae016fb"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
-  "planSubmittedAt": "2026-10-29T15:01:54.331Z",
+  "planSubmittedAt": "2026-10-29T16:44:33.544Z",
   "planningNotes": {
-    "approachesConsidered": "1. Add @modelcontextprotocol/sdk. Rejected: it is a new runtime dependency for about 190 lines, the daemon deliberately ships only chokidar, pino and ws, and the SDK client would still need the allowlist, the caps and the tree kill wrapped around it.\n2. Reuse benchmarks/baselineRun.ts terminateTree. Rejected: it is POSIX-only (it uses a negative-pid kill with no Windows branch) and throws a benchmark-specific fail() on a non-ESRCH error. A local killTree of about 12 lines with a taskkill branch is smaller than adapting it.\n3. Line cap = maxResponseBytes, as the row text literally says. Rejected after checking the consumer:\n- CQ-C03's plan (T8) maps truncated:true to 'response-byte-cap', which only works if maxResponseBytes caps the answer text.\n- C03 passes 64 KiB, and a real tools/list (Serena: about 30 tools with long descriptions) could exceed that and fail every session at open.\n- Resolution: a fixed MCP_FRAME_LIMIT_BYTES (4 MiB) bounds every line, giving 'response-too-large', which is session-fatal. maxResponseBytes (at most the frame limit) caps the call text at a character boundary, giving truncated:true.\n4. Keep the session alive after a timeout. Rejected: the late answer would arrive with a retired id. Session-fatal is simpler, and C03 already turns a dead session into per-query fallbacks.\n5. stderr as a capped pipe. Rejected: 'ignore' has no buffer, no stall and nothing to parse.",
-    "codebaseInsights": "- util/errors.ts invalidInput(field, reason) returns a MoeError INVALID_INPUT.\n- util/version.ts exports VERSION.\n- server/McpAdapter.ts serves protocolVersion '2024-11-05'.\n- Serena 1.6.2.dev0 bundles mcp 1.28.1, with LATEST '2025-11-25' and SUPPORTED ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25'].\n- mcp/server/stdio.py writes through TextIOWrapper(sys.stdout.buffer, encoding='utf-8') with no newline argument, so it emits CRLF on Windows.\n- benchmarks/baselineRun.ts shows the POSIX detached-group kill pattern (signalGroup, terminateTree).\n- util/gitExecutable.ts documents the libuv cwd-first search, which is why command must be absolute.\n- The consumer, CQ-C03 semanticSource.ts (planned), passes command = the absolute serena path or process.execPath, cwd = the materialized commit dir, an allowlisted env plus SERENA_HOME, timeoutMs = the remaining budget, and maxResponseBytes 65536. It uses session.server, tools[].inputSchema.properties and call() {ok, text, truncated}.",
-    "risks": "- Windows: if the analyzer root exits on its own (a crash), its grandchildren are unreachable by taskkill /T. Node exposes no Job Objects. Record this as a known limitation; close() orders taskkill before stdin EOF so the normal path is covered.\n- POSIX: the group SIGKILL after the leader is reaped is safe while members exist, because Linux will not reuse a pid still in use as a pgid. With no members it is ESRCH. A pid wraparound within 2 s is the only theoretical misfire, the same as baselineRun.\n- Test flakiness: poll with bounded deadlines (pid gone within 3 s), never fixed sleeps. Every test closes its session in afterEach, so a red test never leaks a fake server.\n- The fake server must not depend on the parent env (the child env is exact), so the tests also prove the env contract.\n- Size: about 390 net. Stay table-driven.\n- Rails: no forbidden tokens, no .moe edits, no Git use at all, no MCP tool registration, no Serena-specific logic.",
+    "approachesConsidered": "1. A size exception for the exact landed slice. CHOSEN, following the C07a (prop-af8be424) and C02 precedents. It is proposed as prop-7dd6d59a, TASK scope.\n2. The plan's split, tree kill plus S11-S13 as a sibling. Rejected: it removes only about 70 lines, leaving about 421, still over the cap.\n3. The worker's fallback split: (a) client with a simple close, (b) process-tree kill. Rejected: slice (a) would fail DoD 3 (close() must kill grandchildren) unless the DoD itself were re-sliced. It also doubles QA and verification for the same bytes, against CQ-TOKEN-SAFETY-v1.",
+    "codebaseInsights": "The bytes and evidence are in checkpoint 9d05921 and the worker's comment (2026-10-29T16:42Z). The reason codes and API are listed in Serena task-task-465fb4b958934707b311fc0e7731cc7b-handoff. The consumer is CQ-C03 (task-8d009716).",
+    "risks": "- QA cannot approve over the cap until a human approves prop-7dd6d59a. The worker can still complete; QA waits.\n- The Windows taskkill path (S11) is covered only by a native run. Re-run it if a native node is reachable, else cite the recorded run.\n- Known limitation: on Windows, grandchildren of a self-crashed root are unreachable (no Job Objects). Record it, and do not fix it here.",
     "keyFiles": [
-      "packages/moe-daemon/src/benchmarks/baselineRun.ts",
-      "packages/moe-daemon/src/util/gitExecutable.ts",
-      "packages/moe-daemon/src/util/errors.ts",
-      "packages/moe-daemon/src/util/version.ts"
+      "packages/moe-daemon/src/context/mcpStdioClient.ts",
+      "packages/moe-daemon/src/context/mcpStdioClient.test.ts"
     ]
   },
-  "planApprovedAt": "2026-10-29T15:01:54.428Z",
+  "planApprovedAt": "2026-10-29T16:44:33.631Z",
   "workStartedAt": "2026-10-29T16:26:06.325Z",
   "priorAttempt": {
     "attemptedAt": "2026-10-29T16:42:07.576Z",
@@ -119,5 +159,53 @@
       "step-1",
       "step-2"
     ]
-  }
+  },
+  "commits": [
+    {
+      "sha": "9d05921c785e9309856c9d6d35cf50ff1347baf3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T15:03:51Z",
+      "paths": [
+        ".moe/epics/epic-fe5e32c32b044a20944c693dfd79411b.json",
+        ".moe/tasks/task-02fd5931f7274a6696ef84e7d3da4efb.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-37dd3edb921c42eca56efefb36832992.json",
+        ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+        ".moe/tasks/task-f9abfd2d170246549e01fa1bcbff4238.json",
+        "packages/moe-daemon/src/context/mcpStdioClient.test.ts",
+        "packages/moe-daemon/src/context/mcpStdioClient.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T16:43:20.263Z",
+      "treeId": "446d617e1a8530b1a306df10156d4b7aa6975f58",
+      "status": "PLANNING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/context/mcpStdioClient.ts",
+    "packages/moe-daemon/src/context/mcpStdioClient.test.ts"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/mcpStdioClient.ts",
+    "packages/moe-daemon/src/context/mcpStdioClient.test.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-0062feec@2026-10-29T15:03:51Z",
+    "at": "2026-10-29T16:43:20.263Z"
+  },
+  "reviewStartedAt": "2026-10-29T16:50:44.008Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test",
+    "exitCode": 0,
+    "outputTail": "[Fresh run 2026-10-29 18:47 in a Linux snapshot /tmp/moe-c03b-gate.njTiot: whole-repo git archive of HEAD 9d05921, owned files cmp-identical, native npm ci, env -i with node v24.21.0, MOE_* unset]\n ✓ src/context/mcpStdioClient.test.ts (27 tests) 4506ms\n ...\n Test Files  175 passed (175)\n      Tests  4744 passed | 16 skipped (4760)\n   Start at  18:47:55\n   Duration  33.91s (tests 91%, transform 5%, import 4%)\n[npm test exit 0; npx tsc --noEmit exit 0]\n[Native Windows node v24.16.0: vitest run src/context/mcpStdioClient.test.ts exit 0, 25 passed | 2 skipped (S12, S14 POSIX-only); S11 taskkill /T passed]",
+    "reportedAt": "2026-10-29T16:50:44.008Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "CQ-C03b, a read-only MCP stdio analyzer client. Delivered in checkpoint 9d05921 on moe/work-2026-10-24. This review-slice session (plan rev 8) changed no bytes.\n\nnumstat:\n- packages/moe-daemon/src/context/mcpStdioClient.ts +279/-0\n- packages/moe-daemon/src/context/mcpStdioClient.test.ts +212/-0\n- Total 491 net, over the 400 cap. Size-exception rail proposal prop-7dd6d59a55b24ac49d4e39cf57febd54 (TASK scope) is PENDING: QA approval needs a human to approve prop-7dd6d59a first.\n\nAPI: the exact row names plus MCP_FRAME_LIMIT_BYTES (4 MiB).\n\nReason codes:\n- Refused before any frame: tool-not-allowed, tool-not-listed.\n- Per call, the session survives: tool-error, rpc-error:<n>.\n- Session-fatal, tree killed: protocol-violation, response-too-large, timeout.\n- Child: exited:<code|signal>, spawn-failed:<ERRNO>.\n- After close(): closed.\n\nFresh evidence this session:\n- Linux snapshot: `npm test` exit 0, 175 files, 4744 passed and 16 skipped; tsc --noEmit exit 0.\n- Native Windows node v24.16.0: 25 passed, 2 skipped (S12 and S14 are POSIX-only). S11 taskkill /T and S5 passed.\n- The 10 mutants and 3 review fixes were recorded earlier: deepid RangeError → S7 deepid; stdin backlog → S7 flood; reaped guard → S14.\n\nDoD map:\n1. S1.\n2. S6, S7 ×7, S8, S9.\n3. S11 (both platforms), S12, S14, S5.\n4. The run above.\n\nFor QA:\n- The description's \"line over maxResponseBytes fails\" follows the approved plan rev 1 split. A line over 4 MiB gives response-too-large; an answer over maxResponseBytes gives truncated:true on a character boundary (S3), matching C03 T8.\n- stderr is 'ignore', so there is no buffer and nothing is parsed.\n- Known limits: the Windows env is the libuv superset (mem:gotcha-windows-libuv-spawn-env-injection); Windows grandchildren of a self-crashed root are unreachable; the POSIX child is detached, so CQ-C03 must call close() on shutdown."
 }
