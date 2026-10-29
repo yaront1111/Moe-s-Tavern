@@ -13,9 +13,57 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). First read the LANDED C08 (task-f12b03e8) recipe framework and adapt every name below to its interface: its definition record, its kind registry, its eligibility/fallback reason shape and any post-patch hook. Then create docsLiteralReplace.test.ts using real temp Git repos, following the fixture style of context/repositorySource.test.ts; no mocks for Git. Assert exact reason codes and exact objects, never truthiness.\n(DoD1) Eligible only when sha256 of the COMMITTED bytes at the basis commit equals originalSha256 AND oldText occurs exactly once. Refusals:\n- docs-replace-hash-mismatch;\n- docs-replace-old-text-missing;\n- docs-replace-old-text-ambiguous, including an overlapping repeat ('aa' in 'aaa');\n- docs-replace-source-unavailable, for a missing path, a symlink, a 100755 file, binary or non-UTF-8 bytes, a file over the byte cap, and an unresolvable commit.\n(DoD2) The definition is refused when allowedPaths or requiredChecks is missing or empty. An input path outside allowedPaths, under .moe/, or not *.md gives docs-replace-path-not-allowed. The instantiated plan is exactly one step with affectedFiles [path]. Its executionContract.requiredChecks deep-equals the definition's checks, checkRefs equals their commands, and approvedScope names only the path.\n(DoD3) Post-patch:\n- exactly [path] changed with the expected post sha256 passes;\n- another path changed gives docs-replace-extra-edits, listing the paths;\n- an extra change inside the same file gives docs-replace-postpatch-mismatch;\n- no change gives docs-replace-patch-missing;\n- an inputs digest that differs from the instantiation record gives docs-replace-inputs-changed;\n- a definition kind or version that differs from the recipe gives docs-replace-recipe-mismatch;\n- a Git failure gives an unavailable reason, and nothing throws.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement docsLiteralReplace.ts, pure plus bounded read-only Git, as the single C08 recipe kind 'docs-literal-replace', version 1. Error handling: every function returns a typed refusal reason and never throws. Git, IO, timeout and decode failures all map to an unavailable reason.\n(a) validateDefinition(def): allowedPaths is a non-empty list of normalized repo-relative prefixes (normalizeAffectedFile). requiredChecks is non-empty, validated through validateExecutionContract({requiredChecks}).\n(b) validateInputs(inputs, def): exact keys {path, originalSha256, oldText, newText}. path is normalized, *.md, not under .moe/, and equal to or under an allowedPaths prefix. originalSha256 is 64 lowercase hex. oldText is 1-2000 chars, newText 0-2000 chars, neither contains NUL, and newText !== oldText.\n(c) inputsDigest: sha256 of canonical JSON [kind, version, path, originalSha256, oldText, newText].\n(d) assessSource(projectRoot, commit, inputs): REUSE readRepositorySource with one read query, raising maxFileBytes within validateSourceRequest's bounds. Require status 'served', mode 100644 and sha256(Buffer.from(content,'utf8')) === originalSha256. The decoder is fatal UTF-8 with the BOM kept, so the round trip is byte-exact. Count occurrences with indexOf(old, i+1) so overlapping repeats count. Return {ok, commit, oid, expectedSha256}.\n(e) instantiate(inputs, def, assessment): a deterministic ordinary plan. It is one step whose description JSON-quotes oldText and newText and states the expected post-patch sha256 and 'change nothing else'. It has affectedFiles [path] and an executionContract carrying intendedBehavior, acceptanceCriteria, approvedScope, sourceAssumptions (commit, oid, sha256), checkRefs and requiredChecks from the definition. It must fit MAX_STEP_DESCRIPTION_CHARS; refuse rather than truncate.\n(f) assessPostpatch(projectRoot, {baseCommit, postCommit}, inputs, expectedSha256): run openProjectGit and diff-tree -r -z --no-renames --no-ext-diff --no-textconv --raw base post with a bounded maxBuffer. Excluding only the task's own board path .moe/tasks/<taskId>.json, the changed set must be exactly [path]. Then read path at post through readRepositorySource and require sha256 === expectedSha256. No writes, no shell, no filesystem fallback.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire the kind into C08's framework with the smallest edit. Register it in C08's recipe-kind registry and hook assessPostpatch into C08's post-patch or eligibility call site. Before editing, run moe.declare_files on that landed C08 file; it does not exist at plan time, so it cannot be listed here. Ineligibility, a changed inputs digest and a recipe mismatch must return C08's concrete ordinary-planning fallback with these reason codes; extra edits must refuse. Add one test proving the registered kind is reachable through C08's entry point. If C08 landed no post-patch call site, do NOT invent a second authority. Call moe.report_blocked naming task-f12b03e83a1a491494a08e42c7a58504 and the missing hook. Keep the whole diff within 400 net lines and 3 files.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts",
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify once. Iterate with `npx vitest run src/context/recipes/docsLiteralReplace.test.ts`. Then run the gate fresh in an isolated Linux snapshot of HEAD with native deps, MOE_* unset and a Linux-only PATH (see mem:gotcha-daemon-linux-snapshot-gate), plus `npx tsc --noEmit`. The gate is `cd packages/moe-daemon && npm test`, and it must exit 0. Supply its command, exit code and output tail to complete_task. Also prove mutations are killed on scratch copies, then restore and cmp the bytes:\n- drop the uniqueness check;\n- compare the hash of the worktree instead of committed bytes;\n- ignore extra changed paths;\n- skip the inputs-digest compare.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts",
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "One adversarial self-review of this task's diff only. Check:\n- CRLF and BOM bytes, and a NUL in oldText;\n- oldText overlapping itself, or newText containing oldText;\n- path case collisions and a path with traversal or control characters;\n- a symlink or gitlink at the path;\n- the doc changing between assessSource and postpatch;\n- two instantiations of the same task running concurrently;\n- a candidate that edits the recipe definition itself;\n- Git timeouts.\nConfirm that no .moe edits and no Git writes happen, and that legacy (non-recipe) tasks are untouched.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts",
+        "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +76,36 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:48.454Z",
-  "updatedAt": "2026-10-27T13:37:37.997Z",
+  "updatedAt": "2026-10-29T13:40:27.856Z",
   "dependsOn": [
     "task-f12b03e83a1a491494a08e42c7a58504"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T13:30:52.693Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T13:40:27.760Z",
+  "planningNotes": {
+    "approachesConsidered": "I proposed the split to the C08 architect (architect-e4b7eee0, msg-af90dfdb) and had no reply when this plan was submitted. C08 owns the definition storage and protection, the internal-identity instantiation through submit_plan validation (CONTROL, SPEED and TURBO), and the fallback. C09 owns one kind, in new files. I rejected a hand-rolled blob reader: readRepositorySource (C02) already does bounded, committed-only, UTF-8-strict reads that refuse symlinks and submodules. I also rejected worktree reads, because the shared checkout is dirty. And I rejected a complete_task file-list check, because TOOL-tier attribution can land files the worker never reported. The post-patch check therefore diffs commits.",
+    "codebaseInsights": "Reusable pieces:\n- context/repositorySource.ts readRepositorySource(projectRoot, commit, queries, {limits}).\n- util/cachedPlanPaths.ts openProjectGit and runGit: read-only env, budgeted.\n- state/validators.ts validateExecutionContract, for requiredChecks.\n- util/affectedFiles.ts normalizeAffectedFile.\n- delivery/requiredChecks.ts, which shows the never-trust-candidate pattern.\nsubmit_plan is blocking:true and runs Git outside the mutex. claim_next_task holds the mutex, so no Git may run synchronously there.",
+    "risks": "C08 was unplanned at submit time, so every name here is assumed. Adapt them to the landed C08. The wrapper's completion commit includes the BOARD path .moe/tasks/<id>.json, so exclude only that path. Other tasks' commits interleave on the shared branch, so always diff the exact base and post commits, never a range. The size cap is 400 net lines.",
+    "keyFiles": [
+      "packages/moe-daemon/src/context/repositorySource.ts",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T13:40:27.856Z"
 }
