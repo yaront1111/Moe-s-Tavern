@@ -76,9 +76,9 @@ describe('executionContract persistence and planRevision', () => {
     const [submission, board] = await Promise.all([
       submit({ executionContract: fullContract() }), patchContract(replacement),
     ]);
-    expect(submission).toMatchObject({ planRevision: 8 });
-    expect(board.planRevision).toBe(9);
-    await persisted(9, replacement);
+    // submit_plan awaits its Git basis capture before the lock, so either write may go first.
+    expect([(submission as { planRevision: number }).planRevision, board.planRevision].sort()).toEqual([8, 9]);
+    await persisted(9, board.planRevision === 9 ? replacement : fullContract());
   });
   it.each([null, undefined, {}])('clears with %j and omits the key on disk', async value => {
     await boot({ executionContract: fullContract() });

@@ -729,6 +729,25 @@ describe('MoeWebSocketServer Integration', () => {
       ws.close();
     });
 
+    it('UPDATE_TASK drops forged plan-reuse state before it reaches state.updateTask', async () => {
+      const spy = vi.spyOn(state, 'updateTask');
+      const { ws, ready, nextMessage } = connectAndCollect();
+      await ready;
+      await nextMessage(); // STATE_SNAPSHOT
+      ws.send(JSON.stringify({ type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { title: 'Renamed',
+        planSourceBasis: { version: 1, commit: 'a'.repeat(40), planRevision: 0 },
+        planningEntry: { from: 'BACKLOG', at: '2026-10-27T10:00:00.000Z', seq: 1 }, planReuse: null } } }));
+
+      expect((await nextTaskUpdated(nextMessage)).payload.title).toBe('Renamed');
+      expect(spy).toHaveBeenCalled();
+      for (const [, updates] of spy.mock.calls) {
+        for (const key of ['planSourceBasis', 'planningEntry', 'planReuse']) expect(Object.hasOwn(updates, key)).toBe(false);
+      }
+      const stored = state.getTask('task-1')!;
+      expect([stored.planSourceBasis, stored.planningEntry, stored.planReuse]).toEqual([undefined, undefined, undefined]);
+      ws.close();
+    });
+
     it('UPDATE_TASK WORKING→REVIEW releases the worker even when the payload echoes the old owner', async () => {
       await state.createWorker({
         id: 'w-owner',

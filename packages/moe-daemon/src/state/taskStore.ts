@@ -18,13 +18,14 @@
 import fs from 'fs';
 import path from 'path';
 import type { StateManager } from './StateManager.js';
-import type { ActivityEventType, ExecutionPolicySnapshot, RequiredCheckSnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
+import type { ActivityEventType, ExecutionPolicySnapshot, PlanReuseRecord, RequiredCheckSnapshot, Task, TaskComment, TaskPriority, TaskStatus } from '../types/schema.js';
 import {
   assertExecutionProfileReady,
   readExecutionPolicySnapshot,
   resolveTaskExecutionProfile,
 } from '../delivery/executionProfile.js';
 import { captureExecutionPolicySnapshot } from '../delivery/policy.js';
+import { readPlanningEntry, readPlanSourceBasis, validatePlanReuseRecord } from '../context/planReuseState.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
@@ -425,7 +426,10 @@ export function assertNoFinalizingAttempt(state: StateManager, taskId: string): 
 
 export async function updateTask(
   state: StateManager, taskId: string, updates: Partial<Task>, event?: ActivityEventType, actorWorkerId?: string,
-  daemonOwned?: { requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number },
+  daemonOwned?: {
+    requiredCheckSnapshot?: RequiredCheckSnapshot; approvedPlanRevision?: number;
+    planSourceBasis?: { commit: string }; planReuse?: PlanReuseRecord;
+  },
 ): Promise<Task> {
   const task = state.tasks.get(taskId);
   if (!task) {
@@ -454,6 +458,14 @@ export async function updateTask(
   // Protected file identity has the same ownership: only submit_plan's internal
   // parameter may set/clear it. StateManager's public update signature omits it.
   delete sanitized.requiredCheckSnapshot;
+  // Plan-reuse state is daemon-owned: submit_plan's basis (PLAN_SUBMITTED),
+  // the PLANNING-entry stamp below and the daemonOwned reuse record are its
+  // only writers. A caller value, null included, never reaches the row.
+  delete sanitized.planSourceBasis;
+  delete sanitized.planningEntry;
+  delete sanitized.planReuse;
+  // Refused before any write: nothing is persisted, mapped or emitted.
+  const reuse = daemonOwned?.planReuse === undefined ? undefined : validatePlanReuseRecord(daemonOwned.planReuse);
   if (Object.prototype.hasOwnProperty.call(sanitized, 'executionContract')) {
     sanitized.executionContract = validateExecutionContract(sanitized.executionContract);
   }
@@ -569,18 +581,35 @@ export async function updateTask(
   const stamp = reviewed === undefined
     ? {}
     : { approvedPlanRevision: checkedApprovalRevision(taskId, reviewed, planRevision) };
+  // The commit the submitted plan was measured against, with the revision this write commits.
+  const basis = event === 'PLAN_SUBMITTED' && daemonOwned?.planSourceBasis
+    ? readPlanSourceBasis({ planSourceBasis: { version: 1, commit: daemonOwned.planSourceBasis.commit, planRevision } })
+    : undefined;
+  if (basis === null) throw invalidInput('planSourceBasis', 'commit must be 40 or 64 lowercase hex');
 
+  const now = new Date().toISOString();
   const updated: Task = {
     ...task,
     ...finalUpdates,
     planRevision,
     ...capture,
     ...stamp,
-    updatedAt: new Date().toISOString()
+    updatedAt: now
   };
   if (event === 'PLAN_SUBMITTED' && daemonOwned) {
     if (daemonOwned.requiredCheckSnapshot) updated.requiredCheckSnapshot = daemonOwned.requiredCheckSnapshot;
     else delete updated.requiredCheckSnapshot;
+    if (basis) updated.planSourceBasis = basis;
+    else delete updated.planSourceBasis;
+  }
+  if (reuse) updated.planReuse = reuse;
+  // How the task last entered PLANNING. Judged on the STORED row: an unblock
+  // nulls blockedFromStatus in this same update, and a return from a block
+  // taken in PLANNING is not a new entry.
+  if (statusChanged && finalUpdates.status === 'PLANNING'
+    && !(task.status === 'BLOCKED' && task.blockedFromStatus === 'PLANNING')) {
+    const prior = readPlanningEntry(task)?.seq ?? 0;
+    updated.planningEntry = { from: task.status, at: now, seq: prior < Number.MAX_SAFE_INTEGER ? prior + 1 : 1 };
   }
 
   await state.writeEntity('tasks', taskId, updated);

@@ -129,6 +129,9 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   // The reviewed revision a checked approval stamped, written only by
   // approveTask's PLAN_APPROVED write: a board echo must not forge, null or erase it.
   'approvedPlanRevision',
+  // Daemon-owned plan-reuse state, written only by taskStore.updateTask (submit_plan's basis, the
+  // PLANNING-entry stamp and the daemonOwned reuse record), so a board echo must not forge or wipe it.
+  'planSourceBasis', 'planningEntry', 'planReuse',
 ]);
 
 export type PluginMessage =

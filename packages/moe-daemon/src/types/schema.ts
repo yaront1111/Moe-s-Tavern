@@ -746,6 +746,39 @@ export interface RequiredCheckSnapshot {
   entries: { path: string; oid: string }[];
 }
 
+/** The commit `HEAD^{commit}` resolved to when submit_plan ran, and the planRevision that write committed. */
+export interface PlanSourceBasis {
+  version: 1;
+  /** Full 40- or 64-hex commit id. */
+  commit: string;
+  planRevision: number;
+}
+
+/** How the task last entered PLANNING: the status it left, the write's ISO time, a per-task counter from 1. */
+export interface PlanningEntry {
+  from: TaskStatus;
+  at: string;
+  seq: number;
+}
+
+export type PlanReuseDecision = 'reuse' | 'refresh' | 'reassess' | 'replan';
+
+/** A recorded approved-plan reuse assessment (CQ-C07). Never approval, readiness or evidence. */
+export interface PlanReuseRecord {
+  version: 1;
+  decision: PlanReuseDecision;
+  planRevision: number;
+  entrySeq: number;
+  /** 0-32 items of 1-300 chars, no control characters. */
+  reasons: string[];
+  assessedAt: string;
+  basisCommit?: string;
+  headCommit?: string;
+  /** At most 64 normalized repo-relative paths. */
+  changedPaths?: string[];
+  candidate?: 'current' | 'revalidate';
+}
+
 /**
  * Optional execution intent, canonicalized by validateExecutionContract. A docs
  * fix may supply only intendedBehavior; an API change may also need compatibility.
@@ -840,6 +873,25 @@ export interface Task {
    * readRequiredCheckSnapshot. Never verification evidence by itself.
    */
   requiredCheckSnapshot?: RequiredCheckSnapshot;
+  /**
+   * Daemon-owned, written only by taskStore.updateTask in the PLAN_SUBMITTED
+   * write (submit_plan's capture). Stripped from caller updates and listed in
+   * the /ws denylist. Decode with readPlanSourceBasis (context/planReuseState).
+   * Never approval, readiness or evidence.
+   */
+  planSourceBasis?: PlanSourceBasis;
+  /**
+   * Daemon-owned, stamped only by taskStore.updateTask on a status change into
+   * PLANNING. Stripped from caller updates and listed in the /ws denylist.
+   * Decode with readPlanningEntry. Never approval, readiness or evidence.
+   */
+  planningEntry?: PlanningEntry;
+  /**
+   * Daemon-owned, written only through taskStore.updateTask's private
+   * daemonOwned argument. Stripped from caller updates and listed in the /ws
+   * denylist. Decode with readPlanReuseRecord. Never approval, readiness or evidence.
+   */
+  planReuse?: PlanReuseRecord;
   status: TaskStatus;
   assignedWorkerId: string | null;
   branch: string | null;

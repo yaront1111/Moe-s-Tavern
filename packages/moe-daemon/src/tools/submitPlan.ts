@@ -20,6 +20,7 @@ import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchFor, accountSwitchReply } from '..
 import { decodeStoredPlanRevision, updateTask } from '../state/taskStore.js';
 import { definitionDigest, measureRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
+import { capturePlanSourceBasis } from '../context/planReuseState.js';
 
 /**
  * The affected-path refusal. `cachedRefMiss` says why the configured cached
@@ -313,6 +314,9 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
       const snapshot = measuredContract?.requiredChecks
         ? await measureRequiredCheckSnapshot(state.projectPath, measuredContract.requiredChecks, revision as string | undefined)
         : undefined;
+      // The commit this plan is submitted against, once per call (the cached-path
+      // retry reuses it). Null never refuses or warns: it only removes an older basis.
+      const basis = await capturePlanSourceBasis(state.projectPath);
       let cachedPaths: CachedPlanPaths | undefined;
       let lookupBranch: unknown;
       const submit = () => state.runExclusive(async () => {
@@ -576,7 +580,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         // was actually committed with this plan. Reading the cache later would
         // report a stamp a concurrent write had already moved past.
         const submitted = await updateTask(state, task.id, updatePayload, 'PLAN_SUBMITTED', params.workerId,
-          snapshot ? { requiredCheckSnapshot: snapshot } : {});
+          { ...(snapshot ? { requiredCheckSnapshot: snapshot } : {}), ...(basis ? { planSourceBasis: basis } : {}) });
         // Use the captured assignee because updateTask clears assignedWorkerId on
         // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
         // records and never blocks a successfully submitted plan.
