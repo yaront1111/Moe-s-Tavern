@@ -15,53 +15,86 @@
     {
       "stepId": "step-1",
       "description": "Held contested paths in record_commit (recordCommit.ts), test-first. Load test-driven-development: write the step-1 tests in packages/moe-daemon/src/tools/recordCommit.test.ts, watch them fail, then implement. The decision is option B, from Serena decision-declare-files-contested-hold: report and explain the hold. The attribution predicate does not change and nothing bypasses the hold.\n\n1. Classify a skipped entry as HELD only from its code. It is never inferred from `contested`: a contested path that a witness or `contested: commit` landed also appears there, with a Moe-Contested trailer. Work on the readRecordList output, which has non-blank trimmed strings capped at 255 chars and at most 100 entries. Add a pure helper, `heldContestedPaths(skipped, contested)`, that never throws:\n   - code exactly 'MOE_ATTR_CONTESTED' (strict attribution.contested=skip): peer = the taskId of the `contested` entry whose path normalizes to the same path, else null;\n   - code exactly matching /^MOE_ATTR_CONTESTED_UNTOUCHED\\((task-[A-Za-z0-9_-]+)\\)$/ (skip-untouched): peer = the captured id;\n   - every other code is ignored: other MOE_ATTR_* codes, lowercase, a missing or empty peer, a peer without the task- prefix, trailing characters after ')', nested parens, a space inside;\n   - normalize the path with the existing PathSet / tolerantNormalizePath from util/attributionTiers. A path they drop (absolute, traversal, non-string) is malformed and ignored;\n   - dedupe by normalized path, first entry wins, keeping its peer and kind.\n2. When at least one path is held, append ONE line to `lines`, for every outcome (a NO_OWNED_PATHS refusal is often exactly this case):\n   `MOE_CONTESTED_HELD task=<id>: <path>(<peer or ?>), … (+N more) — <remedy>`\n   - Show at most HELD_PATHS_SHOWN = 5 entries, the same bound as the wrapper's held= suffix; N counts the remaining distinct paths.\n   - The remedy is constant text, so the line stays bounded.\n   - If any entry is skip-untouched, the remedy says: verify these bytes are this task's and coordinate any live peer; then either this task's own assignee session edits the path with a wrapper-observed successful editing tool (Claude Edit/Write family or a supported Serena editor, not a shell write), or the stale peer task is legitimately completed or archived, before the next landing. declare_files, unblocking or a shell touch alone does not release it.\n   - If any entry is strict, the remedy adds: attribution.contested=skip holds the path whatever the session's tools did; only resolving or legitimately finishing the peer task releases it. Never change the policy as the fix.\n3. alertGovernors also becomes true when the held list is non-empty, so committed and nothing outcomes alert with zero unattributedPaths. The alert goes through the existing 24h per-task window, which every alert reason shares. Do not change the ledger, the path unions, duplicate detection, lastCommitOutcome, warnings or the response shape: no new wire or response field and no schema change. Chat stays best-effort, so error handling is unchanged: both posts keep their try/catch, and a failed post never changes the stored outcome.\n\nTests (new describe block in recordCommit.test.ts, reusing seed/record and the postSystemMessage/postToRoleChannel spies):\n1. committed + skipped [{ path: 'src/held.ts', code: 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' }], no unattributedPaths: the task line contains 'MOE_CONTESTED_HELD task=task-1: src/held.ts(task-peer)' and the editing-tool remedy text. #governors gets that line once.\n2. outcome nothing + a strict 'MOE_ATTR_CONTESTED' entry whose path appears in contested with taskId 'task-peer2': shows 'src/strict.ts(task-peer2)' and the strict remedy; governors are alerted. A strict entry with no matching contested entry shows '(?)'.\n3. Contested but landed: contested [{ path: 'src/b.ts', taskId: 'task-peer' }] with paths ['src/b.ts'] and no contested skip code gives no held line and no governors call.\n4. it.each near-match and unrelated codes give no held line and no alert on a clean committed record: 'MOE_ATTR_PEER_DECLARED', 'MOE_ATTR_PREEXISTING', 'moe_attr_contested', 'MOE_ATTR_CONTESTEDX', 'XMOE_ATTR_CONTESTED', 'MOE_ATTR_CONTESTED_UNTOUCHED', 'MOE_ATTR_CONTESTED_UNTOUCHED()', 'MOE_ATTR_CONTESTED_UNTOUCHED(peer)', 'MOE_ATTR_CONTESTED_UNTOUCHED(task-a)x', 'MOE_ATTR_CONTESTED_UNTOUCHED(task-a)(task-b)', 'MOE_ATTR_CONTESTED_UNTOUCHED(task-a b)'.\n5. Malformed entries alongside a valid code give no held line, and success is still true: a string, null, an array, a missing path, a blank code, a numeric path, an absolute path '/etc/x', and a traversal '../x'.\n6. Truncation: 7 distinct held paths plus one duplicate show exactly 5 '(task-peer)' items, then '(+2 more)'.\n7. Repeat window: a second held record for task-1 inside the window posts the task line again but makes no second governors call. task-2 alerts on its own. After resetRecordCommitGovernorRateLimit, task-1 alerts again. A held alert and an unattributed alert for the same task share one window.\n8. Chat failure: both spies reject, the record still resolves success true, and commits and lastCommitOutcome are stored.\n9. Ledger unchanged: the same committed record with and without held skipped entries stores equal commits[0] (ignoring recordedAt), filesModified, inferredPaths and unattributedPaths.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/recordCommit.ts",
         "packages/moe-daemon/src/tools/recordCommit.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "TDD: wrote the new describe block 'held contested paths (MOE_CONTESTED_HELD)' first and ran it in a Linux snapshot (/tmp/moe-cfa0-snap, git archive HEAD 4de578b, native npm ci, env -i, node 24.21.0): 6 failed and 32 passed, so the negative guards already passed. Then implemented it: 44/44 pass with declareFiles.test.ts unchanged, and tsc is clean.\nrecordCommit.ts:\n- adds heldContestedPaths(), a private helper. It reads the skip codes only: exactly MOE_ATTR_CONTESTED, or /^MOE_ATTR_CONTESTED_UNTOUCHED\\((task-[A-Za-z0-9_-]+)\\)$/. The strict peer comes from the contested entry with the same pathKey, else '?'. Paths go through tolerantNormalizePath + pathKey, and the first entry per path wins.\n- heldContestedLine() lists at most 5 paths, then +N more, then the constant remedy text (untouched, strict, and the never-clause).\n- alertGovernors gains a held.length>0 term inside the shared 24h window.\n- the tool description mentions the new alert reason.\nThe ledger, unions, response and inputs are unchanged; a test checks this against a held-free twin task.\nTests: untouched on committed; strict on nothing with peer/'?'; refused and failed; contested-but-landed; 11 near-match codes; malformed entries; truncation 5 plus 2 more with a duplicate; the shared window, including an unattributed alert; chat failure; ledger equality.",
+      "startedAt": "2026-10-29T13:48:26.828Z",
+      "completedAt": "2026-10-29T13:51:40.906Z"
     },
     {
       "stepId": "step-2",
       "description": "declare_files caveat (declareFiles.ts), prose only, test-first.\n\n1. The tool description currently says the wrapper commits declared paths 'regardless of the pre-task baseline'. Keep that, and add the caveat: declaring does not override a contested hold. A declared path that another nonterminal task also declares is still held at landing (MOE_ATTR_CONTESTED_UNTOUCHED(<peer>) / MOE_ATTR_CONTESTED), and record_commit's MOE_CONTESTED_HELD line names the remedy.\n2. The success message for new paths ('Declared N new path(s) on <task>; the wrapper commits them under the task on its next exit.') must gain the same short caveat: '…unless another open task also declares one (a contested hold; declaring does not release it).' Keep the 'already declared' message as it is, because declareFiles.test.ts asserts it.\n3. Do NOT change path validation, normalization, the union, alreadyDeclared, the activity event, the chat post, the response keys, or any error handling path.\n\nTests (in recordCommit.test.ts, because the task owns exactly that test file; declareFiles.test.ts must pass unchanged):\n- the declareFilesTool description mentions the contested hold and that declaring does not release it (assert distinctive substrings);\n- declaring ['src/a.ts'], then ['src/a.ts', 'src/b.ts'], gives declaredFiles ['src/a.ts', 'src/b.ts'], addedPaths ['src/b.ts'] and alreadyDeclared ['src/a.ts'] exactly as before, and the second message contains the caveat;\n- a fully repeated declaration still says 'already declared'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/declareFiles.ts",
         "packages/moe-daemon/src/tools/recordCommit.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/declareFiles.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "TDD. I first added describe('moe.declare_files contested-hold caveat') to recordCommit.test.ts, and it failed for the right reason (2 failed of 40). Then the declareFiles.ts prose change, which touches only two things:\n- the description sentence 'Declaring does not override a contested hold … MOE_ATTR_CONTESTED_UNTOUCHED(<peer>) / MOE_ATTR_CONTESTED … record_commit's MOE_CONTESTED_HELD line names the remedy';\n- the new-path message suffix 'unless another open task also declares one (a contested hold; declaring does not release it)'.\nValidation, normalization, the union, alreadyDeclared, the event, the chat post, the response keys and error handling are untouched. The 'already declared' message is unchanged.\nResults: recordCommit.test.ts and declareFiles.test.ts (unedited) give 46/46 in the snapshot. No other source or docs file quotes the old message.",
+      "startedAt": "2026-10-29T13:51:43.308Z",
+      "completedAt": "2026-10-29T13:52:22.603Z"
     },
     {
       "stepId": "step-3",
       "description": "Contract docs (docs/MCP_SERVER.md, record_commit and declare_files sections only).\n\nFirst run git diff -- docs/MCP_SERVER.md. Hunks you did not write belong to other tasks: as of 2026-10-27, task-cd2e4477's unlanded finalTaskId text, plus whatever the prerequisites task-0b40957c and task-9a9b46d8 add. Never revert, reformat or stage them, and name them in your step note. Edit with the built-in Edit tool, which is the TOOL witness for this contested path.\n\n1. record_commit, Notes 'Chat:' bullet:\n- #governors is now also alerted when a skipped entry is a held contested path, through the same once-per-task-per-24h window.\n- Classification comes from skipped codes only: exactly MOE_ATTR_CONTESTED, or MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>). `contested` alone is never taken as a hold, because a witnessed or `contested: commit` path lands with a Moe-Contested trailer.\n- The line format is MOE_CONTESTED_HELD task=<id>: <path>(<peer>) …, with at most 5 paths, then +N more, then the remedy.\n- Strict-skip remedy: a peer resolution only, no TOOL bypass.\n- Skip-untouched remedy: verify ownership, coordinate the peer, then either a wrapper-observed successful editing-tool write in the owning assignee's session (see docs/CONFIGURATION.md attribution.contested for the supported tools), or a legitimately finished peer, before retrying.\n- Declaration, plain unblocking and a shell touch are not fixes, and neither is changing the policy.\n- The response, the stored records and the inputs are unchanged.\n2. declare_files:\n- In the first paragraph, 'commits them regardless of the baseline' gains 'unless another nonterminal task also declares the path'.\n- Add a Notes bullet: declaring never overrides attribution.contested. A path that another open task declares is still held (the codes above), and record_commit's MOE_CONTESTED_HELD line names the remedy.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "git diff -- docs/MCP_SERVER.md was empty before my edits: the prerequisite and cd2e4477 hunks have all landed, so this file has no foreign dirty hunks. I edited it with the built-in Edit tool (the TOOL witness). The diff is now 3 hunks, +9/-2, all mine:\n1. record_commit Notes: the Chat bullet adds the held-path alert reason and says one window is shared by every reason. A new 'Held contested paths (MOE_CONTESTED_HELD)' bullet covers:\n   - the exact codes;\n   - classification by skip code only, with the Moe-Contested trailer rationale;\n   - the line format, the 5-path bound and the peer-or-'?' rule;\n   - the alert on committed/nothing;\n   - the UNTOUCHED remedy, which points at CONFIGURATION.md attribution.contested for the supported tools;\n   - the STRICT remedy (no editing tool releases it, peer only);\n   - the never-clause on declaration, unblocking, shell touch and policy change;\n   - unchanged response, records and inputs.\n2. declare_files first paragraph: 'regardless of the baseline, unless another nonterminal task also declares the path'.\n3. declare_files Notes: a new bullet saying declaring never overrides attribution.contested.",
+      "startedAt": "2026-10-29T13:52:25.309Z",
+      "completedAt": "2026-10-29T13:52:57.605Z"
     },
     {
       "stepId": "step-4",
       "description": "Governor cheat sheet (docs/roles/governor.md), then regenerate its vendored copy.\n\n1. Add a signal-table row after MOE_ATTRIBUTION_UNRESOLVED:\n- Signal: `MOE_CONTESTED_HELD`.\n- Source: `record_commit` (task channel; #governors once per task per 24h).\n- Meaning: the landing held a path this task owns because another nonterminal task also declares it.\n- Action: verify the bytes are this task's and coordinate the live peer. Then either the owning assignee's own Claude session edits the path with a wrapper-observed editing tool before its next exit (a shell write leaves no witness), or the stale peer task is legitimately completed or archived and the landing retried. Under `MOE_ATTR_CONTESTED` (attribution.contested=skip) only the peer route works. Declaring, plain unblocking or touching the file from a shell does not release it, and never change the policy as the fix.\n2. Amend the three existing declare_files mentions so none promises a landing for a contested path: the MOE_ATTRIBUTION_UNRESOLVED row, workflow step 3's declare_files entry, and escalation step 4. Add a short clause pointing at the MOE_CONTESTED_HELD row. Keep everything else, including the reference doc, untouched.\n3. Regenerate packages/moe-daemon/src/generated/initFiles.ts with `npm run generate-init-files` in packages/moe-daemon. HEAD keeps every role doc's marker sha in that file equal to docs/roles (verified 2026-10-27 for all 8 docs), and the JetBrains plugin stamps the same sha at runtime: a stale entry makes the plugin and the daemon overwrite each other's copy of the doc.\n- Run the generator where git history and a working tsx both exist: Windows Git Bash in the real checkout (its node_modules are Windows-native). Never run it from a git-archive snapshot: the shipped-body sha list reads `git log`, and without it the list shrinks.\n- Error handling: if the generator fails, or the diff touches anything other than the governor.md entry (its body, its marker sha, and one new shipped-body sha), stop and report it rather than hand-editing the generated file.\n- Then run npm run lint from the repo root (the role-doc cap; governor.md is exempt but the test still runs).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/roles/governor.md",
         "packages/moe-daemon/src/generated/initFiles.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/roles/governor.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "docs/roles/governor.md, edited with the Edit tool:\n- a new MOE_CONTESTED_HELD signal-table row after MOE_ATTRIBUTION_UNRESOLVED, giving the source, the meaning, the TOOL-or-terminal-peer action and the strict peer-only clause, and saying declaration, unblocking, shell touches and policy changes do not release a hold;\n- the three existing declare_files mentions amended to point at that row: the UNRESOLVED row, workflow step 3, and escalation step 4.\nThe reference doc is untouched.\n\ninitFiles.ts was regenerated with `npm run generate-init-files` through Windows Git Bash (/mnt/c/Program Files/Git/bin/bash.exe -lc, real checkout, git history available). Exit 0: '8 role docs + 3 subagents'. The diff is +6/-5 and confined to the governor.md entry:\n- marker sha 9b4b1f77fc16 -> 6cedbe83add8;\n- 4 body lines;\n- 6cedbe83add8 added to SHIPPED_ROLE_BODY_SHAS['governor.md'].\nThere is no CRLF drift.\nChecks: npm run lint exits 0 (architect 39, worker 29, qa 32). initFiles.test.ts passes 13/13 in the snapshot with the overlay.",
+      "startedAt": "2026-10-29T13:53:00.352Z",
+      "completedAt": "2026-10-29T13:53:52.759Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification gate, run once. From the repository root, run exactly: (cd packages/moe-daemon && npx tsc --noEmit && npm test) && npm run lint. It must exit 0. Submit the command, exitCode and outputTail (the vitest totals plus the lint OK lines) to moe.complete_task.\n\nEnvironment:\n- Under WSL the shared checkout's node_modules are Windows-native, and vitest dies with 'Cannot find native binding'. Run the whole command from Windows Git Bash at the repo root, which also gives npm run lint its bash.\n- Or run the daemon half in a Linux snapshot per Serena gotcha-daemon-linux-snapshot-gate: git archive HEAD of the whole repo, overlay ONLY this task's six paths, symlink a native node_modules, MOE_* unset, and cmp the six files before citing the run.\n- Never npm install in the shared checkout.\n- tsconfig excludes *.test.ts, so tsc does not type-check the test file; vitest runs it.\n\nThis task changes no schema, migration, wire field or tool input, so the daemon suite plus the lint is its full regression.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate: `(cd packages/moe-daemon && npx tsc --noEmit && npm test) && npm run lint`, run from the repo root of a fresh Linux snapshot /tmp/moe-cfa0-gate. GATE_EXIT=0.\n- Snapshot: a git archive of the whole repo at HEAD b049b8e (HEAD 4de578b plus one board-only commit). Only this task's 6 paths are overlaid, each cmp-equal to the worktree.\n- node_modules: the native npm ci install is symlinked, and the lock is cmp-equal.\n- Environment: env -i (no MOE_*), node v24.21.0.\n- Results: tsc 0 errors; vitest 173 files, 4597 passed, 16 skipped; lint OK for architect 39, worker 29, qa 32.\nThis step modified no files.",
+      "startedAt": "2026-10-29T13:54:06.619Z",
+      "completedAt": "2026-10-29T13:54:56.513Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, run once. Load adversarial-self-review and read the diff of your six paths as an attacker:\n- False holds: can a contested-but-landed path, a near-match code, a lowercase code, a missing peer, an absolute or traversal path, or a non-object entry produce MOE_CONTESTED_HELD?\n- Missed holds: does a held path on committed, nothing, refused and failed outcomes, with zero unattributedPaths, always produce the line, and on committed/nothing the alert?\n- Boundedness: are there at most 5 paths, constant remedy text, capped fields, and no unbounded join?\n- Rate limit: is it one governors alert per task per window, whatever the reason? Does a clean committed record still alert nobody?\n- Error handling: rejected chat posts never fail the call or change the ledger, and the helper cannot throw on any input.\n- Contract: no response field, stored field or input changed; the declareFiles union is byte-identical; and declareFiles.test.ts and the existing recordCommit tests pass unchanged.\n- Wording: nothing in the code, docs or governor row says that declaration, unblocking, a shell touch or a policy change releases a hold. The strict code never suggests a TOOL bypass. The remedy names the owning assignee's own session.\n- Generated file: initFiles.ts differs from HEAD only in the governor.md entry.\n\nMutation probe, on a scratch copy or reverted at once: drop the held clause from alertGovernors, then accept the bare 'MOE_ATTR_CONTESTED_UNTOUCHED'. Confirm a test fails for each. If the review changes bytes, rerun the step-5 command and submit only fresh exit-0 evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of the six own paths. No defect was found and no bytes changed, so the step-5 gate run (GATE_EXIT=0) stays current.\n\nMutants were run in the gate snapshot (failures out of 40), then the original was restored and cmp-checked against the worktree:\n- M1 held clause dropped from alertGovernors: 4\n- M2 bare MOE_ATTR_CONTESTED_UNTOUCHED accepted: 1\n- M3 strict peer lookup dropped: 1\n- M4 dedupe dropped: 1\n- M5 shown=6: 1\n- M6 strict remedy always: 1\n- M7 untouched remedy always: 1\n- M8 case-insensitive strict: 1\n- M9 line only on committed: 2\n- M10 unanchored peer regex: 4\nAll 10 were killed.\n\nChecks passed:\n- False holds: the contested list alone, near-match codes, lowercase codes, empty peers, abs/traversal paths and non-object entries give no line.\n- Missed holds: committed, nothing, refused and failed all give the line, and committed/nothing alert.\n- Bounds: at most 5 paths, fields capped at 255 by readRecordList, constant remedy text.\n- One shared 24h window, and a clean committed record alerts nobody.\n- The helper cannot throw: inputs are strings and tolerantNormalizePath catches.\n- Response, records and inputs are unchanged, and the declare union is byte-identical.\n- The strict remedy never suggests a TOOL bypass.\n- initFiles.ts changes only in its governor.md entry.\n\nTheoretical, not fixed:\n(a) A strict peer comes from the contested taskId unvalidated (at most 255 chars) and paths are echoed. This is the same trust as the existing message/code echo, with the wrapper as caller, and gives no capability beyond chat_send.\n(b) A held entry past the reader's 100-entry skipped cap goes unreported, but the wrapper already sends at most 100.\n(c) A whitespace-padded exact code counts, because the reader trims.\n(d) A landing with both strict and untouched holds prints both remedies without per-path kind. This is practically impossible because the policy is project-wide.\n(e) Pre-existing: the docs declare_files Returns block omits message/alreadyDeclared.",
+      "startedAt": "2026-10-29T13:54:59.391Z",
+      "completedAt": "2026-10-29T13:56:21.954Z"
     }
   ],
-  "planRevision": 1,
-  "status": "WORKING",
+  "planRevision": 13,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,14 +118,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:52:06.809Z",
-  "updatedAt": "2026-10-27T09:10:26.337Z",
+  "updatedAt": "2026-10-29T13:57:46.705Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T09:02:29.181Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 6
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-4c57a52b"
+    "architect-4c57a52b",
+    "worker-ac765af7"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -101,7 +136,14 @@
   "planSizeWarnings": [
     "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-27T09:10:26.235Z",
   "planningNotes": {
@@ -121,5 +163,23 @@
       "scripts/moe-agent.sh"
     ]
   },
-  "planApprovedAt": "2026-10-27T09:10:26.337Z"
+  "planApprovedAt": "2026-10-27T09:10:26.337Z",
+  "workStartedAt": "2026-10-29T13:48:26.828Z",
+  "reviewStartedAt": "2026-10-29T13:57:46.703Z",
+  "verification": {
+    "command": "(cd packages/moe-daemon && npx tsc --noEmit && npm test) && npm run lint   [run from the repo root of a Linux snapshot /tmp/moe-cfa0-gate2: git archive of HEAD 29216f5 (whole repo) + only this task's 6 paths overlaid, each cmp-equal to the worktree; native npm ci node_modules symlinked (lock cmp-equal); env -i (no MOE_*); node v24.21.0]",
+    "exitCode": 0,
+    "outputTail": "GATE_EXIT=0\n Test Files  173 passed (173)\n      Tests  4597 passed | 16 skipped (4613)\n(tsc --noEmit: 0 errors)\n> docs:lint\n> bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 29 lines (max 40)\nOK: docs/roles/qa.md has 32 lines (max 40)",
+    "reportedAt": "2026-10-29T13:57:46.703Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/recordCommit.ts",
+    "packages/moe-daemon/src/tools/recordCommit.test.ts",
+    "packages/moe-daemon/src/tools/declareFiles.ts",
+    "docs/MCP_SERVER.md",
+    "docs/roles/governor.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Option B: record_commit now reports held contested paths and explains the remedy. The attribution predicate, ledger, response, stored fields, schema and tool inputs are unchanged.\n\nCode: recordCommit.ts +60/-3\n- New private heldContestedPaths() classifies a hold from the skipped codes only: exactly MOE_ATTR_CONTESTED, or /^MOE_ATTR_CONTESTED_UNTOUCHED\\((task-[A-Za-z0-9_-]+)\\)$/. The contested list is used only to name a strict hold's peer, else '?'.\n- Paths are normalized with tolerantNormalizePath and pathKey; malformed entries are ignored and duplicates merged.\n- On any outcome it appends one line: MOE_CONTESTED_HELD task=<id>: p(peer), … (+N more) — <constant remedy>, with at most 5 paths.\n  - UNTOUCHED remedy: the owning assignee's own session edits with a wrapper-observed editing tool (not a shell write), or the stale peer is legitimately finished.\n  - STRICT remedy: the peer only, never a TOOL bypass.\n  - Both say declaring, unblocking, a shell touch or a policy change does not release it.\n- alertGovernors gains held.length>0, inside the existing shared 24h window. Chat stays try/catch.\n\nProse:\n- declareFiles.ts: the description and new-path message carry the contested caveat; the union is unchanged.\n- docs/MCP_SERVER.md: +9/-2.\n- docs/roles/governor.md: a MOE_CONTESTED_HELD row, and 3 declare_files mentions amended.\n- initFiles.ts: regenerated through Windows Git Bash; only the governor.md entry changed (marker sha, body, one shipped sha).\n\nTests: recordCommit.test.ts +190, 22 new tests:\n- untouched on committed; strict on nothing with peer/'?'; refused and failed;\n- contested-but-landed; 11 near-match codes; malformed entries; truncation;\n- the shared window; chat failure; ledger and response equality;\n- the declare_files caveat with an unchanged union.\nThey failed before the implementation. declareFiles.test.ts and the existing tests are unedited and pass.\n\nGate: exit 0 on HEAD 29216f5 plus the 6 paths. vitest 173 files, 4597 passed, 16 skipped; tsc clean; "
 }
