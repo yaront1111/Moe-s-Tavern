@@ -105,7 +105,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -149,18 +149,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T10:15:36.235Z",
-  "updatedAt": "2026-10-29T18:29:49.718Z",
+  "updatedAt": "2026-10-29T20:26:33.540Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T15:22:30.034Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-29T20:26:33.539Z",
+    "wallClockMs": 277443505
   },
   "contextFetchedBy": [
     "architect-1520cc31",
     "architect-2c9d5121",
     "architect-4c57a52b",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-0b40957cd116453aa76965059743fefb",
@@ -272,5 +275,9 @@
   "completionSummary": "Seats now register their real CLI as worker.type; the launcher side is now delivered on top of the landed daemon (f107447) and proxy (29216f5) contract.\n- Both launchers export MOE_WORKER_TYPE right after CLI detection, before any pre-flight RPC: sh uses a bash-3.2 case, ps1 uses $cliType.ToUpperInvariant(). The values are CODEX, GEMINI, GROK, and CLAUDE for anything else. The export is unconditional, so it replaces an inherited value after a hot reload.\n- Codex: the per-seat mcp_servers.moe override carries the type before MOE_WORKER_ID and strips a value persisted in config.toml.\n- Grok: the config carries the literal `MOE_WORKER_TYPE = \"${MOE_WORKER_TYPE:-}\"`. Claude and gemini inherit the env.\n- Tests:\n  - prompt-cache-launcher.test.mjs runs the real detection block on every engine over a stale inherited type, checks Codex override order (stale and blank values), pins the export before the pre-flight join and the single grok literal, and parses the ps1.\n  - New packages/moe-proxy/src/workerType.integration.test.ts drives the built proxy against the daemon's real McpAdapter and StateManager. It covers all 4 types through join and claim (memory, disk, list_workers, chat_who), a relaunch CODEX→GEMINI (alreadyAssigned)→GROK (join), an absent env keeping the type, and absent, lowercase and unknown values registering CLAUDE.\n- Docs: CONFIGURATION.md (proxy and launcher rows, display-only caveat), root CLAUDE.md proxy row, scripts/CLAUDE.md MCP-servers bullet.\n- Size: +86/-23 tracked plus 176 new lines.\n- A mutation check (proxy injection off) turned the 4 typed integration cases red.\n- Filed task-649edbbb: a missing claude reports 'unknown' when PATH has an unsearchable dir (EACCES).\n- Pre-existing and not fixed: with no python, the sh Codex fallback override carries no type.",
   "touchedFiles": [
     "packages/moe-proxy/src/workerType.integration.test.ts"
-  ]
+  ],
+  "completedAt": "2026-10-29T20:26:33.539Z",
+  "reviewCompletedAt": "2026-10-29T20:26:33.539Z",
+  "reviewSummary": "Reviewed completion 13d4665 (on moe/work-2026-10-24, pushed; checkpoint b51ff41 is board-only). Non-board diff +262/-23, net 239 (under the 400 cap). Owned paths are unchanged 13d4665..HEAD.\nGate: re-ran task.verification verbatim in a git-archive snapshot of HEAD 549fd3b (7 owned files cmp-identical, native npm ci, env -i, node 24.21). GATE_EXIT=0. bash -n ok; launcher node --test 26: 25 pass, 0 fail, 1 skip (ps1 parse, no engine on linux); parity-check PASS; daemon tsc ok, 182 files, 5074 passed | 16 skipped (workerType.test 57); proxy clean+build+vitest 176/176 (workerType.integration 8/8, workerType 65).\nNative Windows: node.exe on the same launcher bytes, 83/83 across powershell.exe 5.1, pwsh 7 and Git Bash: detection over a stale inherited type, Codex override order, ParseFile clean on both PS engines.\nMutants in the sh launcher are each caught (1 red each): export removed (by the source pin), MOE_WORKER_TYPE dropped from identity_keys (stale persisted GROK leaks), codex mapped to CLAUDE. Restored and confirmed with cmp.\nDoD1: sh case and ps1 ToUpperInvariant, both unconditional right after CLI detection and before the pre-flight join; daemon claim/join tests from f107447 plus an e2e proxy-to-McpAdapter test for all 4 types. DoD2: relaunch CODEX->GEMINI (alreadyAssigned)->GROK (join) refreshes the type; absent env keeps the type; absent/lowercase/unknown on a new seat gives CLAUDE and the claim still succeeds. DoD3: proxy injection 29216f5 with tests; Codex per-seat override with stale value stripped, grok literal ${MOE_WORKER_TYPE:-}, claude/gemini inherit env (same path as MOE_SESSION_ID); parity green. DoD4: evidence in verification, reproduced.\nRails: additive only, no state change, regression tests present, forbidden-pattern scan clean. CI test job installs daemon deps before proxy tests, so the cross-package import resolves.\nNotes (non-blocking): the no-python sh Codex fallback carries no type (pre-existing); task-649edbbb was filed for PATH EACCES.",
+  "requiredCheckAtDone": null
 }
