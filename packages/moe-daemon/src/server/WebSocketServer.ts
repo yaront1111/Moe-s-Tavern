@@ -31,6 +31,7 @@ import { buildReopenClearingUpdates } from '../util/reopen.js';
 import { invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
 import { decodeClientHello, type CapabilityAgreement } from './clientCapabilities.js';
 import { applyAccountMessage, type AccountMessageType } from './accountMessages.js';
+import { authenticateRunner, type RunnerIdentity } from './runnerChannel.js';
 
 /**
  * The ONLY error-context keys allowed to cross the /ws boundary. A MoeError's
@@ -187,6 +188,15 @@ export type PluginMessage =
   | { type: 'APPROVE_DECISION'; payload: { decisionId: string } }
   | { type: 'REJECT_DECISION'; payload: { decisionId: string } };
 
+/** The request path without its query; '' for a URL that does not parse. */
+function pathnameOf(url: string): string {
+  try {
+    return new URL(url, 'http://localhost').pathname;
+  } catch {
+    return '';
+  }
+}
+
 export class MoeWebSocketServer {
   private wss: WSS;
   private pluginClients = new Set<WebSocket>();
@@ -283,25 +293,18 @@ export class MoeWebSocketServer {
     }
     const url = req.url || '/';
     if (url.startsWith('/mcp')) {
-      this.mcpClients.add(ws);
-      ws.on('message', (data: WebSocket.RawData) => {
-        this.handleMcpMessage(ws, data.toString()).catch((err) => {
-          logger.error({ error: err, endpoint: 'mcp' }, 'Unhandled error in MCP message handler');
-        });
-      });
-      ws.on('close', () => {
-        this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws).catch((err) => {
-          logger.error({ error: err }, 'Error during MCP worker cleanup');
-        });
-      });
-      ws.on('error', (error) => {
-        logger.error({ error, endpoint: 'mcp' }, 'MCP client WebSocket error');
-        this.mcpClients.delete(ws);
-        this.cleanupMcpWorkers(ws).catch((err) => {
-          logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
-        });
-      });
+      this.attachMcpClient(ws);
+      return;
+    }
+    if (pathnameOf(url) === '/runner') {
+      // Authenticate before any handler is attached: a refused socket never reaches a tool.
+      const runner = authenticateRunner(req, this.state.projectPath);
+      if (!runner) {
+        logger.warn({ endpoint: 'runner', remoteAddress: req.socket.remoteAddress }, 'Runner channel authentication failed');
+        ws.close(1008, 'runner authentication failed');
+        return;
+      }
+      this.attachMcpClient(ws, runner);
       return;
     }
 
@@ -1158,13 +1161,38 @@ export class MoeWebSocketServer {
     }
   }
 
-  private async handleMcpMessage(ws: WebSocket, raw: string): Promise<void> {
+  /** MCP handling shared by /mcp and an authenticated /runner, which alone passes `runner`. */
+  private attachMcpClient(ws: WebSocket, runner?: RunnerIdentity): void {
+    const endpoint = runner ? 'runner' : 'mcp';
+    this.mcpClients.add(ws);
+    ws.on('message', (data: WebSocket.RawData) => {
+      this.handleMcpMessage(ws, data.toString(), runner).catch((err) => {
+        logger.error({ error: err, endpoint }, 'Unhandled error in MCP message handler');
+      });
+    });
+    ws.on('close', () => {
+      this.mcpClients.delete(ws);
+      this.cleanupMcpWorkers(ws).catch((err) => {
+        logger.error({ error: err }, 'Error during MCP worker cleanup');
+      });
+    });
+    ws.on('error', (error) => {
+      logger.error({ error, endpoint }, 'MCP client WebSocket error');
+      this.mcpClients.delete(ws);
+      this.cleanupMcpWorkers(ws).catch((err) => {
+        logger.error({ error: err }, 'Error during MCP worker cleanup after WS error');
+      });
+    });
+  }
+
+  private async handleMcpMessage(ws: WebSocket, raw: string, runner?: RunnerIdentity): Promise<void> {
     try {
       const request = JSON.parse(raw);
       this.trackMcpWorker(ws, request);
       const response = await this.mcpAdapter.handle(request, {
         shouldContinue: () => !this.isClosed && this.mcpClients.has(ws) && ws.readyState === WebSocket.OPEN,
         onWaiterRegistered: (toolName, workerId) => this.registerMcpWaiter(ws, toolName, workerId),
+        runner,
       });
       if (response !== null) {
         this.safeSend(ws, JSON.stringify(response));

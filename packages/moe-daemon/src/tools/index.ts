@@ -79,6 +79,8 @@ export interface ToolCallContext {
   shouldContinue?: () => boolean;
   /** Called synchronously after a long poll publishes its active waiter. */
   onWaiterRegistered?: (workerId: string) => void;
+  /** Set only by an authenticated /runner connection (server/runnerChannel.ts), never from arguments. */
+  runner?: { readonly runnerId: string };
 }
 
 export type ToolHandler = (args: unknown, state: StateManager, context?: ToolCallContext) => Promise<unknown>;

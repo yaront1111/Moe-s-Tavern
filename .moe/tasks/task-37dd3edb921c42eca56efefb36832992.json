@@ -108,7 +108,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:26:53.251Z",
-  "updatedAt": "2026-10-29T17:57:42.354Z",
+  "updatedAt": "2026-10-29T17:58:36.771Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:31:01.695Z",
     "plannedStepCount": 5,
@@ -157,7 +157,50 @@
   },
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/tests/local-runner-check.test.mjs"
+    "scripts/tests/local-runner-check.test.mjs",
+    ".moe/tasks/task-37dd3edb921c42eca56efefb36832992.json",
+    ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+    ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+    ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+    ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
   ],
-  "completionSummary": "CQ-R11a: guest-supervisor.py gains a root-only 'check' mode (main(['check']) -> check_job).\n\nIntake: read_check reads one frame (read_frame, extracted from read_job; read_job is unchanged) and checks:\n- exact keys {kind:'check', version, id, command, protected};\n- version is an int and equals 1;\n- id matches the daemon regex;\n- command is non-blank by JS trim, has no C0/C1/U+2028/U+2029 characters, and is at most 1000 UTF-16 units;\n- protected == [].\n\nExit codes: a bad frame gives 65, EOF 74, no moe-check account or session home 71, a missing workspace 66, non-root 77, bad argv 64. None writes a frame or starts a job.\n\nRe-own: reown() walks the workspace through directory fds. It lstats each entry and refuses links, FIFOs and other specials, a hard-linked file, a path over MAX_PATH_BYTES, and a lstat/open (dev, ino, type) mismatch. Every chown is an fchown.\n\nSpawn: relay(['/bin/sh','-c',command]) with no agent socket and:\n- user/group moe-check with no extra groups;\n- umask 077;\n- cwd = the workspace;\n- env exactly PATH, HOME, USER, LOGNAME, LANG and MOE_CHECK_ID;\n- CQ-R11d's rlimits, soft = hard;\n- a private netns.\n\nGUARD applies the rlimits and, when netns is set, unshares the network and brings lo up after the NNP prctl. The agent job path is unchanged.\n\nTests (local-runner-check.test.mjs):\n- K1: about 50 refusal rows;\n- K2: the recorder contract and drift against CHECK_BOUNDARIES;\n- K3: a real Linux job read from /proc (env, cwd, Umask, NoNewPrivs, limits);\n- K4: the fd walk (symlink, hard link, FIFO, swap, depth, fchown failure).\n\nThe bridge test is unchanged. Mutation check: 49/50 killed; the survivor (the S_IFMT re-check) is equivalent outside inode reuse. The netns branch was verified ad hoc under unshare -r and is not a suite row; CQ-R13 certifies it.\n\nDiff: 379 lines (budget 400). Verification: exit 0, 70/70 pass."
+  "completionSummary": "CQ-R11a: guest-supervisor.py gains a root-only 'check' mode (main(['check']) -> check_job).\n\nIntake: read_check reads one frame (read_frame, extracted from read_job; read_job is unchanged) and checks:\n- exact keys {kind:'check', version, id, command, protected};\n- version is an int and equals 1;\n- id matches the daemon regex;\n- command is non-blank by JS trim, has no C0/C1/U+2028/U+2029 characters, and is at most 1000 UTF-16 units;\n- protected == [].\n\nExit codes: a bad frame gives 65, EOF 74, no moe-check account or session home 71, a missing workspace 66, non-root 77, bad argv 64. None writes a frame or starts a job.\n\nRe-own: reown() walks the workspace through directory fds. It lstats each entry and refuses links, FIFOs and other specials, a hard-linked file, a path over MAX_PATH_BYTES, and a lstat/open (dev, ino, type) mismatch. Every chown is an fchown.\n\nSpawn: relay(['/bin/sh','-c',command]) with no agent socket and:\n- user/group moe-check with no extra groups;\n- umask 077;\n- cwd = the workspace;\n- env exactly PATH, HOME, USER, LOGNAME, LANG and MOE_CHECK_ID;\n- CQ-R11d's rlimits, soft = hard;\n- a private netns.\n\nGUARD applies the rlimits and, when netns is set, unshares the network and brings lo up after the NNP prctl. The agent job path is unchanged.\n\nTests (local-runner-check.test.mjs):\n- K1: about 50 refusal rows;\n- K2: the recorder contract and drift against CHECK_BOUNDARIES;\n- K3: a real Linux job read from /proc (env, cwd, Umask, NoNewPrivs, limits);\n- K4: the fd walk (symlink, hard link, FIFO, swap, depth, fchown failure).\n\nThe bridge test is unchanged. Mutation check: 49/50 killed; the survivor (the S_IFMT re-check) is equivalent outside inode reuse. The netns branch was verified ad hoc under unshare -r and is not a suite row; CQ-R13 certifies it.\n\nDiff: 379 lines (budget 400). Verification: exit 0, 70/70 pass.",
+  "commits": [
+    {
+      "sha": "b71c0fd06d92c3bccfc17ca3b003da4ab301f65a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T17:35:52Z",
+      "paths": [
+        ".moe/tasks/task-37dd3edb921c42eca56efefb36832992.json",
+        ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
+        ".moe/tasks/task-6a5d5a13257b48c9940ae3b22347ff7d.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T17:58:36.771Z",
+      "treeId": "6dbc308637352a5642287ffc757ac52c3db355eb",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/guest-supervisor.py"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T17:35:52Z",
+    "at": "2026-10-29T17:58:36.771Z"
+  }
 }

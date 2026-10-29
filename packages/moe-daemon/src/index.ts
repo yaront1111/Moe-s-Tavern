@@ -16,6 +16,7 @@ import { FileWatcher } from './state/FileWatcher.js';
 import { healMassDeletion } from './state/massDeletionHeal.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
+import { ensureRunnerKey } from './server/runnerChannel.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
@@ -611,6 +612,12 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   });
 
   const mcpAdapter = new McpAdapter(state);
+  try {
+    await ensureRunnerKey(projectPath);
+  } catch (error) {
+    logger.warn({ error: error instanceof Error ? error.message : String(error) },
+      'Runner channel key unavailable; /runner refuses every connection');
+  }
   const wsServer = new MoeWebSocketServer(httpServer, state, mcpAdapter);
 
   // Wait for server to actually start listening

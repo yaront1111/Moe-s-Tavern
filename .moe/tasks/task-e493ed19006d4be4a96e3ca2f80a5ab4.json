@@ -13,9 +13,40 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Create packages/moe-daemon/src/__acceptance__/mcpCall.ts, a small acceptance harness that reaches tools ONLY through the real registry and dispatch, the path agents use. It never imports a tool module or calls a handler.\n\nExport `createMcpCaller(state: StateManager, adapter = new McpAdapter(state))`, which returns:\n- `call(name, args)`: sends `adapter.handle({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })` and resolves to the parsed JSON of `result.content[0].text`.\n- `listTools()`: returns the names from tools/list.\n\nError handling:\n- A JSON-RPC error response becomes a thrown `McpCallError extends Error { code: number; codeName?: string }`, taken from error.code and error.data.codeName, so tests assert exact codeNames.\n- A response with neither result nor error, or non-JSON text, throws McpCallError with code -32603. A malformed reply is never silently a pass.\n\nHeader comment: this is the CQ-V11 rule. A handler-level test mirrors the implementation and passes even when the consumer is unwired; an acceptance fixture must go through registration and dispatch.\n\nDo not mutate McpAdapter. A test that needs an unwired registry deletes the entry from its own adapter instance (a test-only cast).",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__acceptance__/mcpCall.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts (vitest).\n\nFixture:\n- Use ToolTestHarness (tools/toolTestHarness.ts) for the temp project.\n- EVERY call goes through createMcpCaller, never an imported handler.\n- Build the producer and consumer flow the way src/__e2e__/lifecycle.e2e.test.ts sequences it, but over MCP. The order is submit_plan, a worker claim, start_step and complete_step, complete_task, then finalize_attempt with outcome 'nothing-to-commit' as the runner (as finalizeLanding does), then record_candidate, a QA claim, a QA get_context, and the decision.\n- Write it as ONE reusable `async function gatedApproval(call, opts)` scenario.\n\nCases:\n- A1 producer to consumer (the scenario's own assertions):\n  - Settings: deliveryPolicy 'local-branch', qualityGate 'npm test' and qualityGateScope 'everyTask'.\n  - qa_approve BEFORE any check run is refused with codeName DELIVERY_EVIDENCE_MISSING, and its missing evidence includes required-check:npm test.\n  - After record_check_run (runner-observed, exit 0, outcome passed, the candidate's treeSha), the same approval with the completion evidence the policy needs succeeds, and the task is DONE.\n- A2 an unwired consumer (DoD 1):\n  - Run gatedApproval against an adapter whose registry entry 'moe.qa_approve' was deleted, so the consumer is unregistered. It rejects with McpCallError code -32601.\n  - In the SAME test, a mirroring check that imports qaApproveTool and calls its handler directly still succeeds on an equivalent fixture.\n  - Assert both outcomes: acceptance fails where an implementation-mirroring test stays green.\n- A3 a negative regression (DoD 2):\n  - vi.spyOn the delivery/policy.js namespace's evaluateDeliveryEvidence to always return satisfied (the defect). Precedent for namespace spying: src/server/planApproval.test.ts:1095.\n  - `await expect(gatedApproval(call)).rejects.toThrow()`: the scenario's 'refused before the check run' assertion catches the defect.\n  - A second defect: spy listCheckRunsForCandidate in state/checkRunStore.js to return []. The 'approves after the run' assertion fails.\n  - Restore every spy in afterEach.\n- A4 protected assertions (DoD 3):\n  - The task's executionContract.requiredChecks is [{ id: 'acceptance', command: 'npm test', assertionRoots: ['packages/moe-daemon/src/__acceptance__'] }], approved through submit_plan, with the snapshot measured from a temp Git repo the way delivery/requiredChecks.delivery.test.ts builds one.\n  - A candidate whose protectedEntries change an oid under that root, or ADD a file under it, makes qa_approve refuse DELIVERY_EVIDENCE_MISSING with protected-check-changed:<path>.\n  - The unchanged candidate passes.\n- A5 compatibility: under the default legacy policy, the same flow approves with today's soft NO-COMPLETION-COMMIT warning semantics, and no evidence is required.\n- A6: createMcpCaller error mapping. An unknown tool gives -32601, and a tool refusal surfaces its codeName.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/__acceptance__/producerConsumer.acceptance.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Iterate with `cd packages/moe-daemon && npx vitest run src/__acceptance__`.\n2. Mutants. Apply each to a scratch copy, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. In mcpCall.ts, swallow JSON-RPC errors as results: A1 and A6 fail.\n   2. In the scenario, call a handler directly instead of `call`: A2 stops failing, which proves the A2 guard matters. Revert it.\n   3. Remove the A3 spy restore: the next case observes the defect, so it must still fail on its own.\n3. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo.\n   - Overlay ONLY the two new files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0.\n   - `cmp` the overlay against the worktree.\n4. A red run outside these files is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n5. Supply the npm test command, its exit code and the output tail to complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n\n1. Every acceptance case reaches tools through McpAdapter. Grep the test for 'Tool(' and '.handler(': only the A2 mirroring check may do it.\n2. The scenario's assertions are exact codeNames and tokens, never truthiness.\n3. The defects in A3 genuinely flip the outcome. Do not weaken assertions to make a spy pass.\n4. A4 covers an ADDED file under the root, not only a changed one.\n5. Spies and temp directories are restored, and the rate limiter is per adapter instance.\n6. No production code changed apart from the test-support module.\n7. Rails: no forbidden-pattern tokens, no .moe edits, no Git writes, and verified-local untouched.\n\nWrite the Serena handoff memory 'task-task-e493ed19006d4be4a96e3ca2f80a5ab4-handoff' for CQ-V12 (task-b621ddc9). Cover:\n- the acceptance pattern: createMcpCaller plus gatedApproval;\n- that V12 should extend it to the epic's new producer-consumer edges (V03 runner tools, V04 dispatch, V06 strict review) and declare src/__acceptance__ an assertionRoot in the epic's protected required checks;\n- that the docs sweep should describe the pattern.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,11 +59,80 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:10.558Z",
-  "updatedAt": "2026-10-29T17:47:48.155Z",
+  "updatedAt": "2026-10-29T17:59:58.112Z",
   "dependsOn": [
     "task-db328cda8c094df3a4551f0015679fed"
   ],
   "contextFetchedBy": [
-    "worker-b5749787"
-  ]
+    "worker-b5749787",
+    "architect-e4b7eee0"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:57:37.731Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:59:58.029Z",
+  "executionContract": {
+    "intendedBehavior": "Adds protected producer-to-consumer acceptance fixtures that reach daemon tools only through the real MCP registry and dispatch (McpAdapter).\n- One reusable scenario proves that check runs (the producer) gate qa_approve (the consumer) under a strict delivery policy.\n- Meta-tests show that the scenario FAILS when the consumer is unregistered (where a handler-level mirroring test stays green) and when a defect is injected into the policy or the store.\n- A candidate that changes or adds files under the declared protected assertion root is refused through the V01 protected-check machinery.\n- Legacy-policy behavior is shown unchanged.",
+    "acceptanceCriteria": [
+      "An unwired consumer, with the registry entry removed, fails the acceptance scenario, while a direct-handler mirroring check passes on the same fixture.",
+      "Injected defects (an always-satisfied evidence evaluation; check runs hidden from the policy) make the scenario's negative assertions fail.",
+      "A candidate changing or adding a file under the protected acceptance root is refused with protected-check-changed:<path>, and the unchanged candidate is accepted.",
+      "The default legacy policy flow is unchanged.",
+      "In a fresh Linux snapshot, `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` both exit 0."
+    ],
+    "invariants": [
+      "No production behavior changes; only a test-support module and a test are added.",
+      "Acceptance cases never import tool modules, apart from the single A2 mirroring check.",
+      "Spies, temp directories and adapters are per test and restored."
+    ],
+    "compatibility": [
+      "Existing e2e and held-out acceptance tests are untouched."
+    ],
+    "approvedScope": [
+      "New src/__acceptance__/mcpCall.ts (createMcpCaller, McpCallError) and src/__acceptance__/producerConsumer.acceptance.test.ts (the gatedApproval scenario, cases A1-A6)."
+    ],
+    "reuse": [
+      "McpAdapter from packages/moe-daemon/src/server/McpAdapter.ts is the real dispatch path.",
+      "ToolTestHarness from packages/moe-daemon/src/tools/toolTestHarness.ts provides the temp project.",
+      "The lifecycle sequence comes from packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts, and the V01 snapshot and candidate construction from packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/server/McpAdapter.ts: handle() returns {result:{content:[{type:'text', text}]}} or an error with data.codeName, and an unknown tool gives -32601.",
+      "packages/moe-daemon/src/delivery/policy.ts: evaluateDeliveryEvidence reports required-check:<gate> and protected-check-changed:<path> tokens, and qa_approve refuses DELIVERY_EVIDENCE_MISSING under a strict policy.",
+      "packages/moe-daemon/src/server/planApproval.test.ts spies an ESM namespace export with vi.spyOn."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Static wiring checks (imports or registry scans), for example with V10a's import extraction. Rejected as the primary proof: wiring can exist statically and still be inert at runtime. A behavior-level fixture through real dispatch is what the CQ doc asks for ('the real producer/consumer path').\n2. Extending lifecycle.e2e.test.ts. Rejected: it calls handlers directly, which is exactly the implementation-mirroring style that misses an unregistered tool.\n3. CHOSEN: a test-support MCP caller through McpAdapter.handle (registry, dispatch, mutex and error mapping), plus one reusable producer-consumer scenario. Meta-tests prove that it fails when the consumer is unwired (A2) or defective (A3), and that protected assertion roots stop a candidate from weakening it (A4, using the V01 machinery).\n4. Protecting this repo's own acceptance dir in .moe/project.json. Rejected: that is .moe configuration, never hand-edited. V12 can declare it in the epic's required checks.",
+    "codebaseInsights": "- McpAdapter.handle(request) answers tools/call with result.content[0].text, which is JSON. Errors are errorResponse(id, code, message, {tool, codeName}). Unknown tools give -32601.\n- The rate limiter is enabled by default (100 requests per window) and per adapter instance.\n- lifecycle.e2e.test.ts shows the tool sequence and the finalizeLanding helper (finalize_attempt with outcome nothing-to-commit).\n- delivery/requiredChecks.delivery.test.ts shows how V01 snapshots and protectedEntries candidates are built with a temp Git repo; protectedDrift tokens are protected-check-changed:<path>.\n- planApproval.test.ts:1095 is the precedent for spying on an ESM namespace export.\n- vitest includes src/**/*.test.ts, and tsc excludes only *.test.ts, so mcpCall.ts compiles, like tools/toolTestHarness.ts.",
+    "risks": "- Driving the full lifecycle over MCP needs the context and ownership guards satisfied (get_context before qa_approve). Mirror the e2e sequence exactly.\n- The local-branch policy also requires completion-commit evidence. Record it the way acceptance.test.ts and qaApprove tests do (record_commit over MCP), or assert only the required-check token in the before-run refusal.\n- ESM spies on named exports: if vi.spyOn cannot intercept a binding, inject the defect through the adapter's registry (wrap the tool handler) instead, and say so in the step note.\n- WORKING waits for V10 (task-db328cda); no V10 code is used.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/server/planApproval.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:59:58.112Z",
+  "approvedPlanRevision": 1
 }
