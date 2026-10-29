@@ -8,10 +8,14 @@ import { spawn } from 'child_process';
 import type { DaemonInfo } from './types/schema.js';
 import {
   acquireLock,
+  existingDaemonBlocksStart,
+  isForeignDaemonInfo,
   isPortAvailable,
+  isSameProjectPath,
   readDaemonInfo,
   readLockInfo,
   releaseLock,
+  statusDaemon,
   stopDaemon,
   validateDaemonInfoForProject,
 } from './index.js';
@@ -176,6 +180,196 @@ describe('daemon lifecycle validation', () => {
     expect(acquireLock(testDir)).toBe(true);
     expect(readLockInfo(testDir)?.pid).toBe(process.pid);
     releaseLock(testDir);
+  });
+
+  // A daemon.json written on the other side of the WSL/Windows boundary names a
+  // pid from another pid namespace. Flipping process.platform makes testDir's
+  // own path form look like the other side's, so this runs on every CI OS.
+  describe('daemon.json across the WSL boundary', () => {
+    const DEAD_PID = 2147483646;
+    let savedExitCode: typeof process.exitCode;
+    const jsonPath = () => path.join(testDir, '.moe', 'daemon.json');
+    const lockPath = () => path.join(testDir, '.moe', 'daemon.lock');
+    const stopPath = () => path.join(testDir, '.moe', 'daemon.stop');
+
+    beforeEach(() => {
+      savedExitCode = process.exitCode;
+      process.exitCode = undefined;
+    });
+
+    afterEach(() => {
+      process.exitCode = savedExitCode;
+    });
+
+    async function otherSide<T>(fn: () => Promise<T>): Promise<T> {
+      const saved = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      const flipped = process.platform === 'win32' ? 'linux' : 'win32';
+      Object.defineProperty(process, 'platform', { ...saved, value: flipped });
+      try {
+        return await fn();
+      } finally {
+        Object.defineProperty(process, 'platform', saved);
+      }
+    }
+
+    function writeDaemonFiles(port: number, pid = DEAD_PID): string {
+      const raw = JSON.stringify(daemonInfo({ port, pid }));
+      fs.writeFileSync(jsonPath(), raw);
+      fs.writeFileSync(lockPath(), JSON.stringify({
+        pid, projectPath: testDir, createdAt: new Date().toISOString(),
+      }));
+      return raw;
+    }
+
+    function killSpyWithoutSignals() {
+      const realKill = process.kill.bind(process);
+      return vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) =>
+        signal === 0 || signal === undefined ? realKill(pid, 0) : true) as typeof process.kill);
+    }
+
+    it('DEAD_PID is not a live pid here', () => {
+      let code: string | undefined;
+      try { process.kill(DEAD_PID, 0); } catch (err) { code = (err as NodeJS.ErrnoException).code; }
+      expect(code).toBe('ESRCH');
+    });
+
+    it('X1 isSameProjectPath matches /mnt/<d>/x and <D>:/x in both orders', () => {
+      const equal: Array<[string, string]> = [
+        ['/mnt/d/projexts/app', 'D:\\projexts\\app'],
+        ['/mnt/d/projexts/app', 'd:/projexts/app/'],
+        ['/mnt/D/projexts/app', 'D:/projexts/app'],
+        ['/mnt/d/', 'D:\\'],
+        ['/tmp/a', '/tmp/a/'],
+      ];
+      const unequal: Array<[string, string]> = [
+        ['/mnt/d/x', 'E:/x'],
+        ['/mnt/d/x', 'D:/y'],
+        ['/mnt/dd/x', 'D:/x'],
+        ['/mnt/d/x/y', 'D:/x'],
+      ];
+      for (const [a, b] of equal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, true, true]);
+      }
+      for (const [a, b] of unequal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, false, false]);
+      }
+      if (process.platform !== 'win32') expect(isSameProjectPath('/tmp/A', '/tmp/a')).toBe(false);
+    });
+
+    it('X2 isForeignDaemonInfo judges the writer by its projectPath form', () => {
+      const foreign = (projectPath: string, platform: NodeJS.Platform) =>
+        isForeignDaemonInfo(daemonInfo({ projectPath }), platform);
+      for (const p of ['D:\\p', 'd:/p', '\\\\srv\\share\\p']) {
+        expect([p, foreign(p, 'linux'), foreign(p, 'darwin'), foreign(p, 'win32')]).toEqual([p, true, true, false]);
+      }
+      for (const p of ['/mnt/d/p', '/home/u/p']) {
+        expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, true, false, false]);
+      }
+      // `--project` is recorded as given: a relative path names no side.
+      for (const p of ['.', 'proj', 'sub/proj', 'sub\\proj']) {
+        expect([p, foreign(p, 'win32'), foreign(p, 'linux'), foreign(p, 'darwin')]).toEqual([p, false, false, false]);
+      }
+    });
+
+    it('X3 a foreign daemon.json skips the pid check and is judged by /health alone', async () => {
+      const port = await healthServer(testDir, DEAD_PID);
+      const info = daemonInfo({ port, pid: DEAD_PID });
+      expect(await validateDaemonInfoForProject(testDir, info))
+        .toMatchObject({ valid: false, reason: 'pid not alive' });
+
+      expect(await otherSide(() => validateDaemonInfoForProject(testDir, info)))
+        .toMatchObject({ valid: true, foreign: true, info: { port, pid: DEAD_PID } });
+      const unreachable = daemonInfo({ port: await unusedPort(), pid: DEAD_PID });
+      expect(await otherSide(() => validateDaemonInfoForProject(testDir, unreachable)))
+        .toEqual({ valid: false, reason: 'foreign daemon unreachable', foreign: true });
+    });
+
+    it.each(['healthy', 'unreachable'])('X4 statusDaemon leaves a %s foreign daemon.json and its lock in place and exits 0', async (kind) => {
+      const port = kind === 'healthy' ? await healthServer(testDir, DEAD_PID) : await unusedPort();
+      const raw = writeDaemonFiles(port);
+
+      await otherSide(() => statusDaemon(testDir));
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('X5a statusDaemon natively removes a daemon.json whose pid is dead', async () => {
+      writeDaemonFiles(await healthServer(testDir, DEAD_PID));
+
+      await statusDaemon(testDir);
+
+      expect(fs.existsSync(jsonPath())).toBe(false);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('X5b statusDaemon natively keeps a live-pid daemon.json whose /health fails', async () => {
+      const raw = writeDaemonFiles(await unusedPort(), process.pid);
+
+      await statusDaemon(testDir);
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it.each(['healthy', 'unreachable'])('X6 stopDaemon never signals, deletes or sentinels a %s foreign daemon', async (kind) => {
+      const port = kind === 'healthy' ? await healthServer(testDir, DEAD_PID) : await unusedPort();
+      const raw = writeDaemonFiles(port);
+      const killSpy = killSpyWithoutSignals();
+
+      await otherSide(() => stopDaemon(testDir));
+
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(fs.existsSync(stopPath())).toBe(false);
+    });
+
+    it('X7 existingDaemonBlocksStart refuses over a foreign daemon.json and keeps native stale recovery', async () => {
+      const healthyRaw = writeDaemonFiles(await healthServer(testDir, DEAD_PID));
+      expect(await otherSide(() => existingDaemonBlocksStart(testDir))).toBe(true);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(healthyRaw);
+      expect(process.exitCode ?? 0).toBe(0);
+
+      const unreachableRaw = writeDaemonFiles(await unusedPort());
+      expect(await otherSide(() => existingDaemonBlocksStart(testDir))).toBe(true);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(unreachableRaw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = undefined;
+
+      writeDaemonFiles(await healthServer(testDir, DEAD_PID));
+      expect(await existingDaemonBlocksStart(testDir)).toBe(false);
+      expect(fs.existsSync(jsonPath())).toBe(false);
+
+      expect(await existingDaemonBlocksStart(testDir)).toBe(false);
+    });
+
+    it('X8 never removes a foreign daemon.lock, nor a foreign daemon.json naming another path', async () => {
+      const old = new Date(Date.now() - 60_000).toISOString();
+      const lockRaw = JSON.stringify({ pid: DEAD_PID, projectPath: testDir, createdAt: old });
+      fs.writeFileSync(lockPath(), lockRaw);
+      expect(await otherSide(async () => acquireLock(testDir))).toBe(false);
+      expect(fs.readFileSync(lockPath(), 'utf-8')).toBe(lockRaw);
+
+      const raw = JSON.stringify(daemonInfo({ port: await unusedPort(), pid: DEAD_PID, projectPath: path.join(testDir, 'moved') }));
+      fs.writeFileSync(jsonPath(), raw);
+      const killSpy = killSpyWithoutSignals();
+      await otherSide(() => statusDaemon(testDir));
+      await otherSide(() => stopDaemon(testDir));
+      expect(await otherSide(() => existingDaemonBlocksStart(testDir))).toBe(true);
+      expect(process.exitCode).toBe(1);
+      process.exitCode = undefined;
+      expect(killSpy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.readFileSync(lockPath(), 'utf-8')).toBe(lockRaw);
+      expect(fs.existsSync(stopPath())).toBe(false);
+
+      killSpy.mockRestore();
+      expect(acquireLock(testDir)).toBe(true);
+      releaseLock(testDir);
+    });
   });
 });
 

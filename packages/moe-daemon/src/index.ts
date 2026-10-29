@@ -88,12 +88,64 @@ function canonicalProjectPath(projectPath: string): string {
   return path.resolve(projectPath);
 }
 
+/**
+ * Comparison-only form of a project path; never written anywhere. A copy of
+ * moe-proxy's rule (packages/moe-proxy/src/utils.ts comparableProjectPath), so
+ * `/mnt/d/x` (WSL) and `D:\x` (Windows) name the same project on both sides.
+ * The special forms are detected on the raw string: path.resolve would treat a
+ * drive path as relative on Linux and prefix a /mnt path with a drive on Windows.
+ */
+function comparableProjectPath(projectPath: string): string {
+  const raw = projectPath.trim();
+  if (/^[a-zA-Z]:[\\/]/.test(raw)) return normalizeWindowsDrivePath(raw);
+  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
+  if (wslMatch) {
+    const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
+    return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
+  }
+  const resolved = path.resolve(raw);
+  if (/^[a-zA-Z]:[\\/]/.test(resolved)) return normalizeWindowsDrivePath(resolved);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function normalizeWindowsDrivePath(drivePath: string): string {
+  return path.win32.normalize(drivePath).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
 function isSameProjectPath(a: string, b: string): boolean {
-  const left = canonicalProjectPath(a);
-  const right = canonicalProjectPath(b);
-  return process.platform === 'win32'
-    ? left.toLowerCase() === right.toLowerCase()
-    : left === right;
+  return comparableProjectPath(a) === comparableProjectPath(b);
+}
+
+/**
+ * True when daemon.json was written on the other side of the WSL/Windows
+ * boundary: a drive or UNC projectPath read outside Windows, or a POSIX one read
+ * on Windows. The writer's pid lives in another pid namespace, so
+ * `process.kill(pid, 0)` proves nothing either way and only /health may judge
+ * it. Mirrors moe-agent.sh's pre-flight, which detects a Windows-owned
+ * daemon.json by its drive-letter projectPath. A relative projectPath (the
+ * daemon records `--project` as given) names no side, so it stays local.
+ */
+function isForeignDaemonInfo(info: Pick<DaemonInfo, 'projectPath'>, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32'
+    ? /^\/(?![\\/])/.test(info.projectPath)
+    : /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(info.projectPath);
+}
+
+/**
+ * The WSL default gateway (the Windows host in NAT mode), read from
+ * /proc/net/route without spawning anything; null on any error. Node twin of
+ * moe-agent.sh wsl_gateway_host (`ip route show default`).
+ */
+function wslGatewayHost(): string | null {
+  try {
+    for (const line of fs.readFileSync('/proc/net/route', 'utf-8').split('\n').slice(1)) {
+      const [, destination, gateway] = line.trim().split(/\s+/);
+      if (destination !== '00000000' || !/^[0-9A-Fa-f]{8}$/.test(gateway ?? '') || /^0{8}$/.test(gateway)) continue;
+      // Little-endian hex: 01D01AAC is 172.26.208.1.
+      return gateway.match(/../g)!.reverse().map((byte) => parseInt(byte, 16)).join('.');
+    }
+  } catch { /* not Linux, or no procfs */ }
+  return null;
 }
 
 function isValidPort(port: unknown): port is number {
@@ -118,6 +170,8 @@ type DaemonValidationResult = {
   valid: boolean;
   reason?: string;
   info?: DaemonInfo;
+  /** daemon.json belongs to the other side of the WSL boundary (isForeignDaemonInfo). */
+  foreign?: boolean;
 };
 
 type LockInfo = {
@@ -151,6 +205,8 @@ function readLockInfo(projectPath: string): LockInfo | null {
 function staleLockReason(projectPath: string): string | null {
   const info = readLockInfo(projectPath);
   if (!info || !info.pid || !Number.isFinite(info.createdAtMs)) return 'malformed lock';
+  // Its owner's pid is in another pid namespace: never judge it stale from here.
+  if (info.projectPath && isForeignDaemonInfo({ projectPath: info.projectPath })) return null;
   if (info.projectPath && !isSameProjectPath(info.projectPath, projectPath)) return 'projectPath mismatch';
   if (!isProcessAlive(info.pid)) return 'lock owner not alive';
   if (Date.now() - info.createdAtMs > LOCK_STALE_TIMEOUT_MS) return 'lock owner unverifiable after timeout';
@@ -239,14 +295,19 @@ function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEO
   });
 }
 
-function probeDaemonHealth(info: DaemonInfo, expectedProjectPath: string, timeoutMs: number = SOCKET_TIMEOUT_MS): Promise<boolean> {
+function probeDaemonHealth(
+  info: DaemonInfo,
+  expectedProjectPath: string,
+  timeoutMs: number = SOCKET_TIMEOUT_MS,
+  host?: string,
+): Promise<boolean> {
   if (!isDaemonInfoShape(info) || !isSameProjectPath(info.projectPath, expectedProjectPath)) {
     return Promise.resolve(false);
   }
 
   return new Promise((resolve) => {
     const req = http.request({
-      hostname: info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST,
+      hostname: host ?? (info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST),
       port: info.port,
       path: '/health',
       method: 'GET',
@@ -293,7 +354,22 @@ async function validateDaemonInfoForProject(
 ): Promise<DaemonValidationResult> {
   if (!info) return { valid: false, reason: 'missing' };
   if (!isDaemonInfoShape(info)) return { valid: false, reason: 'malformed' };
-  if (!isSameProjectPath(info.projectPath, projectPath)) return { valid: false, reason: 'projectPath mismatch' };
+  const foreign = isForeignDaemonInfo(info);
+  if (!isSameProjectPath(info.projectPath, projectPath)) {
+    return { valid: false, reason: 'projectPath mismatch', ...(foreign ? { foreign } : {}) };
+  }
+  if (foreign) {
+    // Loopback (mirrored networking) first, then the WSL gateway (NAT mode).
+    const hosts = [info.bindHost ? probeHostFor(info.bindHost) : DEFAULT_BIND_HOST];
+    const gateway = process.platform === 'linux' ? wslGatewayHost() : null;
+    if (gateway && !hosts.includes(gateway)) hosts.push(gateway);
+    for (const host of hosts) {
+      if (await probeDaemonHealth(info, projectPath, SOCKET_TIMEOUT_MS, host)) {
+        return { valid: true, info, foreign: true };
+      }
+    }
+    return { valid: false, reason: 'foreign daemon unreachable', foreign: true };
+  }
   if (!isProcessAlive(info.pid)) return { valid: false, reason: 'pid not alive' };
   if (!await probeDaemonHealth(info, projectPath)) return { valid: false, reason: 'health check failed' };
   return { valid: true, info };
@@ -494,21 +570,40 @@ function writeGlobalConfig(): void {
   }
 }
 
-async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
-  const host = bindHost || DEFAULT_BIND_HOST;
+/**
+ * Shared first gate of `start`/`init` (supervisor) and `_run`: true when an
+ * existing daemon.json must stop this start. A live daemon, native or on the
+ * other side of the WSL boundary, blocks it; so does a foreign daemon.json that
+ * does not answer /health, which is reported (exit 1) and never removed. A
+ * native stale daemon.json is cleaned up and the start proceeds.
+ */
+async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> {
   const existing = readDaemonInfo(projectPath);
-  const existingValidation = await validateDaemonInfoForProject(projectPath, existing);
-  if (existingValidation.valid && existingValidation.info) {
-    logger.info({ port: existingValidation.info.port, pid: existingValidation.info.pid }, 'Moe daemon already running');
-    return;
+  const validation = await validateDaemonInfoForProject(projectPath, existing);
+  if (validation.valid && validation.info) {
+    logger.info({ port: validation.info.port, pid: validation.info.pid, foreign: validation.foreign }, 'Moe daemon already running');
+    return true;
+  }
+  if (validation.foreign) {
+    logger.error({ reason: validation.reason, port: existing?.port, projectPath: existing?.projectPath },
+      'daemon.json belongs to a daemon on the other side of the WSL boundary that could not be confirmed here; '
+      + 'not removing it and not starting a second daemon over the same .moe/');
+    process.exitCode = 1;
+    return true;
   }
   if (existing) {
     const existingPid = isDaemonInfoShape(existing) ? existing.pid : null;
     if (existingPid && !isProcessAlive(existingPid)) {
       logger.info({ pid: existingPid }, '[lock] cleaned stale daemon.json (pid not running)');
     }
-    cleanupStaleDaemonFiles(projectPath, existingValidation.reason || 'invalid daemon info');
+    cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
   }
+  return false;
+}
+
+async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  const host = bindHost || DEFAULT_BIND_HOST;
+  if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Acquire lock to prevent race conditions
   if (!acquireLock(projectPath)) {
@@ -521,7 +616,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       logger.info({ port: validation.info.port, pid: validation.info.pid }, 'Daemon started by another process');
       return;
     }
-    if (info) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info after lock wait');
+    if (info && !validation.foreign) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info after lock wait');
     logger.error('Failed to acquire lock and daemon not running');
     return;
   }
@@ -780,14 +875,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 }
 
 async function superviseDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
-  // Check if daemon is already running
-  const existing = readDaemonInfo(projectPath);
-  const existingValidation = await validateDaemonInfoForProject(projectPath, existing);
-  if (existingValidation.valid && existingValidation.info) {
-    logger.info({ port: existingValidation.info.port, pid: existingValidation.info.pid }, 'Moe daemon already running');
-    return;
-  }
-  if (existing) cleanupStaleDaemonFiles(projectPath, existingValidation.reason || 'invalid daemon info');
+  if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Clean up stale stop sentinel from previous runs
   consumeStopSentinel(projectPath);
@@ -914,6 +1002,12 @@ async function stopDaemon(projectPath: string): Promise<void> {
   }
 
   const validation = await validateDaemonInfoForProject(projectPath, info);
+  if (validation.foreign) {
+    logger.warn({ port: info.port, pid: info.pid, projectPath: info.projectPath },
+      'daemon.json belongs to a daemon on the other side of the WSL boundary; stop it from there '
+      + '(no signal sent, nothing removed)');
+    return;
+  }
   if (!validation.valid || !validation.info) {
     const pid = isDaemonInfoShape(info) ? info.pid : null;
     if (pid && !isProcessAlive(pid)) {
@@ -941,20 +1035,21 @@ async function statusDaemon(projectPath: string): Promise<void> {
   }
 
   const validation = await validateDaemonInfoForProject(projectPath, info);
-  const pid = isDaemonInfoShape(info) ? info.pid : null;
-  const pidDead = pid !== null && !isProcessAlive(pid);
-  if (!validation.valid && pidDead) {
-    logger.info({ pid }, 'Daemon not running (stale daemon.json removed: pid dead)');
-  } else {
-    logger.info({
-      status: validation.valid ? 'running' : 'stopped',
-      reason: validation.reason,
-      port: isDaemonInfoShape(info) ? info.port : undefined,
-      pid: isDaemonInfoShape(info) ? info.pid : undefined,
-      projectPath: isDaemonInfoShape(info) ? info.projectPath : undefined
-    }, 'Daemon status');
+  const shaped = isDaemonInfoShape(info);
+  // A query only deletes what is proven gone here: a local daemon.json whose pid is dead.
+  if (shaped && !validation.foreign && !isProcessAlive(info.pid)) {
+    logger.info({ pid: info.pid }, 'Daemon not running (stale daemon.json removed: pid dead)');
+    cleanupStaleDaemonFiles(projectPath, validation.reason || 'pid not alive');
+    return;
   }
-  if (!validation.valid) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info');
+  logger.info({
+    status: validation.valid ? 'running' : validation.foreign ? 'unknown' : 'stopped',
+    owner: validation.foreign ? 'other side of the WSL boundary' : 'local',
+    reason: validation.reason,
+    port: shaped ? info.port : undefined,
+    pid: shaped ? info.pid : undefined,
+    projectPath: shaped ? info.projectPath : undefined
+  }, 'Daemon status');
 }
 
 type InitResult = {
@@ -1098,6 +1193,7 @@ async function main() {
 export {
   canonicalProjectPath,
   isSameProjectPath,
+  isForeignDaemonInfo,
   isDaemonInfoShape,
   probeDaemonHealth,
   validateDaemonInfoForProject,
@@ -1113,6 +1209,7 @@ export {
   initProject,
   stopDaemon,
   statusDaemon,
+  existingDaemonBlocksStart,
   isPortAvailable,
 };
 
