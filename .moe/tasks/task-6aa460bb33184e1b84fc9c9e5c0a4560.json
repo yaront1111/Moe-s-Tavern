@@ -40,19 +40,34 @@
     {
       "stepId": "step-3",
       "description": "Implement equivalent fail-closed ownership decisions in both wrapper scope readers/landing paths. Validate task identity and assignedWorkerId; own caller may land, explicit unassigned may land, a different owner may land only when authoritative assigneeProtected is boolean false. Different owner with true refuses using MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE; missing/malformed/unreadable protection or ownership refuses with MOE_COMMIT_REFUSED_OWNER_UNKNOWN. Error handling: RPC failure or old daemon lacking the field must not be coerced into false; disk fallback may only allow a positively identified own/unassigned task, never infer a foreign owner dead. Refresh cached preflight scope before source landing. Place guard before attribution, baseline pruning/landed marking, branch peel, private-index build and source rescue; ensure teardown/recovery cannot bypass it, including signal cleanup and prebuilt working-tree candidates. Refuse the whole landing (board-only is optional and intentionally omitted), send record_commit outcome refused with task/session/role/code, set existing summary/handled flags so cleanup does not retry; report ledger failure best-effort without mutating Git or losing bytes. Keep owned immutable receipt replay/finalization behavior and orphan checkpoint logic unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-owner-guard.cjs"
+      ],
+      "note": "Owner guard in both wrappers. sh: landing_owner_guard + landing_refuse_owner. ps1: Get-MoeOwnerGuard (fetches the scope; any exception -> OWNER_UNKNOWN) + Send-MoeOwnerRefusal.\nRule:\n- The owner (== own workerId) lands.\n- A foreign owner refuses: ACTIVE on assigneeProtected===true; OWNER_UNKNOWN when not a JSON bool, on the disk fallback, or with a missing/malformed owner or taskId mismatch.\n- Unassigned, or a foreign owner with an explicit false, scans .moe/attempts for a well-formed foreign `finalizing` attempt on the task (ACTIVE) and otherwise lands (orphan path unchanged).\n- The disk fallback emits assignedWorkerId only when the record has the key. All 477 records and taskStore create always write it.\nPlacement:\n- run_landing / Invoke-MoeLanding: before the baseline read, snapshot, attribution, gate, peel, temp index and rescue.\n- Pre-flight recovery: refreshes the scope (sh LAND_SCOPE_FILE=''; ps1 already fresh).\n- Teardown: guard before the [rescue] line and the frozen-tree branch. ps1 passes the guard's scope to Invoke-MoeRescueRef via a new -Scope param, so the rescue makes no second fetch.\nRefusal behaviour:\n- record_commit outcome refused with code/role/sessionId and no sha/ref/push/path fields.\n- Session-ended line reads commit=none ... outcome=refused code=...\n- Landing-done is set, so there is no teardown double pass.\nChecks:\n- bash -n OK; ParseFile OK on PS 5.1 + pwsh 7; BOM kept; parity-check.sh PASS.\n- Owner-guard suite 12/12 on sh, PS 5.1 and pwsh 7.\n- Frozen teardown-{protected,running,finalizing,scope,recovered} 5/5 on sh and PS 5.1.\nStep-2 test fix: the sequential case now normalizes the ledger `ref`. ps1 records refs/heads/<branch> where sh records <branch>; that is a pre-existing wrapper difference, filed as task-3d0be5681276428d8908d361341145bf (bug, LOW).\nThe shared checkout has ~608 foreign dirty paths; none were touched.",
+      "startedAt": "2026-10-29T13:50:58.354Z",
+      "completedAt": "2026-10-29T14:05:02.068Z"
     },
     {
       "stepId": "step-4",
       "description": "Update scripts/CLAUDE.md 'Land on every exit': former assignee sessions cannot land source while a different owner is protected by registration/open attempt; stale display presence is not proof of death. Document both refusal codes, no source or board landing on guard refusal, unchanged bytes/baseline for owner/recovery, conservative old-daemon/error handling and unchanged dead/absent/unassigned recovery when authoritative metadata permits. Cross-check producer MCP contract and both launcher behaviors; no edits to generated/.moe docs.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "note": "scripts/CLAUDE.md \"Land on every exit\" gains an **Owner guard** paragraph:\n- Where it runs: post-flight landing, pre-flight recovery on a fresh scope, and teardown rescue.\n- Non-assignee sessions land no source or BOARD bytes while assigneeProtected is true, or while another seat's attempt is finalizing: MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE.\n- assigneeAlive is display presence only.\n- Only a JSON false clears a foreign owner. An absent/non-boolean answer (older daemon), a missing/malformed owner, a failed check or the disk fallback gives MOE_COMMIT_REFUSED_OWNER_UNKNOWN.\n- A refusal moves nothing: tree, index and baseline are untouched, record_commit outcome is refused with no paths, and the session line reads commit=none ... outcome=refused code=.\n- The owner's own landing commits the bytes. Assignee, unassigned and dead/absent-with-nothing-finalizing land as before.\n- The scope read and the CAS are not atomic.\nThe text was cross-checked against docs/MCP_SERVER.md \"Live-assignee protection\" (consistent, no edit needed) and both launchers.\nScope note: I added one bullet to docs/TROUBLESHOOTING.md's lastCommitOutcome list, which enumerates every refused code. Operators and governors see these codes in lastCommitOutcome and in #governors alerts (record_commit alerts on refused), so the doc marks them as expected/nothing-lost. That file is not vendored into the daemon.\ndocs/roles/governor.reference.md was deliberately NOT edited: it is vendored into packages/moe-daemon/src/generated/initFiles.ts, which would pull the daemon into scope. No .moe/ docs were touched.",
+      "startedAt": "2026-10-29T14:05:04.151Z",
+      "completedAt": "2026-10-29T14:06:27.830Z"
     },
     {
       "stepId": "step-5",
@@ -67,7 +82,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 5,
+  "planRevision": 9,
   "status": "WORKING",
   "assignedWorkerId": "worker-0062feec",
   "branch": null,
@@ -100,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:02:10.593Z",
-  "updatedAt": "2026-10-29T13:38:41.152Z",
+  "updatedAt": "2026-10-29T14:06:27.830Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e",
     "task-5c71dff9ff2a488d8f75ec375c4f99f8",
@@ -111,7 +126,7 @@
     "firstClaimAt": "2026-10-26T15:33:36.071Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-1520cc31",
@@ -125,7 +140,9 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-26T15:39:59.734Z",
@@ -160,19 +177,45 @@
       "treeId": "f8da0b463a1207e6866baecddaf26cc71c0dfd83",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "bb35a1614b4df6f492a94090ee290bf31e1a2e29",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:54:34Z",
+      "paths": [
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+        "scripts/tests/postflight-owner-guard.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T13:39:07.391Z",
+      "treeId": "81fe1b9c49d728722ea4cda456bbf06265a21ded",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
+    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+    "scripts/tests/postflight-owner-guard.cjs",
+    "scripts/tests/postflight.ps1",
+    "scripts/tests/postflight.sh"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
     "sessionId": "worker-0062feec@2026-10-29T12:54:34Z",
-    "at": "2026-10-29T12:55:22.597Z"
+    "at": "2026-10-29T13:39:07.391Z"
   },
   "declaredFiles": [
+    "scripts/tests/postflight-owner-guard.cjs"
+  ],
+  "touchedFiles": [
     "scripts/tests/postflight-owner-guard.cjs"
   ]
 }

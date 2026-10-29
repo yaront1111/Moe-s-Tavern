@@ -3010,7 +3010,8 @@ function Get-MoeTaskDeclaredSets($Task) {
 function Get-MoeDiskScope([string]$TaskId) {
     $scope = @{
         Source = 'disk'; Found = $false; TaskId = $TaskId; Title = ''; Status = ''; ReopenCount = 0
-        AssignedWorkerId = ''; Asserted = @(); Declared = @(); Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
+        OwnerSet = $false; Owner = $null; Protected = $null
+        Asserted = @(); Declared = @(); Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
         PeerDeclared = @{}; LivePeerIds = @(); LivePeerIdsKnown = $false; PeersActive = $true; ForceNever = $true
     }
     $tasksDir = Join-Path $moeDir 'tasks'
@@ -3025,7 +3026,8 @@ function Get-MoeDiskScope([string]$TaskId) {
         $t = Get-MoeProp $own 'title'; if ($t -is [string]) { $scope.Title = $t }
         $st = Get-MoeProp $own 'status'; if ($st -is [string]) { $scope.Status = $st }
         $rc = Get-MoeProp $own 'reopenCount'; if ($rc) { try { $scope.ReopenCount = [int]$rc } catch {} }
-        $aw = Get-MoeProp $own 'assignedWorkerId'; if ($aw -is [string]) { $scope.AssignedWorkerId = $aw }
+        # Raw, for Get-MoeOwnerGuard: an absent key is an unknown owner.
+        $aw = $own.PSObject.Properties['assignedWorkerId']; if ($aw) { $scope.OwnerSet = $true; $scope.Owner = $aw.Value }
         $sets = Get-MoeTaskDeclaredSets $own
         $scope.Asserted = @($sets.Asserted)
         $scope.Declared = @(Get-MoeStringList (Get-MoeProp $own 'declaredFiles'))
@@ -3071,13 +3073,16 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
     if ($resp -and ($resp -isnot [string]) -and $resp.PSObject.Properties['taskId'] -and $resp.PSObject.Properties['asserted']) {
         $scope = @{
             Source = 'rpc'; Found = $true; TaskId = [string]$resp.taskId; Title = ''; Status = ''; ReopenCount = 0
-            AssignedWorkerId = ''; Asserted = @(); Declared = $null; Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
+            OwnerSet = $false; Owner = $null; Protected = $null
+            Asserted = @(); Declared = $null; Planned = @(); TouchedFiles = @(); InferredPaths = @(); UnattributedPaths = @()
             PeerDeclared = @{}; LivePeerIds = @(); LivePeerIdsKnown = $true; PeersActive = $false; ForceNever = $false
         }
         $t = Get-MoeProp $resp 'title'; if ($t -is [string]) { $scope.Title = $t }
         $st = Get-MoeProp $resp 'status'; if ($st -is [string]) { $scope.Status = $st }
         $rc = Get-MoeProp $resp 'reopenCount'; if ($rc) { try { $scope.ReopenCount = [int]$rc } catch {} }
-        $aw = Get-MoeProp $resp 'assignedWorkerId'; if ($aw -is [string]) { $scope.AssignedWorkerId = $aw }
+        # Raw, for Get-MoeOwnerGuard: JSON null (unassigned) and an absent key differ.
+        $aw = $resp.PSObject.Properties['assignedWorkerId']; if ($aw) { $scope.OwnerSet = $true; $scope.Owner = $aw.Value }
+        $ap = $resp.PSObject.Properties['assigneeProtected']; if ($ap) { $scope.Protected = $ap.Value }
         $scope.Asserted = @(Get-MoeStringList (Get-MoeProp $resp 'asserted'))
         # moe.declare_files, the part of asserted committed regardless of the
         # baseline. Absent (a daemon older than the field) stays $null, which
@@ -3115,6 +3120,55 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
     $disk = Get-MoeDiskScope $TaskId
     Write-Host "[attribution] moe.get_commit_scope unavailable; using the on-disk task records (declared paths only, peers presumed active)." -ForegroundColor Yellow
     return $disk
+}
+
+# May this session land the task's bytes? Fetches the postflight scope and
+# returns @{ Code; Detail; Scope }, Code '' = it may. Twin: landing_owner_guard,
+# which carries the rule: the assignee lands its own task; any other session
+# lands nothing while that owner is protected (only a JSON false clears it) or
+# while another seat's attempt on the task is still finalizing. A failure
+# anywhere in here is OWNER_UNKNOWN, never a landing.
+# ponytail: the scope read and the landing CAS are two steps, not one atomic check.
+function Get-MoeOwnerGuard([string]$TaskId, [string]$Sid) {
+    $active = 'MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE'
+    $g = @{ Code = 'MOE_COMMIT_REFUSED_OWNER_UNKNOWN'; Detail = 'the ownership check did not run'; Scope = $null }
+    try {
+        $s = Get-MoeCommitScope $TaskId 'postflight' $Sid
+        $g.Scope = $s
+        $owner = $s.Owner
+        if (-not $s.OwnerSet -or $s.TaskId -cne $TaskId) { $g.Detail = 'its commit scope names no owner'; return $g }
+        if ($null -ne $owner -and $owner -isnot [string]) { $g.Detail = 'its commit scope has a malformed owner'; return $g }
+        if ($WorkerId -and $owner -ceq $WorkerId) { $g.Code = ''; $g.Detail = ''; return $g }
+        if ($null -ne $owner) {
+            if ($s.Source -ne 'rpc') { $g.Detail = "it is assigned to $owner and the daemon is unreachable"; return $g }
+            if ($s.Protected -is [bool] -and $s.Protected) { $g.Code = $active; $g.Detail = "it is assigned to $owner, a live seat or one holding an open attempt"; return $g }
+            if ($s.Protected -isnot [bool]) { $g.Detail = "it is assigned to $owner with no assigneeProtected answer"; return $g }
+        }
+        $files = @()
+        try { $files = @(Get-ChildItem -LiteralPath (Join-Path $projectPath '.moe/attempts') -Filter '*.json' -ErrorAction Stop | Sort-Object Name) } catch { }
+        foreach ($f in $files) {
+            try { $a = [IO.File]::ReadAllText($f.FullName) | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+            if ($a -isnot [System.Management.Automation.PSCustomObject] -or $a.phase -isnot [string] -or $a.phase -cne 'finalizing' -or
+                $a.taskId -isnot [string] -or $a.taskId -cne $TaskId) { continue }
+            $aid = $a.id; $w = $a.workerId
+            if ($aid -is [string] -and $aid.Trim() -and $w -is [string] -and $w.Trim() -and $w -cne $WorkerId -and (Test-MoeGeneration $a.generation)) {
+                $g.Code = $active; $g.Detail = "attempt $aid of $w is still finalizing"; return $g
+            }
+        }
+        $g.Code = ''; $g.Detail = ''
+    } catch { $g.Code = 'MOE_COMMIT_REFUSED_OWNER_UNKNOWN'; $g.Detail = "the ownership check failed: $_" }
+    return $g
+}
+
+# Get-MoeOwnerGuard said no: say why and record the refusal (no sha, ref, push
+# or path field: nothing moved). No byte, index entry, ref or baseline row is
+# touched; the owner's own landing, or a later orphan recovery, lands them.
+# Twin: landing_refuse_owner.
+function Send-MoeOwnerRefusal([string]$TaskId, [string]$Kind, [string]$Status, [string]$Sid, [hashtable]$Guard, $CliExit = $null) {
+    Write-Host "[WARN] $($Guard.Code): task $TaskId -- $($Guard.Detail); this session is not its owner, so it lands none of the task's bytes (tree and baseline left as they are)." -ForegroundColor Yellow
+    $rec = @{ taskId = $TaskId; outcome = 'refused'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; code = $Guard.Code; message = $Guard.Detail }
+    if ($null -ne $CliExit) { $rec.cliExitCode = $CliExit }
+    Send-MoeRecordCommit $rec | Out-Null
 }
 
 function Test-MoeDenyPath([string]$TopPath, [string]$XY, [string]$Rel, [hashtable]$Settings) {
@@ -4001,7 +4055,8 @@ function Invoke-MoeRescueRef {
         [Parameter(Mandatory = $true)][string]$Reason,
         [string]$Title = '', [string]$Status = '', [string]$Sid = '',
         [hashtable]$Attr = $null,
-        [string]$Sha = ''
+        [string]$Sha = '',
+        [hashtable]$Scope = $null
     )
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
@@ -4021,7 +4076,7 @@ function Invoke-MoeRescueRef {
                 $bl = Read-MoeBaseline (Get-MoeBaselinePath $Git.GitDir $TaskId)
                 $b = if ($bl) { $bl.B } else { @{} }
                 $u = if ($bl) { $bl.U } else { @{} }
-                $scope = Get-MoeCommitScope $TaskId 'postflight' $Sid
+                $scope = if ($Scope) { $Scope } else { Get-MoeCommitScope $TaskId 'postflight' $Sid }
                 $settings = Read-MoeCommitSettings
                 $Attr = Resolve-MoeAttribution -Git $Git -S $s -B $b -U $u -Tool $script:MoeToolWritten -Scope $scope -Settings $settings -TaskId $TaskId -Mode 'checkpoint' -PolicyOverride 'never' -Evidence $script:MoePreflightEvidence -PreflightDirty $script:MoePreflightDirty
             }
@@ -4454,6 +4509,16 @@ function Invoke-MoeLanding {
     $msgFile = ''
     $statusText = if ($Status) { $Status } else { 'UNKNOWN' }
     try {
+        # The owner guard first, before anything reads or writes the task's
+        # bytes, baseline or refs. Twin: run_landing.
+        $guard = Get-MoeOwnerGuard $TaskId $Sid
+        $scope = $guard.Scope
+        if ($guard.Code) {
+            $res.Outcome = 'refused'; $res.Code = $guard.Code
+            Send-MoeOwnerRefusal $TaskId $Kind $Status $Sid $guard $CliExit
+            return $res
+        }
+        if (-not $Title -and $scope.Title) { $Title = $scope.Title }
         $baselinePath = Get-MoeBaselinePath $Git.GitDir $TaskId
         $bl = Read-MoeBaseline $baselinePath
         $B = if ($bl) { $bl.B } else { @{} }
@@ -4491,8 +4556,6 @@ function Invoke-MoeLanding {
             Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'failed'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; code = 'MOE_COMMIT_FAILED_ATTRIBUTION' } | Out-Null
             return $res
         }
-        $scope = Get-MoeCommitScope $TaskId 'postflight' $Sid
-        if (-not $Title -and $scope.Title) { $Title = $scope.Title }
         # MOE_ATTR_ASSERTED_FOREIGN evidence: a recovery lands the crashed
         # session's bytes against the P rows ITS pre-flight persisted; every
         # other landing uses the evidence this session's own pre-flight kept in
@@ -5139,8 +5202,16 @@ function Invoke-MoeTeardownRescue {
         if ($null -eq $moeGit -or $null -eq $moeSettings) { return }
         $baselinePath = Get-MoeBaselinePath $moeGit.GitDir $preflightTaskId
         if (-not $baselinePath -or -not (Test-Path -LiteralPath $baselinePath)) { return }
+        # The owner guard first: a session that does not own the task parks
+        # nothing, an interrupted gate's frozen tree included.
+        $guard = Get-MoeOwnerGuard $preflightTaskId $moeSid
+        if ($guard.Code) {
+            $teardown.Outcome = 'refused'; $teardown.Code = $guard.Code
+            Send-MoeOwnerRefusal $preflightTaskId 'rescue' '' $moeSid $guard
+            return
+        }
         Write-Host "[rescue] session ended before landing task $preflightTaskId — parking its changes on a rescue ref." -ForegroundColor Yellow
-        $rescue = Invoke-MoeRescueRef -Git $moeGit -TaskId $preflightTaskId -Reason 'teardown' -Title $preflightTaskTitle -Status '' -Sid $moeSid
+        $rescue = Invoke-MoeRescueRef -Git $moeGit -TaskId $preflightTaskId -Reason 'teardown' -Title $preflightTaskTitle -Status '' -Sid $moeSid -Scope $guard.Scope
         if ($rescue) { $teardown.Ref = $rescue.Ref; $teardown.Sha = $rescue.Sha }
     } catch {}
 }

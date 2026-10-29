@@ -3362,11 +3362,14 @@ if own is None:
 else:
     a, pl = tiers(own)
     out.update(title=own.get('title') or '', status=own.get('status') or '', epicId=own.get('epicId'),
-               reopenCount=own.get('reopenCount') or 0, assignedWorkerId=own.get('assignedWorkerId'),
+               reopenCount=own.get('reopenCount') or 0,
                asserted=a, declared=PS().addall(own.get('declaredFiles')).values(), planned=pl,
                touchedFiles=PS().addall(own.get('touchedFiles')).values(),
                inferredPaths=PS().addall(own.get('inferredPaths')).values(),
                unattributedPaths=PS().addall(own.get('unattributedPaths')).values())
+    # Only a key the record really has: an absent one is an unknown owner.
+    if 'assignedWorkerId' in own:
+        out['assignedWorkerId'] = own['assignedWorkerId']
     always.append('.moe/tasks/' + task_id + '.json')
 always.append('.moe/project.json')
 for f in sorted(glob.glob(os.path.join(project, '.moe', 'epics', '*.json'))):
@@ -3398,6 +3401,82 @@ PYEOF
         printf '{"taskId":"%s","notFound":true,"fallback":true,"asserted":[],"planned":[],"peerDeclared":[],"livePeerIds":[],"peersActive":true,"alwaysInclude":[],"excludePrefixes":[],"policy":{"undeclared":"never","contested":"skip-untouched"}}' "$task_id" > "$out"
     fi
     return 0
+}
+
+# landing_owner_guard TASKID SCOPE_JSON -- may this session land the task's
+# bytes? 0 = yes; 1 = no, with LAND_GUARD_CODE / LAND_GUARD_DETAIL. Twin:
+# Get-MoeOwnerGuard. The assignee lands its own task. Any other session (an
+# architect whose planned task a worker took, a QA seat whose row moved on)
+# lands nothing while that owner is protected (assigneeProtected: a registered
+# non-DEAD seat or one holding an open attempt; assigneeAlive is display
+# presence, never proof of death) or while another seat's attempt on the task
+# is still finalizing (complete_task clears the assignee before that seat's
+# wrapper lands). Only a JSON false clears a foreign owner: an absent or
+# malformed answer, an older daemon or the disk fallback is OWNER_UNKNOWN.
+# Unassigned, or a dead owner with nothing finalizing, lands as before.
+# ponytail: the scope read and the landing CAS are two steps, not one atomic check.
+landing_owner_guard() {
+    local out=""
+    LAND_GUARD_CODE="MOE_COMMIT_REFUSED_OWNER_UNKNOWN"; LAND_GUARD_DETAIL="the ownership check did not run"
+    out=$($PYTHON_CMD - "$1" "$2" "${WORKER_ID:-}" "${MOE_SCOPE_FALLBACK:-0}" "$PROJECT" <<'PYEOF' 2>/dev/null
+import glob, json, os, sys
+tid, scope_f, me, fallback, project = sys.argv[1:6]
+ACTIVE, UNKNOWN = 'MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE', 'MOE_COMMIT_REFUSED_OWNER_UNKNOWN'
+def verdict():
+    try:
+        with open(scope_f, encoding='utf-8') as fh:
+            d = json.load(fh)
+    except Exception:
+        return UNKNOWN, 'its commit scope is unreadable'
+    if not isinstance(d, dict) or d.get('taskId') != tid or 'assignedWorkerId' not in d:
+        return UNKNOWN, 'its commit scope names no owner'
+    owner = d['assignedWorkerId']
+    if owner is not None and not isinstance(owner, str):
+        return UNKNOWN, 'its commit scope has a malformed owner'
+    if me and owner == me:
+        return '', ''
+    if owner is not None:
+        protected = d.get('assigneeProtected')
+        if fallback == '1':
+            return UNKNOWN, 'it is assigned to %s and the daemon is unreachable' % owner
+        if protected is True:
+            return ACTIVE, 'it is assigned to %s, a live seat or one holding an open attempt' % owner
+        if protected is not False:
+            return UNKNOWN, 'it is assigned to %s with no assigneeProtected answer' % owner
+    for f in sorted(glob.glob(os.path.join(project, '.moe', 'attempts', '*.json'))):
+        try:
+            with open(f, encoding='utf-8-sig') as fh:
+                a = json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(a, dict) or a.get('phase') != 'finalizing' or a.get('taskId') != tid:
+            continue
+        aid, w, g = a.get('id'), a.get('workerId'), a.get('generation')
+        if isinstance(aid, str) and aid.strip() and isinstance(w, str) and w.strip() and w != me \
+                and type(g) is int and 1 <= g <= 9007199254740991:
+            return ACTIVE, 'attempt %s of %s is still finalizing' % (aid, w)
+    return '', ''
+code, detail = verdict()
+sys.stdout.write(code + '\x1f' + detail.replace('\x1f', ' ').replace('\n', ' ') + '\x1f')
+PYEOF
+    ) || out=""
+    [ -n "$out" ] || return 1
+    { IFS= read -r -d $'\x1f' LAND_GUARD_CODE; IFS= read -r -d $'\x1f' LAND_GUARD_DETAIL; } <<< "$out" 2>/dev/null || true
+    [ -z "$LAND_GUARD_CODE" ]
+}
+
+# landing_refuse_owner KIND -- landing_owner_guard said no: say why, record the
+# refusal (no sha, ref, push or path field: nothing moved) and fill the
+# session-ended summary. No byte, index entry, ref or baseline row is touched;
+# the owner's own landing, or a later orphan recovery, lands them. ATTR_DIR
+# must be a fresh empty directory.
+landing_refuse_owner() {
+    LAND_OUTCOME="refused"; LAND_CODE="$LAND_GUARD_CODE"; LAND_TOOL_FILE_EFFECTIVE=""
+    echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_GUARD_DETAIL; this session is not its owner, so it lands none of the task's bytes (tree and baseline left as they are)."
+    record_commit_rpc "refused" "$1" "" "" "$LAND_CODE" "$LAND_GUARD_DETAIL" "" "" "" || true
+    MOE_LANDING_DONE=true
+    LAND_SUMMARY_SHA="none"; LAND_SUMMARY_KIND="$1"; LAND_SUMMARY_PATHS=0; LAND_SUMMARY_INFERRED=0; LAND_SUMMARY_UNATTR=0; LAND_SUMMARY_HELD=""
+    LAND_SUMMARY_OUTCOME="refused"; LAND_SUMMARY_CODE="$LAND_CODE"
 }
 
 # resolve_attribution MODE TASKID SNAPSHOT B_FILE U_FILE TOOL_FILE SCOPE_JSON OUT_DIR POLICY_OVERRIDE
@@ -5319,6 +5398,11 @@ run_landing() {
         policy_override="never"
         echo -e "${YELLOW}[attribution]${NC} moe.get_commit_scope unavailable -- disk fallback (declared-only, peers assumed active)."
     fi
+    # Before anything reads or writes the task's bytes, baseline or refs.
+    if ! landing_owner_guard "$LAND_TASK_ID" "$LAND_SCOPE_FILE"; then
+        landing_refuse_owner "$LAND_KIND"
+        return 0
+    fi
     # Every baseline write below keeps the header's session: a landing never
     # takes over another session's baseline, it only prunes B and replaces U.
     local bl_flag bl_session
@@ -5678,7 +5762,8 @@ PYEOF
         echo -e "${BLUE}[info]${NC} lingering baseline for $tid -- landing the previous session's work before this one starts."
         LAND_KIND="checkpoint"; LAND_TASK_ID="$tid"; LAND_TITLE="$title"; LAND_STATUS="$status"; LAND_REOPEN=0
         LAND_CLI_EXIT=0; LAND_RECOVERED=true; LAND_GATE_FAILED=false; LAND_POLICY_OVERRIDE=""
-        LAND_SNAPSHOT_FILE=""; LAND_TOOL_FILE=""; LAND_SCOPE_FILE="$work/scope.json"
+        # A fresh scope (LAND_SCOPE_FILE=''): ownership may have moved since the read above.
+        LAND_SNAPSHOT_FILE=""; LAND_TOOL_FILE=""; LAND_SCOPE_FILE=""
         if run_landing; then rc=0; else rc=$?; fi
         if [ "$LAND_OUTCOME" = "committed" ]; then
             echo -e "${GREEN}[OK]${NC} MOE_CHECKPOINT_RECOVERED task=$tid sha=$LAND_SHA"
@@ -5837,7 +5922,9 @@ PYEOF
 #   any other outcome the landing reached before its push/record      -> kept
 #   bytes parked on a rescue ref                                      -> rescued
 #   deliberate autoCommit=false, or no git repo at all                -> nothing
-#   anything else (no baseline, nothing parked)                       -> failed
+#   anything else (no baseline, nothing parked, owner guard refused)  -> failed
+# A session that does not own the task (landing_owner_guard) parks nothing:
+# it records the refusal and leaves the bytes for the owner.
 MOE_TEARDOWN_DONE=false
 teardown_rescue() {
     [ "$MOE_TEARDOWN_DONE" = true ] && return 0
@@ -5867,7 +5954,19 @@ teardown_rescue() {
     [ -n "${MOE_TOP:-}" ] && [ -n "${MOE_GITDIR:-}" ] || return 0
     [ -f "$(baseline_path "$tid")" ] || return 0
     [ "$(type -t run_landing)" = "function" ] || return 0
+    local work
+    work="$(create_secure_temp)/teardown-$$"
+    rm -rf "$work" 2>/dev/null
+    mkdir -p "$work/attr" 2>/dev/null || return 0
+    # The owner guard first: a session that does not own the task parks
+    # nothing, an interrupted gate's frozen tree included.
+    commit_scope postflight "$tid" "$work/scope.json"
     echo ""
+    if ! landing_owner_guard "$tid" "$work/scope.json"; then
+        ATTR_DIR="$work/attr"; LAND_TASK_ID="$tid"; LAND_STATUS="${LAND_STATUS:-UNKNOWN}"; LAND_CLI_EXIT="${CLI_EXIT_CODE:-}"; LAND_TREE=""
+        landing_refuse_owner rescue
+        return 0
+    fi
     echo -e "${YELLOW}[rescue]${NC} session ending with task $tid unlanded -- taking a rescue snapshot before deregistering."
     if [ -n "${FROZEN_TREE:-}" ]; then
         LAND_CODE=MOE_COMMIT_FAILED_GATE
@@ -5876,15 +5975,9 @@ teardown_rescue() {
         MOE_LANDING_DONE=true
         return 0
     fi
-    local work
-    work="$(create_secure_temp)/teardown-$$"
-    rm -rf "$work" 2>/dev/null
-    mkdir -p "$work" 2>/dev/null || return 0
     ATTR_DIR="$work/attr"
-    mkdir -p "$ATTR_DIR" 2>/dev/null || return 0
     LAND_KIND="rescue"; LAND_TASK_ID="$tid"; LAND_TITLE="${PREFLIGHT_TASK_TITLE:-}"; LAND_STATUS="${LAND_STATUS:-UNKNOWN}"
     LAND_CLI_EXIT="${CLI_EXIT_CODE:-}"; LAND_TREE=""; TI_N_STAGED=0; TI_N_INFERRED=0
-    commit_scope postflight "$tid" "$work/scope.json"
     baseline_read "$tid" "$work/B.tsv" "$work/U.tsv" || true
     git_dirty_snapshot "$work/S.tsv" || return 0
     local tool="${MOE_TOOL_WRITES_FILE:-}"

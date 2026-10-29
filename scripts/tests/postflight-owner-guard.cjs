@@ -201,9 +201,10 @@ async function sequential(){
     assert.match(git(p.dir,'log','-1','--format=%s').trim(),/^(feat|fix)\(task-postflight\): Postflight smoke$/,log);
     assert.equal(git(p.dir,'show','HEAD:'+OWNED),BYTES,'the completion commit holds the worker\'s bytes\n'+log);
     // The row landing metadata (task.landing.lastCompletion) is built from.
+    // ref: sh records the branch name, ps1 refs/heads/<branch> (task-3d0be5681276428d8908d361341145bf).
     const done=rec.filter(r=>r.kind==='completion');
     assert.equal(done.length,1,JSON.stringify(rec));
-    assert.deepEqual([done[0].outcome,done[0].sha,done[0].ref,done[0].role,done[0].pushed],
+    assert.deepEqual([done[0].outcome,done[0].sha,String(done[0].ref).replace(/^refs\/heads\//,''),done[0].role,done[0].pushed],
       ['committed',head,git(p.dir,'symbolic-ref','--short','HEAD').trim(),'worker',true],JSON.stringify(done[0]));
     assert.ok(done[0].sessionId.startsWith('worker-live@')&&done[0].paths.includes(OWNED),JSON.stringify(done[0]));
     assert.ok(!log.includes('MOE_COMMIT_NOTHING_TO_COMMIT'),log);
