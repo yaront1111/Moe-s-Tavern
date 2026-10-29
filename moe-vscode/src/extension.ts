@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { BoardViewProvider } from './providers/BoardViewProvider';
 import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
+import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
 import { MoeDaemonClient, readDaemonJsonText } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
@@ -54,6 +55,15 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Managed VMs: owned-VM status with refresh, reconcile and cleanup (CQ-I05); never edits settings
+    const managedVms = new ManagedVmTreeProvider(context.extensionPath, daemonClient);
+    context.subscriptions.push(
+        managedVms,
+        vscode.window.registerTreeDataProvider('moe.managedVms', managedVms),
+        vscode.commands.registerCommand('moe.managedVms.refresh', () => managedVms.refresh()),
+        vscode.commands.registerCommand('moe.managedVms.reconcile', () => managedVms.reconcile()),
+        vscode.commands.registerCommand('moe.managedVms.cleanup', () => managedVms.cleanup())
+    );
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('moe.connect', async () => {

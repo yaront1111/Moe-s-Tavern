@@ -17,27 +17,40 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nPrerequisites, landed by WORKING time; adapt to their landed names:\n- CQ-I03a's producer, scripts/local-runner/vm-control.mjs, with schemas moe-vm-status-v1, moe-vm-reconcile-v1 and moe-vm-cleanup-v1;\n- CQ-I03's JetBrains presentation rules. Read its handoff memory 'task-task-63930ba4a46344f9af3c41cfef60ae0d-handoff' and mirror the same behavior.\n\nCreate moe-vscode/tests/managed-vm.test.cjs (node:test), compiling src/util/ManagedVm.ts with typescript's transpileModule the way tests/settings-wire.test.cjs does. Keep it to about 130 lines. Assert exact strings, arrays and booleans; never truthiness.\n\nCases, mirroring I03's P1-P5:\n- V1, explicit owned lifecycle status (DoD 1):\n  - three distinct readiness lines: provider, execution and verified. Only a literal JSON true makes execution or verified ready, and provider ready never implies either;\n  - rows equal the report's instances (instance, phase, state, launchTries, taskId), in order;\n  - a name failing R06's owned-name shape, or a duplicated name, makes the whole report Unreadable.\n- V2, no strict enablement (DoD 2):\n  - strongProfile(report) is the fixed 'Strong profile (verified-local) is unavailable …' line for EVERY report, including one claiming verified:true;\n  - actions(report, running) has exactly { refresh, reconcile, cleanup }. reconcile and cleanup are false unless provider is ready (cleanup also needs at least 1 instance), and everything is false while running.\n- V3, the process seam: runVmControl(execFileImpl, node, script, command, root, timeoutMs) calls execFileImpl with exactly (node, [script, 'status'|'reconcile'|'cleanup', '--project', root], { timeout, maxBuffer: 65537, windowsHide: true }). There is no instance argument, no shell option, and stderr is ignored. These give Unreadable and never reject:\n  - an execFile error;\n  - a timeout;\n  - exceeding maxBuffer;\n  - a nonzero exit;\n  - non-JSON;\n  - more than one line;\n  - an unknown schema.\n- V4, report mapping: a cleanup report renders deleted, preserved (with reasons) and errors (with codes); an unknown code renders as 'Unknown code <code>'. The raw stdout text never appears.\n\nIn tests/settings-wire.test.cjs (DoD 3), add ONE case using its existing harness:\n- the client state holds settings with executionProfile 'observe', deliveryPolicy 'local-branch', checkEnvironments [ENV] and repairPolicy {maxCodeRepairs: 2};\n- saving sends UPDATE_SETTINGS with exactly the six form keys, so no profile or evidence key is sent or overwritten;\n- after a SETTINGS_UPDATED full-project payload, the client state still carries all four fields unchanged (deepStrictEqual).\n\nRun `cd moe-vscode && npm test`: the new cases fail before step 2. The settings case may already pass: if so, keep it as the DoD 3 pin and say so in the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/settings-wire.test.cjs"
       ],
       "newFiles": [
         "moe-vscode/tests/managed-vm.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/managed-vm.test.cjs",
+        "moe-vscode/tests/settings-wire.test.cjs"
+      ],
+      "note": "RED. Added tests/managed-vm.test.cjs (V1-V4, 9 tests) following the LANDED I03 rules and architect comment-5c9de848, so it adapts the plan text in four places: decode takes the command (decode(command, stdout, exit, timedOut)); a top-level code gives {kind:'refused'}; rows hide collision and deleted; cleanup needs a LAUNCHED row (launching/owned/absent/failed), not just one instance. The module loads with a throwing require, which pins purity (no vscode import). Run: managed-vm fails with ENOENT on src/util/ManagedVm.ts (the expected red). settings-wire: harness now also passes `client` to the body (a one-line change). New S6 (DoD 3) ALREADY PASSES, as the plan allowed: the client stores the raw SETTINGS_UPDATED payload. It is kept as the pin. Comparison uses JSON.stringify because the client parses in its own vm realm. Baseline before this step: 165/165 pass. Peer-dirty moe-vscode/scripts/bundle-assets.mjs left untouched.",
+      "startedAt": "2026-10-29T22:50:19.882Z",
+      "completedAt": "2026-10-29T22:53:50.894Z"
     },
     {
       "stepId": "step-2",
       "description": "Create moe-vscode/src/util/ManagedVm.ts. It is pure: it never imports vscode, and it is about 100 lines.\n\nExports:\n- types ManagedVmReport (Status, Reconcile, Cleanup, or Unreadable(reason)) and ManagedVmRow;\n- decode(stdout, exitCode, timedOut);\n- readiness(report) gives three strings, worded like I03's MoeBundle text, for example 'Provider ready', 'Execution not ready: isolation and evidence gates are not certified', 'Not verified';\n- strongProfile(report);\n- rows(report);\n- actions(report, running);\n- commandArgs(script, command, root);\n- runVmControl(execFileImpl, node, script, command, root, timeoutMs): Promise<ManagedVmReport>, which wraps execFileImpl in a Promise that always resolves.\n\nError handling: decode and runVmControl never throw. Every malformed, foreign-named, duplicated, oversized, multi-line, unknown-schema, nonzero-exit, timed-out or spawn-failed result is Unreadable with a fixed reason. Raw stdout and stderr never reach a rendered string.\n\nThe header comment states:\n- provider readiness is not execution readiness or verification;\n- the extension never offers strong-profile activation, because the daemon refuses verified-local with EXECUTION_PROFILE_NOT_READY;\n- ownership is the producer's ledger, and the extension never names an instance.\n\nMake V1-V4 pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "moe-vscode/src/util/ManagedVm.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/ManagedVm.ts"
+      ],
+      "note": "GREEN. src/util/ManagedVm.ts is pure (the test's throwing require proves it imports nothing).\n\nExports:\n- decode(command, stdout, exit, timedOut), readiness, strongProfile, rows, actions, notes, commandArgs, runVmControl, unreadable, TIMEOUT_MS.\n- Field checks run in the same order as I03's ManagedVmPresentation.parse, so a multi-defect report gets the same verdict on both clients (for the I06b corpus).\n\nBehaviour:\n- Unreadable reasons: timed-out, failed, too-large, malformed, not-owned, cancelled, node-missing, script-missing, no-project. Texts reuse the JetBrains MoeBundle wording.\n- Codes and reasons resolve through a Map, so the token 'constructor' is not looked up on the prototype (tested in V4).\n- runVmControl(execFileImpl, node, script, command, root, signal?): the timeout comes from TIMEOUT_MS[command] (120 s, or 20 min for cleanup), and signal is added only when given.\n  - AbortError gives cancelled, MAXBUFFER gives too-large, ENOENT gives node-missing.\n  - Any other error never parses stdout.\n  - A synchronous throw gives failed.\n\nRuns: managed-vm 9/9 pass, `npx tsc -p ./ --noEmit` exit 0.",
+      "startedAt": "2026-10-29T22:53:53.901Z",
+      "completedAt": "2026-10-29T22:54:53.602Z"
     },
     {
       "stepId": "step-3",
       "description": "Wire the native TreeView. A webview is not used: no HTML, no media script, and so no HTML-injection surface. Report every file in modifiedFiles.\n\n1. Create moe-vscode/src/providers/ManagedVmTreeProvider.ts (about 75 lines), a vscode.TreeDataProvider.\n   - Root nodes:\n     - the three readiness lines;\n     - the strong-profile line;\n     - 'Profile: <executionProfile or legacy> · Delivery: <deliveryPolicy or legacy>', read-only, from the daemon client's current project settings;\n     - 'Owned VMs (n)', with one child per row;\n     - the last action's report lines.\n   - refresh(), reconcile() and cleanup() run ManagedVm.runVmControl:\n     - execFile from child_process;\n     - the node path from MoeDaemonClient's existing runtime resolver (make resolveDaemonRuntime public, with no behavior change);\n     - the script at path.join(extensionPath, 'bundled', 'scripts', 'local-runner', 'vm-control.mjs'), which bundle-assets.mjs already copies;\n     - the root is the workspace project path the client uses.\n   - Single flight. cleanup asks a modal confirmation that names the rule (only Moe-owned VMs whose attempt is closed and whose lease is free), then runs under vscode.window.withProgress, cancellable, with a 20-minute timeout. Status and reconcile use 120s.\n   - A missing script or node renders 'Managed VM control unavailable: <reason>' and starts no process.\n2. moe-vscode/src/extension.ts: registerTreeDataProvider('moe.managedVms', provider) plus the commands moe.managedVms.refresh, moe.managedVms.reconcile and moe.managedVms.cleanup, pushed to context.subscriptions. Refresh once on activation.\n3. moe-vscode/package.json contributes:\n   - the view moe.managedVms, titled 'Managed VMs', in the existing Moe view container;\n   - the three commands;\n   - view/title menu entries for them.\n   Add NO command or setting that edits executionProfile or deliveryPolicy.\n4. moe-vscode/src/services/MoeDaemonClient.ts: only the visibility change of resolveDaemonRuntime.\n\nError handling: no IO on the extension host's render path, apart from the async runs. Every failure renders a fixed string. Disposal cancels a running action.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/extension.ts",
         "moe-vscode/package.json",
@@ -45,23 +58,44 @@
       ],
       "newFiles": [
         "moe-vscode/src/providers/ManagedVmTreeProvider.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ManagedVmTreeProvider.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/package.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/ManagedVm.ts",
+        "moe-vscode/tests/managed-vm.test.cjs",
+        "moe-vscode/tests/settings-wire.test.cjs"
+      ],
+      "note": "Wired the native TreeView.\n- NEW src/providers/ManagedVmTreeProvider.ts, the moe.managedVms view. Roots:\n  - 3 readiness lines;\n  - the strong-profile line;\n  - 'Profile: <executionProfile|legacy> · Delivery: <deliveryPolicy|legacy>', read-only, from client.currentState;\n  - 'Owned VMs (n)' with its rows;\n  - the notes for the last status and last action.\n- run() is single flight and re-checks actions():\n  - withProgress: a view progress bar for status and reconcile; a cancellable Notification for cleanup, whose cancel aborts the AbortController;\n  - .catch gives unreadable('failed'); a refresh follows reconcile and cleanup.\n- cleanup() asks a modal confirm, worded as in JB moe.managedVm.cleanup.confirm.\n- execute() checks:\n  - no workspace gives no-project;\n  - a missing bundled/scripts/local-runner/vm-control.mjs gives script-missing (no process);\n  - otherwise runVmControl(execFile, client.resolveDaemonRuntime().node, …).\n- dispose() aborts the run and disposes the emitter and subscription.\n- setContext moe.managedVms.canReconcile/canCleanup drives command enablement.\n\nOther files:\n- extension.ts +10: provider, registerTreeDataProvider and 3 commands, all in context.subscriptions.\n- package.json: the view, 3 commands (icons; reconcile/cleanup enablement) and 3 view/title entries. There is no settings/profile command.\n- MoeDaemonClient: `private` dropped from resolveDaemonRuntime only.\n\nDEVIATIONS (all deliberate):\n- Refresh runs on the first render of the view, not on activation, so a workspace that never opens the view never spawns node or multipass.\n- No onView activation entry: VS Code ≥1.74 generates it, and engines is ^1.80.\n- Size compaction to meet the cap. ManagedVm.ts and the test file were re-flowed (step-2 and step-1 files, re-reported). Behaviour is unchanged, and the tests gained cases: instances [7], instance 7, claim false.\n\nSize now: 400 net over moe-vscode, exactly at the cap.\nRuns: managed-vm and settings-wire 19/19 pass, tsc --noEmit exit 0.",
+      "startedAt": "2026-10-29T22:54:55.749Z",
+      "completedAt": "2026-10-29T23:00:21.091Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail the named case:\n   - derive execution readiness from provider readiness, or accept \"true\": V1;\n   - accept a foreign or duplicate name: V1;\n   - let strongProfile follow report.verified: V2;\n   - enable cleanup while running: V2;\n   - add an instance argument, or shell:true: V3;\n   - put stderr or raw stdout into a line: V4;\n   - spread stored settings into the UPDATE_SETTINGS payload: the settings-wire DoD 3 case.\n2. The GATE: `cd moe-vscode && npm test && npm run compile` must exit 0, run fresh. Confirm that the managed-vm tests ran, with their counts, and that 0 failed.\n3. Size: `git diff --numstat` over moe-vscode must be at most 400 net (QA cap; tests count). The budget is: test about 130, settings case about 20, ManagedVm about 100, tree about 75, package.json about 25 and extension about 8.\n4. A red test outside this task is compared against a run WITHOUT this task's files. Never edit peer files.\n5. Supply the command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "VERIFY. No source edits in this step.\n\n1. MUTANTS: 12/12 killed by the named case. They ran in the scratch copy /tmp/i05-mut, restored afterwards; cmp is identical for ManagedVm.ts and MoeDaemonClient.ts.\n   - M1a: execution derived from provider; M1b: 'true' accepted. Both killed by V1 readiness.\n   - M2a: OWNED loosened; M2b: duplicate check dropped. Both killed by V1 foreign/repeated.\n   - M3: strongProfile follows verified. Killed by V2 strong.\n   - M4: cleanup while running. Killed by V2 actions.\n   - M5a: '--instance' arg; M5b: shell:true. Both killed by V3 runs.\n   - M6a: raw preserve reason accepted. Killed by V4.\n   - M6b: error.message into a line. Killed by V3 failed-run.\n   - M7a: stored settings spread into UPDATE_SETTINGS. Killed by S1-S6.\n   - M7b: checkEnvironments dropped on SETTINGS_UPDATED. Killed by S6 alone.\n2. GATE (fresh): `cd moe-vscode && npm test && npm run compile` exits 0.\n   - 175 tests: 175 pass, 0 fail/cancelled/skipped. That is the 165 baseline + 9 managed-vm + 1 S6.\n   - tsc compile is clean; dist/ is gitignored.\n3. SIZE: 400 net (+405/-5) over moe-vscode, at the cap.\n   - New files: ManagedVm.ts 145, ManagedVmTreeProvider.ts 92, managed-vm.test.cjs 135.\n   - Modified: package.json +10/-3, extension.ts +10, settings-wire +13/-1, MoeDaemonClient +1/-1.\n4. No red tests outside this task.\n\nNote: moe-vscode/scripts/bundle-assets.mjs, previously peer-dirty, is now clean (landed by its owner); this task never touched it.",
+      "startedAt": "2026-10-29T23:00:23.325Z",
+      "completedAt": "2026-10-29T23:01:14.818Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as a user, or a buggy producer, trying to get VS Code to act on a VM Moe does not own, or to enable strict execution:\n- a foreign or duplicated name;\n- a report that claims readiness or verification;\n- a double invoke of a command, or disposal mid-run;\n- a huge, hanging or stderr-flooding producer;\n- paths with spaces and Windows drive letters. execFile takes an args array and never a shell;\n- any code path that sends UPDATE_SETTINGS with executionProfile or deliveryPolicy. There must be none;\n- settings fields discarded on SETTINGS_UPDATED;\n- parity with JetBrains I03: the same three lines, the no-activation rule, the owned-only rows and the confirmation wording;\n- rails: no .moe writes, no Git writes, none of the project's forbidden-pattern tokens (globalRails.forbiddenPatterns), and verified-local untouched.\n\nThen write the Serena memory 'task-task-758bb59a61bd443382e02aea44b515c9-handoff' for CQ-I06. Cover:\n- the VS Code tree contract;\n- the shared producer contract;\n- the DoD 3 roundtrip pin;\n- residuals: no real VM or IDE-host certification, and CI wiring of the producer test is still owed by I06.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/ManagedVmTreeProvider.ts"
+      ],
+      "note": "Adversarial review of this task's paths only.\n\nFIXED:\n- Disconnected client: the profile line said 'legacy' with no project state. It now renders 'Profile: unknown (not connected) · Delivery: unknown (not connected)'. 'legacy' is shown only for an absent field on a connected project.\n\nCHECKED, no change needed:\n- Foreign or duplicate name anywhere in the report gives not-owned for the whole report.\n- A report claiming readiness:\n  - only a literal true counts;\n  - strongProfile is a constant;\n  - there is no activation path.\n- Double invoke: run() sets `running` synchronously before any await and re-checks actions(). A double cleanup confirm re-checks against the refreshed status.\n- Dispose mid-run: aborts the run; update() and the follow-up refresh are no-ops once disposed.\n- Huge, hanging or noisy producer:\n  - maxBuffer 65537 gives too-large;\n  - the timeout kill gives timed-out;\n  - a stderr flood over maxBuffer gives too-large (fail-closed).\n- Spaces and drive letters: an args array with no shell (V3 pins 'C:\\Program Files\\node.exe' and 'D:\\a b').\n- A .cmd MOE_NODE_COMMAND throws EINVAL synchronously, which gives failed.\n- No UPDATE_SETTINGS, executionProfile or deliveryPolicy writes (grep). SETTINGS_UPDATED is pinned by S6.\n- JB parity:\n  - the same 3 readiness lines, strong-profile text, hidden phases, LAUNCHED rule, confirmation text and 'Clean up owned' label;\n  - the only difference is the unknown-code wording.\n- Rails:\n  - grep finds no eval(, innerHTML, dangerouslySetInnerHTML or __proto__;\n  - no .moe or Git writes;\n  - verified-local untouched;\n  - daemon key names verified (settings.executionProfile / settings.deliveryPolicy).\n\nRESIDUALS (theoretical):\n- A grandchild inheriting the producer's stdout could delay execFile close.\n- The stderr-flood text says 'report'.\n- Cancelling cleanup can interrupt a multipass delete; reconcile repairs it.\n\nGATE re-run after the fix: exit 0, 175/175. Size still 400 net.\n\nHandoff memory written: task-task-758bb59a61bd443382e02aea44b515c9-handoff.",
+      "startedAt": "2026-10-29T23:01:17.066Z",
+      "completedAt": "2026-10-29T23:02:50.572Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -81,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:30.772Z",
-  "updatedAt": "2026-10-29T22:32:38.886Z",
+  "updatedAt": "2026-10-29T23:03:10.623Z",
   "dependsOn": [
     "task-6f3725e6ae56471c982fc39492ca2069",
     "task-63930ba4a46344f9af3c41cfef60ae0d"
@@ -100,7 +134,8 @@
   "metrics": {
     "firstClaimAt": "2026-10-29T19:22:39.957Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 7
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -109,7 +144,13 @@
   "planSizeWarnings": [
     "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T19:25:54.444Z",
   "planningNotes": {
@@ -133,5 +174,24 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T19:25:54.525Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T22:50:19.882Z",
+  "reviewStartedAt": "2026-10-29T23:03:10.621Z",
+  "verification": {
+    "command": "cd moe-vscode && npm test && npm run compile",
+    "exitCode": 0,
+    "outputTail": "✔ V1: readiness keeps provider, execution and verification apart; only a literal true counts\n✔ V1: rows are the owned instances in report order, never collision or deleted\n✔ V1: a foreign or repeated VM name anywhere makes the whole report unreadable\n✔ V1: anything but one strict report line for the invoked command is malformed or refused\n✔ V2: the strong profile is blocked whatever the report claims\n✔ V2: actions are refresh, reconcile and cleanup only; cleanup needs a ready provider and a launched row\n✔ V3: runVmControl runs node on the script with the verb and --project only, no shell or instance\n✔ V3: every failed run resolves unreadable with a fixed reason and never rejects\n✔ V4: reports render fixed texts from validated tokens only\n✔ S6: profile and evidence settings are never sent and survive the SETTINGS_UPDATED roundtrip\n...\nℹ tests 175\nℹ suites 0\nℹ pass 175\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 756.425273\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n(combined exit 0)",
+    "reportedAt": "2026-10-29T23:03:10.621Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/managed-vm.test.cjs",
+    "moe-vscode/tests/settings-wire.test.cjs",
+    "moe-vscode/src/util/ManagedVm.ts",
+    "moe-vscode/src/providers/ManagedVmTreeProvider.ts",
+    "moe-vscode/src/extension.ts",
+    "moe-vscode/package.json",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completionSummary": "CQ-I05 delivered (plan rev 1, 5/5 steps): a VS Code 'Managed VMs' native TreeView over CQ-I03a's vm-control.mjs, mirroring JB I03.\n\nFiles:\n- NEW src/util/ManagedVm.ts: pure. decode, readiness, strongProfile, rows, actions, notes, commandArgs, runVmControl.\n- NEW src/providers/ManagedVmTreeProvider.ts.\n- NEW tests/managed-vm.test.cjs (V1-V4, 9 tests).\n- settings-wire S6.\n- extension.ts +10 (view and 3 commands).\n- package.json: view, commands, enablement, title menu.\n- MoeDaemonClient.resolveDaemonRuntime made public.\n\nAdapted to the landed I03 rules and comment-5c9de848:\n- decode takes the command (schema bound to it); a top-level code gives refused;\n- rows hide collision and deleted;\n- cleanup needs a LAUNCHED row;\n- distinct unreadable reasons.\n\nDoD:\n1. readiness gives 3 lines; only a literal true counts. Rows are owned only. A foreign or duplicate name anywhere makes the whole report not-owned.\n2. strongProfile is a constant (blocked); there is no activation path. actions are refresh, reconcile and cleanup, single flight.\n3. S6: executionProfile, deliveryPolicy, checkEnvironments and repairPolicy are never sent and survive SETTINGS_UPDATED.\n4. Gate exit 0, 175/175 (165 baseline + 10 new), tsc clean.\n\nMutants: 12/12 killed by their named cases (scratch copy, restored, cmp identical).\n\nSize: 400 net (+405/-5) over moe-vscode, at the cap. Code was compacted to get there; no behavior was dropped.\n\nDeviations:\n- the first status run happens on the view's first render, not at activation;\n- no explicit onView activation (VS Code 1.74+ generates it);\n- unknown-code wording is 'Unknown code X: …'.\n\nSelf-review fix: a disconnected client shows the profile as 'unknown (not connected)', not 'legacy'.\n\nResiduals:\n- headless only: no real VM and no extension-host run;\n- CI wiring of the producer test is owed by I06;\n- a grandchild holding stdout could delay close (theoretical);\n- a stderr flood reads as too-large;\n- cancelling cleanup can interrupt a delete (reconcile repairs "
 }

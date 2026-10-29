@@ -129,7 +129,7 @@ function withSettingsPage(settings, body) {
         body(loadPage(panel.webview.html, message => {
             if (typeof seen.handler !== 'function') { throw new Error('the panel registered no message handler'); }
             seen.handler(message);
-        }), seen);
+        }), seen, client);
     } finally { client.dispose(); }
 }
 
@@ -196,3 +196,15 @@ for (const typed of ['', 'abc', '0']) {
         });
     });
 }
+
+test('S6: profile and evidence settings are never sent and survive the SETTINGS_UPDATED roundtrip', () => {
+    const kept = { executionProfile: 'observe', deliveryPolicy: 'local-branch', checkEnvironments: [{ id: 'env-1', image: 'ubuntu-24.04' }], repairPolicy: { maxCodeRepairs: 2 } };
+    withSettingsPage({ ...STORED, ...kept }, (page, seen, client) => {
+        page.click('saveBtn');
+        const payload = savedPayload(seen);
+        client['handleMessage'](JSON.stringify({ type: 'SETTINGS_UPDATED', payload: { id: 'p', rootPath: '/p', settings: { ...STORED, ...kept, ...payload } } }));
+        // The client parsed the frame in its own vm realm, so compare serialized values, not prototypes.
+        const settings = client.currentState.project.settings;
+        for (const key of Object.keys(kept)) { assert.equal(JSON.stringify(settings[key]), JSON.stringify(kept[key]), key); }
+    });
+});

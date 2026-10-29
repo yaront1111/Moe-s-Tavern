@@ -67,7 +67,8 @@
           "type": "webview",
           "id": "moe.metrics",
           "name": "Metrics"
-        }
+        },
+        { "id": "moe.managedVms", "name": "Managed VMs" }
       ]
     },
     "commands": [
@@ -130,7 +131,10 @@
       {
         "command": "moe.reconnect",
         "title": "Moe: Reconnect to Daemon"
-      }
+      },
+      { "command": "moe.managedVms.refresh", "title": "Moe: Refresh Managed VMs", "icon": "$(refresh)" },
+      { "command": "moe.managedVms.reconcile", "title": "Moe: Reconcile Managed VMs", "icon": "$(sync)", "enablement": "moe.managedVms.canReconcile" },
+      { "command": "moe.managedVms.cleanup", "title": "Moe: Clean Up Owned VMs", "icon": "$(trash)", "enablement": "moe.managedVms.canCleanup" }
     ],
     "menus": {
       "view/title": [
@@ -143,7 +147,10 @@
           "command": "moe.refresh",
           "when": "view == moe.board",
           "group": "navigation"
-        }
+        },
+        { "command": "moe.managedVms.refresh", "when": "view == moe.managedVms", "group": "navigation@1" },
+        { "command": "moe.managedVms.reconcile", "when": "view == moe.managedVms", "group": "navigation@2" },
+        { "command": "moe.managedVms.cleanup", "when": "view == moe.managedVms", "group": "navigation@3" }
       ]
     },
     "configuration": {

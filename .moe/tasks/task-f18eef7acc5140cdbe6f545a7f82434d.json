@@ -82,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:43.274Z",
-  "updatedAt": "2026-10-29T22:59:54.017Z",
+  "updatedAt": "2026-10-29T23:00:23.204Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:41:53.026Z",
     "plannedStepCount": 4,
@@ -168,7 +168,8 @@
     "moe-vscode/scripts/bundle-assets.mjs",
     "scripts/tests/onboarding.mjs",
     ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
-    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
+    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json",
+    ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json"
   ],
   "completionSummary": "Packaged IDE bundles are now test-free and require vm-control.mjs. (1) packages/moe-daemon/tsconfig.json excludes src/tools/toolTestHarness.ts, so dist stops emitting it (Linux snapshot: absent; HEAD tsconfig emits it; tsc --noEmit exit 0). (2) moe-jetbrains/build.gradle.kts: requireBundledAssets names vm-control.mjs; both from(bundledDaemonDir) and from(bundledProxyDir) exclude **/*.test.* and **/*.spec.*. (3) moe-vscode/scripts/bundle-assets.mjs: vm-control.mjs is required, and copyDir gains excludeTests, used only for the dist copies. (4) scripts/tests/onboarding.mjs packaged block requires vm-control.mjs, runs it with no args (asserts exit 2 and exact stdout {\\\"code\\\":\\\"VM_CONTROL_INPUT_INVALID\\\"}, proving the import closure loads), and scans daemon/, proxy/, scripts/ for test artifacts, skipping node_modules. (5) scripts/tests/local-runner-bundle.test.mjs: 12 tests, 12 pass; RED was 7 failing; 12 mutants (M1-M8 plus 4 extras) are all killed by named tests. A real VS Code bundle from fresh dists passes onboarding with its PASS line and an empty test-artifact find. Size +130/-17 (net 113). Notes for QA: (a) Gradle was not executed (no Java on this PATH), so it is pinned by static checks and CI's real-zip onboarding step; (b) a flagged test directory is reported once as the directory, so T4 asserts the directory path for the fixtures/__tests__ cases; (c) the npm-published moe-proxy still ships compiled tests, since the proxy tsconfig is intentionally unchanged. Handoff: Serena memories task-task-f18eef7acc5140cdbe6f545a7f82434d-handoff and gotcha-packaged-bundle-test-artifacts.",
   "commits": [
@@ -198,6 +199,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "2a52420bc4726113310df412cab09f8a124e7bd8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T22:57:59Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+        ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T23:00:23.203Z",
+      "treeId": "88a3b9ee5ab3d4ba0d04c0818b3e861a09ac94ad",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -210,9 +228,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-29T22:44:17Z",
-    "at": "2026-10-29T22:50:20.241Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T22:57:59Z",
+    "at": "2026-10-29T23:00:23.203Z"
   },
   "completedAt": "2026-10-29T22:59:54.016Z",
   "reviewCompletedAt": "2026-10-29T22:59:54.016Z",

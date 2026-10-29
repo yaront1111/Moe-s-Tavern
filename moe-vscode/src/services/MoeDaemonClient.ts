@@ -732,7 +732,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
     }
 
-    private resolveDaemonRuntime(): { node: string; env: NodeJS.ProcessEnv } {
+    resolveDaemonRuntime(): { node: string; env: NodeJS.ProcessEnv } {
         const env = { ...process.env };
         const override = env.MOE_NODE_COMMAND;
         const home = env.HOME || env.USERPROFILE;
