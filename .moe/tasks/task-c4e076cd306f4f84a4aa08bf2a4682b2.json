@@ -1,0 +1,39 @@
+{
+  "id": "task-c4e076cd306f4f84a4aa08bf2a4682b2",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V04c] Honest frozen gate outcome",
+  "description": "Objective: the wrappers' frozen-candidate quality gate never leaves a passing check run behind when the gate mutated its checkout. This is the host half of CQ-V04 DoD 2: \"exit 0 followed by a tree/index/HEAD mutation is not a passing trusted result\".\n\nSplit from CQ-V04 (task-a9d1a74d845b4d3d83f359bf864f8651) on 2026-10-29, at the human's choice in the architect REPL.\n\nThe defect today:\n- scripts/moe-agent.sh run_frozen_gate (about lines 4602-4636) calls record_check_run_rpc BEFORE gate_integrity, and sends no outcome. The ps1 twin does the same.\n- A gate that exits 0 but changes its checkout's tracked tree, index or HEAD is correctly refused for landing, but it still leaves an exit-0 'runner-observed' CheckRun.\n- delivery/policy.ts passedOn counts that run under every strict deliveryPolicy, by the legacy no-outcome rule.\n\nContract (scripts/moe-agent.sh and scripts/moe-agent.ps1, in string parity):\n- After the gate exits, run gate_integrity (sh) or its ps1 twin BEFORE recording.\n- Send `outcome` in the CQ-V02 vocabulary:\n  - 'passed' only for exit 0 with integrity intact;\n  - 'inconclusive' for exit 0 followed by any tracked tree, index or HEAD mutation;\n  - 'code-failure' for a nonzero exit.\n- Everything else is unchanged: the run's id, candidate, tree, command and tail; the landing refusal and rescue on failure; the [WARN] lines; and legacy deliveryPolicy behaviour.\n- moe-agent.ps1 stays UTF-8 with a BOM. Run bash scripts/tests/parity-check.sh.\n- Depends on every in-flight task that edits these files: CQ-V08 task-2720c13b (after CQ-V07), task-bdf6db6f, task-ad0dc2e7, task-c2a900aa and task-bc8410af. Build on their landed bytes and never revert peers.\n\nTests: modes in scripts/tests/postflight.sh and scripts/tests/postflight.ps1.\n- A gate that edits a tracked file, stages a change, or moves HEAD, then exits 0, records 'inconclusive' and lands nothing.\n- A clean exit-0 gate records 'passed'.\n- An exit-1 gate records 'code-failure'.\n\nOut of scope: the isolated check VM path (CQ-V04b), daemon policy (CQ-V04), and verified-local.\n\nVerification command (fresh, exit 0 required): bash scripts/tests/postflight.sh",
+  "definitionOfDone": [
+    "A qualityGate that exits 0 after mutating its checkout's tracked tree, index or HEAD records outcome 'inconclusive' and lands nothing, as today. Under a strict deliveryPolicy that run never satisfies required-check.",
+    "A clean exit-0 gate records outcome 'passed', a nonzero exit records 'code-failure', and the run is recorded only after the integrity check.",
+    "moe-agent.sh and moe-agent.ps1 behave identically (postflight.sh and postflight.ps1 modes), and bash scripts/tests/parity-check.sh passes.",
+    "Fresh verification `bash scripts/tests/postflight.sh` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-a9d1a74d845b4d3d83f359bf864f8651",
+  "dependsOn": [
+    "task-2720c13bc79b438e840b14cbba4fea50",
+    "task-bdf6db6f65b04a009c88c1e49aed3848",
+    "task-ad0dc2e7557d4ceca42ce7fab3708942",
+    "task-c2a900aa5107479aa4c630f1b3837ed0",
+    "task-bc8410afe7144ddda804b60af000864d"
+  ],
+  "priority": "HIGH",
+  "order": 242.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:16:19.929Z",
+  "updatedAt": "2026-10-29T18:16:19.929Z"
+}

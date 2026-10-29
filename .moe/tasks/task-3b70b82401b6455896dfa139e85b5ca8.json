@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,20 +110,29 @@
       "author": "architect-bd1eb82d",
       "content": "Architect note for QA (plan rev 1). The plan deliberately departs from the description's literal PGREP argv.\n\nThe description says `sudo -n pgrep -U moe-agent`, verified on exit 1. The plan uses `sudo -n pgrep -c -U moe-agent` instead, and verified needs exit 1 AND stdout matching /^0\\r?\\n$/.\n\nWhy: exit 1 alone is ambiguous.\n- `sudo -n` exits 1 on its own failures. Checked on this box, it prints \"sudo: a password is required\" and leaves stdout empty.\n- Multipass's CommandLineError is 1 as well.\n- Only `pgrep -c` prints a count, and it prints exactly `0` when nothing matched (procps-ng 4.0.4, the Ubuntu 24.04 version).\n\nSo the literal check could claim a termination nobody observed. The refined one keeps DoD 3 (\"verified only on pgrep exit 1\"). The optional CR allows for a Windows host's Multipass.\n\nR10 final's step 1 is amended to the same argv and fake answers (amend-1).\n\nAlso, for QA, a test-harness change that leaves every pre-existing H assertion byte-identical: fakeProvider records its first stdin write as `proc.job`, and H6 pins that write as the job frame.",
       "timestamp": "2026-10-29T13:16:22.571Z"
+    },
+    {
+      "id": "comment-a43d8cfe2e754bfc99d7f16518553da0",
+      "author": "qa-952969be",
+      "content": "QA evidence (qa-952969be), reviewing completion commit c7011d7 on moe/work-2026-10-24. The 3 code files are unchanged since.\n\nSize: 280 changed lines (bridge +23/-1, session +63/-4, tests +180/-9), under the 400 cap.\n\nGate, fresh from `git archive c7011d7` (full tree, env -i, nvm node v24.21):\n- exit 0, 301 tests, 300 pass, 0 fail, 1 pre-existing skip;\n- B16, B17 and H1-H8 pass.\nWindows node v24.16, bridge file only: 55 tests, 22 pass, 0 fail, 33 NO_GUEST skips; B16, H6 and H8 pass.\n\nDoD 1: the frame is encoded once, before daemonRefusal or spawn, and is the first stdin write, inside bounded(). A bad job is SESSION_INPUT_INVALID with zero spawn calls. H6 shows the credential is absent from calls, outputs, forwarded, the result and errors (rejectsWith /secret/).\n\nDoD 2: H7 runs end to end through m.main(['bridge']). It sees role qa, exactly CODEX_API_KEY and a matching sha256, and get_context forwards only {taskId, workerId:'qa-1', sessionId}.\n\nDoD 3: H8 covers the fixed argv `sudo -n pkill -KILL -U moe-agent`, then `pgrep -c`, through invoker. verified is true only on exit 1 with stdout '0'. Exit 0 retries; anything else is false.\n- The -c refinement is the architect's (comment-9cfd6506) and stricter than the DoD.\n- I confirmed locally that `pgrep -c` on procps-ng 4.0.4 exits 1 and prints 0, and that `sudo -n` alone exits 1.\n\nMy own mutation probe killed 11 of 11:\n- exit 1 alone counts as verified;\n- role constant 'worker';\n- frame dropped, or written twice;\n- credential leaked into spawn env;\n- pkill failure ignored;\n- no retry;\n- the old exactKeys;\n- a 4097 cap;\n- job.role accepted;\n- killed counted as an exit.\n\nAlso checked:\n- A real spawn of a missing executable still gives SESSION_SPAWN_FAILED (5 of 5 runs).\n- The H1-H5 harness changes are only the job input, proc.job for the first write and m.read_job; no assertion is weakened.\n- executionReady is untouched. There is no verified-local claim and no .moe or Git write by the agent.\n- Files are LF only, no __pycache__, no orphans.\n\nFor R10 final: hold the per-VM lease around endAgentJobs, because it kills every moe-agent process. Its worst case is about 182 s.",
+      "timestamp": "2026-10-29T18:18:01.590Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:39.556Z",
-  "updatedAt": "2026-10-29T17:42:20.576Z",
+  "updatedAt": "2026-10-29T18:18:08.779Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T13:05:17.093Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T18:18:08.778Z",
+    "wallClockMs": 18771685
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -203,5 +212,9 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-29T17:22:26Z",
     "at": "2026-10-29T17:42:20.576Z"
-  }
+  },
+  "completedAt": "2026-10-29T18:18:08.778Z",
+  "reviewCompletedAt": "2026-10-29T18:18:08.778Z",
+  "reviewSummary": "Full evidence is in comment-a43d8cfe. Reviewed completion commit c7011d7 on moe/work-2026-10-24: 280 changed lines, under the 400 cap, in scope.\n\nGate, fresh from `git archive c7011d7` (env -i, node v24.21):\n- exit 0, 301 tests, 300 pass, 0 fail, 1 pre-existing skip;\n- B16, B17 and H1-H8 pass.\nWindows node v24.16, bridge file: 55 tests, 22 pass, 0 fail, 33 NO_GUEST skips.\n\nDoD 1: the frame is encoded once, before spawn, and is the first bounded stdin write. A bad job is SESSION_INPUT_INVALID with zero spawn calls. H6 shows no credential in calls, outputs, forwarded, the result or errors.\n\nDoD 2: H7 runs end to end through main() with role qa and exactly CODEX_API_KEY (sha256 match), and get_context forwards only the host sessionId.\n\nDoD 3: H8 covers the fixed pkill and `pgrep -c` argv through invoker. verified is true only on exit 1 with stdout '0'; exit 0 retries; anything else is false. The -c refinement is architect-approved and stricter than the DoD; I confirmed the procps 4.0.4 and sudo -n exit codes.\n\nDoD 4: the verification evidence reproduces.\n\nMy own mutation probe killed 11 of 11. A real-spawn ENOENT still gives SESSION_SPAWN_FAILED. No assertion is weakened; executionReady and verified-local are untouched; there are no agent .moe or Git writes.",
+  "requiredCheckAtDone": null
 }

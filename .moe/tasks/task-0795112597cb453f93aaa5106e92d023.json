@@ -31,11 +31,17 @@
       "author": "architect-bd1eb82d",
       "content": "Architect split, 2026-10-29. The human chose in the architect REPL: **one fresh owned VM per check run**, deleted after it.\n\nThis row is now the orchestrator and keeps its DoD 1-4. It is BLOCKED until its slices are DONE, then it returns to PLANNING. Plan it against their landed code:\n- CQ-R11d (task-874aa17c): CHECK_BOUNDARIES, checkEnvironment and evidenceStatus, in the new check-evidence.mjs and local-runner-check.test.mjs (added to CI). It owns DoD 3 and the \"reported\" half of DoD 2.\n- CQ-R11a (task-37dd3edb): the guest `check` mode. One frame; the job runs as moe-check with no groups, NoNewPrivs, umask 077, an exact environment, rlimits and a private network namespace. It owns the \"enforced\" half of DoD 2.\n- CQ-R11b (task-9048e7ec): protected-path oids verified before and after the run, plus read-only bind mounts. It owns the \"mutate protected definitions\" half of DoD 1.\n- CQ-R11c (task-53daa94f): the host runCheckSession, the CheckOutcome classification and a bounded outputTail.\n- CQ-R11e (task-001d8ab3, BACKLOG): the guest check toolchain, a human decision. CQ-R13 now depends on it; this row does not, because it proves the lifecycle with python3 stdlib checks.\n\nWhat remains for this row is the orchestration for one check:\n1. provision a fresh owned VM (R03/R04/R05 provisionGuest plus the R06 ledger);\n2. waitForGuestReady (R07: the supervisor hash, and every job identity denied the supervisor credential, which is the \"credential\" half of DoD 1);\n3. assertNoMounts, then materializeSnapshot (R09c);\n4. runCheckSession (R11c);\n5. delete the VM on every path (R06);\n6. return an observation carrying R11d's checkEnvironment.\nDetails are in Serena `decision-cq-r11-split`.",
       "timestamp": "2026-10-29T13:28:48.502Z"
+    },
+    {
+      "id": "comment-9694da9cad654cc49422066d6cad4d20",
+      "author": "architect-4ae016fb",
+      "content": "Interface request from the CQ-V04 split (2026-10-29). CQ-V04b (task-340a07b33a764c65b2486d16b30d7aef), the runner's focused check dispatch client, builds directly on this orchestrator. When you plan it, please expose two seams, or say in the plan which slice owns them.\n\n1. Environment before the run. V04b must record moe.record_check_dispatch first, and that call pins `environment`; the observation must then carry the same value (CQ-V03b, CHECK_ENVIRONMENT_MISMATCH). So V04b needs the R11d checkEnvironment identity of the booted VM (its observed providerImageHash, the supervisor sha256 and its resources) BEFORE runCheckSession. One option is an onReady(environment) hook that may abort, placed after waitForGuestReady and materializeSnapshot and before the session.\n\n2. Post-run workspace integrity, before the VM is deleted. After a session resolves 'passed', confirm that every materialized snapshot file still has its exact bytes, for example through R09 final's export mode compared with workspaceEntries(snapshot). Any change reports 'inconclusive'. New untracked files may stay allowed, as the host gate allows them. This is the VM half of CQ-V04 DoD 2 (\"exit 0 followed by tree mutation is not a passing trusted result\"); R11b's protected-path recheck covers only the protected files.",
+      "timestamp": "2026-10-29T18:16:47.182Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:17.777Z",
-  "updatedAt": "2026-10-29T13:29:02.721Z",
+  "updatedAt": "2026-10-29T18:16:47.182Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-23a5563cea384d56abb8da1551435455",

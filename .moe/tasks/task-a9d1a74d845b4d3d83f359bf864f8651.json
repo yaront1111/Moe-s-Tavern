@@ -13,9 +13,70 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nThese prerequisites must be in HEAD; adapt to their landed names (planningNotes lists the assumed ones) and never re-implement them:\n- CQ-V03b: state/checkObservationStore.ts;\n- CQ-V03: tools/recordCheckDispatch.ts and tools/recordCheckObservation.ts.\n\nCreate packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts (vitest). Keep it to about 230 lines, table-driven, because tests count toward QA's 400-net cap.\n\nReadiness mock, scoped to this file:\n- vi.mock('./executionProfile.js') spreads importOriginal and replaces only assertExecutionProfileReady with () => undefined.\n- Pin production with vi.importActual: the real assertExecutionProfileReady('verified-local') still throws codeName EXECUTION_PROFILE_NOT_READY.\n\nFixture, in the style of delivery/requiredChecks.delivery.test.ts (ToolTestHarness, a temp git repo, submit_plan measuring the snapshot):\n- settings executionProfile 'verified-local', deliveryPolicy 'local-branch', approvalMode 'TURBO' (so submit_plan auto-approves and approvedPlanRevision === planRevision), checkEnvironments [ENV_A];\n- the approved defs acc (UNIT) and lint (LINT);\n- a current candidate whose protectedEntries equal the snapshot, plus a completion commit.\n\nHelpers dispatch(check, env) and observe(dispatchId, outcome, exitCode) call the V03 tool handlers with context { runner: { runnerId: 'runner-0123456789abcdef' } }. Assert exact codeNames, tokens, record fields and file absence; never truthiness.\n\nCases:\n- A, admission (DoD 1). Each refusal writes no file under .moe/checks/dispatches:\n  - an unowed command, or an owed command with a wrong or missing checkId: NOT_ALLOWED CHECK_DEFINITION_NOT_APPROVED;\n  - ENV_B (unlisted), or no checkEnvironments at all: CHECK_ENVIRONMENT_NOT_APPROVED;\n  - checkEnvironments 'x' (not an array): INVALID_INPUT field checkEnvironments.\n  An identical replay of an already-recorded dispatch id, after ENV_A is removed, still returns duplicate:true.\n- P, positive control: authenticated 'passed' runs for acc and lint in ENV_A give missingEvidence [].\n- R, freshness (DoD 1 and 2). Starting from that passing pair, each of these brings back both required-check tokens:\n  1. a re-approval at revision 2;\n  2. ENV_A removed from checkEnvironments;\n  3. a newer candidate with a different tree.\n- D, diagnostic (DoD 2): a record_check_run run (recordCheckRunTool) with source runner-observed, exit 0, outcome passed, the same candidate, tree, command, planRevision and ENV_A, the channel's runnerId and a REAL dispatchId leaves the token under verified-local. The identical fixture under executionProfile 'legacy' counts it, as today.\n- O, outcomes (DoD 2 and 3): it.each over no dispatch, dispatched but unobserved, skipped (exit 0), inconclusive (0), timeout (0), infra-failure (0) and code-failure (1) for acc. Each keeps required-check:UNIT, and a dependent of the DONE task stays withheld through dependencyShortfall / unmetDependsOn, the one shared predicate.\n- U, undeclared: a verified-local task with no requiredChecks and no owed gate reports required-checks-undeclared. With qualityGate set and qualityGateScope everyTask, owedChecks is [{command: gate}] instead.\n- T, twin ids: two approved defs with the same command each need their own dispatch, so a pass for one alone leaves the token.\n\nRun `npx vitest run src/delivery/requiredChecks.strong.test.ts`: the new cases fail, and the readiness pin and the legacy case pass.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "packages/moe-daemon/src/types/schema.ts: in ProjectSettings, after deliveryPolicy, add `checkEnvironments?: string[]` with a doc comment covering:\n- what it is: human-approved isolated check environment ids, the exact CheckRun.environment values, e.g. R11d's 'moe-local-vm-v1:<sha256>';\n- absent or empty approves none;\n- it is read live by delivery/policy.ts and moe.record_check_dispatch, so removing an id revokes the evidence recorded in it;\n- it is set in .moe/project.json, like deliveryPolicy; validateSettingsUpdate refuses it as unknown and preserves it, so the IDE never edits it.\n\nNothing else in schema.ts changes. It is a shared file: preserve peers' bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "packages/moe-daemon/src/delivery/policy.ts. Every legacy and observe expression stays byte-identical in effect. The strong branch is reached only when resolveTaskExecutionProfile(state.project?.settings, task.executionPolicySnapshot) === 'verified-local'. Add one STRONG paragraph to the header comment. Budget: about 120 net lines.\n\n1. Import isAuthenticatedCheckRun and getCheckDispatch from '../state/checkObservationStore.js', and hasControlChar from candidateStore.\n2. Extract checkShortfall's command resolution into owedGate(state, task): string | null | undefined, where undefined means unreadable (logged as today). checkShortfall's tokens are unchanged.\n3. `export interface OwedCheck { checkId?: string; command: string }` and `export function owedChecks(state, task): OwedCheck[]`:\n   - the approved definitions, only when readRequiredCheckSnapshot(task) is non-null, as {checkId: id, command: command.trim()} in contract order;\n   - then {command: gate} when owedGate returns a string that no definition already runs;\n   - it never throws: a failed contract read yields no definitions.\n4. `export function approvedCheckEnvironments(settings): readonly string[]`:\n   - absent or null gives [];\n   - otherwise an array of at most 50 entries, each a non-blank string of at most 255 characters with no control character (hasControlChar), kept verbatim. That is the CheckRun.environment rule;\n   - anything else throws invalidInput('checkEnvironments', ...).\n5. trustedPassedOn(state, task, current, check). It is false unless current has a treeSha and task.planRevision === task.approvedPlanRevision (a number). Otherwise it is true iff some run of listCheckRunsForCandidate(state, current.id) meets ALL of:\n   - candidateId and treeSha equal current's;\n   - exitCode 0 and outcome === 'passed' exactly;\n   - planRevision === task.approvedPlanRevision;\n   - environment is in approvedCheckEnvironments(settings);\n   - isAuthenticatedCheckRun(state, run);\n   - getCheckDispatch(state, run.dispatchId) returns a dispatch whose command === check.command, and when check.checkId is set, whose checkId equals it.\n6. Wiring for a strong task:\n   - hasPassingCheck takes the task, and the gate uses trustedPassedOn(..., {command});\n   - protectedCheckShortfall owes each definition separately: requiredCheckToken(trimmed command) for every def whose {checkId: d.id, command} fails trustedPassedOn, deduped;\n   - drift tokens are unchanged.\n7. EVIDENCE_TOKENS.requiredChecksUndeclared = 'required-checks-undeclared', plus its TOKEN_REASONS entry. evaluateDeliveryEvidence adds it for a strong task whose contract declares no requiredChecks and that owes no gate.\n8. `export function assertCheckDispatchApproved(state, params)`. When taskId, command and environment are strings and the task exists, it throws NOT_ALLOWED:\n   - CHECK_DEFINITION_NOT_APPROVED unless owedChecks has an entry with this exact command and the same checkId (both absent for the gate);\n   - then CHECK_ENVIRONMENT_NOT_APPROVED unless approvedCheckEnvironments includes the environment.\n   Malformed input returns silently, so the store refuses it with its own codes.\n\nError handling: approvedCheckEnvironments' INVALID_INPUT throw is already read as not satisfied by every evaluateDeliveryEvidence consumer.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "packages/moe-daemon/src/tools/recordCheckDispatch.ts was created by CQ-V03. It is listed as new only because it does not exist at plan time: edit it, never recreate it.\n\nAfter the runner-channel gate and the unknown-key check, and before delegating to the store's recordCheckDispatch:\n- skip admission when params.id names a dispatch that is already recorded (getCheckDispatch), so a crash retry still replays under the store's rules;\n- otherwise call assertCheckDispatchApproved(state, params), so an unapproved dispatch writes nothing.\nAdd the two codeNames to the tool description. Nothing else changes. Admission and the store write happen in the same non-blocking tool call, under the state mutex.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "docs/MCP_SERVER.md: edit only CQ-V03's `### moe.record_check_dispatch` section, and preserve peers' bytes. Add an 'Admission (CQ-V04)' paragraph covering:\n- what may be dispatched: an owed check, meaning an approved protected definition matched by exact checkId and trimmed command, or the owed qualityGate with no checkId;\n- in an environment listed in settings.checkEnvironments;\n- the two NOT_ALLOWED refusals, CHECK_DEFINITION_NOT_APPROVED and CHECK_ENVIRONMENT_NOT_APPROVED, which write nothing;\n- the exception: an identical replay of a recorded dispatch id skips admission.\nAdd one sentence: for a verified-local task, only an authenticated observation satisfies a required check (outcome passed, the current approved revision, a dispatch naming that check, a listed environment), and record_check_run reports never do.\n\nThe CONFIGURATION.md row and the SCHEMA.md ProjectSettings field for checkEnvironments are deferred to CQ-V12's docs sweep, as noted on task-b621ddc9.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Iterate with `cd packages/moe-daemon && npx vitest run src/delivery/requiredChecks.strong.test.ts src/delivery/requiredChecks.delivery.test.ts`.\n2. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail a named case:\n   - drop isAuthenticatedCheckRun: D;\n   - drop the planRevision clause: R1;\n   - drop the environment clause: R2;\n   - accept any outcome at exit 0: O;\n   - drop the checkId clause: T;\n   - skip admission: A;\n   - admit before the replay check: the A replay;\n   - apply the strong rule to every profile: the legacy case.\n3. GATE, fresh, in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - `git archive HEAD` of the whole repo, with the prerequisites in HEAD;\n   - overlay ONLY this task's 5 files;\n   - `npm ci` after checking the lockfile against the tree;\n   - env -i with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH;\n   - `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` must both exit 0. schema.ts is shared, so the full suite is the scope;\n   - cmp the overlay against the worktree.\n4. Size: this task's numstat over packages/ must be at most 400 net (QA cap; tests count).\n5. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n6. Supply the npm test command, its exit code and the output tail to complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-7",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an agent trying to get a verified-local task DONE without trusted evidence:\n- forgery: a record_check_run run copying runnerId, dispatchId and binding; a caller-built run object; a dispatch for an unowed command or an unlisted environment; a replayed id with altered fields;\n- staleness: a run from an older approved revision, a revoked environment id, a superseded candidate. A DONE task whose id is revoked withholds its dependents until re-checked, which is intended;\n- outcomes: exit 0 with skipped, inconclusive, timeout or infra-failure;\n- legacy: every legacy and observe verdict and existing test unchanged, and readiness unconditional outside this one test file;\n- concurrency: admission and the store write happen in one mutex-held tool call;\n- rails: no .moe edits, no Git writes, no forbidden tokens, and verified-local still unavailable.\n\nThen write the Serena memory 'task-task-a9d1a74d845b4d3d83f359bf864f8651-handoff' with the landed names for CQ-V04b, CQ-V05, CQ-V06 and CQ-V12: owedChecks, approvedCheckEnvironments, assertCheckDispatchApproved, the two codeNames and the new token.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/policy.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,20 +86,110 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 242.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-343e3208837a492396f9199506e1fe5a",
+      "author": "architect-e4b7eee0",
+      "content": "Planning note from architect-e4b7eee0, 2026-10-29, for whoever plans V04. V03 is now split, and all three slices are planned (WORKING):\n- V03a (task-3b4e3833): a loopback-only `/runner` WebSocket path, authenticated by a host-only key at runnerKeyPath(projectPath) in ~/.moe/runner-keys. ToolCallContext.runner carries {runnerId}.\n- V03b (task-c9fe2515): the dispatch records now live HERE, not in V04, as recordCheckDispatch and recordCheckObservation in state/checkObservationStore.ts. isAuthenticatedCheckRun(state, run) is the trust predicate V04 should wire into delivery policy for strict tasks. Do not create a second dispatch store.\n- V03 (task-9cc13170): the runner-only tools moe.record_check_dispatch and moe.record_check_observation.\n- V05 (task-6be626cf) is a pure decideRepair/resolveRepairPolicy module. Feed it one required check's runs (authenticated only, for strict tasks); acting on its decision is V12's job unless V04 exposes a seam.\n- A dispatched command inherits CheckRun's 500-character cap.\nSee Serena mem:decision-cq-v03-split.",
+      "timestamp": "2026-10-29T17:50:19.016Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:55.999Z",
-  "updatedAt": "2026-10-27T16:48:32.300Z",
+  "updatedAt": "2026-10-29T18:18:15.964Z",
   "dependsOn": [
     "task-9cc131704d214e66afc8a51a524b35c2"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-26T08:35:49.789Z"
+    "firstClaimAt": "2026-10-26T08:35:49.789Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "A plan written now would be speculative. CQ-V04 dispatches required focused checks through the isolated check runner and publishes a pass only through the authenticated observation channel, and neither exists yet.\n1. The runner is CQ-R11 (BACKLOG, unplanned). It owns the fresh check environment, the environment identity that DoD1 must match against approval, and the post-run tree/index/HEAD re-measurement that DoD2 relies on.\n2. The trusted-pass channel is CQ-V03 (BLOCKED, for the same reason, on CQ-V02 and CQ-R11).\nCQ-V02 is planned (2026-10-26). It adds CheckRun outcome / planRevision / environment / dispatchId / attemptId, and a passedOn guard so skipped or inconclusive outcomes never count. That already covers most of DoD3. The planning analysis is in Serena memory task-<this id>-handoff. The task auto-unblocks to PLANNING when both prerequisites are DONE."
+  "priorBlockedReason": "A plan written now would be speculative. CQ-V04 dispatches required focused checks through the isolated check runner and publishes a pass only through the authenticated observation channel, and neither exists yet.\n1. The runner is CQ-R11 (BACKLOG, unplanned). It owns the fresh check environment, the environment identity that DoD1 must match against approval, and the post-run tree/index/HEAD re-measurement that DoD2 relies on.\n2. The trusted-pass channel is CQ-V03 (BLOCKED, for the same reason, on CQ-V02 and CQ-R11).\nCQ-V02 is planned (2026-10-26). It adds CheckRun outcome / planRevision / environment / dispatchId / attemptId, and a passedOn guard so skipped or inconclusive outcomes never count. That already covers most of DoD3. The planning analysis is in Serena memory task-<this id>-handoff. The task auto-unblocks to PLANNING when both prerequisites are DONE.",
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T18:18:15.882Z",
+  "executionContract": {
+    "intendedBehavior": "For a verified-local task, a required check passes only on trusted, approved evidence. Legacy and observe tasks are unchanged.\n- owedChecks(state, task) in delivery/policy.ts is the frozen list a task owes on its current candidate: each approved protected definition {checkId, trimmed command}, only while readRequiredCheckSnapshot binds the snapshot to the current definitions, then the owed qualityGate {command} unless a definition already runs it.\n- moe.record_check_dispatch admits a NEW dispatch only for an owed check (exact checkId and command), in an environment listed in settings.checkEnvironments. Otherwise it refuses NOT_ALLOWED CHECK_DEFINITION_NOT_APPROVED or CHECK_ENVIRONMENT_NOT_APPROVED and writes nothing. A replay of a recorded dispatch id skips admission.\n- Under verified-local, an owed check counts only through a run on the current candidate's tree that is all of: authenticated (isAuthenticatedCheckRun); outcome exactly 'passed' with exit 0; planRevision equal to the task's current approved revision; bound to a dispatch naming that check; in an environment in settings.checkEnvironments, read live. Anything else, including every moe.record_check_run report, leaves required-check:<command>.\n- A verified-local task that declares no requiredChecks and owes no gate reports required-checks-undeclared.\n- settings.checkEnvironments is a project.json-only list of approved environment ids. Absent approves none; a malformed value is INVALID_INPUT wherever it is judged.",
+    "acceptanceCriteria": [
+      "Dispatch admission refuses each of these by name and writes no file under .moe/checks: an unowed command, a wrong checkId, an unlisted environment, an absent environment list. A malformed checkEnvironments is INVALID_INPUT. An identical replay of a recorded dispatch still returns duplicate:true.",
+      "Under verified-local (readiness mocked in the new test file only), a required check passes only with an authenticated 'passed' run at the current approved revision, for that check's dispatch, in a listed environment. A revision change, a removed environment id or a newer candidate each brings required-check:<command> back.",
+      "Under verified-local, neither of these passes: exit 0 with outcome inconclusive, or a moe.record_check_run report carrying runner-observed, exit 0, outcome passed and a copied runnerId, dispatchId and binding.",
+      "Missing (no dispatch, or dispatched but unobserved), skipped, inconclusive, timeout, infra-failure and code-failure all leave the token, and evaluateDeliveryEvidence and the dependency projection agree.",
+      "The same fixture under legacy/observe keeps today's verdicts, and production readiness still throws EXECUTION_PROFILE_NOT_READY.",
+      "In a fresh Linux snapshot, `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` exit 0, and numstat over packages/ is at most 400 net."
+    ],
+    "invariants": [
+      "Legacy and observe tasks: every existing passedOn, checkShortfall and protectedCheckShortfall verdict is unchanged. The strong branch is reached only when resolveTaskExecutionProfile(...) === 'verified-local'.",
+      "assertExecutionProfileReady stays unconditional in production; only the new test file mocks it.",
+      "One predicate: qa_approve, dependency readiness and the projections all judge through evaluateDeliveryEvidence. There is no second rule.",
+      "Trust comes only from stored records (isAuthenticatedCheckRun, getCheckDispatch), never from arguments.",
+      "Admission runs in the same non-blocking, mutex-held tool call as the store write, and every refusal precedes the first write."
+    ],
+    "compatibility": [
+      "The token vocabulary is unchanged except the new 'required-checks-undeclared', which applies to verified-local only.",
+      "record_check_dispatch keeps CQ-V03's params, result shape and replay rules. record_check_run, checkRunStore.ts and checkObservationStore.ts are not modified.",
+      "settings.checkEnvironments follows the deliveryPolicy precedent: set in .moe/project.json, refused as unknown by UPDATE_SETTINGS, and preserved by its {...project.settings} copy."
+    ],
+    "approvedScope": [
+      "delivery/policy.ts: the exported OwedCheck, owedChecks, approvedCheckEnvironments and assertCheckDispatchApproved; the internal trustedPassedOn and owedGate; EVIDENCE_TOKENS.requiredChecksUndeclared and its reason.",
+      "types/schema.ts: ProjectSettings.checkEnvironments?: string[].",
+      "tools/recordCheckDispatch.ts (created by CQ-V03): one admission call before delegating.",
+      "docs/MCP_SERVER.md: the record_check_dispatch admission paragraph.",
+      "New delivery/requiredChecks.strong.test.ts."
+    ],
+    "reuse": [
+      "isAuthenticatedCheckRun and getCheckDispatch (CQ-V03b, state/checkObservationStore.ts) are the only trust source.",
+      "readRequiredCheckSnapshot, validateExecutionContract, requiredCheckCommand, listCandidatesForTask, listCheckRunsForCandidate and resolveTaskExecutionProfile are already among policy.ts's imports.",
+      "hasControlChar (state/candidateStore.ts) implements the environment-id rule, matching checkRunStore's private readEnvironment: non-blank, at most 255 characters, no C0 or DEL.",
+      "The fixture style of delivery/requiredChecks.delivery.test.ts: ToolTestHarness, a temp git repo, submit_plan measuring the snapshot."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/delivery/policy.ts: passedOn(state, current, command) is the one pass rule. checkShortfall (via hasPassingCheck) and protectedCheckShortfall call it. evaluateDeliveryEvidence first calls resolveTaskDeliveryPolicy, which throws EXECUTION_PROFILE_NOT_READY for verified-local.",
+      "packages/moe-daemon/src/delivery/executionProfile.ts: resolveTaskExecutionProfile(settings, snapshot) floors to a stored verified-local snapshot, and assertExecutionProfileReady is unconditional.",
+      "packages/moe-daemon/src/state/validators.ts: validateSettingsUpdate's allowlist omits deliveryPolicy and starts from {...project.settings}, so a project.json-only key survives settings updates.",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts defaults approvalMode to CONTROL. TURBO makes submit_plan auto-approve (PLAN_AUTO_APPROVED, approvedPlanRevision).",
+      "ASSUMED, from CQ-V03b's approved plan (unlanded): state/checkObservationStore.ts exports isAuthenticatedCheckRun(state, run): boolean (stored run plus marker plus dispatch; never throws) and getCheckDispatch(state, id): CheckDispatch | null. CheckDispatch is {id, taskId, candidateId, treeSha, planRevision, command, checkId?, environment, runnerId, createdAt}.",
+      "ASSUMED, from CQ-V03's approved plan (unlanded): tools/recordCheckDispatch.ts exports recordCheckDispatchTool(state). Its handler(args, state, context) refuses without context.runner (RUNNER_CHANNEL_REQUIRED), rejects unknown keys, then delegates to recordCheckDispatch(state, context.runner, params). recordCheckObservationTool takes {id, dispatchId, exitCode, outcome, outputTail?, environment}."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test",
+      "cd packages/moe-daemon && npx tsc --noEmit"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Scope, decided by the human in the REPL on 2026-10-29: 'Daemon core, split rest'.\n- V04 keeps the daemon core: the frozen owed-check list, dispatch admission and the strong pass rule.\n- CQ-V04b (task-340a07b3) is the local-runner dispatch client, after R11 final.\n- CQ-V04c (task-c4e076cd) is the honest host-gate outcome, after V08 and the other wrapper editors.\n- V12 depends on both.\n\nThe approved environment, also the human's choice ('Human allowlist setting'): settings.checkEnvironments. Rejected:\n- runner-pinned only: no real approval;\n- capture at plan approval: a snapshot schema change, and every image change would force a replan.\nSettings plumbing follows the deliveryPolicy precedent: project.json-only, judged where read, with no validators.ts change.\n\nWhere admission lives:\n- In the tool (tools/recordCheckDispatch.ts), not in V03b's store. A store import of policy.ts would close a cycle, because policy.ts now imports checkObservationStore.\n- It is skipped for an already-recorded dispatch id, which keeps V03b's crash-retry replay.\n\nEnvironment approval is judged LIVE at evaluation as well as at dispatch, so a human can revoke a compromised image. The alternative, approval only at dispatch, could never revoke anything.\n\nNo runner read tool in V04: it would exceed QA's 400-net cap. V04b sources owedChecks through a new tool or get_context, and its planner decides.\n\nUnder verified-local the legacy no-outcome rule is dropped: an explicit 'passed' is required. A strong task with no checks reports required-checks-undeclared, which comes from CQ-04's acceptance that every task in the profile has appropriate required checks.",
+    "codebaseInsights": "- policy.ts is the one predicate. qa_approve, dependency readiness and the projections all call evaluateDeliveryEvidence, so changing passedOn's callers changes every consumer consistently.\n- resolveTaskDeliveryPolicy throws EXECUTION_PROFILE_NOT_READY for verified-local, so the strong branch is unreachable in production until certification. The new test file mocks the readiness assertion locally and pins the real one with vi.importActual.\n- protectedCheckShortfall dedupes owed commands and reads definitions only through the validated contract plus readRequiredCheckSnapshot. Keep the legacy expressions unchanged and add the strong branch beside them.\n- checkShortfall resolves the gate as live until DONE, then requiredCheckAtDone, with unreadable becoming a token. The owedGate extraction must keep exactly that.\n- Fixtures: requiredChecks.delivery.test.ts builds candidates and runs directly on h.state maps. ToolTestHarness defaults approvalMode to CONTROL, so set TURBO for approvedPlanRevision.\n- ASSUMED names from the prerequisites' approved plans (unlanded; adapt to what lands and note the difference):\n  - CQ-V03b: isAuthenticatedCheckRun(state, run), getCheckDispatch(state, id), state.checkDispatches and state.checkObservations;\n  - CQ-V03: recordCheckDispatchTool and recordCheckObservationTool, handler(args, state, { runner });\n  - CQ-V02 (landed): CheckRun.outcome, planRevision, environment and dispatchId.",
+    "risks": "- Size: QA rejects past 400 net over packages/, and tests count. Keep the implementation to about 120 lines and the test to about 230, using it.each tables and shared helpers.\n- Legacy drift: any change visible to legacy or observe tasks breaks the epic rail. Mutant 8 and the legacy case guard it.\n- Revocation is live: removing an environment id un-satisfies DONE strong tasks and withholds their dependents until re-checked. This is intended, and documented in the schema comment and MCP_SERVER.md.\n- The prerequisite files must be in HEAD before WORKING (dependsOn V03, which covers V03a, V03b, R11 and the others). tools/recordCheckDispatch.ts is in newFiles only because it does not exist at plan time; edit it.\n- schema.ts and MCP_SERVER.md are shared. Preserve peers' bytes; overlapping editors are serialized through the V03 chain.\n- verified-local stays unavailable. Never change assertExecutionProfileReady.\n- Docs debt (CONFIGURATION.md, SCHEMA.md) and the activation gap (nothing invokes the V04b client per candidate yet) are recorded on V12 (task-b621ddc9).",
+    "keyFiles": [
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts",
+      "packages/moe-daemon/src/delivery/executionProfile.ts",
+      "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
+      "packages/moe-daemon/src/state/checkRunStore.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T18:18:15.963Z",
+  "approvedPlanRevision": 1
 }

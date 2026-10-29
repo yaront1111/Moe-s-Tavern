@@ -1,0 +1,41 @@
+{
+  "id": "task-6339299aa3b743d1948ffbd880a5c34a",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V12b] Dependency projection agreement",
+  "description": "Objective: every daemon place that projects whether a prerequisite is ready must give the answer of the ONE shared predicate, and that answer must agree with QA and delivery. This is V12's DoD 2, split out of the epic-final V12 (task-b621ddc9) on 2026-10-29 by architect-e4b7eee0 for size. V12 re-runs this test unchanged.\n\nBackground, read at HEAD 2026-10-29:\n- state/dependencyUnblock.ts holds dependencyShortfall, isDependencySatisfied, unmetDependsOn and unmetBlockedOnTaskIds.\n- unmetDependsOn(state, task) feeds tools/getContext.ts:512 (task.dependsOnUnmet), tools/listTasks.ts:115, tools/searchTasks.ts:167, tools/setTaskDependencies.ts:84, state/resourceStore.ts:73 (grant eligibility) and tools/claimNextTask.ts:243.\n- reportBlocked.ts calls isDependencySatisfied directly.\n- CQ-V09 (task-af83018e) makes dependencyShortfall and isDependencySatisfied consumer-aware: (state, taskId, consumer?).\n- V09's plan passes the consumer only at claimNextTask:243 and reportBlocked:231, 488 and 495. Any site still calling without the consumer would let a strict consumer see a legacy-DONE or missing prerequisite as ready.\n\nDeliverable:\n1. A new packages/moe-daemon/src/__acceptance__/dependencyProjection.acceptance.test.ts on CQ-V11's createMcpCaller (src/__acceptance__/mcpCall.ts). It has no imported handlers. It is table-driven over consumer (legacy, strict) by prerequisite state:\n   - legacy DONE;\n   - strict DONE with and without verified delivery;\n   - ARCHIVED with and without retained proof;\n   - missing id;\n   - not DONE.\n   It asserts that these all equal isDependencySatisfied(state, id, consumer): claim_next_task withholding, get_context dependsOnUnmet, the list_tasks and search_tasks dependsOnUnmet counts, set_task_dependencies dependsOnUnmet, report_blocked dependenciesSatisfied, and the auto-unblock of a BLOCKED consumer. A strict prerequisite is satisfied only after a successful qa_approve on its current candidate with complete delivery evidence.\n2. Fix every site that disagrees, so it passes the consumer through the shared predicate, never a parallel one. Each fix gets a failing-first row.\n3. CQ-V02's hand-forward (comment on V12 by worker-7d158765): state/deliveryProjection.ts checkFor adds the run's `outcome` to latestCheckRun when one is recorded, and no key when it is absent. Test it in state/deliveryProjection.test.ts. The wire change is additive, and JetBrains' Gson ignores unknown keys.\n\nError handling: an unjudgeable prerequisite stays unmet (fail closed), at every site.\n\nScope boundaries: no client UI. JetBrains DeliveryPresentation.kt still renders the reported exit code; that follow-up is outside this epic. No new activity event types; ACTIVITY_EVENT_TYPES is mirrored in moe-vscode. Legacy consumers are byte-identical. Serialize with any open task that touches the same files, since C-series tasks edit getContext.ts and claimNextTask.ts. No .moe edits.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "For every consumer (legacy, strict) x prerequisite state (legacy DONE, strict DONE with/without verified delivery, ARCHIVED with/without retained proof, missing id, not DONE), claim_next_task withholding, get_context dependsOnUnmet, list_tasks/search_tasks dependsOnUnmet, set_task_dependencies dependsOnUnmet and report_blocked dependenciesSatisfied all equal isDependencySatisfied(state, id, consumer), proven by src/__acceptance__/dependencyProjection.acceptance.test.ts through createMcpCaller.",
+    "A strict prerequisite counts as satisfied, and auto-unblocks a BLOCKED strict consumer, only after qa_approve succeeded on its current candidate with complete delivery evidence, proven in the same file.",
+    "Every non-test call of unmetDependsOn, unmetBlockedOnTaskIds, isDependencySatisfied or dependencyShortfall (including resourceStore grant eligibility) passes the consumer task; each site fixed here has a failing-first row in the same file.",
+    "latestCheckRun in the delivery projection carries the run's outcome when one is recorded and no outcome key when absent, proven by state/deliveryProjection.test.ts.",
+    "Legacy consumers keep today's answers: every pre-existing dependency, unblock, claim and projection test passes unchanged.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-b621ddc99fe44d50ab700b2aa51c84fc",
+  "dependsOn": [
+    "task-af83018e892149a1a18cd6a946edeba5",
+    "task-e493ed19006d4be4a96e3ca2f80a5ab4",
+    "task-6a5d5a13257b48c9940ae3b22347ff7d",
+    "task-a9d1a74d845b4d3d83f359bf864f8651",
+    "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+  ],
+  "priority": "HIGH",
+  "order": 250.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:14:13.471Z",
+  "updatedAt": "2026-10-29T18:14:13.471Z"
+}

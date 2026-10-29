@@ -1,0 +1,43 @@
+{
+  "id": "task-754fa988748b4d2abb2628f4c91d8ff5",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V12a] Delivery bypass acceptance fixtures",
+  "description": "Objective: daemon-side, end-to-end proof that forged, stale, missing, target-raced or crash-replayed evidence cannot pass the CQ-V gates. This is V12's DoD 1, split out of the epic-final V12 (task-b621ddc9) on 2026-10-29 by architect-e4b7eee0 for size. V12 keeps the docs sweep, the whole-epic review and regression, and re-runs these fixtures unchanged.\n\nDeliverable:\n- A new packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts built on CQ-V11's harness (src/__acceptance__/mcpCall.ts: createMcpCaller, McpCallError, the gatedApproval scenario of producerConsumer.acceptance.test.ts). Every call goes through McpAdapter, never an imported handler.\n- The two CQ-V01 QA hand-forward tests in src/delivery/requiredChecks.delivery.test.ts. They are spelled out in V12's comment from qa-7c627d35 (2026-10-26).\n\nFixture classes, all on a STRICT task:\n- A verified-local task is built the way CQ-V06's reviewBinding.test.ts and src/__e2e__/executionContract.e2e.test.ts drive one. The readiness gate (assertExecutionProfileReady) is spied ONLY inside the test; the precedent is src/server/planApproval.test.ts:1095. Production readiness stays unconditionally unavailable.\n- Forgery: a /mcp record_check_run claiming runner-observed; record_check_dispatch or record_check_observation without the /runner context; observation args carrying runnerId, source, candidateId, treeSha or planRevision.\n- Stale: a passing run on a superseded candidate, an older plan revision, or a stale served-context receipt.\n- Missing check: missing, skipped, inconclusive, timeout and infra-failure results, and an exit-0 run followed by a tree, index or HEAD mutation (CQ-V04).\n- Target race and receipt crash, daemon side: a receipt or landing record for a tree other than the verified candidate's; an identical receipt replayed after a fresh StateManager load over the same .moe directory.\n- At least one case runs over the real /runner WebSocket with a host key in a temp MOE_RUNNER_KEY_DIR (CQ-V03a). A wrong or missing key is refused at upgrade.\n\nAssumed interfaces, from approved plans; adapt to the LANDED names:\n- V03a: server/runnerChannel.ts (RUNNER_KEY_HEADER, ensureRunnerKey, authenticateRunner), ToolCallContext.runner.\n- V03b: state/checkObservationStore.ts (recordCheckDispatch, recordCheckObservation, isAuthenticatedCheckRun).\n- V03 tools: moe.record_check_dispatch and moe.record_check_observation.\n- V04's dispatch flow, which is unplanned at the time of writing.\n- V06: delivery/reviewBinding.ts (assertReviewedCandidateCurrent), and qa_approve's attemptId, generation, sessionId and candidateId.\n- V05b's repair transitions.\n- moe.record_delivery_receipt and moe.finalize_attempt.\n\nError handling: assert exact codeNames and tokens, never truthiness. A bypass a fixture exposes is fixed at its source module, with that fixture as the regression, never by weakening the fixture.\n\nScope boundaries: no new production surface beyond such fixes; no client UI; no wrapper changes (CQ-V08b owns those); no .moe edits; verified-local stays unavailable outside test spies.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "Forgery: a /mcp record_check_run claiming runner-observed, a dispatch or observation sent without the /runner context, and observation args carrying runnerId/source/candidateId each leave a strict task's qa_approve refused, with exact codeNames and tokens asserted, proven by src/__acceptance__/deliveryBypass.acceptance.test.ts.",
+    "Stale: a passing run on a superseded candidate, on an older plan revision, or under a stale served-context receipt cannot satisfy qa_approve, with each exact codeName asserted in the same file.",
+    "Missing check: missing, skipped, inconclusive, timeout and infra-failure required checks, and an exit-0 run followed by a tree/index/HEAD mutation, each keep qa_approve refused, proven in the same file.",
+    "Target race and receipt crash, daemon side: a receipt for a tree other than the verified candidate's never satisfies delivery evidence or a strict consumer's dependency, and an identical receipt replayed after a fresh StateManager load is idempotent with dependents unchanged, proven in the same file.",
+    "At least one case runs over the real /runner WebSocket with a host key (a wrong or missing key is refused at upgrade); every other case goes only through createMcpCaller.",
+    "The two CQ-V01 hand-forward tests in requiredChecks.delivery.test.ts (a corrupt requiredChecks entry gives protected-checks-unapproved; a duplicate candidate protected path, first or last, gives protected-checks-unmeasured) each kill their named mutant on a scratch copy.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-b621ddc99fe44d50ab700b2aa51c84fc",
+  "dependsOn": [
+    "task-9cc131704d214e66afc8a51a524b35c2",
+    "task-a9d1a74d845b4d3d83f359bf864f8651",
+    "task-66e8d7d1e9ef4ba281cdb2f505d47e7d",
+    "task-6a5d5a13257b48c9940ae3b22347ff7d",
+    "task-af83018e892149a1a18cd6a946edeba5",
+    "task-e493ed19006d4be4a96e3ca2f80a5ab4"
+  ],
+  "priority": "HIGH",
+  "order": 250.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:13:47.066Z",
+  "updatedAt": "2026-10-29T18:13:47.066Z"
+}

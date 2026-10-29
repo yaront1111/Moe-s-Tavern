@@ -1,0 +1,37 @@
+{
+  "id": "task-340a07b33a764c65b2486d16b30d7aef",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V04b] Runner focused check dispatch client",
+  "description": "Objective: the trusted host runner checks each strong-profile (verified-local) task's current candidate. It runs every check the daemon says the task owes, each in a fresh check VM, and publishes the results over the authenticated /runner channel. It publishes 'passed' only after a post-run integrity check.\n\nSplit from CQ-V04 (task-a9d1a74d845b4d3d83f359bf864f8651) on 2026-10-29, at the human's choice in the architect REPL: V04 keeps the daemon core, and this slice is the local-runner client. It depends on:\n- CQ-R11 final (task-0795112597cb453f93aaa5106e92d023), the fresh-VM check orchestration;\n- CQ-V03 (task-9cc131704d214e66afc8a51a524b35c2), the /runner tools moe.record_check_dispatch and moe.record_check_observation;\n- CQ-V04, for owedChecks, dispatch admission and settings.checkEnvironments.\n\nContract (scripts/local-runner/: a new check-dispatch module plus a CLI entry):\n- Connect to ws://127.0.0.1:<daemon.json port>/runner with header x-moe-runner-key, read from runnerKeyPath(projectPath) (CQ-V03a). The key never appears in output, logs or errors.\n- The owed checks come from the daemon, never from candidate bytes: V04's owedChecks ({checkId?, command}) plus each check's approved protected entries {path, oid} from the approved RequiredCheckSnapshot. Read them through either:\n  - a new runner-channel read tool exposing owedChecks, which means a SPIDR split (the daemon tool first, then the client); or\n  - get_context's executionContract, requiredCheckSnapshot and currentCandidate.\n  The planner decides.\n- For each owed check, in order:\n  1. provision a fresh VM (R11 final);\n  2. compute its environment with checkEnvironment (R11d);\n  3. stop locally if that environment is not in settings.checkEnvironments;\n  4. call moe.record_check_dispatch {taskId, candidateId, planRevision, command, checkId, environment};\n  5. materialize the candidate snapshot and run the check session;\n  6. verify integrity after the run: every materialized snapshot file must still have its exact bytes. Untracked new files are tolerated, as the host gate tolerates them. Any change after exit 0 makes the outcome 'inconclusive';\n  7. call moe.record_check_observation {id (random), dispatchId, exitCode, outcome, outputTail, environment};\n  8. delete the VM, on every path.\n- Recovery: a retry reuses the recorded dispatch id (CQ-V03b replay rules), with one observation per dispatch. A daemon refusal is reported, never retried blindly.\n- Two seams are needed from R11 final: the environment before the check runs, and a post-run workspace verification before the VM is deleted (see the comment on task-0795112597cb453f93aaa5106e92d023).\n\nOut of scope:\n- wiring the client into the wrappers' strong-profile completion path (an open item for CQ-V12);\n- the host qualityGate (CQ-V04c);\n- daemon policy (CQ-V04);\n- enabling verified-local or claiming isolation.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-dispatch.test.mjs (on WSL: env -i with the nvm Node 24 PATH). Add that file to the CI local-runner step's explicit list in .github/workflows/ci.yml.",
+  "definitionOfDone": [
+    "Each check the daemon says the task owes is dispatched with its frozen definition (checkId, command and approved protected entries), in an environment listed in settings.checkEnvironments, and observed exactly once over /runner. An unlisted environment or a daemon refusal dispatches nothing further for that check.",
+    "A check job that exits 0 but changes any materialized snapshot file is recorded as 'inconclusive', never 'passed'.",
+    "The VM is deleted on every path (refusal, disconnect, timeout, crash), and the runner key never appears in output or logs.",
+    "Fresh verification `node --test scripts/tests/local-runner-dispatch.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-a9d1a74d845b4d3d83f359bf864f8651",
+  "dependsOn": [
+    "task-0795112597cb453f93aaa5106e92d023",
+    "task-9cc131704d214e66afc8a51a524b35c2",
+    "task-a9d1a74d845b4d3d83f359bf864f8651"
+  ],
+  "priority": "HIGH",
+  "order": 242.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:16:07.737Z",
+  "updatedAt": "2026-10-29T18:16:07.737Z"
+}
