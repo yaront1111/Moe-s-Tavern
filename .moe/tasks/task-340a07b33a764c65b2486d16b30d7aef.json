@@ -21,7 +21,17 @@
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/local-runner-dispatch.test.mjs"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "TESTS FIRST (red). Load test-driven-development.\n\nThese prerequisites are landed by WORKING time; adapt to their landed names and never re-implement them:\n- V04b1: scripts/local-runner/runner-client.mjs, openRunnerChannel;\n- CQ-V03's tool params, and CQ-V04's admission codes;\n- R11 final's orchestrator;\n- R09b's exportSourceSnapshot.\nCQ-V05b (task-66e8d7d1) may land after this task. Its `repair` field on the record_check_observation result is then simply absent, and the scripted fakes below cover it.\n\nCreate scripts/tests/local-runner-dispatch.test.mjs (node:test). Keep it to about 250 lines, because tests count toward QA's 400-net cap.\n\nThe fakes:\n- `call`: records every (tool, args) and returns scripted results or rejections.\n- `runCheck`: records VM create and delete, calls onReady(environment) before 'running', and returns scripted {outcome, exitCode, outputTail, environment, workspace}.\n- a get_context-shaped context: task.executionContract.requiredChecks, task.requiredCheckSnapshot, task.isEpicFinal, currentCandidate {id, treeSha}, servedContext {planRevision, approvedPlanRevision}, project.settings {qualityGate, qualityGateScope, autoCommit, checkEnvironments}.\n\nAssert exact call lists, args, codes and create/delete pairs; never truthiness.\n\nCases:\n- O, owedChecks(context):\n  - defs only when requiredCheckSnapshot is present, as {checkId, command trimmed, protected: snapshot entries under the def's configs, scripts and assertionRoots (path === root or under root/)};\n  - the gate {command, protected: []} only for a non-blank trimmed qualityGate, autoCommit not false, and scope everyTask or isEpicFinal, and only when no def already runs that command;\n  - [] when planRevision !== approvedPlanRevision.\n- B, binding:\n  - snapshot.tree !== currentCandidate.treeSha: RUNNER_SNAPSHOT_MISMATCH;\n  - no currentCandidate: RUNNER_NO_CANDIDATE;\n  - both with zero runCheck and zero dispatch calls.\n- H, happy path (DoD 1): two owed checks run sequentially. Each has:\n  - a frame {id: checkId or 'quality-gate', command, protected};\n  - onReady, then record_check_dispatch with exactly {id: /^dispatch-[0-9a-f]{32}$/, taskId, candidateId, planRevision, command, environment}, plus checkId for a def (none for the gate);\n  - then record_check_observation with exactly {id: /^check-[0-9a-f]{32}$/, dispatchId, exitCode, outcome, outputTail, environment};\n  - one create and one delete.\n- E, environment (DoD 1): an environment not in settings.checkEnvironments gives no dispatch; onReady throws, the VM is deleted, and the run stops with RUNNER_ENVIRONMENT_NOT_APPROVED. Later checks never start.\n- F, refusal (DoD 1): a record_check_dispatch rejection (RUNNER_TOOL_ERROR, codeName CHECK_DEFINITION_NOT_APPROVED) gives no observation; the VM is deleted, and the run stops naming that codeName.\n- I, integrity (DoD 2):\n  - passed with workspace 'changed' is observed 'inconclusive';\n  - passed with 'unverified' is observed 'inconclusive';\n  - passed with 'intact' is observed 'passed';\n  - code-failure, timeout and infra-failure pass through unchanged.\n- R, recovery:\n  - a dispatch whose response is lost is retried with the SAME dispatch id;\n  - an observation that fails with RUNNER_DISCONNECTED is retried with the SAME check id, up to 3 attempts, then the run stops with RUNNER_OBSERVATION_UNRECORDED naming the dispatch id.\n- Y, infra retry (CQ-V05b):\n  - The first check's record_check_observation result carries repair {action: 'retry-infra', attempt: 1, remaining: 1}. The SAME check then re-runs on a fresh VM: a second runCheck with the same frame, and a second record_check_dispatch with a NEW dispatch id and otherwise identical args, then a NEW check id.\n  - The re-run's result carries repair {action: 'escalate'}. The run then moves on to the second check. Any other repair action, or none, also moves on.\n  - The summary's results hold one entry per run (three here).\n  - A fake that always answers retry-infra stops after 10 re-runs, which is 11 runs of that check, with RUNNER_RETRY_LIMIT naming the last dispatch id. Every create still has its delete.\n- V, cleanup (DoD 3): across E, F, R, Y, a runCheck rejection and an abort signal, every create has exactly one delete, and the run never starts a second VM after a stop.\n- K, key (DoD 3): the CLI entry run with a fake channel whose rejection message holds a sentinel key prints only fixed codes; neither stdout nor stderr contains the sentinel.\n\nRun `node --test scripts/tests/local-runner-dispatch.test.mjs`: every case fails before implementation.",
+          "reason": "CQ-V05b (task-66e8d7d1) returns the bounded-repair decision on record_check_observation as a `repair` field. Its retry-infra action is the runner's cue to re-dispatch the same candidate's check. This adds test case Y for that loop and its local cap. Every other case is unchanged.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T18:57:03.115Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -30,7 +40,17 @@
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/check-dispatch.mjs"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Create scripts/local-runner/check-dispatch.mjs: pure coordination, with every dependency injected and Node stdlib only. Budget about 160 lines. The header comment states:\n- it publishes evidence only through the injected /runner channel, and 'passed' only after the post-run integrity report;\n- it never claims isolation and never enables verified-local.\n\nExports:\n1. owedChecks(context): mirrors CQ-V04's delivery/policy.ts owedChecks exactly, as tested in O. The daemon's dispatch admission (CHECK_DEFINITION_NOT_APPROVED) is the backstop, so a mirror drift fails closed.\n2. dispatchFocusedChecks({ taskId, snapshot, call, runCheck, signal }), in this order:\n   - context = await call('moe.get_context', { taskId }), then the binding checks (B).\n   - For each owed check, sequentially:\n     - run runCheck({ snapshot, check: { id, command, protected }, signal, onReady }).\n     - onReady(environment) throws RUNNER_ENVIRONMENT_NOT_APPROVED unless settings.checkEnvironments includes the environment. Otherwise it calls record_check_dispatch with a fresh 'dispatch-<32 hex>' id, retrying only a transport failure with the same id.\n     - After the run, outcome = (result.outcome === 'passed' && result.workspace !== 'intact') ? 'inconclusive' : result.outcome.\n     - Call record_check_observation with a fresh 'check-<32 hex>' id and the dispatch's environment, retrying only RUNNER_DISCONNECTED or RUNNER_CALL_TIMEOUT with the same id, up to 3 attempts.\n     - Infra retry (CQ-V05b, case Y): when the recorded observation's result has repair?.action === 'retry-infra', run the SAME check again from runCheck, with fresh dispatch and check ids. The daemon's decision is the budget authority. Allow at most 10 re-runs per check, which is V05's maxInfraRetries cap; past that, stop with RUNNER_RETRY_LIMIT naming the last dispatch id. Any other repair action, or no repair field, moves on to the next check.\n   - It stops at the first refusal or failure, with one fixed RUNNER_* code, plus the daemon codeName when there is one.\n   - It resolves a frozen summary {taskId, candidateId, results: [{checkId?, command, dispatchId, outcome}], stopped?: {code, codeName?, dispatchId?}}. results holds one entry per run, so a re-run adds its own entry.\n   - Ids come from crypto.randomBytes(16).\n\nError handling: every thrown error carries `code`. A runCheck rejection stops the run with RUNNER_CHECK_FAILED, and no observation is invented for it. The seam contract says runCheck deletes its VM before it settles; the coordinator never starts another check, or a re-run, after a stop.",
+          "reason": "CQ-V05b (task-66e8d7d1) returns the bounded-repair decision on the record_check_observation result. A retry-infra decision must re-dispatch the same candidate's check through V04's dispatch path, bounded locally at 10 re-runs per check. This matches V05's maxInfraRetries cap of 10, so the daemon stays the budget authority. Everything else is unchanged.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T18:57:03.208Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
@@ -55,7 +75,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -75,7 +95,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:16:07.737Z",
-  "updatedAt": "2026-10-29T18:25:53.157Z",
+  "updatedAt": "2026-10-29T18:57:03.208Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:18:44.976Z",
     "plannedStepCount": 5,

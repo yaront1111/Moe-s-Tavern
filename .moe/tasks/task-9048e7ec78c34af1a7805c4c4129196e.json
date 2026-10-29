@@ -90,7 +90,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -113,16 +113,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:10.200Z",
-  "updatedAt": "2026-10-29T18:53:13.508Z",
+  "updatedAt": "2026-10-29T19:00:35.424Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:42:48.551Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T19:00:35.424Z",
+    "wallClockMs": 8266873
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -167,7 +170,40 @@
   },
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
-    "scripts/tests/local-runner-check.test.mjs"
+    "scripts/tests/local-runner-check.test.mjs",
+    ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
   ],
-  "completionSummary": "CQ-R11b: the guest-supervisor.py check mode now admits a non-empty protected list and enforces its integrity.\n\nFrame (read_check, protected_entries):\n- At most 2000 entries, each exactly {path, oid}; oid is 40 lowercase hex.\n- Paths: at most 500 UTF-16 units; no backslash, U+FFFD or control/U+2028; no '', '.' or '..' segment; no JS-trim whitespace at either end (deviation: added for the plan's ' ' row; it mirrors the daemon's trim and is no stricter).\n- Paths are strictly ascending by UTF-8 bytes.\n- Anything else gives 65.\n\nPre-run: blob_oid walks dir fds with O_NOFOLLOW, requires S_ISREG, takes sha1('blob N\\0' + bytes) and checks for growth. Any mismatch or failure gives the new 79 before hello, with no frame, home, job or mount.\n\nreown: protected files become root (euid) with mode 0444, or 0555 when executable, and are never handed to moe-check.\n\nprotect_mounts runs in the root supervisor before relay; GUARD and the job inherit it. This is a documented DoD-2 deviation: GUARD's argv is capped at 128 KiB. It runs unshare(CLONE_NEWNS), mounts / with MS_REC|MS_PRIVATE, self-binds the ancestors parents first, then binds each file with MS_BIND and a read-only remount. Any failure gives 71 before hello.\n\nPost-run: when relay returned 0 and the list is non-empty, the paths are re-verified. A change, or a failure to re-read, gives the new 80 after the observation. An empty list behaves exactly as in R11a.\n\nTests (check file only; bridge untouched; the only removed line is the retired K1 element):\n- K5 shapes: 65.\n- K6: 79 refusals, plus real modes and a recorder for the ownership and modes.\n- K7: the exact unshare and mount calls, fail-closed rows, a real non-root EPERM, and mount()'s errno.\n- K8: 80 after 'OBS', the rows that stay 0 or 74, and a real `rm` row.\n- K9 is root-only and skipped here. It PASSES under `unshare -r`; CQ-R13 certifies it as real root.\n\nMutation sweep: 52/53 killed, including all 12 plan mutants. The survivor, an fd leak, is fail-closed.\n\nDiff is 39"
+  "completionSummary": "CQ-R11b: the guest-supervisor.py check mode now admits a non-empty protected list and enforces its integrity.\n\nFrame (read_check, protected_entries):\n- At most 2000 entries, each exactly {path, oid}; oid is 40 lowercase hex.\n- Paths: at most 500 UTF-16 units; no backslash, U+FFFD or control/U+2028; no '', '.' or '..' segment; no JS-trim whitespace at either end (deviation: added for the plan's ' ' row; it mirrors the daemon's trim and is no stricter).\n- Paths are strictly ascending by UTF-8 bytes.\n- Anything else gives 65.\n\nPre-run: blob_oid walks dir fds with O_NOFOLLOW, requires S_ISREG, takes sha1('blob N\\0' + bytes) and checks for growth. Any mismatch or failure gives the new 79 before hello, with no frame, home, job or mount.\n\nreown: protected files become root (euid) with mode 0444, or 0555 when executable, and are never handed to moe-check.\n\nprotect_mounts runs in the root supervisor before relay; GUARD and the job inherit it. This is a documented DoD-2 deviation: GUARD's argv is capped at 128 KiB. It runs unshare(CLONE_NEWNS), mounts / with MS_REC|MS_PRIVATE, self-binds the ancestors parents first, then binds each file with MS_BIND and a read-only remount. Any failure gives 71 before hello.\n\nPost-run: when relay returned 0 and the list is non-empty, the paths are re-verified. A change, or a failure to re-read, gives the new 80 after the observation. An empty list behaves exactly as in R11a.\n\nTests (check file only; bridge untouched; the only removed line is the retired K1 element):\n- K5 shapes: 65.\n- K6: 79 refusals, plus real modes and a recorder for the ownership and modes.\n- K7: the exact unshare and mount calls, fail-closed rows, a real non-root EPERM, and mount()'s errno.\n- K8: 80 after 'OBS', the rows that stay 0 or 74, and a real `rm` row.\n- K9 is root-only and skipped here. It PASSES under `unshare -r`; CQ-R13 certifies it as real root.\n\nMutation sweep: 52/53 killed, including all 12 plan mutants. The survivor, an fd leak, is fail-closed.\n\nDiff is 39",
+  "commits": [
+    {
+      "sha": "b8fd20373279f64685ba6a4d68f70ef7641a9850",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T18:28:03Z",
+      "paths": [
+        ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+        ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T18:53:40.651Z",
+      "treeId": "8a881b8a620a2c5a0d388304379db3b7738e4a3a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T18:28:03Z",
+    "at": "2026-10-29T18:53:40.651Z"
+  },
+  "completedAt": "2026-10-29T19:00:35.424Z",
+  "reviewCompletedAt": "2026-10-29T19:00:35.424Z",
+  "reviewSummary": "Reviewed completion commit b8fd203 (on moe/work-2026-10-24 = HEAD, pushed). Changes: supervisor +129/-11, check test +254/-1, so 395 lines (<400); the other 2 paths are wrapper-staged .moe board records. The bridge test is unchanged. The only removed test line is the retired K1 element. ASCII, no __pycache__.\n\nRe-ran task.verification fresh from a full-tree git archive: exit 0, 77 tests, 76 pass, 0 fail, 1 skipped (K9, root-only, with its reason).\n\nBroader regression over the 3 files that load the supervisor: 300 tests, 298 pass, 0 fail, 2 skipped (K9 and the macOS smoke).\n\nAd-hoc, not certification: K9 passes under `unshare -r`.\n\nDoD:\n1. K5/K6: 79 before hello with no frame, relay or home for a bad oid, a missing file, a directory, a FIFO, a symlink, an ancestor symlink, a grown file and a shrunk file. Verification runs before reown.\n2. K7 pins unshare(NEWNS), MS_REC|MS_PRIVATE, parent-first ancestor binds, then each file's bind plus RO remount, all before relay. Any failure gives 71 and nothing runs after it. K9 is the root-only row. The supervisor-not-GUARD deviation (GUARD's argv is capped at MAX_ARG_STRLEN) and 0555 for exec files are architect-sanctioned and documented.\n3. K8: 80 after exactly 'OBS', 0 when unchanged, and the real `rm` row gives 80.\n4. Gate output supplied.\n\nMy own mutation sweep killed 20/20 mutants on K5-K9: post-check guards, RO remount, exec bit, blob header, all/any, trim, MAX ±1, ancestor order, swallowed errno, MS_REC, oid case, the protected branch, holds-after-reown, ancestor binds, mounts outside the try, a <= sort and no unshare.\n\nprotected_entries matches the daemon's normalizedPath, its 2000 and 500 limits, and its UTF-8 ordering. No verified-local, executionReady or isolation claim. Nothing for ponytail to cut.",
+  "requiredCheckAtDone": null
 }
