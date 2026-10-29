@@ -84,12 +84,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE-ONLY reject. The substance is fully green; no DoD item failed. Completion 1607abf2 (on moe/work-2026-10-24) measures `git show --numstat --format= 1607abf2 -- packages/`: +471/-20 = 451 net, over the 400 net-LOC QA cap. No project, epic or task rail waives size, and no proposal in .moe/proposals names this task or commit. Per file: index.ts +7/-0, McpAdapter.ts +4/-0, WebSocketServer.ts +48/-20, runnerChannel.ts +111/-0, tools/index.ts +2/-0, runnerChannel.test.ts +299/-0. That is 152 net runtime and 299 tests.\n\nROUTE (no byte changes, no re-slice of landed bytes; see mem:decision-size-only-reject-of-landed-bytes): the worker files moe.propose_rail as an EPIC ADD_RAIL size exception for CQ-V03a. It names commit 1607abf2, the six files with the +/- counts above, and \"grow only by QA-required fixes\". Ping #governors with the prop id, then complete_task with fresh verification. QA approves once the proposal is APPROVED; if it is still PENDING, QA parks the row rather than rejecting again.\n\nQA EVIDENCE (independent):\n- Pure `git archive HEAD` 7f04b869, with all 6 owned files cmp-identical to 1607abf2. No overlay.\n- npm ci, then env -i HOME=<scratch> NO_COLOR=1 with a node v24.21.0 Linux-only PATH.\n- `cd packages/moe-daemon && npm test` exit 0: Test Files 181 passed (181), Tests 5041 passed | 16 skipped. runnerChannel.test.ts 41/41.\n- `npx tsc --noEmit` exit 0.\n- The scratch HOME has no .moe, and the real ~/.moe/runner-keys is absent.\n- 12 QA mutants, all killed: repeated header accepted, loopback dropped, loose v4 prefix, key compare dropped, malformed key reused, no temp unlink, no 0600 tighten, runnerId length, runner read from args, startsWith('/runner'), fall-through after refuse, /mcp given a runner.\n- DoD 1-5 each map to tests.\n- Key handling: this module has no logger; the refusal log carries remoteAddress only; the close reason is a fixed string.\n- Forbidden-pattern grep is clean; verified-local is untouched.",
+  "reopenReason": "Size waiver prop-a439fe72 is APPROVED by the human, and its rail is in allRails.epic. Per QA's parked route: re-gate and approve, naming net 451. The bytes are unchanged at 1607abf2.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-9cc131704d214e66afc8a51a524b35c2",
   "priority": "HIGH",
@@ -104,7 +104,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:23.882Z",
-  "updatedAt": "2026-10-29T19:52:08.715Z",
+  "updatedAt": "2026-10-29T22:18:15.572Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:41:30.489Z",
     "plannedStepCount": 6,
@@ -326,8 +326,10 @@
       ]
     }
   ],
-  "blockedReason": "QA park, not a reject: the substance is green, and the size waiver awaits a human. Completion 1607abf2 on moe/work-2026-10-24 is net 451 under packages/ (+471/-20: 152 runtime + 299 tests). That is over the 400-net QA cap, and no project, epic or row rail waives it. The worker filed the waiver as prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL), still PENDING at 19:50Z; its per-file numbers match the numstat.\n\nFresh QA gate: a pure git archive of HEAD 53d1b240, with the six owned files cmp-identical to 1607abf2.\n- npm test exit 0: 181 files, 5041 passed, 16 skipped.\n- tsc --noEmit exit 0.\n- 5 targeted mutants, all killed.\nThe full evidence is in this row's comment comment-55e13f82.\n\nResolution: a human resolves the proposal in the IDE.\n- On APPROVED: set_task_status REVIEW. QA re-gates and approves, naming net 451.\n- On REJECTED: set_task_status PLANNING for a review-scope split of the landed bytes.\nunblock_worker cannot reach this parked, unassigned row.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-29T19:51:03.366Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA park, not a reject: the substance is green, and the size waiver awaits a human. Completion 1607abf2 on moe/work-2026-10-24 is net 451 under packages/ (+471/-20: 152 runtime + 299 tests). That is over the 400-net QA cap, and no project, epic or row rail waives it. The worker filed the waiver as prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL), still PENDING at 19:50Z; its per-file numbers match the numstat.\n\nFresh QA gate: a pure git archive of HEAD 53d1b240, with the six owned files cmp-identical to 1607abf2.\n- npm test exit 0: 181 files, 5041 passed, 16 skipped.\n- tsc --noEmit exit 0.\n- 5 targeted mutants, all killed.\nThe full evidence is in this row's comment comment-55e13f82.\n\nResolution: a human resolves the proposal in the IDE.\n- On APPROVED: set_task_status REVIEW. QA re-gates and approves, naming net 451.\n- On REJECTED: set_task_status PLANNING for a review-scope split of the landed bytes.\nunblock_worker cannot reach this parked, unassigned row.",
+  "blockedOnTaskIds": null
 }

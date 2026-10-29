@@ -8,6 +8,7 @@ import { contextNextAction } from '../util/contextNextAction.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
 import { listCandidatesForTask } from '../state/candidateStore.js';
+import { planReuseContext } from '../context/planReuseJob.js';
 import { contextStatus } from '../util/contextStatus.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
 import { routingInfo } from '../util/routing.js';
@@ -549,6 +550,8 @@ export function getContextTool(_state: StateManager): ToolDefinition {
       // The approved protected-check overlay; readRequiredCheckSnapshot never throws
       // and answers null for a stale, forged or malformed snapshot, which is omitted.
       const requiredCheckSnapshot = task ? readRequiredCheckSnapshot(task) : null;
+      // Served to every role, never role-trimmed: a refresh resume needs changedPaths, an architect the reasons.
+      const planReuse = task ? planReuseContext(task) : null;
       // Role trim applies only to the default view; view:"full" is never gated by role.
       const callerRole = params.view !== 'full' && task && callerWorkerId
         ? resolveWorkerRole(state, callerWorkerId) : undefined;
@@ -582,6 +585,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               // Mandatory execution context for workers and QA; never role-trimmed.
               ...(task.executionContract !== undefined && task.executionContract !== null
                 ? { executionContract: task.executionContract } : {}),
+              ...(planReuse ? { planReuse } : {}),
               ...(requiredCheckSnapshot ? { requiredCheckSnapshot } : {}),
               status: task.status,
               priority: task.priority,

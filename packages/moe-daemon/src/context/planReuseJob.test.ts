@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { claimNextTaskTool } from '../tools/claimNextTask.js';
+import { getContextTool } from '../tools/getContext.js';
 import { recordCandidateTool } from '../tools/recordCandidate.js';
 import { submitPlanTool } from '../tools/submitPlan.js';
 import { waitForTaskTool } from '../tools/waitForTask.js';
@@ -127,9 +128,13 @@ describe('scheduling', () => {
       planSubmittedAt, planApprovedAt, planReuse: { decision: 'reuse', reasons: [], planRevision } });
     const claimed = await claim('worker-1', 'WORKING');
     expect(claimed).toMatchObject({ hasNext: true, task: { id: 'task-1' }, planReuse: row().planReuse });
+    const context = await getContextTool(h.state).handler({ taskId: 'task-1', workerId: 'worker-1' }, h.state) as Reply;
+    expect(context.task?.planReuse).toEqual(row().planReuse);
   });
   it('S2 hands an explicit replan straight to the architect without assessing', async () => {
-    await approvedAndRequeued(); await h.state.updateTask('task-1', { status: 'WORKING' });
+    // From a row an earlier job resumed: its reuse record (older entry seq) must not mask the replan.
+    await approvedAndRequeued(); await claim('architect-1', 'PLANNING'); await settlePlanReuseAssessments(h.state);
+    expect(row()).toMatchObject({ status: 'WORKING', planReuse: { decision: 'reuse' } });
     await h.state.updateTask('task-1', { status: 'PLANNING' }); const spy = vi.spyOn(planReuseGit, 'run');
     expect(await claim('architect-1', 'PLANNING')).toMatchObject({ hasNext: true, task: { id: 'task-1' },
       planReuse: { decision: 'replan', reasons: ['replan-requested-from-WORKING'] } });
@@ -174,6 +179,8 @@ describe('source movement', () => {
     const claimed = await claim('architect-1', 'PLANNING');
     expect(claimed).toMatchObject({ hasNext: true, task: { id: 'task-1' }, planReuse: { decision: 'reassess' } });
     expect((claimed.planReuse as { reasons: string[] }).reasons[0].startsWith(reason)).toBe(true);
+    const context = await getContextTool(h.state).handler({ taskId: 'task-1', workerId: 'architect-1' }, h.state) as Reply;
+    expect(context.task?.planReuse).toEqual(claimed.planReuse);
   });
   it.each([
     ['moved', 'revalidate', ['target-moved']],
