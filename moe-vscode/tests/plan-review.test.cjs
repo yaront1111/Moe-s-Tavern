@@ -1047,6 +1047,12 @@ async function checkCorpusVerdict(h, row, send) {
         case 'latched':
             assert.deepEqual(h.infoMessages, []);
             assert.equal(h.webview.approveDisabled(), true);
+            // Before the WORKING probe, which ends the review in both clients.
+            await probe('AWAITING_APPROVAL');
+            assert.equal(h.webview.approveDisabled(), true, 'an AWAITING_APPROVAL probe at the rendered revision must not re-arm');
+            h.webview.click('approveBtn');
+            await h.settle();
+            assert.deepEqual(h.approveCalls, [send], 'a latched page sends nothing more');
             await probe('WORKING');
             assert.deepEqual(h.infoMessages, [], 'a WORKING probe at the rendered revision must not confirm');
             return;

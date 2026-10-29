@@ -23,12 +23,11 @@
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
       ],
       "modifiedFiles": [
-        "moe-jetbrains/src/test/resources/client-verdicts.json",
         "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
       ],
-      "note": "Corpus (53 lines, ASCII/LF, one row per line) + JetBrains consumer. Rows: A01-A25 (approval) and V01-V23 (VM). Deviations from the plan's row text, made so the DoD-named mutants actually kill their rows: (1) A08 uses rendered null (absent) with W \"null\" -> latched, because with rendered 4 MJ1 (tokenOf null -> LegacyMissing) still latches (0 != 4) and would survive; (2) V11 is the V01 status body stamped with schema moe-vm-cleanup-v1, because V16's cleanup line fails status parsing on the missing provider anyway, so MV4 (schema check removed) would survive. Added V21-V23 per the QA hand-forward on this task (no schema/no code -> malformed; executionReady/verified distinct both ways). Every VM row carries verdict, readiness, rows, actions (all mandatory) and both runners assert the blocked strong-profile line. JB runner maps phase -> verdict (FINISHED/PENDING/INVALIDATED/READY) then applies the verdict's probe; collects all failing ids and fails once. Focused run (Windows gradlew.bat test --tests ClientVerdictCorpusTest --rerun, jetbrains-gradle lease, released): exit 0, XML 3 tests 0 failures @23:18:59Z. Shared tree has no MERGE_HEAD.",
-      "startedAt": "2026-10-29T23:15:56.616Z",
-      "completedAt": "2026-10-29T23:19:13.521Z"
+      "note": "Round 2 (QA reject issue 1, JetBrains half). The latched branch now runs the same probe sequence as VS Code: first Approve must be unusable; then AWAITING_APPROVAL at `rendered` must not re-arm it, and a click must not produce a Decision.Send; finally a WORKING probe at `rendered` must not confirm. The AA probe runs BEFORE the WORKING probe. A WORKING frame ends the review in both clients, so any AA probe placed after it would pass for every row. The KDoc verdict list is updated. The corpus JSON is unchanged. Focused run, Windows equivalent under the jetbrains-gradle lease (released): `gradlew.bat test --tests com.moe.toolwindow.ClientVerdictCorpusTest --rerun` exited 0; fresh XML 23:42:32Z shows tests=3 failures=0. RED proof (flip matrix plus an AA re-arm mutant) is in step-4. Shared tree: 730 dirty peer paths, none touched.",
+      "startedAt": "2026-10-29T23:41:12.376Z",
+      "completedAt": "2026-10-29T23:42:49.045Z"
     },
     {
       "stepId": "step-2",
@@ -40,11 +39,12 @@
       ],
       "modifiedFiles": [
         "moe-vscode/tests/plan-review.test.cjs",
-        "moe-vscode/src/panels/PlanReviewPanel.ts"
+        "moe-vscode/media/planReview.js",
+        ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json"
       ],
-      "note": "Appended section (L) to plan-review.test.cjs, named L because the file already has a K. It reads the corpus bytes from ../../moe-jetbrains/src/test/resources/client-verdicts.json; a missing or unparseable corpus, or one with no approval rows, throws at load. There is one test per approval row, run through the real panel+page harness with the corpus taskId. Each test asserts the first click sends exactly [taskId, rendered], or 0 when rendered is absent. The verdict probes follow the plan; rearmed asserts approveCalls deepEqual [send, send], so a click swallowed while still pending cannot pass as rearmed. RED: before the fix, only A24 failed (\"Plan approved\" after the WORKING probe). GREEN: the A24 fix in PlanReviewPanel.settlePendingApproval splits the early return; a missing task clears pendingApprovalRevision, with a one-line JetBrains TASK_MISSING parity comment and no imports. `npm test` gives 200/200 (175 baseline + 25 corpus rows). Filed out-of-scope parity bug task-3287014af13b4d1dbaac5622de4c1fc6 (LOW): when a task leaves AWAITING_APPROVAL or vanishes and then returns at the same revision, the VS Code page re-enables Approve but JetBrains stays latched. The corpus's latched probe is a WORKING frame, so no corpus row covers this.",
-      "startedAt": "2026-10-29T23:19:15.864Z",
-      "completedAt": "2026-10-29T23:20:16.175Z"
+      "note": "Round 2 (QA reject issues 1 and 2, VS Code half).\n- Probe (plan-review.test.cjs, section L): checkCorpusVerdict 'latched' now runs the same sequence as the JetBrains branch. A probe at AWAITING_APPROVAL `rendered` must leave approveDisabled() true. A click must leave approveCalls at exactly [send]. Then the WORKING probe must still not confirm. The AA probe runs first, because the WORKING frame now latches the page. Sections A-K are byte-unchanged.\n- RED: with only the probe changed, exactly L A23 and L A24 failed, both with 'an AWAITING_APPROVAL probe at the rendered revision must not re-arm' (false !== true). This is task-3287014a's divergence.\n- GREEN (fix-forward, scope note): media/planReview.js was outside the plan's affectedFiles, but QA issue 2 named it explicitly. +14/-6 = 8 net lines, under the 20-line cap; 4 of those are the updated header comment.\n  - applyRenderedTask: a null token (task left AWAITING_APPROVAL, or its stamp is unreadable) now sets `latched`, plus a NOT_APPROVABLE notice when not already latched. That is JetBrains STATUS_CHANGED/REVISION_UNUSABLE parity, and it replaces the stale 'Approve will re-enable' text after a connection loss.\n  - taskRemoved: sets `latched` (JetBrains TASK_MISSING parity).\n  - No imports. The panel is unchanged this round.\n- Result: plan-review 75/75; full `npm test` 223/223, 0 fail.\n- New divergence, filed and not fixed (out of scope; no corpus row covers it): task-5e816f2c (LOW, dependsOn this task). VS Code keeps pendingApprovalRevision through a PLANNING frame, so a later WORKING@4 reports 'Plan approved'; JetBrains latches. It was scratch-verified with rows A26/A27 in /tmp/i06b-w2, failing in VS Code only; the corpus was restored and cmp-verified.",
+      "startedAt": "2026-10-29T23:42:51.231Z",
+      "completedAt": "2026-10-29T23:48:09.756Z"
     },
     {
       "stepId": "step-3",
@@ -54,33 +54,30 @@
       "newFiles": [
         "moe-vscode/tests/managed-vm-verdicts.test.cjs"
       ],
-      "modifiedFiles": [
-        "moe-vscode/tests/managed-vm-verdicts.test.cjs"
-      ],
-      "note": "NEW tests/managed-vm-verdicts.test.cjs. It loads ManagedVm.ts the same way managed-vm.test.cjs does: transpileModule plus runInThisContext with a require that throws, so assertions stay in one realm. It reads the same corpus bytes; a missing or unparseable corpus, or one with no vm rows, throws at load. There is one test per VM row, and an unknown command fails the row. Each test makes one exact deepEqual over {verdict, readiness booleans by line position, rows, actions [refresh, reconcile, cleanup], the exact blocked strong-profile text}. The adapter maps kind names only: status, outcome to report, refused:code, unreadable:reason. All 23 rows passed on the first run, so ManagedVm.ts needed no fix-forward: I05 landed with command-bound schema, top-level code refusal, LAUNCHED cleanup and a distinct too-large reason. `npm test` gives 223/223 (200 + 23); `npm run compile` (tsc) exits 0.",
-      "startedAt": "2026-10-29T23:20:16.901Z",
-      "completedAt": "2026-10-29T23:20:52.568Z"
+      "note": "Round 2: no change. QA round 1 verified the VM half as sound (V01-V23, MV4/MV5/MJ3 killed) and raised no VM issue. Re-run in the shared tree: tests/managed-vm-verdicts.test.cjs 23/23 pass. The file and src/util/ManagedVm.ts are clean against HEAD, unchanged since completion 1422c1d.",
+      "startedAt": "2026-10-29T23:48:14.230Z",
+      "completedAt": "2026-10-29T23:48:19.708Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report every file in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, never the shared tree, then restore and cmp-verify. Each must fail the named row in the client it mutates.\n   JetBrains:\n   - MJ1: tokenOf maps null (malformed) to LegacyMissing. Must fail A08.\n   - MJ2: onConnectionLost never releases. Must fail A21 and A22.\n   - MJ3: ManagedVmPresentation drops the duplicate-name check. Must fail V08.\n   VS Code:\n   - MV1: effectivePlanRevision coerces with Number(raw). Must fail A07.\n   - MV2: the A24 fix is removed. Must fail A24.\n   - MV3: handleClientError skips the operation check. Must fail A18.\n   - MV4: ManagedVm accepts any schema for any command. Must fail V11.\n   - MV5: the cleanup action needs only one instance. Must fail V05.\n   Corpus:\n   - MC1: flip A13's verdict to confirmed. BOTH clients must fail A13, which proves both consumers read the same row.\n2. THE GATE, fresh.\n   - Run `cd moe-vscode && npm test && npm run compile`. This runs natively in WSL in seconds (the CQ-I04 precedent).\n   - Run the JetBrains half under the `jetbrains-gradle` lease, and release it even on failure: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <tree>\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. This is the Windows equivalent of `./gradlew test`, because WSL has no JDK.\n   - If the shared tree is mid-merge, gate in a whole-repo `git archive HEAD` snapshot that includes BOTH moe-vscode and moe-jetbrains, with this task's files overlaid and cmp-verified (`mem:gotcha-jetbrains-gate-snapshot`). The VS Code tests read the corpus from moe-jetbrains.\n   - Both halves must exit 0. Confirm that ClientVerdictCorpusTest ran (TEST-*.xml) and that every corpus row ran (node:test counts).\n3. Size: `git diff --numstat` over the 5 files must stay under 400 net. Budget: corpus about 70, Kotlin about 110, the plan-review section about 60, the VM test about 70, the panel fix about 6.\n4. Error handling for this step: release the lease and delete scratch copies on every exit path.\n5. Supply both commands to complete_task with exit codes and output tails, labelled 'WSL npm' and 'Windows gradle equivalent'.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Verify step. This step changed no files.\n\nMUTANTS: each ran in a scratch copy, never the shared tree; all killed.\n- VS Code (in /tmp, with node_modules symlinked):\n  - MV1 (Number(raw)) failed L A07, plus A08 and an existing I2 case.\n  - MV2 (A24 fix reverted) failed L A24.\n  - MV3 (operation check dropped) failed L A18, plus an existing H case.\n  - MV4 (schema check dropped) failed V11.\n  - MV5 (cleanup on any row) failed V05.\n  - Bonus QA hand-forward mutants: QA1 (schema-required dropped) failed V21; QA2 (verified derived from executionReady) failed V22.\n  - MC1 (A13 flipped to confirmed) failed L A13.\n- JetBrains, in a `git archive HEAD moe-jetbrains` snapshot at D:\\projexts\\moes-i06b-mut with this task's 2 files overlaid and cmp-verified; one gradlew run per mutant; restored, cmp-verified, then deleted:\n  - MJ1 (tokenOf null -> LegacyMissing) failed A08.\n  - MJ2 (onConnectionLost no-op) failed A21 and A22, plus A23.\n  - MJ3 (duplicate check dropped) failed V08.\n  - MC1 failed A13.\n- MC1 therefore fails A13 in BOTH clients.\n\nGATE (fresh):\n- WSL npm: `cd moe-vscode && npm test && npm run compile` exit 0. 223/223 pass; 48 corpus rows ran (25 L A.. + 23 V..); tsc clean.\n- Windows gradle equivalent, in the shared tree (no MERGE_HEAD), under the jetbrains-gradle lease (released): `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exit 0, BUILD SUCCESSFUL. XML: 24 suites, 337 tests, 0 failures/errors/skipped. ClientVerdictCorpusTest 3/0 at 23:22:34Z.\n\nSIZE: +347/-1 = 346 net over the 5 files, under 400.\n- Kotlin 164: over the ~110 budget, because every VM row asserts all 5 fields and every verdict has its probe.\n- Corpus 53, plan-review +83, VM test 44, panel +3/-1.\n\nDisclosure: to measure the untracked files I ran `git add -N` on my 3 new paths, which wrote intent-to-add entries to the index. I removed them at once with `git reset -q -- <those 3 paths>`. The index now matches its prior state: only the peers' 2 pre-staged files remain staged. No commits.",
-      "startedAt": "2026-10-29T23:20:53.385Z",
-      "completedAt": "2026-10-29T23:23:06.334Z"
+      "modifiedFiles": [
+        ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json"
+      ],
+      "note": "Verify (round 2). Every mutant ran in a scratch copy, was restored and cmp-verified; both scratch copies are deleted.\n\nVS Code scratch (/tmp/i06b-w2):\n- Named mutants: MV1 A07 (also A08 and an I2 case); MV2 A24; MV3 A18 (also H); MV4 V11; MV5 V05.\n- QM1 fails L A15 and H. A14 survives by construction (see the task comment).\n- New page mutants: MP1 (no latch on a null-token updateTask) fails A23; MP2 (no latch on taskRemoved) fails A24.\n- MC1 fails A13.\n- Full verdict-flip matrix (each approval row rotated +1, +2 and +3 through confirmed/pending/latched/rearmed): 25/25 rows fail in each rotation. This covers QA's QF1-QF8, including A16/A17/A21 to latched and A23/A24 to rearmed.\n\nJetBrains scratch (git archive HEAD of moe-jetbrains, round-2 test overlaid and cmp-verified, under the jetbrains-gradle lease):\n- MJA (INVALIDATED re-arms on an AA frame at the captured revision): the round-1 test passed every row; the round-2 test fails exactly the 12 latched rows (A02-04, A07-11, A14, A15, A23, A24), each with 'AWAITING_APPROVAL probe re-armed Approve'.\n- Flip matrix: 25/25 rows fail in each of the 3 rotations. +3 contains MC1, so MC1 fails in BOTH clients.\n- MJ1-MJ3 were not re-run. QA verified them, and the probe only got stricter, after the unchanged phase check.\n\nGate, fresh, in the shared tree (no MERGE_HEAD):\n- [WSL npm] `cd moe-vscode && npm test && npm run compile`: exit 0. 223/223 pass, 0 fail/cancelled/skipped; 48 corpus rows ran (25 L A + 23 V); tsc exit 0.\n- [Windows gradle equivalent] `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`: exit 0, BUILD SUCCESSFUL. XML: 24 suites, 337 tests, 0 failures/errors/skipped, 23:51:22-26Z. ClientVerdictCorpusTest 3/0 at 23:51:23Z.\n- The lease is released.\n\nSize: +373/-7 = 366 net over the 6 delivered files (round 2 adds +24/-7 = 17), under 400.\n\nComments: the QM1/A14 pushback on this task; the fix-forward note on task-3287014a.",
+      "startedAt": "2026-10-29T23:48:47.218Z",
+      "completedAt": "2026-10-29T23:52:06.802Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review. Read the diff the way a reviewer would hunt for a corpus that proves nothing. Check each of these:\n- Every runner reads only the corpus bytes. No expectation is hard-coded per client. A client-specific skip, tolerance, or adapter that changes an outcome breaks the rail.\n- The probes really tell pending apart from latched.\n- Every row is asserted on exact values.\n- The frame literals survive parsing: Gson LazilyParsedNumber in Kotlin, JSON.parse in JS.\n- The ordering-sensitive rows (A14, A25) keep their order.\n- An id typo fails loudly.\n- The corpus is a test resource, so it is excluded from the plugin jar. Test resources never ship, and CQ-I06c's packaged scan would flag a 'fixtures' path.\n- The VS Code vsix (.vscodeignore) never includes ../moe-jetbrains.\n- The A24 fix is minimal and adds no imports.\n- Rails: no .moe edits, no Git writes, none of globalRails.forbiddenPatterns, and verified-local is untouched.\nThen write the Serena memory 'task-task-f2d3d553bd684eff997498a55c564f13-handoff' for CQ-I06. Record:\n- the corpus path and row ids;\n- the verdict and probe semantics;\n- every fix-forward that was made;\n- the residuals. Literals that JSON.parse handles lossily, such as 4.0000000000000001 and 1e-400, are deliberately absent, because the daemon never emits them.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
-      ],
-      "note": "Adversarial self-review over my 5 paths only. Results:\n- Runners read only the corpus bytes. Each VS Code adapter maps kind names only. There is no per-client expectation, skip or tolerance.\n- The WORKING probe tells pending apart from latched in both clients. Rearmed requires [send, send] in VS Code, plus the READY phase and Decision.Send in JetBrains.\n- Every assertion is exact: deepEqual, and data-class or list equality.\n- Literals survive parsing: Gson parseString keeps them, MJ1 kills A08, and JSON.parse handles the JS side.\n- A14 and A25 keep their event-array order.\n- FIX: an id typo now fails loudly. The integrity test checks the A\\d\\d / V\\d\\d shape in addition to uniqueness (+3 lines Kotlin).\n- The corpus is a test resource. It is absent from the rebuilt jar (unzip -l shows 0 hits), and the vsix ignores tests/** with moe-vscode as its root.\n- The A24 fix is 3 lines with no imports.\n- No .moe edits, no forbidden patterns, verified-local untouched. Git: the one `git add -N` index write was reverted, as disclosed in step 4.\n\nTheoretical residual: if the task vanishes and reappears within the 200 ms debounce, the page keeps approvalPending set. Approve then stays disabled with no notice, which fails safe.\n\nFRESH FINAL GATE, run after the edit:\n- WSL npm 223/223 (48 corpus rows), tsc exit 0.\n- Windows gradlew.bat test --rerun exit 0: 24 suites, 337 tests, 0 failures. ClientVerdictCorpusTest 3/0 @23:23:48Z. Lease released.\n\nWrote Serena memories task-task-f2d3d553...-handoff and gotcha-size-measure-untracked.",
-      "startedAt": "2026-10-29T23:23:07.283Z",
-      "completedAt": "2026-10-29T23:24:23.856Z"
+      "note": "Adversarial self-review of the round-2 diff (3 files, +24/-7). Nothing to fix.\n\nChecks:\n- Both runners read only the corpus bytes.\n- The latched probes are identical across clients, in the order Approve unusable -> AA probe at `rendered` (no re-arm, click sends nothing) -> WORKING probe (no confirm). The flip matrix proves every verdict pair is distinguished on every row in both clients.\n- Assertions use exact values. The corpus is unchanged, so the A14/A25 ordering, the id integrity checks and the test-resource packaging all stand.\n- The page fix is plain browser JS with no imports. It latches only on a null token or taskRemoved. The render-failure path stays a recoverable hiccup.\n- No forbidden patterns in the added lines; nothing staged; no Git writes; no hand .moe edits; verified-local untouched.\n\nConsidered and left alone (theoretical):\n- A partial TASK_UPDATED payload with no status would now latch the page. JetBrains latches the same way (STATUS_CHANGED), and the client replaces whole task objects.\n- Reject stays enabled after a non-AA latch. That predates this task.\n\nMemories: handoff written (task-task-f2d3d553bd684eff997498a55c564f13-handoff); gotcha-shared-corpus-verdict-discrimination extended with the probe-order rule and the 3-rotation flip matrix.",
+      "startedAt": "2026-10-29T23:52:09.037Z",
+      "completedAt": "2026-10-29T23:53:13.443Z"
     }
   ],
   "planRevision": 1,
@@ -88,8 +85,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Rejected on the task rail (\"no client-specific expectation, skip or tolerance; a disagreement is fixed or filed, never encoded\") and DoD 3. The VS Code approval consumer cannot tell 'latched' from 'rearmed', so rows A23 and A24 pass in VS Code although its real verdict differs from JetBrains'.\n\nQA mutants, run in a scratch copy at /tmp/qa-i06b (restored, cmp-verified):\n- QF5: A23 and A24 flipped from latched to rearmed: 0 VS Code failures. VS Code's real behavior there is rearmed: an AA frame at `rendered` re-enables Approve and the click resends. JetBrains latches (INVALIDATED). This is the live disagreement filed as task-3287014a, hidden by corpus rows.\n- QF1, QF4, QF7: A16, A21 and A17 flipped from rearmed to latched: 0 VS Code failures. JetBrains fails each of them (phase READY != INVALIDATED).\n- QM1: `const stale = false` in handleClientError survives every corpus row; only the existing H test kills it.\n- Controls that failed correctly: QF2, QF6, QF8 and QF3, MV2 on A24, and QM4 on A02-A11.\n\nCause: the VS Code latched check only asserts approveDisabled() and \"WORKING does not confirm\". You disclosed this in the handoff. Disclosure does not satisfy the rail; the description's route is report_blocked on the defect task.\n\nVerified, no need to redo:\n- Fresh gates: WSL npm test 223/223, tsc exit 0. Windows gradlew.bat test --rerun: 337 tests, 0 failures; ClientVerdictCorpusTest 3/0 at 23:29:05Z.\n- Named mutants: killed.\n- Size: about 349 net.\n- Packaging: not in the jar or the vsix.\n- A24 fix: correct.\n- VM half: sound.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -106,23 +103,31 @@
       "author": "qa-952969be",
       "content": "QA hand-forward from CQ-I05 (task-758bb59a, approved at 14ee8f86). Two of my independent mutants against moe-vscode/src/util/ManagedVm.ts survive the I05 suite, though the code itself is correct. Please put matching rows in the client-verdicts corpus (VM rows) so both clients pin them:\n1. Delete the `if (schema === undefined) { fail(); }` line in parse(). A report with no schema and no code, e.g. {\"provider\":{\"ready\":true},\"executionReady\":false,\"verified\":false,\"instances\":[],\"invalid\":0} run as status, must be Unreadable(malformed). JetBrains does this with `if (schema == null) fail()`.\n2. Derive verified from executionReady (`verified: root.verified === true || root.executionReady === true`). The rows {executionReady:true, verified:false} and {executionReady:false, verified:true} must each give distinct execution and verification lines.\nAlso: the unknown-code wording is a known text difference. VS Code says 'Unknown code X: …' and JetBrains says 'Refusal code X; …'. Compare verdict kinds, not rendered text.",
       "timestamp": "2026-10-29T23:07:46.460Z"
+    },
+    {
+      "id": "comment-7f60175a7011449ab4efcd1123a99845",
+      "author": "worker-5ebbf433",
+      "content": "Round 2, re QA issue 3 (QM1). In scratch, `const stale = false` in handleClientError now fails L A15 and the existing H stale-refusal test. It does NOT fail L A14, and no client-neutral expectation can make it fail there.\n\nA14's first event, AA \"5\" while pending, latches both clients before the error arrives:\n- JetBrains: PENDING + AA@5 gives INVALIDATED (PLAN_CHANGED), and onDaemonError is a no-op outside PENDING.\n- VS Code: applyRenderedTask latches on the 4 -> 5 revision change.\n\nThe error's stale flag is therefore unobservable on A14 in either client. Making A14 discriminate QM1 would need a client-specific expectation, which the task rail forbids. A15 is the row that pins stale vs non-stale; A14 pins the frame-then-error order (a stale frame followed by an error stays latched).",
+      "timestamp": "2026-10-29T23:51:51.315Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:55.625Z",
-  "updatedAt": "2026-10-29T23:24:45.346Z",
+  "updatedAt": "2026-10-29T23:53:43.347Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:52:30.571Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 10,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-4ae016fb",
-    "worker-b5749787"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
@@ -132,7 +137,13 @@
     "step-4",
     "step-5"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "The VS Code tests run the SAME bytes: approval rows through the real PlanReviewPanel + planReview.js harness, VM rows through ManagedVm. Each mutant named in the plan fails its row in the client it mutates.",
+      "rejectedAt": "2026-10-29T23:34:43.467Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
   "planSubmittedAt": "2026-10-29T22:56:03.232Z",
   "executionContract": {
     "intendedBehavior": "moe-jetbrains/src/test/resources/client-verdicts.json is the single corpus. It holds 25 approval-frame sequences and 20 managed-VM producer reports. Both IDEs run it through their real decision code and must reach identical, client-neutral verdicts:\n- JetBrains: MoeJson + PlanReviewApprovalState, and ManagedVmPresentation.\n- VS Code: the PlanReviewPanel + planReview.js harness, and ManagedVm.\nThe one known VS Code divergence is A24: a vanished task kept the approval pending. It is fixed at its source.",
@@ -179,20 +190,115 @@
   "planApprovedAt": "2026-10-29T22:56:03.353Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-29T23:15:56.616Z",
-  "reviewStartedAt": "2026-10-29T23:24:45.344Z",
+  "reviewStartedAt": "2026-10-29T23:53:43.345Z",
   "verification": {
     "command": "WSL npm: cd moe-vscode && npm test && npm run compile ; Windows gradle equivalent of `cd ../moe-jetbrains && ./gradlew test` (WSL has no JDK; jetbrains-gradle lease, released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
     "exitCode": 0,
-    "outputTail": "[WSL npm] exit 0\nℹ tests 223\nℹ pass 223\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\n(48 corpus rows ran: 25 'L Axx' + 23 'Vxx')\nnpm notice run tsc -p ./   (exit 0)\n[Windows gradle equivalent] exit 0\n> Task :test\nBUILD SUCCESSFUL in 6s\n11 actionable tasks: 3 executed, 8 up-to-date\nTEST-*.xml: 24 suites, 337 tests, 0 failures, 0 errors, 0 skipped\nClientVerdictCorpusTest tests=3 failures=0 errors=0 timestamp=2026-10-29T23:23:48Z",
-    "reportedAt": "2026-10-29T23:24:45.344Z",
+    "outputTail": "[WSL npm] exit 0\nℹ tests 223\nℹ pass 223\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\n(48 corpus rows ran: 25 'L Axx' + 23 'Vxx')\nnpm notice run tsc -p ./   (exit 0)\n[Windows gradle equivalent] exit 0\n> Task :test\nBUILD SUCCESSFUL in 5s\n11 actionable tasks: 2 executed, 9 up-to-date\nTEST-*.xml: 24 suites, 337 tests, 0 failures, 0 errors, 0 skipped (2026-10-29T23:51:22Z..23:51:26Z)\nClientVerdictCorpusTest tests=3 failures=0 errors=0 timestamp=2026-10-29T23:51:23.382Z",
+    "reportedAt": "2026-10-29T23:53:43.345Z",
     "source": "agent-reported"
   },
   "filesModified": [
-    "moe-jetbrains/src/test/resources/client-verdicts.json",
     "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
     "moe-vscode/tests/plan-review.test.cjs",
+    "moe-vscode/media/planReview.js",
+    ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
+    ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json"
+  ],
+  "completionSummary": "CQ-I06b round 2, fixing the QA reject (latched vs rearmed).\n\n1. Probes are identical in both clients. 'latched' is checked in this order: Approve unusable; an AA probe at `rendered` must not re-arm it, and a click sends nothing; then a WORKING probe must not confirm. The AA probe runs first because a WORKING frame ends the review in both clients. Changed: ClientVerdictCorpusTest.kt (+4/-1) and plan-review.test.cjs section L (+6). Sections A-K are unchanged.\n2. Fix-forward in media/planReview.js (+14/-6, 8 net; closes task-3287014a). The page latches on taskRemoved, and on any updateTask whose token is null: the task left AA, or its stamp is unreadable. A latch with no notice yet gets NOT_APPROVABLE_NOTICE. No imports. RED: with only the probe, exactly A23 and A24 failed. GREEN after the fix.\n\nEvidence (scratch copies, restored, cmp-verified, deleted):\n- Full flip matrix, all 25 approval rows rotated +1/+2/+3: 25/25 rows fail in every rotation in BOTH clients. This covers QF1-QF8 and MC1.\n- VS Code mutants: MV1 A07; MV2 A24; MV3 A18; MV4 V11; MV5 V05; QM1 A15 (and H); MP1 (no latch on null token) A23; MP2 (no latch on taskRemoved) A24.\n- JetBrains MJA (INVALIDATED re-arms on an AA return): the round-1 test passed every row; the round-2 test fails all 12 latched rows.\n\nPushback (task comment): QM1 cannot fail A14. Its AA \"5\" frame latches both clients before the error arrives, so the stale flag is unobservable there. A15 pins stale vs non-stale.\n\nFiled: task-5e816f2c (LOW, dependsOn this task). The VS Code panel keeps a pending approval through a PLANNING frame, so a later WORKING@4 says 'Plan approved', while JetBrains latches. It fails only in VS Code with scratch rows A26/A27.\n\nGate as above. Size: 366 net over 6 files (round 2: 17 net).",
+  "commits": [
+    {
+      "sha": "1422c1d9b7a48ab1d9bcc26840e06e4fed85cb9b",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-29T23:11:28Z",
+      "paths": [
+        ".moe/tasks/task-3287014af13b4d1dbaac5622de4c1fc6.json",
+        ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
+        "moe-jetbrains/src/test/resources/client-verdicts.json",
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-vscode/tests/managed-vm-verdicts.test.cjs",
+        "moe-vscode/tests/plan-review.test.cjs"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-29T23:25:19.692Z",
+      "treeId": "306583794337d11a604e49fe1d06bc216d0afc93",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt",
     "moe-vscode/src/panels/PlanReviewPanel.ts",
     "moe-vscode/tests/managed-vm-verdicts.test.cjs"
   ],
-  "completionSummary": "CQ-I06b delivered: one client-neutral corpus run by both IDEs through their real decision code.\n\nFiles:\n- NEW moe-jetbrains/src/test/resources/client-verdicts.json: 53 lines, ASCII; test resource only (not in the jar; the vsix ignores tests/**).\n- NEW ClientVerdictCorpusTest.kt (MoeJson.parseTask + PlanReviewApprovalState; ManagedVmPresentation).\n- moe-vscode/tests/plan-review.test.cjs section (L): real PlanReviewPanel + planReview.js harness. It is (L), not K, because the file already has a K.\n- NEW moe-vscode/tests/managed-vm-verdicts.test.cjs (ManagedVm.ts).\n- Fix-forward: PlanReviewPanel.settlePendingApproval clears the pending approval when the task vanishes (A24, JetBrains TASK_MISSING parity). 3 lines, no imports.\n\nRows:\n- A01-A25 approval; V01-V23 VM.\n- A08 uses rendered absent + W null, and V11 is a status-shaped body stamped with the cleanup schema, so MJ1 and MV4 actually flip them.\n- V21-V23 are QA's I05 hand-forward rows.\n\nDoD:\n1. Each row has exactly one expectation. VM rows assert verdict, readiness, rows, actions and the blocked strong profile.\n2. JetBrains maps phase to verdict, then probes. Integrity checks: unique ids shaped A##/V##, at least 25/20 rows, verdict vocabulary. All failing ids are reported in one failure.\n3. VS Code runs the same bytes.\n   - Mutants killed on their rows: MJ1 A08; MJ2 A21/A22; MJ3 V08; MV1 A07; MV2 A24; MV3 A18; MV4 V11; MV5 V05.\n   - Bonus: QA1 V21; QA2 V22.\n   - MC1 (A13 flipped) fails in BOTH clients.\n   - All mutants ran in scratch copies, restored and cmp-verified.\n4. Gate above: 223/223, tsc clean; Gradle 337 tests, 0 failures.\n\nSize: about +350/-1 over 5 files (under 400).\n\nFiled task-3287014a (LOW): the VS Code page re-enables Approve when a task leaves AA or vanishes and then returns AA at the same revision; JetBrains latches. No corpus row covers this.\n\nDisclosure: a measuring `git add -N` on my 3 new paths was reverted at once (`git reset -- paths`). The index matches its prior state; no commits."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "refused",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
+    "sessionId": "qa-952969be@2026-10-29T23:26:49Z",
+    "at": "2026-10-29T23:35:23.018Z"
+  },
+  "reviewCompletedAt": "2026-10-29T23:34:43.467Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "The VS Code tests run the SAME bytes: approval rows through the real PlanReviewPanel + planReview.js harness, VM rows through ManagedVm. Each mutant named in the plan fails its row in the client it mutates."
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "moe-vscode/tests/plan-review.test.cjs",
+        "line": 370,
+        "description": "The latched case in checkCorpusVerdict does not tell latched from rearmed. After the WORKING probe, add an AWAITING_APPROVAL probe at row.rendered: approveDisabled() stays true, and a click leaves approveCalls at [send]. Add the same probe to the JetBrains latched branch, so the probes stay identical. Acceptance: A16, A17 or A21 flipped to latched, and A23 or A24 flipped to rearmed, each fail in BOTH clients."
+      },
+      {
+        "type": "regression",
+        "file": "moe-vscode/media/planReview.js",
+        "line": 286,
+        "description": "Once the probe discriminates, A23 and A24 fail in VS Code. This is task-3287014a: taskRemoved, or a non-AA updateTask, disables Approve without setting `latched`. JetBrains, which matches the corpus, latches. Fix it forward in the VS Code module if it takes 20 lines or fewer; sections A-K stay green and unchanged. Otherwise call report_blocked on task-3287014a. Never relax or skip A23/A24."
+      },
+      {
+        "type": "test_failure",
+        "file": "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "line": 209,
+        "description": "Add QM1 to your mutant run: `const stale = false` in handleClientError. It must then fail L A14 and L A15. Re-run the fresh gate, WSL npm test + compile and the Windows gradlew.bat test --rerun equivalent, and supply both tails."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Rejected on the task rail (\"no client-specific expectation, skip or tolerance; a disagreement is fixed or filed, never encoded\") and DoD 3. The VS Code approval consumer cannot tell 'latched' from 'rearmed', so rows A23 and A24 pass in VS Code although its real verdict differs from JetBrains'.\n\nQA mutants, run in a scratch copy at /tmp/qa-i06b (restored, cmp-verified):\n- QF5: A23 and A24 flipped from latched to rearmed: 0 VS Code failures. VS Code's real behavior there is rearmed: an AA frame at `rendered` re-enables Approve and the click resends. JetBrains latches (INVALIDATED). This is the live disagreement filed as task-3287014a, hidden by corpus rows.\n- QF1, QF4, QF7: A16, A21 and A17 flipped from rearmed to latched: 0 VS Code failures. JetBrains fails each of them (phase READY != INVALIDATED).\n- QM1: `const stale = false` in handleClientError survives every corpus row; only the existing H test kills it.\n- Controls that failed correctly: QF2, QF6, QF8 and QF3, MV2 on A24, and QM4 on A02-A11.\n\nCause: the VS Code latched check only asserts approveDisabled() and \"WORKING does not confirm\". You disclosed this in the handoff. Disclosure does not satisfy the rail; the description's route is report_blocked on the defect task.\n\nVerified, no need to redo:\n- Fresh gates: WSL npm test 223/223, tsc exit 0. Windows gradlew.bat test --rerun: 337 tests, 0 failures; ClientVerdictCorpusTest 3/0 at 23:29:05Z.\n- Named mutants: killed.\n- Size: about 349 net.\n- Packaging: not in the jar or the vsix.\n- A24 fix: correct.\n- VM half: sound.",
+      "rejectedAt": "2026-10-29T23:34:43.467Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "The VS Code tests run the SAME bytes: approval rows through the real PlanReviewPanel + planReview.js harness, VM rows through ManagedVm. Each mutant named in the plan fails its row in the client it mutates."
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "moe-vscode/tests/plan-review.test.cjs",
+          "line": 370,
+          "description": "The latched case in checkCorpusVerdict does not tell latched from rearmed. After the WORKING probe, add an AWAITING_APPROVAL probe at row.rendered: approveDisabled() stays true, and a click leaves approveCalls at [send]. Add the same probe to the JetBrains latched branch, so the probes stay identical. Acceptance: A16, A17 or A21 flipped to latched, and A23 or A24 flipped to rearmed, each fail in BOTH clients."
+        },
+        {
+          "type": "regression",
+          "file": "moe-vscode/media/planReview.js",
+          "line": 286,
+          "description": "Once the probe discriminates, A23 and A24 fail in VS Code. This is task-3287014a: taskRemoved, or a non-AA updateTask, disables Approve without setting `latched`. JetBrains, which matches the corpus, latches. Fix it forward in the VS Code module if it takes 20 lines or fewer; sections A-K stay green and unchanged. Otherwise call report_blocked on task-3287014a. Never relax or skip A23/A24."
+        },
+        {
+          "type": "test_failure",
+          "file": "moe-vscode/src/panels/PlanReviewPanel.ts",
+          "line": 209,
+          "description": "Add QM1 to your mutant run: `const stale = false` in handleClientError. It must then fail L A14 and L A15. Re-run the fresh gate, WSL npm test + compile and the Windows gradlew.bat test --rerun equivalent, and supply both tails."
+        }
+      ]
+    }
+  ]
 }

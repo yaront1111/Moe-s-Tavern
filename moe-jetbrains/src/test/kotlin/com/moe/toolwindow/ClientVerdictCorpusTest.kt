@@ -19,7 +19,8 @@ import com.moe.toolwindow.ManagedVmKeys as K
  *
  * Approval verdicts, after rendering AWAITING_APPROVAL at `rendered`, one click and the row's events:
  * - confirmed: success; pending: a later WORKING at `rendered` confirms;
- * - latched: Approve unusable, and a later WORKING at `rendered` still does not confirm;
+ * - latched: Approve unusable, AWAITING_APPROVAL at `rendered` neither re-arms it nor lets a click send,
+ *   and a later WORKING at `rendered` still does not confirm;
  * - rearmed: AWAITING_APPROVAL at `rendered` makes Approve usable and the next click resends `rendered`.
  */
 class ClientVerdictCorpusTest {
@@ -83,6 +84,8 @@ class ClientVerdictCorpusTest {
             "pending" -> "WORKING probe did not confirm".takeUnless { approval.onStateUpdate(working); approval.currentPhase == Phase.FINISHED }
             "latched" -> when {
                 approval.approveEnabled -> "Approve is usable"
+                run { approval.onStateUpdate(awaiting); approval.approveEnabled } -> "AWAITING_APPROVAL probe re-armed Approve"
+                approval.onApproveClicked(true, awaiting) is Decision.Send -> "AWAITING_APPROVAL probe click sent"
                 else -> "WORKING probe confirmed".takeIf { approval.onStateUpdate(working); approval.currentPhase == Phase.FINISHED }
             }
             else -> {
