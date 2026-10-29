@@ -57,7 +57,7 @@
     }
   ],
   "planRevision": 8,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -77,14 +77,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:49:19.527Z",
-  "updatedAt": "2026-10-29T17:59:47.339Z",
+  "updatedAt": "2026-10-29T19:31:52.841Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T14:55:59.479Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T19:31:52.841Z",
+    "wallClockMs": 16553362
   },
   "contextFetchedBy": [
     "qa-952969be",
@@ -275,7 +277,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "CQ-C03b QA round-1 fixes. Test-only: mcpStdioClient.ts is still byte-identical to 9d05921.\n\nQA issue → fix:\n1. Exit-time tree kill (M1):\n   - S14 now asserts groupKills()==[[-pid,'SIGKILL']] BEFORE close(), and the same after close(), so close() adds none.\n   - New POSIX S15: open('grandchild'), then 'crash' gives exited:3, then gone(pid) and gone(grandchild) both hold before close().\n2. Page cap (M2): a FAKE 'endless' mode answers tools:[] with a fresh nextCursor. New S16: open resolves {ok:false, reason:'protocol-violation'} after exactly 16 tools/list frames, and the server is gone.\n3. Size:\n   - This round is +18/-1, test file only.\n   - Cumulative: mcpStdioClient.ts +279/-0, mcpStdioClient.test.ts +229/-0, 508 net (491 plus 17 QA-required test lines).\n   - TASK-scope proposal prop-7dd6d59a55b24ac49d4e39cf57febd54 (PENDING) says \"they grow only by QA-required fixes\", so no replacing proposal. QA approval needs a human to approve prop-7dd6d59a first.\n\nMutation proof (Linux snapshot):\n- Real code: 29/29.\n- M1, the exit handler's `void this.killTree()` deleted: S14 red at :208 (`expected [] to deeply equal [[-pid,'SIGKILL']]`) and S15 red at :218 (`[true,false]`); 27 passed.\n- M2, the page loop unbounded: S16 red (5003 ms timeout); 28 passed.\n\nFresh gate:\n- Linux snapshot of HEAD b19566c, owned files cmp-identical, native npm ci, env -i, node v24.21.0: `cd packages/moe-daemon && npm test` exit 0, 179 files, 4867 passed and 16 skipped.\n- `npx tsc --noEmit` exit 0.\n- Native Windows node v24.16.0, re-run: 26 passed and 3 skipped (S12, S14 and S15 are POSIX-only). S11 (taskkill /T) and S16 passed.\n\nSelf-review: no defects. Note for CQ-C03: inputSchema is raw server JSON of any depth, so don't JSON.stringify it outside a try.\nCleanup: killed the 6 stray fixture grandchildren QA flagged, left by my earlier mutant runs.",
-  "reviewCompletedAt": "2026-10-29T17:02:32.127Z",
+  "reviewCompletedAt": "2026-10-29T19:31:52.841Z",
   "rejectionDetails": {
     "failedDodItems": [
       "close() and every failure path kill the whole process tree: a fake server that spawns a grandchild leaves no live process afterwards on POSIX. A Windows taskkill path is covered by a platform-gated test or a recorded native run. The child gets exactly launch.env."
@@ -326,5 +328,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-29T19:31:52.841Z",
+  "reviewSummary": "CQ-C03b round 2 APPROVED.\nCommit: completion 2cbfdd38 (+18/-1, test-only) is on moe/work-2026-10-24 (branch --contains), and 9d05921 is an ancestor of HEAD b2d1a6af. At HEAD, mcpStdioClient.ts == 9d05921 and the test file == 2cbfdd38; the working tree is clean for both.\nSize: numstat 9d05921^..HEAD is ts +279/-0 and test +229/-0, 508 net. The task rail waives the 491 and allows growth only by QA-required fixes. The +17 is exactly the round-1 QA tests. The rail appears twice in taskRails (board hygiene only).\nGate, own fresh run: git archive of HEAD b2d1a6af in /tmp, native npm ci (lock sha256 unchanged), env -i, node v24.21.0. `cd packages/moe-daemon && npm test` exit 0: 181 files, 5041 passed, 16 skipped; mcpStdioClient 29/29. `npx tsc --noEmit` exit 0.\nNative Windows, node v24.16.0, re-run by QA (vitest 5.0.3 matches the HEAD lock): exit 0, 26 passed, 3 skipped (S12/S14/S15 are POSIX-only). S11 (taskkill /T) and S16 passed. No fixture node.exe left; scratch removed.\nMutants, all red (file restored with cmp, 0 strays):\n- M1, exit-handler killTree removed: S14:208 and S15:218.\n- M2, unbounded pages: S16 times out.\n- M3, no reaped guard: S14:210.\n- M4, cap returns tools: S16:105.\n- M5, MAX_PAGES 17: S16:107.\nFlake check: S7 crash, S11, S12, S14, S15 and S16 passed 10 of 10 runs.\nDoD:\n1. S1.\n2. S6; S7 garbage/badid/huge/hang/crash/deepid/flood; S8; S9.\n3. S11, S12, S14, S15, S16; S5 env (exact on POSIX); the Windows run.\n4. Verification exit 0 with its tail.\nRails: no forbidden patterns. No callers or registration outside the module. The board paths in 2cbfdd38 are wrapper-staged non-live peer records. QA made no Git writes.\nPonytail: Lean already. net: -0 lines possible.\nFor CQ-C03: inputSchema is untrusted deep JSON, so stringify it inside a try. The POSIX child is detached, so call close() on shutdown.",
+  "requiredCheckAtDone": null
 }

@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:02:38.354Z",
-  "updatedAt": "2026-10-29T19:28:42.944Z",
+  "updatedAt": "2026-10-29T19:29:31.378Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:10:01.337Z",
     "plannedStepCount": 5,
@@ -175,7 +175,10 @@
     "reportedAt": "2026-10-29T19:28:42.943Z",
     "source": "agent-reported"
   },
-  "filesModified": [],
+  "filesModified": [
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-53daa94fa9d7405a831eb727eec803ac.json"
+  ],
   "completionSummary": "CQ-V10a round 2, after QA's size-only reject (failedDodItems empty). No byte changes. I reused the landed 7664bbba (architectureRules.ts +527/-0, architectureRules.test.ts +398/-0, net 925), which is cmp-equal at HEAD b2d1a6af and in the worktree.\n\nSize waiver:\n- Worker-filed EPIC ADD_RAIL prop-7401cd0b8ba34ff89a31ea3056142e61 names 7664bbba, those exact per-file counts, and \"grow only by QA-required fixes\".\n- It was PENDING at completion; #governors pinged (msg-641a9aa1).\n\nGate, fresh pure archive of HEAD b2d1a6af:\n- npm test exit 0: 181 files, 5041 passed, 16 skipped. The skips are pre-existing: baselineRun 6, cli 1, claudeHook 4, gitExecutable 2, heartbeatStop 3. architectureRules: 133/133.\n- tsc --noEmit exit 0.\n\nMutants: 13/13 killed, each restored and cmp-verified afterwards. The 7 planned ones, plus: control-head, octal, linearity (X6 timeout), '.js' order, forbid applied outside its own from, unresolved-relative dropped.\n\nQA's advisories (optional) stayed as they are, to keep the waiver's exact numbers. Advisory 2 is a confirmed decoy-file bypass, filed as task-54dc3d385ef542a08a0a8e9aa2ce8969 (MEDIUM).\n\nNew finding from the adversarial review: the plan's \"line-local recovery\" premise is false for template and block-comment state. Six repros hide a require on a later line with no uncertainty, and three of them run in node vm.\n- Triggers: a division misread as a regex after `}`, `!` or ++, followed by a path template; a regex read as division after `extends` or `export default`; a CJS `<!--` comment; a backtick in TSX text.\n- Not a DoD failure. The fix needs an architect decision, because the contract forbids new uncertainty reasons.\n- Filed as task-16628bef427b426aa9d8fc6ac1d19534 (HIGH). V10 has a comment with both bugs and the residuals; #governors notified (msg-745ef199).\n\nHandoff: Serena task-task-2cd62d2c87ab4e118222a5a8b841db6c-handoff, gotcha-lexical-import-scan-desync.",
   "commits": [
     {
@@ -195,6 +198,22 @@
       "treeId": "0e71145d7695b87e7678a3d8b0dea7e7218f6e4a",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "6df1c05becc1f142c14f90fea65f3a637d445bca",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-29T19:09:51Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-53daa94fa9d7405a831eb727eec803ac.json"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-29T19:29:31.378Z",
+      "treeId": "5afbe024910d5f34bb6ee62376c14c9237adc934",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -203,11 +222,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-29T19:01:48Z",
-    "at": "2026-10-29T19:10:42.979Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-29T19:09:51Z",
+    "at": "2026-10-29T19:29:31.378Z"
   },
   "reviewCompletedAt": "2026-10-29T19:09:47.045Z",
   "rejectionDetails": {
