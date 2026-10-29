@@ -85,7 +85,7 @@
     }
   ],
   "planRevision": 26,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,7 +111,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:28:17.007Z",
-  "updatedAt": "2026-10-29T13:22:27.545Z",
+  "updatedAt": "2026-10-29T13:43:00.692Z",
   "dependsOn": [
     "task-8333866a53464d07bcaf88134f259ff4"
   ],
@@ -121,7 +121,9 @@
     "plannedDistinctFileCount": 5,
     "executedStepCount": 12,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T13:43:00.692Z",
+    "wallClockMs": 190620072
   },
   "contextFetchedBy": [
     "qa-6fa5d758",
@@ -289,7 +291,7 @@
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "docs/MCP_SERVER.md"
   ],
-  "reviewCompletedAt": "2026-10-27T17:45:00.899Z",
+  "reviewCompletedAt": "2026-10-29T13:43:00.692Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -318,5 +320,8 @@
   "blockedFromStatus": null,
   "blockedAt": null,
   "priorBlockedReason": "Size waiver pending. Human proposal prop-3aea89536f004d529d67e8820b933d03 (EPIC ADD_RAIL, a size exception for this row) is still PENDING. No epic or task rail waives the 400 net-LOC review cap for this row: own net 498 (runtime+docs 66, tests 432), completion f107447. Substance passes again (QA r3, 2026-10-29):\n- bytes unchanged: the 5 owned paths are identical at f107447, HEAD a2441f5 and the worktree, and c4d8f20 is board-only;\n- fresh gate on a pure git archive of HEAD a2441f5 (env -i, node 24.21.0): tsc 0 errors; vitest 172 files, 4536 passed, 16 skipped; exit 0;\n- DoD 1-5 verified;\n- 4 of 5 QA mutants killed; the survivor behaves the same on every successful join.\nNot a code defect; no change requested. Route back is manual, nothing auto-unblocks:\n- APPROVED: set_task_status REVIEW. QA approves once the rail is in allRails.epic.\n- REJECTED: set_task_status PLANNING to re-slice.\nFull evidence is in the QA r3 comment.",
-  "blockedOnTaskIds": null
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-29T13:43:00.692Z",
+  "reviewSummary": "QA r4 (qa-952969be). APPROVE. Size waiver prop-3aea8953 is APPROVED (resolvedBy HUMAN, 13:22Z); its text is byte-equal to allRails.epic[6]. Size: own net 498 (66 runtime+docs, 432 tests) per `git show --numstat f107447`, matching the rail per file. Per the rail, I reviewed substance only, with no size reject.\nDelivery: code is in completion f107447; the round's completion c4d8f20 is board-only. Both are on moe/work-2026-10-24 = origin (HEAD 4989ccb). The 5 owned blobs are identical at f107447, HEAD and the worktree; git log f107447..HEAD on them is empty.\nGate re-run: (cd packages/moe-daemon && npx tsc --noEmit && npm test) on a pure git archive of HEAD 4989ccb, native npm ci, env -i (0 MOE_*), node 24.21.0. Exit 0, tsc 0 errors, vitest 172 files, 4536 passed, 16 skipped. workerType 57/57; claimNextTask 68/49/6; joinTeam.notification 7; listWorkers 4.\nDoD 1-5 verified in code, tests and docs:\n- claim refresh after input checks + assertAgentClaimableStatuses and in the governor redirect;\n- join checks the team, creates, adds, revives, refreshes last;\n- the refresh never creates, keeps lastActivityAt, skips unchanged, warn-logs err;\n- chat_who types all 3 push sites.\nRails: additive contract, no .moe schema change, tests added, no forbidden patterns.\nMy mutants (snapshot, restored+cmp): join refresh before addTeamMember 1 fail; trim-normalize 1; claim refresh after the hold 1; refresh auto-registers 3. Survivor: null treated as omitted (`== null`). The code and docs record a supplied null on an existing record as CLAUDE, but no test pins that row (pinned for new seats and 'aider' on existing). Non-blocking; the proxy/integration tasks should omit the key rather than send null, or pin it.\nPonytail: workerType.test.ts:L381-383 shrink: pairs() repeats the full toEqual at L385-390. net: -3 lines possible.",
+  "requiredCheckAtDone": null
 }
