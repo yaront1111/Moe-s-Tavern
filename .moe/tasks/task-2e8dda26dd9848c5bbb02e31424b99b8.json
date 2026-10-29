@@ -1,0 +1,35 @@
+{
+  "id": "task-2e8dda26dd9848c5bbb02e31424b99b8",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R10d5] Typed guest shim argument schemas",
+  "description": "Objective: give the guest MCP shim from CQ-R10d1 (task-9faf1ef30b0a4264b6dccce1e7bf5b1d) typed argument schemas, so that a codex seat in the guest can pass arrays, objects and numbers.\n\nWhy: the R10d1 contract builds each tool's inputSchema from argument keys alone. Codex's MCP schema sanitizer gives every property without a type the type string; see sanitize_json_schema in codex-rs core/src/openai_tools.rs and its test test_mcp_tool_property_missing_type_defaults_to_string. A codex worker or QA seat would therefore send modifiedFiles, verification, blockedOnTaskIds, failedDodItems, issues and commentsLimit as strings, and the daemon's schemas would refuse those calls. Claude seats are not affected. The human chose this follow-up in the architect REPL on 2026-10-30: R10d1 stays key-only, and the types come in a sibling slice ordered before the R10d final task.\n\nDeliverable:\n- scripts/local-runner/guest-mcp-tools.json gives each allowlisted key the property schema that the committed daemon inputSchema gives it (packages/moe-daemon/src/tools/<name>.ts). At minimum: type, items.type for arrays, and nested object types where the daemon declares them, for example complete_task's verification. Choose the exact fragment subset and justify it; descriptions are optional.\n- guest-mcp-shim.py load_tools accepts and validates the new shape and fails closed: a malformed table serves no tools. tools/list emits the fragments and keeps additionalProperties false.\n- A drift test compares the keys with guest-bridge.mjs TOOLS and the fragments with the daemon schemas. The planner chooses the source and records the trade-off:\n  - the built packages/moe-daemon/dist tool definitions: CI builds the daemon before the local-runner step, but a local run needs a built daemon;\n  - or a bounded static read of the TypeScript source.\n- Every existing SH row in scripts/tests/local-runner-agents.test.mjs still passes. buildUserData and readiness pick up the new tools.json bytes with no test edits, because R10d1 computes the expected content from the repo files.\n\nNot in scope: guest-bridge.mjs TOOLS and scopeRequest, the daemon schemas, the host session, the CLI configs (CQ-R10d4), and any verified-local or isolation claim.\n\nDependencies: this task depends on CQ-R10d4 (task-60626bee13034a178fed55c697d14d06) only to serialize the shared agents test file and shim files along the R10d chain. The CQ-R10d orchestrator (task-90847011452544dc868039ff435b018b) waits on this task.\n\nVerification command (fresh run, exit 0 required): node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs (on WSL, use env -i with the nvm Node 24 PATH).",
+  "definitionOfDone": [
+    "For every allowlisted key, guest-mcp-tools.json carries the type that the daemon tool inputSchema gives that property, plus the item type for arrays. The shim's tools/list emits those types, and no emitted property lacks a type. Shown by tests in scripts/tests/local-runner-agents.test.mjs.",
+    "A drift test fails when tools.json disagrees with guest-bridge.mjs TOOLS on the keys, or with the daemon tool inputSchemas on the types.",
+    "load_tools refuses a malformed typed table and serves no tools, and every existing CQ-R10d1 SH row still passes unchanged in behavior.",
+    "The verification command exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-60626bee13034a178fed55c697d14d06"
+  ],
+  "priority": "HIGH",
+  "order": 252.45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:27:09.588Z",
+  "updatedAt": "2026-10-29T22:27:09.588Z"
+}

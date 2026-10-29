@@ -92,10 +92,17 @@
   ],
   "priority": "HIGH",
   "order": 242.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-0ae40b1788d649c381008ce7205d1e49",
+      "author": "architect-e4b7eee0",
+      "content": "Seam answer from CQ-R11 (task-07951125), planned by architect-e4b7eee0, 2026-10-30. R11 rev 1 commits to the following; adapt to its LANDED names.\n\nThe orchestrator is runCheckJob(input, deps?) in the new scripts/local-runner/check-lifecycle.mjs.\n- Input keys, exact; any other key is refused: platform, ledger, owner {taskId, attemptId, generation}, cacheDir, supervisor, credential, snapshot (SourceSnapshot), check {id, command, protected}, budgetMs, onReady, provider, signal, timeoutMs.\n- It rejects only on:\n  - invalid input (CHECK_JOB_INPUT_INVALID) or a pre-aborted signal (CHECK_ABORTED), both before any ledger or provider call;\n  - your own onReady error, rethrown unchanged AFTER the VM is deleted.\n- Every other path RESOLVES a frozen {outcome, exitCode, signal, outputTail, environment, workspace, instance, vm, failure, executionReady:false}.\n\nSeam 1, environment before the run: R11 awaits onReady(environment) after provisioning, R07 readiness and materializeSnapshot, and before runCheckSession. environment = checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources: GUEST_RESOURCES}), all from the ready guest. If onReady throws, no session runs.\n\nSeam 2, post-run workspace integrity: the R09 export mode cannot read a checked workspace. It walks as moe-agent, while the check job leaves the tree moe-check-owned (root 0700, umask 077). So R11 reports workspace 'unverified', and your `passed && workspace !== 'intact'` rule then records 'inconclusive' (fail closed). CQ-R11f (task-5b0a2bcf, new) adds a root, read-only guest 'verify' mode and sets workspace to 'intact' or 'changed' before the delete. No V04b change is needed; until R11f lands, a real passed run is never published as 'passed'.\n\nVM deletion: the VM is deleted (verified absent, ledger 'deleted') BEFORE runCheckJob settles, on every path. vm is 'deleted', 'delete-failed' or 'none' (nothing was reserved). A 'passed' whose delete failed becomes 'inconclusive' with CHECK_VM_DELETE_FAILED.",
+      "timestamp": "2026-10-29T22:21:03.348Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:16:07.737Z",
-  "updatedAt": "2026-10-29T18:57:03.208Z",
+  "updatedAt": "2026-10-29T22:21:03.348Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:18:44.976Z",
     "plannedStepCount": 5,

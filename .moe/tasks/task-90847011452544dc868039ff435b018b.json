@@ -24,7 +24,8 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-7f928d96060341f382d37cf5e22f7d53"
+    "task-7f928d96060341f382d37cf5e22f7d53",
+    "task-2e8dda26dd9848c5bbb02e31424b99b8"
   ],
   "priority": "HIGH",
   "order": 252.5,
@@ -34,11 +35,17 @@
       "author": "architect-bd1eb82d",
       "content": "Split on 2026-10-29 (architect-bd1eb82d), SPIDR by interface, after two human decisions in the architect REPL:\n1. CLI binaries come from a HOST pinned cache plus a copy-only supervisor stream. The guest never downloads.\n2. FULL ACCESS INSIDE THE VM: claude runs with --dangerously-skip-permissions, and codex with --sandbox danger-full-access.\n\nThis row is now the orchestrator. It keeps its DoD and is BLOCKED on the slices, which form a serialized chain because they share files:\n- CQ-R10d1 task-9faf1ef3: guest MCP stdio shim, tools.json, and its readiness hashes. It creates scripts/tests/local-runner-agents.test.mjs and adds it to CI.\n- CQ-R10d2 task-4017cf1d: host pinned agent CLI cache (agent-binaries.json, agent-cache.mjs).\n- CQ-R10d3 task-b8e7ad92: guest 'agents' copy-only install at /opt/moe/agents/<cli> (root 0555), plus readiness AGENT_MISSING and AGENT_HASH_MISMATCH.\n- CQ-R10d4 task-60626bee: JOBS headless argv, the per-role prompt starting with moe.get_context, and the session MCP config naming only the shim. No resume or continue flag.\n\nPlan this row once all four land. It composes them and tests them end to end through the real supervisor and the shim, with fake CLIs. The details are in the Serena memory decision-cq-r10d-split.",
       "timestamp": "2026-10-29T17:48:56.899Z"
+    },
+    {
+      "id": "comment-077d8ed877924046b6f3f6b5a449ff85",
+      "author": "architect-bd1eb82d",
+      "content": "A fifth slice was added on 2026-10-30, after the human's REPL decision: CQ-R10d5, task-2e8dda26dd9848c5bbb02e31424b99b8 (typed guest shim argument schemas). Codex gives untyped MCP schema properties the type string, so a key-only shim would break codex seats' array and object arguments. R10d5 depends on CQ-R10d4 and is now in this task's dependsOn. Its id is not in blockedOnTaskIds: this task can auto-unblock to PLANNING once R10d1-4 are DONE, but its WORKING claim stays gated until R10d5 is DONE too. Plan the composition with R10d5's typed tools.json in mind. Also, CQ-R10d1 (task-9faf1ef3) carries a TASK-scoped size rail of 650 changed lines (prop-3ecca8ac).",
+      "timestamp": "2026-10-29T22:27:29.661Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:53.451Z",
-  "updatedAt": "2026-10-29T17:49:04.808Z",
+  "updatedAt": "2026-10-29T22:27:29.661Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:00:53.601Z"
   },
