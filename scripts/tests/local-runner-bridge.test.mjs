@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, getEventListeners, once } from 'node:events';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { connect } from 'node:net';
 import { constants, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -10,13 +11,14 @@ import { after, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import {
-  MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, parseGuestFrame, scopeRequest, TOOLS,
+  AGENT_JOBS, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, jobFrame as hostJobFrame, parseGuestFrame,
+  scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
 import { JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
 import {
-  MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, runGuestSession,
+  MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, endAgentJobs, runGuestSession,
 } from '../local-runner/guest-session.mjs';
-import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
+import { ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
 
 const refuses = (fn, expected, label) => assert.throws(fn, error => error?.code === expected, label);
 const header = length => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(length); return bytes; };
@@ -614,10 +616,17 @@ const rejectsWith = (promise, code, label) => assert.rejects(promise, error => e
 const nest = depth => Array.from({ length: depth }).reduce(value => [value], 0);
 const answered = (id, text) => ({ kind: 'response', id, ok: true, result: { content: [{ type: 'text', text }] } });
 const refused = (id, code) => ({ kind: 'response', id, ok: false, error: { code } });
+// CQ-R10c: every session carries a job, whose frame the fake provider keeps apart as proc.job.
+const KEY = 'sk-secret-R10c!~';
+const HOST_JOB = Object.freeze({ cli: 'claude', credential: Object.freeze({ name: 'ANTHROPIC_API_KEY', value: KEY }) });
 
-function fakeProvider({ hung = false, write = (chunk, done) => done() } = {}) {
-  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], kills: [], written: [] });
-  proc.stdin = new Writable({ write(chunk, encoding, done) { proc.written.push(chunk); write(chunk, done); } });
+function fakeProvider({ hung = false, first = (chunk, done) => done(), write = (chunk, done) => done() } = {}) {
+  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], kills: [], written: [], job: null });
+  proc.stdin = new Writable({ write(chunk, encoding, done) {
+    if (proc.job === null) { proc.job = chunk; return first(chunk, done); } // the job frame; replies() decodes only what follows
+    proc.written.push(chunk);
+    write(chunk, done);
+  } });
   proc.exit = (code = 0) => { if (!proc.stdout.writableEnded) proc.stdout.once('close', () => proc.emit('close', code, null)).end(); };
   if (!hung) proc.stdin.once('close', () => proc.exit(74));
   proc.kill = signal => { proc.kills.push(signal); setImmediate(() => proc.emit('close', null, signal)); return true; }; // async, as in Node
@@ -630,7 +639,7 @@ function fakeProvider({ hung = false, write = (chunk, done) => done() } = {}) {
 function openSession(provider, { answer = tool => ({ content: [{ type: 'text', text: tool }] }), ...options } = {}) {
   const run = { outputs: [], observations: [], forwarded: [], signals: [] };
   run.promise = runGuestSession({
-    name: NAME, binding: BINDING, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { spawn: provider.spawn }, timeoutMs: 1_000,
+    name: NAME, binding: BINDING, job: HOST_JOB, sessionId: SESSION_ID, daemonInfoPath: DAEMON, provider: { spawn: provider.spawn }, timeoutMs: 1_000,
     forward: (tool, args, { signal }) => { run.forwarded.push([tool, args]); run.signals.push(signal); return answer(tool, args); },
     onOutput: (stream, data) => run.outputs.push([stream, data]), onObservation: frame => run.observations.push(frame), ...options,
   });
@@ -891,7 +900,8 @@ function supervised(job, ...args) {
   host.spawn = (executable, argv, options) => {
     host.launches.push([executable, argv, options]);
     host.socket = `${mkdtempSync(`${tmpdir()}/moe-r08-`)}/agent.sock`;
-    const code = `${LOAD}sys.exit(m.relay(['python3', '-I', '-c', *sys.argv[3:]], agent_socket=sys.argv[2], agent_uid=os.getuid()${PEER}))`;
+    // The job frame comes first on stdin; read_job, the guest's own validator, consumes it before relay().
+    const code = `${LOAD}m.read_job(0, m.JOBS)\nsys.exit(m.relay(['python3', '-I', '-c', *sys.argv[3:]], agent_socket=sys.argv[2], agent_uid=os.getuid()${PEER}))`;
     host.proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, host.socket, job, host.socket, ...args], options);
     sessions.push(host);
     return host.proc;
@@ -1300,3 +1310,164 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
       assert.deepEqual(decodeAll([groups.stdout]).map(parseGuestFrame), [HELLO]);
     }
   });
+
+// CQ-R10c: the host's job frame is the first stdin write of every session, and endAgentJobs proves the end of the guest
+// job only from a pgrep count it observed. KEY holds 'secret', so rejectsWith also proves that no error echoes it.
+test('B16 jobFrame encodes exactly the CQ-R10b job frame and refuses any other job without echoing the credential', () => {
+  assert.ok([AGENT_JOBS, ...Object.values(AGENT_JOBS)].every(Object.isFrozen));
+  const credential = { name: 'CODEX_API_KEY', value: `!${'x'.repeat(4094)}~` };
+  assert.deepEqual(hostJobFrame({ cli: 'codex', role: 'qa', credential }),
+    framed(JSON.stringify({ kind: 'job', version: 1, cli: 'codex', role: 'qa', credential })));
+  const job = { cli: 'claude', role: 'worker', credential: HOST_JOB.credential };
+  const valued = value => ({ ...job, credential: { ...job.credential, value } });
+  const hidden = Object.defineProperty({ value: KEY, extra: 1 }, 'name', { value: 'ANTHROPIC_API_KEY', enumerable: false });
+  const throwing = { name: 'ANTHROPIC_API_KEY', get value() { throw new Error(KEY); } };
+  const invalid = [null, [], { ...job, extra: 1 }, { cli: 'claude', role: 'worker' }, ...['gemini', 'constructor'].map(cli => ({ ...job, cli })),
+    { ...job, role: 'architect' }, ...['x', { ...job.credential, extra: 1 }, hidden, throwing].map(value => ({ ...job, credential: value })),
+    { ...job, credential: { ...job.credential, name: 'OPENAI_API_KEY' } }, ...['', 'a b', 'x\n', 'a\x7f', 'café', 'x'.repeat(4097), 7].map(valued)];
+  for (const input of invalid) {
+    assert.throws(() => hostJobFrame(input), error => error?.code === 'BRIDGE_INPUT_INVALID' && !/secret/.test(error.message), String(input?.cli));
+  }
+});
+
+test('B17 AGENT_JOBS is the guest supervisor job table', { skip: NO_GUEST }, () => {
+  const run = harness('print(json.dumps({cli: list(names) for cli, (_, names) in m.JOBS.items()}))');
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(JSON.parse(run.stdout), AGENT_JOBS);
+});
+
+const QA_HOST_JOB = Object.freeze({ cli: 'codex', credential: Object.freeze({ name: 'CODEX_API_KEY', value: KEY }) });
+
+test('H6 the job frame is the first stdin write, bounded, with the binding role, and the credential reaches nothing else', { timeout: 30_000 }, async () => {
+  for (const [binding, job] of [[BINDING, HOST_JOB], [QA, QA_HOST_JOB]]) {
+    const caller = { ...job, credential: { ...job.credential } };
+    const proc = fakeProvider();
+    const run = openSession(proc, { binding, job: caller });
+    Object.assign(caller.credential, { name: 'OPENAI_API_KEY', value: 'changed' }); // encoded once, before spawn
+    const result = await exchange(proc, run, [REQUEST], 1);
+    assert.deepEqual(proc.job, hostJobFrame({ cli: job.cli, role: binding.role, credential: job.credential }));
+    assert.deepEqual([proc.calls, proc.replies()], [[SPAWNED], [answered(1, 'moe.get_context')]]);
+    assert.equal(JSON.stringify([proc.calls, run.outputs, run.forwarded, result]).includes(KEY), false);
+  }
+  // Hello has arrived, so only the job write's own bound is left.
+  for (const [code, first] of [['SESSION_TIMEOUT', () => {}], ['SESSION_PROVIDER_FAILED', (chunk, done) => done(new Error(KEY))]]) {
+    const proc = fakeProvider({ first });
+    const run = openSession(proc, { timeoutMs: 100 });
+    proc.send(HELLO);
+    await rejectsWith(run.promise, code, code);
+    assert.deepEqual([run.forwarded, proc.written], [[], []]);
+  }
+  // A job write that throws fails the session, even when the guest then ends cleanly.
+  const broken = fakeProvider();
+  broken.stdin.write = () => { throw new Error(KEY); };
+  const brokenRun = openSession(broken);
+  broken.send(HELLO, EXIT);
+  broken.exit(0);
+  await rejectsWith(brokenRun.promise, 'SESSION_PROVIDER_FAILED');
+  assert.deepEqual(brokenRun.observations, []);
+  for (const job of [undefined, null, { cli: 'claude' }, { ...HOST_JOB, role: 'worker' }, { cli: 'codex', credential: HOST_JOB.credential },
+    { ...HOST_JOB, credential: { ...HOST_JOB.credential, value: 'a b' } }]) {
+    const proc = fakeProvider();
+    const run = openSession(proc, { job });
+    await rejectsWith(run.promise, 'SESSION_INPUT_INVALID', String(job?.cli));
+    assert.deepEqual([proc.calls.length, run.forwarded.length], [0, 0]);
+  }
+});
+
+// CQ-R10c end to end through R10b's main(): the probe is the job's agent CLI. Its argv is the executable alone, so the
+// socket path is baked in. It reports its role, its env beyond the fixed keys and each credential's sha256, never a value.
+const PROBE_AGENT = `import hashlib, json, os, socket, struct
+s = socket.socket(socket.AF_UNIX)
+s.connect(SOCKET)
+body = json.dumps({'kind': 'request', 'id': 1, 'tool': 'moe.get_context', 'args': {}}).encode()
+s.sendall(struct.pack('>I', len(body)) + body)
+f = s.makefile('rb')
+answer = json.loads(f.read(struct.unpack('>I', f.read(4))[0]))
+names = sorted(set(os.environ) - {'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'MOE_ROLE'})
+print(json.dumps({'role': os.environ['MOE_ROLE'], 'names': names, 'sha': [hashlib.sha256(os.environ[name].encode()).hexdigest() for name in names],
+                  'answer': answer}))
+`;
+function bridgeMain() {
+  const host = { launches: [] };
+  host.spawn = (executable, argv, options) => {
+    host.launches.push([executable, argv, options]);
+    host.socket = join(mkdtempSync(join(tmpdir(), 'moe-r10c-')), 'agent.sock');
+    const code = `${LOAD}base = os.path.dirname(sys.argv[2])
+probe = os.path.join(base, 'probe')
+with open(probe, 'w') as f:
+    f.write('#!%s -I\\nSOCKET = %r\\n%s' % (sys.executable, sys.argv[2], sys.argv[3]))
+os.chmod(probe, 0o700)
+os.mkdir(os.path.join(base, 'ws'))
+jobs = {cli: (probe, names) for cli, (_, names) in m.JOBS.items()}
+sys.exit(m.main(['bridge'], geteuid=lambda: 0, workspace=os.path.join(base, 'ws'), sessions=os.path.join(base, 'sessions'),
+                identity=(os.getuid(), os.getgid(), None), jobs=jobs, agent_socket=sys.argv[2]${PEER}))
+`;
+    host.proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, host.socket, PROBE_AGENT], options);
+    sessions.push(host);
+    return host.proc;
+  };
+  return host;
+}
+
+test('H7 end to end, main() starts the job with exactly the frame credential and the binding role, and get_context carries only the host sessionId',
+  { skip: NO_GUEST, timeout: 30_000 }, async () => {
+    const host = bridgeMain();
+    const run = openSession(host, { binding: QA, job: QA_HOST_JOB, timeoutMs: 10_000 });
+    assert.deepEqual(await run.promise, { observation: EXIT, executionReady: false });
+    const bytes = stream => Buffer.concat(run.outputs.filter(([name]) => name === stream).map(([, data]) => data));
+    assert.deepEqual(JSON.parse(bytes('stdout')), { role: 'qa', names: ['CODEX_API_KEY'], sha: [createHash('sha256').update(KEY).digest('hex')],
+      answer: answered(1, 'moe.get_context') }, String(bytes('stderr')));
+    assert.deepEqual([host.launches, run.forwarded, host.proc.exitCode],
+      [[SPAWNED], [['moe.get_context', { taskId: 'task-abc', workerId: 'qa-1', sessionId: SESSION_ID }]], 0]);
+    assert.equal(JSON.stringify(host.launches).includes(KEY) || Buffer.concat(run.outputs.map(([, data]) => data)).includes(KEY), false);
+  });
+
+// A scripted run stands in for lifecycle's execFile: a resolved call is exit 0, a rejection carries the remote exit code
+// (execFile's error.code) unless it was killed, and anything else is a transport failure.
+const remote = (code, stdout = '') => (code === 0 ? { stdout, stderr: '' } : Object.assign(new Error(KEY), { code, killed: false, stdout, stderr: '' }));
+const TIMED_OUT = Object.assign(new Error(KEY), { code: null, killed: true, signal: 'SIGKILL', stdout: '0\n' });
+const MISSING = Object.assign(new Error(KEY), { code: 'ENOENT' });
+
+test('H8 endAgentJobs reports verified only on an observed pgrep count of 0, retries a live job and fails closed otherwise', { timeout: 30_000 }, async () => {
+  const exec = argv => ['exec', '--no-map-working-directory', NAME, '--', 'sudo', '-n', ...argv];
+  const [pkill, pgrep] = [exec(['pkill', '-KILL', '-U', 'moe-agent']), exec(['pgrep', '-c', '-U', 'moe-agent'])];
+  const thrown = () => { throw new Error(KEY); };
+  // Each row is [results, verified]. Every result is consumed, so the calls alternate pkill and pgrep, one per result.
+  const rows = [[[remote(0), remote(1, '0\n')], true], [[remote(1), remote(1, '0\r\n')], true], [[remote(255), remote(1, '0\n')], true],
+    [[remote(0), remote(0, '2\n'), remote(0), remote(1, '0\n')], true], [Array(3).fill([remote(0), remote(0, '1\n')]).flat(), false],
+    [[remote(1), remote(1)], false], [[remote(0), remote(1, '0\n\n')], false], [[remote(0), remote(1, ' 0\n')], false],
+    [[remote(0), remote(2, '0\n')], false], [[remote(0), TIMED_OUT], false], [[remote(0), thrown], false], [[remote(0), MISSING], false],
+    [[MISSING], false], [[TIMED_OUT], false], [[thrown], false]];
+  for (const [index, [results, verified]] of rows.entries()) {
+    const calls = [];
+    const slept = [];
+    const run = (executable, args, options) => {
+      calls.push([executable, args, options]);
+      const result = results[calls.length - 1];
+      if (typeof result === 'function') return result(); // a synchronous throw
+      return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
+    };
+    const result = await endAgentJobs(NAME, { run }, { sleep: async ms => { slept.push(ms); }, delayMs: 7 });
+    const label = `row ${index}`;
+    assert.ok(Object.isFrozen(result), label);
+    assert.deepEqual(result, { verified }, label);
+    assert.deepEqual(calls.map(([, args]) => args), results.map((_, call) => (call % 2 ? pgrep : pkill)), label);
+    for (const [executable, , options] of calls) {
+      assert.deepEqual([executable, options.shell, options.timeout, options.killSignal], ['multipass', false, QUERY_TIMEOUT_MS, 'SIGKILL'], label);
+    }
+    assert.deepEqual(slept, Array(Math.ceil(results.length / 2) - 1).fill(7), label);
+  }
+  // Only a full count of rounds is tried, and an unset sleep waits for real between them.
+  const live = [];
+  const started = Date.now();
+  assert.deepEqual(await endAgentJobs(NAME, { run: async (...call) => { live.push(call); return remote(0, '1\n'); } }, { rounds: 2, delayMs: 50 }),
+    { verified: false });
+  assert.deepEqual([live.length, Date.now() - started >= 45], [4, true]);
+  const never = async () => { throw new Error('never run'); };
+  for (const [name, provider, options] of [['primary', { run: never }, {}], [NAME, null, {}], [NAME, { run: 'run' }, {}],
+    [NAME, { run: never, executable: ' ' }, {}], ...[0, 11, 1.5, '3'].map(rounds => [NAME, { run: never }, { rounds }]),
+    ...[-1, 60_001, 0.5].map(delayMs => [NAME, { run: never }, { delayMs }]), ...[null, 'sleep'].map(sleep => [NAME, { run: never }, { sleep }]),
+    [NAME, { run: never }, null]]) {
+    await rejectsWith(endAgentJobs(name, provider, options), 'SESSION_INPUT_INVALID', JSON.stringify([name, options]));
+  }
+});

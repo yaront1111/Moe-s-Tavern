@@ -4,12 +4,16 @@
 // no daemon address, port, token or setting: its argv is the constant bridgeArgv(name) and nothing is added to its
 // environment. A request reaches forward only after scopeRequest, a depth bound and a fresh loopback check of
 // daemon.json. Child output reaches only onOutput, as bytes; the observation comes only from a supervisor frame.
+// Its stdin starts with the CQ-R10b job frame, the one place the job's credential goes.
 // This is local session logic, not VM, Multipass or network-isolation certification (CQ-R13): executionReady is false.
 import { spawn as spawnProcess } from 'node:child_process';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
-import { bridgeArgv, createFrameDecoder, encodeFrame, parseGuestFrame, scopeRequest } from './guest-bridge.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { JOB_IDENTITIES } from './guest-bootstrap.mjs';
+import { bridgeArgv, createFrameDecoder, encodeFrame, jobFrame, parseGuestFrame, scopeRequest } from './guest-bridge.mjs';
+import { invoker, QUERY_TIMEOUT_MS } from './lifecycle.mjs';
 
 export const MAX_DAEMON_INFO_BYTES = 16_384;
 export const MAX_PENDING_REQUESTS = 64; // the supervisor's MAX_CONNECTIONS * MAX_IN_FLIGHT
@@ -34,22 +38,27 @@ const refusal = (id, code) => encodeFrame({ kind: 'response', id, ok: false, err
  * Anything else rejects with a fixed SESSION_* code and never yields an observation. forward(tool, args, {signal}) is
  * the trusted daemon transport returning an MCP tool result; onOutput(stream, Buffer) and onObservation(frame) are
  * synchronous. provider: {executable = 'multipass', spawn = child_process.spawn}. timeoutMs (1-60000) bounds hello,
- * each forward, each stdin write and the wait for the provider to exit after teardown.
+ * each forward, each stdin write and the wait for the provider to exit after teardown. job: {cli, credential: {name,
+ * value}} is encoded once, with the binding's role, into the job frame that is the first stdin write. The credential
+ * reaches only that frame: never argv, spawn options, env, an error, onOutput or any other provider call.
  */
 export async function runGuestSession(input) {
   let options;
   try {
-    const { name, binding, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, provider = {}, timeoutMs = 30_000 } = input;
+    const { name, binding, job, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, provider = {}, timeoutMs = 30_000 } = input;
     const { executable = 'multipass', spawn = spawnProcess } = isRecord(provider) ? provider : { spawn: null };
     const frozen = Object.freeze({ ...binding }); // a later caller edit cannot change authorization
     scopeRequest({ kind: 'request', id: 1, tool: 'moe.get_context', args: {} }, frozen); // validates the binding only
+    const keys = isRecord(job) ? Object.keys(job) : [];
+    if (keys.length !== 2 || !keys.includes('cli') || !keys.includes('credential')) throw sessionError('SESSION_INPUT_INVALID');
+    const first = jobFrame({ cli: job.cli, role: frozen.role, credential: job.credential }); // the role comes only from the binding
     if (typeof sessionId === 'string' && sessionId.trim() !== '' && sessionId.length <= 255 && !/[\0\r\n]/.test(sessionId)
       && typeof daemonInfoPath === 'string' && path.isAbsolute(daemonInfoPath) && !CONTROL.test(daemonInfoPath)
       && [forward, onOutput, onObservation, spawn].every(fn => typeof fn === 'function')
       && (signal === undefined || signal instanceof AbortSignal)
       && typeof executable === 'string' && executable.trim() !== '' && !CONTROL.test(executable)
       && Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= MAX_TIMEOUT_MS) {
-      options = { argv: bridgeArgv(name), binding: frozen, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, timeoutMs };
+      options = { argv: bridgeArgv(name), binding: frozen, first, sessionId, daemonInfoPath, forward, onOutput, onObservation, signal, timeoutMs };
       options.start = () => spawn(executable, options.argv, { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     }
   } catch { options = undefined; }
@@ -110,6 +119,9 @@ function relay(child, options) {
       stop(session);
     });
     child.stderr.on('error', () => {}).resume(); // drained unread: stderr is never protocol data
+    // The job frame is the first stdin write: Node keeps write order and pump writes only after a request.
+    bounded(session, new Promise((done, failed) => child.stdin.write(options.first, error => (error ? failed(error) : done()))))
+      .catch(error => stop(session, error === TIMEOUT ? 'SESSION_TIMEOUT' : 'SESSION_PROVIDER_FAILED'));
   });
 }
 
@@ -235,4 +247,51 @@ function settle(session) {
   if (session.failure) return session.reject(sessionError(session.failure));
   try { session.options.onObservation(session.observation); } catch { return session.reject(sessionError('SESSION_CALLBACK_FAILED')); }
   session.resolve(Object.freeze({ observation: session.observation, executionReady: false }));
+}
+
+// The agent identity's processes only. `sudo -n` and Multipass's CommandLineError both exit 1 with an empty stdout, so a
+// pgrep exit 1 is proof only with its '0' count (procps-ng prints the count even when it is 0). The CR is a Windows host's.
+const PKILL = Object.freeze(['sudo', '-n', 'pkill', '-KILL', '-U', JOB_IDENTITIES[0]]);
+const PGREP = Object.freeze(['sudo', '-n', 'pgrep', '-c', '-U', JOB_IDENTITIES[0]]);
+const NO_PROCESS = /^0\r?\n$/;
+
+// The remote exit as {code, stdout}, the runGuestProbe rule; null for a transport failure (timeout, ENOENT, maxBuffer,
+// a synchronous throw).
+async function remote(invoke, name, argv) {
+  try {
+    const { stdout } = await invoke(['exec', '--no-map-working-directory', name, '--', ...argv], QUERY_TIMEOUT_MS);
+    return { code: 0, stdout };
+  } catch (error) {
+    return Number.isInteger(error?.code) && !error.killed ? { code: error.code, stdout: error.stdout } : null;
+  }
+}
+
+/**
+ * Proves that no agent-identity process is left in the owned guest, which a local kill of `multipass exec` never shows.
+ * Each round runs the fixed PKILL, then PGREP, through lifecycle's bounded invoker; provider is lifecycle's
+ * {executable = 'multipass', run = execFile}, so one object can carry both run and runGuestSession's spawn. Resolves a
+ * frozen {verified}: true only on pgrep exit 1 with a '0' count. pgrep exit 0 retries after delayMs; any other result,
+ * a provider error or timeout, or running out of rounds is false. It never claims a termination it did not observe.
+ */
+export async function endAgentJobs(name, provider = {}, options = {}) {
+  let invoke;
+  let rounds;
+  let sleep;
+  let delayMs;
+  try {
+    ({ rounds = 3, sleep = delay, delayMs = 1_000 } = options);
+    invoke = invoker(name, provider);
+  } catch { invoke = null; }
+  if (!invoke || !Number.isSafeInteger(rounds) || rounds < 1 || rounds > 10 || typeof sleep !== 'function'
+    || !Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 60_000) throw sessionError('SESSION_INPUT_INVALID');
+  try {
+    for (let round = 0; round < rounds; round += 1) {
+      if (round > 0) await sleep(delayMs);
+      if (!(await remote(invoke, name, PKILL))) break; // its exit code proves nothing; a transport failure ends the proof
+      const counted = await remote(invoke, name, PGREP);
+      if (counted?.code === 1 && typeof counted.stdout === 'string' && NO_PROCESS.test(counted.stdout)) return Object.freeze({ verified: true });
+      if (counted?.code !== 0) break; // exit 0: a process is still there
+    }
+  } catch { /* a failed sleep: fail closed */ }
+  return Object.freeze({ verified: false });
 }

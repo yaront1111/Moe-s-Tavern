@@ -23,7 +23,8 @@ const MESSAGES = {
 };
 const isRecord = value => value !== null && typeof value === 'object'
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
-const exactKeys = (value, keys) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+// The own enumerable key set: a non-enumerable required key cannot stand in for an enumerable extra.
+const exactKeys = (value, keys) => { const own = Object.keys(value); return own.length === keys.length && own.every(key => keys.includes(key)); };
 const matches = (value, pattern) => typeof value === 'string' && pattern.test(value);
 
 export function bridgeError(code) {
@@ -174,6 +175,27 @@ export function scopeRequest(request, binding) {
   }
   for (const key of STAMPED_KEYS) if (allowed[key]) forwarded[key] = binding[key];
   return Object.freeze({ id, tool, args: Object.freeze(forwarded) });
+}
+
+// cli -> the credential names its job may get. It mirrors guest-supervisor.py JOBS, the guest's own table (B17 pins it).
+export const AGENT_JOBS = Object.freeze({
+  claude: Object.freeze(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']),
+  codex: Object.freeze(['OPENAI_API_KEY', 'CODEX_API_KEY']),
+});
+
+// The CQ-R10b job frame, the first bytes the host writes on the bridge's stdin; the guest's read_job checks the same shape.
+// It is built from the named fields only, each read once. Any refusal, a throwing getter or proxy trap included, is
+// BRIDGE_INPUT_INVALID, whose fixed text never carries the credential.
+export function jobFrame(job) {
+  try {
+    const { cli, role, credential } = isRecord(job) && exactKeys(job, ['cli', 'role', 'credential']) ? job : {};
+    const { name, value } = isRecord(credential) && exactKeys(credential, ['name', 'value']) ? credential : {};
+    if (typeof cli === 'string' && Object.hasOwn(AGENT_JOBS, cli) && (role === 'worker' || role === 'qa')
+      && AGENT_JOBS[cli].includes(name) && matches(value, /^[\x21-\x7e]{1,4096}$/)) {
+      return encodeFrame({ kind: 'job', version: 1, cli, role, credential: { name, value } });
+    }
+  } catch { /* refused below */ }
+  throw bridgeError('BRIDGE_INPUT_INVALID');
 }
 
 // The one Multipass argv that opens the bridge. Every element except the validated owned name is a constant, so

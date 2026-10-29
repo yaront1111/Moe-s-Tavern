@@ -1,0 +1,46 @@
+{
+  "id": "task-c9fe2515321e4b1a881bb844965fe179",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V03b] Recorded check dispatch and observation store",
+  "description": "Objective: record which check a trusted runner was asked to run (a recorded dispatch) and the one result it observed for it. Trust then follows the dispatch binding and the channel identity, never caller arguments.\n\nThis is the data slice of CQ-V03 (task-9cc13170), split out by architect-e4b7eee0 on 2026-10-29 (SPIDR Data). CQ-V03 wraps these functions as runner-channel tools, and CQ-V04 consumes isAuthenticatedCheckRun in delivery policy. It depends on V02 (DONE). It also depends on C08 (task-f12b03e8) and the bug task-bc8410af only because all three edit src/types/schema.ts, which the epic rail serializes.\n\nInterface: a new module packages/moe-daemon/src/state/checkObservationStore.ts.\n- It follows the checkRunStore pattern: stateless functions taking the state first, with the caller holding state.mutex.\n- `runner` is the channel identity, a plain `{ runnerId: string }` (CQ-V03a's RunnerIdentity shape). The caller passes it in; it is never read from params.\n- Types go in src/types/schema.ts:\n  - `export interface CheckDispatch { readonly id: string; readonly taskId: string; readonly candidateId: string; readonly treeSha: string; readonly planRevision: number; readonly command: string; readonly checkId?: string; readonly environment: string; readonly runnerId: string; readonly createdAt: string }`.\n  - `export interface CheckObservation { readonly id: string; readonly checkRunId: string; readonly runnerId: string; readonly createdAt: string }`, whose id is the dispatchId.\n\n`recordCheckDispatch(state, runner, params: { id?, taskId, candidateId, planRevision, command, checkId?, environment }): Promise<{ dispatch: CheckDispatch; duplicate: boolean }>`:\n- The candidate must exist (CANDIDATE_NOT_FOUND) and belong to taskId.\n- It must be the task's CURRENT candidate: the last of listCandidatesForTask, the rule policy and get_context share. Otherwise CHECK_DISPATCH_NOT_CURRENT; a superseded candidate never gets a new dispatch.\n- planRevision must equal both task.planRevision and task.approvedPlanRevision. Otherwise CHECK_DISPATCH_REVISION_MISMATCH.\n- treeSha comes from the candidate, and runnerId from `runner`.\n- command uses checkRunStore's rule: verbatim, non-blank, at most 500 characters, because the result is written as a CheckRun.\n- checkId uses the protected-check id rule.\n- environment is 1-255 characters with no control characters.\n- The id is caller-supplied (validateEntityId) or 'dispatch-<32 hex>'. An identical same-id replay returns duplicate:true; a differing one is CHECK_DISPATCH_IMMUTABLE.\n- It is persisted at .moe/checks/dispatches/<id>.json. That subdirectory sits inside the already-gitignored checks/ dir, and loadEntities reads only top-level *.json files, so check runs never load it.\n\n`recordCheckObservation(state, runner, params: { id, dispatchId, exitCode, outcome, outputTail?, environment }): Promise<{ checkRun: CheckRun; duplicate: boolean }>`:\n- The dispatch must be recorded (CHECK_DISPATCH_NOT_FOUND); only a recorded dispatch can be answered.\n- runner.runnerId must equal dispatch.runnerId (CHECK_RUNNER_MISMATCH).\n- environment must equal dispatch.environment exactly (CHECK_ENVIRONMENT_MISMATCH).\n- outcome is required, under checkRunStore's coherence rule.\n- params carry NO candidate, tree, command or revision. The CheckRun is built from three sources:\n  - the dispatch: candidateId, treeSha, command, planRevision, environment and dispatchId;\n  - `runner`: runnerId;\n  - the observation: exitCode, outcome and outputTail, with source 'runner-observed'.\n- It is written through the existing validateCheckRunParams and recordCheckRun. The tree match, the 16 KiB tail, same-id immutability (CHECK_RUN_IMMUTABLE) and identical-replay duplicates are reused unchanged.\n- The CheckObservation marker is then written at .moe/checks/observations/<dispatchId>.json.\n  - A marker that exists with a different checkRunId is CHECK_DISPATCH_ALREADY_OBSERVED: one result per dispatch.\n  - An identical retry, including one after a crash between the two writes, completes the missing marker and returns duplicate.\n- A dispatch whose candidate or revision has since been superseded can still be answered. That is recovery of a recorded dispatch, and the result stays bound to the dispatch's own candidate and revision, never the task's current ones.\n\n`isAuthenticatedCheckRun(state, run: CheckRun): boolean` is true only when ALL of these hold:\n- a marker exists for run.dispatchId, with checkRunId === run.id and runnerId === run.runnerId;\n- its dispatch exists;\n- the run's candidateId, treeSha, command, planRevision and environment equal the dispatch's;\n- the run's source is 'runner-observed'.\nIt never throws and fails closed to false. A run recorded through moe.record_check_run, whatever its source, runnerId or dispatchId, is therefore never authenticated: it stays diagnostic.\n\nsrc/state/StateManager.ts loads checkDispatches and checkObservations maps from those directories, so recovery works across a daemon restart.\n\nScope boundaries:\n- No MCP tool (that is CQ-V03), no channel code (CQ-V03a), and no delivery-policy wiring (CQ-V04).\n- record_check_run, checkRunStore and passedOn stay untouched, so legacy, local-branch and every other existing policy result is unchanged.\n- No docs: CQ-V03 owns them. Never edit .moe directly.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "A run recorded through record_check_run with source 'runner-observed', any runnerId and a real recorded dispatchId fails isAuthenticatedCheckRun, while recordCheckObservation's run passes it (vitest).",
+    "A duplicate observation id with an identical payload returns duplicate:true and writes nothing. A conflicting payload is CHECK_RUN_IMMUTABLE, and a second observation id for the same dispatch is CHECK_DISPATCH_ALREADY_OBSERVED.",
+    "recordCheckObservation refuses an unrecorded dispatch (CHECK_DISPATCH_NOT_FOUND), a different runner and a different environment. After the task gets a newer candidate, a recorded dispatch's observation still binds to the dispatch's candidate and revision, and recordCheckDispatch refuses the superseded candidate (CHECK_DISPATCH_NOT_CURRENT).",
+    "Dispatches and markers reload from disk in a fresh StateManager, and an identical retry after a crash between the CheckRun write and the marker write completes the marker.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "Do not modify checkRunStore.ts, recordCheckRun.ts or delivery/policy.ts: legacy policy results must stay byte-identical."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-9cc131704d214e66afc8a51a524b35c2",
+  "dependsOn": [
+    "task-23a5563cea384d56abb8da1551435455",
+    "task-f12b03e83a1a491494a08e42c7a58504",
+    "task-bc8410afe7144ddda804b60af000864d"
+  ],
+  "priority": "HIGH",
+  "order": 226.2,
+  "comments": [
+    {
+      "id": "comment-34421319d7ce448bb0b4ea6b2b096a27",
+      "author": "architect-e4b7eee0",
+      "content": "Planning note from architect-e4b7eee0, who split this slice out of V03:\n- Require planRevision >= 1 at dispatch time. checkRunStore's readPlanRevision refuses anything below 1, so a revision-0 dispatch could never be answered. Refuse it up front with CHECK_DISPATCH_REVISION_MISMATCH.\n- The consumer plan (V03 rev 1, the tool slice) calls these functions with the exact names in this description: recordCheckDispatch(state, runner, params), recordCheckObservation(state, runner, params) and isAuthenticatedCheckRun(state, run). It asserts these codeNames: CHECK_DISPATCH_NOT_CURRENT, CHECK_DISPATCH_REVISION_MISMATCH, CHECK_DISPATCH_IMMUTABLE, CHECK_DISPATCH_NOT_FOUND, CHECK_RUNNER_MISMATCH, CHECK_ENVIRONMENT_MISMATCH and CHECK_DISPATCH_ALREADY_OBSERVED.",
+      "timestamp": "2026-10-29T17:41:05.283Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T17:38:47.791Z",
+  "updatedAt": "2026-10-29T17:41:05.283Z"
+}
