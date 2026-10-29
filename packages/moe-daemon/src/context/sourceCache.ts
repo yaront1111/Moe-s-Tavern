@@ -11,13 +11,14 @@ import { readSemanticSource, type SemanticOptions, type SemanticQuery, type Sema
 import { verifySourceSnapshot, type VerifiedSnapshotFile } from './snapshotManifest.js';
 import { readSnapshotSource, type SnapshotProvenance, type SnapshotRequest, type SnapshotSource, type SnapshotSourceItem } from './snapshotSource.js';
 
-export const SOURCE_CACHE_LIMITS = Object.freeze({ maxEntries: 2048, maxBytes: 33_554_432 });
+export interface SourceCacheLimits { readonly maxEntries: number; readonly maxBytes: number }
+export const SOURCE_CACHE_LIMITS: SourceCacheLimits = Object.freeze({ maxEntries: 2048, maxBytes: 33_554_432 });
 /** LRU in Map insertion order. No timers and no TTL: time is not a content dependency. */
 export class SourceCache {
-  private readonly limits: typeof SOURCE_CACHE_LIMITS;
+  private readonly limits: SourceCacheLimits;
   private readonly entries = new Map<string, { value: unknown; size: number }>();
   private readonly counts = { bytes: 0, hits: 0, misses: 0, evictions: 0 };
-  constructor(limits: Partial<typeof SOURCE_CACHE_LIMITS> = {}) {
+  constructor(limits: Partial<SourceCacheLimits> = {}) {
     if (!limits || typeof limits !== 'object' || Object.getPrototypeOf(limits) !== Object.prototype) throw invalidInput('limits', 'must be a plain object');
     for (const [key, value] of Object.entries(limits)) {
       if (!Object.hasOwn(SOURCE_CACHE_LIMITS, key) || !Number.isSafeInteger(value) || (value as number) <= 0) throw invalidInput(`limits.${key}`, 'must be a known positive safe integer');

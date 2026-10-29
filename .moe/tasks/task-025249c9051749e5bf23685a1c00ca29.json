@@ -8,9 +8,51 @@
     "Existing runtime validation of limits unchanged; `cd packages/moe-daemon && npm test` exits 0"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Widen the SourceCache limit types (packages/moe-daemon/src/context/sourceCache.ts) and prove it in the tests.\n\n(a) In sourceCache.ts:\n- Add `export interface SourceCacheLimits { readonly maxEntries: number; readonly maxBytes: number }`.\n- Annotate the constant as `export const SOURCE_CACHE_LIMITS: SourceCacheLimits = Object.freeze({ maxEntries: 2048, maxBytes: 33_554_432 });`. It stays frozen at runtime; the annotation only stops literal-type inference.\n- Type the field as `private readonly limits: SourceCacheLimits;` and the constructor as `constructor(limits: Partial<SourceCacheLimits> = {})`.\n- Change nothing else. The runtime validation stays byte-identical: plain-object check, known keys via Object.hasOwn(SOURCE_CACHE_LIMITS, key), positive safe integers, invalidInput fields. So do the LRU and the byte accounting.\n\n(b) In src/context/negativeSearch.test.ts line 215, drop the `as never` cast from `new SourceCache({ maxEntries: 1 } as never)`. It was the workaround for this bug.\n\n(c) In src/context/sourceCache.test.ts, next to C2/C3, add 'C2b accepts custom maxEntries and maxBytes together':\n- `const c = new SourceCache({ maxEntries: 1, maxBytes: 10 })` (the DoD's exact call).\n- c.set('a', 'x'); c.set('b', 'y'). Expect c.get('a') toBeUndefined and c.get('b') toBe('y').\n- c.set('c', 'x'.repeat(20)). It is 22 JSON bytes, over 10. Expect c.get('c') toBeUndefined and c.get('b') still 'y'.\n\nError handling: the C5 refusal rows stay unchanged and green. Bad limits are still refused at runtime.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ],
+      "note": "Added exported SourceCacheLimits interface, annotated frozen constant, widened field/ctor types; removed as-never cast; added C2b. Runtime validation untouched. 735 other dirty paths are peers' and left alone.",
+      "startedAt": "2026-10-29T23:28:42.418Z",
+      "completedAt": "2026-10-29T23:29:04.002Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification gate, run once and fresh, in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n1. git archive HEAD of the whole repo.\n2. Overlay ONLY the three owned files.\n3. Provide a native node_modules whose lock matches modulo CR.\n4. Run under env -i with the nvm node v24 bin on PATH and NO_COLOR=1.\n\nRun exactly:\ncd packages/moe-daemon && npm test && npx tsc --noEmit && npx tsc --ignoreConfig --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --esModuleInterop --skipLibCheck --resolveJsonModule src/context/sourceCache.test.ts src/context/negativeSearch.test.ts\n\nThe last command is the DoD's typecheck of test files. The package tsconfig excludes *.test.ts, so the command names the files and mirrors tsconfig's compilerOptions. --ignoreConfig is required because TypeScript 7 refuses explicit files next to a tsconfig.json (TS5112).\n\nExpect exit 0. At HEAD, the last command fails with five TS2322 errors: sourceCache.test.ts lines 45, 49, 88, 172 and negativeSearch.test.ts:215.\n\ncmp the owned files against the snapshot before citing the run. Submit the command, its exit code and the output tail as complete_task evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate in Linux snapshot: 186 files, 5194 passed | 16 skipped; tsc --noEmit and file-level test tsc exit 0. Owned files cmp-identical to snapshot.",
+      "startedAt": "2026-10-29T23:29:04.657Z",
+      "completedAt": "2026-10-29T23:29:46.866Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this diff.\n\nRed proof: in a scratch copy, restore the old `Partial<typeof SOURCE_CACHE_LIMITS>` typing. The file-level tsc must fail with TS2322, including on the new C2b line. Then restore and cmp.\n\nCheck:\n- The runtime validation lines are unchanged: diff them.\n- SOURCE_CACHE_LIMITS is still frozen (Object.isFrozen).\n- Nothing outside the three files changed.\n- The diff carries none of the global forbidden tokens.\n- What if a caller passes extra keys or a class instance? Still refused at runtime by C5, so the type widening adds no new accepted input.\n\nWrite the Serena handoff. Note that C11 (task-4e0264fc) can now pass SourceCacheLimits without a cast.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/sourceCache.ts",
+        "packages/moe-daemon/src/context/sourceCache.test.ts",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ],
+      "note": "Red proof: old typeof typing in scratch copy gives 7 TS2322 incl. C2b line 55; restored and cmp-identical. Diff of sourceCache.ts touches only the 4 type lines; runtime validation unchanged; no forbidden tokens. architectureRules.ts dirty path belongs to a peer.",
+      "startedAt": "2026-10-29T23:29:47.594Z",
+      "completedAt": "2026-10-29T23:30:00.931Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,10 +65,99 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T21:02:27.701Z",
-  "updatedAt": "2026-10-29T22:13:29.794Z",
+  "updatedAt": "2026-10-29T23:30:07.893Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T22:13:29.794Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:25:40.722Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-b5749787"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:28:16.991Z",
+  "executionContract": {
+    "intendedBehavior": "SourceCache accepts any positive safe-integer limits at the type level: new SourceCache({ maxEntries: 1, maxBytes: 10 }) compiles. Runtime limit validation and cache behavior are unchanged.",
+    "acceptanceCriteria": [
+      "The file-level tsc over sourceCache.test.ts and negativeSearch.test.ts exits 0, with the cast removed and C2b present.",
+      "C2b passes, showing that both custom limits are enforced together.",
+      "The C5 refusal rows are unchanged and pass.",
+      "npm test and the project tsc --noEmit exit 0."
+    ],
+    "invariants": [
+      "SOURCE_CACHE_LIMITS is still frozen, with values 2048 and 33554432.",
+      "The runtime validation and refusal fields are unchanged."
+    ],
+    "compatibility": [
+      "Every existing caller compiles unchanged: the type only widens."
+    ],
+    "approvedScope": [
+      "The SourceCacheLimits interface (exported).",
+      "The SOURCE_CACHE_LIMITS annotation.",
+      "The SourceCache field and constructor parameter types.",
+      "One new test, C2b.",
+      "Removing one `as never` cast."
+    ],
+    "reuse": [
+      "The existing constructor validation."
+    ],
+    "sourceAssumptions": [
+      "sourceCache.ts:14 SOURCE_CACHE_LIMITS = Object.freeze({...}), with literal types inferred.",
+      "sourceCache.ts:17-25 the limits field and constructor.",
+      "negativeSearch.test.ts:215 the `as never` cast."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test && npx tsc --noEmit && npx tsc --ignoreConfig --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --esModuleInterop --skipLibCheck --resolveJsonModule src/context/sourceCache.test.ts src/context/negativeSearch.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Proving the DoD's 'typechecks':\n- Chosen: a file-level tsc over the two test files, mirroring tsconfig.json compilerOptions, with --ignoreConfig as TypeScript 7 requires. It needs no repo config and QA can re-run it.\n- Rejected: a committed extra tsconfig or a vitest typecheck mode. That is scope creep, and per mem:gotcha-daemon-tests-not-type-checked many other test files would surface unrelated errors.\n- Rejected: a production-code fixture.",
+    "codebaseInsights": "Architect verified this in a fresh HEAD 1422c1d snapshot with TypeScript 7.0.2.\n- The file-level typecheck of sourceCache.test.ts and negativeSearch.test.ts shows exactly the literal-type TS2322 errors: 4 today, 5 once the cast is removed.\n- With the interface fix it exits 0, and the project `tsc --noEmit` still exits 0.\n- There are no other type errors in those two files.\n- SOURCE_CACHE_LIMITS is referenced only inside sourceCache.ts. No docs mention it.\n- No open task plans to touch these files.",
+    "risks": "- Keep Object.freeze: the annotation must widen only the type.\n- Do not loosen runtime validation.\n- TypeScript 7 needs --ignoreConfig for explicit files (TS5112).",
+    "keyFiles": [
+      "packages/moe-daemon/src/context/sourceCache.ts",
+      "packages/moe-daemon/src/context/sourceCache.test.ts",
+      "packages/moe-daemon/src/context/negativeSearch.test.ts",
+      "mem:gotcha-daemon-linux-snapshot-gate"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:28:17.102Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:28:42.418Z",
+  "reviewStartedAt": "2026-10-29T23:30:07.891Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test && npx tsc --noEmit && npx tsc --ignoreConfig --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --esModuleInterop --skipLibCheck --resolveJsonModule src/context/sourceCache.test.ts src/context/negativeSearch.test.ts  (Linux snapshot of HEAD + 3 owned files, node v24.21.0, env -i)",
+    "exitCode": 0,
+    "outputTail": "Test Files  186 passed (186)\n      Tests  5194 passed | 16 skipped (5210)\nnpm run 'tsc' --noEmit (clean)\nnpm run 'tsc' --ignoreConfig --noEmit --strict ... src/context/sourceCache.test.ts src/context/negativeSearch.test.ts (clean)\nEXIT=0",
+    "reportedAt": "2026-10-29T23:30:07.891Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/context/sourceCache.ts",
+    "packages/moe-daemon/src/context/sourceCache.test.ts",
+    "packages/moe-daemon/src/context/negativeSearch.test.ts"
+  ],
+  "completionSummary": "Added exported SourceCacheLimits interface and annotated frozen SOURCE_CACHE_LIMITS with it, so SourceCache's field and constructor accept any numeric limits. Runtime validation is unchanged. Removed the `as never` cast in negativeSearch.test.ts and added C2b to sourceCache.test.ts. Red proof: with the old typeof typing the file-level tsc gives 7 TS2322, including the C2b line."
 }

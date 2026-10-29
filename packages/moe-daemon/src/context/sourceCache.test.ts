@@ -45,6 +45,12 @@ describe('C1-C8 SourceCache core', () => {
     const c = new SourceCache({ maxEntries: 2 }); c.set('a', 1); c.set('b', 2); c.get('a'); c.set('c', 3);
     expect([c.get('a'), c.get('b'), c.get('c'), c.stats().evictions]).toEqual([1, undefined, 3, 1]);
   });
+  it('C2b accepts custom maxEntries and maxBytes together', () => {
+    const c = new SourceCache({ maxEntries: 1, maxBytes: 10 }); c.set('a', 'x'); c.set('b', 'y');
+    expect([c.get('a'), c.get('b')]).toEqual([undefined, 'y']);
+    c.set('c', 'x'.repeat(20));
+    expect([c.get('c'), c.get('b')]).toEqual([undefined, 'y']);
+  });
   it('C3 holds at most maxBytes, the sum of stored sizes, and never an oversize or unclonable value', () => {
     const c = new SourceCache({ maxBytes: 10 }); c.set('a', 'xx'); c.set('a', 'x'.repeat(20));
     expect(c.get('a')).toBeUndefined();

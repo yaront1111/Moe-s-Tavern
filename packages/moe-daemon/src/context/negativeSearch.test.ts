@@ -211,8 +211,7 @@ describe('N7, N8 an unknown generation or a lost entry is unknown, never absent'
     await expect(repositoryScopeGeneration(r.root, 'HEAD', ['src'])).rejects.toThrow(invalid);
   });
   it('N8 a cache miss, clear(), restart, eviction or malformed entry reads unknown', () => {
-    // The cast works around C04's literal-typed limits (bug task-025249c9051749e5bf23685a1c00ca29).
-    const c = new SourceCache({ maxEntries: 1 } as never), key = negativeSearchKey(repoQ), zero = { manifest: { commit: 'e'.repeat(40) }, items: [{ ...search(['src']), status: 'served', matches: [], bytes: 0 }], complete: true, limitations: ['committed-bytes-only'], bytes: 0 };
+    const c = new SourceCache({ maxEntries: 1 }), key = negativeSearchKey(repoQ), zero = { manifest: { commit: 'e'.repeat(40) }, items: [{ ...search(['src']), status: 'served', matches: [], bytes: 0 }], complete: true, limitations: ['committed-bytes-only'], bytes: 0 };
     const reads = [lookupNegative(c, repoQ, GEN)];
     recordNegative(c, repoQ, zero as never, GEN); reads.push(lookupNegative(c, repoQ, GEN), lookupNegative(new SourceCache(), repoQ, GEN));
     c.clear(); reads.push(lookupNegative(c, repoQ, GEN));

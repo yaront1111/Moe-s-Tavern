@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:33:41.147Z",
-  "updatedAt": "2026-10-29T23:29:31.907Z",
+  "updatedAt": "2026-10-29T23:30:12.285Z",
   "contextFetchedBy": [
     "worker-b5749787",
     "qa-952969be",
@@ -162,7 +162,40 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-snapshot.test.mjs",
+    "scripts/local-runner/source-export.mjs",
+    ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+    ".moe/tasks/task-e40ad69f14194e2c89b43727588c2b25.json"
+  ],
+  "completionSummary": "exportSourceSnapshot now refuses a bare, relative, root-/drive-relative, missing or in-repository git with EXPORT_INPUT_INVALID before any process spawns, and an omitted git resolves only to the first git in a fully qualified PATH entry (EXPORT_GIT_FAILED if none).\n\nsource-export.mjs (+38/-3): readInput drops the 'git' default and requires an omitted or fully qualified git (win32: drive-absolute or UNC, as the daemon's gitExecutable; else path.isAbsolute). New pathGit stats only, skipping empty/relative entries, with no bare-name fallback. New exported exportGit realpaths the git (not case-folded) and refuses one inside realpath(repoDir) (pathKey-folded compare). It returns the realpath, so the checked file is the one that runs. An unreadable repoDir still falls through to EXPORT_REPOSITORY_UNSUPPORTED (E7 unchanged). admission.mjs, openRepository and gitRunner are untouched.\\n\\nTests: new row E9 (+39 lines) covers bare/relative/root-relative/drive-relative/in-repo/missing/symlink-into-repo git and the PATH cases ('.' and empty entries skipped, repo-bin first refused, PATH='.' gives GIT_GIT_FAILED), with planted marker gits in the repo and in the chdir'd cwd and a positive control. RED first (bare git resolved), then green.\\n\\nEvidence: snapshot suite 23/23, exit 0. X7 passes. The four daemon context tests that omit git pass 244/244 in a Linux git-archive snapshot with this source-export.mjs. Windows Node via cmd.exe: 22 pass, 1 skip (E6, POSIX-only). Mutation probes: 6/6 killed (drop in-repo check, keep relative PATH entries, drop fullyQualified, bare-name fallback, realpath-failure passthrough, guard removed).\\n\\nResidual (theoretical, same as admission.mjs): repoDir is realpath'd twice (exportGit then openRepository), so a concurrent re-point of repoDir's own path between them is not closed.",
+  "commits": [
+    {
+      "sha": "9b5897b9b5b447d6ac96412aad25fd85a36ceacc",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T23:24:51Z",
+      "paths": [
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-e40ad69f14194e2c89b43727588c2b25.json",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T23:30:12.285Z",
+      "treeId": "38c723efe2a1ff264a653731a229d53432080f4a",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-snapshot.test.mjs",
     "scripts/local-runner/source-export.mjs"
   ],
-  "completionSummary": "exportSourceSnapshot now refuses a bare, relative, root-/drive-relative, missing or in-repository git with EXPORT_INPUT_INVALID before any process spawns, and an omitted git resolves only to the first git in a fully qualified PATH entry (EXPORT_GIT_FAILED if none).\n\nsource-export.mjs (+38/-3): readInput drops the 'git' default and requires an omitted or fully qualified git (win32: drive-absolute or UNC, as the daemon's gitExecutable; else path.isAbsolute). New pathGit stats only, skipping empty/relative entries, with no bare-name fallback. New exported exportGit realpaths the git (not case-folded) and refuses one inside realpath(repoDir) (pathKey-folded compare). It returns the realpath, so the checked file is the one that runs. An unreadable repoDir still falls through to EXPORT_REPOSITORY_UNSUPPORTED (E7 unchanged). admission.mjs, openRepository and gitRunner are untouched.\\n\\nTests: new row E9 (+39 lines) covers bare/relative/root-relative/drive-relative/in-repo/missing/symlink-into-repo git and the PATH cases ('.' and empty entries skipped, repo-bin first refused, PATH='.' gives GIT_GIT_FAILED), with planted marker gits in the repo and in the chdir'd cwd and a positive control. RED first (bare git resolved), then green.\\n\\nEvidence: snapshot suite 23/23, exit 0. X7 passes. The four daemon context tests that omit git pass 244/244 in a Linux git-archive snapshot with this source-export.mjs. Windows Node via cmd.exe: 22 pass, 1 skip (E6, POSIX-only). Mutation probes: 6/6 killed (drop in-repo check, keep relative PATH entries, drop fullyQualified, bare-name fallback, realpath-failure passthrough, guard removed).\\n\\nResidual (theoretical, same as admission.mjs): repoDir is realpath'd twice (exportGit then openRepository), so a concurrent re-point of repoDir's own path between them is not closed."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T23:24:51Z",
+    "at": "2026-10-29T23:30:12.285Z"
+  }
 }
