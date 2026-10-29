@@ -1,0 +1,35 @@
+{
+  "id": "task-1e7f5a2dc15b4de5b384a814c4505ed8",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e2] Guest Node toolchain install mode",
+  "description": "Objective: copy the host-verified Node toolchain tarball from CQ-R11e1 into a fresh check VM through a copy-only supervisor stream. It is installed root-owned at /opt/moe/toolchain and is never writable by a job identity, so the check mode can run node and npm. This is part of the human's CQ-R11e decision, made in the architect REPL on 2026-10-30: an offline cache, so the guest never touches the network.\n\nSplit from CQ-R11e (task-001d8ab3) by architect-e4b7eee0 on 2026-10-30. It depends on:\n- CQ-R11e1 (task-b799056d), for fetchNodeToolchain's verified {file, sha256, size, version};\n- CQ-R10d4 (task-60626bee), so that its edits to guest-supervisor.py, snapshot-transfer.mjs and local-runner.test.mjs land after those of CQ-R11f, CQ-R10d3 and CQ-R10d4.\n\nContract — guest-supervisor.py, a root 'toolchain' mode (argv ['toolchain']):\n- Frames on stdin, read with the snapshot_frames/expect helpers that materialize uses:\n  - one {kind:'toolchain', version:1, size, sha256}, with size at most MAX_TOOLCHAIN_BYTES (128 MiB);\n  - then base64 'data' frames;\n  - then {kind:'end'}.\n- The bytes go to a root 0700 staging directory beside TOOLCHAIN = '/opt/moe/toolchain': a file opened O_EXCL|O_NOFOLLOW, then fsynced. Its size and sha256 must match the header, or it exits 65 with nothing installed.\n- Extraction is tarfile.open(mode='r:*') with extractall(filter='data') into that staging directory. This refuses absolute or escaping member paths, links that leave the tree and device files, and strips setuid/setgid and group/other write bits. It runs as root, so every entry is root-owned.\n- If tarfile has no data_filter, the mode exits 71. The guest's Ubuntu 24.04 python3 3.12 always has one.\n- The tarball must have exactly one top-level directory, which is renamed onto TOOLCHAIN.\n  - An existing TOOLCHAIN is 73, left untouched.\n  - Any refusal leaves no TOOLCHAIN and no staging.\n- Success writes exactly one frame, {kind:'installed', sha256}, and exits 0.\n- Update the module header's mode and exit-code lines.\n\nContract — scripts/local-runner/snapshot-transfer.mjs: MODES gains 'toolchain', and a new exported installToolchain({name, toolchain, provider, timeoutMs}):\n- toolchain is fetchNodeToolchain's result. Before any spawn, it reads the file and re-checks its size and sha256 against toolchain; a changed cache file is TRANSFER_TOOLCHAIN_MISMATCH.\n- It streams the header, SNAPSHOT_CHUNK_BYTES data frames and end through the module's runSupervisorStream path.\n- It asserts no mounts before and after, as materializeSnapshot does.\n- It accepts exactly one {kind:'installed', sha256} frame, equal to toolchain.sha256; otherwise TRANSFER_FRAME_INVALID or TRANSFER_DIGEST_MISMATCH.\n- It resolves a frozen {instance, sha256, version, executionReady:false}.\n- New codes get fixed MESSAGES entries, with no path or guest byte in any message.\n\nTests go in scripts/tests/local-runner.test.mjs:\n- beside R09c's M1-M4: the real supervisor through PY_LOAD, with an injectable toolchain path and owner;\n- beside T4/T7: the host side, with a fake provider;\n- fixture tarballs are built with python3 tarfile in a temp directory, never downloaded;\n- a row whose python3 tarfile lacks data_filter is skipped, the way NOT_POSIX rows are.\n\nOut of scope:\n- the check job's PATH and the dependency phase (CQ-R11e5);\n- the host cache (CQ-R11e1);\n- lifecycle wiring and environment identity (CQ-R11e);\n- any verified-local or isolation claim;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "Through the real supervisor, the toolchain mode installs only a stream whose size and sha256 match its header, as a root-owned tree with no group- or other-writable entry. A mismatch fails with a fixed exit code and leaves no install and no staging. So do an escaping or absolute member, a link out of the tree, a device entry, an existing install and a malformed frame. Shown by tests.",
+    "Before any spawn, installToolchain re-verifies the cached tarball. It streams only those bytes, checks mounts before and after, and accepts only the matching installed frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "dependsOn": [
+    "task-b799056d744749ba8ca9e4888f3452c4",
+    "task-60626bee13034a178fed55c697d14d06"
+  ],
+  "priority": "HIGH",
+  "order": 253.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:52:33.539Z",
+  "updatedAt": "2026-10-29T22:52:33.539Z"
+}

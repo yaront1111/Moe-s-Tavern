@@ -1,0 +1,36 @@
+{
+  "id": "task-71516084821845a29f79570b0a63f274",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e4] Guest offline dependency tree stream",
+  "description": "Objective: copy one host-built offline npm dependency tree (from CQ-R11e3) into the fresh check VM, copy-only, at /var/lib/moe/dependencies. It is root-owned and read-only to job identities, so CQ-R11e5's check-mode install phase can run `npm ci --offline` with no network. This is part of the human's CQ-R11e decision, made in the architect REPL on 2026-10-30: an offline cache, so the guest never touches the network.\n\nSplit from CQ-R11e (task-001d8ab3) by architect-e4b7eee0 on 2026-10-30. It depends on:\n- CQ-R11e3 (task-ab029075), for the tree;\n- CQ-R11e2 (task-1e7f5a2d), so its guest-supervisor.py, snapshot-transfer.mjs and local-runner.test.mjs edits land after R11e2's.\n\nInput, as pinned in CQ-R11e3's contract comment: buildDependencyCache resolves {tree, digest, packages, bytes}.\n- tree is source-snapshot.mjs validateImport's sealed {entries, digest} over the offline tree: the `_cacache/content-v2/...` files plus a root `moe-dependencies.json`.\n- digest === tree.digest.\nSo no new stream format is needed. Reuse R09c's materialize.\n\nContract — guest-supervisor.py:\n- materialize() gains a keyword `mode=0o700` for its root directory, which is today's literal, so the workspace call and its behavior are unchanged.\n- A root 'dependencies' mode (argv ['dependencies']) calls materialize with:\n  - workspace=DEPENDENCIES ('/var/lib/moe/dependencies');\n  - manifest=DEPENDENCIES_MANIFEST ('/var/lib/moe/dependencies.manifest.json', root 0600);\n  - owner=(0, 0) and mode=0o755.\n- The tree is then root-owned, with files 0644 and directories 0755: readable by the check identity, never writable by any job identity.\n- It keeps materialize's frames, limits and exit codes (65 malformed or mismatched, 73 existing, 74 I/O) and its 'materialized' digest frame.\n- Update the module header's mode and exit-code lines.\n\nContract — scripts/local-runner/snapshot-transfer.mjs:\n- MODES gains 'dependencies'.\n- A new exported installDependencies({name, tree, provider, timeoutMs}) streams hostFrames(tree) in mode 'dependencies'. It accepts only the 'materialized' frame whose digest equals tree.digest, and checks for mounts before and after.\n- It shares one internal helper with materializeSnapshot rather than copying it. materializeSnapshot's behavior and its T rows stay unchanged.\n- It resolves a frozen {instance, digest, files, bytes, executionReady:false}.\n\nTests go in scripts/tests/local-runner.test.mjs, beside M1-M4 and T4/T7:\n- the real supervisor's dependencies mode, with an injectable owner and paths: modes, the root-only manifest, 73 for an existing tree, 65 for a mismatch;\n- installDependencies with a fake provider: a digest mismatch, a malformed frame, mounts present;\n- the workspace materialize rows still pass unchanged.\n\nOut of scope:\n- the install phase in the check mode (CQ-R11e5);\n- building the tree (CQ-R11e3);\n- lifecycle wiring and identity (CQ-R11e);\n- any verified-local claim;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "Through the real supervisor, the dependencies mode installs a tree only when its digest matches. The tree is root-owned, with 0644 files and 0755 directories, beside a root-only manifest. An existing tree is 73 and left untouched; a malformed or mismatched stream is 65 and leaves nothing behind. Shown by tests.",
+    "installDependencies streams only the sealed tree, checks mounts before and after, and accepts only the matching materialized frame. Every failure is a fixed TRANSFER_* code. Shown by tests with a fake provider.",
+    "materializeSnapshot and the workspace materialize mode behave exactly as before; every existing T and M row passes unchanged.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "dependsOn": [
+    "task-ab029075e214413483456f26eef0269a",
+    "task-1e7f5a2dc15b4de5b384a814c4505ed8"
+  ],
+  "priority": "HIGH",
+  "order": 253.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:53:09.580Z",
+  "updatedAt": "2026-10-29T22:53:09.580Z"
+}

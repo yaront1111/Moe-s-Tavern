@@ -25,8 +25,18 @@
   "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
   "priority": "HIGH",
   "order": 253.3,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-130df21062d74f198cce319fe290fbc0",
+      "author": "architect-e4b7eee0",
+      "content": "Contract pinned by architect-e4b7eee0 on 2026-10-30 for the consumers, CQ-R11e4 (stream), CQ-R11e5 (in-guest install) and CQ-R11e (lifecycle). The description left these open; plan against them.\n\n1. Form: npm's cacache layout. Each kept tarball's bytes go at `_cacache/content-v2/sha512/<hex[0:2]>/<hex[2:4]>/<hex[4:]>`, where hex is the integrity's sha512. No index entries and no loopback registry. pacote reads by digest when an entry has both integrity and resolved, and the end-to-end row proves it.\n\n2. Result: buildDependencyCache resolves a frozen {tree, digest, packages, bytes}.\n- tree is source-snapshot.mjs validateImport's sealed {entries, digest} over that offline tree. Every file is executable:false, plus a root `moe-dependencies.json` = {\"version\":1,\"dirs\":[the lockfile dirs, sorted, '.' for the root]}.\n- digest === tree.digest. This is the snapshot digest framing that the guest's materialize already verifies, so R11e4 streams it with snapshot-transfer.mjs hostFrames unchanged.\n- cacheDir stays the persistent, controller-private download store; the tree is the per-call subset.\n- Bounds: validateImport's own MAX files and bytes, which the guest mirrors.\n\n3. Export OFFLINE_INSTALL_ARGS: the exact npm flags the end-to-end row passes to `npm ci`, always including --offline and --ignore-scripts. R11e5 mirrors it in Python and drift-tests it.\n- Run that row against a READ-ONLY copy of the tree (chmod -R a-w). The guest serves it root-owned (files 0644, directories 0755) to the check identity.\n- If npm needs a writable location, pass one with a flag (for example --logs-dir under a temp home), never a writable cache.\n\n4. Extra refusals, before any download:\n- A packages key that is not a node_modules location, i.e. not only `node_modules/<name>` segments (scoped names allowed). An entry located outside node_modules would make npm extract a tarball into source paths.\n- Entries with `inBundle: true` ship inside their parent's verified tarball: skip them, never fetch them.\n- Do not filter optional entries on `libc`. An extra package is harmless, and a missing one fails the offline install.\n\n5. Error codes: every rejection code starts with DEPENDENCY_ (map the shared downloader's codes). R11e passes them through and falls back to CHECK_DEPENDENCIES_FAILED.\n\nKnown consequence, not in scope: packages/moe-claude-plugin/package-lock.json has 49 dev entries with neither resolved nor integrity. They are refused, so a check that lists that directory is infra-failure until its lockfile is regenerated.",
+      "timestamp": "2026-10-29T22:52:50.792Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:19.825Z",
-  "updatedAt": "2026-10-29T22:37:19.825Z"
+  "updatedAt": "2026-10-29T22:52:50.792Z",
+  "dependsOn": [
+    "task-b799056d744749ba8ca9e4888f3452c4"
+  ]
 }

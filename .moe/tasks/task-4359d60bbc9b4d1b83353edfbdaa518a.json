@@ -1,0 +1,36 @@
+{
+  "id": "task-4359d60bbc9b4d1b83353edfbdaa518a",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M06b] Six-workstream composition fixtures",
+  "description": "Objective: Prove that the six CQ workstreams compose: no stale-revision, check, recipe or isolation bypass at the seams between contract (F), context (C), delivery (V), isolation (R), client (I) and rollout (M). This is a SPIDR slice of [CQ-M06] (task-ced857485a1c4d75b57cc25dcc9b4d82), which keeps the docs sweep, the full regression and the whole-epic review. It depends on CQ-M05, which waits on every workstream's final task (F12, C11, V12, R13, I06), so all producers have landed when it runs.\n\nDeliverable: packages/moe-daemon/src/__e2e__/workstreamComposition.e2e.test.ts. It is tests only, using real tools and stores and temp Git repos, with one describe per seam:\n- Stale revision (F×C×V): a requirement edit after approval advances planRevision. Plan reuse then never resumes the row, the recipe instance reads stale, and strict entry or completion is refused PLAN_REVISION_NOT_APPROVED. A review, candidate or check run bound to the old revision is refused, or does not satisfy delivery.\n- Check (V×C×M): under a strict deliveryPolicy, each of these is refused at delivery, identically under legacy and observe: a missing, failing or inconclusive required check; a caller-labelled runner observation; a candidate that edits a protected check config or the recipe definitions.\n- Recipe (C×F×M): an ineligible or mismatched instantiation falls back to ordinary planning with no approval stamp, and 'moe-recipe' impersonation is refused.\n- Isolation (R×M×V×I): verified-local is refused on every path (settings activation through the CQ-M05 control, claim, completion, delivery) with no host fallback. Nothing records isolation, readiness or verifiedLocal from a legacy or observe runner, check or client.\nEvery refusal asserts the exact codeName and that nothing was written. Legacy control rows keep their compatibility outcomes.\n\nNot in scope:\n- New production behavior. A defect fix over about 30 lines, or any contract change, goes to its owning task through moe.report_blocked.\n- IDE rendering (I06), real VM provisioning (R13) and docs.\n\nVerification command (fresh, exit 0 required): cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "workstreamComposition.e2e.test.ts covers the stale-revision, check, recipe and isolation seams named in the description, each through real tools with exact codeName assertions.",
+    "Every refusal case also proves nothing was written: task, attempt, candidate, check, review and receipt bytes are unchanged.",
+    "No gate is mocked, no test-only certification is used, and verified-local is never made ready.",
+    "Legacy-profile control rows keep their existing compatibility outcomes in the same scenarios.",
+    "Fresh verification `cd packages/moe-daemon && npm test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c53999b2dd2c4ad08bacb73c50371cfa"
+  ],
+  "priority": "HIGH",
+  "order": 230.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:51:08.708Z",
+  "updatedAt": "2026-10-29T22:51:08.708Z"
+}

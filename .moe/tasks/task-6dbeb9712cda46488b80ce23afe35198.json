@@ -1,0 +1,131 @@
+{
+  "id": "task-6dbeb9712cda46488b80ce23afe35198",
+  "epicId": "epic-c9561bfb767248e38c9c0be82d09ec2c",
+  "title": "[CQ-I06d] JetBrains approval error correlation",
+  "description": "Objective: make the JetBrains plan review consume daemon ERROR frames the way VS Code's PlanReviewPanel.handleClientError does. Verified on 2026-10-30:\n- MoeMessageDispatcher keeps only `message` and `operation` from an ERROR frame. It drops the frame's `codeName` and `context.taskId`.\n- PlanReviewDialog.onError feeds EVERY error frame into PlanReviewApprovalState.onDaemonError, which re-arms a PENDING approval.\n\nSo any unrelated error that arrives while an approval is pending re-arms the dialog with a misleading 'The daemon refused the approval: <other text>'. Examples: another operation, another task, or a payload error with no context. When WORKING then arrives at the captured revision, it is reported as status-changed, never as approved. VS Code ignores uncorrelated frames, and latches on a correlated PLAN_REVISION_MISMATCH. CQ-I06 DoD 1 ('Both clients consume identical daemon verdicts') needs one behaviour.\n\nDeliverable:\n- The dispatcher strictly parses `codeName` and `context.taskId`: strings only, anything else becomes null.\n- It publishes them through a NEW default MoeStateListener method, so the four existing onError(operation, message) implementers stay unchanged.\n- The dialog reacts only to operation APPROVE_TASK whose context.taskId equals its task:\n  - a correlated PLAN_REVISION_MISMATCH latches INVALIDATED with PLAN_CHANGED_KEY;\n  - any other correlated error re-arms with DAEMON_ERROR_KEY, as today.\n- Tests for each case.\n\nOut of scope:\n- the daemon frame shape, which already carries operation, code, codeName and context {taskId, epicId, revisions};\n- VS Code, CLIENT_HELLO, and the shared verdict corpus (CQ-I06b);\n- any other listener's error handling.\n\nVerification (run fresh, exit 0 required): cd moe-jetbrains && ./gradlew test. WSL has no JDK, so run the Windows gradlew.bat equivalent under the jetbrains-gradle lease and label it as such.",
+  "definitionOfDone": [
+    "A dispatcher test feeds raw ERROR frames to MoeMessageDispatcher. The new listener method receives the exact operation, codeName and context.taskId. A missing or non-string codeName or taskId arrives as null. Existing onError(operation, message) delivery is unchanged.",
+    "Named PlanReviewApprovalStateTest cases: a PENDING approval stays PENDING after an ERROR for another operation, after one for another task, and after one with no context. A later WORKING at the captured revision then reaches FINISHED.",
+    "Named tests: a correlated PLAN_REVISION_MISMATCH while PENDING ends INVALIDATED with PLAN_CHANGED_KEY and never re-arms. Any other correlated codeName (including none) re-arms READY with DAEMON_ERROR_KEY.",
+    "Fresh `cd moe-jetbrains && ./gradlew test` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "JetBrains only: no daemon, wire-shape or moe-vscode changes; existing onError(operation, message) implementers keep compiling and behaving unchanged."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Load test-driven-development. CQ-I06a, a dependency, has landed onConnectionLost in the same three toolwindow files. Build on its landed bytes and never revert them.\n\n1. NEW moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherErrorTest.kt. Copy the harness from MoeMessageDispatcherAccountsTest: a Proxy fakeProject(), `MoeMessageDispatcher(project=fakeProject(), invokeLater={ it() }, isDisposed={ false }, currentState={ state }, updateState={ state = it }, onProjectMismatch={}, onDaemonShuttingDown={})`, and a listener that records BOTH onError(operation, message) and the new onDaemonError(DaemonError). Feed raw JSON through dispatcher.handle(...):\n   - E1: the full refusal frame `{\"type\":\"ERROR\",\"message\":\"Plan changed\",\"operation\":\"APPROVE_TASK\",\"code\":-32010,\"codeName\":\"PLAN_REVISION_MISMATCH\",\"context\":{\"taskId\":\"task-1\",\"epicId\":\"epic-1\",\"expectedPlanRevision\":4,\"currentPlanRevision\":5}}`. Expect DaemonError(\"APPROVE_TASK\", \"PLAN_REVISION_MISMATCH\", \"task-1\", \"Plan changed\") exactly, and onError(\"APPROVE_TASK\", \"Plan changed\") exactly as today.\n   - E2: the legacy frame `{\"type\":\"ERROR\",\"message\":\"Missing payload\"}`. Expect DaemonError(null, null, null, \"Missing payload\"), with onError(\"unknown\", \"Missing payload\") unchanged.\n   - E3: hostile types, each giving the null field and never throwing:\n     - codeName 7, true, null, {} and [];\n     - context \"task-1\", [] and null;\n     - context {\"taskId\":5}, {\"taskId\":null} and {\"taskId\":{}}.\n     onError delivery stays as today for every frame whose operation and message are strings.\n2. moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt:\n   - Migrate every existing `state.onDaemonError(\"APPROVE_TASK\", \"<text>\")` call to `state.onDaemonError(\"APPROVE_TASK\", taskId, null)`, a correlated error with no code. Their asserted semantics do not change. The step note must say this is a mechanical signature migration, not a weakening.\n   - Add a section '// ---- daemon error correlation (CQ-I06d)', using the existing helpers (pendingAt, working, rendered, snapshot):\n     - D1 `an error for another operation leaves a pending approval pending`. onDaemonError(\"UPDATE_SETTINGS\", taskId, null) and onDaemonError(\"UPDATE_TASK\", taskId, \"PLAN_REVISION_MISMATCH\") both return false, and the state stays PENDING. Then onStateUpdate(working(4L)) reaches FINISHED.\n     - D2 `an error for another task leaves a pending approval pending`. onDaemonError(\"APPROVE_TASK\", \"task-other\", \"PLAN_REVISION_MISMATCH\") returns false. Then working(4L) reaches FINISHED.\n     - D3 `an error without context leaves a pending approval pending`. Both (null, null, null) and (\"APPROVE_TASK\", null, null) return false. Then working(4L) reaches FINISHED.\n     - D4 `a correlated PLAN_REVISION_MISMATCH latches as plan changed`. It returns true and gives INVALIDATED, PLAN_CHANGED_KEY, approveEnabled false, captured 4L. onApproveClicked returns Blocked(PLAN_CHANGED_KEY). A later working(4L) leaves it INVALIDATED, never FINISHED.\n     - D5 `any other correlated code re-arms with the daemon error notice`. Use a table over codeName null, \"INVALID_INPUT\", \"TASK_NOT_FOUND\" and \"plan_revision_mismatch\"; matching is exact and case-sensitive only. Each returns true and gives READY, DAEMON_ERROR_KEY, approveEnabled true. The next click sends Send(taskId, 4L).\n     - D6 `a correlated error outside pending changes nothing`. In READY, INVALIDATED, FINISHED and DISPOSED, a correlated mismatch returns false and leaves the phase and notice unchanged.\n     - D7, a source pin via dialogSource(): `the dialog routes only correlated daemon errors into the machine`. The source contains `override fun onDaemonError(error: DaemonError)` with `approval.onDaemonError(error.operation, error.taskId, error.codeName)` and `applyApprovalState()`, and no longer contains `approval.onDaemonError(operation, message)`.\nRED: the test sources fail to compile, because DaemonError and the new signatures do not exist yet. Record that in the step note. Run the focused classes under the jetbrains-gradle lease: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <tree>\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.PlanReviewApprovalStateTest --tests com.moe.services.MoeMessageDispatcherErrorTest\"`.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherErrorTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "MINIMUM IMPLEMENTATION. Report every file.\n\n1. moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt:\n   - add a top-level `data class DaemonError(val operation: String?, val codeName: String?, val taskId: String?, val message: String)`;\n   - add the interface default `fun onDaemonError(error: DaemonError) {}`. Its KDoc says it is delivered AFTER onError for every ERROR frame, and that each field is null when the frame lacks it or carries a non-string;\n   - leave the four existing onError implementers untouched.\n2. moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt, \"ERROR\" branch:\n   - keep `publishError(operation, errorMessage)` exactly;\n   - then publish `DaemonError(json.get(\"operation\").stringOrNull(), json.get(\"codeName\").stringOrNull(), json.get(\"context\")?.takeIf { it.isJsonObject }?.asJsonObject?.get(\"taskId\").stringOrNull(), errorMessage)` through a new `publishDaemonError`. It runs invokeLater and listeners.forEach { it.onDaemonError(it) }, like publishError;\n   - add the private strict accessor `JsonElement?.stringOrNull()`. It returns non-null only for a JSON primitive string and never calls asString on an object or array.\n   Error handling: the strict parse cannot throw, so a hostile frame can never suppress the legacy onError delivery.\n3. moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt: replace `onDaemonError(operation: String, message: String)` with `fun onDaemonError(operation: String?, errorTaskId: String?, codeName: String?): Boolean`, under the existing lock:\n   - return false unless operation == APPROVE_OPERATION (\"APPROVE_TASK\"), errorTaskId == taskId and the phase is PENDING;\n   - if codeName == PLAN_REVISION_MISMATCH (\"PLAN_REVISION_MISMATCH\", exact), set phase = INVALIDATED and notice = PLAN_CHANGED_KEY, and return true. The approval stays latched, and capturedRevision is never replaced;\n   - otherwise call releasePending(DAEMON_ERROR_KEY).\n   Add the two constants to the companion object. The KDoc names VS Code PlanReviewPanel.handleClientError as the parity reference.\n4. moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt:\n   - delete the onError override, so the interface default no-op applies;\n   - add `override fun onDaemonError(error: DaemonError) { if (!approval.onDaemonError(error.operation, error.taskId, error.codeName)) return; lastErrorMessage = error.message.take(MAX_ERROR_CHARS); ... }`, followed by the same EDT repaint as before (SwingUtilities.invokeLater with an isDisposed guard and try/log);\n   - keep CQ-I06a's onStatus untouched.\nRun the focused classes from step 1: all green.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each one to a scratch copy, never the shared tree, then restore it and cmp-verify. Each must fail the named case:\n   - M1, the machine ignores operation: fails D1.\n   - M2, the machine ignores task id: fails D2.\n   - M3, a mismatch re-arms instead of latching: fails D4.\n   - M4, a case-insensitive code match: fails D5's lowercase row.\n   - M5, the dispatcher parses codeName leniently with safeAsString: fails E3 (7 becomes \"7\").\n   - M6, the dispatcher drops publishError: fails the onError assertions in E1/E2.\n   - M7, the dialog still routes onError into the machine: fails D7.\n2. THE GATE. Run it fresh, under the `jetbrains-gradle` lease, and release the lease even on failure: `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <tree>\\moe-jetbrains && .\\gradlew.bat test --rerun\"`. This is the Windows equivalent of `cd moe-jetbrains && ./gradlew test`, because WSL has no JDK.\n   - If the shared tree is mid-merge or has conflict markers, gate in a `git archive HEAD moe-jetbrains` snapshot overlaid with exactly this task's six files, and cmp-verify the overlay (`mem:gotcha-jetbrains-gate-snapshot`).\n   - Exit must be 0. Confirm from the TEST-*.xml timestamps and counts that MoeMessageDispatcherErrorTest and PlanReviewApprovalStateTest ran.\n3. Size: `git diff --numstat` over these files must stay well under 400 net. Expect about 190.\n4. Give complete_task the gate command, labelled as the Windows equivalent, with its exit code and the output tail.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, last. Load adversarial-self-review. Read the diff as someone trying to make JetBrains report an approval wrongly, or drift from VS Code. Check:\n- Ordering: the newer-revision frame arriving BEFORE the correlated PLAN_REVISION_MISMATCH. It already latched, so the error is a no-op. Also a mismatch followed by WORKING at the captured revision.\n- A board-originated APPROVE_TASK refusal for the same task while the dialog is pending. It correlates by task id, exactly as VS Code does; note that this is intended.\n- Thread safety: dispatcher invokeLater, then the machine lock, then an EDT-only repaint.\n- Hostile frames: huge message text (still bounded by MAX_ERROR_CHARS), non-string fields, a context array, a missing operation.\n- The four other onError listeners are unaffected: status bar, tool window, metrics, and the dialog's former route. The tool window's error notification still fires.\n- Strings match exactly: no trimming and no case folding.\n- Rails: JetBrains only, with no daemon, wire or moe-vscode edits; no .moe edits; no Git writes; none of globalRails.forbiddenPatterns.\nThen write the Serena memory 'task-task-6dbeb9712cda46488b80ce23afe35198-handoff' for CQ-I06b. Record:\n- the corpus mapping: an error event is (operation, taskId, codeName). The machine's verdicts are: ignored leaves it unchanged, a correlated mismatch latches, any other correlated error re-arms;\n- the new DaemonError listener API.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b20f7a40efbd4f56b457888612cd52a8"
+  ],
+  "priority": "HIGH",
+  "order": 246.65,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:47:04.182Z",
+  "updatedAt": "2026-10-29T22:50:30.785Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T22:47:23.657Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:50:30.684Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains reads codeName and context.taskId from daemon ERROR frames strictly. Only APPROVE_TASK errors for its own task reach the plan-review machine:\n- a correlated PLAN_REVISION_MISMATCH latches as plan changed;\n- any other correlated error re-arms;\n- uncorrelated frames never touch a pending approval, so a later WORKING at the captured revision still confirms it.\nThis matches VS Code's PlanReviewPanel.handleClientError.",
+    "acceptanceCriteria": [
+      "Dispatcher tests E1-E3 prove the exact DaemonError fields: strict strings, null for anything else, never a throw. Legacy onError delivery is unchanged.",
+      "Machine tests D1-D6 prove:\n- correlation by operation, task id and context;\n- the exact-match mismatch latch;\n- the re-arm for other codes;\n- nothing changes outside PENDING.",
+      "Source pin D7 proves the dialog routes only through onDaemonError(DaemonError).",
+      "`cd moe-jetbrains && ./gradlew test` (or the labelled Windows equivalent) exits 0 fresh."
+    ],
+    "invariants": [
+      "The captured revision is never replaced, and nothing is retried automatically.",
+      "FINISHED is reachable only from PENDING observing WORKING at the captured revision.",
+      "Existing onError(operation, message) implementers keep compiling and behave as before.",
+      "No daemon, wire-shape, moe-vscode, .moe or Git-write changes."
+    ],
+    "compatibility": [
+      "Daemon ERROR frames are unchanged. Legacy frames without operation, codeName or context still dispatch to onError exactly as before.",
+      "Existing PlanReviewApprovalStateTest semantics are kept. Only the onDaemonError call signature is migrated, to the correlated no-code form."
+    ],
+    "checkRefs": [
+      "cd moe-jetbrains && ./gradlew test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Change onError(operation, message) to carry the new fields. Rejected: it would break four implementers (MoeStatusBarWidget, MoeToolWindowPanel, MetricsPanel, PlanReviewDialog). A default onDaemonError(DaemonError) method is added instead.\n- Filter only by operation in the dialog. Rejected: an APPROVE_TASK error for another task, for example a board approval, would still re-arm, and VS Code correlates by context.taskId.\n- Put the correlation in the dialog. Rejected: the dialog cannot be tested headlessly. The machine already knows its taskId and holds the lock, so correlation lives there and D1-D6 test it directly.",
+    "codebaseInsights": "- MoeMessageDispatcher.kt, \"ERROR\" branch (about line 180): it reads only message and operation, via safeAsString. safeAsString calls asString, which throws on an object or array. Neither codeName nor context is parsed.\n- Daemon WebSocketServer error frame (around line 1145): {type:'ERROR', message, operation: message.type, code?, codeName? (MoeError only), context: {taskId, epicId, expectedPlanRevision?, currentPlanRevision?} (only when a payload exists)}. It is sent to the requesting socket only. Envelope and payload errors carry no operation or context.\n- MoeStateListener.onError has a default no-op. Implementers: MoeStatusBarWidget:44, MoeToolWindowPanel:347 (shows a notification), MetricsPanel:146, PlanReviewDialog.\n- Existing test call sites: PlanReviewApprovalStateTest calls onDaemonError(\"APPROVE_TASK\", text) six times. Migrate them to (\"APPROVE_TASK\", taskId, null).\n- MoeMessageDispatcherAccountsTest holds the dispatcher harness: a Proxy fakeProject and a synchronous invokeLater.\n- VS Code reference, PlanReviewPanel.handleClientError: it requires operation === 'APPROVE_TASK' and context.taskId === this.taskId, and treats the error as stale when codeName === 'PLAN_REVISION_MISMATCH'.",
+    "risks": "- CQ-I06a edits the same three toolwindow files. This task dependsOn it, so build on its landed bytes and never revert onConnectionLost.\n- Six distinct files is one over the size warning: four small production edits and two test files, about 190 net LOC. The daemon floors the plan to the heavy tier, which allows Opus only.\n- If the shared tree is mid-merge, gate in a snapshot.\n- The Kotlin compiler here rejects `arrayOf(stringValue, intValue)`. Use arrayOf<Any> or typed lists in tables.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeStateListener.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewDialog.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/PlanReviewApprovalStateTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherAccountsTest.kt",
+      "moe-vscode/src/panels/PlanReviewPanel.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:50:30.785Z",
+  "approvedPlanRevision": 1
+}

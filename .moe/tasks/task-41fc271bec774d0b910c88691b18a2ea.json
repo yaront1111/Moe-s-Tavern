@@ -1,0 +1,37 @@
+{
+  "id": "task-41fc271bec774d0b910c88691b18a2ea",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e5] Check-mode offline dependency install phase",
+  "description": "Objective: in the guest check mode, run `npm ci --offline --ignore-scripts` from the streamed offline tree for each listed lockfile directory, as the check identity in the private network namespace. It runs after the workspace is re-owned and its protected paths are bind-mounted read-only, and before hello. A failed phase is reported as infra-failure, never as code-failure or passed. The slice also puts the pinned toolchain first on the check job's PATH. This is the last guest-side part of the human's CQ-R11e decision, made in the architect REPL on 2026-10-30.\n\nSplit from CQ-R11e (task-001d8ab3) by architect-e4b7eee0 on 2026-10-30. It depends on:\n- CQ-R11e4 (task-71516084): the tree at DEPENDENCIES, and the edit order on guest-supervisor.py;\n- CQ-R11e2 (task-1e7f5a2d): the toolchain at TOOLCHAIN;\n- CQ-R11e3 (task-ab029075): OFFLINE_INSTALL_ARGS, and the order on local-runner-check.test.mjs.\n\nThe install phase goes in guest-supervisor.py check_job, after reown, session_home and protect_mounts and before relay(). It runs when this run's DEPENDENCIES_MANIFEST exists; that root-only manifest is written by the 'dependencies' mode.\n\nValidation:\n- Read DEPENDENCIES/moe-dependencies.json. It must be exactly {\"version\":1,\"dirs\":[...]}.\n- dirs holds 1-16 unique entries. Each is '.' or a relative path that create()'s segment rules accept.\n- Each <workspace>/<dir>/package-lock.json must be a regular file, reached with WALK/READ and never through a symlink.\n\nInstall, for each dir in order:\n- Run [TOOLCHAIN/bin/node, TOOLCHAIN/lib/node_modules/npm/bin/npm-cli.js, 'ci', *OFFLINE_INSTALL_ARGS, '--cache', DEPENDENCIES]. The flags are CQ-R11e3's exported list, mirrored here as a constant with a drift test.\n- The command goes through GUARD with the check job's own spawn: CHECK_IDENTITY, no extra groups, umask 077, CHECK_RLIMITS, the private netns, and cwd <workspace>/<dir>. stdin, stdout and stderr are /dev/null, and the env is the check env.\n- Write the stand-down byte once the guard reports '+'. A dead supervisor still closes the life pipe, so GUARD kills the group.\n- Each dir is bounded by INSTALL_TIMEOUT (900 s). Past it, SIGKILL the group while the unreaped guard pins its id, then reap.\n\nFailure:\n- Any failure returns DEPENDENCIES_FAILED = 81 before hello, with no frame and no check job. That covers a malformed list, a missing or symlinked lockfile, a spawn failure, a non-zero status and the timeout.\n- With no manifest there is no install phase: exactly today's behavior.\n\nOther edits:\n- The check env's PATH becomes TOOLCHAIN + '/bin:' + JOB_PATH. The bridge job's PATH is unchanged.\n- Update the module header for 81.\n- scripts/local-runner/check-session.mjs: export DEPENDENCIES_FAILED = 81 beside PROTECTED_MISMATCH and PROTECTED_CHANGED, with a doc line. Classification does not change: exit 81 with no frame is already 'infra-failure', never 'skipped'.\n\nTests, in scripts/tests/local-runner-check.test.mjs, through the real supervisor via PY_LOAD with seams (netns False, the identity seam, injectable TOOLCHAIN and DEPENDENCIES paths):\n- A fake node script stands in for the toolchain. It records its argv and cwd and exits with a chosen status.\n- A successful install runs in order, then the check runs.\n- A failing or hanging install gives 81, with no frame and no check job.\n- A malformed list, or a missing or symlinked lockfile, gives 81.\n- No manifest leaves today's behavior.\n- The check env's PATH order.\n- runCheckSession classifies exit 81 with no frame as 'infra-failure'.\n- The OFFLINE_INSTALL_ARGS drift test.\n\nOut of scope:\n- building or streaming the tree (CQ-R11e3/R11e4);\n- the toolchain install (CQ-R11e2);\n- lifecycle wiring and identity (CQ-R11e);\n- any verified-local or isolation claim;\n- .moe edits.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-check.test.mjs (on WSL: env -i with the nvm Node 24 PATH)",
+  "definitionOfDone": [
+    "With the dependency manifest present, each listed directory is installed in order, after the re-own and the protected mounts and before hello, as the check identity under the check job's spawn. Shown through the real supervisor with a fake toolchain.",
+    "An install that fails, times out or cannot start exits 81 before hello, as do a malformed directory list and a missing or symlinked lockfile. No frame is written and no check job starts, and runCheckSession reports infra-failure, never code-failure, passed or skipped. Shown by tests.",
+    "Without the manifest, the check mode behaves as before, except that its PATH puts the toolchain's bin first. Existing check rows pass, changed only where they pin the check env's PATH.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "dependsOn": [
+    "task-71516084821845a29f79570b0a63f274",
+    "task-1e7f5a2dc15b4de5b384a814c4505ed8",
+    "task-ab029075e214413483456f26eef0269a"
+  ],
+  "priority": "HIGH",
+  "order": 253.45,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T22:53:31.651Z",
+  "updatedAt": "2026-10-29T22:53:31.651Z"
+}

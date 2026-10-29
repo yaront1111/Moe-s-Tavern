@@ -82,7 +82,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:33:43.274Z",
-  "updatedAt": "2026-10-29T22:49:53.091Z",
+  "updatedAt": "2026-10-29T22:50:20.241Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:41:53.026Z",
     "plannedStepCount": 4,
@@ -163,7 +163,52 @@
     "packages/moe-daemon/tsconfig.json",
     "moe-jetbrains/build.gradle.kts",
     "moe-vscode/scripts/bundle-assets.mjs",
+    "scripts/tests/onboarding.mjs",
+    ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
+  ],
+  "completionSummary": "Packaged IDE bundles are now test-free and require vm-control.mjs. (1) packages/moe-daemon/tsconfig.json excludes src/tools/toolTestHarness.ts, so dist stops emitting it (Linux snapshot: absent; HEAD tsconfig emits it; tsc --noEmit exit 0). (2) moe-jetbrains/build.gradle.kts: requireBundledAssets names vm-control.mjs; both from(bundledDaemonDir) and from(bundledProxyDir) exclude **/*.test.* and **/*.spec.*. (3) moe-vscode/scripts/bundle-assets.mjs: vm-control.mjs is required, and copyDir gains excludeTests, used only for the dist copies. (4) scripts/tests/onboarding.mjs packaged block requires vm-control.mjs, runs it with no args (asserts exit 2 and exact stdout {\\\"code\\\":\\\"VM_CONTROL_INPUT_INVALID\\\"}, proving the import closure loads), and scans daemon/, proxy/, scripts/ for test artifacts, skipping node_modules. (5) scripts/tests/local-runner-bundle.test.mjs: 12 tests, 12 pass; RED was 7 failing; 12 mutants (M1-M8 plus 4 extras) are all killed by named tests. A real VS Code bundle from fresh dists passes onboarding with its PASS line and an empty test-artifact find. Size +130/-17 (net 113). Notes for QA: (a) Gradle was not executed (no Java on this PATH), so it is pinned by static checks and CI's real-zip onboarding step; (b) a flagged test directory is reported once as the directory, so T4 asserts the directory path for the fixtures/__tests__ cases; (c) the npm-published moe-proxy still ships compiled tests, since the proxy tsconfig is intentionally unchanged. Handoff: Serena memories task-task-f18eef7acc5140cdbe6f545a7f82434d-handoff and gotcha-packaged-bundle-test-artifacts.",
+  "commits": [
+    {
+      "sha": "5143b4c742675fa2cc28b0bf33c6ff290849aa51",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T22:44:17Z",
+      "paths": [
+        ".moe/tasks/task-b20f7a40efbd4f56b457888612cd52a8.json",
+        ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json",
+        "moe-jetbrains/build.gradle.kts",
+        "moe-vscode/scripts/bundle-assets.mjs",
+        "packages/moe-daemon/tsconfig.json",
+        "scripts/tests/local-runner-bundle.test.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T22:50:20.241Z",
+      "treeId": "e6ea1c577cf43753fb9473b17f1b62de6b161ba4",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner-bundle.test.mjs",
+          "taskId": "task-4017cf1d0cab459eb98f488ea7e3a047"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "packages/moe-daemon/tsconfig.json",
+    "moe-jetbrains/build.gradle.kts",
+    "moe-vscode/scripts/bundle-assets.mjs",
     "scripts/tests/onboarding.mjs"
   ],
-  "completionSummary": "Packaged IDE bundles are now test-free and require vm-control.mjs. (1) packages/moe-daemon/tsconfig.json excludes src/tools/toolTestHarness.ts, so dist stops emitting it (Linux snapshot: absent; HEAD tsconfig emits it; tsc --noEmit exit 0). (2) moe-jetbrains/build.gradle.kts: requireBundledAssets names vm-control.mjs; both from(bundledDaemonDir) and from(bundledProxyDir) exclude **/*.test.* and **/*.spec.*. (3) moe-vscode/scripts/bundle-assets.mjs: vm-control.mjs is required, and copyDir gains excludeTests, used only for the dist copies. (4) scripts/tests/onboarding.mjs packaged block requires vm-control.mjs, runs it with no args (asserts exit 2 and exact stdout {\\\"code\\\":\\\"VM_CONTROL_INPUT_INVALID\\\"}, proving the import closure loads), and scans daemon/, proxy/, scripts/ for test artifacts, skipping node_modules. (5) scripts/tests/local-runner-bundle.test.mjs: 12 tests, 12 pass; RED was 7 failing; 12 mutants (M1-M8 plus 4 extras) are all killed by named tests. A real VS Code bundle from fresh dists passes onboarding with its PASS line and an empty test-artifact find. Size +130/-17 (net 113). Notes for QA: (a) Gradle was not executed (no Java on this PATH), so it is pinned by static checks and CI's real-zip onboarding step; (b) a flagged test directory is reported once as the directory, so T4 asserts the directory path for the fixtures/__tests__ cases; (c) the npm-published moe-proxy still ships compiled tests, since the proxy tsconfig is intentionally unchanged. Handoff: Serena memories task-task-f18eef7acc5140cdbe6f545a7f82434d-handoff and gotcha-packaged-bundle-test-artifacts."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-29T22:44:17Z",
+    "at": "2026-10-29T22:50:20.241Z"
+  }
 }
