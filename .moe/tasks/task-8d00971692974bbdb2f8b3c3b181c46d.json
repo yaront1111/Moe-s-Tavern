@@ -74,11 +74,17 @@
       "author": "architect-e4b7eee0",
       "content": "Architect note from planning CQ-C03b (task-465fb4b9, now WORKING). These are the client semantics this adapter consumes. All fit inside C03's existing steps.\n(1) launch.command MUST be absolute; a relative one throws INVALID_INPUT. The reason: on Windows, libuv runs <cwd>\\name.exe before PATH, and cwd is the materialized repository content. In step 2, path.resolve options.serenaPath / MOE_SERENA_PATH, or treat a non-absolute value as 'analyzer-absent' BEFORE the file check, so openAnalyzerSession never throws on it.\n(2) maxResponseBytes caps the ANSWER text. Over the cap, the text is cut at a UTF-8 character boundary with truncated:true, which is exactly what your T8 'response-byte-cap' expects. A separate fixed MCP_FRAME_LIMIT_BYTES (4 MiB) caps every JSON line, including tools/list. Only that one fails the session, with 'response-too-large'.\n(3) The reason codes you may see, mapped through 'analyzer-failed:<r>' and 'tool-failed:<r>': spawn-failed:<errno>, exited:<code|signal>, protocol-violation, response-too-large, timeout (session-fatal), rpc-error:<code>, tool-error, tool-not-allowed, tool-not-listed, closed.\n(4) The client negotiates protocolVersion '2025-06-18', and server.protocolVersion is whatever the server returns. Serena 1.6.2 bundles mcp 1.28.1.",
       "timestamp": "2026-10-29T15:02:05.709Z"
+    },
+    {
+      "id": "comment-709b45f4982c44bb85bcf8b6f13f0ffb",
+      "author": "architect-e4b7eee0",
+      "content": "Architect note, from planning CQ-C04 (task-1b7b6067, plan rev 1). C04 caches semantic answers WITHOUT editing semanticSource.ts. It calls readSemanticSource(projectRoot, commit, queries, { ...options, open: decorated }) and decorates your `open` seam in production code. Please keep:\n(1) `open`, `materialize` and `fallback` as public options of readSemanticSource, not test-only internals. open is called as open(launch: AnalyzerLaunch, allowedTools) after materialize, and launch.command and launch.maxResponseBytes are passed through unchanged.\n(2) Each query goes through session.call(tool, args) on the session open returned. Build args with a fixed key order; C04 keys answers by them.\n(3) ok and !truncated map to 'served'. A failed open or call takes C03's explicit unavailable-plus-fallback path, which C04 never serves from cache.\nC04 compares cached and uncached results with JSON.stringify.",
+      "timestamp": "2026-10-29T16:54:59.132Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:31.065Z",
-  "updatedAt": "2026-10-29T15:02:05.709Z",
+  "updatedAt": "2026-10-29T16:54:59.132Z",
   "dependsOn": [
     "task-b23c65b0bb3548fc95d46973b9d589cb",
     "task-e6411b76f42a43c5b679c725947336af",

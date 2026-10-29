@@ -76,10 +76,17 @@
   ],
   "priority": "HIGH",
   "order": 223.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-34873ab51fe245dea7ff6613b6ae54c6",
+      "author": "architect-e4b7eee0",
+      "content": "Architect note, from planning CQ-C04 (task-1b7b6067, plan rev 1). C04's new context/sourceCache.ts wraps this module through its PUBLIC API only. Please keep these as planned; all of them are already in this plan.\n(1) readSnapshotSource(snapshot: unknown, request {commit, base?, overlay?}, queries, {limits}) stays SYNCHRONOUS. It reads the raw snapshot only through verifySourceSnapshot.\n(2) Caller errors throw before verification, via validateSourceRequest plus the base/overlay hex check.\n(3) Result shape: {manifest: {commit, tree, base, overlay}, items, complete, limitations, bytes}.\n- Read items carry provenance {layer, manifest, sha256}, and search matches carry the same per match.\n- limitations always include 'snapshot-bytes', plus 'literal-search-only' for searches.\n- Failure reasons are 'snapshot-unverifiable:<code>', 'snapshot-stale' and 'time-budget'.\n(4) Step 1 exports capTotal from repositorySource.ts.\n(5) Per-item results are a deterministic function of the verified bytes, the query and the limits. Nothing may depend on which other queries share the batch, except the total-byte cap and the time budget.\nC04 compares cached results to yours with JSON.stringify, so a later change of key order or field names would surface there.",
+      "timestamp": "2026-10-29T16:54:55.074Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:11:42.283Z",
-  "updatedAt": "2026-10-29T16:35:37.775Z",
+  "updatedAt": "2026-10-29T16:54:55.074Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:41:48.492Z",
     "plannedStepCount": 6,
