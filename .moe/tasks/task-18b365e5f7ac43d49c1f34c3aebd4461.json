@@ -1,0 +1,151 @@
+{
+  "id": "task-18b365e5f7ac43d49c1f34c3aebd4461",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "[CQ-V04b1] Runner channel client",
+  "description": "Objective: give the host's trusted check runner (CQ-V04b) a client for the daemon's authenticated /runner channel, through which it calls moe.* tools. It is the only local-runner code that ever reads the runner key.\n\nSplit from CQ-V04b (task-340a07b33a764c65b2486d16b30d7aef) on 2026-10-29 for size (QA's 400-net cap). It builds on CQ-V03a (task-3b4e3833, landed in 1607abf):\n- server/runnerChannel.ts: RUNNER_KEY_HEADER is 'x-moe-runner-key', and runnerKeyPath(projectPath) gives <MOE_RUNNER_KEY_DIR | ~/.moe/runner-keys>/<first 32 hex of sha256(projectPath)>.key.\n- WebSocketServer serves `/runner` and accepts loopback only; an authentication failure closes with 1008.\n- McpAdapter answers JSON-RPC tools/call. A result is {result: {content: [{type: 'text', text: <JSON>}]}}; an error is {error: {code, message, data: {tool, codeName}}}.\n\nContract: a new scripts/local-runner/runner-client.mjs, Node stdlib only.\n- openRunnerChannel({ projectPath, timeoutMs, signal }) resolves { call(tool, args, { signal }), close() }, or rejects with exactly one fixed RUNNER_* code.\n- Discovery: read <projectPath>/.moe/daemon.json under a size cap. It must name the same projectPath, a loopback bindHost (absent, 127.0.0.1, ::1 or localhost) and an integer port; otherwise RUNNER_DAEMON_INFO_INVALID. Reuse guest-session.mjs's daemon.json rules if they can be exported unchanged; otherwise mirror them.\n- Key: the file at runnerKeyPath's location for the daemon.json projectPath. It must hold exactly 43 base64url characters, allowing one trailing newline; otherwise RUNNER_KEY_INVALID. A missing file is RUNNER_KEY_MISSING.\n- Transport: globalThis.WebSocket (Node 22+; verified on Node 24 to send custom headers via `new WebSocket(url, { headers })`), connecting to ws://127.0.0.1:<port>/runner with the key header.\n  - A missing WebSocket is RUNNER_WEBSOCKET_UNAVAILABLE.\n  - A 1008 close is RUNNER_AUTH_REFUSED.\n- call sends `tools/call {name, arguments}` with a unique id and resolves the parsed tool result.\n  - A tool error rejects with RUNNER_TOOL_ERROR, carrying the daemon's numeric code and codeName.\n  - A per-call timeout is RUNNER_CALL_TIMEOUT.\n  - A disconnect rejects every pending call with RUNNER_DISCONNECTED.\n  - close() is idempotent.\n- The key value never appears in any error message or property, return value or log line.\n\nOut of scope: dispatch logic (CQ-V04b), any daemon change, and enabling verified-local.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-channel.test.mjs (on WSL: env -i with the nvm Node 24 PATH). Add the file to the CI local-runner step's explicit list in .github/workflows/ci.yml.",
+  "definitionOfDone": [
+    "openRunnerChannel reaches the loopback /runner endpoint named by the project's daemon.json, sending x-moe-runner-key from the file at runnerKeyPath's location. A missing or invalid daemon.json, key file or WebSocket, or a 1008 close, refuses with its fixed RUNNER_* code.",
+    "Against the real daemon /runner endpoint, call() resolves a tool's parsed result, rejects a tool error with RUNNER_TOOL_ERROR carrying the daemon's codeName, and rejects every pending call on timeout or disconnect.",
+    "A sentinel key value never appears in any error, return value, log line or test output.",
+    "Fresh verification `node --test scripts/tests/local-runner-channel.test.mjs` exits 0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCreate scripts/tests/local-runner-channel.test.mjs (node:test). Keep it to about 200 lines, because tests count toward QA's 400-net cap. Assert exact `code` values (plus rpcCode and codeName where set), never truthiness.\n\nCORRECTIONS to the task description, so the client matches the daemon:\n- The key file must hold EXACTLY 43 base64url characters with NO trailing newline: server/runnerChannel.ts KEY_RE /^[A-Za-z0-9_-]{43}$/ is applied to the raw file, so the daemon itself refuses a newline.\n- A loopback bindHost is absent, '127.0.0.1' or '::1' only, as in guest-session.mjs: no 'localhost', and no DNS.\n\nCases without a daemon, using temp dirs and an injectable `WebSocket` option:\n- C1, daemon.json. Each of these gives RUNNER_DAEMON_INFO_INVALID: missing, a directory, more than MAX_DAEMON_INFO_BYTES (import it from scripts/local-runner/guest-session.mjs), not JSON, not a record, projectPath unequal to path.resolve(input), port not an integer in 1-65535. bindHost '0.0.0.0' and 'localhost' each give RUNNER_DAEMON_NOT_LOOPBACK.\n- C2, key. A missing file is RUNNER_KEY_MISSING. 42 characters, 44 characters, a trailing newline, a non-base64url character, or a directory is RUNNER_KEY_INVALID. The key's location honours MOE_RUNNER_KEY_DIR (trimmed and resolved), else <home>/.moe/runner-keys, with <first 32 hex of sha256(daemon.json projectPath)>.key. The file name is pinned against a fixed vector.\n- C3: `WebSocket: undefined` is RUNNER_WEBSOCKET_UNAVAILABLE, with no read of the key.\n\nCases against the REAL daemon (DoD 2):\n- Start it as scripts/tests/onboarding.mjs does: packages/moe-daemon/dist/index.js `init --project <tmp> --port <free>`. Use an env with every MOE_* removed, HOME and USERPROFILE set to a temp profile, MOE_RUNNER_KEY_DIR set to a temp dir, and LOG_LEVEL warn. Wait for .moe/daemon.json with a bounded poll, and stop the daemon in after(). If dist is missing, FAIL with 'build packages/moe-daemon first'; never skip.\n- C4 success: call('moe.list_tasks', {}) resolves the parsed tool result object.\n- C5 tool error: call('moe.get_context', {taskId: 'task-0000000000000000000000000000dead'}) rejects RUNNER_TOOL_ERROR with the daemon's exact rpcCode and codeName (assert the observed values).\n- C6 auth: a different valid key in another MOE_RUNNER_KEY_DIR makes openRunnerChannel reject RUNNER_AUTH_REFUSED (close 1008).\n- C7 timeout: a long-poll the daemon parks (moe.wait_for_task, or another tool marked blocking) with call timeoutMs 500 rejects RUNNER_CALL_TIMEOUT. The channel stays usable: a following list_tasks resolves.\n- C8 disconnect: two pending calls, then the daemon is stopped. Both reject RUNNER_DISCONNECTED, a later call rejects RUNNER_DISCONNECTED, and close() twice is harmless.\n\nC9 sentinel (DoD 3): across C1 to C8, write a known sentinel key wherever a key file exists. Then:\n- String(err), JSON.stringify(err, Object.getOwnPropertyNames(err)) and every resolved value never contain it;\n- console.log, console.warn and console.error spies record nothing from the module;\n- the test's own assertion messages never interpolate the key.\n\nRun `node --test scripts/tests/local-runner-channel.test.mjs`: every case fails.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/local-runner-channel.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/runner-client.mjs. Node stdlib only, about 130 lines, and no logger or console use at all. The header comment states:\n- it is the only local-runner code that reads the runner key;\n- it reaches only the loopback daemon named by daemon.json;\n- error messages carry fixed codes only, never a path, key byte or upstream text, in guest-session.mjs's style.\n\nError handling: every failure rejects with exactly one fixed RUNNER_* code, via Object.assign(new Error('Runner channel failed: <code>.'), { code }), plus rpcCode and codeName for tool errors. Each pending call settles exactly once, and nothing throws synchronously out of an event handler.\n\nExports:\n- `RUNNER_KEY_HEADER = 'x-moe-runner-key'`, mirroring server/runnerChannel.ts.\n- `runnerKeyFile(projectPath, env = process.env)`, the exact mirror of runnerKeyPath.\n- `openRunnerChannel({ projectPath, timeoutMs = 30_000, signal, WebSocket = globalThis.WebSocket })`.\n\nopenRunnerChannel, in order:\n1. Validate the inputs; failure is RUNNER_INPUT_INVALID.\n2. If typeof WebSocket !== 'function': RUNNER_WEBSOCKET_UNAVAILABLE.\n3. Read daemon.json under guest-session's discipline: O_RDONLY | O_NOFOLLOW | O_NONBLOCK, isFile, the size cap and a record. Then require projectPath === path.resolve(input), an integer port, and bindHost absent or in {'127.0.0.1', '::1'}.\n4. Read the key through the same open discipline, with a size of at most 64 bytes and KEY_RE exact. ENOENT is RUNNER_KEY_MISSING; anything else is RUNNER_KEY_INVALID.\n5. Open `new WebSocket(\\`ws://${host}:${port}/runner\\`, { headers: { [RUNNER_KEY_HEADER]: key } })`, where host is the bindHost or 127.0.0.1, bracketed for ::1.\n   - Resolve on 'open'.\n   - A 'close' with code 1008 before open is RUNNER_AUTH_REFUSED. Any other failure before open is RUNNER_CONNECT_FAILED.\n   - No open within timeoutMs is RUNNER_CONNECT_TIMEOUT. A signal abort is RUNNER_ABORTED.\n   - Drop the key reference after construction.\n\ncall(tool, args, { signal, timeoutMs }):\n- Requires tool /^moe\\.[a-z_]+$/ and a plain-object args; otherwise RUNNER_CALL_INVALID.\n- Sends {jsonrpc: '2.0', id: <increasing int>, method: 'tools/call', params: {name, arguments}}.\n- result.content[0].text parsed as JSON resolves; a malformed result is RUNNER_RESPONSE_INVALID.\n- error rejects RUNNER_TOOL_ERROR with rpcCode (number) and codeName (string, when present).\n- A timeout (RUNNER_CALL_TIMEOUT) or an abort (RUNNER_ABORTED) drops the pending entry, and a late response is ignored.\n- Unmatched or garbage messages are ignored.\n\nAfter open, a 'close' or 'error' rejects every pending call, and every later call, with RUNNER_DISCONNECTED. close() is idempotent and rejects pending calls the same way.\n\nMake every case pass.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/runner-client.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": ".github/workflows/ci.yml: append scripts/tests/local-runner-channel.test.mjs to the explicit file list of the 'Test local runner prerequisite bundles' step (`node --test scripts/tests/local-runner.test.mjs … local-runner-check.test.mjs`). Nothing else changes. That step runs after 'Build daemon' in the build-all-platforms job on all three OSes, so the real-daemon cases have dist. Confirm this against the file before editing, and report it in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail a named case:\n   - accept a trailing newline: C2;\n   - accept 'localhost' or a non-loopback bindHost: C1;\n   - hash the caller's path instead of daemon.json's projectPath: C2's vector;\n   - put the key or upstream text in an error message: C9;\n   - keep pending calls after close: C8;\n   - treat a 1008 close as RUNNER_CONNECT_FAILED: C6.\n2. Build packages/moe-daemon in an isolated Linux snapshot or a native Linux install (mem:gotcha-daemon-linux-snapshot-gate). Never overwrite the Windows node_modules.\n3. Run the verification command fresh: `node --test scripts/tests/local-runner-channel.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-channel.test.mjs`, with no MOE_*. It must exit 0.\n4. Also run the CI step's full list, to show nothing nearby broke.\n5. Size: numstat over this task's files must be at most 400 net.\n6. Supply the command, its exit code and the output tail to complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an attacker trying to steal or misuse the runner key:\n- a symlinked or FIFO daemon.json or key file;\n- a daemon.json pointing at a non-loopback host or another project;\n- a key leaking through error messages, properties, stack traces, resolved values or retries;\n- a hostile server sending garbage, duplicate ids, a huge text or no reply;\n- pending-call leaks on timeout, abort, close or disconnect;\n- two channels in one process.\n\nAlso check cross-platform behaviour: O_NOFOLLOW and O_NONBLOCK are 0 on Windows, os.homedir() uses USERPROFILE, and the daemon run in CI on all three OSes. A WSL client of a Windows daemon cannot see that daemon's key; that is documented as unsupported (RUNNER_KEY_MISSING).\n\nRails: no daemon change, no Git writes, no .moe edits, verified-local untouched.\n\nWrite the Serena memory 'task-task-18b365e5f7ac43d49c1f34c3aebd4461-handoff' with the landed exports and codes for CQ-V04b (task-340a07b3).",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-340a07b33a764c65b2486d16b30d7aef",
+  "dependsOn": [
+    "task-3b4e3833e3c74927b4cdf455663cf6b4"
+  ],
+  "priority": "HIGH",
+  "order": 242.55,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:24:24.874Z",
+  "updatedAt": "2026-10-29T18:29:36.409Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T18:26:08.269Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T18:29:36.324Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/local-runner/runner-client.mjs opens the daemon's authenticated /runner channel and calls moe.* tools over it.\n- It discovers the daemon only through <project>/.moe/daemon.json: the same projectPath, an integer port, and a bindHost that is absent, 127.0.0.1 or ::1.\n- It reads the key only from the file server/runnerChannel.ts runnerKeyPath names: MOE_RUNNER_KEY_DIR or ~/.moe/runner-keys, then <32 hex of sha256(daemon projectPath)>.key, exactly 43 base64url characters.\n- It connects with Node's built-in WebSocket and the x-moe-runner-key header.\n- call() returns the parsed tool result, or rejects with a fixed RUNNER_* code; tool errors carry the daemon's rpcCode and codeName. Timeouts, aborts and disconnects reject the affected pending calls.\n- No message ever carries the key, a path or upstream text, and the module never logs.",
+    "acceptanceCriteria": [
+      "Every discovery, key and transport refusal has its own fixed code, and none of them writes to the network.",
+      "Against the real daemon: a tool result resolves, a tool error rejects RUNNER_TOOL_ERROR with the daemon's codeName, a wrong key is RUNNER_AUTH_REFUSED, a parked call times out with RUNNER_CALL_TIMEOUT while the channel stays usable, and stopping the daemon rejects every pending call with RUNNER_DISCONNECTED.",
+      "A sentinel key never appears in any error, value or console output.",
+      "A fresh `node --test scripts/tests/local-runner-channel.test.mjs` exits 0."
+    ],
+    "invariants": [
+      "Only loopback hosts are dialled, and only the daemon.json of the given project is trusted.",
+      "The key is read once per open and never stored, returned, logged or put in messages.",
+      "Each pending call settles exactly once.",
+      "No daemon change, no Git writes, no .moe edits."
+    ],
+    "compatibility": [
+      "It mirrors server/runnerChannel.ts (RUNNER_KEY_HEADER, runnerKeyPath, KEY_RE) and guest-session.mjs's daemon.json discipline exactly; it changes neither.",
+      "Node 22+ (global WebSocket). An older Node refuses with RUNNER_WEBSOCKET_UNAVAILABLE."
+    ],
+    "approvedScope": [
+      "New scripts/local-runner/runner-client.mjs: RUNNER_KEY_HEADER, runnerKeyFile and openRunnerChannel.",
+      "New scripts/tests/local-runner-channel.test.mjs.",
+      "One list entry in .github/workflows/ci.yml."
+    ],
+    "reuse": [
+      "MAX_DAEMON_INFO_BYTES is imported from scripts/local-runner/guest-session.mjs, and its open/size/record discipline is mirrored, because daemonRefusal is private and returns only a code.",
+      "scripts/tests/onboarding.mjs's real-daemon start: an env without MOE_*, a temp HOME, `init --project --port`, a daemon.json poll, and stop.",
+      "Node's global WebSocket, so there is no new dependency."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/server/runnerChannel.ts: RUNNER_KEY_HEADER is 'x-moe-runner-key'. runnerKeyPath(projectPath) uses MOE_RUNNER_KEY_DIR (trimmed, path.resolve) or os.homedir()/.moe/runner-keys, plus sha256(projectPath) hex[:32] + '.key'. authenticateRunner applies KEY_RE /^[A-Za-z0-9_-]{43}$/ to the raw stored file and accepts loopback only.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts: an exact '/runner' pathname; an authentication failure closes 1008 'runner authentication failed'; then the same attachMcpClient as /mcp.",
+      "packages/moe-daemon/src/server/McpAdapter.ts: a tools/call result is {content: [{type: 'text', text: JSON}]}. A MoeError becomes {error: {code, message, data: {tool, codeName}}}.",
+      "packages/moe-daemon/src/index.ts writes daemon.json {port, pid, startedAt, projectPath, bindHost only when not the default} after listening, and calls ensureRunnerKey(projectPath) at startup.",
+      "Verified in this session: Node v24.21.0's global WebSocket sends custom headers via `new WebSocket(url, { headers })`."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner-channel.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Transport: Node's global WebSocket, CHOSEN; verified here to send custom headers. Rejected: the ws package, which scripts/local-runner has no dependency on; a hand-rolled RFC 6455 client, more code and more risk; reusing moe-proxy, which speaks /mcp and has no key.\n2. daemon.json rules: exporting guest-session.mjs's daemonRefusal would change an R-series file, and it returns only a code. Instead, mirror its discipline and import the exported MAX_DAEMON_INFO_BYTES.\n3. Tests: a real daemon for the DoD 2 cases, which proves the actual /runner auth and JSON-RPC shapes; onboarding.mjs is the precedent. Injected fakes only for the no-daemon refusals.\n4. Error text carries fixed codes only, no upstream message, matching guest-session's sessionError discipline. The daemon's codeName and rpcCode are kept as properties.",
+    "codebaseInsights": "- The task description allowed one trailing newline in the key, but the daemon's KEY_RE does not, so the plan requires exactly 43 characters.\n- The description allowed 'localhost', but guest-session's LOOPBACK set is {127.0.0.1, ::1} only. The plan follows the code.\n- runnerKeyPath hashes the daemon's projectPath string, so the client must hash daemon.json's projectPath, not the caller's spelling.\n- The CI local-runner step is in build-all-platforms, after Build daemon. Verify this before relying on dist.\n- onboarding.mjs isolates env: no MOE_*, HOME and USERPROFILE set to a temp profile, NODE_ENV production, LOG_LEVEL warn.",
+    "risks": "- The real daemon in tests: free-port races, slow starts on Windows CI, and stopping it on every path, including failures. Bound every wait and stop the daemon in after().\n- A timeout case needs a tool the daemon parks (blocking: true). Pick one that does not register a worker, or clean it up.\n- A WSL client cannot read a Windows daemon's key (a different HOME): unsupported, refused with RUNNER_KEY_MISSING.\n- Windows: O_NOFOLLOW is 0, so the symlink guard is POSIX-only, as in guest-session.\n- No daemon change at all. A daemon defect found here becomes a separate bug task.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/runnerChannel.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/tests/onboarding.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T18:29:36.409Z",
+  "approvedPlanRevision": 1
+}

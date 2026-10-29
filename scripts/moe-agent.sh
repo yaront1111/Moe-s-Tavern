@@ -426,6 +426,10 @@ elif [ "$CMD_BASE" = "gemini" ]; then
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
 fi
+# The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
+# Replaces an inherited value (a hot reload keeps env). Bash 3.2 has no ${x^^}.
+case "$CLI_TYPE" in codex) MOE_WORKER_TYPE=CODEX ;; gemini) MOE_WORKER_TYPE=GEMINI ;; grok) MOE_WORKER_TYPE=GROK ;; *) MOE_WORKER_TYPE=CLAUDE ;; esac
+export MOE_WORKER_TYPE
 
 # Codex is interactive (TUI) for every role unless --codex-exec opts the seat
 # into one-shot `codex exec`. 8b632b5 (2026-09-06) had made worker/qa seats
@@ -1153,8 +1157,8 @@ fi
 # Print this seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
 # plus, when exported, the seat's execution identity (MOE_SESSION_ID and the
-# MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair, which moe-proxy stamps), then
-# MOE_WORKER_ID=$2 and the seat's runner identity
+# MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair, which moe-proxy stamps) and
+# MOE_WORKER_TYPE, then MOE_WORKER_ID=$2 and the seat's runner identity
 # (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP server
 # only the env its table names. The override must be a complete server definition:
 # codex 0.163 TUI bootstrap rejects a partial dotted one
@@ -1167,7 +1171,7 @@ codex_moe_server_override() {
 import sys, json, os
 config_file, worker_id = sys.argv[1], sys.argv[2]
 seat_keys = ("MOE_WORKER_ID", "MOE_RUNNER_PROCESS_STARTED_AT", "MOE_RUNNER_HOST")
-identity_keys = ("MOE_SESSION_ID", "MOE_ATTEMPT_ID", "MOE_ATTEMPT_GENERATION")
+identity_keys = ("MOE_SESSION_ID", "MOE_ATTEMPT_ID", "MOE_ATTEMPT_GENERATION", "MOE_WORKER_TYPE")
 server, env, section = [], [], None
 with open(config_file, "r", encoding="utf-8-sig") as f:
     for line in f:
@@ -1353,6 +1357,8 @@ moe_block_lines.extend([
     'MOE_SESSION_ID = "${MOE_SESSION_ID:-}"',
     'MOE_ATTEMPT_ID = "${MOE_ATTEMPT_ID:-}"',
     'MOE_ATTEMPT_GENERATION = "${MOE_ATTEMPT_GENERATION:-}"',
+    # The seat's CLI (the wrapper exports GROK), forwarded on registration.
+    'MOE_WORKER_TYPE = "${MOE_WORKER_TYPE:-}"',
     # Grok drops any MCP tool whose name contains a dot (it namespaces tools
     # as <server>__<tool> and validates the result), so the daemon's moe.<name>
     # tools all vanish -- "connected, 0 tools", then "failed to connect"

@@ -221,10 +221,10 @@ function Grant-GrokFolderTrust {
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $ConfigPath
 # (.codex/config.toml) plus, when set, the seat's execution identity
 # (MOE_SESSION_ID and the MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair, both or
-# neither, which moe-proxy stamps), then MOE_WORKER_ID and the seat's runner
-# identity (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST): codex hands an MCP
-# server only the env its table names. The override must be a complete
-# server definition: codex 0.163 TUI bootstrap rejects a partial dotted one
+# neither, which moe-proxy stamps) and MOE_WORKER_TYPE, then MOE_WORKER_ID and
+# the seat's runner identity (MOE_RUNNER_PROCESS_STARTED_AT/MOE_RUNNER_HOST):
+# codex hands an MCP server only the env its table names. The override must be a
+# complete server definition: codex 0.163 TUI bootstrap rejects a partial dotted one
 # (`-c mcp_servers.moe.env.MOE_WORKER_ID=...`) with "account/read failed:
 # failed to load workspace requirements (code -32603)", exit 1 before any work.
 # The writer emits one-line values with forward-slashed paths and no escapes, so
@@ -239,7 +239,7 @@ function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
         if ($s.StartsWith('[')) { $section = $s; continue }
         if (-not $s -or $s.StartsWith('#') -or -not $s.Contains('=')) { continue }
         $key, $value = $s.Split('=', 2) | ForEach-Object { $_.Trim() }
-        if ($key -in @('MOE_WORKER_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION')) { continue }
+        if ($key -in @('MOE_WORKER_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION', 'MOE_WORKER_TYPE')) { continue }
         if (-not $value.Contains("'") -and -not $value.Contains('\')) { $value = $value.Replace('"', "'") }
         if ($section -eq '[mcp_servers.moe]') { $server += "$key=$value" }
         elseif ($section -eq '[mcp_servers.moe.env]') { $envPairs += "$key=$value" }
@@ -248,6 +248,8 @@ function Get-CodexMoeServerOverride([string]$ConfigPath, [string]$WorkerId) {
     $sid = $env:MOE_SESSION_ID; $aid = $env:MOE_ATTEMPT_ID; $gen = $env:MOE_ATTEMPT_GENERATION
     if ($sid -and -not $sid.Contains("'")) { $envPairs += "MOE_SESSION_ID='$sid'" }
     if ($aid -and $gen -and -not "$aid$gen".Contains("'")) { $envPairs += "MOE_ATTEMPT_ID='$aid'", "MOE_ATTEMPT_GENERATION='$gen'" }
+    $type = $env:MOE_WORKER_TYPE
+    if ($type -and -not $type.Contains("'")) { $envPairs += "MOE_WORKER_TYPE='$type'" }
     $envPairs += "MOE_WORKER_ID='$WorkerId'"
     foreach ($key in @('MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST')) {
         $value = [Environment]::GetEnvironmentVariable($key)
@@ -784,6 +786,9 @@ $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
+# The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
+# Replaces an inherited value (the in-process hot reload keeps env).
+$env:MOE_WORKER_TYPE = $cliType.ToUpperInvariant()
 
 # Shared policy applies to every project, before a task is claimed or a model is called.
 $promptCacheHelper = Join-Path $PSScriptRoot 'prompt-cache.mjs'
@@ -1158,6 +1163,8 @@ $serenaTomlBlock
         $grokSessionIdLine = 'MOE_SESSION_ID = "${MOE_SESSION_ID:-}"'
         $grokAttemptIdLine = 'MOE_ATTEMPT_ID = "${MOE_ATTEMPT_ID:-}"'
         $grokAttemptGenerationLine = 'MOE_ATTEMPT_GENERATION = "${MOE_ATTEMPT_GENERATION:-}"'
+        # The seat's CLI (the wrapper exports GROK), forwarded on registration.
+        $grokWorkerTypeLine = 'MOE_WORKER_TYPE = "${MOE_WORKER_TYPE:-}"'
         # Grok drops any MCP tool whose name contains a dot (it namespaces
         # tools as <server>__<tool> and validates the result), so the daemon's
         # moe.<name> tools all vanish - the server shows as connected with 0
@@ -1193,6 +1200,7 @@ $serenaTomlBlock
             $grokSessionIdLine,
             $grokAttemptIdLine,
             $grokAttemptGenerationLine,
+            $grokWorkerTypeLine,
             ($grokToolNameStyleLine + $grokDaemonHostLine)
         ) -join "`n")
 

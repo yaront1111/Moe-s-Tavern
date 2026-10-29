@@ -135,7 +135,7 @@ for (const [ext, engine] of engines) {
 const runSh = (engine, dir, name, script, env = {}) => {
   const file = path.join(dir, name);
   writeFileSync(file, `set -eu\nPYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}\n${script}`);
-  const { MOE_SESSION_ID: _s, MOE_ATTEMPT_ID: _a, MOE_ATTEMPT_GENERATION: _g, ...base } = process.env;
+  const { MOE_SESSION_ID: _s, MOE_ATTEMPT_ID: _a, MOE_ATTEMPT_GENERATION: _g, MOE_WORKER_TYPE: _t, ...base } = process.env;
   return spawnSync(engine, [file.replaceAll('\\', '/')], { encoding: 'utf8', timeout: 20000, env: { ...base, ...env } });
 };
 const record = (id, generation, workerId = 'w') => ({ id, generation, workerId, taskId: 'task-t', phase: 'running' });
@@ -168,19 +168,22 @@ for (const [ext, engine] of engines) {
     });
   }
 
-  test(`${engine}: Codex override carries the seat's execution identity before its worker id`, t => {
+  test(`${engine}: Codex override carries the seat's execution identity and worker type before its worker id`, t => {
     const dir = mkdtempSync(path.join(tmpdir(), 'moe codex identity '));
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const config = path.join(dir, 'config.toml');
-    writeFileSync(config, '[mcp_servers.moe]\ncommand = "node"\nargs = ["proxy.js"]\n\n[mcp_servers.moe.env]\nMOE_PROJECT_PATH = "/p"\nMOE_SESSION_ID = "old"\n');
+    writeFileSync(config, '[mcp_servers.moe]\ncommand = "node"\nargs = ["proxy.js"]\n\n[mcp_servers.moe.env]\nMOE_PROJECT_PATH = "/p"\nMOE_SESSION_ID = "old"\nMOE_WORKER_TYPE = "GROK"\n');
     const fn = between(read('sh'), 'codex_moe_server_override() {', '# For grok: write project-scoped');
     const script = `${fn}\ncodex_moe_server_override ${quote(config.replaceAll('\\', '/'))} w`;
-    const runner = { MOE_SESSION_ID: 'w@2026-10-26T00:00:00Z', MOE_RUNNER_PROCESS_STARTED_AT: '2026-10-26T00:00:00.000Z', MOE_RUNNER_HOST: 'host-a' };
+    const runner = { MOE_SESSION_ID: 'w@2026-10-26T00:00:00Z', MOE_RUNNER_PROCESS_STARTED_AT: '2026-10-26T00:00:00.000Z', MOE_RUNNER_HOST: 'host-a', MOE_WORKER_TYPE: 'CODEX' };
     const head = 'mcp_servers.moe={command="node",args=["proxy.js"],env={MOE_PROJECT_PATH="/p",MOE_SESSION_ID="w@2026-10-26T00:00:00Z",';
     const tail = 'MOE_WORKER_ID="w",MOE_RUNNER_PROCESS_STARTED_AT="2026-10-26T00:00:00.000Z",MOE_RUNNER_HOST="host-a"}}';
+    const typed = 'MOE_WORKER_TYPE="CODEX",';
     for (const [pair, expected] of [
-      [{ MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' }, head + 'MOE_ATTEMPT_ID="attempt-a",MOE_ATTEMPT_GENERATION="2",' + tail],
-      [{ MOE_ATTEMPT_ID: '', MOE_ATTEMPT_GENERATION: '' }, head + tail],
+      [{ MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' }, head + 'MOE_ATTEMPT_ID="attempt-a",MOE_ATTEMPT_GENERATION="2",' + typed + tail],
+      [{ MOE_ATTEMPT_ID: '', MOE_ATTEMPT_GENERATION: '' }, head + typed + tail],
+      // The config's persisted type is stale: it never reaches a seat without one.
+      [{ MOE_WORKER_TYPE: '' }, head + tail],
     ]) {
       const result = runSh(engine, dir, 'override.sh', script, { ...runner, ...pair });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -210,7 +213,7 @@ for (const [ext, engine] of engines) {
 const runPs = (engine, dir, name, script, env = {}) => {
   const file = path.join(dir, name);
   writeFileSync(file, `﻿$ErrorActionPreference='Stop'\n[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n${script}`);
-  const { MOE_SESSION_ID: _s, MOE_ATTEMPT_ID: _a, MOE_ATTEMPT_GENERATION: _g, ...base } = process.env;
+  const { MOE_SESSION_ID: _s, MOE_ATTEMPT_ID: _a, MOE_ATTEMPT_GENERATION: _g, MOE_WORKER_TYPE: _t, ...base } = process.env;
   return spawnSync(engine, ['-NoProfile', '-File', file], { encoding: 'utf8', timeout: 20000, env: { ...base, ...env } });
 };
 
@@ -245,20 +248,22 @@ for (const [ext, engine] of engines) {
     assert.equal(result.stdout, '[True][True]');
   });
 
-  test(`${engine}: Codex override carries the seat's execution identity before its worker id`, t => {
+  test(`${engine}: Codex override carries the seat's execution identity and worker type before its worker id`, t => {
     const dir = mkdtempSync(path.join(tmpdir(), 'moe codex identity '));
     t.after(() => rmSync(dir, { recursive: true, force: true }));
     const config = path.join(dir, 'config.toml');
-    writeFileSync(config, '[mcp_servers.moe]\ncommand = "node"\nargs = ["proxy.js"]\n\n[mcp_servers.moe.env]\nMOE_PROJECT_PATH = "/p"\nMOE_SESSION_ID = "old"\n');
+    writeFileSync(config, '[mcp_servers.moe]\ncommand = "node"\nargs = ["proxy.js"]\n\n[mcp_servers.moe.env]\nMOE_PROJECT_PATH = "/p"\nMOE_SESSION_ID = "old"\nMOE_WORKER_TYPE = "GROK"\n');
     const fn = between(read('ps1'), 'function Get-CodexMoeServerOverride(', '\nfunction Get-MoeInstallPath');
     const script = `${fn}\n[Console]::Write((Get-CodexMoeServerOverride $env:MOE_TEST_CONFIG 'w'))`;
-    const runner = { MOE_TEST_CONFIG: config, MOE_SESSION_ID: 'w@2026-10-26T00:00:00Z', MOE_RUNNER_PROCESS_STARTED_AT: '2026-10-26T00:00:00.000Z', MOE_RUNNER_HOST: 'host-a' };
+    const runner = { MOE_TEST_CONFIG: config, MOE_SESSION_ID: 'w@2026-10-26T00:00:00Z', MOE_RUNNER_PROCESS_STARTED_AT: '2026-10-26T00:00:00.000Z', MOE_RUNNER_HOST: 'host-a', MOE_WORKER_TYPE: 'CODEX' };
     const head = "mcp_servers.moe={command='node',args=['proxy.js'],env={MOE_PROJECT_PATH='/p',MOE_SESSION_ID='w@2026-10-26T00:00:00Z',";
     const tail = "MOE_WORKER_ID='w',MOE_RUNNER_PROCESS_STARTED_AT='2026-10-26T00:00:00.000Z',MOE_RUNNER_HOST='host-a'}}";
+    const typed = "MOE_WORKER_TYPE='CODEX',";
     for (const [pair, expected] of [
-      [{ MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' }, head + "MOE_ATTEMPT_ID='attempt-a',MOE_ATTEMPT_GENERATION='2'," + tail],
-      [{ MOE_ATTEMPT_ID: 'attempt-a' }, head + tail],
-      [{}, head + tail],
+      [{ MOE_ATTEMPT_ID: 'attempt-a', MOE_ATTEMPT_GENERATION: '2' }, head + "MOE_ATTEMPT_ID='attempt-a',MOE_ATTEMPT_GENERATION='2'," + typed + tail],
+      [{ MOE_ATTEMPT_ID: 'attempt-a' }, head + typed + tail],
+      // The config's persisted type is stale: it never reaches a seat without one.
+      [{ MOE_WORKER_TYPE: '' }, head + tail],
     ]) {
       const result = runPs(engine, dir, 'override.ps1', script, { ...runner, ...pair });
       assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -418,4 +423,46 @@ for (const [ext, engine] of engines) {
       assert.equal(result.stdout, `${window}|${marker}|operator-dir${keeperOn ? sep + keeperDir : ''}${switchOn ? sep + switchDir : ''}`);
     });
   }
+}
+
+// Worker type: the launcher exports the CLI it starts (never the role or model)
+// as MOE_WORKER_TYPE, replacing an inherited value; moe-proxy forwards it on
+// claim_next_task/join_team. An unknown command keeps claude's CLAUDE.
+const typeCases = [['claude', 'CLAUDE'], ['bin/codex', 'CODEX'], ['C:/tools/gemini.cmd', 'GEMINI'], ['grok.exe', 'GROK'], ['aider', 'CLAUDE']];
+for (const [ext, engine] of engines) {
+  for (const [command, expected] of typeCases) {
+    const inherited = expected === 'GROK' ? 'CODEX' : 'GROK';
+    test(`${engine}: ${command} exports MOE_WORKER_TYPE=${expected} over an inherited ${inherited}`, t => {
+      const dir = mkdtempSync(path.join(tmpdir(), 'moe worker type '));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const env = { MOE_WORKER_TYPE: inherited, MOE_TEST_NODE: process.execPath };
+      const probe = `"process.stdout.write('MOE_WORKER_TYPE=' + process.env.MOE_WORKER_TYPE)"`;
+      const result = ext === 'ps1'
+        ? runPs(engine, dir, 'type.ps1', `$Command='${command}'\n${between(read('ps1'), '# Detect CLI type from command name', '\n# Shared policy applies')}\n& $env:MOE_TEST_NODE -e ${probe}`, env)
+        : runSh(engine, dir, 'type.sh', `COMMAND=${quote(command)}\n${between(read('sh'), 'parse_command_into_argv() {', '\n# Codex is interactive (TUI)')}\n"$MOE_TEST_NODE" -e ${probe}`, env);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(result.stdout, `MOE_WORKER_TYPE=${expected}`, 'the CLI child and every proxy RPC inherit the detected type');
+    });
+  }
+}
+
+test('both launchers export the type before registering and hand grok a per-process template', () => {
+  for (const [ext, exported, register] of [['sh', 'export MOE_WORKER_TYPE', 'moe_rpc join_team'], ['ps1', '$env:MOE_WORKER_TYPE = ', '"name":"moe.join_team"']]) {
+    const source = read(ext);
+    assert.ok(source.indexOf(exported) > 0 && source.indexOf(exported) < source.indexOf(register), `${ext}: type exported before the pre-flight join`);
+    // Literal: grok expands ${MOE_WORKER_TYPE:-} per process; a shared config never bakes one seat's type.
+    assert.equal(source.split(`'MOE_WORKER_TYPE = "\${MOE_WORKER_TYPE:-}"'`).length, 2, `${ext}: grok env table expands MOE_WORKER_TYPE`);
+    assert.doesNotMatch(source, /MOE_WORKER_TYPE = "(CLAUDE|CODEX|GEMINI|GROK)"/, `${ext}: no baked-in seat type`);
+  }
+});
+
+// The PowerShell launcher must parse as a whole on every engine; elsewhere say so.
+const psEngines = engines.filter(([ext]) => ext === 'ps1').map(([, engine]) => engine);
+if (!psEngines.length) test('moe-agent.ps1 parses on PowerShell 5.1 and 7', { skip: `no PowerShell engine on ${process.platform}` }, () => {});
+for (const engine of psEngines) {
+  test(`${engine}: moe-agent.ps1 parses with no language errors`, () => {
+    const parse = '$e = $null; [void][Management.Automation.Language.Parser]::ParseFile($env:MOE_TEST_PS1, [ref]$null, [ref]$e); $e | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }; exit $e.Count';
+    const result = spawnSync(engine, ['-NoProfile', '-Command', parse], { encoding: 'utf8', timeout: 60000, env: { ...process.env, MOE_TEST_PS1: fileURLToPath(new URL('scripts/moe-agent.ps1', root)) } });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
 }
