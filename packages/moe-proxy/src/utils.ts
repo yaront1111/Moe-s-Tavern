@@ -80,11 +80,42 @@ function isDaemonInfoShape(value: unknown): value is DaemonInfo {
     && typeof info.startedAt === 'string';
 }
 
+/**
+ * daemon.json is repository content (a repository can commit one), and a
+ * wrapper RPC spawns a fresh proxy per call, so an oversize file would be
+ * read again on every call. The cap matches the daemon and JetBrains readers.
+ */
+const MAX_DAEMON_JSON_BYTES = 64 * 1024;
+
+/**
+ * Read at most MAX + 1 bytes through one descriptor. Returns null when the
+ * file holds more than MAX bytes. Size metadata is not trusted (a device
+ * symlink reports 0), so the read itself is bounded; short reads are looped.
+ */
+function readBounded(filePath: string): string | null {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(MAX_DAEMON_JSON_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n = fs.readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    return total > MAX_DAEMON_JSON_BYTES ? null : buf.toString('utf-8', 0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function readDaemonInfoResult(projectPath: string): DaemonInfoReadResult {
   const filePath = path.join(projectPath, '.moe', 'daemon.json');
   if (!fs.existsSync(filePath)) return { info: null, retryable: true };
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
+    const raw = readBounded(filePath);
+    if (raw === null) {
+      return { info: null, retryable: false, error: 'daemon.json is larger than 64 KiB' };
+    }
     const parsed = JSON.parse(raw) as unknown;
     if (!isDaemonInfoShape(parsed)) {
       return {

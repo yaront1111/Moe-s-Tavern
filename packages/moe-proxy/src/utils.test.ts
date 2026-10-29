@@ -78,6 +78,89 @@ describe('utils', () => {
       });
     });
 
+    describe('size cap (64 KiB)', () => {
+      const OVERSIZE = {
+        info: null,
+        retryable: false,
+        error: 'daemon.json is larger than 64 KiB',
+      };
+
+      /** Valid daemon.json padded with trailing spaces to exactly `bytes`. */
+      function writePadded(bytes: number): string {
+        const moePath = path.join(testDir, '.moe');
+        fs.mkdirSync(moePath, { recursive: true });
+        const info: DaemonInfo = {
+          port: 3000,
+          pid: 12345,
+          startedAt: '2024-01-01T00:00:00Z',
+          projectPath: testDir,
+        };
+        const body = JSON.stringify(info);
+        const file = path.join(moePath, 'daemon.json');
+        fs.writeFileSync(file, body + ' '.repeat(bytes - Buffer.byteLength(body)));
+        expect(fs.statSync(file).size).toBe(bytes);
+        return file;
+      }
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('parses a valid 65536-byte daemon.json', () => {
+        writePadded(65536);
+        expect(readDaemonInfo(testDir)).toEqual({
+          port: 3000,
+          pid: 12345,
+          startedAt: '2024-01-01T00:00:00Z',
+          projectPath: testDir,
+        });
+      });
+
+      it('refuses a 65537-byte daemon.json as non-retryable', () => {
+        writePadded(65537);
+        expect(readDaemonInfoResult(testDir)).toEqual(OVERSIZE);
+        expect(readDaemonInfo(testDir)).toBeNull();
+      });
+
+      it('never takes more than 65537 bytes from an 8 MiB file and closes the descriptor once', () => {
+        const file = writePadded(8 * 1024 * 1024);
+        const readFileSpy = vi.spyOn(fs, 'readFileSync');
+        const openSpy = vi.spyOn(fs, 'openSync');
+        const readSpy = vi.spyOn(fs, 'readSync');
+        const closeSpy = vi.spyOn(fs, 'closeSync');
+
+        expect(readDaemonInfoResult(testDir)).toEqual(OVERSIZE);
+
+        expect(readFileSpy.mock.calls.some((c) => String(c[0]) === file)).toBe(false);
+        const opened = openSpy.mock.calls.findIndex((c) => String(c[0]) === file);
+        expect(opened).toBeGreaterThanOrEqual(0);
+        expect(openSpy.mock.calls.filter((c) => String(c[0]) === file)).toHaveLength(1);
+        const fd = openSpy.mock.results[opened].value as number;
+        const total = readSpy.mock.calls.reduce((sum, call, i) => (
+          call[0] === fd ? sum + (readSpy.mock.results[i].value as number) : sum
+        ), 0);
+        expect(total).toBe(65537);
+        expect(closeSpy.mock.calls.filter((c) => c[0] === fd)).toHaveLength(1);
+      });
+
+      it('closes the descriptor and reports invalid details when the read throws', () => {
+        writePadded(200);
+        const openSpy = vi.spyOn(fs, 'openSync');
+        const closeSpy = vi.spyOn(fs, 'closeSync');
+        vi.spyOn(fs, 'readSync').mockImplementation(() => {
+          throw Object.assign(new Error('boom'), { code: 'EIO' });
+        });
+
+        expect(readDaemonInfoResult(testDir)).toEqual({
+          info: null,
+          retryable: false,
+          error: 'daemon.json contains invalid daemon connection details',
+        });
+        const fd = openSpy.mock.results[openSpy.mock.results.length - 1].value as number;
+        expect(closeSpy.mock.calls.filter((c) => c[0] === fd)).toHaveLength(1);
+      });
+    });
+
     it('returns null for malformed port and pid', () => {
       const moePath = path.join(testDir, '.moe');
       fs.mkdirSync(moePath);

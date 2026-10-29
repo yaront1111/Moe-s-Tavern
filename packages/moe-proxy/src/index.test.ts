@@ -70,6 +70,38 @@ describe('moe-proxy graceful shutdown', () => {
     expect(parsed.error.message).toBe('daemon.json belongs to a different project');
   }, 10000);
 
+  it('returns clear JSON-RPC error for a daemon.json larger than 64 KiB', async () => {
+    const body = JSON.stringify({
+      port: mockPort,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      projectPath: testDir,
+    });
+    fs.writeFileSync(
+      path.join(testDir, '.moe', 'daemon.json'),
+      body + ' '.repeat(65537 - Buffer.byteLength(body))
+    );
+
+    const responses: string[] = [];
+    const proxy = spawn('node', [path.join(__dirname, '../dist/index.js')], {
+      env: { ...process.env, MOE_PROJECT_PATH: testDir },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    proxy.stdout!.on('data', (chunk) => {
+      responses.push(...chunk.toString().trim().split('\n').filter((line: string) => line.startsWith('{')));
+    });
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timeout = setTimeout(() => { proxy.kill(); reject(new Error('Proxy did not exit')); }, 5000);
+      proxy.on('exit', (code) => { clearTimeout(timeout); resolve(code); });
+    });
+
+    expect(exitCode).toBe(1);
+    expect(responses.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(responses[0]);
+    expect(parsed.error.message).toBe('daemon.json is larger than 64 KiB');
+  }, 10000);
+
   it('waits for pending response before exiting on stdin close', async () => {
     const responses: string[] = [];
     let clientConnected = false;
