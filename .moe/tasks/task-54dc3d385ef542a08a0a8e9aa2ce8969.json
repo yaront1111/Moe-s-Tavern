@@ -1,0 +1,29 @@
+{
+  "id": "task-54dc3d385ef542a08a0a8e9aa2ce8969",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: resolveImport tries file candidates before the directory index for '.', '..' and trailing-slash specifiers",
+  "description": "resolveImport in packages/moe-daemon/src/delivery/architectureRules.ts (lines 476-480) tries joined+ext before joined/index for '.', '..', a trailing '/' or a trailing '/.'. Node and TS resolve those forms to the directory only.\n\nThat lets a decoy sibling file bypass a forbid. Repro, probe on HEAD 7f04b869:\n- tree {src/state.ts, src/state/index.ts}; one rule, from src/ui, forbid src/state;\n- src/ui/v.ts contains `import x from '../state/'`;\n- it resolves to src/state.ts, and evaluateArchitecture returns passed. Without the decoy it returns failed.\n\nFix: index-only candidates for those forms, plus V1 tests. This was QA's round-1 advisory on CQ-V10a (task-2cd62d2c). It is deferred because that task's bytes are frozen under size waiver prop-7401cd0b.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2cd62d2c87ab4e118222a5a8b841db6c"
+  ],
+  "priority": "MEDIUM",
+  "order": 251.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T19:19:52.868Z",
+  "updatedAt": "2026-10-29T19:19:52.868Z"
+}

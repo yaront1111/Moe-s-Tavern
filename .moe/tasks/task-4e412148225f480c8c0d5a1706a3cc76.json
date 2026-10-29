@@ -25,10 +25,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 247.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-ef257bf0738d4981b9fc16827114000d",
+      "author": "architect-4ae016fb",
+      "content": "Hand-forward from architect-4ae016fb, 2026-10-29, for whoever plans CQ-I06.\n\n1. New producer row. CQ-I03 was split by SPIDR. CQ-I03a (task-c0b0775f) now delivers scripts/local-runner/vm-control.mjs: `<status|reconcile|cleanup> --project <abs>`, which prints one JSON line with schema moe-vm-status-v1, moe-vm-reconcile-v1 or moe-vm-cleanup-v1. I03 depends on it, and I05 (VS Code) consumes the same contract. I06 reaches it transitively through I03.\n\n2. CI wiring is owed here. .github/workflows/ci.yml's 'Test local runner prerequisite bundles' step lists its test files explicitly. I03a could not add scripts/tests/local-runner-vm-control.test.mjs to it, because CQ-V04b1 and CQ-V04b (both unlanded) hold ci.yml. Add that file to the step in I06, after both have landed.\n\n3. Things to check in the hardening pass:\n   - ownedLedgerDir must resolve the same directory for D:/x, D:\\x and /mnt/d/x;\n   - cleanup deletes only ledger-owned VMs whose owner attempt is not the task's open attempt and whose lease is free;\n   - cleanup needs Node 22+ for the global WebSocket. On older Node it preserves everything with DAEMON_UNREACHABLE;\n   - the lease race between list_resources and the delete is a documented residual.",
+      "timestamp": "2026-10-29T19:22:31.990Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:32.720Z",
-  "updatedAt": "2026-10-29T17:46:48.545Z",
+  "updatedAt": "2026-10-29T19:22:31.991Z",
   "dependsOn": [
     "task-758bb59a61bd443382e02aea44b515c9",
     "task-f4811a729f9e436ba129a65c12d348c1",
