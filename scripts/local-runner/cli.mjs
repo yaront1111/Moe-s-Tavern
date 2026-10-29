@@ -25,7 +25,7 @@ function argumentsFor(argv) {
 export const platformFor = id => (Object.hasOwn(PLATFORMS, id) ? PLATFORMS[id] : null);
 
 /** This host's operator prerequisites; a host without a platform module is unsupported, never ready. */
-async function hostPrerequisites({ executable }) {
+export async function hostPrerequisites({ executable }) {
   const platform = platformFor(process.platform);
   if (!platform) return { code: 'PLATFORM_UNSUPPORTED', ready: false, executionReady: false };
   const report = await platform.prerequisites({ provider: { executable } });

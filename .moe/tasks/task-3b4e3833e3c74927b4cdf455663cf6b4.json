@@ -84,7 +84,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,10 +94,17 @@
   "parentTaskId": "task-9cc131704d214e66afc8a51a524b35c2",
   "priority": "HIGH",
   "order": 226.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-55e13f82039b4604a3154d53a99c0568",
+      "author": "qa-952969be",
+      "content": "QA round 3 (qa-952969be, 2026-10-29 19:50Z): PARKED, not rejected. The substance is green, but the size waiver prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL) is still PENDING (filed 19:20:21Z). No project, epic or task rail waives the 400-net cap yet.\n\nSIZE: `git show --numstat --format= 1607abf2 -- packages/` = +471/-20, net 451 (152 runtime + 299 tests). It matches the proposal text file by file:\n- runnerChannel.test.ts +299/-0\n- runnerChannel.ts +111/-0\n- WebSocketServer.ts +48/-20\n- index.ts +7/-0\n- McpAdapter.ts +4/-0\n- tools/index.ts +2/-0\nThe round-2 completion 1eada7de carries only 5 board JSON files (.moe/tasks) and no packages/ bytes.\n\nBYTES: at HEAD 53d1b240, `git log 1607abf2..HEAD` over the 6 owned paths is empty, and each snapshot path is cmp-identical to `git show 1607abf2:<path>`. Both commits are on moe/work-2026-10-24.\n\nFRESH GATE: a pure `git archive HEAD` 53d1b240 with no overlay. npm ci exit 0, run under env -i with a scratch HOME, NO_COLOR=1 and node v24.21.0 on a Linux-only PATH.\n- `cd packages/moe-daemon && npm test` exit 0: Test Files 181 passed (181); Tests 5041 passed | 16 skipped (5057); runnerChannel.test.ts 41/41.\n- `npx tsc --noEmit` exit 0.\n- The scratch HOME has no .moe after the run. The real ~/.moe/runner-keys is absent before and after.\n\nMUTANTS (on the snapshot copy, restored, sha256sum -c OK), all killed:\n- loopback check dropped: 6 failed (A1 remote cases, no socket, W1 non-loopback);\n- repeated header accepted: 2 failed;\n- digest compare dropped: 2 failed;\n- fall-through after the 1008 close: 6 failed (every W1 refusal);\n- /mcp given a runner: 1 failed.\n\nDoD:\n1. W1 has one socket-level 1008 test per refusal: no header, wrong, malformed, repeated, non-loopback, key file missing.\n2. W1 success returns the key-derived runnerId; /mcp with the header and identity arguments returns runner null.\n3. K2 covers the key's creation, modes, reuse and replacement; the logger spies and the response text never contain the key.\n4. beforeEach points MOE_RUNNER_KEY_DIR at a mkdtemp directory.\n5. Verification exit 0, re-run by QA.\n\nRAILS: no forbidden patterns in the added lines; verified-local appears only in the header comment; the module has no logger; the refusal warning carries remoteAddress only.\n\nINTEGRATION: index.ts passes the same projectPath variable to StateManager and to ensureRunnerKey. cleanupMcpWorkers on a /runner close only cancels the waiters that socket owns and deletes no worker.\n\nCOMPLEXITY (non-blocking): the stored-key KEY_RE check after a digest match is redundant, and isEnoent is used once. Neither is a DoD or rail matter.\n\nROUTE:\n- On APPROVED: set_task_status REVIEW. The next QA re-gates and approves, naming net 451.\n- On REJECTED: set_task_status PLANNING for a review-scope split of the landed bytes (mem:decision-size-only-reject-of-landed-bytes).",
+      "timestamp": "2026-10-29T19:50:34.067Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:23.882Z",
-  "updatedAt": "2026-10-29T19:27:22.669Z",
+  "updatedAt": "2026-10-29T19:51:03.366Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:41:30.489Z",
     "plannedStepCount": 6,
@@ -302,5 +309,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "QA park, not a reject: the substance is green, and the size waiver awaits a human. Completion 1607abf2 on moe/work-2026-10-24 is net 451 under packages/ (+471/-20: 152 runtime + 299 tests). That is over the 400-net QA cap, and no project, epic or row rail waives it. The worker filed the waiver as prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL), still PENDING at 19:50Z; its per-file numbers match the numstat.\n\nFresh QA gate: a pure git archive of HEAD 53d1b240, with the six owned files cmp-identical to 1607abf2.\n- npm test exit 0: 181 files, 5041 passed, 16 skipped.\n- tsc --noEmit exit 0.\n- 5 targeted mutants, all killed.\nThe full evidence is in this row's comment comment-55e13f82.\n\nResolution: a human resolves the proposal in the IDE.\n- On APPROVED: set_task_status REVIEW. QA re-gates and approves, naming net 451.\n- On REJECTED: set_task_status PLANNING for a review-scope split of the landed bytes.\nunblock_worker cannot reach this parked, unassigned row.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-29T19:51:03.366Z"
 }
