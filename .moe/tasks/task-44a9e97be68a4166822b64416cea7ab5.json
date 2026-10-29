@@ -115,7 +115,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:20.491Z",
-  "updatedAt": "2026-10-29T17:34:20.778Z",
+  "updatedAt": "2026-10-29T17:35:19.491Z",
   "dependsOn": [
     "task-3b760109c42544ab892199b3d5534b77",
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
@@ -182,19 +182,52 @@
       "treeId": "cd511bb27adc00eaf718fd49692f1437f218636d",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "2d23c608220c4920784589bfeeab1f172f18a917",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T17:08:43Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        "scripts/local-runner/admission.mjs",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T17:35:19.490Z",
+      "treeId": "577524d55fc262d4375b4a693d76002ccab516cc",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-e6411b76f42a43c5b679c725947336af"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/local-runner/source-export.mjs",
     "scripts/local-runner/admission.mjs",
-    "scripts/tests/local-runner.test.mjs"
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+    ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+    ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-5ebbf433@2026-10-29T17:03:01Z",
-    "at": "2026-10-29T17:08:10.785Z"
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T17:08:43Z",
+    "at": "2026-10-29T17:35:19.490Z"
   },
   "workStartedAt": "2026-10-29T17:10:06.182Z",
   "reviewStartedAt": "2026-10-29T17:34:20.777Z",
@@ -205,5 +238,9 @@
     "reportedAt": "2026-10-29T17:34:20.777Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R12 safe host admission: 400 changed lines.\n\nNew scripts/local-runner/admission.mjs, exported admitCandidate({repoDir, baseTree, candidate, git, timeoutMs}):\n- Input checks:\n  - repoDir and git must be absolute, and git's realpath must lie outside the repository, both checked before any spawn.\n  - The candidate must be a frozen validateImport manifest. It is re-derived from its own bytes, and its digest and each entry's kind, path, size and sha256 must match.\n- Base checks:\n  - baseTree must peel to itself as a tree in the repo's sha1 or sha256 format.\n  - A delete must name a base blob.\n  - A file may only replace a base blob or add a path that is neither a base directory nor beneath a base symlink, gitlink or blob.\n- One tree object is written by plumbing only: hash-object -w --no-filters, checked against Node-computed blob ids, then read-tree, update-index and write-tree.\n- Git runs in R09b's envelope:\n  - no inherited GIT_*, no system or global config, no replace objects, protocol.allow=never, fsmonitor off;\n  - plus an empty private core.hooksPath, a private GIT_INDEX_FILE, and splitIndex and sparse index off.\n- A filter, partial clone or core.worktree in any config scope is refused.\n- No ref, worktree or .git/index byte changes, and no repository code runs. The temp dir is removed on every path.\n- Every refusal is one fixed ADMISSION_* or SNAPSHOT_* code.\n- executionReady, verified-local and isolation are untouched.\n\nsource-export.mjs now exports gitRunner and openRepository, refactored out of openCommit. Export behaviour is unchanged: snapshot suite 22/22.\n\nTests A1-A6 in local-runner.test.mjs cover:\n- input refusals and forged candidates;\n- base conflicts, including gitlinks, symlinks, sha256 and a worktree-scope filter;\n- exact bytes under autocrlf, eol and ident;\n- concurrency;\n- controller-copy candidates;\n- hostile hooks, fsmonitor, package scripts, GIT_* and HOME;\n- the exact argv and env envelope.\n\nMutation spot-check: every mutant was killed except"
+  "completionSummary": "CQ-R12 safe host admission: 400 changed lines.\n\nNew scripts/local-runner/admission.mjs, exported admitCandidate({repoDir, baseTree, candidate, git, timeoutMs}):\n- Input checks:\n  - repoDir and git must be absolute, and git's realpath must lie outside the repository, both checked before any spawn.\n  - The candidate must be a frozen validateImport manifest. It is re-derived from its own bytes, and its digest and each entry's kind, path, size and sha256 must match.\n- Base checks:\n  - baseTree must peel to itself as a tree in the repo's sha1 or sha256 format.\n  - A delete must name a base blob.\n  - A file may only replace a base blob or add a path that is neither a base directory nor beneath a base symlink, gitlink or blob.\n- One tree object is written by plumbing only: hash-object -w --no-filters, checked against Node-computed blob ids, then read-tree, update-index and write-tree.\n- Git runs in R09b's envelope:\n  - no inherited GIT_*, no system or global config, no replace objects, protocol.allow=never, fsmonitor off;\n  - plus an empty private core.hooksPath, a private GIT_INDEX_FILE, and splitIndex and sparse index off.\n- A filter, partial clone or core.worktree in any config scope is refused.\n- No ref, worktree or .git/index byte changes, and no repository code runs. The temp dir is removed on every path.\n- Every refusal is one fixed ADMISSION_* or SNAPSHOT_* code.\n- executionReady, verified-local and isolation are untouched.\n\nsource-export.mjs now exports gitRunner and openRepository, refactored out of openCommit. Export behaviour is unchanged: snapshot suite 22/22.\n\nTests A1-A6 in local-runner.test.mjs cover:\n- input refusals and forged candidates;\n- base conflicts, including gitlinks, symlinks, sha256 and a worktree-scope filter;\n- exact bytes under autocrlf, eol and ident;\n- concurrency;\n- controller-copy candidates;\n- hostile hooks, fsmonitor, package scripts, GIT_* and HOME;\n- the exact argv and env envelope.\n\nMutation spot-check: every mutant was killed except",
+  "touchedFiles": [
+    "scripts/local-runner/source-export.mjs",
+    "scripts/local-runner/admission.mjs"
+  ]
 }

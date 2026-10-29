@@ -31,7 +31,7 @@ export function cachedPlanRef(branch: unknown): string | undefined {
 
 export type PlanPathGitRunner = (args: string[], cwd: string, timeout: number, maxBuffer?: number) => Promise<string>;
 
-function readOnlyGitEnv(): NodeJS.ProcessEnv {
+export function readOnlyGitEnv(): NodeJS.ProcessEnv {
   // Do not inherit a seat's alternate index/repository/config. No shell, hooks,
   // replacement objects, optional locks, global config or network transports.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
@@ -40,7 +40,7 @@ function readOnlyGitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function readOnlyGitArgs(cwd: string, args: string[]): string[] {
+export function readOnlyGitArgs(cwd: string, args: string[]): string[] {
   // Trust only this canonical project, never a wildcard or global config.
   return ['--no-optional-locks', '--no-replace-objects',
     '-c', 'protocol.allow=never', '-c', `safe.directory=${cwd}`, ...args];
