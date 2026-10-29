@@ -1,0 +1,37 @@
+{
+  "id": "task-44a9e97be68a4166822b64416cea7ab5",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R12] Safe host admission",
+  "description": "Objective: Keep target Git writes in protected wrappers and import only validated candidate bytes.\n\nDeliverable: Safe host admission. This is task R12 of the approved full CQ rollout; consume this contract, not the whole reference document.\n\nScope boundaries: implement this behavior and its regression tests only. Later activation, other platform/client consumers and other task behaviors remain out of scope unless named here. Approved full CQ-01–CQ-08 rollout from the interactive implementation plan (2026-10-24). CQ-01 is already landed. Use original Moe source; daemon owns state, wrappers own host Git writes. User selected Moe-provisioned LOCAL Linux VMs (not cloud CI), coding/QA and checks isolated, and exact designated LOCAL BRANCH delivery. Strong profile stays disabled until isolation, evidence and client gates pass. Preserve legacy behavior and existing dirty bytes. Never directly edit .moe. No second revision authority, scheduler, graph database or native memory database.\n\nVerification command (fresh, exit0 required): node --test scripts/tests/local-runner.test.mjs\n\nDependency aliases (wired by Moe task ids after import): R01, R09, V02.",
+  "definitionOfDone": [
+    "Disable executable hooks/fsmonitor/filters/helpers and sanitize inherited Git config/environment.",
+    "Candidate Moe source cannot replace active host controller.",
+    "Host never executes repository tests/package scripts/hooks during admission.",
+    "Fresh verification `node --test scripts/tests/local-runner.test.mjs` exits0 and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor feed rule (2026-10-29): CQ row whose only unmet prerequisite, CQ-R09 (task-0dd1cce2), has an approved plan (WORKING, 5 steps). 3b760109 (R01) and 23a5563c are already met. Plan against R09's approved plan and landed code where it exists, and otherwise against the prerequisite's description, DoD and docs/plans/2026-10-24-ai-code-quality-and-context.md. Name every assumed interface in planningNotes and keep dependsOn. If a contract must be designed first, split it out (SPIDR) rather than report_blocked. CQ-V07 (task-16bbf8ff, PLANNING) and CQ-R13 consume this row.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 120,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-23T23:34:20.491Z",
+  "updatedAt": "2026-10-29T12:29:47.573Z",
+  "dependsOn": [
+    "task-3b760109c42544ab892199b3d5534b77",
+    "task-0dd1cce23a6646fd80cf401dd47c7b0f",
+    "task-23a5563cea384d56abb8da1551435455"
+  ]
+}
