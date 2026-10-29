@@ -54,19 +54,29 @@
     {
       "stepId": "step-4",
       "description": "Verification gate, run once and fresh, in a Linux-native snapshot (mem:gotcha-daemon-linux-snapshot-gate). The in-tree node_modules is Windows-native.\n1. git archive HEAD of the WHOLE repo into /tmp.\n2. Overlay ONLY the two owned files: architectureRules.ts and architectureRules.desync.test.ts.\n3. Provide a native packages/moe-daemon/node_modules: symlink an existing install whose package-lock.json matches modulo CR, or run npm ci.\n4. Under env -i HOME=$HOME PATH=<nvm node v24 bin>:/usr/local/bin:/usr/bin:/bin NO_COLOR=1, run exactly: cd packages/moe-daemon && npm test && npx tsc --noEmit\n\nExpect exit 0. The 133 landed architectureRules tests must be green and unchanged, every desync test green, and the skip set equal to the pre-existing one.\n\nBefore citing the run, cmp the owned files against the snapshot, and confirm with `git diff --quiet HEAD -- packages/moe-daemon/src/delivery/architectureRules.test.ts` that the landed test file is untouched. Read the vitest log with grep -a, since the octal test can print NUL bytes.\n\nSubmit that command, its exit code and the output tail as the complete_task verification evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate, green, in a Linux-native snapshot at /tmp/moe-16628-gate.OpJnbh.\nSetup: git archive of the whole repo at HEAD cac652b. The two owned files were overlaid and are cmp-equal to the worktree and to HEAD, since they were already landed in checkpoint 38397f3. npm ci ran under env -i with node v24.21.0.\nCommand: `cd packages/moe-daemon && npm test && npx tsc --noEmit`, run with NO_COLOR=1. It exited 0.\n- Test Files: 187 passed (187).\n- Tests: 5234 passed, 16 skipped. The skips are the pre-existing set: baselineRun 6, accounts/cli 1, claudeHook 4, gitExecutable 2, heartbeatStop 3.\n- architectureRules.test.ts: 133/133.\n- architectureRules.desync.test.ts: 40/40.\n- tsc --noEmit: exit 0.\nThe landed architectureRules.test.ts is byte-identical: `git diff --quiet HEAD` and `git diff --quiet 38397f3~ HEAD` both pass on it. This step modified no files. The 727 dirty peer paths were not touched.",
+      "startedAt": "2026-10-29T23:33:41.738Z",
+      "completedAt": "2026-10-29T23:36:25.889Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff. Load adversarial-self-review.\n\nMutation probes: apply each in a scratch copy, see it go red, restore, then cmp.\n- M1: firstRisk never set. D1 and D2 go red.\n- M2: re-scan every multi-line region when no risk point exists. D3a, D3b and landed X4 'a multi-line block comment' go red.\n- M3: re-scan regions that start before firstRisk. D3d goes red.\n- M4: drop the `}`-in-substitution hazard. D1(9) goes red.\n- M5: rescan the line per candidate, with no cache. D6a times out.\n- M6: flag external specifiers too. D3e goes red.\n- M7: ignore uncertain entries in segments. D3f goes red.\n- M8: no per-line dedupe. D3i goes red.\n- M9: skip star-led lines. D1(10) goes red.\n- M10: gate R3 on the line hazard. D1(7) goes red.\n- M11: split segments at LF only. D4 goes red.\n\nCheck also:\n- The diff carries none of the global forbidden tokens.\n- No new exports beyond the widened union, and no IO, Git or node: imports.\n- No source comment phrasing that util/daemonGitDocs.test.ts rejects (e.g. 'runs no Git').\n- Optionally, type-check the new test file with a scratch tsconfig, because the package tsconfig excludes tests.\n- What if the input is empty, a lone backtick, an unterminated comment, a BOM, a hashbang, or a 1 MB line? It must still return and never throw.\n\nWrite the Serena handoff. It must say:\n- the residuals that stay accepted: a same-line misread still hides that line's import; quoted-string continuations are not re-scanned; deliberate evasion is out of reach;\n- the accepted false-inconclusive trade-off;\n- that V10 (task-db328cda) must surface 'ambiguous-syntax' as a named exit-2 reason.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/architectureRules.ts",
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts"
+      ],
+      "note": "Adversarial review. It found one real gap, now fixed and tested.\n- Gap: the plan's hazard set (backtick, `/*`, or `}` inside a substitution) misses a `{` inside a substitution. A misread that swallows or exposes `{` shifts the per-substitution brace depth, so a `}` on a LATER line closes the substitution early or late and hides the lines after it. vm runs the hidden require in both directions:\n  - swallowed: `${ {} / 1, f({ k: '/'` NL `}),` NL require\n  - exposed: `${ new (class extends /{/.constructor` NL ` {})() }` NL backtick NL REQ\n- Fix: lineHazard records `{` or `}` (one token), plus comment updates. Two new HIDDEN rows (D1 and D2) were red before the fix and are green after it.\n- Why this is in scope: it serves the contract's intendedBehavior, stays inside the approved hazard cache, and the original ten D1 texts are unchanged.\n\nMutants, each applied in a scratch copy, run red, then restored and cmp-verified:\n- M1-M4 and M6-M11: all killed by the predicted tests.\n- M2 also killed landed X4.\n- M5 (no cache) timed out D6a at 193s, and landed X6 with it.\n- M11 leaves CRLF green by construction; U+2028 and lone CR go red.\n- M4a (`}` only) and M4b (`{` only): killed.\n\nChecks:\n- None of the global forbidden tokens appear.\n- Exports and imports are unchanged; no module let/var.\n- Nothing matches the daemonGitDocs phrasing.\n- No non-ASCII in the test file.\n- Both test files type-check under a scratch tsconfig.\n- Edge inputs return without throwing, every line in range: empty, a lone backtick, unterminated `/*`, a BOM, a hashbang, a 1 MB line, a 1 MB line plus a template, and `<!--`/`-->`/`<`/`/` at EOF.\n\nRuled out: a desynced parens stack only changes later `/` choices, and each of those slashes is a gated candidate itself. regexOffUntil ends at its own line.\n\nFresh re-gate after the fix: archive of HEAD 90a97db, owned files overlaid and cmp-equal. `cd packages/moe-daemon && npm test && npx tsc --noEmit` exited 0: 187 files, 5250 passed, 16 skipped (the pre-existing set). Net is 121 runtime + 135 test - 9 = 247 LOC.\n\nThe handoff and the extended gotcha-lexical-import-scan-desync are written to Serena. The 727 dirty peer paths are untouched.",
+      "startedAt": "2026-10-29T23:36:28.139Z",
+      "completedAt": "2026-10-29T23:48:00.915Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-093a65d0",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -81,7 +91,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T19:25:18.471Z",
-  "updatedAt": "2026-10-29T23:31:39.056Z",
+  "updatedAt": "2026-10-29T23:48:21.924Z",
   "contextFetchedBy": [
     "qa-952969be",
     "architect-32ff5555",
@@ -96,7 +106,7 @@
     "firstClaimAt": "2026-10-29T22:57:22.171Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "tier": "heavy",
   "effort": "xhigh",
@@ -105,7 +115,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T23:22:40.008Z",
@@ -175,5 +187,51 @@
   },
   "planApprovedAt": "2026-10-29T23:22:40.113Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-10-29T23:23:31.866Z"
+  "workStartedAt": "2026-10-29T23:23:31.866Z",
+  "commits": [
+    {
+      "sha": "38397f3467f8c832d045f733252f086bc6412b73",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-29T23:22:46Z",
+      "paths": [
+        ".moe/tasks/task-025249c9051749e5bf23685a1c00ca29.json",
+        ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+        "packages/moe-daemon/src/delivery/architectureRules.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-29T23:32:15.019Z",
+      "treeId": "e9283e1b131a6a68dfa0375fb0d389405e050964",
+      "status": "WORKING",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+    "packages/moe-daemon/src/delivery/architectureRules.ts"
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/architectureRules.desync.test.ts",
+    "packages/moe-daemon/src/delivery/architectureRules.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "checkpoint",
+    "sessionId": "worker-093a65d0@2026-10-29T23:22:46Z",
+    "at": "2026-10-29T23:32:15.019Z"
+  },
+  "reviewStartedAt": "2026-10-29T23:48:21.922Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npm test && npx tsc --noEmit",
+    "exitCode": 0,
+    "outputTail": "Fresh git archive of HEAD 90a97db + the 2 owned files overlaid (cmp-equal to the worktree), npm ci, env -i, node v24.21.0, NO_COLOR=1.\n ✓ src/delivery/architectureRules.test.ts (133 tests) 239ms\n ✓ src/delivery/architectureRules.desync.test.ts (44 tests) 236ms\n ✓ src/benchmarks/baselineRun.test.ts (20 tests | 6 skipped)\n ✓ src/accounts/cli.test.ts (14 tests | 1 skipped)\n ✓ src/util/claudeHook.test.ts (12 tests | 4 skipped)\n ✓ src/util/gitExecutable.test.ts (12 tests | 2 skipped)\n ✓ src/util/heartbeatStop.test.ts (9 tests | 3 skipped)\n\n Test Files  187 passed (187)\n      Tests  5250 passed | 16 skipped (5266)\n   Start at  01:46:53\n   Duration  30.54s (tests 92%, transform 4%, import 4%)\n\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nEXIT=0",
+    "reportedAt": "2026-10-29T23:48:21.922Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Fix for the architectureRules lexer desync. A line hidden by a lexing ambiguity now surfaces as 'ambiguous-syntax' uncertainty, so the result is 'inconclusive' (or 'failed' alongside a real violation), never a silent 'passed'.\n\nRuntime: architectureRules.ts, +121/-9.\n- ImportUncertainty.reason gains 'ambiguous-syntax'.\n- The Lexer records the multi-line template and comment regions and the first risk point:\n  - every `/`, or an Annex-B `<!--`/`-->`, when the rest of its line holds a backtick, a `/*`, or (inside a substitution) a brace;\n  - a JSX-like `<`, ungated.\n- The hazard check uses a per-line cache, so it stays linear.\n- extractImports re-lexes each line of the regions after that point, through the private recognize() moved from extractImports. It flags, once per line in ascending order, any line that imports a relative path or calls import()/require() on a non-literal.\n- Exports and result shapes are unchanged. The module is still pure.\n\nTests: new architectureRules.desync.test.ts, 44 tests (D1-D7 plus 2 brace rows). The landed architectureRules.test.ts is byte-identical, 133/133.\n\nDeviation, found in step-5 review: the plan's hazard set covered only `}` inside a substitution. A swallowed or exposed `{` also shifts the substitution's brace depth, so a `}` on a LATER line closes it early or late. vm runs the hidden require in both directions. The fix records `{` as well, and the two new HIDDEN rows go red without it.\n\nEvidence:\n- Mutants M1-M11 plus M4a/M4b: all killed. M5 timed out D6a.\n- Token-invariance probe (200k random inputs, run in step 2 before the review fix): identical tokens. The fix only adds `{` to the hazard scan, which sets firstRisk and never touches tokens.\n- Both test files type-check under a scratch tsconfig.\n- Edge inputs (empty, a BOM, a hashbang, a 1 MB line, constructs at EOF) never throw, and every line stays in range.\n- Gate exit 0: 5250 passed, 16 pre-existing skips.\n\nAccepted residuals:\n- A same-line misread still hides that line's "
 }

@@ -227,7 +227,7 @@ class Lexer {
   private readonly parens: boolean[] = [];
   /** After a failed regex scan, every `/` before this index is division (keeps the pass linear). */
   private regexOffUntil = 0;
-  /** Line-remainder cache: the end of the scanned span, its last backtick or `/*`, and its last `}`. */
+  /** Line-remainder cache: the end of the scanned span, its last backtick or `/*`, and its last `{` or `}`. */
   private hazardEnd = 0;
   private lastHazard = -1;
   private lastBrace = -1;
@@ -408,13 +408,14 @@ class Lexer {
   /**
    * Record `this.i` as the first risk point. A gated candidate (a `/`, or an
    * Annex-B `<!--` or `-->`) counts only when the rest of its line could flip
-   * template or comment state: such a misread never reaches past its own line.
+   * template or comment state, or shift a substitution's brace depth so that a
+   * later `}` closes it early: otherwise the misread ends with its own line.
    */
   private risk(gated: boolean): void {
     if (this.firstRisk < 0 && (!gated || this.lineHazard(this.i))) this.firstRisk = this.i;
   }
 
-  /** Does the rest of `i`'s line hold a backtick, a `/*` or, inside a substitution, a `}`? Scans each line once. */
+  /** Does the rest of `i`'s line hold a backtick, a `/*` or, inside a substitution, a brace? Scans each line once. */
   private lineHazard(i: number): boolean {
     const { text } = this;
     if (i >= this.hazardEnd) {
@@ -422,7 +423,7 @@ class Lexer {
       let j = i;
       for (; j < text.length && !breakLen(text, j); j++) {
         if (text[j] === '`' || (text[j] === '/' && text[j + 1] === '*')) this.lastHazard = j;
-        else if (text[j] === '}') this.lastBrace = j;
+        else if (text[j] === '{' || text[j] === '}') this.lastBrace = j;
       }
       this.hazardEnd = j;
     }

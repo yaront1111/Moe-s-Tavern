@@ -27,6 +27,8 @@ const HIDDEN: [string, string, number][] = [
   ['an Annex-B --> comment', src('x = 1', '--> `', REQ, '// `'), 3],
   ["a regex swallowing a substitution's closing brace", src('const s = `${', '  a++ / 2}/x', '`;', REQ, '// `'), 4],
   ['a hidden line that starts with a star', src('export default /\\/*/;', 'x = 1', "* 0; require('../tools/t.js');", '// */'), 3],
+  ["a regex swallowing a substitution's opening brace", src("const s = `${ {} / 1, f({ k: '/'", '}),', "require('../tools/t.js') }`;"), 3],
+  ['a regex read as division exposing an opening brace', src('const s = `${ new (class extends /{/.constructor', ' {})() }', '`;', REQ, '// `'), 4],
 ];
 
 describe('extractImports after a lexing ambiguity', () => {
