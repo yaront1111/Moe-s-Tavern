@@ -55,11 +55,17 @@
       "author": "qa-6fa5d758",
       "content": "QA note from the CQ-R08 review (task-7a77465621dc4d6588d5747394cb0ced, completion b0e5982). Non-blocking, for the hardening pass.\n\nscripts/tests/local-runner-bridge.test.mjs:803 (H4) uses Promise.withResolvers(), which needs Node 22+. Under Node 20.18 (the WSL default /usr/local/bin/node) H4 fails with \"Promise.withResolvers is not a function\". Every pre-existing test in the 4-file local-runner gate still passes on 20.18, and CI (Node 24, all three OSes) is green. docs/DEVELOPMENT.md:9 says \"Node.js 18+ (Node 20/24 also works)\".\n\nPick one when hardening:\n- Replace it with a manual resolver: `let finish; const late = new Promise(resolve => { finish = resolve; });` (about +1 line).\n- Or state the Node 22+ floor for the script tests in DEVELOPMENT.md.\n\nThe runtime module guest-session.mjs is Node 18/20-safe, so this affects tests only.",
       "timestamp": "2026-10-27T14:44:01.312Z"
+    },
+    {
+      "id": "comment-ae27a321d9db4542805322946e3b9ef4",
+      "author": "qa-952969be",
+      "content": "QA follow-up from CQ-R11c (task-53daa94f, approved at 2f2b5e48). It does not block that task, so it goes here for the hardening pass.\n\nIn scripts/tests/local-runner-check.test.mjs, C5's row 'close before EOF' emits proc.emit('close', 0, null) synchronously, before the PassThrough delivers HELLO and OBS. That row is infra-failure through !s.opened, so check-session.mjs outcomeOf's `|| !s.ended` guard is never pinned: a mutant that drops it survives `^C[1-7] `. The guard itself works, as a QA probe shows: frames parsed, then close 0 with stdout open, gives infra-failure.\n\nFix: defer the close, e.g. `setImmediate(() => proc.emit('close', 0, null))`. It changes one line and still kills the stop-after-settle mutant the row was added for.\n\nDetails are in comment-997358d583ff4f2b9c0f9c779df7172f on task-53daa94f.",
+      "timestamp": "2026-10-29T20:00:09.789Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-29T17:46:45.608Z",
+  "updatedAt": "2026-10-29T20:00:09.789Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",

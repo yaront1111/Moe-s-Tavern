@@ -105,7 +105,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,19 +119,29 @@
   ],
   "priority": "HIGH",
   "order": 105.4,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-997358d583ff4f2b9c0f9c779df7172f",
+      "author": "qa-952969be",
+      "content": "QA evidence (qa-952969be, 2026-10-29), reviewing completion commit 2f2b5e48 on moe/work-2026-10-24. The working tree's three files are byte-identical to that commit.\n\nGate: fresh `git archive 2f2b5e48 | tar -x`, then the task's verification command (env -i, nvm Node 24.21.0). It exits 0: tests 84, pass 83, fail 0, skipped 1 (K9, root-only, pre-existing). C7 ran (not skipped), and no __pycache__ appeared.\n\nSize: numstat gives check-session.mjs +147, guest-bridge.mjs +30 and local-runner-check.test.mjs +223/-0. That is 400 changed lines, at the cap and not over it. The bridge test is untouched, no test line was removed, the bytes are ASCII and LF, and no forbidden pattern appears.\n\nCross-checks:\n- MAX_CHECK_TAIL_BYTES 16384 equals checkRunStore MAX_CHECK_LOG_BYTES.\n- tailOf follows boundOutputTail's rule.\n- The six outcomes match CHECK_OUTCOMES.\n- MAX_HOST_FRAME_BYTES (4 MiB) is the same on both sides.\n- checkFrame mirrors read_check and protected_path, including CHECK_BLANK as JS trim, UTF-16 lengths and UTF-8 order.\n\nProbes (scratch, outside the suite), all correct:\n- Frames split byte by byte give passed.\n- An observation forged inside output data stays bytes and gives infra-failure.\n- 79 or 80 after the wrong frames gives infra-failure.\n- An observation that reports a signal gives code-failure.\n- An abort after the observation with a hung provider gives infra-failure plus one SIGKILL.\n- 200k 1-byte output frames give passed, with a 16384-byte tail, in 264 ms.\n\nQA mutation spot-check: 16 mutants with `^C[1-7] `, 13 killed. Survivors:\n1. Dropping `|| frame.kind === 'request'` is equivalent: keep() throws on a frame that has no data.\n2. Dropping `s.killed = true` is equivalent: a kill settles with code null, which maps to infra-failure.\n3. Dropping `|| !s.ended` from outcomeOf is NOT equivalent, and no test pins it. The guard itself works: a probe that sends HELLO+OBS, waits two setImmediate ticks and emits close 0 with stdout still open gets infra-failure. But C5's 'close before EOF' row emits close synchronously, before the PassThrough delivers the frames, so it is infra-failure through !s.opened and is masked for the EOF condition. Real child_process orders stdout 'end' before 'close', so this guard is defense in depth. It is non-blocking. Follow-up: defer the close, e.g. `setImmediate(() => proc.emit('close', 0, null))`. That still kills the stop-after-settle mutant the row was added for.\n\nEdge, non-blocking and as planned (timedOut is checked first): a protocol stop followed by the budget firing before a hung provider exits gives 'timeout', not 'infra-failure'. It is never 'passed'.",
+      "timestamp": "2026-10-29T19:59:53.022Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:28.562Z",
-  "updatedAt": "2026-10-29T19:28:46.226Z",
+  "updatedAt": "2026-10-29T20:00:02.576Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:49:58.492Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T20:00:02.575Z",
+    "wallClockMs": 11404083
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -277,5 +287,9 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-29T19:00:37Z",
     "at": "2026-10-29T19:28:46.226Z"
-  }
+  },
+  "completedAt": "2026-10-29T20:00:02.575Z",
+  "reviewCompletedAt": "2026-10-29T20:00:02.575Z",
+  "reviewSummary": "Approved CQ-R11c at completion commit 2f2b5e48, on moe/work-2026-10-24; the tree is byte-identical. Full evidence is in comment-997358d583ff4f2b9c0f9c779df7172f.\n\nGate: I re-ran the task's verification command fresh from a full git archive of 2f2b5e48 with env -i Node 24.21. It exits 0: 84 tests, 83 pass, 0 fail, 1 skip (K9, root-only). C7 actually ran.\n\nSize: 400 changed lines (+147 check-session.mjs, +30 guest-bridge.mjs, +223/-0 test), at the cap and not over it. No test line was removed, the files are ASCII and LF, no forbidden pattern appears, no __pycache__, and verified-local and executionReady are untouched.\n\nDoD:\n1. checkArgv is frozen and owned-name only (C1). checkFrame is byte-exact and mirrors read_check (C1, plus C2's 24-row drift through the real Python). The frame is the first and only stdin write (C4). Invalid input refuses with CHECK_SESSION_INPUT_INVALID with 0 spawns (C3).\n2. Each outcome follows only from its own condition (C5's 36 rows, plus my probes: frames split byte by byte, a forged observation inside output, 79 or 80 with the wrong frames, an observation reporting a signal, an abort with a hung provider).\n3. The tail is a 16384-byte cut on whole characters, matching checkRunStore boundOutputTail (C6). 200k 1-byte frames take 264 ms.\n4. C7 runs the real supervisor and gets passed, code-failure, skipped and inconclusive.\n\nMy mutation spot-check: 13 of 16 killed. Two survivors are equivalent (request refusal, killed flag). One gap does not block: the !s.ended guard works, but no test pins it, because C5's 'close before EOF' row emits close before the frames are parsed. Fix that by deferring the close with setImmediate. Separately, a protocol stop followed by the budget firing gives 'timeout' by the planned order. Neither path can ever give 'passed'.",
+  "requiredCheckAtDone": null
 }
