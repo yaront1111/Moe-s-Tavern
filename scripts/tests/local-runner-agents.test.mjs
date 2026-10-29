@@ -89,8 +89,8 @@ test('SH1 tools.json is the TOOLS projection, and tools/list serves exactly MOE_
   const dir = scratch();
   const small = '{"worker":{"moe.x":[]}}';
   const files = [
-    '{', '[]', '{"worker":[]}', '{"worker":{"moe.Get":[]}}', '{"worker":{"get_context":[]}}', '{"worker":{"moe.x":"view"}}',
-    '{"worker":{"moe.x":["a","a"]}}', '{"worker":{"moe.x":["1a"]}}', '{"worker":{"moe.x":[1]}}', '{"worker":{"moe.x":[]},"n":NaN}',
+    '{', '[]', '{"worker":[]}', '{"worker":{"moe.Get":[]}}', '{"worker":{"moe.x-y":[]}}', '{"worker":{"get_context":[]}}', '{"worker":{"moe.x":"view"}}',
+    '{"worker":{"moe.x":["a","a"]}}', '{"worker":{"moe.x":["1a"]}}', '{"worker":{"moe.x":["a-b"]}}', '{"worker":{"moe.x":[1]}}', '{"worker":{"moe.x":[]},"n":NaN}',
     Buffer.from([0x7b, 0xff, 0x7d]), small.padEnd(MAX_SUPERVISOR_BYTES + 1), small.padEnd(MAX_SUPERVISOR_BYTES),
   ].map((content, index) => { const file = join(dir, `${index}.json`); writeFileSync(file, content); return file; });
   const code = `${LOAD}print(json.dumps([m.load_tools(p) for p in sys.argv[2:]]))`;
@@ -217,10 +217,10 @@ test('SH7 an absent bridge, a closed connection or a bad host frame fails pendin
   }
   const header = length => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(length); return bytes; };
   const bad = [
-    'close', header(0), header(MAX_HOST_FRAME_BYTES + 1), id => response(id + 50, { ok: true, result: {} }), () => response(0, { ok: true, result: {} }),
+    () => response(true, { ok: true, result: {} }), 'close', header(0), header(MAX_HOST_FRAME_BYTES + 1), id => response(id + 50, { ok: true, result: {} }), () => response(0, { ok: true, result: {} }),
     id => response(id, { ok: true, result: {}, extra: 1 }), id => response(id, { ok: true, error: { code: 'X' } }),
     id => response(id, { ok: 'true', result: {} }), id => response(id, { ok: true }), id => response(id, { ok: false, error: { code: 'bridge_busy' } }),
-    id => response(id, { ok: false, error: { code: 5 } }), id => response(id, { ok: false, error: { code: 'X', why: 'y' } }),
+    id => response(id, { ok: false, error: { code: 5 } }), id => response(id, { ok: false, error: { code: 'X', why: 'y' } }), id => response(id, { ok: false, error: { code: 'BRIDGE_BUSY x' } }),
     id => response(id, { ok: true, result: [1] }), id => encodeFrame({ kind: 'request', id, ok: true, result: {} }, MAX_HOST_FRAME_BYTES),
     Buffer.concat([header(3), Buffer.from([0x7b, 0xff, 0x7d])]), Buffer.concat([header(5), Buffer.from('{"a":')]),
   ];

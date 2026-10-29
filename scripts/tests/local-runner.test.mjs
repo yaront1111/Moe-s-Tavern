@@ -926,8 +926,10 @@ const DENIALS = [
 const EXPECTED_PROBES = {
   cloudInit: ['cloud-init', 'status', '--format', 'json'],
   mountinfo: ['cat', '/proc/self/mountinfo'],
-  layout: ['sudo', '-n', 'stat', '--format=%U:%G:%a:%A:%n', '/opt/moe', '/opt/moe/bin', '/opt/moe/bin/moe-supervisor', '/etc/moe', '/etc/moe/supervisor.credential'],
+  layout: ['sudo', '-n', 'stat', '--format=%U:%G:%a:%A:%n', '/opt/moe', '/opt/moe/bin', '/opt/moe/bin/moe-supervisor', '/etc/moe', '/etc/moe/supervisor.credential', '/opt/moe/bin/moe-mcp-shim', '/opt/moe/bin/tools.json'],
   supervisorHash: ['sudo', '-n', 'sha256sum', '/opt/moe/bin/moe-supervisor'],
+  shimHash: ['sudo', '-n', 'sha256sum', '/opt/moe/bin/moe-mcp-shim'],
+  shimToolsHash: ['sudo', '-n', 'sha256sum', '/opt/moe/bin/tools.json'],
 };
 for (const id of IDENTITIES) {
   const as = ['sudo', '-n', '-u', id];
@@ -966,6 +968,7 @@ const mountinfo = (lines = MOUNTS) => ({ code: 0, stdout: `${lines.join('\n')}\n
 const LAYOUT = [
   'root:root:755:drwxr-xr-x:/opt/moe', 'root:root:755:drwxr-xr-x:/opt/moe/bin', 'root:root:500:-r-x------:/opt/moe/bin/moe-supervisor',
   'root:root:755:drwxr-xr-x:/etc/moe', 'root:root:400:-r--------:/etc/moe/supervisor.credential',
+  'root:root:555:-r-xr-xr-x:/opt/moe/bin/moe-mcp-shim', 'root:root:444:-r--r--r--:/opt/moe/bin/tools.json',
 ];
 const layout = (lines = LAYOUT, code = 0) => ({ code, stdout: `${lines.join('\n')}\n` });
 const withLine = (lines, index, line) => lines.map((entry, at) => (at === index ? line : entry));
@@ -975,6 +978,7 @@ function healthy(overrides = {}) {
   const answers = {
     cloudInit: cloudInit(0, 'done'), mountinfo: mountinfo(), layout: layout(),
     supervisorHash: { code: 0, stdout: `${BOOTSTRAP.supervisorSha256}  /opt/moe/bin/moe-supervisor\n` },
+    shimHash: { code: 0, stdout: `${BOOTSTRAP.shimSha256}  /opt/moe/bin/moe-mcp-shim\n` }, shimToolsHash: { code: 0, stdout: `${BOOTSTRAP.shimToolsSha256}  /opt/moe/bin/tools.json\n` },
   };
   for (const id of IDENTITIES) {
     answers[`whoami:${id}`] = { code: 0, stdout: `${id}\n` };
@@ -1099,6 +1103,7 @@ test('verifySourceImage accepts only the installed manifest pin for the requeste
 });
 
 test('buildUserData renders deterministic cloud-config with a protected supervisor and locked identities', () => {
+  const [shim, tools] = ['guest-mcp-shim.py', 'guest-mcp-tools.json'].map(name => readFileSync(new URL(`../local-runner/${name}`, import.meta.url)));
   const expected = [
     '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: []', 'users:', '  - default',
     '  - name: moe-agent', '    lock_passwd: true', '    shell: /bin/bash',
@@ -1106,12 +1111,15 @@ test('buildUserData renders deterministic cloud-config with a protected supervis
     'write_files:',
     '  - path: /opt/moe/bin/moe-supervisor', '    owner: root:root', "    permissions: '0500'", '    encoding: b64',
     `    content: '${SUPERVISOR.toString('base64')}'`,
+    '  - path: /opt/moe/bin/moe-mcp-shim', '    owner: root:root', "    permissions: '0555'", '    encoding: b64', `    content: '${shim.toString('base64')}'`,
+    '  - path: /opt/moe/bin/tools.json', '    owner: root:root', "    permissions: '0444'", '    encoding: b64', `    content: '${tools.toString('base64')}'`,
     '  - path: /etc/moe/supervisor.credential', '    owner: root:root', "    permissions: '0400'", '    encoding: b64',
     `    content: '${CREDENTIAL.toString('base64')}'`,
     '',
   ].join('\n');
   const built = buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL });
-  assert.deepEqual(built, { userData: expected, supervisorSha256: createHash('sha256').update(SUPERVISOR).digest('hex') });
+  const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+  assert.deepEqual(built, { userData: expected, supervisorSha256: sha256(SUPERVISOR), shimSha256: sha256(shim), shimToolsSha256: sha256(tools) });
   assert.equal(Object.isFrozen(built), true);
   assert.equal(buildUserData({ supervisor: SUPERVISOR, credential: CREDENTIAL }).userData, expected);
   assert.equal(built.userData.includes(CREDENTIAL.toString('utf8')), false);
@@ -1140,6 +1148,7 @@ test('guest layout, identities and resource bounds are frozen constants shared w
   assert.deepEqual(GUEST_LAYOUT, {
     supervisor: '/opt/moe/bin/moe-supervisor', supervisorDirs: ['/opt/moe', '/opt/moe/bin'],
     credential: '/etc/moe/supervisor.credential', credentialDir: '/etc/moe',
+    shim: '/opt/moe/bin/moe-mcp-shim', shimTools: '/opt/moe/bin/tools.json',
   });
   for (const value of [GUEST_RESOURCES, JOB_IDENTITIES, GUEST_LAYOUT, GUEST_LAYOUT.supervisorDirs]) assert.equal(Object.isFrozen(value), true);
 });
@@ -1195,7 +1204,7 @@ test('readGuestInfo runs bounded info on the owned name and parses the v1.17.0 d
 test('runGuestProbe executes only the frozen fixed-argv table without host-directory mapping', async () => {
   assert.deepEqual(Object.keys(GUEST_PROBES), Object.keys(EXPECTED_PROBES));
   assert.deepEqual(GUEST_PROBES, EXPECTED_PROBES);
-  assert.equal(Object.keys(GUEST_PROBES).length, 4 + 15 * IDENTITIES.length);
+  assert.equal(Object.keys(GUEST_PROBES).length, 6 + 15 * IDENTITIES.length);
   assert.equal(Object.isFrozen(GUEST_PROBES), true);
   for (const argv of Object.values(GUEST_PROBES)) {
     assert.equal(Object.isFrozen(argv), true);
@@ -1334,6 +1343,8 @@ test('the supervisor and credential must be root-only files under root-owned unw
     ['an extra line', [...LAYOUT, 'root:root:755:drwxr-xr-x:/opt']],
     ['reordered lines', [LAYOUT[1], LAYOUT[0], ...LAYOUT.slice(2)]],
     ['an extra field', withLine(LAYOUT, 3, 'root:root:755:drwxr-xr-x:/etc/moe:x')],
+    ['shim mode 755', withLine(LAYOUT, 5, 'root:root:755:-rwxr-xr-x:/opt/moe/bin/moe-mcp-shim')], ['shim owned by ubuntu', withLine(LAYOUT, 5, 'ubuntu:root:555:-r-xr-xr-x:/opt/moe/bin/moe-mcp-shim')],
+    ['tools mode 644', withLine(LAYOUT, 6, 'root:root:644:-rw-r--r--:/opt/moe/bin/tools.json')], ['tools mode 666', withLine(LAYOUT, 6, 'root:root:666:-rw-rw-rw-:/opt/moe/bin/tools.json')],
   ]) await expectRefused(h, { answers: healthy({ layout: layout(lines) }) }, ['LAYOUT_INVALID'], { label });
   await expectRefused(h, { answers: healthy({ layout: layout(LAYOUT, 1) }) }, ['LAYOUT_INVALID'], { label: 'stat exit 1' });
   const digestLine = sha => `${sha}  /opt/moe/bin/moe-supervisor\n`;
@@ -1343,6 +1354,12 @@ test('the supervisor and credential must be root-only files under root-owned unw
     ['an uppercase digest', { code: 0, stdout: digestLine(BOOTSTRAP.supervisorSha256.toUpperCase()) }],
     ['a failed sha256sum', { code: 1, stdout: digestLine(BOOTSTRAP.supervisorSha256) }],
   ]) await expectRefused(h, { answers: healthy({ supervisorHash: answer }) }, ['SUPERVISOR_HASH_MISMATCH'], { label });
+  for (const [id, sha, file, failure] of [
+    ['shimHash', BOOTSTRAP.shimSha256, '/opt/moe/bin/moe-mcp-shim', 'SHIM_HASH_MISMATCH'], ['shimToolsHash', BOOTSTRAP.shimToolsSha256, '/opt/moe/bin/tools.json', 'SHIM_TOOLS_HASH_MISMATCH'],
+  ]) {
+    const rows = [['another digest', 0, `${'ef'.repeat(32)}  ${file}\n`], ['an uppercase digest', 0, `${sha.toUpperCase()}  ${file}\n`], ['another path', 0, digestLine(sha)], ['a failed sha256sum', 1, `${sha}  ${file}\n`]];
+    for (const [label, code, stdout] of rows) await expectRefused(h, { answers: healthy({ [id]: { code, stdout } }) }, [failure], { label: `${id} ${label}` });
+  }
   for (const id of IDENTITIES) {
     for (const [key, , , exposed] of DENIALS) {
       for (const [code, failure] of [[0, exposed], [2, 'PROBE_UNKNOWN'], [3, 'PROBE_UNKNOWN'], [126, 'PROBE_UNKNOWN']]) {
@@ -1463,6 +1480,8 @@ test('a malformed source image or supervisor digest is refused before any provid
     ['an uppercase supervisor digest', { bootstrap: { ...BOOTSTRAP, supervisorSha256: BOOTSTRAP.supervisorSha256.toUpperCase() } }],
     ['a short supervisor digest', { bootstrap: { supervisorSha256: 'ab' } }],
     ['an array supervisor digest', { bootstrap: { supervisorSha256: [BOOTSTRAP.supervisorSha256] } }],
+    ...['shimSha256', 'shimToolsSha256'].flatMap(key => [[`no ${key}`, { bootstrap: { ...BOOTSTRAP, [key]: undefined } }],
+      [`an uppercase ${key}`, { bootstrap: { ...BOOTSTRAP, [key]: BOOTSTRAP[key].toUpperCase() } }]]),
     ['no bootstrap', { bootstrap: undefined }],
     ['a zero poll interval', { pollMs: 0 }],
     ['a fractional wait', { maxWaitMs: 1.5 }],
@@ -1746,7 +1765,7 @@ const provisionWith = (h, overrides = {}) => provisionGuest({
 
 const provisioned = (failures = []) => ({
   provisioned: true, instance: GUEST, bootstrapReady: failures.length === 0, executionReady: false, prerequisites: READY_ITEMS,
-  image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, failures,
+  image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures,
 });
 
 test('fileImageUrl keeps the literal path Multipass strips from file://, never percent-encoded', () => {
@@ -3810,4 +3829,251 @@ test('AJ6 a reconnect is a new job under a fresh session id, after a verified sw
   assert.deepEqual(h.calls().filter(([tool]) => tool.endsWith('_resource')),
     [ACQUIRE_CALL, ACQUIRE_CALL, RELEASE_CALL(), ...Array(3).fill([ACQUIRE_CALL, RELEASE_CALL()]).flat()]);
   onlyAllowed(h);
+});
+
+// CQ-R11 isolated check lifecycle: deleteOwned ends one fresh check VM with its run. runCheckJob rows CJ1-CJ7 inject every
+// step and record it in one ordered log ('removed' once the delete settled); CJ6 also runs the real runCheckSession over a
+// fake supervisor, and CJ8 composes the real provisionGuest and deleteOwned over fakeVm.
+import { checkEnvironment, evidenceStatus } from '../local-runner/check-evidence.mjs';
+import { runCheckJob } from '../local-runner/check-lifecycle.mjs';
+import { MAX_BUDGET_MS } from '../local-runner/check-session.mjs';
+import { checkArgv, checkFrame } from '../local-runner/guest-bridge.mjs';
+import { deleteOwned, validOwner } from '../local-runner/lifecycle.mjs';
+import { transferError } from '../local-runner/snapshot-transfer.mjs';
+
+test('deleteOwned purges only its owner\'s launched record, never an unlaunched one, and is idempotent', async t => {
+  const purge = [infoArgs(nameAt(1)), ['delete', '--purge', nameAt(1)], infoArgs(nameAt(1))];
+  const remove = (h, who = owner) => deleteOwned({ ledger: h.ledger, name: nameAt(1), owner: who, provider: h.provider });
+  for (const [phase, argv = purge] of [['launching'], ['owned'], ['absent'], ['failed'], ['absent', [infoArgs(nameAt(1))]]]) {
+    const h = harness(t, [...(argv === purge ? [[nameAt(1), 'Running']] : []), ...FOREIGNERS]);
+    await seed(h.ledger, phase);
+    // The second call is idempotent: no provider call.
+    assert.deepEqual([await remove(h), await phasesOf(h.ledger), h.fake.argv(), await remove(h), h.fake.calls.length],
+      ['deleted', ['deleted'], argv, 'deleted', argv.length], phase);
+    assertScoped(h.fake, [nameAt(1)]);
+  }
+  for (const [phase, who, expected] of [['reserved', owner, 'not-launched'], ['collision', owner, 'not-launched'],
+    ...[{ ...owner, taskId: 'task-other' }, { ...owner, attemptId: 'attempt-other' }, { ...owner, generation: 4 }, null].map(who => ['owned', who, 'LIFECYCLE_NOT_OWNER'])]) {
+    const h = harness(t, [[nameAt(1), 'Running']]);
+    await seed(h.ledger, phase);
+    const seen = await remove(h, who).catch(error => assertSanitized(error, 'LIFECYCLE_NOT_OWNER') && error.code);
+    assert.deepEqual([seen, await phasesOf(h.ledger), h.fake.calls.length, h.fake.present.get(nameAt(1))], [expected, [phase], 0, 'Running'], phase);
+  }
+  for (const script of [args => (args[0] === 'delete' ? { stdout: '' } : undefined),
+    args => (args[0] === 'delete' ? { error: failWith({ code: 1, stderr: 'secret' }) } : undefined)]) {
+    const h = harness(t, [[nameAt(1), 'Running']], script);
+    await seed(h.ledger, 'owned');
+    await assert.rejects(remove(h), error => assertSanitized(error, 'LIFECYCLE_STATE_UNKNOWN'));
+    assert.deepEqual([await phasesOf(h.ledger), h.fake.argv()], [['owned'], purge]);
+  }
+  await assert.rejects(deleteOwned({ ledger: null, name: nameAt(1), owner }), error => assertSanitized(error, 'LIFECYCLE_INPUT_INVALID'));
+  assert.deepEqual([owner, { ...owner, generation: 0 }, { ...owner, taskId: 'task-' }, null].map(validOwner), [true, false, false, false]);
+});
+
+const CHECK = Object.freeze({ id: 'unit', command: 'python3 -m unittest', protected: Object.freeze([Object.freeze({ path: 'tests/a.py', oid: 'e'.repeat(40) })]) });
+const CHECK_SNAPSHOT = snapshotOf([fileOf('tests/a.py', 'pass\n')], [fileOf('src/a.py', 'A')]);
+const identityOf = ({ source = SOURCE.sha256, image = PROVIDER_HASH, supervisor = BOOTSTRAP.supervisorSha256 } = {}) =>
+  checkEnvironment({ sourceImageSha256: source, providerImageHash: image, supervisorSha256: supervisor, resources: GUEST_RESOURCES });
+const PASSED_RUN = { outcome: 'passed', exitCode: 0, signal: null, outputTail: 'ok\n' };
+const FULL_LOG = ['provision', 'reserve', 'materialize', 'onReady', 'session', 'remove', 'removed'];
+const readyGuest = (changes = {}) => ({ provisioned: true, instance: GUEST, bootstrapReady: true, executionReady: false, prerequisites: READY_ITEMS,
+  image: { source: SOURCE, provider: { imageHash: PROVIDER_HASH, imageRelease: '24.04 LTS' } }, supervisorSha256: BOOTSTRAP.supervisorSha256, failures: [], ...changes });
+// A provision step that reserves through the ledger it was given, then resolves value, or throws it when it is an Error.
+const reserving = value => async ({ ledger, owner: who }) => { await ledger.reserve(who); if (value instanceof Error) throw value; return value; };
+const checkRefused = code => error => error?.code === code && error.message === `Check job failed: ${code}.`;
+const stopped = (failure, changes = {}) => ({ outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '', environment: null,
+  workspace: 'unverified', instance: GUEST, vm: 'deleted', failure, executionReady: false, ...changes });
+const ranWith = (run, changes = {}) => ({ ...run, environment: identityOf(), workspace: 'unverified', instance: GUEST, vm: 'deleted', failure: null,
+  executionReady: false, ...changes });
+
+function checkHarness({ provision = reserving(readyGuest()), materialize = () => {}, onReady = () => {}, session = () => PASSED_RUN, remove = () => 'deleted' } = {}) {
+  const h = { log: [], seen: {} };
+  const step = (name, behave) => async options => { h.log.push(name); h.seen[name] = options; return behave(options); };
+  h.ledger = { read: async () => assert.fail('read'), update: async () => assert.fail('update'), recordImage: async () => assert.fail('recordImage'),
+    reserve: async who => { h.log.push('reserve'); h.seen.reserve = who; return { instance: GUEST }; } };
+  h.deps = { provision: step('provision', provision), materialize: step('materialize', materialize), session: step('session', session),
+    remove: step('remove', async options => { await wait(1); try { return await remove(options); } finally { h.log.push('removed'); } }) };
+  h.input = { platform: onWindows(), ledger: h.ledger, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL,
+    snapshot: CHECK_SNAPSHOT, check: CHECK, budgetMs: 60_000, provider: { run: async () => assert.fail('provider') }, timeoutMs: 1_000,
+    onReady: environment => { h.log.push('onReady'); h.seen.onReady = environment; return onReady(environment); } };
+  return h;
+}
+
+test('CJ1 invalid input or an aborted signal refuses before any ledger or provider call', async () => {
+  const MISSING = Symbol('missing');
+  const check = changes => ({ check: { ...CHECK, ...changes } });
+  const entry = path => ({ path, oid: 'e'.repeat(40) });
+  const invalid = [{ extra: 1 }, { sessionId: 'worker-1@x' }, check({ id: '' }), check({ command: ' ' }), check({ command: 'a\u0000b' }),
+    check({ note: 1 }), check({ protected: [entry('b'), entry('a')] }), check({ protected: [entry('../a')] }), check({ protected: null }), { check: null },
+    { snapshot: null }, { snapshot: { ...CHECK_SNAPSHOT, version: 2 } }, { snapshot: snapshotOf([fileOf('a', 'A')], [fileOf('a/x', 'X')]) },
+    ...[0, MAX_BUDGET_MS + 1, 1.5, '1000', undefined].map(budgetMs => ({ budgetMs })), ...[0, 60_001, '100'].map(timeoutMs => ({ timeoutMs })),
+    ...[1, null, undefined].map(onReady => ({ onReady })), { owner: { ...owner, generation: 0 } }, { owner: { ...owner, taskId: 'x' } }, { owner: null },
+    { ledger: null }, { ledger: { reserve: async () => ({}) } }, ...[null, [], 'x'].map(provider => ({ provider })), { signal: {} },
+    ...['platform', 'check', 'snapshot', 'onReady'].map(key => ({ [key]: MISSING }))];
+  for (const [index, changes] of invalid.entries()) {
+    const h = checkHarness();
+    const input = Object.fromEntries(Object.entries({ ...h.input, ...changes }).filter(([, value]) => value !== MISSING));
+    await assert.rejects(runCheckJob(input, h.deps), checkRefused('CHECK_JOB_INPUT_INVALID'), `case ${index}`);
+    assert.deepEqual(h.log, [], `case ${index}`);
+  }
+  for (const input of [null, [], 'x']) await assert.rejects(runCheckJob(input, checkHarness().deps), checkRefused('CHECK_JOB_INPUT_INVALID'));
+  const h = checkHarness();
+  await assert.rejects(runCheckJob({ ...h.input, signal: AbortSignal.abort() }, h.deps), checkRefused('CHECK_ABORTED'));
+  assert.deepEqual(h.log, []);
+});
+
+test('CJ2 a clean run provisions, materializes, reports the environment, runs the approved check and deletes its own VM', async () => {
+  const signal = new AbortController().signal;
+  const h = checkHarness();
+  const result = await runCheckJob({ ...h.input, signal }, h.deps);
+  assert.deepEqual([result, Object.isFrozen(result), h.log, h.seen.onReady], [ranWith(PASSED_RUN), true, FULL_LOG, identityOf()]);
+  const { ledger, ...provisioned } = h.seen.provision;
+  assert.deepEqual(provisioned, { platform: h.input.platform, owner, cacheDir: '/var/cache/moe', supervisor: SUPERVISOR, credential: CREDENTIAL, provider: h.input.provider });
+  assert.deepEqual([ledger === h.ledger, h.seen.reserve, h.seen.remove], [false, owner, { ledger, name: GUEST, owner, provider: h.input.provider }]);
+  assert.deepEqual(h.seen.materialize, { name: GUEST, snapshot: CHECK_SNAPSHOT, provider: h.input.provider });
+  assert.deepEqual(h.seen.session, { name: GUEST, check: CHECK, provider: h.input.provider, budgetMs: 60_000, timeoutMs: 1_000, signal });
+  assert.deepEqual([h.seen.session.signal === signal, h.seen.session.provider === h.seen.materialize.provider], [true, true]);
+  // Two concurrent runs of one owner each reserve, check and delete only their own VM.
+  const names = [nameAt(1), nameAt(2)];
+  const used = [];
+  const deps = { provision: async ({ ledger: own, owner: who }) => readyGuest({ instance: (await own.reserve(who)).instance }), materialize: async () => {},
+    session: async ({ name }) => { used.push(['session', name]); await wait(1); return PASSED_RUN; },
+    remove: async ({ name }) => { used.push(['remove', name]); return 'deleted'; } };
+  const twins = await Promise.all([0, 1].map(() => runCheckJob({ ...h.input, ledger: { ...h.ledger, reserve: async () => ({ instance: names.shift() }) } }, deps)));
+  assert.deepEqual(twins.map(run => [run.instance, run.outcome, run.vm]), [[nameAt(1), 'passed', 'deleted'], [nameAt(2), 'passed', 'deleted']]);
+  assert.deepEqual(used.sort(), [['remove', nameAt(1)], ['remove', nameAt(2)], ['session', nameAt(1)], ['session', nameAt(2)]]);
+});
+
+test('CJ3 nothing runs in the VM unless it is provisioned and cleanly ready, and a reserved VM is still deleted', async () => {
+  const unreserved = (failure, provision) => [failure, provision, stopped(failure, { instance: null, vm: 'none' }), ['provision']];
+  for (const [label, provision, expected, log = ['provision', 'reserve', 'remove', 'removed']] of [
+    ['credential readable', reserving(readyGuest({ bootstrapReady: false, failures: ['CREDENTIAL_EXPOSED'] })), stopped('CHECK_GUEST_NOT_READY')],
+    ['a failure despite bootstrapReady', reserving(readyGuest({ failures: ['CREDENTIAL_EXPOSED'] })), stopped('CHECK_GUEST_NOT_READY')],
+    ['bootstrapReady not exactly true', reserving(readyGuest({ bootstrapReady: 'true' })), stopped('CHECK_GUEST_NOT_READY')],
+    ['failures not an array', reserving(readyGuest({ failures: undefined })), stopped('CHECK_GUEST_NOT_READY')],
+    ['another instance', reserving(readyGuest({ instance: nameAt(2) })), stopped('CHECK_PROVISION_FAILED')],
+    ['no supervisor identity', reserving(readyGuest({ supervisorSha256: undefined })), stopped('CHECK_ENVIRONMENT_UNKNOWN')],
+    ['no provider image identity', reserving(readyGuest({ image: { source: SOURCE, provider: null } })), stopped('CHECK_ENVIRONMENT_UNKNOWN')],
+    ['a throw after reserving', reserving(failWith({ code: 'LIFECYCLE_RETRY_EXHAUSTED' })), stopped('LIFECYCLE_RETRY_EXHAUSTED')],
+    ['an unknown code after reserving', reserving(failWith({ code: 'EACCES' })), stopped('CHECK_PROVISION_FAILED')],
+    ['a code carrying a path', reserving(failWith({ code: 'PROVIDER_/private/secret' })), stopped('CHECK_PROVISION_FAILED')],
+    unreserved('CHECK_PROVISION_FAILED', async () => readyGuest()),
+    unreserved('CHECK_PROVISION_UNAVAILABLE', async () => ({ provisioned: false, bootstrapReady: false, executionReady: false })),
+    unreserved('PRIMARY_NAME_CONFLICT', async () => { throw failWith({ code: 'PRIMARY_NAME_CONFLICT' }); }),
+  ]) {
+    const h = checkHarness({ provision });
+    const result = await runCheckJob(h.input, h.deps);
+    assert.deepEqual([result, h.log, /secret|private/.test(JSON.stringify(result))], [expected, log, false], label);
+  }
+});
+
+test('CJ4 a refused no-mount materialization stops the run before the hook and the session, and still deletes the VM', async () => {
+  for (const [error, failure] of [...['TRANSFER_MOUNTS_PRESENT', 'TRANSFER_MOUNTS_UNKNOWN', 'TRANSFER_DIGEST_MISMATCH'].map(code => [transferError(code), code]),
+    [failWith({ code: 'SNAPSHOT_PATH_INVALID' }), 'CHECK_MATERIALIZE_FAILED'], [new Error('/private/secret'), 'CHECK_MATERIALIZE_FAILED']]) {
+    const h = checkHarness({ materialize: () => { throw error; } });
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log],
+      [stopped(failure, { environment: identityOf() }), ['provision', 'reserve', 'materialize', 'remove', 'removed']], failure);
+  }
+});
+
+test('CJ5 the onReady hook gates the session; its error, a timeout or an abort settles only after the delete', async () => {
+  const gated = FULL_LOG.filter(name => name !== 'session');
+  const boom = new Error('caller hook');
+  for (const [hook, thrown] of [[() => { throw boom; }, boom], [() => Promise.reject(boom), boom], [() => { throw 'not an error'; }, 'not an error']]) {
+    const h = checkHarness({ onReady: hook });
+    await assert.rejects(runCheckJob(h.input, h.deps), error => error === thrown && h.log.at(-1) === 'removed');
+    assert.deepEqual(h.log, gated);
+  }
+  const hung = checkHarness({ onReady: () => new Promise(() => {}) });
+  await assert.rejects(runCheckJob({ ...hung.input, timeoutMs: 20 }, hung.deps), error => checkRefused('CHECK_READY_TIMEOUT')(error) && hung.log.at(-1) === 'removed');
+  assert.deepEqual(hung.log, gated);
+  const during = new AbortController();
+  const aborted = checkHarness({ onReady: () => { during.abort(); return new Promise(() => {}); } });
+  assert.deepEqual([await runCheckJob({ ...aborted.input, signal: during.signal }, aborted.deps), aborted.log],
+    [stopped('CHECK_ABORTED', { environment: identityOf() }), gated]);
+  for (const [at, log] of [['provision', ['provision', 'reserve', 'remove', 'removed']], ['materialize', ['provision', 'reserve', 'materialize', 'remove', 'removed']]]) {
+    const controller = new AbortController();
+    const abortAfter = behave => async options => { const value = await behave(options); controller.abort(); return value; };
+    const h = checkHarness(at === 'provision' ? { provision: abortAfter(reserving(readyGuest())) } : { materialize: abortAfter(() => {}) });
+    assert.deepEqual([await runCheckJob({ ...h.input, signal: controller.signal }, h.deps), h.log], [stopped('CHECK_ABORTED', { environment: identityOf() }), log], at);
+  }
+});
+
+test('CJ6 outcomes pass through after the delete, the approved protected list reaches the guest frame unchanged, and an undeleted pass is inconclusive', async () => {
+  const failed = { outcome: 'code-failure', exitCode: 1, signal: null, outputTail: 'boom\n' };
+  const undeleted = vm => ranWith(PASSED_RUN, { outcome: 'inconclusive', vm, failure: 'CHECK_VM_DELETE_FAILED' });
+  for (const run of [failed, ...['timeout', 'skipped', 'infra-failure'].map(outcome => ({ outcome, exitCode: null, signal: null, outputTail: 'x' })),
+    { outcome: 'inconclusive', exitCode: 0, signal: null, outputTail: 'ok\n' }]) {
+    const h = checkHarness({ session: () => run });
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [ranWith(run), FULL_LOG], run.outcome);
+  }
+  for (const [session, remove, expected] of [[() => PASSED_RUN, () => { throw failWith({ code: 'LIFECYCLE_STATE_UNKNOWN' }); }, undeleted('delete-failed')],
+    [() => PASSED_RUN, () => 'gone', undeleted('delete-failed')], [() => PASSED_RUN, () => 'not-launched', undeleted('not-launched')],
+    [() => failed, () => { throw new Error('x'); }, ranWith(failed, { vm: 'delete-failed', failure: 'CHECK_VM_DELETE_FAILED' })],
+    [() => { throw failWith({ code: 'CHECK_SESSION_INPUT_INVALID' }); }, () => 'deleted', stopped('CHECK_SESSION_FAILED', { environment: identityOf() })],
+    [() => ({ ...PASSED_RUN, outcome: 'pass' }), () => 'deleted', stopped('CHECK_SESSION_FAILED', { environment: identityOf() })]]) {
+    const h = checkHarness({ session, remove });
+    assert.deepEqual([await runCheckJob(h.input, h.deps), h.log], [expected, FULL_LOG]);
+  }
+  // The real runCheckSession over a fake supervisor: the frame is the approved check even when the caller edits its object
+  // during onReady, and supervisor exits 79 and 80 classify as skipped and inconclusive.
+  const HELLO = { kind: 'hello', protocol: 1 };
+  for (const [code, frames, outcome, exitCode] of [[79, [], 'skipped', null], [80, [HELLO, EXITED], 'inconclusive', 0], [0, [HELLO, EXITED], 'passed', 0]]) {
+    const check = structuredClone(CHECK);
+    const h = checkHarness({ onReady: () => { check.command = 'true'; check.protected.length = 0; } });
+    const procs = [];
+    const spawn = (executable, argv) => {
+      const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true, argv, written: [] });
+      proc.stdin = new Writable({ write(chunk, encoding, done) {
+        proc.written.push(chunk);
+        setImmediate(() => proc.stdout.once('close', () => proc.emit('close', code, null)).end(Buffer.concat(frames.map(frame => encodeFrame(frame)))));
+        done();
+      } });
+      return procs.push(proc) && proc;
+    };
+    const { session, ...deps } = h.deps;
+    const result = await runCheckJob({ ...h.input, check, provider: { spawn } }, deps);
+    assert.deepEqual([result.outcome, result.exitCode, result.vm, result.failure], [outcome, exitCode, 'deleted', null], String(code));
+    assert.deepEqual(procs.map(proc => [proc.argv, Buffer.concat(proc.written).equals(checkFrame(CHECK))]), [[checkArgv(GUEST), true]]);
+  }
+});
+
+test('CJ7 a changed image or supervisor gives a new environment, and evidence observed in the old one is stale', async () => {
+  const runWith = async changes => {
+    const h = checkHarness({ provision: reserving(readyGuest(changes)) });
+    const { environment } = await runCheckJob(h.input, h.deps);
+    return { environment, treeSha: 'f'.repeat(40), definitionDigest: `sha256:${'d'.repeat(64)}`, planRevision: 1 };
+  };
+  const first = await runWith({});
+  assert.deepEqual([first.environment, evidenceStatus(first, await runWith({}))], [identityOf(), 'fresh']);
+  const provider = { imageHash: 'ef'.repeat(32), imageRelease: '24.04 LTS' };
+  for (const [changes, identity] of [[{ image: { source: SOURCE, provider } }, { image: provider.imageHash }], [{ supervisorSha256: 'ab'.repeat(32) }, { supervisor: 'ab'.repeat(32) }],
+    [{ image: { source: { ...SOURCE, sha256: '12'.repeat(32) }, provider: { imageHash: PROVIDER_HASH } } }, { source: '12'.repeat(32) }]]) {
+    const next = await runWith(changes);
+    assert.deepEqual([next.environment, next.environment !== first.environment, evidenceStatus(first, next)], [identityOf(identity), true, 'stale']);
+  }
+});
+
+test('CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run reserved, and nothing foreign', async t => {
+  const exhausted = { launch: () => ({ error: failWith({ code: 1, stderr: 'secret' }), create: false }) };
+  for (const [label, fakeOptions, expected, taken = false] of [['ready', {}, ranWith(PASSED_RUN)],
+    ['the check identity can read the credential', { answers: healthy({ 'readCredential:moe-check': { code: 0, stdout: '' } }) }, stopped('CHECK_GUEST_NOT_READY')],
+    ['launch retries exhausted', exhausted, stopped('LIFECYCLE_RETRY_EXHAUSTED')],
+    ['a name collision', {}, stopped('LIFECYCLE_NAME_COLLISION', { vm: 'not-launched' }), true]]) {
+    const h = provisionHarness(t, fakeOptions);
+    const order = [0xa1, 0xa2, 1];
+    h.ledger = createLedger(h.ledgerDir, { random: size => Buffer.from(hexOf(order.shift()).repeat(size), 'hex') });
+    await seed(h.ledger, 'owned', 1, { ...owner, attemptId: 'attempt-other' });
+    await seed(h.ledger, 'collision');
+    for (const name of [nameAt(0xa1), nameAt(0xa2), ...(taken ? [GUEST] : [])]) h.fake.present.set(name, 'Running');
+    const purged = [];
+    const run = (executable, args, options) => (args[0] !== 'delete' ? h.fake.run(executable, args, options)
+      : Promise.resolve(purged.push(args[2]) && h.fake.present.delete(args[2]) && { stdout: '', stderr: '' }));
+    const result = await runCheckJob({ ...checkHarness().input, ledger: h.ledger, cacheDir: h.cacheDir, provider: { run }, onReady: () => {} }, {
+      provision: options => provisionGuest({ ...options, fetch: h.download.fetch, digest: h.digest, sleep: async () => {} }),
+      materialize: async () => {}, session: async () => PASSED_RUN });
+    const records = Object.fromEntries((await h.ledger.list()).records.map(record => [record.instance, record.phase]));
+    assert.deepEqual([result, purged.filter(name => name !== GUEST), records, [GUEST, nameAt(0xa1), nameAt(0xa2)].map(name => h.fake.present.has(name))],
+      [expected, [], { [nameAt(0xa1)]: 'owned', [nameAt(0xa2)]: 'collision', [GUEST]: taken ? 'collision' : 'deleted' }, [taken, true, true]], label);
+  }
 });

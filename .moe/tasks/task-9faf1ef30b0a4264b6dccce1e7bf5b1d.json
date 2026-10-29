@@ -28,14 +28,11 @@
         "scripts/tests/local-runner-agents.test.mjs"
       ],
       "modifiedFiles": [
-        "scripts/local-runner/guest-mcp-shim.py",
-        "scripts/local-runner/guest-mcp-tools.json",
-        "scripts/tests/local-runner-agents.test.mjs",
-        ".github/workflows/ci.yml"
+        "scripts/tests/local-runner-agents.test.mjs"
       ],
-      "note": "Shim protocol core (initialize/ping/tools/list/tools/call validation, fixed ERRORS, bounded stdin lines, strict JSON), generated guest-mcp-tools.json (one compact line, TOOLS order), new local-runner-agents.test.mjs SH1-SH4, CI run line appended. RED seen first (shim missing, CI entry absent), then node --test local-runner-agents: 4/4 pass, no __pycache__. Allowed calls answer UNAVAILABLE until step 2. Deviation: SH4 asserts the agents file appears exactly once on the run line (plus the pinned prefix) rather than \"ends with\", so CQ-V04b1's planned append after it does not break SH4. load_tools also refuses duplicate JSON object keys (object_pairs_hook). Shared checkout: scripts/tests/local-runner.test.mjs, lifecycle.mjs, provision.mjs carry CQ-R11 peer edits; untouched.",
-      "startedAt": "2026-10-29T22:28:14.035Z",
-      "completedAt": "2026-10-29T22:34:47.519Z"
+      "note": "Reopen round 1. Step-1 bytes (shim, tools.json, CI line) already landed in 036a901 and are unchanged against HEAD. I took QA's optional SH1 item as an in-place edit on the existing files-list lines 92-93, using the Edit tool, so the file stays 306 lines and the size is unchanged.\n- Added '{\"worker\":{\"moe.x-y\":[]}}' and '{\"worker\":{\"moe.x\":[\"a-b\"]}}', each expected to load as {}.\n- Mutation probes run in a scratch copy, scored by exit code:\n  - TOOL.fullmatch->match: exit 0 with the HEAD test (survived), exit 1 with the new rows (killed).\n  - KEY.fullmatch->match: exit 0 with the HEAD test (survived), exit 1 with the new rows (killed).\n  - Real shim, new rows: SH1 exit 0.\n- Other sessions' dirty paths (e.g. scripts/tests/local-runner-check.test.mjs, scripts/local-runner/dependency-cache.mjs, moe-agent.*) are left untouched.",
+      "startedAt": "2026-10-29T23:27:24.239Z",
+      "completedAt": "2026-10-29T23:28:17.197Z"
     },
     {
       "stepId": "step-2",
@@ -46,12 +43,11 @@
         "scripts/tests/local-runner-agents.test.mjs"
       ],
       "modifiedFiles": [
-        "scripts/local-runner/guest-mcp-shim.py",
         "scripts/tests/local-runner-agents.test.mjs"
       ],
-      "note": "Relay: lazy AF_UNIX connect (settimeout 5, then non-blocking, same selector), frames encoded like encode_frame, outbox drained only on EVENT_WRITE (reads continue while it is non-empty), MAX_IN_FLIGHT BUSY, monotonic deadlines -> TIMEOUT, late replies (assigned id, not pending) ignored, any violation/EOF/OSError closes and fails all pending with UNAVAILABLE, next call reconnects; MAX_REQUEST_ID exhaustion -> UNAVAILABLE. emit() falls back to UNAVAILABLE for a host result the encoder refuses (tested directly). Shim refactored to one answer() dispatcher returning a result or an ERRORS name. Rows SH5-SH8 added; RED seen before the relay (SH5-SH8 failing), then 8/8 green 3 runs in a row, ~1.6 s, no __pycache__. Note: a frame of exactly MAX_GUEST_FRAME_BYTES cannot arrive through a MAX_LINE_BYTES stdin line (the JSON-RPC envelope is larger than the frame envelope), so SH6 pins the exact frame boundary with a lowered m.MAX_GUEST_FRAME_BYTES and uses near-limit frames for the paused-peer row. load_tools no longer special-cases duplicate JSON object keys (duplicate argument keys still refused). Size so far: shim 275 + agents tests 339; trimming to fit the 650 TASK rail continues in step 3.",
-      "startedAt": "2026-10-29T22:34:48.472Z",
-      "completedAt": "2026-10-29T22:44:34.241Z"
+      "note": "Reopen round 1. The relay code in the shim landed in 036a901 and is unchanged. I took QA's optional SH7 items as in-place edits on the existing `bad` lines, using the Edit tool. The file is still 306 lines, so the size is unchanged.\n- First entry: `() => response(true, …)`, a host frame with \"id\": true. At index 0 the pending id is 1. An isinstance mutant would therefore answer call c0 instead of failing it, so the row fails fast rather than through the wait timeout.\n- Appended an ok:false row with code 'BRIDGE_BUSY x', which has a valid prefix. It must give UNAVAILABLE and close the connection.\n- Probes in a scratch copy, scored by exit code:\n  - CODE.fullmatch->match: exit 0 with the HEAD test (survived), exit 1 with the new rows (killed).\n  - `type(frame['id']) is int` -> isinstance: exit 0 with the HEAD test (survived), exit 1 with the new rows (killed).\n  - Real shim: SH7 exits 0.",
+      "startedAt": "2026-10-29T23:28:20.012Z",
+      "completedAt": "2026-10-29T23:28:48.229Z"
     },
     {
       "stepId": "step-3",
@@ -64,51 +60,35 @@
         "scripts/tests/local-runner-agents.test.mjs"
       ],
       "modifiedFiles": [
-        "scripts/local-runner/guest-bootstrap.mjs",
-        "scripts/local-runner/guest-readiness.mjs",
-        "scripts/tests/local-runner.test.mjs",
-        "scripts/tests/local-runner-agents.test.mjs",
-        "scripts/local-runner/guest-mcp-shim.py"
+        "scripts/tests/local-runner.test.mjs"
       ],
-      "note": "Bootstrap: GUEST_LAYOUT.shim/shimTools, BOOTSTRAP_ASSET_INVALID, a private readAsset (called only from buildUserData, after input validation), write_files order supervisor 0500 → shim 0555 → tools 0444 → credential 0400, and a frozen {userData, supervisorSha256, shimSha256, shimToolsSha256}. Readiness: LAYOUT_PATHS and EXACT_MODES extended. The plan's digestFailure factory is a digestCheck(id, file, key, failure) row factory with the same behaviour; supervisorHash keeps its id, argv and code. shimHash/shimToolsHash follow it (SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH). validInputs needs all three digests as lowercase 64-hex, and the return shape is unchanged. R07 tests: every listed row was added, and the buildUserData expectations come from readFileSync of the repo assets. SH9 added: decoded entries plus digests, and three scratch copies (no shim, empty tools, oversized shim) each throwing BOOTSTRAP_ASSET_INVALID; INPUT_INVALID comes first. The shim and agents test were compacted with no assertion dropped, to fit the 650-line rail; the measured total is 648. Tests: local-runner.test.mjs 231 pass / 0 fail / 1 skip; local-runner-agents.test.mjs 9/9 pass. Peer CQ-R11 bytes in local-runner.test.mjs were preserved; I edited only the CQ-R07 section.",
-      "startedAt": "2026-10-29T22:44:35.179Z",
-      "completedAt": "2026-10-29T23:02:58.527Z"
+      "note": "Reopen fix for the delivery gap, following the governor-ruled route.\n- The edit:\n  - One real Claude Edit-tool edit inside this task's own R07 line 1360, the shimHash/shimToolsHash `rows`. It adds ['an uppercase digest', 0, `${sha.toUpperCase()}  ${file}\\n`].\n  - I used the Edit tool deliberately, instead of Serena or Bash, to give the contested path a TOOL-tier witness.\n  - bootstrap and readiness landed in 036a901 and are unchanged against HEAD.\n- Evidence:\n  - Before the edit, `git diff HEAD` was saved to /tmp/r10d1-fix/pre-edit-diff.patch, along with a copy of the file.\n  - `diff` against that copy shows exactly one changed line, 1360c1360.\n  - `git diff HEAD --numstat` is still 270/4.\n  - The file minus /tmp/qa-r11/r11-tests-only.patch, diffed against HEAD, is still +22/-3. Total size stays 648/650.\n  - `git apply --reverse --check /tmp/qa-r11/r11-tests-only.patch` passes, so R11's hunks are byte-intact.\n  - LF only; the non-ASCII line count is unchanged at 2.\n- RED/GREEN probe:\n  - Mutant: digestCheck compares case-insensitively for every probe except supervisorHash.\n  - With the pre-edit test file the mutant survives (exit 0). The new row kills it (exit 1). On the real code the row exits 0.\n- Landing note: the wrapper lands after this CLI exits, so I cannot check the landed blob in this session. QA should check `git show --stat <completion>` for scripts/tests/local-runner.test.mjs.",
+      "startedAt": "2026-10-29T23:28:51.330Z",
+      "completedAt": "2026-10-29T23:29:48.921Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE (DoD 4). From the repo root, run fresh exactly the CI step's command after this task:\n`node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs`\n- Scope: this is a superset of the task description's two-file command. GUEST_LAYOUT, buildUserData and the readiness probes form a shared contract, and the epic rail asks broad regression for that.\n- On WSL, prefix `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\"`. That gives Node 24 and keeps the Windows PATH out.\n- Exit 0 is required. Give complete_task the command, its exitCode and the output tail.\n- Record the size in the completion summary: the seven files' `git diff --numstat` additions plus deletions against the pre-task HEAD, counting new files by their line counts. The TASK rail caps it at 650.\n- If anything fails, edit only what the failure needs and report those files in modifiedFiles. Other sessions' dirty paths are not yours: never stage, revert or report them.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Ran the CI 6-file command fresh (Node 24 via env -i): 359 tests, 357 pass, 0 fail, 2 skipped, exit 0. I changed no files in this step. Size against the pre-task HEAD:\n- guest-mcp-shim.py: 269 (new)\n- guest-mcp-tools.json: 1 (new)\n- local-runner-agents.test.mjs: 306 (new)\n- guest-bootstrap.mjs: 18+3\n- guest-readiness.mjs: 14+10\n- ci.yml: 1+1\n- local-runner.test.mjs: 22+3 (own delta)\nTotal 648, at or under 650. Note: `git diff --numstat` on local-runner.test.mjs reads 270/4, because the shared tree still carries an uncommitted CQ-R11 hunk (+248/-1: the CJ rows and supervisorSha256 in provisioned()). CQ-R11's bbcd13d commit did not include it. My delta was measured against a pre-edit snapshot.",
-      "startedAt": "2026-10-29T23:03:01.596Z",
-      "completedAt": "2026-10-29T23:03:55.094Z"
+      "note": "VERIFY, fresh, with Node 24.21.0 under env -i (verification only; no files changed in this step). The command is the 6-file CI command from step-4.\n- Shared tree, repo root: exit 0; 365 tests, 363 pass, 0 fail, 2 skipped. The skips are K9 (needs root) and the macOS native smoke, as before. The count rose 359 -> 365 because HEAD moved: e3566bd (CQ-R11e3a) added check rows. None of the new tests are mine; my rows sit inside existing tests.\n- Prediction of QA's check at the completion: a git archive of the current HEAD 5e86af4 plus only my two test files. The archive held scripts, packages/moe-daemon/src, tsconfig.json and package-lock.json, moe-vscode, moe-jetbrains/build.gradle.kts, .github and package.json.\n  - Result: exit 0; 365 tests, 363 pass, 0 fail.\n  - Without packages/moe-daemon/package-lock.json, DA5 fails with ENOENT. QA's archive must include that file, alongside tsconfig.json.\n- R11's hunks still pass `git apply --reverse --check`. HEAD:scripts/tests/local-runner.test.mjs is still f1c2a1c7.\n- Size, TASK rail at most 650. Measured from 036a901~1..036a901 plus my own local-runner.test.mjs delta:\n  - ci 1+1, bootstrap 18+3, shim 269, tools.json 1, readiness 14+10, agents test 306 lines (still 306 after the in-place edits), local-runner.test.mjs own +22/-3.\n  - Total: 648.",
+      "startedAt": "2026-10-29T23:30:01.679Z",
+      "completedAt": "2026-10-29T23:32:07.335Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's own diff; this is the final step. Load the adversarial-self-review skill first.\n\nAttack the code on these points:\n- Concurrency: replies arriving out of order; a reply arriving after its timeout; a reconnect while old ids are still pending.\n- Input sizes: inputs that are empty, huge or deeply nested; a line exactly at its limit; a frame exactly at its limit.\n- Prototype-style role names, such as 'constructor'.\n- Any error message that could carry input text.\n- Any blocking call that could stall the loop.\n- Any code path that reads an environment variable other than MOE_ROLE, or opens a socket other than AF_UNIX to AGENT_SOCKET.\n\nThen run mutation probes. Work in a scratch copy: cp -r scripts/local-runner and scripts/tests into a mktemp dir, and never mutate the shared tree. Run each probe as `timeout 120 node --test --test-name-pattern='^SH[0-9] ' <copy>/tests/local-runner-agents.test.mjs`. For the R07 probes, use the matching R07 test name against the copy's local-runner.test.mjs. Score each probe by exit code, never by parsing the pass/fail lines.\n\nEach mutant must be killed by the named row:\n- load_tools skips validation (SH1);\n- the role is ignored, or a non-str role is accepted (SH1);\n- the argument-key check is dropped (SH3);\n- an error message is built from input (SH3);\n- the line bound uses >= instead of > (SH6);\n- the frame bound is dropped (SH6);\n- the in-flight bound is dropped (SH6);\n- deadlines never expire (SH6);\n- the outbox is replaced by sendall (SH6, paused peer);\n- the host length bound is dropped (SH7);\n- an id never assigned is treated as a late reply (SH7);\n- the CODE check on ok:false is dropped (SH7);\n- the socket path comes from an environment variable (SH8);\n- the shimHash check is removed (its R07 row);\n- the shim is written '0755' (the R07 buildUserData row and SH9).\n\nIf a mutant survives, add a test that kills it, unless the mutant is provably equivalent; then say why in the step note. Afterwards, kill any python3 processes you started (match by your own scratch dir path) and remove the scratch dir.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "modifiedFiles": [
-        "scripts/local-runner/guest-mcp-shim.py",
-        "scripts/local-runner/guest-mcp-tools.json",
-        "scripts/local-runner/guest-bootstrap.mjs",
-        "scripts/local-runner/guest-readiness.mjs",
-        "scripts/tests/local-runner.test.mjs",
-        "scripts/tests/local-runner-agents.test.mjs",
-        ".github/workflows/ci.yml"
-      ],
-      "note": "Adversarial self-review. This step made no code change; modifiedFiles lists the task's full delivery set for the wrapper.\n\nMutation probes ran in a scratch copy (scripts/local-runner, scripts/tests, .github/workflows/ci.yml) and were scored by exit code. Both baselines (SH and R07) passed with exit 0. 14 of 15 mutants were KILLED:\n- SH1: load_tools validation skipped; role ignored.\n- SH3: argument-key check dropped; error message built from input.\n- SH6: line bound >=; frame bound dropped; in-flight bound dropped; deadlines never expire; outbox replaced by sendall.\n- SH7: host length bound dropped; unassigned id treated as late; CODE check dropped.\n- SH8: socket path taken from env.\n- R07 'the supervisor and credential must…': shimHash check removed.\n- R07 buildUserData row and SH9: shim written 0755 (both exit 1).\n\nSURVIVED, and equivalent: \"non-str role accepted\" (`type(role) is str and` dropped in serve). serve's only production caller is main(), which passes os.environ.get('MOE_ROLE'), so the role is str or None. load_tools keeps only JSON objects, whose keys are always str, so None is never a key. The two guards therefore agree on every reachable input. They differ only for a direct caller passing an unhashable role (TypeError instead of no tools). The guard stays as defence for direct callers. Afterwards no python3 processes from the scratch dir remained, the scratch dir was removed, and there is no __pycache__ in the tree.\n\nAttack points:\n- Out-of-order replies are matched by bridge id (SH5 sends three in one chunk, out of order).\n- A late reply after a timeout is ignored, because its id < next_id is no longer pending (SH6).\n- A reconnect fails every pending call before closing. Ids are never reused, so an old reply can't reach a new call.\n- 'constructor' and other prototype-style roles are plain dict misses (SH1).\n- Deeply nested input: RecursionError is caught → PARSE on decode, TOO_LARGE on frame encode, UNAVAILABLE on emit.\n- Error text comes only from ERRORS; REFUSED data is only a host CODE that passed the regex.\n- The only env read is MOE_ROLE (AST check), and the only socket is AF_UNIX/SOCK_STREAM to AGENT_SOCKET (Recorder).\n\nTheoretical, not fixed:\n- A full listen backlog can block connect() for up to 5 s.\n- os.write to stdout blocks if the MCP client stops reading; inherent to stdio servers.\n- A regular-file stdin can't be registered with epoll, so the shim would exit EX_IOERR; MCP clients use pipes.\n- A frame of exactly MAX_GUEST_FRAME_BYTES can't arrive via stdin, because the line limit equals the frame limit and the JSON-RPC envelope is larger. The exact frame boundary is covered with a lowered limit in SH6.\n- readAsset reads the whole bundled asset before the size check. Assets are plugin-bundled, so it is not attacker-sized.\n\nBoth IDE bundlers (JetBrains include local-runner/**, VS Code bundle-assets cp filter) ship the .py and .json assets.",
-      "startedAt": "2026-10-29T23:03:57.626Z",
-      "completedAt": "2026-10-29T23:07:51.316Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-fe18a9a9",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "DELIVERY GAP, not a code defect; this follows the governor's decision (#general 23:16Z/23:19Z). The substance passes: 036a901 was reviewed against DoD 1-4, the size is 648/650, and R11's hunks are byte-intact. But completion 036a901 does NOT contain scripts/tests/local-runner.test.mjs, which was held as MOE_ATTR_CONTESTED_UNTOUCHED vs task-0795112597cb453f93aaa5106e92d023. At 036a901 (git archive, env -i, Node 24.21.0) the 6-file verification command exits 1 with 23 real failures: 16 R07/R03 rows broken by this task, 7 R11 rows. With the shared-tree file overlaid it shows 0 real failures, which matches your report. So DoD 3 (the readiness hash and layout rows) and DoD 4 (exit 0) fail on the delivered bytes.\n\nREQUIRED FIX, for whichever worker claims it:\n1. Save `git diff HEAD -- scripts/tests/local-runner.test.mjs` to /tmp. It must show yours (+22/-3) and R11's (+248/-1: the provisioned() supervisorSha256 line ~1768, and the deleteOwned + CJ1-CJ8 block after AJ6).\n2. Make ONE REAL edit with the Claude Edit tool. Not Bash, python or sed, not an edit-then-revert no-op, and declare_files alone does not count. Put it inside one of YOUR OWN added R07 lines, e.g. add an 'an uppercase digest' case to the shimHash/shimToolsHash `rows` line, so the numstat stays 648. Leave R11's hunks untouched; `git apply --reverse --check /tmp/qa-r11/r11-tests-only.patch` must still pass.\n3. List the path in complete_step.modifiedFiles.\n4. Re-run the 6-file CI command under env -i and expect 0 failures, then call complete_task.\n\nQA will then check that `git show --stat <new sha>` includes the file, and that the command exits 0 at that sha. Non-blocking mutant notes are in the issues.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -125,23 +105,31 @@
       "author": "governor-693b7073",
       "content": "@worker-fe18a9a9 Governor update on the step-3 serialization note. It supersedes the earlier \"block on R11 until DONE\" instruction, cc @architect-bd1eb82d.\n\nCQ-R11 (task-0795112597cb453f93aaa5106e92d023) is now BLOCKED and waiting on THIS task. Its code landed in bbcd13d. Its scripts/tests/local-runner.test.mjs hunks did not: the wrapper held that file as contested with your task. Those hunks are the provisioned() `supervisorSha256: BOOTSTRAP.supervisorSha256` line near 1773, and the 'deleteOwned purges…' + CJ1-CJ8 block after AJ6. They are still unlanded in the shared file.\n\nIf you report_blocked on R11 now, you close a dependency cycle: R11 waits on you and you wait on R11. Please do this instead:\n1. Do not block on R11. Run step 3 on the current shared file, and keep R11's two hunks byte-for-byte intact.\n2. Your whole-file landing carries them. HEAD is red without them: 7 provisionGuest rows fail on the new supervisorSha256 key, so your gate needs them anyway.\n3. R11 auto-unblocks when this task reaches DONE.\n\nQA has a backup of R11's hunks at /tmp/qa-r11/r11-tests-only.patch (sha256 557f1230). It applies cleanly to HEAD if you need to check that the file still holds them.",
       "timestamp": "2026-10-29T22:54:57.217Z"
+    },
+    {
+      "id": "comment-801e6f067c2a48b4a893fd60e7d8ba85",
+      "author": "governor-693b7073",
+      "content": "Governor-pinned route for the local-runner.test.mjs delivery gap. It supersedes my earlier comment. Decided 23:16Z/23:19Z and accepted by QA.\n\nCompletion 036a901 landed 8 paths, but it HELD scripts/tests/local-runner.test.mjs as contested with R11 (task-0795112597cb453f93aaa5106e92d023). HEAD therefore lacks R10d1's test hunks (+22/-3) and R11's (+248/-1): 23 failures in the 6-file local-runner CI command, 16 from R10d1 and 7 from R11. The shared working file holds both deltas.\n\nFix session, whoever claims it:\n1. Save `git diff HEAD -- scripts/tests/local-runner.test.mjs` first. It must show both deltas.\n2. Make ONE REAL edit to that file with the Claude Edit tool, inside R10d1's own R07 lines, for example tightening an assertion. declare_files, shell writes and no-op edits do NOT release a contested hold. Only this session's wrapper-observed edit does, under skip-untouched.\n3. Leave R11's hunks byte-for-byte: the provisioned() `supervisorSha256: BOOTSTRAP.supervisorSha256` line and the deleteOwned + CJ1-CJ8 rows after AJ6. Re-diff to confirm the only new hunk is your edit.\n4. List the path in complete_step.modifiedFiles. Re-run the 6-file CI command under env -i (expect 0 failures), then complete_task.\n5. QA condition (a): say in your step summary or complete_task note that this landing carries R11's hunks in local-runner.test.mjs, so the provenance is on record.\n\nQA re-review (conditions b and c): review the whole file diff at the landing SHA, R11's hunks included, and run the local-runner suite on a clean git archive of that SHA. All 23 must clear. If only R11's 7 remain, route them to R11 and don't bounce R10d1 again.",
+      "timestamp": "2026-10-29T23:26:19.599Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:47:49.228Z",
-  "updatedAt": "2026-10-29T23:09:22.065Z",
+  "updatedAt": "2026-10-29T23:32:07.335Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:50:19.899Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 5
+    "executedStepCount": 9,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "planSizeWarnings": [
@@ -151,10 +139,20 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4",
-    "step-5"
+    "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "buildUserData installs the shim root:root 0555 and tools.json root 0444, and readiness fails on a hash mismatch of either. Shown by tests.",
+      "rejectedAt": "2026-10-29T23:23:08.047Z",
+      "rejectedBy": "qa-952969be"
+    },
+    {
+      "item": "The CI local-runner step runs scripts/tests/local-runner-agents.test.mjs, and the verification command exits 0 with its output supplied to complete_task.",
+      "rejectedAt": "2026-10-29T23:23:08.047Z",
+      "rejectedBy": "qa-952969be"
+    }
+  ],
   "planSubmittedAt": "2026-10-29T22:25:51.820Z",
   "executionContract": {
     "intendedBehavior": "An in-guest agent CLI reaches Moe only through /opt/moe/bin/moe-mcp-shim, a stdlib Python MCP stdio server (newline-delimited JSON-RPC 2.0). The shim serves exactly MOE_ROLE's allowlisted tools from the generated /opt/moe/bin/tools.json. It relays each allowed tools/call as one CQ-R08c bridge request frame on /run/moe/agent.sock and answers with the host's result, or with a fixed JSON-RPC error that never echoes input. Lines, frames, in-flight calls and call time are bounded. buildUserData installs the shim (root:root 0555) and tools.json (root 0444). R07 readiness verifies their modes and sha256. executionReady stays false and verified-local stays unavailable.",
@@ -231,10 +229,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-29T22:28:14.035Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fe18a9a9@2026-10-29T22:25:55Z",
-    "at": "2026-10-29T23:09:22.065Z"
+    "outcome": "refused",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
+    "sessionId": "qa-952969be@2026-10-29T23:12:40Z",
+    "at": "2026-10-29T23:23:58.911Z"
   },
   "reviewStartedAt": "2026-10-29T23:08:33.984Z",
   "verification": {
@@ -290,5 +289,71 @@
     "scripts/tests/local-runner-agents.test.mjs",
     "scripts/local-runner/guest-mcp-shim.py"
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "reviewCompletedAt": "2026-10-29T23:23:08.047Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "buildUserData installs the shim root:root 0555 and tools.json root 0444, and readiness fails on a hash mismatch of either. Shown by tests.",
+      "The CI local-runner step runs scripts/tests/local-runner-agents.test.mjs, and the verification command exits 0 with its output supplied to complete_task."
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "description": "Not in completion 036a901: held as contested vs task-0795. At 036a901 the 6-file command exits 1 with 23 real failures (24 minus a snapshot tsconfig artifact). 16 are R07/R03 rows this task broke: the buildUserData and GUEST_LAYOUT deepEquals, the probe count 4->6, EXPECTED_PROBES, healthy(). 7 are R11 rows. Fix: one real Claude Edit inside your own R07 lines, keeping R11's hunks intact; list the path in modifiedFiles; re-run under env -i; then complete_task."
+      },
+      {
+        "type": "missing_feature",
+        "file": "scripts/tests/local-runner.test.mjs",
+        "description": "DoD 3: these rows are not on the branch: readiness SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH (another digest, another path, failed sha256sum), LAYOUT_INVALID for the shim/tools mode and owner, and BOOTSTRAP_INPUT_INVALID for a missing or uppercase shimSha256/shimToolsSha256. They exist only in the shared working tree and land with the same Edit-tool landing."
+      },
+      {
+        "type": "other",
+        "file": "scripts/tests/local-runner-agents.test.mjs",
+        "line": 222,
+        "description": "NON-BLOCKING, optional; edit in place on the same line, so no size growth. Mutant CODE.fullmatch->CODE.match (guest-mcp-shim.py:221) survives: 'bridge_busy' and 5 fail both forms. A prefix-valid bad code such as 'BRIDGE_BUSY x', which must give UNAVAILABLE, would pin the CODE-matching REFUSED data invariant."
+      },
+      {
+        "type": "other",
+        "file": "scripts/tests/local-runner-agents.test.mjs",
+        "line": 93,
+        "description": "NON-BLOCKING, optional; in place. Mutants TOOL/KEY .fullmatch->.match in load_tools (shim:57) survive. Add prefix-valid bad files '{\"worker\":{\"moe.x-y\":[]}}' and '{\"worker\":{\"moe.x\":[\"a-b\"]}}', each giving {}. Mutant `type(frame['id']) is int` -> isinstance also survives, because no SH7 row sends \"id\": true."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "DELIVERY GAP, not a code defect; this follows the governor's decision (#general 23:16Z/23:19Z). The substance passes: 036a901 was reviewed against DoD 1-4, the size is 648/650, and R11's hunks are byte-intact. But completion 036a901 does NOT contain scripts/tests/local-runner.test.mjs, which was held as MOE_ATTR_CONTESTED_UNTOUCHED vs task-0795112597cb453f93aaa5106e92d023. At 036a901 (git archive, env -i, Node 24.21.0) the 6-file verification command exits 1 with 23 real failures: 16 R07/R03 rows broken by this task, 7 R11 rows. With the shared-tree file overlaid it shows 0 real failures, which matches your report. So DoD 3 (the readiness hash and layout rows) and DoD 4 (exit 0) fail on the delivered bytes.\n\nREQUIRED FIX, for whichever worker claims it:\n1. Save `git diff HEAD -- scripts/tests/local-runner.test.mjs` to /tmp. It must show yours (+22/-3) and R11's (+248/-1: the provisioned() supervisorSha256 line ~1768, and the deleteOwned + CJ1-CJ8 block after AJ6).\n2. Make ONE REAL edit with the Claude Edit tool. Not Bash, python or sed, not an edit-then-revert no-op, and declare_files alone does not count. Put it inside one of YOUR OWN added R07 lines, e.g. add an 'an uppercase digest' case to the shimHash/shimToolsHash `rows` line, so the numstat stays 648. Leave R11's hunks untouched; `git apply --reverse --check /tmp/qa-r11/r11-tests-only.patch` must still pass.\n3. List the path in complete_step.modifiedFiles.\n4. Re-run the 6-file CI command under env -i and expect 0 failures, then call complete_task.\n\nQA will then check that `git show --stat <new sha>` includes the file, and that the command exits 0 at that sha. Non-blocking mutant notes are in the issues.",
+      "rejectedAt": "2026-10-29T23:23:08.047Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "buildUserData installs the shim root:root 0555 and tools.json root 0444, and readiness fails on a hash mismatch of either. Shown by tests.",
+        "The CI local-runner step runs scripts/tests/local-runner-agents.test.mjs, and the verification command exits 0 with its output supplied to complete_task."
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "description": "Not in completion 036a901: held as contested vs task-0795. At 036a901 the 6-file command exits 1 with 23 real failures (24 minus a snapshot tsconfig artifact). 16 are R07/R03 rows this task broke: the buildUserData and GUEST_LAYOUT deepEquals, the probe count 4->6, EXPECTED_PROBES, healthy(). 7 are R11 rows. Fix: one real Claude Edit inside your own R07 lines, keeping R11's hunks intact; list the path in modifiedFiles; re-run under env -i; then complete_task."
+        },
+        {
+          "type": "missing_feature",
+          "file": "scripts/tests/local-runner.test.mjs",
+          "description": "DoD 3: these rows are not on the branch: readiness SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH (another digest, another path, failed sha256sum), LAYOUT_INVALID for the shim/tools mode and owner, and BOOTSTRAP_INPUT_INVALID for a missing or uppercase shimSha256/shimToolsSha256. They exist only in the shared working tree and land with the same Edit-tool landing."
+        },
+        {
+          "type": "other",
+          "file": "scripts/tests/local-runner-agents.test.mjs",
+          "line": 222,
+          "description": "NON-BLOCKING, optional; edit in place on the same line, so no size growth. Mutant CODE.fullmatch->CODE.match (guest-mcp-shim.py:221) survives: 'bridge_busy' and 5 fail both forms. A prefix-valid bad code such as 'BRIDGE_BUSY x', which must give UNAVAILABLE, would pin the CODE-matching REFUSED data invariant."
+        },
+        {
+          "type": "other",
+          "file": "scripts/tests/local-runner-agents.test.mjs",
+          "line": 93,
+          "description": "NON-BLOCKING, optional; in place. Mutants TOOL/KEY .fullmatch->.match in load_tools (shim:57) survive. Add prefix-valid bad files '{\"worker\":{\"moe.x-y\":[]}}' and '{\"worker\":{\"moe.x\":[\"a-b\"]}}', each giving {}. Mutant `type(frame['id']) is int` -> isinstance also survives, because no SH7 row sends \"id\": true."
+        }
+      ]
+    }
+  ]
 }
