@@ -105,7 +105,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -122,16 +122,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T19:15:35.382Z",
-  "updatedAt": "2026-10-29T19:51:36.145Z",
+  "updatedAt": "2026-10-29T20:09:36.338Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T19:18:39.892Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T20:09:36.338Z",
+    "wallClockMs": 3056446
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-b5749787"
+    "worker-b5749787",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -222,5 +225,9 @@
     "kind": "completion",
     "sessionId": "worker-b5749787@2026-10-29T19:22:30Z",
     "at": "2026-10-29T19:51:36.145Z"
-  }
+  },
+  "completedAt": "2026-10-29T20:09:36.338Z",
+  "reviewCompletedAt": "2026-10-29T20:09:36.338Z",
+  "reviewSummary": "QA approve CQ-I03a. Reviewed completion ad8097f, on moe/work-2026-10-24; the shared tree is byte-identical. Size: scripts/ +398/-1, under 400.\nGate: `node --test scripts/tests/local-runner-vm-control.test.mjs` exits 0, 8/8, in a git-archive snapshot (env -i, Linux Node 24.21), in the shared tree, and on Windows Node 24.16, which ran L1's win32 rows. R06 local-runner.test.mjs: 222 pass, 1 pre-existing skip.\nDoD1: status lists ledger records only, each queried by its own name; a foreign moe-vm-* is never queried (S1 checks the exact call list). executionReady and verified are always false, and provider readiness is reported separately. The real CLI reports PROVIDER_NOT_FOUND/linux.\nDoD2: cleanup runs through R06 cleanupOwned (LAUNCHED only, never collision). 'closed' means servedContext.attemptId differs from the owner attempt, consistent with attemptStore OPEN_PHASES/currentAttempt. Unreadable, refused or unreachable is unknown, so preserved. The lease is read fresh per record, and a failed read counts as held.\nLIVE read-only /mcp probe of the real daemon (Windows node, no workerId): the list_resources and servedContext shapes match. A missing task gives codeName TASK_NOT_FOUND with no message text. The open-attempt record was preserved; a closed attempt with a free lease was purged (fake provider).\nDoD3: the D:/, D:\\ and /mnt/d spellings reach one directory, 0700 and outside the project. Usage errors exit 2 with exact bytes and empty stderr.\nDoD4: verification reproduces.\nRails: no forbidden tokens, no .moe or Git writes, no activation. Independent mutants: 7/7 killed.\nAdvisories (non-blocking):\n(a) A WSL-mode bindHost of 0.0.0.0 (this repo's live daemon.json) makes cleanup preserve everything; bindHost ::1 still dials 127.0.0.1. Both fail closed.\n(b) mkdir 0700 does not tighten an existing directory.\n(c) ci.yml wiring is left to I06.\n(d) The read-to-delete lease race is documented.",
+  "requiredCheckAtDone": null
 }
