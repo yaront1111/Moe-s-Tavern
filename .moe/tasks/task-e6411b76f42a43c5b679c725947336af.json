@@ -89,7 +89,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:15.727Z",
-  "updatedAt": "2026-10-29T18:34:57.748Z",
+  "updatedAt": "2026-10-29T18:50:02.198Z",
   "dependsOn": [
     "task-0dd1cce23a6646fd80cf401dd47c7b0f",
     "task-b15bbbe5caab4a8dbdb6c2e10ec2805e",
@@ -129,13 +129,16 @@
     "worker-3729a0d6",
     "architect-4c57a52b",
     "architect-bd1eb82d",
-    "worker-73c29a03"
+    "worker-73c29a03",
+    "qa-952969be"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-27T13:40:53.570Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T18:50:02.198Z",
+    "wallClockMs": 191348628
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -260,5 +263,12 @@
   "completionSummary": "CQ-R10 final is delivered: plan rev 2, 4/4 steps. Size is 355 changed lines (cap 400): the new scripts/local-runner/agent-lifecycle.mjs is 131 lines, and scripts/tests/local-runner.test.mjs is +224/-0.\n\nrunAgentJob(input):\n- Input keys are exact; a caller sessionId is refused. The binding, job and provider are validated as frozen copies before any call.\n- It mints `${workerId}@${iso}#${16 hex}` and refuses one over 255 characters. Up-front refusals: AGENT_INPUT_INVALID, AGENT_ABORTED, AGENT_BUSY (an in-process Set per name).\n- Lease: moe.acquire_resource on jobLeaseResourceId(name), giving AGENT_LEASE_BUSY or AGENT_LEASE_UNAVAILABLE. Lease calls use their own timeoutMs signal and deadline, never the caller's, and the text is bounded.\n- Flow:\n  1. pre-start endAgentJobs; if unverified, AGENT_TERMINATION_UNVERIFIED with the lease kept and no spawn;\n  2. assertNoMounts, then runGuestSession;\n  3. the post-end sweep, always;\n  4. a release only after a verified sweep, pinned with ifHolderWorkerId and ifAcquiredAt, never forced, never retried. It is 'released' only when releasedHolders == [{taskId, workerId, acquiredAt}].\n- Result: frozen {sessionId, observation, failure, terminationVerified, lease, executionReady:false}. Artifacts are never touched.\n\nRows are AJ1-AJ6, not A1-A6, because CQ-R12 already owns A1-A6 in this file.\n\nDoD:\n1. AJ3 checks credential confinement (frame bytes == jobFrame; no secret in any forward argument, argv, spawn option or the result). onlyAllowed in AJ3-AJ6 allows only PKILL, PGREP, info, mountinfo and bridgeArgv. AJ5d covers the mount refusal. This rests on R07's identity probes and R10b's privilege drop.\n2. AJ6: five runs give five distinct ids, each carried by its own run's get_context and start_step, and a reconnect is a new spawn after a sweep. The daemon gate CONTEXT_RECEIPT_STALE forces the full context read.\n3. AJ4 (crash and kill are data, lingering descendants are swept), AJ5 (a-e) and the allowed-command check.\n4. The gate: exit 0,",
   "touchedFiles": [
     "scripts/local-runner/agent-lifecycle.mjs"
-  ]
+  ],
+  "declaredFiles": [
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "completedAt": "2026-10-29T18:50:02.198Z",
+  "reviewCompletedAt": "2026-10-29T18:50:02.198Z",
+  "reviewSummary": "APPROVED CQ-R10 final.\n\nDelivery: completion 1b9ca19 is on moe/work-2026-10-24 and carries agent-lifecycle.mjs (131 lines). The AJ1-AJ6 rows are still dirty in local-runner.test.mjs: one appended hunk, +224/-0, nothing else differs from HEAD. They were held MOE_CONTESTED_HELD against R12, now DONE (0107d5f). The rail forbids agent Git writes, so no self-land; this session's exit checkpoint should carry them, and the governor was asked to confirm. Size 355 (<400). No forbidden patterns.\n\nGate, re-run in the foreground: env -i node v24 `node --test scripts/tests/local-runner.test.mjs` exits 0 (222/223, 1 pre-existing macOS skip). It is also green in a clean git-archive HEAD snapshot plus the AJ section, so peers' dirty files mask nothing. AJ rows pass 6/6 on Node 20 and 18; 8 repeats on Node 24 are clean.\n\nMy own mutation sweep: 28 of 30 killed. The 2 survivors are unreachable: the sweep-reject handler (endAgentJobs' invoker check equals parse) and the PASSED filter (deps throw only coded errors, and a leak still fails closed).\n\nContracts checked against committed daemon code: release_resource takes ifHolderWorkerId/ifAcquiredAt and returns releasedHolders.\n\nDoD:\n1. AJ3 credential confinement, onlyAllowed in AJ3-AJ6, AJ5d mounts, plus committed supervisor setgroups([]) and setuid to moe-agent.\n2. AJ6: 5 distinct ids, 5 spawns, per-run get_context/start_step ids, and the daemon CONTEXT_RECEIPT_STALE gate (startStepAuthorization.test.ts).\n3. AJ4 crash as data, AJ5a-e lease kept or released only with the pin, no destructive commands.\n4. The gate.\n\nRails: executionReady is always false; no verified-local claim; no .moe edits.\n\nAccepted residuals: a busy acquire leaves a queue entry, and a later grant delays cleanupOwned until expiry (fail closed). Suggest R10d leave the queue on AGENT_LEASE_BUSY.\n\nPonytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

@@ -3587,3 +3587,227 @@ test('A6 every Git call runs in the admission envelope with plumbing subcommands
       ['rev-parse', 'config', 'ls-tree', 'hash-object', 'read-tree', 'update-index', 'write-tree']);
     assert.deepEqual([existsSync(temp), tmp.left()], [false, []]);
   });
+
+// CQ-R10 isolated agent lifecycle: runAgentJob over fakeGuest plus scripted PKILL/PGREP exits, a spawn-compatible bridge
+// and a fake daemon forward. The rows are AJ1-AJ6, since CQ-R12's admission rows own A1-A6.
+import { setTimeout as wait } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
+import { runAgentJob } from '../local-runner/agent-lifecycle.mjs';
+import { bridgeArgv, jobFrame } from '../local-runner/guest-bridge.mjs';
+import { MAX_RESPONSE_BYTES } from '../local-runner/guest-session.mjs';
+
+const AGENT_KEY = 'sk-R10-agent!~'.padEnd(32, 'k');
+const JOB = { cli: 'claude', credential: { name: 'ANTHROPIC_API_KEY', value: AGENT_KEY } };
+const AGENT = { role: 'worker', workerId: 'worker-1', ...owner };
+const PKILL = ['exec', '--no-map-working-directory', GUEST, '--', 'sudo', '-n', 'pkill', '-KILL', '-U', 'moe-agent'];
+const PGREP = ['exec', '--no-map-working-directory', GUEST, '--', 'sudo', '-n', 'pgrep', '-c', '-U', 'moe-agent'];
+const ACQUIRED = '2026-10-29T12:00:00.000Z';
+const mcp = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
+const leaseOf = (changes = {}) => mcp({ success: true, granted: true, resourceId: GUEST,
+  lease: { taskId: owner.taskId, workerId: 'worker-1', acquiredAt: ACQUIRED, expiresAt: '2026-10-30T12:00:00.000Z', ...changes } });
+const BUSY = mcp({ success: true, granted: false, resourceId: GUEST, position: 1, queueLength: 1 });
+const releasedOf = (holders = [{ taskId: owner.taskId, workerId: 'worker-1', acquiredAt: ACQUIRED }]) =>
+  mcp({ success: true, resourceId: GUEST, released: holders.map(({ taskId }) => taskId), releasedHolders: holders });
+const EXITED = { kind: 'observation', type: 'exit', code: 0, signal: null };
+const GUEST_REQUESTS = [{ tool: 'moe.get_context', args: {} }, { tool: 'moe.start_step', args: { stepId: 'step-1' } }];
+const SESSION_SHAPE = /^worker-1@\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z#[0-9a-f]{16}$/;
+const agentRefused = code => error => error?.code === code && !error.message.includes(AGENT_KEY) && !/[\\/]/.test(error.message);
+
+// After the job frame it sends hello, then each request once the previous one is answered, then frames and exit `exit`.
+// Like the supervisor it exits 74 when stdin closes first.
+function fakeBridge({ requests = GUEST_REQUESTS, frames = [EXITED], exit = 0 } = {}) {
+  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], written: [], kill: () => true });
+  const send = list => proc.stdout.write(Buffer.concat(list.map(frame => encodeFrame(frame))));
+  const end = code => { if (!proc.stdout.writableEnded) proc.stdout.once('close', () => proc.emit('close', code, null)).end(); };
+  proc.stdin = new Writable({ write(chunk, encoding, done) {
+    const answered = proc.written.push(chunk) - 1;
+    if (answered === 0) send([{ kind: 'hello', protocol: 1 }]);
+    if (answered < requests.length) send([{ kind: 'request', id: answered + 1, ...requests[answered] }]);
+    else setImmediate(() => { send(frames); end(exit); }); // once the last reply's write has completed
+    done();
+  } });
+  proc.stdin.once('close', () => end(74));
+  proc.spawn = (...args) => { proc.calls.push(args); return proc; };
+  proc.frames = () => createFrameDecoder(MAX_HOST_FRAME_BYTES).push(Buffer.concat(proc.written));
+  return proc;
+}
+
+// One seat's fakes. log holds every provider command and 'spawn', in order; pkill and pgrep list exit codes (or errors),
+// the last repeating. Each spawn gets a fresh bridge, bridge(index) when a function. The forward refuses a call whose
+// signal is already aborted.
+function agentHarness(t, { guest, pkill = [0], pgrep = [1], bridge, acquire = leaseOf(), release = releasedOf(), onCall } = {}) {
+  const h = { log: [], forwarded: [], outputs: [], observations: [], slept: [], fake: fakeGuest(guest), procs: [] };
+  const take = list => (list.length > 1 ? list.shift() : list[0]);
+  const run = async (executable, args, options) => {
+    h.log.push(args);
+    const kill = isDeepStrictEqual(args, PKILL);
+    if (!kill && !isDeepStrictEqual(args, PGREP)) return h.fake.run(executable, args, options);
+    const code = take(kill ? pkill : pgrep);
+    if (code === 0) return { stdout: kill ? '' : '1\n', stderr: '' };
+    throw code instanceof Error ? code : Object.assign(new Error('Command failed'), { code, stdout: code === 1 && !kill ? '0\n' : '', stderr: '' });
+  };
+  const answer = value => (typeof value === 'function' ? value() : value);
+  const forward = (tool, args, { signal }) => {
+    h.forwarded.push({ tool, args, signal });
+    if (signal.aborted) return Promise.reject(new Error('aborted'));
+    onCall?.(tool);
+    return tool === 'moe.acquire_resource' ? answer(acquire) : tool === 'moe.release_resource' ? answer(release) : mcp({ tool });
+  };
+  const daemonInfoPath = path.join(scratch(t), 'daemon.json');
+  writeFileSync(daemonInfoPath, JSON.stringify({ port: 9876, pid: 1, projectPath: '/p' }));
+  h.input = { name: GUEST, binding: AGENT, job: JOB, daemonInfoPath, forward, timeoutMs: 1_000, sleep: async ms => { h.slept.push(ms); },
+    onOutput: (stream, data) => h.outputs.push([stream, data]), onObservation: frame => h.observations.push(frame),
+    provider: { run, spawn: (...args) => {
+      h.log.push('spawn');
+      const proc = fakeBridge(typeof bridge === 'function' ? bridge(h.procs.length) : bridge);
+      h.procs.push(proc);
+      return proc.spawn(...args);
+    } } };
+  h.calls = () => h.forwarded.map(({ tool, args }) => [tool, args]);
+  return h;
+}
+const ACQUIRE_CALL = ['moe.acquire_resource', { resourceId: GUEST, taskId: owner.taskId, workerId: 'worker-1' }];
+const RELEASE_CALL = (ifAcquiredAt = ACQUIRED) =>
+  ['moe.release_resource', { resourceId: GUEST, workerId: 'worker-1', taskId: owner.taskId, ifHolderWorkerId: 'worker-1', ifAcquiredAt }];
+const CLEAN_LOG = [PKILL, PGREP, infoArgs(GUEST), execArgs('mountinfo'), 'spawn', PKILL, PGREP];
+const ALLOWED = CLEAN_LOG.filter(entry => entry !== 'spawn').map(argv => JSON.stringify(argv));
+// No delete, stop, purge, restart, mount, transfer, materialize or export: only these commands and the bridge argv.
+const onlyAllowed = h => assert.deepEqual([h.log.filter(args => args !== 'spawn' && !ALLOWED.includes(JSON.stringify(args))),
+  h.procs.flatMap(proc => proc.calls).filter(([, argv]) => !isDeepStrictEqual(argv, bridgeArgv(GUEST)))], [[], []]);
+const OUT = { kind: 'output', stream: 'stdout', data: 'QQ==' };
+
+test('AJ1 invalid input, a caller session id and an aborted signal refuse before any daemon or provider call', async t => {
+  const valued = value => ({ job: { cli: 'claude', credential: { name: 'ANTHROPIC_API_KEY', value } } });
+  const invalid = [{ name: 'primary' }, { binding: { ...AGENT, role: 'architect' } }, { binding: null }, { job: { cli: 'claude' } },
+    { job: { ...JOB, role: 'worker' } }, { job: { ...JOB, cli: 'gemini' } }, { job: { ...JOB, credential: { ...JOB.credential, note: 1 } } },
+    { job: { cli: 'claude', credential: { name: 'OPENAI_API_KEY', value: AGENT_KEY } } }, ...['', 'k'.repeat(4097), 'a b', 'a\u0001b'].map(valued),
+    { daemonInfoPath: 'daemon.json' }, { daemonInfoPath: '/p/daemon.json\n' }, ...['forward', 'onOutput', 'onObservation', 'sleep'].map(key => ({ [key]: 1 })),
+    { onObservation: undefined }, { provider: null }, { provider: { spawn: 'x' } }, { provider: { run: 'x' } }, { provider: { executable: ' ' } },
+    ...[0, 60_001, '100', 1.5].map(timeoutMs => ({ timeoutMs })), { signal: {} }, { sessionId: 'worker-1@2026-10-29T00:00:00.000Z' },
+    { binding: { ...AGENT, generation: 0 } }, { binding: { ...AGENT, workerId: '\u{1F600}'.repeat(128) } }];
+  for (const [index, [code, options]] of [...invalid.map(options => ['AGENT_INPUT_INVALID', options]),
+    ['AGENT_ABORTED', { signal: AbortSignal.abort() }]].entries()) {
+    const h = agentHarness(t);
+    await assert.rejects(runAgentJob({ ...h.input, ...options }), agentRefused(code), `case ${index}`);
+    assert.deepEqual([h.forwarded, h.log, h.procs], [[], [], []], `case ${index}`);
+  }
+});
+
+test('AJ2 a busy, unreadable or hung acquire rejects after its one call, under its own signal, and releases nothing', async t => {
+  const caller = new AbortController().signal;
+  for (const [index, [code, acquire, hangs = false]] of [['AGENT_LEASE_BUSY', BUSY],
+    ...[() => Promise.reject(new Error(AGENT_KEY)), () => { throw new Error(AGENT_KEY); }, { ...leaseOf(), isError: true },
+      { content: [...leaseOf().content, ...leaseOf().content] }, { content: [{ type: 'text', text: '{' }] }, leaseOf({ taskId: 'task-other' }),
+      leaseOf({ workerId: 'worker-2' }), leaseOf({ acquiredAt: '2026-10-29T12:00:00Z' }),
+      { content: [{ type: 'text', text: leaseOf().content[0].text.padEnd(MAX_RESPONSE_BYTES + 1) }] }].map(acquire => ['AGENT_LEASE_UNAVAILABLE', acquire]),
+    ['AGENT_LEASE_UNAVAILABLE', () => new Promise(() => {}), true]].entries()) {
+    const h = agentHarness(t, { acquire });
+    await assert.rejects(runAgentJob({ ...h.input, signal: caller, timeoutMs: 50 }), agentRefused(code), `case ${index}`);
+    await wait(60); // past timeoutMs: only the hung call's signal is aborted, a settled call's timer was cleared
+    assert.deepEqual([h.calls(), h.log, h.procs], [[ACQUIRE_CALL], [], []], `case ${index}`);
+    const { signal } = h.forwarded[0];
+    assert.deepEqual([signal instanceof AbortSignal, signal !== caller, signal.aborted], [true, true, hangs], `case ${index}`);
+  }
+  let grant;
+  const h = agentHarness(t, { acquire: () => (grant ? BUSY : new Promise(resolve => { grant = resolve; })) });
+  const first = runAgentJob(h.input);
+  await assert.rejects(runAgentJob(h.input), agentRefused('AGENT_BUSY'));
+  assert.equal(h.forwarded.length, 1);
+  grant(BUSY);
+  await assert.rejects(first, agentRefused('AGENT_LEASE_BUSY'));
+  await assert.rejects(runAgentJob(h.input), agentRefused('AGENT_LEASE_BUSY'));
+  assert.deepEqual([h.calls(), h.log], [[ACQUIRE_CALL, ACQUIRE_CALL], []]);
+});
+
+test('AJ3 a clean job: lease, verified sweep, no mounts, one bridge session with the job frame first, verified sweep, release', async t => {
+  const h = agentHarness(t);
+  const result = await runAgentJob(h.input);
+  const { sessionId } = result;
+  assert.match(sessionId, SESSION_SHAPE);
+  assert.deepEqual(result, { sessionId, observation: EXITED, failure: null, terminationVerified: true, lease: 'released', executionReady: false });
+  assert.deepEqual([Object.isFrozen(result), h.observations, h.log, h.fake.unexpected], [true, [EXITED], CLEAN_LOG, []]);
+  const [proc] = h.procs;
+  assert.deepEqual(h.procs.flatMap(({ calls }) => calls), [['multipass', bridgeArgv(GUEST), PIPES]]);
+  const [job, ...replies] = proc.frames();
+  assert.deepEqual(job, { kind: 'job', version: 1, cli: 'claude', role: 'worker', credential: JOB.credential });
+  assert.equal(proc.written[0].equals(jobFrame({ cli: 'claude', role: 'worker', credential: JOB.credential })), true);
+  assert.deepEqual(replies.map(({ kind, id, ok }) => [kind, id, ok]), [['response', 1, true], ['response', 2, true]]);
+  const stamped = { taskId: owner.taskId, workerId: 'worker-1' };
+  assert.deepEqual(h.calls(), [ACQUIRE_CALL, ['moe.get_context', { ...stamped, sessionId }],
+    ['moe.start_step', { stepId: 'step-1', ...stamped, attemptId: owner.attemptId, generation: owner.generation, sessionId }], RELEASE_CALL()]);
+  for (const seen of [h.calls(), h.log, proc.calls, result]) assert.equal(JSON.stringify(seen).includes(AGENT_KEY), false);
+  onlyAllowed(h);
+});
+
+test('AJ4 a crashed or killed job is data, lingering descendants are swept again and output arrives as bytes', async t => {
+  for (const observation of [{ ...EXITED, code: null, signal: 'SIGSEGV' }, { ...EXITED, code: 137 }]) {
+    const h = agentHarness(t, { bridge: { frames: [observation] } });
+    const { observation: seen, failure, lease } = await runAgentJob(h.input);
+    assert.deepEqual([seen, failure, lease, h.log, h.calls().at(-1)], [observation, null, 'released', CLEAN_LOG, RELEASE_CALL()]);
+    onlyAllowed(h);
+  }
+  const h = agentHarness(t, { pgrep: [1, 0, 1], bridge: { frames: [OUT, { ...OUT, stream: 'stderr', data: 'Qg==' }, EXITED] } });
+  const result = await runAgentJob(h.input);
+  assert.deepEqual([result.failure, result.terminationVerified, result.lease, h.log, h.slept], [null, true, 'released', [...CLEAN_LOG, PKILL, PGREP], [1_000]]);
+  assert.deepEqual(h.outputs, [['stdout', Buffer.from('A')], ['stderr', Buffer.from('B')]]);
+  onlyAllowed(h);
+});
+
+test('AJ5 a failed session, an unverified sweep, mounts or a refused release keep or release only the pinned lease', async t => {
+  const caller = new AbortController();
+  const leases = h => h.calls().filter(([tool]) => tool.endsWith('_resource'));
+  for (const [code, options, outputs = []] of [['SESSION_PROVIDER_FAILED', { bridge: { frames: [OUT], exit: 3 } }, [['stdout', Buffer.from('A')]]],
+    ['SESSION_PROTOCOL_VIOLATION', { bridge: { frames: [{ kind: 'hello', protocol: 1 }] } }],
+    ['SESSION_ABORTED', { onCall: tool => tool === 'moe.get_context' && caller.abort() }]]) {
+    const h = agentHarness(t, options);
+    const result = await runAgentJob({ ...h.input, signal: caller.signal });
+    assert.deepEqual([result.failure, result.observation, result.terminationVerified, result.lease, h.log, leases(h), h.outputs],
+      [code, null, true, 'released', CLEAN_LOG, [ACQUIRE_CALL, RELEASE_CALL()], outputs], code);
+    onlyAllowed(h);
+  }
+  const ENOENT = failWith({ code: 'ENOENT' });
+  for (const [failure, options] of [['AGENT_TERMINATION_UNVERIFIED', { pgrep: [1, 0] }], ['AGENT_TERMINATION_UNVERIFIED', { pgrep: [1, 2] }],
+    ['AGENT_TERMINATION_UNVERIFIED', { pkill: [0, ENOENT] }], ['SESSION_PROVIDER_FAILED', { pgrep: [1, 0], bridge: { exit: 3 } }]]) {
+    const h = agentHarness(t, options);
+    const result = await runAgentJob(h.input);
+    assert.deepEqual([result.failure, result.terminationVerified, result.lease, leases(h)], [failure, false, 'kept', [ACQUIRE_CALL]]);
+    onlyAllowed(h);
+  }
+  for (const options of [{ pgrep: [0] }, { pgrep: [2] }, { pkill: [ENOENT] }]) {
+    const h = agentHarness(t, options);
+    const result = await runAgentJob(h.input);
+    assert.deepEqual([result.failure, result.observation, result.lease, h.calls(), h.log.filter(args => !ALLOWED.slice(0, 2).includes(JSON.stringify(args)))],
+      ['AGENT_TERMINATION_UNVERIFIED', null, 'kept', [ACQUIRE_CALL], []]);
+  }
+  for (const [failure, guest] of [['TRANSFER_MOUNTS_PRESENT', { info: guestDetail({ mounts: HOST_MOUNT }) }],
+    ['TRANSFER_MOUNTS_PRESENT', { answers: healthy({ mountinfo: mountinfo([...MOUNTS, SHARED_LINE('9p')]) }) }],
+    ['TRANSFER_MOUNTS_UNKNOWN', { answers: healthy({ mountinfo: { code: 0, stdout: '' } }) }]]) {
+    const h = agentHarness(t, { guest });
+    const result = await runAgentJob(h.input);
+    assert.deepEqual([result.failure, result.lease, h.log, h.calls()], [failure, 'released', CLEAN_LOG.filter(entry => entry !== 'spawn'),
+      [ACQUIRE_CALL, RELEASE_CALL()]]);
+  }
+  for (const [release, timeoutMs = 1_000] of [[{ ...releasedOf(), isError: true }], [releasedOf([])],
+    [releasedOf([{ taskId: owner.taskId, workerId: 'worker-1', acquiredAt: '2026-10-29T11:00:00.000Z' }])],
+    [() => Promise.reject(new Error(AGENT_KEY))], [() => new Promise(() => {}), 50]]) {
+    const h = agentHarness(t, { release });
+    const result = await runAgentJob({ ...h.input, timeoutMs });
+    assert.deepEqual([result.failure, result.lease, leases(h)], [null, 'release-failed', [ACQUIRE_CALL, RELEASE_CALL()]]);
+  }
+});
+
+test('AJ6 a reconnect is a new job under a fresh session id, after a verified sweep, on the renewed lease', async t => {
+  const h = agentHarness(t, { pgrep: [1, 0, 0, 0, 1], bridge: index => (index === 0 ? { exit: 3 } : {}) });
+  const first = await runAgentJob(h.input);
+  assert.deepEqual([first.failure, first.lease], ['SESSION_PROVIDER_FAILED', 'kept']);
+  const mark = h.log.length;
+  const runs = [first, await runAgentJob(h.input)];
+  assert.deepEqual([runs[1].failure, runs[1].lease, h.log.slice(mark), h.procs.length], [null, 'released', CLEAN_LOG, 2]);
+  for (let run = 2; run < 5; run += 1) runs.push(await runAgentJob(h.input));
+  const ids = runs.map(({ sessionId }) => sessionId);
+  assert.deepEqual([ids.filter(id => SESSION_SHAPE.test(id)).length, new Set(ids.map(id => id.slice(-16))).size, h.procs.length], [5, 5, 5]);
+  assert.deepEqual(h.calls().filter(([tool]) => !tool.endsWith('_resource')).map(([, args]) => args.sessionId), ids.flatMap(id => [id, id]));
+  assert.deepEqual(h.calls().filter(([tool]) => tool.endsWith('_resource')),
+    [ACQUIRE_CALL, ACQUIRE_CALL, RELEASE_CALL(), ...Array(3).fill([ACQUIRE_CALL, RELEASE_CALL()]).flat()]);
+  onlyAllowed(h);
+});
