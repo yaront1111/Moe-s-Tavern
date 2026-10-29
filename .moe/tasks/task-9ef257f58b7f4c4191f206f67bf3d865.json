@@ -13,9 +13,57 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). First read the LANDED C04 cache (task-1b7b6067) and C02b readSnapshotSource (task-311dbda4), and adapt every assumed name below; planningNotes lists them.\n\nCreate negativeSearch.test.ts.\n- Search results come from the REAL providers: readRepositorySource (C02) over a real temp Git repo, and readSnapshotSource (C02b) over snapshots built by the landed scripts/local-runner/source-export.mjs exportSourceSnapshot. Import the scripts by repo-relative URL, with describe.skipIf when scripts/ is absent (the Docker context).\n- Mask GIT_* and use fixed identities, as in repositorySource.test.ts.\n- Assert exact outcomes ('absent' | 'stale' | 'unknown') and exact reasons, never truthiness. Keep the cases table-driven (it.each).\n\nDoD1, a zero-match literal search over scope ['src'] recorded as a negative:\n- N1: an untracked helper added under src/ (an overlay add) gives 'stale'.\n- N2: a helper deleted under src/ (an overlay delete, and separately a committed delete) gives 'stale'.\n- N3: changed bytes in a file under src/ give 'stale'.\n- N4: a change only under docs/ keeps 'absent', because only the scope is invalidated.\n- N5 (repository namespace): a new commit adding a file under src/ gives 'stale', and an unrelated commit touching only docs/ keeps 'absent'.\n\nDoD2:\n- N6: recordNegative refuses, as {ok:false} with the provider status/reason, every non-served or partial result: 'truncated' with match-cap, search-byte-cap, time-budget or undecodable-match; 'omitted'/total-byte-cap; 'missing' (scope-not-in-manifest, deleted-in-overlay); 'refused'; 'unavailable' (snapshot-stale, snapshot-unverifiable:*, repository failures); and a result whose complete is false.\n- N7: a lookup whose current generation cannot be computed (an unverifiable snapshot, or a Git failure through an injected runner) gives 'unknown', never 'absent'.\n- N8: a lookup with no stored entry, i.e. cache loss or a restart, gives 'unknown'.\n\nDoD3:\n- N9: rewrite an already-dirty tracked file so that `git status --porcelain` output is byte-identical, then restore its mtime with fs.utimesSync. Re-export, look up again: 'stale'.\n- N10: the module's exported functions take no mtime, status or watcher argument, so freshness is always recomputed from content. Prove it with a mutant in step 4, not with a type test.\n\nRun npx vitest run src/context/negativeSearch.test.ts. It must fail only because the module is missing.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement negativeSearch.ts: pure functions plus one bounded read-only Git helper.\n\nError handling: nothing throws except caller-shape errors, which raise INVALID_INPUT the way C02's validateSourceRequest does. Every IO, Git, decode or verification failure maps to {ok:false, reason} or to a null generation, and a null generation always reads as 'unknown'.\n\n(a) Namespaces are 'repository-literal' (C02, committed bytes) and 'snapshot-literal' (C02b, base+overlay). Semantic (C03) negatives are deliberately NOT cached: an analyzer result never establishes absence (C03 DoD1), so it reads as 'unknown'.\n\n(b) negativeSearchKey({namespace, literal, paths, exclusions}): sha256 over canonical JSON of [1, namespace, literal, sorted unique normalized paths, sorted unique exclusions].\n- literal follows C02's maxLiteralChars rule.\n- exclusions are the provider's fixed exclusion vocabulary: SNAPSHOT_CONTROL_SEGMENTS (snapshotManifest.ts) for snapshot-literal, and ['gitlinks'] for repository-literal, because git grep runs with --no-recurse-submodules. A change in what a provider excludes therefore changes the key.\n\n(c) snapshotScopeGeneration(view: VerifiedSnapshot, paths): string. Pure and synchronous.\n- Take the effective files: overlay files win, and overlay deletes hide base files.\n- Keep those whose path equals a scope path or starts with it plus '/'. An empty scope means all files.\n- Sort by UTF-8 path bytes.\n- Hash sha256 over 'moe-negative-generation-v1\\0', a u32be count, then per file: path bytes, 0x00, the executable byte and the raw sha256. The verifier recomputed those sha256 values from the bytes, so the generation is content-derived; it never comes from writer declarations, mtimes, status or watchers.\n\n(d) repositoryScopeGeneration(projectRoot, commit, paths, run = runGit): Promise<string | null>.\n- openProjectGit, then `ls-tree -r -z --full-tree --literal-pathspecs <commit> -- <paths...>`, with a bounded maxBuffer.\n- Return sha256 of 'moe-negative-generation-v1\\0' + commit-independent entry records (mode, type, oid, path).\n- Any failure or unparsable record gives null.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/context/negativeSearch.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Record and look up negatives in C04's ONE cache store. There is no second store: an epic rail forbids a native memory database.\n\nrecordNegative(query, result, generation): {ok:true} | {ok:false, reason}.\n- It stores a detached, frozen record {version:1, key, namespace, generation, manifest} under negativeSearchKey(query), through C04's store API.\n- It stores ONLY when all of these hold: the single search item has status 'served' with no reason and zero matches; result.complete === true; the generation is non-null.\n- Anything else returns the refusal and stores nothing. Incomplete enumeration stays unknown (DoD2).\n\nlookupNegative(query, currentGeneration): 'absent' | 'stale' | 'unknown'.\n- A missing or malformed entry, or a null currentGeneration, gives 'unknown'.\n- An equal generation gives 'absent'.\n- Any other generation gives 'stale', and the stale entry is deleted.\n- The caller computes currentGeneration fresh from content on EVERY lookup, with (c) or (d). Nothing caches a generation, and nothing consults FileWatcher, git status or mtimes (DoD3).\n\nC04 is unlanded at plan time; its architect was asked in chan-b6d8273b (msg-5e7cd751). Adapt to C04's landed store names. If C04 requires registering an entry kind in its own file, call moe.declare_files on that one file and keep the edit to the registration. If C04 landed no reusable store, call moe.report_blocked with blockedOnTaskIds [task-1b7b6067a95f4078bfb2c780c2a598e9] rather than build one.\n\nMake every test green, within 400 net lines over the 2 files plus any one-line registration.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/negativeSearch.ts",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify once.\n- Iterate with `npx vitest run src/context/negativeSearch.test.ts`.\n- Then run the gate fresh in an isolated Linux snapshot of HEAD: whole-repo git archive, overlay only this task's files, native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0.\n- cmp the overlaid files before citing the run. Supply the npm test command, exit code and output tail to complete_task.\n\nProve the tests bite. On scratch copies apply each mutant, confirm a named case turns red, then restore and cmp:\n1. hash only the scope paths, not the content sha256: N3, N9;\n2. let overlay deletes fall through to base: N2;\n3. record a 'truncated' result as a negative: N6;\n4. read a missing entry as 'absent': N8;\n5. cache the generation per scope instead of recomputing it: N9;\n6. ignore the scope filter: N4.\nList each mutant and its killing test in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/negativeSearch.ts",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "One adversarial self-review of this task's diff only (load adversarial-self-review). Check:\n- Can any path return 'absent' when the enumeration was partial, the provider failed, the snapshot was unverifiable or stale, or the entry was lost?\n- Can a generation ever come from metadata (mtime, porcelain, watcher events, writer-declared hashes) instead of verified content?\n- Path and case: scope prefixes compared by whole segment ('src' does not cover 'srcx/'), NFC versus NFD, and a backslash.\n- Two concurrent record and lookup calls on one key.\n- An oversized ls-tree output, and a SHA-256 repository (64-hex oids).\n- That no .moe edits or Git writes happen, no new store or database is created, and no forbidden-pattern token appears in the code or tests.\nWrite the task handoff memory with the final API, for C06 and C11.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/context/negativeSearch.ts",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,20 +76,42 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:33.467Z",
-  "updatedAt": "2026-10-27T16:48:27.451Z",
+  "updatedAt": "2026-10-29T16:43:05.430Z",
   "dependsOn": [
     "task-1b7b6067a95f4078bfb2c780c2a598e9"
   ],
   "metrics": {
-    "firstClaimAt": "2026-10-26T09:50:56.486Z"
+    "firstClaimAt": "2026-10-26T09:50:56.486Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-2c9d5121"
+    "architect-2c9d5121",
+    "architect-4ae016fb"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
   "blockedAt": null,
-  "priorBlockedReason": "Not plannable yet: its contract inputs don't exist. This is not REPL silence and not dirty files.\n1. C05 extends CQ-C04's positive source cache (namespace, exclusions, content-derived generation). C04 task-1b7b6067a95f4078bfb2c780c2a598e9 is BLOCKED with no plan, so there is no cache store, key or generation contract to extend, and a separate negative store would be a second cache, which the epic rail forbids.\n2. DoD1 requires new, untracked or deleted helper files to invalidate prior negatives. The only landed provider (src/context/repositorySource.ts, CQ-C02) serves committed bytes only. The validated base+overlay content provenance belongs to CQ-C02b task-311dbda408864b7597852e683076ca24, which is BLOCKED.\nA commit-only negative cache would make DoD1 vacuous, and enumerating the mutable worktree would violate DoD3 (watchers and status are not freshness).\nThis row auto-returns to PLANNING when both are DONE. Plan it then against their landed APIs: an incomplete enumeration stays unknown, and the generation moves on any added, deleted or changed byte. Neither prerequisite depends on this row, so there is no cycle. Notes are in Serena task-task-9ef257f58b7f4c4191f206f67bf3d865-handoff."
+  "priorBlockedReason": "Not plannable yet: its contract inputs don't exist. This is not REPL silence and not dirty files.\n1. C05 extends CQ-C04's positive source cache (namespace, exclusions, content-derived generation). C04 task-1b7b6067a95f4078bfb2c780c2a598e9 is BLOCKED with no plan, so there is no cache store, key or generation contract to extend, and a separate negative store would be a second cache, which the epic rail forbids.\n2. DoD1 requires new, untracked or deleted helper files to invalidate prior negatives. The only landed provider (src/context/repositorySource.ts, CQ-C02) serves committed bytes only. The validated base+overlay content provenance belongs to CQ-C02b task-311dbda408864b7597852e683076ca24, which is BLOCKED.\nA commit-only negative cache would make DoD1 vacuous, and enumerating the mutable worktree would violate DoD3 (watchers and status are not freshness).\nThis row auto-returns to PLANNING when both are DONE. Plan it then against their landed APIs: an incomplete enumeration stays unknown, and the generation moves on any added, deleted or changed byte. Neither prerequisite depends on this row, so there is no cycle. Notes are in Serena task-task-9ef257f58b7f4c4191f206f67bf3d865-handoff.",
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T16:43:05.320Z",
+  "planningNotes": {
+    "approachesConsidered": "1. A coarse generation (the whole overlay digest or the commit). Correct, but any edit anywhere drops every negative. Rejected in favour of a per-scope, content-derived generation over the verified effective view, which DoD1 needs and which keeps unrelated edits from invalidating.\n2. Caching semantic (C03) negatives. Rejected: C03 DoD1 says an absent or failed analyzer never implies no helper exists, and a served-empty analyzer answer depends on whole-program inputs C04 owns. C05 leaves it 'unknown', and C11 may extend it.\n3. A dedicated negative store. Rejected: the epic rail forbids a second cache or memory database, so negatives live in C04's store.\n4. Using FileWatcher events or git status to skip recomputation. Rejected by DoD3.",
+    "codebaseInsights": "Landed:\n- C02 readRepositorySource: committed bytes. A literal search is status 'served' with matches [] on zero hits. The limitations 'committed-bytes-only' and 'literal-search-only' are expected and are not incompleteness.\n- C02b1 snapshotManifest.ts: verifySourceSnapshot gives a VerifiedSnapshot {commit, tree, identity{base, overlay}, base Map, overlay Map with delete markers}. Also exports SNAPSHOT_CONTROL_SEGMENTS and snapshotPathRefusal.\n- R09b scripts/local-runner/source-export.mjs exportSourceSnapshot({repoDir, commit}) builds worktree snapshots for tests, as C02b's step 4 does.\n- util/cachedPlanPaths.ts openProjectGit and runGit: read-only and budgeted.\n\nASSUMED, unlanded:\n- C02b snapshotSource.ts readSnapshotSource(snapshot, request, queries) returns SnapshotSource {manifest {commit, tree, base, overlay}, items, complete, limitations}. Search items are 'served' or 'truncated' (match-cap, search-byte-cap, time-budget, undecodable-match).\n- C04's bounded in-memory store, with a get/set/delete-style API whose loss affects performance only (mem:task-task-1b7b6067a95f4078bfb2c780c2a598e9-handoff). The exact names are pending a reply to msg-5e7cd751.",
+    "risks": "- C04 is unplanned, so the store names are assumed; adapt them, or report_blocked on C04 if it lands no store.\n- Size is at most 400 net lines.\n- ls-tree over a whole large tree can exceed the buffer. That gives null, so the lookup is 'unknown': safe, merely slower.\n- Snapshot tests need scripts/: skipIf for Docker.\n- WSL: run the gate in a Linux-native snapshot only.",
+    "keyFiles": [
+      "packages/moe-daemon/src/context/repositorySource.ts",
+      "packages/moe-daemon/src/context/snapshotManifest.ts",
+      "scripts/local-runner/source-export.mjs",
+      "packages/moe-daemon/src/util/cachedPlanPaths.ts"
+    ]
+  },
+  "planApprovedAt": "2026-10-29T16:43:05.430Z"
 }

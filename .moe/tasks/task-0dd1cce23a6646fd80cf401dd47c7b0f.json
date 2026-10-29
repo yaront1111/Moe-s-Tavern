@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -124,7 +124,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:13.756Z",
-  "updatedAt": "2026-10-29T16:23:20.719Z",
+  "updatedAt": "2026-10-29T16:46:13.666Z",
   "dependsOn": [
     "task-7a77465621dc4d6588d5747394cb0ced",
     "task-491a2d8cff4d45afbdac79539098ebb1",
@@ -137,7 +137,9 @@
     "plannedDistinctFileCount": 3,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T16:46:13.666Z",
+    "wallClockMs": 301414943
   },
   "contextFetchedBy": [
     "worker-fe18a9a9",
@@ -284,19 +286,37 @@
       "treeId": "8ba4b971b4bfda385560ce94574eeff361d13fbe",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "6ab00df4f7ffa97281ad9ed558a239513c303df9",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T15:03:33Z",
+      "paths": [
+        ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+        ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T16:24:01.970Z",
+      "treeId": "15cf4eb39ce5ea975b29137cea23be2839f2bcd0",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/local-runner/guest-supervisor.py",
     "scripts/tests/local-runner.test.mjs",
-    "scripts/local-runner/snapshot-import.mjs"
+    "scripts/local-runner/snapshot-import.mjs",
+    ".moe/tasks/task-0dd1cce23a6646fd80cf401dd47c7b0f.json",
+    ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-fe18a9a9@2026-10-29T14:47:35Z",
-    "at": "2026-10-29T15:03:30.104Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-29T15:03:33Z",
+    "at": "2026-10-29T16:24:01.970Z"
   },
   "workStartedAt": "2026-10-29T13:44:27.083Z",
   "touchedFiles": [
@@ -313,7 +333,7 @@
     "source": "agent-reported"
   },
   "completionSummary": "CQ-R09 QA round 1 rework. Fixes the DoD-1 host memory DoS: header paths were unbounded.\n\nFix, snapshot-import.mjs:51:\n- header() refuses a path whose UTF-8 length is over R09a's MAX_IMPORT_PATH_BYTES with snapshotError('SNAPSHOT_PATH_INVALID').\n- The check runs right after typeof and before the entry is counted or kept, for every header kind: file, delete, symlink and special.\n- It is validateImport's own measure (utf8Length is Buffer.byteLength) and its own code, so only the timing of the refusal changes. Every other path rule stays in validateImport.\n\nTests, in X6. Each new row ends at the offending frame and then the guest stalls:\n- delete, symlink, special and file headers with a valid 1,025-byte multi-segment path give SNAPSHOT_PATH_INVALID, kills ['SIGKILL'] and calls ['info','mountinfo'];\n- 'é' x 513 (1,026 bytes, 513 code units) pins byte counting;\n- boundary: the MAX_IMPORT_ENTRIES acceptance row carries a valid 1,024-byte path among its 10,000 deletes and resolves with it.\n\nRED, re-run this session in a git-archive scratch copy: against the bfcaa8b module, X6 fails at 'a delete path over MAX_IMPORT_PATH_BYTES' after 2,040 ms (timeout). Against HEAD it passes in 144 ms.\n\nPrior session:\n- QA's QAPROBE (10,000 headers of 262,100 chars, 2 GiB heap) is now refused in 5 ms with heap at 9 MB. QA measured 2,509 MB, or a fatal OOM.\n- Mutants: 11/12 killed. The survivor, which moves the bound after ++count, is equivalent. QA's 22 round-1 host mutants are still killed.\n\nGate, fresh (env -i, node v24.21.0, the 4-file CI command): exit 0, 286 tests, 285 pass, 1 pre-existing macOS skip.\n\nDelivery: the fix bytes are in checkpoint 9402b2f on origin/moe/work-2026-10-24; the owned paths are clean and unchanged since.\n\nSize vs 989e87a: 627 (+621/-6), within the proposed 640 cap. prop-c71ab9372be841a08c767eded3f1e131 is still not in allRails.epic, so QA should confirm it is APPROVED.\n\nNo __pycache__, no python children left. executionReady is false; verified-local, .moe and G",
-  "reviewCompletedAt": "2026-10-29T14:47:12.972Z",
+  "reviewCompletedAt": "2026-10-29T16:46:13.666Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Path traversal, symlink escapes and .git/.moe/control-path writes are refused."
@@ -354,5 +374,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-29T16:46:13.666Z",
+  "reviewSummary": "CQ-R09 QA round 2: APPROVED. The round-1 DoD-1 defect (host memory DoS through header paths) is fixed and pinned.\n\nDelivery: completion 6ab00df; the fix bytes are in this round's checkpoint 9402b2f (an ancestor). Both are on moe/work-2026-10-24 and the live remote tip 9d05921. Owned files unchanged to HEAD and clean.\n\nFix, snapshot-import.mjs:51: header() refuses Buffer.byteLength(path) > MAX_IMPORT_PATH_BYTES with SNAPSHOT_PATH_INVALID, before count or keep, for every kind. It is validateImportPath's own measure and code.\n\nRe-run fresh:\n- task.verification (env -i node 24, 4 files): exit 0, 286/285 pass, 1 skip.\n- DoD-4 command in a git-archive of 6ab00df: exit 0, 211/210, 1 skip.\n- 5-file CI command: exit 0, 297/296, 1 skip.\n- Round-1 QAPROBE: refused in 5 ms, heap 9 MB (round 1: 2.5 GB or a fatal OOM at 2 GiB).\n- Worst in-bounds stream (10,000 padded 256 KiB frames, 1,024-byte paths): heap 19 MB, RSS 130 MB, then validateImport refuses.\n- New mutants on the bound: 14/15 killed by X6. The survivor (bound after ++count) is equivalent.\n- Round-1's 27 mutants: still all killed.\n\nDoD:\n1. X5/X7 give R09a codes; X6 refuses long header paths at their frame, and a 1,024-byte path is admitted.\n2. Identities come only from validateImport.\n3. Mount checks before and after; no mount or transfer argv.\n4. Fresh exit 0.\n\nRails: no forbidden patterns; executionReady false; no .moe edits or agent Git writes.\n\nSize: 627 (+621/-6) vs 989e87a over exactly the 3 files, within the 640 cap of the CQ-R09 rail (prop-c71ab937, approved by the human 16:38Z). The +7 is only the QA-required fix.\n\nComplexity pass: lean, net -0 lines possible.\n\nDownstream (non-blocking):\n- R10 stops the agent before import.\n- R12 checks deletes against the base.\n- R07/R10 must guarantee a non-root moe-agent uid.",
+  "requiredCheckAtDone": null
 }
