@@ -120,7 +120,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:06:39.556Z",
-  "updatedAt": "2026-10-29T18:18:08.779Z",
+  "updatedAt": "2026-10-29T18:18:44.517Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T13:05:17.093Z",
     "plannedStepCount": 5,
@@ -177,7 +177,16 @@
     ".moe/tasks/task-3b70b82401b6455896dfa139e85b5ca8.json",
     ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
     ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
-    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json"
+    ".moe/tasks/task-c9fe2515321e4b1a881bb844965fe179.json",
+    ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+    ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json"
   ],
   "completionSummary": "CQ-R10c delivered. The host session writes R10b's job frame as the first stdin bytes, and endAgentJobs reports the guest job ended only when it observes a pgrep count of 0.\n\nguest-bridge.mjs (+23/-1):\n- AGENT_JOBS is frozen and mirrors the supervisor's JOBS; B17 is the drift pin.\n- jobFrame({cli, role, credential}) checks exact keys, hasOwn on cli, role worker|qa, the name per cli and value /^[\\x21-\\x7e]{1,4096}$/. It builds the frame from fields each read once. Everything sits in a try, so a throwing getter or trap is also BRIDGE_INPUT_INVALID, with fixed text.\n- exactKeys compares the own enumerable key set.\n\nguest-session.mjs (+63/-4):\n- runGuestSession requires job {cli, credential} with exact keys and no role; the role comes from the frozen binding.\n- The frame is encoded once, before daemonRefusal or spawn. A bad job is SESSION_INPUT_INVALID.\n- It is the first stdin write, inside bounded(): a timeout gives SESSION_TIMEOUT, any other failure SESSION_PROVIDER_FAILED.\n- endAgentJobs(name, provider, {rounds, sleep, delayMs}) runs the fixed `sudo -n pkill -KILL -U moe-agent`, then `sudo -n pgrep -c -U moe-agent`, through lifecycle invoker() with QUERY_TIMEOUT_MS.\n  - verified needs pgrep exit 1 AND stdout /^0\\r?\\n$/ (the architect's -c refinement, comment-9cfd6506). Exit 0 retries.\n  - A transport failure, any other result or running out of rounds gives false. It always resolves a frozen {verified}.\n\nTests (+180/-9): B16, B17, H6 (first write, bound, no leak, invalid jobs), H7 (end to end through main() with a probe agent) and H8 (15 scripted rows plus input checks).\n- The removed lines are imports, fakeProvider (first write into proc.job), openSession (job: HOST_JOB), supervised() (m.read_job before relay) and one re-aligned blank line.\n- No existing assertion changed.\n- H7's forwarded workerId is 'qa-1', the QA binding's; the plan said 'worker-1'.\n\nEvidence:\n- Gate: exit 0, 301 tests, 300 pass, 1 pre-existing skip.\n- Windows node v24.16 on the bridge file: 55 tes",
   "commits": [
@@ -201,6 +210,30 @@
       "treeId": "e5230941d1e28e1069e1279bfa7234747640cc8e",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "e7b84ccc5dc0ff2d9e509030bb094a40cc90bbfa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T18:09:35Z",
+      "paths": [
+        ".moe/tasks/task-0795112597cb453f93aaa5106e92d023.json",
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-3b70b82401b6455896dfa139e85b5ca8.json",
+        ".moe/tasks/task-6339299aa3b743d1948ffbd880a5c34a.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-b621ddc99fe44d50ab700b2aa51c84fc.json",
+        ".moe/tasks/task-c4e076cd306f4f84a4aa08bf2a4682b2.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T18:18:44.517Z",
+      "treeId": "f14efcfe893c940944bf182ed274f41f3ba40086",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -209,9 +242,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fe18a9a9@2026-10-29T17:22:26Z",
-    "at": "2026-10-29T17:42:20.576Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T18:09:35Z",
+    "at": "2026-10-29T18:18:44.517Z"
   },
   "completedAt": "2026-10-29T18:18:08.778Z",
   "reviewCompletedAt": "2026-10-29T18:18:08.778Z",

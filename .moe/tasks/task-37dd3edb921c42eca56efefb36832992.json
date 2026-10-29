@@ -90,7 +90,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -108,16 +108,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:26:53.251Z",
-  "updatedAt": "2026-10-29T17:58:36.771Z",
+  "updatedAt": "2026-10-29T18:27:58.670Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:31:01.695Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T18:27:58.670Z",
+    "wallClockMs": 7016975
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -202,5 +205,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-29T17:35:52Z",
     "at": "2026-10-29T17:58:36.771Z"
-  }
+  },
+  "completedAt": "2026-10-29T18:27:58.670Z",
+  "reviewCompletedAt": "2026-10-29T18:27:58.670Z",
+  "reviewSummary": "Reviewed completion commit b71c0fd on moe/work-2026-10-24. Source diff is 379 lines (supervisor +123/-6, check test +249/-1), within 400. The bridge test is untouched, and nothing landed on these files after b71c0fd.\n\nFresh re-run: the env -i node 24 node --test over the bridge and check files exited 0, 70/70 pass, 0 skipped (K3 ran). `^(M1|X1) ` passes.\n\nDoD:\n1. K1 covers 65/74/71/66/77/64, each with empty stdout, no relay, no home and the frame-then-account-then-workspace order. A non-empty protected list gives 65.\n2. K2 (recorder, geteuid=0): sh -c cmd, moe-check, extra_groups [], no agent socket, netns true, rlimits.\n3. K3 reads the real job from /proc: exact 6-key env, cwd, Umask 0077, NNP 1, soft=hard limits. K4: fd-only re-own; symlink, hard link, FIFO, swap and over-long path refused unfollowed.\n4. K2/K3 read CHECK_BOUNDARIES. Constants match the daemon's validateRequiredChecks.\n\nMy own 29 mutants in a scratch archive, scored by exit code: all killed. Probe under `unshare -r` (no suite row): netns on gives only lo, loopback OK, outside ENETUNREACH. CQ-R13 must still certify netns on the real guest.\n\nASCII/LF, no forbidden patterns, no __pycache__, no verified-local or isolation claim.",
+  "requiredCheckAtDone": null
 }
