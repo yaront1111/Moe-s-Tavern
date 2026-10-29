@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:33:41.147Z",
-  "updatedAt": "2026-10-29T23:30:12.285Z",
+  "updatedAt": "2026-10-29T23:40:47.025Z",
   "contextFetchedBy": [
     "worker-b5749787",
     "qa-952969be",
@@ -94,7 +94,9 @@
     "firstClaimAt": "2026-10-29T23:20:00.150Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T23:40:47.025Z",
+    "wallClockMs": 1246875
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -197,5 +199,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-29T23:24:51Z",
     "at": "2026-10-29T23:30:12.285Z"
-  }
+  },
+  "completedAt": "2026-10-29T23:40:47.025Z",
+  "reviewCompletedAt": "2026-10-29T23:40:47.025Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit 9b5897b9 (on moe/work-2026-10-24): source-export.mjs +35/-3, snapshot test +42/-2, far under 400; diff --check clean. Re-ran DoD gate fresh: `env -i ... node --test scripts/tests/local-runner-snapshot.test.mjs` exit 0, 23/23, E9 ran, S/E rows unchanged. Also X7 + admission A1-A6 in local-runner.test.mjs 7/7 (admission.mjs untouched), and the four daemon context tests that omit git (negativeSearch, snapshotSource, snapshotManifest, sourceCache) in a fresh Linux git-archive snapshot: 244/244. DoD: (1) readInput drops the 'git' default, allows only undefined or fully-qualified git; exportGit realpaths the binary, refuses one inside realpath(repoDir) with EXPORT_INPUT_INVALID, runs before openCommit so nothing spawns earlier; omitted git resolves via stat-only pathGit (skips empty/relative entries, no bare-name fallback; none -> EXPORT_GIT_FAILED); the realpath that was checked is what runs. (2) E9 covers bare, relative, root/drive-relative, missing, in-repo and symlink-into-repo git plus PATH cases, with planted marker gits in repo and in a chdir'd outside cwd, and a positive control. (3) Gate green. My mutation probes on a scratch copy: dropping the in-repo check and dropping fullyQualified in readInput each make E9 fail. E2/E7 codes unchanged. Notes: worker's summary typo 'GIT_GIT_FAILED' should read EXPORT_GIT_FAILED (code/test correct). Not reproduced: Windows-native node (worker reported 22 pass/1 skip). Residual, theoretical, same as admission.mjs: repoDir is realpath'd twice (exportGit, openRepository), so a concurrent re-point of repoDir itself between them is not closed; out of approved scope.",
+  "requiredCheckAtDone": null
 }
