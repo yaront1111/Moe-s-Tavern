@@ -134,8 +134,7 @@ const identityModes=['missing-attempt','stale-attempt','claim-missing','claim-ma
 // exactly once, before deregister_worker, with what it actually did to the bytes.
 // teardown-running is the control: its attempt is still `running` (no
 // complete_task), so the very same exit path must acknowledge NOTHING.
-// teardown-protected is that control on a task another worker now owns: the
-// exit parks none of its bytes and records the refusal instead.
+// teardown-protected: that exit on a task another worker owns refuses instead.
 const teardownOutcome={'teardown-finalizing':'rescued','teardown-manual':'nothing-to-commit','teardown-no-git':'nothing-to-commit','teardown-sha256':'nothing-to-commit',
   'teardown-no-baseline':'failed','teardown-recovered':'rescued','teardown-scope':'rescued','teardown-landed':'landed',
   'teardown-nothing':'nothing-to-commit','teardown-running':'','teardown-protected':''};
@@ -883,8 +882,7 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
     & node $frozenSuite ps1 $wrapper $fakeProxy $tempRoot $psExe
     if ($LASTEXITCODE -ne 0) { throw 'Frozen candidate scenarios failed' }
     if ($env:MOE_FROZEN_TEST_ONLY) { exit 0 }
-    # Owner guard: an exit whose task another worker owns or is finalizing lands
-    # none of its bytes; orphans still checkpoint (one suite shared with postflight.sh).
+    # Owner guard cases (one suite shared with postflight.sh).
     & node (Join-Path $root 'scripts\tests\postflight-owner-guard.cjs') ps1 $wrapper $fakeProxy $tempRoot $psExe
     if ($LASTEXITCODE -ne 0) { throw 'Owner guard scenarios failed' }
 

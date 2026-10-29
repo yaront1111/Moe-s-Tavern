@@ -1,15 +1,10 @@
-// Owner guard: a session whose pre-flight task now belongs to another worker
-// (an architect whose planned task a worker took, a QA seat whose row moved on)
-// lands none of that task's source bytes while that worker is protected or is
-// still finalizing; the owner's own landing commits them. An unassigned task or
-// a dead owner still gets the orphan checkpoint. Shared by postflight.sh and
-// postflight.ps1, as the fake proxy is, so both wrappers face the same cases:
+// Owner guard (scripts/CLAUDE.md): a session whose task another worker now owns
+// lands none of its bytes while that owner is protected or finalizing; an
+// unassigned or dead-owner task still checkpoints. One case list for both wrappers:
 //   node postflight-owner-guard.cjs <sh|ps1> <wrapper> <fake-proxy> <parent-tmp> <engine>
-// Each case is a fresh repository and one real wrapper run against the fake's
-// get_commit_scope ownership knobs (the sequential case runs two wrappers on one
-// repository). MOE_OWNER_GUARD_ONLY=<case,...> runs a subset and
-// MOE_KEEP_OWNER_GUARD_FIXTURE=1 keeps the fixture. `node <this file> cli` is the
-// fake agent CLI the wrappers launch.
+// Each case is a fresh repository and real wrapper run(s) against the fake's
+// ownership knobs. MOE_OWNER_GUARD_ONLY=<case,...> runs a subset,
+// MOE_KEEP_OWNER_GUARD_FIXTURE=1 keeps the fixture; `<this file> cli` is the fake CLI.
 'use strict';
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cp=require('node:child_process'),
   crypto=require('node:crypto'),assert=require('node:assert/strict');

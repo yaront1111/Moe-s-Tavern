@@ -3405,15 +3405,10 @@ PYEOF
 
 # landing_owner_guard TASKID SCOPE_JSON -- may this session land the task's
 # bytes? 0 = yes; 1 = no, with LAND_GUARD_CODE / LAND_GUARD_DETAIL. Twin:
-# Get-MoeOwnerGuard. The assignee lands its own task. Any other session (an
-# architect whose planned task a worker took, a QA seat whose row moved on)
-# lands nothing while that owner is protected (assigneeProtected: a registered
-# non-DEAD seat or one holding an open attempt; assigneeAlive is display
-# presence, never proof of death) or while another seat's attempt on the task
-# is still finalizing (complete_task clears the assignee before that seat's
-# wrapper lands). Only a JSON false clears a foreign owner: an absent or
-# malformed answer, an older daemon or the disk fallback is OWNER_UNKNOWN.
-# Unassigned, or a dead owner with nothing finalizing, lands as before.
+# Get-MoeOwnerGuard; the rule is **Owner guard** in scripts/CLAUDE.md. Only the
+# assignee lands while it is protected (assigneeProtected; assigneeAlive is
+# presence, not death) or another seat's attempt is finalizing; only a JSON
+# false clears a foreign owner, anything else is OWNER_UNKNOWN.
 # ponytail: the scope read and the landing CAS are two steps, not one atomic check.
 landing_owner_guard() {
     local out=""
@@ -3465,11 +3460,9 @@ PYEOF
     [ -z "$LAND_GUARD_CODE" ]
 }
 
-# landing_refuse_owner KIND -- landing_owner_guard said no: say why, record the
-# refusal (no sha, ref, push or path field: nothing moved) and fill the
-# session-ended summary. No byte, index entry, ref or baseline row is touched;
-# the owner's own landing, or a later orphan recovery, lands them. ATTR_DIR
-# must be a fresh empty directory.
+# landing_refuse_owner KIND -- record landing_owner_guard's refusal (no sha, ref,
+# push or path field) and fill the session-ended summary; no byte, index entry,
+# ref or baseline row is touched. ATTR_DIR must be a fresh empty directory.
 landing_refuse_owner() {
     LAND_OUTCOME="refused"; LAND_CODE="$LAND_GUARD_CODE"; LAND_TOOL_FILE_EFFECTIVE=""
     echo -e "${YELLOW}[WARN]${NC} $LAND_CODE: task $LAND_TASK_ID -- $LAND_GUARD_DETAIL; this session is not its owner, so it lands none of the task's bytes (tree and baseline left as they are)."
@@ -5923,8 +5916,6 @@ PYEOF
 #   bytes parked on a rescue ref                                      -> rescued
 #   deliberate autoCommit=false, or no git repo at all                -> nothing
 #   anything else (no baseline, nothing parked, owner guard refused)  -> failed
-# A session that does not own the task (landing_owner_guard) parks nothing:
-# it records the refusal and leaves the bytes for the owner.
 MOE_TEARDOWN_DONE=false
 teardown_rescue() {
     [ "$MOE_TEARDOWN_DONE" = true ] && return 0

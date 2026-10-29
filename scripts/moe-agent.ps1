@@ -3123,11 +3123,8 @@ function Get-MoeCommitScope([string]$TaskId, [string]$Phase, [string]$Sid) {
 }
 
 # May this session land the task's bytes? Fetches the postflight scope and
-# returns @{ Code; Detail; Scope }, Code '' = it may. Twin: landing_owner_guard,
-# which carries the rule: the assignee lands its own task; any other session
-# lands nothing while that owner is protected (only a JSON false clears it) or
-# while another seat's attempt on the task is still finalizing. A failure
-# anywhere in here is OWNER_UNKNOWN, never a landing.
+# returns @{ Code; Detail; Scope }, Code '' = it may; a failure in here is
+# OWNER_UNKNOWN. Twin: landing_owner_guard; rule: **Owner guard** in scripts/CLAUDE.md.
 # ponytail: the scope read and the landing CAS are two steps, not one atomic check.
 function Get-MoeOwnerGuard([string]$TaskId, [string]$Sid) {
     $active = 'MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE'
@@ -3160,10 +3157,8 @@ function Get-MoeOwnerGuard([string]$TaskId, [string]$Sid) {
     return $g
 }
 
-# Get-MoeOwnerGuard said no: say why and record the refusal (no sha, ref, push
-# or path field: nothing moved). No byte, index entry, ref or baseline row is
-# touched; the owner's own landing, or a later orphan recovery, lands them.
-# Twin: landing_refuse_owner.
+# Record Get-MoeOwnerGuard's refusal (no sha, ref, push or path field); no byte,
+# index entry, ref or baseline row is touched. Twin: landing_refuse_owner.
 function Send-MoeOwnerRefusal([string]$TaskId, [string]$Kind, [string]$Status, [string]$Sid, [hashtable]$Guard, $CliExit = $null) {
     Write-Host "[WARN] $($Guard.Code): task $TaskId -- $($Guard.Detail); this session is not its owner, so it lands none of the task's bytes (tree and baseline left as they are)." -ForegroundColor Yellow
     $rec = @{ taskId = $TaskId; outcome = 'refused'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; code = $Guard.Code; message = $Guard.Detail }

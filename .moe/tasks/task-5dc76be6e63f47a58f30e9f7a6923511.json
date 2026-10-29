@@ -1,0 +1,39 @@
+{
+  "id": "task-5dc76be6e63f47a58f30e9f7a6923511",
+  "epicId": "epic-be924fb8",
+  "title": "bug: Windows PowerShell 5.1 seats get a mojibake stable role prefix (Get-RoleDoc reads the BOM-less UTF-8 role doc as ANSI)",
+  "description": "scripts/moe-agent.ps1 Get-RoleDoc reads .moe/roles/<role>.md with `Get-Content -Raw -Path $p` and no -Encoding. The daemon writes role docs as BOM-less UTF-8, and Windows PowerShell 5.1 (the JetBrains plugin's native Windows engine) decodes a BOM-less file as ANSI, so every em dash, arrow and comparison sign in the stable system prefix ($systemAppend: the Claude system prompt file and the codex/gemini/grok instruction files) arrives garbled.\nRepro (architect-e4b7eee0, 2026-10-29, PowerShell 5.1.26100 via powershell.exe): on a copy of .moe/roles/worker.md, the default read contains no U+2014 and does contain U+00E2 (mojibake); `Get-Content -Raw -Encoding UTF8` reads the em dash correctly. pwsh 7 is unaffected (UTF-8 default). The bash twin (`cat`) is unaffected.\nFix: read with `-Encoding UTF8` (correct on 5.1 and 7, BOM or not) and pin it with a launcher regression on both PowerShell engines that renders the real Get-RoleDoc + $systemAppend assembly against a BOM-less UTF-8 role doc containing non-ASCII text. Found while planning CQ-C10 (task-34632f08), whose stable-prefix test needs the exact role doc on every engine.",
+  "definitionOfDone": [
+    "Get-RoleDoc in scripts/moe-agent.ps1 reads the role doc as UTF-8 on both Windows PowerShell 5.1 and pwsh 7, so $systemAppend carries the doc's exact non-ASCII text (em dash, arrows, comparison signs).",
+    "A launcher regression in scripts/tests/prompt-cache-launcher.test.mjs runs the real Get-RoleDoc and $systemAppend assembly on powershell.exe and pwsh against a BOM-less UTF-8 role doc. It fails on the old read and passes on the fix, with the red result recorded.",
+    "No other ps1 read path or bash behavior changes, and `bash scripts/tests/parity-check.sh` still exits 0.",
+    "Fresh verification `node --test scripts/tests/prompt-cache-launcher.test.mjs` run on Windows (both PowerShell engines plus Git Bash) exits 0, and its output is supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Keep scripts/moe-agent.ps1 saved as UTF-8 with a BOM and in string parity with scripts/moe-agent.sh."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-6aa460bb33184e1b84fc9c9e5c0a4560",
+    "task-ad0dc2e7557d4ceca42ce7fab3708942",
+    "task-bc8410afe7144ddda804b60af000864d",
+    "task-bdf6db6f65b04a009c88c1e49aed3848",
+    "task-c2a900aa5107479aa4c630f1b3837ed0"
+  ],
+  "priority": "MEDIUM",
+  "order": 257.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T14:31:59.369Z",
+  "updatedAt": "2026-10-29T14:31:59.369Z"
+}
