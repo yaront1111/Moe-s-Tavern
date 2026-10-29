@@ -14,6 +14,8 @@ import { PassThrough, Writable } from 'node:stream';
 import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
 import { MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession } from '../local-runner/check-session.mjs';
 import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
+import { MAX_DEPENDENCY_PACKAGES, MAX_LOCKFILE_BYTES, MAX_LOCKFILES, admitLockfiles, dependencyError } from '../local-runner/dependency-cache.mjs';
+import { MAX_IMPORT_ENTRIES } from '../local-runner/source-snapshot.mjs';
 
 const MESSAGE = 'Check environment input was invalid.';
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -1005,3 +1007,146 @@ test('C7 through the real supervisor check mode, real exit codes give passed, co
       assert.deepEqual(existsSync(join(dir, 'sessions')) ? readdirSync(join(dir, 'sessions')).length : 0, homes, command);
     }
   });
+
+// CQ-R11e3a: lockfile admission. Pure, so nothing here touches a network or a filesystem except the one real lockfile.
+const sri = seed => `sha512-${createHash('sha512').update(seed).digest('base64')}`;
+const regUrl = (name, version = '1.0.0') => `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-${version}.tgz`;
+const ok = (name, extra) => ({ version: '1.0.0', resolved: regUrl(name), integrity: sri(name), ...extra });
+const lock = (packages, lockfileVersion = 3) => Buffer.from(JSON.stringify({ lockfileVersion, packages: { '': { name: 'fixture' }, ...packages } }));
+const admit = (lockfiles, cpu = 'x64') => admitLockfiles({ lockfiles, cpu });
+const refused = (fn, code, ...secrets) => {
+  const error = caught(fn);
+  assert.equal(error.code, code, secrets.join(' '));
+  assert.equal(error.message, dependencyError(code).message, secrets.join(' '));
+  for (const secret of secrets) assert.ok(!error.message.includes(String(secret)), `message echoed ${secret}`);
+};
+const GOOD_BYTES = lock({});
+
+test('DA1 input refusals are fixed DEPENDENCY_INPUT_INVALID, and every property is read exactly once', () => {
+  const good = { dir: '.', bytes: GOOD_BYTES };
+  class Sub extends Array {}
+  const throwing = new Error('getter-secret');
+  const cases = [
+    ['null', null], ['array', [good]], ['string', 'x'], ['extra key', { lockfiles: [good], cpu: 'x64', extra: 1 }],
+    ['no cpu', { lockfiles: [good] }], ['no lockfiles', { cpu: 'x64' }],
+    ...['ia32', 'X64', 'x86_64', 1, new String('x64')].map(cpu => [`cpu ${String(cpu)}`, { lockfiles: [good], cpu }]),
+    ...[{}, 'x', null, Sub.from([good]), [], Array.from({ length: MAX_LOCKFILES + 1 }, (_, i) => ({ dir: `d${i}`, bytes: GOOD_BYTES })),
+      new Proxy([good], { get: (target, key, receiver) => (key === 'length' ? 1e9 : Reflect.get(target, key, receiver)) }),
+      new Proxy([good], { get() { throw throwing; } })].map((lockfiles, i) => [`lockfiles #${i}`, { lockfiles, cpu: 'x64' }]),
+    ...[null, 5, 'x', [good], { dir: '.', bytes: GOOD_BYTES, extra: 1 }, { dir: '.' }, { bytes: GOOD_BYTES }]
+      .map((element, i) => [`element #${i}`, { lockfiles: [element], cpu: 'x64' }]),
+    ...['', '/abs', '../x', 'a/../b', './x', '.moe/x', 'a\\b', 5].map(dir => [`dir ${String(dir)}`, { lockfiles: [{ dir, bytes: GOOD_BYTES }], cpu: 'x64' }]),
+    ...['.', 'sub'].map(dir => [`duplicate ${dir}`, { lockfiles: [{ dir, bytes: GOOD_BYTES }, { dir, bytes: GOOD_BYTES }], cpu: 'x64' }]),
+    ...['x', new ArrayBuffer(8), new DataView(new ArrayBuffer(8)), new Uint16Array(4), 7, null]
+      .map((bytes, i) => [`bytes #${i}`, { lockfiles: [{ dir: '.', bytes }], cpu: 'x64' }]),
+    ['cpu getter', { lockfiles: [good], get cpu() { throw throwing; } }],
+    ['bytes getter', { lockfiles: [{ dir: '.', get bytes() { throw throwing; } }], cpu: 'x64' }],
+  ];
+  for (const [label, input] of cases) refused(() => admitLockfiles(input), 'DEPENDENCY_INPUT_INVALID', label, 'getter-secret');
+  const reads = [];
+  const spy = (target, label) => new Proxy(target, { get: (t, key, receiver) => (reads.push(`${label}.${String(key)}`), Reflect.get(t, key, receiver)) });
+  const lockfiles = spy([spy({ dir: '.', bytes: GOOD_BYTES }, 'e0'), spy({ dir: 'sub', bytes: GOOD_BYTES }, 'e1')], 'lf');
+  assert.deepEqual(admitLockfiles(spy({ lockfiles, cpu: 'x64' }, 'in')).dirs, ['.', 'sub']);
+  assert.deepEqual(reads.sort(), ['e0.bytes', 'e0.dir', 'e1.bytes', 'e1.dir', 'in.cpu', 'in.lockfiles', 'lf.0', 'lf.1', 'lf.length']);
+});
+
+test('DA2 lockfile refusals are fixed DEPENDENCY_LOCKFILE_INVALID, and a BOM is tolerated', () => {
+  const one = bytes => () => admit([{ dir: '.', bytes }]);
+  const json = value => Buffer.from(JSON.stringify(value));
+  // The invalid byte sits in the ROOT entry's name: a lenient decoder would admit this file, so only fatal decoding refuses it.
+  const badUtf8 = Buffer.concat([Buffer.from('{"lockfileVersion":3,"packages":{"":{"name":"x'), Buffer.from([0xff]), Buffer.from('"}}}')]);
+  const bad = [badUtf8, Buffer.from('not json'), ...['null', '[]', '5'].map(text => Buffer.from(text)),
+    ...[1, '3', 4, undefined].map(lockfileVersion => json({ lockfileVersion, packages: {} })),
+    ...[undefined, null, [], 'x'].map(packages => json({ lockfileVersion: 3, packages })),
+    lock({ 'node_modules/a': 5 }), lock({ 'node_modules/a': null })];
+  bad.forEach((bytes, i) => refused(one(bytes), 'DEPENDENCY_LOCKFILE_INVALID', `lockfile #${i}`));
+  assert.deepEqual(one(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), lock({ 'node_modules/a': ok('a') })]))().packages.length, 1);
+});
+
+test('DA3 entry refusals use one fixed code per kind and never echo the entry', () => {
+  const refuseEntry = (key, entry, code) => refused(() => admit([{ dir: 'secret-dir', bytes: lock({ 'node_modules/first': ok('first'), [key]: entry }) }]),
+    code, key, 'secret-dir', JSON.stringify(entry));
+  const b = extra => ok('b', extra);
+  const url = regUrl('b');
+  for (const key of ['src/x', 'node_modules', 'node_modules/', 'node_modules/@s', 'node_modules/@s/', 'node_modules/a/b', 'node_modules/../x',
+    'node_modules/./x', 'node_modules/.bin', 'node_modules/_x', 'node_modules/a/node_modules', 'node_modules/a//node_modules/b', 'packages/ws',
+    'node_modules/a\\b', 'node_modules/a b', 'node_modules/%2e%2e']) refuseEntry(key, b(), 'DEPENDENCY_LOCATION_INVALID');
+  // npm 12.2.0 still creates a link entry's symlink when it is flagged inBundle or optional, so no flag may skip the refusal.
+  const sources = [['node_modules/b', b({ link: true })], ['node_modules/b', { link: true, inBundle: true, resolved: 'target' }],
+    ['node_modules/b', b({ link: true, optional: true, os: ['darwin'] })],
+    ...['git+https://github.com/x/a.git#abc', 'git+ssh://git@github.com/x/a.git', 'file:../a', 'http://registry.npmjs.org/a/-/a-1.0.0.tgz',
+      'https://registry.yarnpkg.com/a/-/a-1.0.0.tgz', url.replace('https://', 'https://u:p@'), url.replace('.org', '.org:443'), `${url}?x=1`,
+      `${url}#x`, url.replace('registry', 'REGISTRY')].map(resolved => ['node_modules/b', b({ resolved })]),
+    ['node_modules/a', b()], ['node_modules/a', ok('a', { name: 'real' })], ['node_modules/b', b({ resolved: regUrl('b', '1.0.1') })],
+    ['node_modules/b', b({ resolved: undefined })], ['node_modules/b', b({ version: undefined })],
+    ...['latest', '1.0'].map(version => ['node_modules/b', b({ version, resolved: regUrl('b', version) })]),
+    ['node_modules/b', b({ name: '../x' })], ['node_modules/b', b({ name: 5 })]];
+  for (const [key, entry] of sources) refuseEntry(key, entry, 'DEPENDENCY_SOURCE_UNSUPPORTED');
+  const body = sri('b').slice(7, -2);
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  // The last of the 86 characters carries 2 data bits and 4 padding bits; setting a padding bit decodes to the same bytes.
+  const loose = `sha512-${body.slice(0, -1)}${alphabet[alphabet.indexOf(body.at(-1)) | 1]}==`;
+  assert.notEqual(loose, sri('b'));
+  assert.deepEqual(Buffer.from(loose.slice(7), 'base64'), Buffer.from(sri('b').slice(7), 'base64'));
+  const sha1 = `sha1-${createHash('sha1').update('b').digest('base64')}`;
+  for (const integrity of [undefined, sha1, `sha256-${createHash('sha256').update('b').digest('base64')}`, `${sri('b')} ${sha1}`, `${sri('b')} ${sri('c')}`,
+    `sha512-${body.slice(0, 85)}==`, `sha512-${body}`, ` ${sri('b')}`, sri('b').replace('sha512', 'SHA512'), loose]) {
+    refuseEntry('node_modules/b', b({ integrity }), 'DEPENDENCY_INTEGRITY_INVALID');
+  }
+});
+
+test('DA4 admits registry entries once per integrity, skips root, bundled and platform-excluded optional ones, and is deterministic', () => {
+  const packages = () => ({
+    '': { resolved: 'garbage', integrity: 'garbage' },
+    'node_modules/@s/b': ok('@s/b'), 'node_modules/a/node_modules/c': ok('c'), 'node_modules/alias': ok('real', { name: 'real' }),
+    'node_modules/constructor': ok('constructor'), 'node_modules/toString': ok('toString'), 'node_modules/bundled': { inBundle: true },
+    'node_modules/darwin-only': ok('darwin-only', { optional: true, os: ['darwin'] }),
+    'node_modules/not-win': ok('not-win', { optional: true, os: ['!win32'] }), 'node_modules/linux-str': ok('linux-str', { optional: true, os: 'linux' }),
+    'node_modules/os-any': ok('os-any', { optional: true, os: ['any'] }), 'node_modules/arm-only': ok('arm-only', { optional: true, cpu: ['arm64'] }),
+    'node_modules/not-arm': ok('not-arm', { optional: true, cpu: ['!arm64'] }), 'node_modules/musl': ok('musl', { optional: true, libc: ['musl'] }),
+    'node_modules/req-darwin': ok('req-darwin', { os: ['darwin'] }), 'node_modules/dev-opt': ok('dev-opt', { devOptional: true, os: ['darwin'] }),
+    'node_modules/zz': ok('zz', { integrity: sri('shared') }), 'node_modules/aa': ok('aa', { integrity: sri('shared') }),
+  });
+  const files = (order = x => x) => order([{ dir: '.', bytes: lock(order(packages())) }, { dir: 'sub', bytes: lock({ 'node_modules/zz': ok('zz', { integrity: sri('shared') }) }, 2) }]);
+  const want = (cpuOnly) => {
+    const pkg = (seed, name) => { const d = createHash('sha512').update(seed).digest(); return { integrity: `sha512-${d.toString('base64')}`, sha512: d.toString('hex'), url: regUrl(name) }; };
+    const names = ['@s/b', 'c', 'real', 'constructor', 'toString', 'not-win', 'linux-str', 'os-any', 'musl', 'req-darwin', 'dev-opt', cpuOnly];
+    return [...names.map(name => pkg(name, name)), pkg('shared', 'aa')].sort((a, b) => (a.sha512 < b.sha512 ? -1 : 1));
+  };
+  for (const [cpu, extra] of [['x64', 'not-arm'], ['arm64', 'arm-only']]) {
+    const result = admit(files(), cpu);
+    assert.deepEqual(result, { dirs: ['.', 'sub'], packages: want(extra) }, cpu);
+    for (const node of [result, result.dirs, result.packages, ...result.packages]) assert.ok(Object.isFrozen(node));
+    for (const { sha512 } of result.packages) assert.match(sha512, /^[0-9a-f]{128}$/);
+    const flipped = x => (Array.isArray(x) ? [...x].reverse() : reversed(x));
+    assert.deepEqual(admit(files(flipped), cpu), result, `${cpu} order`);
+  }
+  // UTF-8 byte order, not UTF-16: U+FF5E sorts before U+10000 in UTF-8 but after it in UTF-16.
+  assert.deepEqual(admit(['b', 'a', '.', '\u{10000}', '～'].map(dir => ({ dir, bytes: GOOD_BYTES }))).dirs, ['.', 'a', 'b', '～', '\u{10000}']);
+});
+
+test('DA5 bounds refuse with fixed codes, and the repository lockfile is admitted', () => {
+  assert.equal(MAX_LOCKFILES, 16);
+  assert.equal(MAX_LOCKFILE_BYTES, 16_777_216);
+  assert.equal(MAX_DEPENDENCY_PACKAGES, MAX_IMPORT_ENTRIES - 1);
+  const base = lock({ 'node_modules/a': ok('a') });
+  const padded = size => Buffer.concat([base, Buffer.alloc(size - base.length, 0x20)]);
+  const lockfile = bytes => [{ dir: '.', bytes }];
+  assert.equal(admit(lockfile(padded(MAX_LOCKFILE_BYTES))).packages.length, 1);
+  refused(() => admit(lockfile(padded(MAX_LOCKFILE_BYTES + 1))), 'DEPENDENCY_LIMIT_EXCEEDED');
+  // Undecodable bytes: the size bound must refuse first. A spoofed own byteLength must not hide the real size.
+  const huge = Buffer.alloc(MAX_LOCKFILE_BYTES + 1, 0xff);
+  Object.defineProperty(huge, 'byteLength', { value: 1 });
+  refused(() => admit(lockfile(huge)), 'DEPENDENCY_LIMIT_EXCEEDED');
+  const many = count => lock(Object.fromEntries(Array.from({ length: count }, (_, i) => [`node_modules/p${i}`, ok(`p${i}`)])));
+  const max = many(MAX_DEPENDENCY_PACKAGES);
+  assert.equal(admit(lockfile(max)).packages.length, MAX_DEPENDENCY_PACKAGES);
+  assert.equal(admit([{ dir: '.', bytes: max }, { dir: 'sub', bytes: max }]).packages.length, MAX_DEPENDENCY_PACKAGES);
+  refused(() => admit(lockfile(many(MAX_DEPENDENCY_PACKAGES + 1))), 'DEPENDENCY_LIMIT_EXCEEDED');
+  const real = admit(lockfile(readFileSync(new URL('../../packages/moe-daemon/package-lock.json', import.meta.url))));
+  assert.ok(real.packages.length > 0);
+  for (const { url, sha512 } of real.packages) {
+    assert.ok(url.startsWith('https://registry.npmjs.org/'), url);
+    assert.match(sha512, /^[0-9a-f]{128}$/);
+  }
+});

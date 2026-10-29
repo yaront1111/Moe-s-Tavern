@@ -1,0 +1,167 @@
+{
+  "id": "task-e40ad69f14194e2c89b43727588c2b25",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "[CQ-R11e3a] Lockfile registry entry admission",
+  "description": "Objective: the pure, network-free admission half of CQ-R11e3's offline npm dependency cache. It turns a candidate's untrusted package-lock.json files into the exact, deduplicated list of registry tarballs the host may fetch. Every other entry kind is refused with a fixed code BEFORE anything is downloaded. Split from CQ-R11e3 (task-ab029075) by architect-4ae016fb on 2026-10-30 to keep both slices under the 400-line review cap. CQ-R11e3's buildDependencyCache calls this export first, before any filesystem or fetch call.\n\nDeliverable: a new scripts/local-runner/dependency-cache.mjs exporting:\n- admitLockfiles({ lockfiles, cpu }). It returns, synchronously, a deeply frozen { dirs, packages }:\n  - dirs: the lockfile dirs, sorted by UTF-8 bytes, '.' for the root;\n  - packages: [{ integrity, sha512, url }], one per distinct integrity, sorted by sha512. sha512 is the digest as 128 lowercase hex. url is the smallest canonical URL among the entries sharing that integrity.\n- dependencyError(code), with a fixed message per code (as snapshotError in source-snapshot.mjs).\n- The constants MAX_LOCKFILES = 16, MAX_LOCKFILE_BYTES = 16_777_216 and MAX_DEPENDENCY_PACKAGES = MAX_IMPORT_ENTRIES - 1. The one spare entry is the tree's moe-dependencies.json in CQ-R11e3.\n\nRules:\n- Input: exact keys {lockfiles, cpu}. cpu is 'x64' or 'arm64'. lockfiles is a real Array of 1-16 exact-key {dir, bytes} records. dir is '.' or a path that source-snapshot.mjs validateImportPath returns unchanged, and dirs are unique. bytes is a Uint8Array or Buffer of at most MAX_LOCKFILE_BYTES. Read each property once.\n- Each lockfile is fatal-UTF-8 JSON of a plain object, with lockfileVersion exactly 2 or 3 and packages a plain object.\n- Every packages key except '' (the root project) must be a node_modules location: one or more `node_modules/<name>` segments, where a name is a scoped or unscoped npm name of [A-Za-z0-9._~-] that does not start with '.' or '_'. Use a linear-time regex. Workspace folder keys and anything else are refused.\n- Skipped, never checked further and never fetched:\n  - inBundle:true entries, which ship inside their parent's verified tarball;\n  - optional:true entries whose os excludes 'linux' or whose cpu excludes the given cpu. Use npm-install-checks checkList semantics: a string or an array, 'any', and '!x' negation. libc is never filtered: an extra package is harmless, a missing one fails the offline install.\n- Every other entry must have:\n  - link not true;\n  - a semver version;\n  - resolved EXACTLY equal to `https://registry.npmjs.org/<name>/-/<unscoped name>-<version>.tgz`. name is entry.name for an npm alias, else the location's last name. Plain string equality: no URL normalization.\n  - integrity that is exactly one canonical `sha512-<86 base64 chars>==` token, decoding to 64 bytes whose re-encoding is the same text.\n- Refusals use fixed text that never carries a URL, path or body:\n  - DEPENDENCY_INPUT_INVALID;\n  - DEPENDENCY_LOCKFILE_INVALID;\n  - DEPENDENCY_LOCATION_INVALID;\n  - DEPENDENCY_SOURCE_UNSUPPORTED: link, git, file, http, another host, userinfo, a port, a query or fragment, an alias-to-tarball or other non-canonical resolved, a missing resolved or version;\n  - DEPENDENCY_INTEGRITY_INVALID: missing, sha1, multi-hash, the wrong length, or non-canonical base64;\n  - DEPENDENCY_LIMIT_EXCEEDED: a lockfile over MAX_LOCKFILE_BYTES, or more distinct packages than MAX_DEPENDENCY_PACKAGES.\n  An unexpected throw (a getter or a Proxy) becomes DEPENDENCY_INPUT_INVALID. There is never a partial result.\n- Pure: no filesystem, network, process, npm or candidate code.\n\nMeasured on 2026-10-30, these rules admit every entry of packages/moe-daemon, moe-proxy and moe-vscode's lockfiles. They refuse packages/moe-claude-plugin's 49 entries that have no resolved, which is known and out of scope.\n\nTests: rows DA1-DA5 in scripts/tests/local-runner-check.test.mjs, which is already in CI's local-runner list.\n\nNOT in scope:\n- downloading, the cacache tree, OFFLINE_INSTALL_ARGS and the npm end-to-end row (CQ-R11e3);\n- guest streaming and install (CQ-R11e4/e5);\n- workspaces support;\n- .moe edits, or any verified-local or isolation claim.\n\nVerification command (fresh, exit 0 required): node --test scripts/tests/local-runner-check.test.mjs (on WSL: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin)",
+  "definitionOfDone": [
+    "admitLockfiles admits only lockfileVersion 2/3 entries at node_modules locations whose resolved is exactly the canonical https://registry.npmjs.org tarball URL for their name and version, with one canonical sha512 integrity. Every other kind throws its fixed DEPENDENCY_* code: link, git, file, http, another host, userinfo/port/query/fragment, alias-to-tarball, missing/sha1/multi-hash/non-canonical integrity, and a non-node_modules key. Shown by the DA rows.",
+    "Root and inBundle entries are skipped, and so are optional entries whose os excludes linux or whose cpu excludes the given cpu (npm list semantics; libc is never filtered). Every other entry is admitted once per distinct integrity, in a deeply frozen result that does not depend on input order. Shown by the DA rows.",
+    "Input, lockfile-size, lockfile-count and package-count bounds refuse with fixed codes, and no error message carries a URL, path or lockfile byte. Shown by the DA rows.",
+    "dependency-cache.mjs imports only node:buffer/node:crypto-style built-ins and ./source-snapshot.mjs, with no fs, network or child_process. It admits the repository's own packages/moe-daemon/package-lock.json. Shown by a DA row.",
+    "The verification command exits 0, with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nWork in scripts/tests/local-runner-check.test.mjs:\n- Append a 'CQ-R11e3a lockfile admission' section after the C rows.\n- Put its imports in the file's top import block: admitLockfiles, dependencyError, MAX_LOCKFILES, MAX_LOCKFILE_BYTES and MAX_DEPENDENCY_PACKAGES from '../local-runner/dependency-cache.mjs', and MAX_IMPORT_ENTRIES from '../local-runner/source-snapshot.mjs'.\n- Reuse caught() and the file's existing helpers.\n- Rows are DA1-DA5. Grep `test('DA` first.\n- The global forbidden patterns apply to test strings too. Never write the double-underscore proto literal; use 'constructor' or 'toString' for prototype-key inputs.\n\nHelpers (small):\n- sri(seed) = 'sha512-' + base64(sha512(seed)).\n- url(name, version = '1.0.0') = `https://registry.npmjs.org/${name}/-/${name.split('/').pop()}-${version}.tgz`.\n- ok(name, extra) = {version: '1.0.0', resolved: url(name), integrity: sri(name), ...extra}.\n- lock(packages, lockfileVersion = 3) = Buffer.from(JSON.stringify({lockfileVersion, packages: {'': {name: 'fixture'}, ...packages}})).\n- admit(lockfiles, cpu = 'x64') = admitLockfiles({lockfiles, cpu}).\n- refused(fn, code) asserts three things: the thrown error's code; that its message equals dependencyError(code).message; and that the message contains none of the row's distinctive input text (the URL host, the key, the dir, the integrity).\n\nDA1. Input refusals, each DEPENDENCY_INPUT_INVALID:\n- The input is null, an array, a string, or a record with an extra key or without cpu.\n- cpu is 'ia32', 'X64', 'x86_64', 1, or new String('x64').\n- lockfiles is not an array, an Array subclass, [], 17 valid records, or a Proxy over an array whose length is 1e9 or whose get trap throws.\n- An element is a non-record, has an extra key, or has no bytes.\n- dir is '', '/abs', '../x', 'a/../b', './x', '.moe/x', or 'a\\\\b'; or dirs are duplicated: ['.', '.'] and ['sub', 'sub'].\n- bytes is a string, an ArrayBuffer, a DataView, a Uint16Array, or 7.\n- A getter on cpu throws: the result is the fixed refusal, not the getter's error.\nA counting getter proves that cpu, lockfiles, each element, dir and bytes are each read exactly once on a SUCCESSFUL call.\n\nDA2. Lockfile refusals, each DEPENDENCY_LOCKFILE_INVALID:\n- an invalid UTF-8 byte INSIDE a JSON string ('{\"a\":\"<0xff>\"}'), which proves fatal decoding matters;\n- non-JSON text;\n- JSON null, an array or a number;\n- lockfileVersion 1, '3' (a string), 4, or missing;\n- packages missing, null, an array, or a string;\n- a packages entry that is 5 or null.\nA UTF-8 BOM before a valid lockfile is accepted, as npm's JSON parsing accepts it.\n\nDA3. Entry refusals. Each lockfile has a VALID entry first and then the bad one; assert the exact code with refused().\n- DEPENDENCY_LOCATION_INVALID, for each of these keys: 'src/x', 'node_modules', 'node_modules/', 'node_modules/@s', 'node_modules/@s/', 'node_modules/a/b', 'node_modules/../x', 'node_modules/./x', 'node_modules/.bin', 'node_modules/_x', 'node_modules/a/node_modules', 'node_modules/a//node_modules/b', 'packages/ws', 'node_modules/a\\\\b', 'node_modules/a b', 'node_modules/%2e%2e'.\n- DEPENDENCY_SOURCE_UNSUPPORTED for:\n  - link:true;\n  - resolved values 'git+https://github.com/x/a.git#abc', 'git+ssh://git@github.com/x/a.git', 'file:../a', 'http://registry.npmjs.org/a/-/a-1.0.0.tgz' and 'https://registry.yarnpkg.com/a/-/a-1.0.0.tgz';\n  - the userinfo form 'https://u:p@registry.npmjs.org/...' and the port form 'https://registry.npmjs.org:443/...';\n  - a '?x=1' suffix, a '#x' suffix, and an uppercase 'REGISTRY.npmjs.org' host;\n  - alias-to-tarball: location node_modules/a, no name, resolved url('b');\n  - a version mismatch: version '1.0.0' with resolved url('a', '1.0.1');\n  - missing resolved, missing version, version 'latest', version '1.0';\n  - name '../x', and name 5.\n- DEPENDENCY_INTEGRITY_INVALID for:\n  - a missing integrity;\n  - 'sha1-...' and 'sha256-...';\n  - '<valid sha512> sha1-...' (multi-hash);\n  - an 85-char body; the 86 chars without '=='; a leading space; 'SHA512-...';\n  - NON-CANONICAL base64: the canonical text with the character before '==' changed only in its padding bits, so it decodes to the same 64 bytes.\n\nDA4. Acceptance and skips. Use a v2 lockfile at dir 'sub' and a v3 lockfile at dir '.':\n- The root '' entry has a garbage resolved and is skipped.\n- These are admitted: a scoped '@s/b'; a nested 'node_modules/a/node_modules/c'; and an npm alias, location node_modules/alias with name 'real' and resolved url('real').\n- An inBundle entry with no resolved and no integrity is skipped.\n- Optional entries:\n  - os ['darwin']: skipped;\n  - os ['!win32'], os 'linux' (a string) and os ['any']: admitted;\n  - cpu ['arm64']: skipped for cpu 'x64', admitted for 'arm64';\n  - cpu ['!arm64']: admitted for x64, skipped for arm64;\n  - libc ['musl']: admitted.\n- A NON-optional entry with os ['darwin'] and a devOptional (not optional) one are both admitted.\n- The same integrity at two locations and in both lockfiles gives ONE package whose url is the smaller canonical URL.\n- The result deepEquals the expected {dirs: ['.', 'sub'], packages: [...sorted by sha512]}, every sha512 is 128 lowercase hex, and the result, dirs, packages and each package are all Object.isFrozen.\n- Reversing lockfiles and the insertion order of packages keys gives a deepEqual result.\n- dirs ['b', 'a', '.'] come back as ['.', 'a', 'b'].\n\nDA5. Bounds and a real lockfile:\n- MAX_LOCKFILES === 16, MAX_LOCKFILE_BYTES === 16_777_216, and MAX_DEPENDENCY_PACKAGES === MAX_IMPORT_ENTRIES - 1.\n- A valid lockfile padded with trailing spaces to MAX_LOCKFILE_BYTES + 1 bytes gives DEPENDENCY_LIMIT_EXCEEDED. Padded to exactly MAX_LOCKFILE_BYTES, it is admitted.\n- A generated lockfile with MAX_DEPENDENCY_PACKAGES + 1 distinct packages (names 'p<i>', integrities sri('p<i>')) gives DEPENDENCY_LIMIT_EXCEEDED. Exactly MAX_DEPENDENCY_PACKAGES is admitted, and so are two lockfiles that each hold the same MAX.\n- readFileSync of packages/moe-daemon/package-lock.json is admitted with cpu 'x64'. packages is non-empty, every url starts with 'https://registry.npmjs.org/', and every sha512 is 128 lowercase hex.\n\nRun the file. It must fail to load with ERR_MODULE_NOT_FOUND for dependency-cache.mjs, which is red for the right reason. No E, K or C row is edited.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Added DA1-DA5 plus the dependency-cache/source-snapshot imports to local-runner-check.test.mjs. Red for the right reason: the file fails to load with ERR_MODULE_NOT_FOUND for scripts/local-runner/dependency-cache.mjs. No E/K/C row edited. 723 other dirty paths in the shared checkout left untouched.",
+      "startedAt": "2026-10-29T23:20:33.620Z",
+      "completedAt": "2026-10-29T23:23:06.212Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/dependency-cache.mjs: pure lockfile admission.\n\nImports: only validateImportPath and MAX_IMPORT_ENTRIES from './source-snapshot.mjs'. Buffer and TextDecoder are globals. Use no fs, net, http, child_process or dynamic import.\n\nDoD 4's import clause describes this slice. CQ-R11e3 later adds node:fs/promises, node:path and the shared downloader to this module for buildDependencyCache. admitLockfiles' own call graph must stay pure, with no I/O.\n\nHeader comment:\n- the purpose: admission before any download, for the offline check cache;\n- the trust model: candidate lockfiles are untrusted;\n- the rules below;\n- that libc is deliberately not filtered;\n- that workspaces and links are refused;\n- that messages are fixed text.\n\nExports:\n- MAX_LOCKFILES = 16, MAX_LOCKFILE_BYTES = 16_777_216, MAX_DEPENDENCY_PACKAGES = MAX_IMPORT_ENTRIES - 1.\n- dependencyError(code), mirroring snapshotError. It holds a MESSAGES table of fixed text for DEPENDENCY_INPUT_INVALID, DEPENDENCY_LOCKFILE_INVALID, DEPENDENCY_LOCATION_INVALID, DEPENDENCY_SOURCE_UNSUPPORTED, DEPENDENCY_INTEGRITY_INVALID and DEPENDENCY_LIMIT_EXCEEDED. An unknown code becomes DEPENDENCY_INPUT_INVALID. An OWN_ERRORS WeakSet marks errors made here.\n- admitLockfiles(input). Inside try/catch, any error not in OWN_ERRORS becomes DEPENDENCY_INPUT_INVALID, so there is never a partial result.\n\nadmitLockfiles steps:\n1. Input. isRecord(input), as in source-snapshot.mjs (prototype Object.prototype or null), and Reflect.ownKeys exactly {lockfiles, cpu}. Read cpu once; it must be 'x64' or 'arm64'.\n   Read lockfiles once. It must satisfy Array.isArray, have prototype Array.prototype, and a length read ONCE that is an integer from 1 to MAX_LOCKFILES. Read each element once by index.\n   Each element is an exact-key {dir, bytes} record, and each is read once:\n   - dir is '.' or validateImportPath(dir) === dir. A snapshot error becomes DEPENDENCY_INPUT_INVALID.\n   - Duplicate dir strings are refused.\n   - bytes passes ArrayBuffer.isView, with prototype Uint8Array.prototype or Buffer.prototype.\n   - Its size comes from the intrinsic %TypedArray% byteLength getter, as source-snapshot's viewLength, so it cannot be spoofed. A size over MAX_LOCKFILE_BYTES is DEPENDENCY_LIMIT_EXCEEDED, checked BEFORE decoding.\n2. Lockfile. Decode with new TextDecoder('utf-8', {fatal: true}), which strips a BOM by default, then JSON.parse. The value must be a plain object with lockfileVersion === 2 or 3 and packages a plain object. Otherwise it is DEPENDENCY_LOCKFILE_INVALID.\n3. For each [key, entry] of Object.entries(packages), in this order:\n   a. key '' is skipped.\n   b. LOCATION = new RegExp(`^node_modules/(?:${NAME}/node_modules/)*(${NAME})$`), where NAME = `(?:@[A-Za-z0-9~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9~-][A-Za-z0-9._~-]*`.\n      NAME's character class excludes '/', so the regex has no ambiguous nesting and runs in linear time. Its last capture is the location's name. A miss is DEPENDENCY_LOCATION_INVALID.\n   c. entry must be a plain object, else DEPENDENCY_LOCKFILE_INVALID.\n   d. entry.inBundle === true is skipped.\n   e. entry.optional === true is skipped when !passes('linux', entry.os) or !passes(cpu, entry.cpu).\n      passes copies npm-install-checks checkList:\n      - undefined passes;\n      - a string becomes [string];\n      - anything that is not an array of strings passes, so it is never a reason to skip;\n      - ['any'] passes;\n      - any matching '!x' fails;\n      - otherwise it passes on a positive match, or when every entry is negated.\n      libc is never consulted.\n   f. entry.link === true is DEPENDENCY_SOURCE_UNSUPPORTED.\n   g. name is entry.name if it is present, else the captured location name. It must fully match NAME.\n      version must be a string matching ^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$.\n      resolved must === `https://registry.npmjs.org/${name}/-/${name.slice(name.lastIndexOf('/') + 1)}-${version}.tgz`: plain string equality, no URL parsing.\n      Any miss is DEPENDENCY_SOURCE_UNSUPPORTED.\n   h. integrity must match ^sha512-([A-Za-z0-9+/]{86}==)$, and Buffer.from(b64, 'base64').toString('base64') === b64 (canonical text). Else DEPENDENCY_INTEGRITY_INVALID. sha512 is the decoded hex.\n   i. Deduplicate in a Map keyed by sha512, keeping the smaller url. When the map's size passes MAX_DEPENDENCY_PACKAGES, throw DEPENDENCY_LIMIT_EXCEEDED at once.\n4. Result:\n   - dirs sorted by Buffer.compare of their UTF-8 bytes;\n   - packages as frozen {integrity, sha512, url} records, sorted by sha512;\n   - the arrays and the result frozen.\n   Return Object.freeze({dirs, packages}).\n\nError handling: every refusal is a dependencyError with fixed text, never input bytes, a URL, a key or a path. Getters, Proxies and hostile values can only produce DEPENDENCY_INPUT_INVALID. The function writes nothing, fetches nothing, and spawns nothing.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/dependency-cache.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/dependency-cache.mjs"
+      ],
+      "note": "Created dependency-cache.mjs (pure admitLockfiles/dependencyError + 3 constants; imports only ./source-snapshot.mjs). DA1-DA5 green. Deviation from plan wording only in structure: each lockfile is size-bounded, decoded, parsed and its entries folded into the shared Map inside the per-element loop, so a later getter cannot mutate already-read bytes and only one parsed lockfile is live at a time; refusals and codes are unchanged. Probed 19 mutants (fatal decode, canonical re-encode, smallest-url, inBundle, os/cpu filter, negation, intrinsic byteLength, UTF-8 dir order, sha512 order, count bounds, link, dup dir, alias name, root skip, freeze, prototype checks); all killed except the dir round-trip compare, which is an equivalent mutant (validateImportPath returns its input).",
+      "startedAt": "2026-10-29T23:23:06.981Z",
+      "completedAt": "2026-10-29T23:24:50.527Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh, after green.\n\n1. Run env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs.\n   - It must exit 0, with DA1-DA5 run, not skipped, and every E, K and C row still passing.\n   - Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. Size: `wc -l scripts/local-runner/dependency-cache.mjs` plus the added lines of `git diff --numstat -- scripts/tests/local-runner-check.test.mjs` must total at most 400. The target is about 300. If over, merge table rows that share setup rather than dropping cases.\n3. `git diff --check` is clean on both files, and a read-only `git status --short` shows this task changed only those two. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, and never weaken an E, K, C or DA row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs",
+        "scripts/local-runner/dependency-cache.mjs"
+      ],
+      "note": "Fresh run: env -i HOME PATH=nvm-node24 node --test scripts/tests/local-runner-check.test.mjs -> exit 0, 34 tests, 33 pass, 1 skipped (K9, a pre-existing skip, unrelated), 0 fail; DA1-DA5 ran and passed, every E/K/C row unchanged. Size: dependency-cache.mjs 139 lines + 143 added test lines = 282 (cap 400). git diff --check clean. git status shows this task touched only the two planned paths (test file modified, module new); other dirty paths belong to peers and were left alone.",
+      "startedAt": "2026-10-29T23:24:51.414Z",
+      "completedAt": "2026-10-29T23:25:12.799Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and read the two-file diff as an attacker:\n- Can any lockfile entry make npm write outside node_modules once it is admitted? Try '..', '.', backslashes, empty segments, a scope without a name, percent-encoding, and a workspace folder key.\n- Can a non-registry or non-canonical source pass? Try a case change, a port, userinfo, a query or fragment, an alias pointing at another package's tarball, or a version mismatch. Can a skipped entry (root, inBundle, optional) smuggle anything into packages?\n- Can two integrity texts name the same bytes (non-canonical base64), or a multi-hash slip through?\n- Is each input property read once, so a getter or Proxy cannot pass validation and then change? Is the lockfile size bound checked BEFORE decoding?\n- Is every regex linear? Time a 1 MB hostile key once, by hand, outside the suite.\n- Does any message carry input text?\n- Is the result deterministic and deeply frozen?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's command fresh before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Self-review found one REAL defect and fixed it. (1) FIXED: the plan skipped inBundle/optional entries BEFORE the link check. I reproduced with npm 12.2.0 in a throwaway dir that `npm ci --offline --ignore-scripts` still creates node_modules/evil -> ../target for {link:true,inBundle:true}; a later admitted key node_modules/evil/node_modules/x would then extract under the link target, outside node_modules. The link refusal now runs before both skips (comment + header updated), and two DA3 rows ({link,inBundle} and {link,optional,os:darwin}) fail against the old order (mutant run: DA3 fails) and pass now. This deviates from the plan's literal \"inBundle never checked further\" and is the only deviation; plain inBundle entries are still skipped (DA4). (2) Checked, no finding: hostile 1 MB keys/names/versions/integrity/resolved (long name, nested segments, scoped repeats, 66k-deep valid key) all resolve in 1-12 ms, so every regex is linear; a 16 MiB lockfile of '[' is refused LOCKFILE_INVALID in ~750 ms / ~430 MB RSS, bounded by MAX_LOCKFILE_BYTES with one parsed lockfile live at a time; size is checked before decoding via the intrinsic byteLength getter; each input property is read once (spy test); no message carries input text; result is deterministic and deeply frozen. Repo lockfiles: daemon 88 and proxy 46 packages admitted for x64 and arm64, vscode 298 admitted, claude-plugin refused DEPENDENCY_SOURCE_UNSUPPORTED (known, out of scope). (3) Theoretical, left for R11e3/e5: the lockfile entries are constrained but package.json (candidate-controlled) still shapes the install, including workspaces; a 66k-deep valid location passes admission and only npm's own path limit refuses it; two lockfiles can name one URL with different integrity (R11e3's download verification fails closed); dir aliasing on case-insensitive names is caught later by validateImport's foldCase collision check. Fresh final run: exit 0, 33 pass / 1 skip (K9, pre-existing) / 0 fail; size 142 + 145 = 287 lines. source-export.mjs shows modified in git status; it is a peer's change, untouched by this task.",
+      "startedAt": "2026-10-29T23:25:13.955Z",
+      "completedAt": "2026-10-29T23:27:33.880Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-001d8ab383ef41088e045b2e41ed0e1e",
+  "priority": "HIGH",
+  "order": 253.25,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T23:13:24.679Z",
+  "updatedAt": "2026-10-29T23:27:42.962Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:16:35.949Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb",
+    "worker-0062feec"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:19:46.985Z",
+  "executionContract": {
+    "intendedBehavior": "admitLockfiles({lockfiles, cpu}) deterministically turns 1-16 untrusted npm lockfiles (v2/v3) into the frozen, deduplicated list of canonical registry.npmjs.org tarballs with sha512 integrity that the host may fetch. It skips root, bundled and platform-excluded optional entries, and refuses every other entry kind with a fixed DEPENDENCY_* code before anything is downloaded.",
+    "acceptanceCriteria": [
+      "DA1-DA5 pass under the verification command.",
+      "The repository's packages/moe-daemon/package-lock.json is admitted."
+    ],
+    "invariants": [
+      "No I/O in admitLockfiles' call graph.",
+      "Fixed-text errors only.",
+      "Each input property is read once.",
+      "No partial result."
+    ],
+    "compatibility": [
+      "The E, K and C rows are unchanged.",
+      "CQ-R11e3 consumes {dirs, packages:[{integrity, sha512, url}]} exactly."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/dependency-cache.mjs (new): admitLockfiles, dependencyError, MAX_LOCKFILES, MAX_LOCKFILE_BYTES, MAX_DEPENDENCY_PACKAGES",
+      "Rows DA1-DA5 in scripts/tests/local-runner-check.test.mjs"
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Split from CQ-R11e3 by SPIDR Interface: admission here, and download, tree and the npm end-to-end row in R11e3. Rejected alternatives:\n- A separate lockfile-admission.mjs module. The task description and its consumers name dependency-cache.mjs, and R11e3 extends that same module.\n- An import-purity test row. R11e3 legitimately adds fs and the downloader import to this module, and such a row would force R11e3 to weaken a DA row. QA checks DoD 4's import clause by reading this slice.\n- URL parsing to compare resolved. Plain equality with the canonical template is stricter and has no normalization tricks.\n- Filtering on libc. An extra package is harmless; a missing one breaks the offline install.\n- Skipping devOptional entries. npm only skips platform-excluded packages that are optional.",
+    "codebaseInsights": "Patterns to mirror from source-snapshot.mjs: isRecord, the VIEW_PROTOTYPES and viewLength intrinsic getter, snapshotError plus the OWN_ERRORS WeakSet, a length read once below a bound, and index reads (no slice).\n\nlocal-runner-check.test.mjs uses static top-level imports, so a missing module fails the WHOLE file; that is the red signal. Its rows: E1-E8, K1-K9, C1-C7. CQ-R11e1 (task-b799056d, which now dependsOn this task) and R11e3 edit the file after this task lands.\n\nThe architect measured these rules on 2026-10-30 against the repo lockfiles:\n- daemon: 157 entries ok, 155 unique, 73 optional-platform;\n- proxy: 113 ok;\n- vscode: 339 ok;\n- claude-plugin: 49 entries without resolved, which are refused.\nnpm checkList semantics are copied from npm-install-checks.",
+    "risks": "- NAME's first character excludes '.' and '_' in both the scope and the name.\n- The scoped name inside a location ('node_modules/@s/b') must stay one capture. Do not derive the name with lastIndexOf('node_modules/'), because a scope named '@node_modules' breaks that.\n- Non-canonical base64: Buffer.from(...,'base64') is lenient, so the canonical re-encode comparison is required.\n- Generating 10,000 entries (DA5) takes about 2.3 MB of JSON. Keep it out of the per-row loops.\n- Never write the double-underscore proto literal or an eval call in code or tests: they are global forbidden patterns.\n- A BOM is tolerated, which matches npm.",
+    "keyFiles": [
+      "scripts/local-runner/source-snapshot.mjs",
+      "scripts/tests/local-runner-check.test.mjs",
+      "packages/moe-daemon/package-lock.json"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:19:47.122Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T23:20:33.620Z",
+  "reviewStartedAt": "2026-10-29T23:27:42.960Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/local-runner-check.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ DA1 input refusals are fixed DEPENDENCY_INPUT_INVALID, and every property is read exactly once\n✔ DA2 lockfile refusals are fixed DEPENDENCY_LOCKFILE_INVALID, and a BOM is tolerated\n✔ DA3 entry refusals use one fixed code per kind and never echo the entry\n✔ DA4 admits registry entries once per integrity, skips root, bundled and platform-excluded optional ones, and is deterministic\n✔ DA5 bounds refuse with fixed codes, and the repository lockfile is admitted (201ms)\nℹ tests 34\nℹ suites 0\nℹ pass 33\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1 (K9, pre-existing skip)\nℹ todo 0\nℹ duration_ms 11879.98",
+    "reportedAt": "2026-10-29T23:27:42.960Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/dependency-cache.mjs"
+  ],
+  "completionSummary": "Added scripts/local-runner/dependency-cache.mjs (142 lines, new): pure, network-free admitLockfiles({lockfiles, cpu}), dependencyError(code) with six fixed DEPENDENCY_* messages, and MAX_LOCKFILES=16 / MAX_LOCKFILE_BYTES=16_777_216 / MAX_DEPENDENCY_PACKAGES=MAX_IMPORT_ENTRIES-1. It imports only ./source-snapshot.mjs (no fs/net/child_process). It returns a deeply frozen {dirs (UTF-8 sorted), packages:[{integrity, sha512, url}] (one per distinct integrity, smallest canonical url, sorted by sha512)}. Registry-only: resolved must equal the canonical https://registry.npmjs.org tarball URL by plain string equality, with one canonical sha512 SRI (re-encode check). Root and inBundle entries are skipped; optional entries are skipped when os excludes linux or cpu excludes the given cpu (checkList semantics, libc never filtered). Everything else refuses with a fixed code; size is bounded before decoding with the intrinsic byteLength getter; each property is read once. Tests DA1-DA5 (+145 lines) in scripts/tests/local-runner-check.test.mjs; E/K/C rows untouched. 19+ mutants probed and killed. ONE DEVIATION from the plan text, found in self-review: the link refusal runs BEFORE the inBundle/optional skips, because npm 12.2.0 was shown to still create the symlink for a link entry flagged inBundle, which a later nested key could write through; two DA3 rows pin it. Repo lockfiles: daemon (88), proxy (46) and vscode (298) are admitted; claude-plugin is refused (known, out of scope). Total size 142 + 145 = 287 lines (cap 400)."
+}

@@ -13,9 +13,38 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Keep scripts/moe-agent.ps1 saved as UTF-8 with a BOM and in string parity with scripts/moe-agent.sh."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. Three dependencies edit scripts/moe-agent.ps1 and land first: ad0dc2e7, bc8410af and c2a900aa. Re-read Get-RoleDoc (around line 659) and the stable-prefix assembly (`$roleDoc = Get-RoleDoc` / `$systemAppend = $systemAppendPre`, around line 6227) before editing.\n\nIn scripts/tests/prompt-cache-launcher.test.mjs, add a test after the `const psEngines = ...` line. It needs psEngines, so it must come after that definition. Mirror the ParseFile test's skip: if (!psEngines.length), register a skipped test 'Get-RoleDoc reads the UTF-8 role doc on PowerShell 5.1 and 7' with `no PowerShell engine on ${process.platform}`. Then, for each engine of psEngines, add test `${engine}: Get-RoleDoc puts the exact UTF-8 role doc in the stable system prefix`:\n- ROLE_DOC_TEXT = '# Worker — role\\nA → B ← C, x ≤ y ≥ z, «q» 漢字\\n'. Use escapes in the test source so the test file stays ASCII.\n- Run two cases, one per bom in [false, true]:\n  - In a fresh mkdtemp dir (removed in t.after), write roles/worker.md as Buffer.concat([bom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0), Buffer.from(ROLE_DOC_TEXT, 'utf8')]).\n  - Build script = '\ufeff' + \"$ErrorActionPreference='Stop'\\n$moeDir=$env:MOE_TEST_DIR\\n$Role='worker'\\n$pluginRoot=$null\\n$systemAppendPre='stable prefix'\\n\" + between(read('ps1'), 'function Get-RoleDoc {', '\\n$roleDoc = Get-RoleDoc') + '\\n' + between(read('ps1'), '    $roleDoc = Get-RoleDoc\\n    $systemAppend = $systemAppendPre', '    $dynamicContext = \"\"') + \"\\n[IO.File]::WriteAllText($env:MOE_TEST_OUT, $systemAppend, (New-Object Text.UTF8Encoding $false))\".\n    This runs the REAL function and the REAL assembly. The result is written as UTF-8 to a file, never to stdout: PowerShell 5.1's redirected stdout would transcode it and confound the check.\n  - spawnSync(engine, ['-NoProfile', '-File', file]) with env MOE_TEST_DIR=dir and MOE_TEST_OUT=<dir>/out.txt. Status must be 0, and readFileSync(out, 'utf8') must equal 'stable prefix\\n\\n' + ROLE_DOC_TEXT exactly, with no U+FEFF and no U+00E2.\n\nRED, recorded in the step note: run the new test with Windows Node on a copy of scripts/ (step 3's recipe) against the UNFIXED moe-agent.ps1. powershell.exe must FAIL the bom=false case with mojibake (U+00E2 instead of U+2014). pwsh.exe passes, because its default is UTF-8. Keep that failure output.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.ps1, Get-RoleDoc: change `if (Test-Path $p) { return Get-Content -Raw -Path $p }` to `if (Test-Path $p) { return Get-Content -Raw -Encoding UTF8 -Path $p }`.\n\nAdd a one-line comment above it: the daemon writes role docs as BOM-less UTF-8; Windows PowerShell 5.1 decodes a BOM-less file as ANSI unless told; -Encoding UTF8 is correct on 5.1 and 7, BOM or not.\n\nNothing else changes:\n- no other Get-Content call;\n- no bash change, since `cat` is byte-exact;\n- no parity strings.\nUse an exact-string edit. Keep the file's UTF-8 BOM (ef bb bf) and its LF line endings: no CRLF conversion and no re-encoding. Confirm with `head -c 3 scripts/moe-agent.ps1 | od -An -tx1` and `grep -c $'\\r$' scripts/moe-agent.ps1` (0).\n\nError handling: unchanged. A missing doc still returns \"\". -Encoding UTF8 never throws on invalid bytes; it substitutes U+FFFD, the same failure class as before, now with the correct decoding for valid files.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY ONCE, fresh. This is the DoD gate on Windows, run from WSL, per Serena memory gotcha-qa-windows-launcher-tests-from-wsl.\n\n1. Copy the whole scripts/ directory to a fresh Windows temp dir, /mnt/c/Users/Yaron/AppData/Local/Temp/moe-roledoc-<n>/scripts. Then run `\"/mnt/c/Program Files/nodejs/node.exe\" --test 'C:\\Users\\Yaron\\AppData\\Local\\Temp\\moe-roledoc-<n>\\scripts\\tests\\prompt-cache-launcher.test.mjs'`.\n   - It must exit 0.\n   - The new test runs, not skipped, on powershell.exe and pwsh.exe, the Git Bash rows pass, and both ParseFile tests pass.\n   - This fresh command, exit code and output tail are complete_task's verification evidence. Also cite step 1's recorded red.\n   - rm -rf the temp dir afterwards.\n2. Run `bash scripts/tests/parity-check.sh` (DoD 3); it must exit 0.\n3. Sanity on Linux: env -i HOME=\"$HOME\" PATH=/home/sysadmin/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test scripts/tests/prompt-cache-launcher.test.mjs must exit 0, with the new test skipped as 'no PowerShell engine on linux'.\n4. Run `git diff --check` on both files. `git diff --stat scripts/moe-agent.ps1` must show only the Get-RoleDoc line and its comment from this task, and the BOM must still be present. A read-only `git status --short` must show this task changed only those two files. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: if Windows Node or an engine is unavailable, say so and do not claim the gate. Fix failures in code, never by weakening the assertion.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review and check:\n- Does the test run the REAL Get-RoleDoc and the REAL assembly? Would it catch a regression if someone re-added a plain Get-Content, or decoded the doc a different way in only one place?\n- Is the result compared byte-exactly, with no stdout transcoding confound? Is a BOM'd doc stripped? Is a missing doc still \"\"?\n- Did the ps1 keep its BOM and LF endings, and is the edit limited to Get-RoleDoc? Do both engines still parse it (the ParseFile tests)?\n- Is the bash twin untouched, and does parity hold?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 3's commands fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -35,5 +64,61 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:31:59.369Z",
-  "updatedAt": "2026-10-29T14:31:59.369Z"
+  "updatedAt": "2026-10-29T23:26:36.091Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T23:24:45.041Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T23:26:35.997Z",
+  "executionContract": {
+    "intendedBehavior": "On Windows PowerShell 5.1 and pwsh 7 alike, the PowerShell launcher's stable system prefix carries the role doc's exact UTF-8 text, whether the doc is BOM-less (as the daemon writes it) or has a BOM.",
+    "acceptanceCriteria": [
+      "The new launcher test passes on powershell.exe and pwsh.exe, and was recorded failing on powershell.exe before the fix.",
+      "parity-check.sh exits 0."
+    ],
+    "invariants": [
+      "moe-agent.ps1 keeps its UTF-8 BOM and LF endings.",
+      "No other ps1 read path and no bash behavior changes."
+    ],
+    "compatibility": [
+      "A missing role doc still yields an empty append.",
+      "The ParseFile tests still pass on both engines."
+    ],
+    "approvedScope": [
+      "The Get-RoleDoc read line and its comment in scripts/moe-agent.ps1",
+      "One test block in scripts/tests/prompt-cache-launcher.test.mjs"
+    ],
+    "checkRefs": [
+      "\"/mnt/c/Program Files/nodejs/node.exe\" --test <windows-temp-copy>\\scripts\\tests\\prompt-cache-launcher.test.mjs",
+      "bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n- [IO.File]::ReadAllText(path), which defaults to UTF-8 with BOM detection. It would also work, but `Get-Content -Raw -Encoding UTF8` is the smallest change, matches the task's stated fix, and is correct on 5.1 and 7.\n- Changing other Get-Content reads, for example of JSON. Out of scope by DoD 3: those are ConvertFrom-Json of ASCII-escaped daemon JSON, or separate issues.\n- Comparing stdout. PowerShell 5.1 transcodes redirected stdout through the console code page, so the test writes the result to a file as UTF-8.",
+    "codebaseInsights": "Get-RoleDoc is at around moe-agent.ps1:659. The stable prefix is assembled at around 6227-6231: $systemAppend = $systemAppendPre + \"`n`n$roleDoc\". It reaches claude's system prompt file and the codex, gemini and grok instruction files.\n\nThe test helper read() normalizes CRLF; between(source, start, end) takes the first end after start. On win32, engines = powershell.exe, pwsh.exe and Git Bash; psEngines is defined at around line 460, just before the ParseFile test, whose skip pattern the new test mirrors.\n\nmoe-agent.ps1 has a UTF-8 BOM and LF endings (autocrlf=false). .moe/roles/worker.md is BOM-less UTF-8 containing em dashes and arrows. The bash twin's load_role_doc uses $(cat), which is byte-exact apart from trailing newlines; that is pre-existing and out of scope.",
+    "risks": "- The extracted assembly block's end marker, '    $dynamicContext = \"\"', must be the first occurrence after the start. Verify between() picks the 6227 block.\n- The extracted block references $moeDir, $Role, $pluginRoot and $systemAppendPre, so define them in the script.\n- On non-Windows hosts the PowerShell rows skip, so the real evidence must come from Windows Node per the memory recipe.\n- moe-agent.ps1 and moe-agent.sh are currently dirty with peers' bytes, which is why this task dependsOn them. Edit only after they land.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T23:26:36.090Z",
+  "approvedPlanRevision": 1
 }
