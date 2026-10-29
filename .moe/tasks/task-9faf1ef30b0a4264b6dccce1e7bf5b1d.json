@@ -129,7 +129,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:47:49.228Z",
-  "updatedAt": "2026-10-29T23:08:33.985Z",
+  "updatedAt": "2026-10-29T23:09:22.065Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:50:19.899Z",
     "plannedStepCount": 5,
@@ -231,11 +231,10 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-29T22:28:14.035Z",
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "architect-bd1eb82d@2026-10-29T17:50:18Z",
-    "at": "2026-10-29T22:32:26.885Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-29T22:25:55Z",
+    "at": "2026-10-29T23:09:22.065Z"
   },
   "reviewStartedAt": "2026-10-29T23:08:33.984Z",
   "verification": {
@@ -252,7 +251,44 @@
     ".github/workflows/ci.yml",
     "scripts/local-runner/guest-bootstrap.mjs",
     "scripts/local-runner/guest-readiness.mjs",
-    "scripts/tests/local-runner.test.mjs"
+    "scripts/tests/local-runner.test.mjs",
+    ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+    ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json"
   ],
-  "completionSummary": "CQ-R10d1 guest MCP stdio shim.\n\n- scripts/local-runner/guest-mcp-shim.py (new): a stdlib-only MCP stdio server, launched as python3 -I.\n  - Serves tools/list from the tools.json allowlist for MOE_ROLE only.\n  - Relays each allowed tools/call, with allowed argument keys only, as one CQ-R08c request frame on /run/moe/agent.sock. Bounds: line and frame limits, 8 in flight, a 120 s deadline, and a non-blocking outbox.\n  - Validates host frames strictly. Every error text is fixed.\n- guest-mcp-tools.json (new): generated from guest-bridge.mjs TOOLS, with an SH1 drift pin.\n- buildUserData installs the shim (root:root 0555) and tools.json (root 0444), and returns shimSha256 and shimToolsSha256. A missing, empty or oversized asset throws BOOTSTRAP_ASSET_INVALID; input validation still runs first.\n- Readiness changes:\n  - Layout checks the shim at 555 and tools.json at 444.\n  - New shimHash / shimToolsHash probes report SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH.\n  - validInputs requires all three digests as lowercase 64-hex.\n  - The return shape is unchanged.\n- CI runs local-runner-agents.test.mjs (SH1-SH9).\n\nSize (TASK rail, at most 650), against the pre-task HEAD; new files count their line counts:\n\n| File | Lines |\n|---|---|\n| guest-mcp-shim.py | 269 |\n| guest-mcp-tools.json | 1 |\n| local-runner-agents.test.mjs | 306 |\n| guest-bootstrap.mjs | 18+3 |\n| guest-readiness.mjs | 14+10 |\n| ci.yml | 1+1 |\n| local-runner.test.mjs (own delta) | 22+3 |\n| **Total** | **648** |\n\n`git diff --numstat` for local-runner.test.mjs reads 270/4. The shared tree still carries CQ-R11's uncommitted CJ/provisioned() hunk (+248/-1), which its commit bbcd13d did not include; I preserved it untouched.\n\nSelf-review: 14 of 15 planned mutants were killed. \"Non-str role accepted\" is equivalent: main() passes str or None, and JSON keys are always str. Deviation from the plan: digestFailure became a digestCheck(id, file, key, failure) row factory with the same behaviour."
+  "completionSummary": "CQ-R10d1 guest MCP stdio shim.\n\n- scripts/local-runner/guest-mcp-shim.py (new): a stdlib-only MCP stdio server, launched as python3 -I.\n  - Serves tools/list from the tools.json allowlist for MOE_ROLE only.\n  - Relays each allowed tools/call, with allowed argument keys only, as one CQ-R08c request frame on /run/moe/agent.sock. Bounds: line and frame limits, 8 in flight, a 120 s deadline, and a non-blocking outbox.\n  - Validates host frames strictly. Every error text is fixed.\n- guest-mcp-tools.json (new): generated from guest-bridge.mjs TOOLS, with an SH1 drift pin.\n- buildUserData installs the shim (root:root 0555) and tools.json (root 0444), and returns shimSha256 and shimToolsSha256. A missing, empty or oversized asset throws BOOTSTRAP_ASSET_INVALID; input validation still runs first.\n- Readiness changes:\n  - Layout checks the shim at 555 and tools.json at 444.\n  - New shimHash / shimToolsHash probes report SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH.\n  - validInputs requires all three digests as lowercase 64-hex.\n  - The return shape is unchanged.\n- CI runs local-runner-agents.test.mjs (SH1-SH9).\n\nSize (TASK rail, at most 650), against the pre-task HEAD; new files count their line counts:\n\n| File | Lines |\n|---|---|\n| guest-mcp-shim.py | 269 |\n| guest-mcp-tools.json | 1 |\n| local-runner-agents.test.mjs | 306 |\n| guest-bootstrap.mjs | 18+3 |\n| guest-readiness.mjs | 14+10 |\n| ci.yml | 1+1 |\n| local-runner.test.mjs (own delta) | 22+3 |\n| **Total** | **648** |\n\n`git diff --numstat` for local-runner.test.mjs reads 270/4. The shared tree still carries CQ-R11's uncommitted CJ/provisioned() hunk (+248/-1), which its commit bbcd13d did not include; I preserved it untouched.\n\nSelf-review: 14 of 15 planned mutants were killed. \"Non-str role accepted\" is equivalent: main() passes str or None, and JSON keys are always str. Deviation from the plan: digestFailure became a digestCheck(id, file, key, failure) row factory with the same behaviour.",
+  "commits": [
+    {
+      "sha": "036a901249eb0907125c663f271d83398b4134f6",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T22:25:55Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+        ".moe/tasks/task-9faf1ef30b0a4264b6dccce1e7bf5b1d.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T23:09:22.065Z",
+      "treeId": "8c5229f8842f03c6a93f7319e25ac0893f81fa52",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/tests/local-runner.test.mjs",
+          "taskId": "task-0795112597cb453f93aaa5106e92d023"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-agents.test.mjs",
+    "scripts/local-runner/guest-mcp-shim.py"
+  ],
+  "unattributedPaths": []
 }

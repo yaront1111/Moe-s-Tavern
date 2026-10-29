@@ -71,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,16 +87,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:47:04.182Z",
-  "updatedAt": "2026-10-29T23:05:47.996Z",
+  "updatedAt": "2026-10-29T23:11:28.692Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:47:23.657Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T23:11:28.692Z",
+    "wallClockMs": 1445035
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -213,5 +216,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-29T22:57:04Z",
     "at": "2026-10-29T23:05:47.996Z"
-  }
+  },
+  "completedAt": "2026-10-29T23:11:28.692Z",
+  "reviewCompletedAt": "2026-10-29T23:11:28.692Z",
+  "reviewSummary": "Reviewed completion commit 12fd4333 (on moe/work-2026-10-24, pushed). moe-jetbrains is unchanged from it to HEAD and clean in the shared tree.\n\nGate re-run by QA under the jetbrains-gradle lease (released): cmd.exe gradlew.bat test --rerun in D:\\projexts\\moes\\moe-jetbrains with GRADLE_OPTS=-Xmx512m. This is the labelled Windows equivalent of `cd moe-jetbrains && ./gradlew test`, because WSL has no JDK.\n- Exit 0.\n- Fresh XML (23:10:24Z to 23:10:27Z): 23 suites, 334 tests, 0 failures, 0 errors, 0 skipped.\n- MoeMessageDispatcherErrorTest 5/0; PlanReviewApprovalStateTest 59/0.\n\nDoD:\n1. E1: exact DaemonError fields, delivered after the unchanged onError, with order asserted. E2/E3: missing or non-string codeName, taskId or operation, and non-object context, give null with no throw. Legacy onError delivery is unchanged.\n2. D1-D3: another operation, another task, or no context leaves the approval PENDING. A later WORKING(4) reaches FINISHED.\n3. D4: a correlated mismatch gives INVALIDATED with PLAN_CHANGED_KEY and keeps captured 4; it never re-arms or finishes. D5: null, other, lowercase or space-padded codes re-arm READY with DAEMON_ERROR_KEY, then Send(taskId,4). D6: no change outside PENDING. D7: the dialog route is source-pinned.\n4. Gate green.\n\nParity: matches VS Code PlanReviewPanel.handleClientError.\n\nRails: JetBrains-only, plus the task's own .moe record. The other onError implementers are untouched.\n\nTests: the six legacy calls were migrated mechanically, with identical assertions; no weakening.\n\nSize: about 299 net LOC (production +61/-14), under 400.\n\nPonytail pass: nothing to cut.\n\nResidual, pre-existing and out of scope: safeAsString throws when message or operation is an object.",
+  "requiredCheckAtDone": null
 }
