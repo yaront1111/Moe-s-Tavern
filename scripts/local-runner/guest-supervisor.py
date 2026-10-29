@@ -15,9 +15,12 @@
 # root. A bridge refusal before hello (65, 66, 74, and 71 for a missing account or session home) writes no frame, nor
 # does 77.
 # Mode 'check' (CQ-R11a): one host check frame on stdin, then that approved command as the CHECK_IDENTITY account. It
-# shares the bridge's codes, and none writes a frame: 65 also for a non-empty protected list (until CQ-R11b) or a
-# workspace entry reown refuses, 66 no workspace, 71 no CHECK_IDENTITY account, a failed re-own or no session home, and
-# 74 EOF before the check frame.
+# shares the bridge's codes, and none writes a frame: 65 also for a malformed protected entry or a workspace entry reown
+# refuses, 66 no workspace, 71 no CHECK_IDENTITY account, a failed re-own, no session home or no protected-path mount
+# namespace, and 74 EOF before the check frame. CQ-R11b adds 79 (before hello, no frame, no job): a protected path is
+# missing, not a regular file, reached through a symlink, or holds another git blob oid, so the candidate does not carry
+# the approved bytes. It adds 80, written after the observation frame: a protected path no longer holds its approved
+# blob once the job is reaped; CQ-R11c classifies the run as inconclusive.
 import base64
 import hashlib
 import json
@@ -855,6 +858,73 @@ CHECK_CONTROL = re.compile(r'[\x00-\x1f\x7f-\x9f\u2028\u2029]')  # the daemon's 
 CHECK_BLANK = re.compile(r'[\s\ufeff]*')  # what JavaScript's trim() removes
 MAX_CHECK_COMMAND = 1000  # UTF-16 code units, the daemon's String.length
 CHECK_RLIMITS = {'RLIMIT_CORE': 0, 'RLIMIT_FSIZE': 1073741824, 'RLIMIT_NOFILE': 4096, 'RLIMIT_NPROC': 2048}
+# CQ-R11b: the protected paths are the approved RequiredCheckSnapshot entries, as the daemon stores them: at most
+# MAX_ENTRIES {path, oid} records, strictly ascending by UTF-8 bytes, each path within MAX_PATH_LEN UTF-16 units.
+MAX_PROTECTED = 2000
+MAX_PROTECTED_PATH = 500
+OID = re.compile(r'[0-9a-f]{40}')
+PROTECTED_MISMATCH = 79
+PROTECTED_CHANGED = 80
+
+
+def protected_path(path):
+    # The safety rules of the daemon's normalizedPath, which is stricter, so every approved path passes: no traversal,
+    # empty or '.' segment, backslash, replacement or control character, and nothing JavaScript's trim() would remove.
+    # utf-16-le raises UnicodeEncodeError, a ValueError, for a lone surrogate.
+    return (len(path.encode('utf-16-le')) // 2 <= MAX_PROTECTED_PATH and '\\' not in path and '\ufffd' not in path
+            and not CHECK_CONTROL.search(path) and all(part not in ('', '.', '..') for part in path.split('/'))
+            and not CHECK_BLANK.fullmatch(path[0]) and not CHECK_BLANK.fullmatch(path[-1]))
+
+
+def protected_entries(value):
+    if not (type(value) is list and len(value) <= MAX_PROTECTED and all(
+            type(entry) is dict and entry.keys() == {'path', 'oid'} and type(entry['oid']) is str
+            and OID.fullmatch(entry['oid']) and type(entry['path']) is str and protected_path(entry['path'])
+            for entry in value)):
+        return False
+    paths = [entry['path'].encode('utf-8') for entry in value]
+    return all(a < b for a, b in zip(paths, paths[1:]))  # strictly ascending, so also unique
+
+
+def blob_oid(root, path):
+    # Git's blob id of the regular file at path under the root fd, or None. Every directory is opened through its parent's
+    # fd with WALK and the file with READ, so no symlink is ever followed; a file that grows or shrinks while it is read,
+    # and any other failure, is None too.
+    fds = []
+    try:
+        *parents, name = path.split('/')
+        for part in parents:
+            fds.append(os.open(part, WALK, dir_fd=fds[-1] if fds else root))
+        fds.append(os.open(name, READ, dir_fd=fds[-1] if fds else root))
+        info = os.fstat(fds[-1])
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        digest = hashlib.sha1(b'blob %d\0' % info.st_size)
+        for chunk in chunks(fds[-1], info.st_size):
+            digest.update(chunk)
+        return None if os.read(fds[-1], 1) else digest.hexdigest()
+    except OSError:
+        return None
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def holds(root, entries):
+    return all(blob_oid(root, entry['path']) == entry['oid'] for entry in entries)
+
+
+def unchanged(workspace, entries):
+    # After the job. The mounts are the boundary and this is the second line: it cannot see a swap the job restored before
+    # it exited, which is why protect_mounts exists. A workspace that cannot be re-read has changed.
+    try:
+        root = os.open(workspace, WALK)
+    except OSError:
+        return False
+    try:
+        return holds(root, entries)
+    finally:
+        os.close(root)
 
 
 def read_check(in_fd):
@@ -865,18 +935,54 @@ def read_check(in_fd):
             and frame['kind'] == 'check' and type(frame['version']) is int and frame['version'] == 1
             and type(frame['id']) is str and CHECK_ID.fullmatch(frame['id'])
             and type(command) is str and not CHECK_BLANK.fullmatch(command) and not CHECK_CONTROL.search(command)
-            and len(command.encode('utf-16-le')) // 2 <= MAX_CHECK_COMMAND
-            and frame['protected'] == []):  # only a list equals []; CQ-R11b admits {path, oid} entries
+            and len(command.encode('utf-16-le')) // 2 <= MAX_CHECK_COMMAND and protected_entries(frame['protected'])):
         raise ValueError('not a check frame')
     return frame
+
+
+# CQ-R11b: the job's boundary around the protected paths. A private mount namespace keeps every mount below out of the
+# guest's own. Each ancestor directory is bound onto itself: it stays writable, but renaming a mount point is EBUSY.
+# Each protected file is bound onto itself read-only: a write or chmod is EROFS, and a rename, replace or unlink EBUSY.
+# Parents are bound before their children, and every directory before any file, since a later non-recursive bind of a
+# parent would hide its children's mounts. Path targets are safe: reown has refused every symlink in the workspace, and
+# no job identity has run since. This root supervisor sets it up, not GUARD as CQ-R11b's DoD words it: GUARD inherits
+# it with the job, and its only channel, argv, is capped at MAX_ARG_STRLEN (128 KiB) per argument, too little for
+# MAX_PROTECTED paths. Here a failure also refuses before hello. CQ-R13 certifies it on a real guest.
+CLONE_NEWNS = 0x00020000  # os.CLONE_NEWNS on Linux, spelled out so the recorder test also runs on macOS
+MS_RDONLY, MS_REMOUNT, MS_BIND, MS_REC, MS_PRIVATE = 1, 32, 4096, 16384, 1 << 18
+
+
+def mount(source, target, flags):
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.mount.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p)
+    if libc.mount(source, target, None, flags, None):
+        raise OSError(ctypes.get_errno(), 'mount')
+
+
+def protect_mounts(workspace, paths):
+    if not hasattr(os, 'unshare'):
+        raise OSError('no mount namespace: os.unshare needs Linux and Python 3.12+')
+    os.unshare(CLONE_NEWNS)  # before relay(), so this thread is the only one, and it forks GUARD
+    mount(None, b'/', MS_REC | MS_PRIVATE)
+    ancestors = {path[:index] for path in paths for index, char in enumerate(path) if char == '/'}
+    for rel in sorted(ancestors, key=lambda rel: rel.encode('utf-8')):  # a prefix sorts first
+        target = os.fsencode(os.path.join(workspace, rel))
+        mount(target, target, MS_BIND)
+    for rel in paths:
+        target = os.fsencode(os.path.join(workspace, rel))
+        mount(target, target, MS_BIND)
+        mount(None, target, MS_BIND | MS_REMOUNT | MS_RDONLY)
 
 
 # Hands the materialized (agent-owned) tree to the check identity through directory fds only, never a path, so nothing
 # is followed. Each entry is opened without following a link and must still be the inode lstat saw; a symlink, FIFO,
 # socket or device, or a hard-linked file (its inode may live outside), raises ValueError before any chown of it. No
 # WALK_LIMIT: the root materialized this tree from at most MAX_SNAPSHOT_FILES files in a fresh check VM where no job
-# identity has run yet, and MAX_PATH_BYTES, checked before descending, bounds its depth and open fds.
-def reown(fd, uid, gid, prefix=b''):
+# identity has run yet, and MAX_PATH_BYTES, checked before descending, bounds its depth and open fds. A file whose
+# relative path is in protected (CQ-R11b, UTF-8 bytes) is never handed over: it becomes this euid's (root in the guest)
+# and read-only, its exec bit kept so a protected script the command runs directly still runs.
+def reown(fd, uid, gid, prefix=b'', protected=frozenset()):
     os.fchown(fd, uid, gid)
     for name in os.listdir(fd):
         raw = prefix + os.fsencode(name)
@@ -892,7 +998,10 @@ def reown(fd, uid, gid, prefix=b''):
                     or stat.S_ISREG(now.st_mode) and now.st_nlink != 1):
                 raise ValueError('the entry was replaced, or is linked elsewhere')
             if stat.S_ISDIR(now.st_mode):
-                reown(child, uid, gid, raw + b'/')
+                reown(child, uid, gid, raw + b'/', protected)
+            elif raw in protected:
+                os.fchown(child, os.geteuid(), os.getegid())
+                os.fchmod(child, 0o555 if now.st_mode & 0o100 else 0o444)
             else:
                 os.fchown(child, uid, gid)
         finally:
@@ -903,7 +1012,9 @@ def reown(fd, uid, gid, prefix=b''):
 # command] in the materialized WORKSPACE, with no agent socket. identity is (uid, gid, groups) as in start_job; netns
 # False skips GUARD's network namespace, for a non-root test only. workspace, sessions, identity and netns are injectable
 # from Python only (tests). A refusal writes no frame and starts no job: 74 host EOF, 65 a malformed or disallowed
-# frame, 71 no account, 66 no workspace, 65 a workspace entry reown refuses, 71 a failed re-own or no session home.
+# frame, 71 no account, 66 no workspace, 79 a protected path that does not hold its approved blob, 65 a workspace entry
+# reown refuses, 71 a failed re-own, no session home or a failed protect_mounts. After the observation, 80 is a
+# protected path the job changed.
 def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, netns=True):
     try:
         frame = read_check(in_fd)
@@ -922,9 +1033,14 @@ def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
         root = os.open(workspace, WALK)  # never through a symlink
     except OSError:
         return os.EX_NOINPUT
+    paths = [entry['path'] for entry in frame['protected']]
     try:
-        reown(root, uid, gid)
+        if not holds(root, frame['protected']):
+            return PROTECTED_MISMATCH  # the candidate does not carry the approved bytes
+        reown(root, uid, gid, protected=frozenset(path.encode('utf-8') for path in paths))
         home = session_home(sessions, uid, gid)
+        if paths:
+            protect_mounts(workspace, paths)  # a partial setup is never used: any failure is 71 and no job starts
     except (ValueError, RecursionError):
         return os.EX_DATAERR
     except OSError:
@@ -935,7 +1051,9 @@ def check_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
            'MOE_CHECK_ID': frame['id']}
     spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace, 'rlimits': CHECK_RLIMITS,
              'netns': netns}
-    return relay(['/bin/sh', '-c', frame['command']], out_fd, in_fd, job={'env': env, 'spawn': spawn})
+    code = relay(['/bin/sh', '-c', frame['command']], out_fd, in_fd, job={'env': env, 'spawn': spawn})
+    # relay's 0 means its observation frame is written; a failed relay is already a failure and is never re-checked.
+    return PROTECTED_CHANGED if code == 0 and paths and not unchanged(workspace, frame['protected']) else code
 
 
 # geteuid and the keywords (seams) of start_job or check_job are injectable from Python only (tests), never from argv or
