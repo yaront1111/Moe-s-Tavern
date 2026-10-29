@@ -258,12 +258,12 @@ async function readItem(git: ProjectGit, commit: string, query: SourceQuery, ent
   if (refusal) return { ...item(query, refusal.status, refusal.reason), ...entries.get(query.path) };
   return readBlob(git, query, entries.get(query.path)!, limits);
 }
-function capTotal(items: SourceItem[], maxBytes: number): SourceItem[] {
+export function capTotal<T extends SourceItem>(items: T[], maxBytes: number): T[] {
   let bytes = 0;
   return items.map(value => {
     if (bytes + value.bytes <= maxBytes) { bytes += value.bytes; return value; }
     const { content: _content, matches: _matches, ...metadata } = value;
-    return { ...metadata, status: 'omitted', reason: 'total-byte-cap', bytes: 0 };
+    return { ...metadata, status: 'omitted', reason: 'total-byte-cap', bytes: 0 } as T;
   });
 }
 /** Immutable committed bytes only. Invoke outside the state mutex; never a filesystem fallback. */

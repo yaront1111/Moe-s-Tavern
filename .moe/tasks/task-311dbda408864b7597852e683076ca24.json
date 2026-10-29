@@ -17,19 +17,31 @@
     {
       "stepId": "step-1",
       "description": "Reuse C02's total-byte cap rather than copying it. In packages/moe-daemon/src/context/repositorySource.ts:\n- Export capTotal as a generic, `export function capTotal<T extends SourceItem>(items: T[], maxBytes: number): T[]`, with a narrow `as T` on the omitted object if TypeScript needs it.\n- Make NO behavior change: same order, same 'omitted'/'total-byte-cap' rewrite, content and matches stripped, bytes 0.\n- Nothing else in the file changes. C02's refusal and explicit-status semantics stay untouched (task description), and the CQ-C02 size rail is about C02's own landed bytes.\nConfirm src/context/repositorySource.test.ts and repositorySource.service.test.ts still pass unchanged in the Linux-native snapshot (mem gotcha-daemon-linux-snapshot-gate: whole-repo git archive HEAD, overlay only this task's files, symlinked native node_modules, env -i with the nvm node bin on PATH, NO_COLOR=1).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/context/repositorySource.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/repositorySource.ts"
+      ],
+      "note": "capTotal is exported as the generic `capTotal<T extends SourceItem>(items: T[], maxBytes): T[]`, with `as T` on the omitted object. Behavior is unchanged: 1 line edited, net 0. Checked in a Linux snapshot (git archive of e1708ce plus this file, its own npm ci, env -i, node 24): repositorySource.test.ts and repositorySource.service.test.ts both pass unchanged, 149/149, and tsc produced no errors. The shared tree's 635 dirty peer paths were not touched.",
+      "startedAt": "2026-10-29T16:58:52.913Z",
+      "completedAt": "2026-10-29T16:59:58.555Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement the adapter in a new packages/moe-daemon/src/context/snapshotSource.ts. It is PURE and SYNCHRONOUS: it imports only from './repositorySource.js' and './snapshotManifest.js' (C02b1), plus Buffer and performance. No fs, child_process, cachedPlanPaths or Git.\n\nAPI:\n- `export interface SnapshotProvenance { readonly layer: 'base' | 'overlay'; readonly manifest: string; readonly sha256: string }`. manifest is the recomputed digest of the layer that supplied the bytes. sha256 is the verified entry's hash, recomputed by C02b1 from the same private copy that is served: derived from the served bytes, never from a writer declaration.\n- `export interface SnapshotSourceMatch extends SourceMatch { provenance: SnapshotProvenance }`.\n- `export interface SnapshotSourceItem extends Omit<SourceItem, 'oid' | 'matches'> { provenance?: SnapshotProvenance; matches?: SnapshotSourceMatch[] }`.\n- `export interface SnapshotSource { manifest: { commit: string; tree: string | null; base: string | null; overlay: string | null }; items: SnapshotSourceItem[]; complete: boolean; limitations: string[]; bytes: number }`.\n- `export interface SnapshotRequest { commit: string; base?: string; overlay?: string }`.\n- `export function readSnapshotSource(snapshot: unknown, request: SnapshotRequest, queries: SourceQuery[], options: { limits?: Partial<SourceLimits> } = {}): SnapshotSource`.\n\nOrder of operations:\n1. Caller errors throw first, as in C02. Run validateSourceRequest(request.commit, queries, options.limits). That refuses '..' traversal, absolute and backslash paths and bad ids with INVALID_INPUT. request.base and request.overlay, when given, must be 64-char lowercase hex, else invalidInput. Copy the queries.\n2. verifySourceSnapshot(snapshot). If it is not ok, EVERY item becomes 'unavailable' with reason `snapshot-unverifiable:<code>`. The manifest is {commit: request.commit, tree: null, base: null, overlay: null}, and limitations include 'snapshot-unverifiable'.\n3. Stale check. If snapshot.commit !== request.commit, or request.base / request.overlay differs from the recomputed identity, EVERY item becomes 'unavailable' with reason 'snapshot-stale'. The manifest reports the recomputed identity actually received, and limitations include 'snapshot-stale'.\n- There is never a fallback to base, worktree or other bytes.\n\nRead query (path P):\n1. snapshotPathRefusal(P): SNAPSHOT_CONTROL_PATH gives 'refused'/'control-path'; SNAPSHOT_PATH_INVALID gives 'refused'/'path-invalid'.\n2. A proper ancestor of P that is a file in the merged view gives 'missing'/'not-in-manifest'.\n3. An overlay delete at P gives 'missing'/'deleted-in-overlay'.\n4. Otherwise serve: the overlay file, else the base file. If P is a directory prefix of any merged file, give 'refused'/'not-a-file'; if it is absent, 'missing'/'not-in-manifest'.\n5. Serving a file: path, mode '100755' or '100644', size and provenance. Bytes containing NUL give 'refused'/'binary' with no content. Decode the first maxFileBytes with a fatal TextDecoder (stream:true when truncated), exactly as C02's readBlob. A decode failure gives 'refused'/'not-utf8'. size > maxFileBytes gives 'truncated'/'file-byte-cap'. bytes = Buffer.byteLength(content).\n\nSearch query (literal L, optional scopes):\n- Each scope goes through snapshotPathRefusal ('control-path' / 'path-invalid' refused). A deleted scope gives 'missing'/'deleted-in-overlay'. An absent scope that is neither a file nor a directory prefix gives 'missing'/'scope-not-in-manifest'. A file or directory scope is fine.\n- Scan the merged files (overlay files win, deletes hide base) in UTF-8 path-byte order, filtered by scope (equal, or prefix plus '/'). Split each file's bytes on 0x0a; line numbers start at 1; a final unterminated line counts; a '\\r' stays in the text, as git grep -F -n -a prints it. Match with Buffer indexOf on the literal's UTF-8 bytes.\n- A matched line containing NUL, or that is not valid UTF-8, is skipped with reason 'undecodable-match'.\n- Stop at maxMatches with 'match-cap'. When the next match's Buffer.byteLength(path)+Buffer.byteLength(text) would exceed maxSearchBytes, stop with 'search-byte-cap'.\n- The status is 'served' with no reason, else 'truncated' with the first reason. Every match carries its file's provenance. bytes is the sum of path+text bytes, as in C02. Push the 'literal-search-only' limitation.\n\nBudget:\n- One deadline for the whole call: performance.now() + limits.timeBudgetMs, checked between files.\n- A search cut off by the deadline is 'truncated'/'time-budget' with its partial matches. Every later query is 'unavailable'/'time-budget'.\n- This bounds the synchronous CPU, because a snapshot may hold 256 MiB.\n\nResult:\n- Apply capTotal(items, maxTotalBytes).\n- complete = every item 'served'.\n- limitations: sorted and unique, always including 'snapshot-bytes'.\n- manifest {commit, tree, base: identity.base, overlay: identity.overlay}.\n\nEach call verifies once; callers batch up to maxQueries queries per call. Error handling: the verifier never throws, and hostile snapshot input only yields statuses; only caller-shape errors throw.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/snapshotSource.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/snapshotSource.ts"
+      ],
+      "note": "Added snapshotSource.ts (about 130 lines). It is pure and synchronous and imports only repositorySource.js, snapshotManifest.js and util/errors.js (invalidInput). The API is as planned: readSnapshotSource(snapshot, request, queries, {limits}); the Snapshot* types are as in the plan and the C04 comment.\nOrder:\n1. Request guard: validateSourceRequest, then the base/overlay hex64 check. Query copy.\n2. Deadline set at call start.\n3. verifySourceSnapshot.\n4. Stale check.\n5. The merged view: base, then overlay deletes and overlay files, sorted by UTF-8 path bytes.\n6. Per query: a time-budget check, then read or search. Then capTotal and the result.\nRead and search scopes share one classify: control-path or path-invalid (snapshotPathRefusal), deleted-in-overlay, file, directory (not-a-file for a read, allowed as a scope), not-in-manifest or scope-not-in-manifest. The ancestor-file check in the plan is redundant: a path under a file is never in the view or a directory, so it already gets not-in-manifest. I dropped it with no behaviour change.\nProvenance objects are frozen and shared across items and matches in one call.\ntsc --noEmit exit 0 in the Linux snapshot. Tests come in step 3.",
+      "startedAt": "2026-10-29T17:01:36.760Z",
+      "completedAt": "2026-10-29T17:03:21.169Z"
     },
     {
       "stepId": "step-3",
@@ -61,7 +73,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-0062feec",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,17 +98,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:11:42.283Z",
-  "updatedAt": "2026-10-29T16:54:55.074Z",
+  "updatedAt": "2026-10-29T17:03:21.169Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:41:48.492Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
     "architect-1520cc31",
     "architect-e4b7eee0",
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-0062feec"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -108,7 +122,10 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T14:42:47.544Z",
   "planningNotes": {
@@ -123,5 +140,6 @@
       "packages/moe-daemon/src/context/contextPacket.ts"
     ]
   },
-  "planApprovedAt": "2026-10-29T14:42:47.657Z"
+  "planApprovedAt": "2026-10-29T14:42:47.657Z",
+  "workStartedAt": "2026-10-29T16:58:52.913Z"
 }
