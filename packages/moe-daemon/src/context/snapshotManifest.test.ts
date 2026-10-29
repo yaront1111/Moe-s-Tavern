@@ -161,7 +161,7 @@ describe.skipIf(!hasScripts)('V2 the landed R09b producer', () => {
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' });
     const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', ...args],
       { cwd: root, env, encoding: 'utf8' }).trim();
-    const put = (name: string, text: string) => [fs.mkdirSync(path.join(root, name, '..'), { recursive: true }), fs.writeFileSync(path.join(root, name), text)];
+    const put = (name: string, text: string) => { fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true }); fs.writeFileSync(path.join(root, name), text); };
     git('init', '-q'); put('a.ts', 'a\n'); put('dir/b.ts', 'b\n'); git('add', '-A'); git('commit', '-q', '-m', 'base');
     put('a.ts', 'A\n'); fs.rmSync(path.join(root, 'dir', 'b.ts')); put('c.ts', 'c\n'); put('.moe/x.json', '{}');
     const exported = await (await load('source-export.mjs')).exportSourceSnapshot({ repoDir: root, commit: git('rev-parse', 'HEAD') })

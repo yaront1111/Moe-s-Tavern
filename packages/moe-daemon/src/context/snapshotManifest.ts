@@ -52,7 +52,7 @@ export function snapshotPathRefusal(path: string): 'SNAPSHOT_PATH_INVALID' | 'SN
 export type SnapshotRefusal = 'SNAPSHOT_INPUT_INVALID' | 'SNAPSHOT_LIMIT_EXCEEDED' | 'SNAPSHOT_ENTRY_INVALID'
   | 'SNAPSHOT_SYMLINK_DENIED' | 'SNAPSHOT_PATH_INVALID' | 'SNAPSHOT_CONTROL_PATH' | 'SNAPSHOT_PATH_COLLISION'
   | 'SNAPSHOT_HASH_MISMATCH' | 'SNAPSHOT_DIGEST_MISMATCH';
-// data is the private copy sha256 was recomputed from; a TypedArray cannot be frozen, so callers must not mutate it.
+// data is the private copy sha256 was recomputed from. A TypedArray, like the view's Maps, cannot be frozen: do not mutate.
 export interface VerifiedSnapshotFile {
   readonly path: string; readonly executable: boolean; readonly size: number; readonly sha256: string; readonly data: Uint8Array;
 }
