@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -78,16 +78,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T12:21:36.378Z",
-  "updatedAt": "2026-10-29T17:45:18.865Z",
+  "updatedAt": "2026-10-29T18:52:57.698Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:59:00.892Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-29T18:52:57.698Z",
+    "wallClockMs": 6836806
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -170,5 +173,9 @@
     "kind": "completion",
     "sessionId": "worker-fe18a9a9@2026-10-29T17:42:57Z",
     "at": "2026-10-29T17:45:18.865Z"
-  }
+  },
+  "completedAt": "2026-10-29T18:52:57.698Z",
+  "reviewCompletedAt": "2026-10-29T18:52:57.698Z",
+  "reviewSummary": "Reviewed completion commit 5f497451 (on moe/work-2026-10-24; recorded, pushed=true) via git show, not the dirty tree. Source diff is +6/-2 in cachedPlanPaths.ts: '--local' dropped from the openProjectGit config --get-regexp call, so Git reads local, config.worktree (once extensions.worktreeConfig=true) and command-line scopes. readOnlyGitEnv still strips every GIT_* and sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null (NUL on win32), so system and global stay masked. The -c args from readOnlyGitArgs (protocol.allow, safe.directory) do not match the regexp. The error text is unchanged and echoes only the key name. Tests: +9 in cachedPlanPaths.test.ts (argv deep-equal pin, no --local) and a new cachedPlanPaths.git.test.ts of 62 lines with 6 real-Git rows: plain repo; worktree promisor; worktree core.worktree; include.path via config.worktree; control with the extension off (resolves, as Git does); and HOME .gitconfig masked. Total commit code/test diff is about 75 LOC, well under 400. Re-ran the verification myself in a fresh Linux snapshot (git archive 5f497451, npm ci, node v24.21.0, env -i, NO_COLOR=1): `npx vitest run cachedPlanPaths requiredChecks planReuse repositorySource` gave 9 files / 559 tests passed, exit 0, with the three owned files cmp-identical to the worktree. Mutation probe: restoring '--local' in the scratch copy fails the argv pin and the 3 worktree rows (promisor, core.worktree, include.path) and leaves the plain, off-extension and HOME-masked rows green, so the tests bite. DoD 1 and DoD 2 are both met. Not verified: Windows runtime (NUL global mask path) and Git older than 2.43 (the sandbox has 2.43.0). The commit's Moe-Contested note on cachedPlanPaths.ts (task-3e5c59e3) did not leak any peer hunk into this diff. No ponytail-level complexity findings.",
+  "requiredCheckAtDone": null
 }
