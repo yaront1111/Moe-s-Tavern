@@ -1,0 +1,27 @@
+{
+  "id": "task-d3cd966c5ef74468b03ac4ca23893d5d",
+  "epicId": "epic-be924fb8",
+  "title": "get_commit_scope: name the task's finalizing attempt so the wrapper owner guard stops scanning every .moe/attempts record",
+  "description": "Follow-up from QA of task-6aa460bb33184e1b84fc9c9e5c0a4560 (owner guard, approved 2026-10-29).\n\nThe owner guard in both wrappers decides on a foreign `finalizing` attempt by reading and parsing EVERY `.moe/attempts/*.json` record (sh `landing_owner_guard`, ps1 `Get-MoeOwnerGuard`). It does that on every landing where the task is unassigned or held by an unprotected owner, and that includes every worker completion, because complete_task clears the assignee. Closed attempts are never pruned: 584 records (579 closed) took 1.46 s on /mnt/d on 2026-10-29, and the count grows by one per claim.\n\nThe daemon already computes this hold (`util/claimEligibility.ts` `isHoldingFinalizingAttempt` / `foreignFinalizingAttempt`). An additive get_commit_scope field naming the task's well-formed finalizing attempt (`{attemptId, workerId, generation}` or null) would let each wrapper replace its ~12-line scan with one comparison. Wrappers keep the scan only when the field is absent (older daemon). Alternative: prune closed attempt records.",
+  "definitionOfDone": [
+    "get_commit_scope returns an additive field naming the task's well-formed finalizing attempt (null when none), using the same predicate as claimEligibility, with daemon tests; docs/MCP_SERVER.md updated; cd packages/moe-daemon && npm test exits 0.",
+    "Both wrappers use the field when present and fall back to the current .moe/attempts scan only when it is absent; refusal codes and behaviour are unchanged; the shared postflight-owner-guard.cjs cases still pass in postflight.sh and postflight.ps1, and bash scripts/tests/parity-check.sh passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 260.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T18:07:30.476Z",
+  "updatedAt": "2026-10-29T18:07:30.476Z"
+}
