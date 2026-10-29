@@ -78,7 +78,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -98,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:35.608Z",
-  "updatedAt": "2026-10-29T22:01:43.727Z",
+  "updatedAt": "2026-10-29T22:11:49.654Z",
   "dependsOn": [
     "task-9ef257f58b7f4c4191f206f67bf3d865",
     "task-7d0f7f082b6349cab75c62af3c8b1da4"
@@ -109,7 +109,9 @@
     "plannedDistinctFileCount": 2,
     "executedStepCount": 8,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T22:11:49.654Z",
+    "wallClockMs": 303567977
   },
   "contextFetchedBy": [
     "worker-b5749787",
@@ -184,7 +186,8 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/tools/getContextDelta.test.ts",
-    "packages/moe-daemon/src/tools/getContext.ts"
+    "packages/moe-daemon/src/tools/getContext.ts",
+    ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json"
   ],
   "completionSummary": "CQ-C06 reopen round 1. This round fixes the delivery gap: the wrapper never committed getContext.ts.\n\nDelivery:\n- getContext.ts held only C06 bytes (sha256 68f358a4…, no planReuse lines). It had been held as MOE_ATTR_CONTESTED_UNTOUCHED against C07 task-93dee42f.\n- I made it TOOL-tier with Claude Edit calls. The harvest file of this session's wrapper (tool-writes-317710.txt, worker-b5749787) lists the path, so this completion should carry it.\n- QA check: `git show --stat <sha>` should list it, and `<sha>:packages/moe-daemon/src/tools/getContext.ts` should be blob f5c1c5d3.\n\nChanges from the self-review:\n- The contextEpoch schema description said any read without an epoch clears the stored base. A read presenting neither field leaves the base alone (D8's legacy path), and the description now says so. This one line is the only byte change since 68f358a4.\n- New test: the diff-failed fallback (QA's optional note). A pass-through vi.mock, diffPackets = vi.fn(actual), throws once. The test checks full('diff-failed'), and that the served packet becomes the next base.\n- D8 now also proves that a legacy read keeps the stored base.\n\nFiles and size: getContext.ts +98/-8, getContextDelta.test.ts +232 (20 tests). Net 322, under 400.\n\nGate, on the final bytes, in a Linux snapshot of HEAD 19bc8c2 plus the 2 files:\n- npm test: exit 0, 186 files, 5193 passed, 16 skipped.\n- tsc --noEmit: exit 0.\n- Test-file tsc: exit 0.\n\nMutants, all killed:\n- m1, an epoch-less read stores a base: D5.\n- m2, stale lastPhaseAt: D7.\n- m3, a global store: D3, D4, D9.\n- m4, contextDelta on legacy reads: D8.\n- m5, the catch rethrows: diff-failed.\n- m6, the old base kept on diff failure: diff-failed.\n- m7, a legacy read clears the base: D8.\n\nDoD:\n1. Removals are explicit pointers (D1, round trip).\n2. A full packet is served on a wrong base (D2), a missing base (D3), compaction (D5), a VM replacement, re-claim or another session (D6), and a restart (D4).\n3. A reattach is not acknowledgement (D7).\n4. Gate gre",
   "commits": [
@@ -210,20 +213,43 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "b41494e70ca6556c78dff3d86d4600dcbc7aa96e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-29T21:45:06Z",
+      "paths": [
+        ".moe/tasks/task-d75f71d7664848fd859a3f877e74ba43.json",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-29T22:02:10.666Z",
+      "treeId": "70196097a7fa7f0e0ba64fce03ed465e4c4ad558",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "packages/moe-daemon/src/tools/getContext.ts",
+          "taskId": "task-93dee42f71db4a6a8e47a8de052ad411"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
-    "packages/moe-daemon/src/tools/getContextDelta.test.ts"
+    "packages/moe-daemon/src/tools/getContextDelta.test.ts",
+    "packages/moe-daemon/src/tools/getContext.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-29T21:37:18Z",
-    "at": "2026-10-29T21:45:59.585Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-b5749787@2026-10-29T21:45:06Z",
+    "at": "2026-10-29T22:02:10.666Z"
   },
-  "reviewCompletedAt": "2026-10-29T21:45:00.824Z",
+  "reviewCompletedAt": "2026-10-29T22:11:49.654Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Fresh verification `cd packages/moe-daemon && npm test` exits0 and its output is supplied to complete_task.",
@@ -278,5 +304,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-29T22:11:49.654Z",
+  "reviewSummary": "Approve CQ-C06 round 2. The delivery gap is fixed.\n\nCommit: completion b41494e, tip of moe/work-2026-10-24 (--contains ok). It carries getContext.ts +98/-8, getContextDelta.test.ts and the task's board record, with blobs f5c1c5d3 and c945672b as claimed. The worktree's owned files equal the commit. Task size vs 19bc8c2~ is +330/-8, net 322.\n\nGate on a pure git archive of b41494e, no overlay (native npm ci, env -i, node v24.21.0):\n- `cd packages/moe-daemon && npm test`: exit 0, 186 files, 5193 passed, 16 skipped. Equals task.verification.\n- tsc --noEmit: exit 0. Test-file tsc: exit 0.\n\nDoD:\n1. Removals: D1 removed ['/task/priorBlockedReason'], and applyDelta(base) toStrictEqual the next full read.\n2. Full packet for a wrong base (D2), a missing base (D3), compaction (D5), VM, re-claim, runner or session (D6) and a restart (D4).\n3. Reattach: D7, an in-process reconcile and reattach gives phase-changed while the receipt still names the base. A no-op reattach needs the same runner, and the wrapper mints a new MOE_SESSION_ID per preflight.\n4. Verification present, exit 0, reproduced.\n\nQA mutants: q1 set-before-get, q3 full body on delta, q4 no pattern, q5 swapped ids, q6 runner without host and q8 late validation are all killed. q7, a constant generation, is equivalent: generation is assigned only in openAttempt.\n\nNon-blocking, for C11:\n- q2 survives the full suite. An unrecorded read presenting neither field could gain contextDelta and no test pins it. The presented guard is correct.\n- The store is keyed by taskId, not deltaBaseKey. That is safe, since decideDelta checks every identity field, and it matches the D6 reasons.\n- The MCP_SERVER.md docs are deferred to C11, which lists them. The forbidden-token grep is clean.",
+  "requiredCheckAtDone": null
 }
