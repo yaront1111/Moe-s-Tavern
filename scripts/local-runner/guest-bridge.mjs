@@ -205,3 +205,33 @@ export function bridgeArgv(name) {
   if (!isOwnedInstanceName(name)) throw bridgeError('BRIDGE_INPUT_INVALID');
   return Object.freeze(['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, 'bridge']);
 }
+
+// The one Multipass argv that runs a CQ-R11 check: bridgeArgv's, in the supervisor's check mode.
+export const checkArgv = name => Object.freeze([...bridgeArgv(name).slice(0, -1), 'check']);
+
+// The CQ-R11a check frame, the first and only bytes the host writes on a check session's stdin. Its rules are the
+// supervisor's read_check, which mirrors the daemon's validateRequiredChecks; C2 pins the two sides together. It is
+// built from copies, each field read once, so a later caller edit cannot change the bytes. Any refusal, a throwing
+// getter or proxy trap included, is BRIDGE_INPUT_INVALID with its fixed text.
+const CHECK_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const checkText = (value, max) => typeof value === 'string' && value.isWellFormed() && value.length <= max && !CHECK_CONTROL.test(value);
+const protectedPath = path => checkText(path, 500) && path.trim() === path && !/[\\\ufffd]/.test(path)
+  && path.split('/').every(part => part !== '' && part !== '.' && part !== '..');
+const protectedEntry = entry => {
+  const { path, oid } = isRecord(entry) && exactKeys(entry, ['path', 'oid']) ? entry : {};
+  return { path, oid };
+};
+
+export function checkFrame(check) {
+  try {
+    const { id, command, protected: list } = isRecord(check) && exactKeys(check, ['id', 'command', 'protected']) ? check : {};
+    const count = Array.isArray(list) ? list.length : -1;
+    const entries = count >= 0 && count <= 2000 ? Array.from({ length: count }, (_, index) => protectedEntry(list[index])) : null;
+    if (matches(id, /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/) && checkText(command, 1000) && command.trim() !== '' && entries
+      && entries.every(({ path, oid }, index) => matches(oid, /^[0-9a-f]{40}$/) && protectedPath(path)
+        && (index === 0 || Buffer.compare(Buffer.from(entries[index - 1].path), Buffer.from(path)) < 0))) {
+      return encodeFrame({ kind: 'check', version: 1, id, command, protected: entries });
+    }
+  } catch { /* refused below */ }
+  throw bridgeError('BRIDGE_INPUT_INVALID');
+}

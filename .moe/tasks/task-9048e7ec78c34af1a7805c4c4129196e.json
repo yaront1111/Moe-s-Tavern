@@ -113,7 +113,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:10.200Z",
-  "updatedAt": "2026-10-29T19:00:35.424Z",
+  "updatedAt": "2026-10-29T19:01:16.268Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:42:48.551Z",
     "plannedStepCount": 5,
@@ -172,7 +172,10 @@
     "scripts/local-runner/guest-supervisor.py",
     "scripts/tests/local-runner-check.test.mjs",
     ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
-    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json"
+    ".moe/tasks/task-e6411b76f42a43c5b679c725947336af.json",
+    ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+    ".moe/tasks/task-9048e7ec78c34af1a7805c4c4129196e.json"
   ],
   "completionSummary": "CQ-R11b: the guest-supervisor.py check mode now admits a non-empty protected list and enforces its integrity.\n\nFrame (read_check, protected_entries):\n- At most 2000 entries, each exactly {path, oid}; oid is 40 lowercase hex.\n- Paths: at most 500 UTF-16 units; no backslash, U+FFFD or control/U+2028; no '', '.' or '..' segment; no JS-trim whitespace at either end (deviation: added for the plan's ' ' row; it mirrors the daemon's trim and is no stricter).\n- Paths are strictly ascending by UTF-8 bytes.\n- Anything else gives 65.\n\nPre-run: blob_oid walks dir fds with O_NOFOLLOW, requires S_ISREG, takes sha1('blob N\\0' + bytes) and checks for growth. Any mismatch or failure gives the new 79 before hello, with no frame, home, job or mount.\n\nreown: protected files become root (euid) with mode 0444, or 0555 when executable, and are never handed to moe-check.\n\nprotect_mounts runs in the root supervisor before relay; GUARD and the job inherit it. This is a documented DoD-2 deviation: GUARD's argv is capped at 128 KiB. It runs unshare(CLONE_NEWNS), mounts / with MS_REC|MS_PRIVATE, self-binds the ancestors parents first, then binds each file with MS_BIND and a read-only remount. Any failure gives 71 before hello.\n\nPost-run: when relay returned 0 and the list is non-empty, the paths are re-verified. A change, or a failure to re-read, gives the new 80 after the observation. An empty list behaves exactly as in R11a.\n\nTests (check file only; bridge untouched; the only removed line is the retired K1 element):\n- K5 shapes: 65.\n- K6: 79 refusals, plus real modes and a recorder for the ownership and modes.\n- K7: the exact unshare and mount calls, fail-closed rows, a real non-root EPERM, and mount()'s errno.\n- K8: 80 after 'OBS', the rows that stay 0 or 74, and a real `rm` row.\n- K9 is root-only and skipped here. It PASSES under `unshare -r`; CQ-R13 certifies it as real root.\n\nMutation sweep: 52/53 killed, including all 12 plan mutants. The survivor, an fd leak, is fail-closed.\n\nDiff is 39",
   "commits": [
@@ -193,14 +196,31 @@
       "treeId": "8a881b8a620a2c5a0d388304379db3b7738e4a3a",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "7f04b869b490535ef94e322654aed9a80771d385",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T18:53:57Z",
+      "paths": [
+        ".moe/tasks/task-340a07b33a764c65b2486d16b30d7aef.json",
+        ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
+        ".moe/tasks/task-9048e7ec78c34af1a7805c4c4129196e.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T19:01:16.268Z",
+      "treeId": "efb3e2eec85a9962a1a17a7a6bf221df3f648f6c",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5ebbf433@2026-10-29T18:28:03Z",
-    "at": "2026-10-29T18:53:40.651Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T18:53:57Z",
+    "at": "2026-10-29T19:01:16.268Z"
   },
   "completedAt": "2026-10-29T19:00:35.424Z",
   "reviewCompletedAt": "2026-10-29T19:00:35.424Z",

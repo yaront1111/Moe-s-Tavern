@@ -8,6 +8,12 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CHECK_BOUNDARIES, checkEnvironment, evidenceStatus } from '../local-runner/check-evidence.mjs';
 import { MAX_HOST_FRAME_BYTES, createFrameDecoder, encodeFrame, parseGuestFrame } from '../local-runner/guest-bridge.mjs';
+import { spawn as spawnChild } from 'node:child_process';
+import { EventEmitter, getEventListeners } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
+import { checkArgv, checkFrame as hostCheckFrame } from '../local-runner/guest-bridge.mjs';
+import { MAX_BUDGET_MS, MAX_CHECK_TAIL_BYTES, PROTECTED_CHANGED, PROTECTED_MISMATCH, runCheckSession } from '../local-runner/check-session.mjs';
+import { ownedInstanceName } from '../local-runner/lifecycle.mjs';
 
 const MESSAGE = 'Check environment input was invalid.';
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -781,4 +787,221 @@ test('K8 a real check job that removes its protected file is observed exiting 0,
     decoder.end();
     assert.deepEqual(frames, [{ kind: 'hello', protocol: 1 }, { kind: 'observation', type: 'exit', code: 0, signal: null }]);
     assert.equal(existsSync(join(dir, 'ws', 'a.txt')), false);
+  });
+
+// CQ-R11c: the host check session. C1-C2 cover guest-bridge.mjs's checkArgv and checkFrame, C3-C6 runCheckSession through
+// a spawn-compatible fake provider, and C7 runCheckSession through the real supervisor's check mode.
+const NAME = ownedInstanceName({ random: () => Buffer.alloc(10, 0xab) });
+const OID = 'a'.repeat(40);
+const HOST_CHECK = Object.freeze({ id: 'unit-1', command: 'npm test', protected: Object.freeze([{ path: 'a.txt', oid: OID }, { path: 'dir/b.txt', oid: 'b'.repeat(40) }]) });
+const withCheck = patch => ({ ...HOST_CHECK, ...patch });
+const entries = (...paths) => paths.map(path => ({ path, oid: OID }));
+const many = count => entries(...Array.from({ length: count }, (_, i) => `p${String(i).padStart(4, '0')}`));
+const literalFrame = check => framed(JSON.stringify({ kind: 'check', version: 1, id: check.id, command: check.command, protected: check.protected }));
+
+test('C1 checkArgv is the fixed check argv for owned names only, and checkFrame is the exact check frame or BRIDGE_INPUT_INVALID', () => {
+  const argv = checkArgv(NAME);
+  assert.deepEqual(argv, ['exec', '--no-map-working-directory', NAME, '--', 'sudo', '-n', '/opt/moe/bin/moe-supervisor', 'check']);
+  assert.ok(Object.isFrozen(argv));
+  for (const name of ['vm', '', 'moe-x', `${NAME}0`, 42, undefined]) assert.throws(() => checkArgv(name), { code: 'BRIDGE_INPUT_INVALID' }, String(name));
+  assert.deepEqual(hostCheckFrame(HOST_CHECK), literalFrame(HOST_CHECK));
+  for (const check of [withCheck({ id: 'a'.padEnd(64, '9._-Z') }), withCheck({ command: 'x'.repeat(1000) }), withCheck({ command: ' a\xa0b ' }),
+    ...[many(2000), [], entries('a'.repeat(500)), entries('\u{1F600}'.repeat(250)), entries('a.b', 'a/b'), entries('\uffff', '\u{10000}')]
+      .map(list => withCheck({ protected: list }))]) {
+    assert.deepEqual(hostCheckFrame(check), literalFrame(check), `${check.id} ${check.command.length} ${check.protected.length}`);
+  }
+  // The bytes come from a copy: a getter is read once, and the frame keeps the key order whatever the input's.
+  let reads = 0;
+  const entry = { oid: OID, get path() { reads += 1; return reads === 1 ? 'a.txt' : 'a\nb'; } };
+  assert.deepEqual(hostCheckFrame({ protected: [entry], command: 'npm test', id: 'unit-1' }), literalFrame(withCheck({ protected: entries('a.txt') })));
+  assert.equal(reads, 1);
+  const throwing = { get id() { throw new Error('secret'); }, command: 'x', protected: [] };
+  const refused = [null, [], 'x', Object.create(HOST_CHECK), { id: 'a', command: 'x' }, withCheck({ extra: 1 }), throwing,
+    ...['', '-a', 'a b', 'a'.repeat(65), '\u00e9', 'a\n', 7].map(id => withCheck({ id })),
+    ...['', '   ', '\ufeff', '\u3000', 'x'.repeat(1001), '\u{1F600}'.repeat(501), 'a\ud800b', 7,
+      ...['\x00', '\n', '\x1f', '\x7f', '\x9f', '\u2028', '\u2029'].map(control => `a${control}b`)].map(command => withCheck({ command })),
+    ...[null, {}, 'a.txt', many(2001), [null], [{ path: 'a.txt' }], [{ ...entries('a')[0], mode: 1 }],
+      ...['A'.repeat(40), 'a'.repeat(39), 'a'.repeat(41), 7].map(oid => [{ path: 'a', oid }]),
+      ...['', '/a', 'a/', 'a//b', '.', '..', 'a/./b', 'a/../b', 'a\\b', '\ufffd', 'a\x00b', 'a\x9fb', 'a\u2028b', ' a', 'a ', 'a\u00a0',
+        '\ufeffa', '\ud800', 'a\udc00b', 'a'.repeat(501), `a${'\u{1F600}'.repeat(250)}`, 7].map(path => entries(path)),
+      entries('b', 'a'), entries('a', 'a'), entries('a/b', 'a.b'), entries('\u{10000}', '\uffff')].map(list => withCheck({ protected: list }))];
+  for (const [index, input] of refused.entries()) {
+    assert.throws(() => hostCheckFrame(input), error => error?.code === 'BRIDGE_INPUT_INVALID' && error.message === 'Bridge input was invalid.', `row ${index}`);
+  }
+});
+
+test('C2 checkFrame accepts exactly the check frames the supervisor read_check accepts, and the exit codes match', { skip: NO_GUEST, timeout: 30_000 }, () => {
+  const rows = [...['a'.repeat(64), 'a'.repeat(65)].map(id => withCheck({ id })),
+    ...['x'.repeat(1000), 'x'.repeat(1001), 'a\x9fb', 'a\xa0b', '\u3000', ' a ', 'a\u2028b', 'a\ud800b'].map(command => withCheck({ command })),
+    ...['a'.repeat(500), 'a'.repeat(501), '\u{1F600}'.repeat(250), '.', '..', '', 'a\\b', ' a', 'a\u205f', '\ud800'].map(path => withCheck({ protected: entries(path) })),
+    ...[many(2000), many(2001), entries('\uffff', '\u{10000}'), entries('\u{10000}', '\uffff')].map(list => withCheck({ protected: list }))];
+  const accepted = rows.map(row => { try { return Buffer.isBuffer(hostCheckFrame(row)); } catch { return false; } });
+  assert.ok(accepted.includes(true) && accepted.includes(false));
+  // Host-refused rows are framed by hand from the same JSON, so read_check judges the very input checkFrame refused.
+  const input = Buffer.concat(rows.map((row, index) => (accepted[index] ? hostCheckFrame(row) : literalFrame(row))));
+  const code = `${PY_LOAD}for _ in range(int(sys.argv[2])):
+    try:
+        m.read_check(0)
+        print('accepted')
+    except ValueError:
+        print('refused')
+print(m.PROTECTED_MISMATCH, m.PROTECTED_CHANGED)
+`;
+  const run = spawnSync('python3', ['-I', '-B', '-c', code, SUPERVISOR, String(rows.length)], { input, maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
+  assert.equal(run.status, 0, String(run.stderr));
+  const lines = String(run.stdout).trim().split('\n');
+  assert.deepEqual(lines.slice(0, -1), accepted.map(ok => (ok ? 'accepted' : 'refused')));
+  assert.equal(lines.at(-1), `${PROTECTED_MISMATCH} ${PROTECTED_CHANGED}`);
+});
+
+// A spawn-compatible fake provider of real Node streams. Like the supervisor it exits 74 on host EOF unless it is hung,
+// and kill() closes it asynchronously, as Node does. Every stdin write is kept in written.
+function checkProvider({ hung = false, write = (chunk, done) => done() } = {}) {
+  const proc = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), calls: [], kills: [], written: [] });
+  proc.stdin = new Writable({ write(chunk, encoding, done) { proc.written.push(chunk); write(chunk, done); } });
+  proc.exit = (code = 0) => { if (!proc.stdout.writableEnded) proc.stdout.once('close', () => proc.emit('close', code, null)).end(); };
+  if (!hung) proc.stdin.once('close', () => proc.exit(74));
+  proc.kill = signal => { proc.kills.push(signal); setImmediate(() => proc.emit('close', null, signal)); return true; };
+  proc.spawn = (...args) => { proc.calls.push(args); return proc; };
+  proc.send = (...frames) => proc.stdout.write(Buffer.concat(frames.map(frame => (Buffer.isBuffer(frame) ? frame : encodeFrame(frame)))));
+  return proc;
+}
+const HELLO = { kind: 'hello', protocol: 1 };
+const exited = (code, signal = null) => ({ kind: 'observation', type: 'exit', code, signal });
+const OBS = exited(0);
+const out = (data, stream = 'stdout') => ({ kind: 'output', stream, data: Buffer.from(data).toString('base64') });
+const ended = (outcome, exitCode = null, signal = null, outputTail = '') => ({ outcome, exitCode, signal, outputTail });
+const hostCheck = (proc, options = {}) => runCheckSession({ name: NAME, check: HOST_CHECK, provider: { spawn: proc.spawn }, budgetMs: 5_000, timeoutMs: 1_000, ...options });
+
+test('C3 invalid input rejects with CHECK_SESSION_INPUT_INVALID before any spawn; an abort, spawn failure or bad child is infra-failure', async () => {
+  const provider = patch => spawn => ({ provider: { spawn, ...patch } });
+  const rows = [{ name: 'vm' }, { name: undefined }, { check: withCheck({ id: '' }) }, { check: null }, { provider: null }, { provider: 'multipass' },
+    provider({ spawn: 'spawn' }), provider({ executable: ' ' }), provider({ executable: 'multi\npass' }), provider({ executable: 7 }),
+    ...[0, 1.5, '1', MAX_BUDGET_MS + 1, undefined].map(budgetMs => ({ budgetMs })), ...[0, 60_001, null].map(timeoutMs => ({ timeoutMs })), { signal: {} }];
+  for (const [index, row] of rows.entries()) {
+    const proc = checkProvider();
+    await assert.rejects(hostCheck(proc, typeof row === 'function' ? row(proc.spawn) : row),
+      error => error?.code === 'CHECK_SESSION_INPUT_INVALID' && error.message === 'Check session input was invalid.', `row ${index}`);
+    assert.equal(proc.calls.length, 0, `row ${index}`);
+  }
+  for (const input of [undefined, null]) await assert.rejects(runCheckSession(input), { code: 'CHECK_SESSION_INPUT_INVALID' });
+  const aborted = checkProvider();
+  assert.deepEqual(await hostCheck(aborted, { signal: AbortSignal.abort() }), ended('infra-failure'));
+  assert.equal(aborted.calls.length, 0);
+  for (const spawn of [() => { throw new Error('ENOENT'); }, () => null, () => ({ ...checkProvider(), kill: undefined }), () => ({ ...checkProvider(), stderr: null })]) {
+    assert.deepEqual(await hostCheck(checkProvider(), { provider: { spawn } }), ended('infra-failure'));
+  }
+});
+
+test('C4 the check frame is the first and only stdin write, under the fixed argv, and stdin stays open while the job runs', async () => {
+  const proc = checkProvider();
+  const { signal } = new AbortController(); // never aborted: its listener must still be removed
+  const promise = hostCheck(proc, { signal, budgetMs: MAX_BUDGET_MS, timeoutMs: 60_000 });
+  proc.send(HELLO, out('ok\n'), OBS);
+  await new Promise(setImmediate);
+  assert.deepEqual([proc.stdin.writableEnded, proc.stdin.destroyed], [false, false]);
+  proc.exit(0);
+  assert.deepEqual(await promise, ended('passed', 0, null, 'ok\n'));
+  assert.deepEqual(proc.calls, [['multipass', checkArgv(NAME), { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }]]);
+  assert.deepEqual([proc.written, proc.kills, getEventListeners(signal, 'abort').length], [[hostCheckFrame(HOST_CHECK)], [], 0]);
+});
+
+test('C5 each outcome arises only from its condition, and only hello, one observation of code 0, EOF and exit 0 is passed', { timeout: 30_000 }, async () => {
+  const clean = (code = 0, ...frames) => proc => { proc.send(HELLO, ...frames, OBS); proc.exit(code); };
+  const after = (...frames) => proc => { proc.send(HELLO, OBS, ...frames); proc.exit(0); };
+  const never = (chunk, done) => {};
+  const rows = [['passed', clean(), ended('passed', 0)],
+    ['code 3', proc => { proc.send(HELLO, exited(3)); proc.exit(0); }, ended('code-failure', 3)],
+    ['SIGKILL', proc => { proc.send(HELLO, exited(null, 'SIGKILL')); proc.exit(0); }, ended('code-failure', null, 'SIGKILL')],
+    ...[0, 3].map(code => [`80 after ${code}`, proc => { proc.send(HELLO, exited(code)); proc.exit(80); }, ended('inconclusive', code)]),
+    ['79, no frame', proc => proc.exit(79), ended('skipped')], ['close before EOF', proc => { proc.send(HELLO, OBS); proc.emit('close', 0, null); }],
+    ['79 after hello', proc => { proc.send(HELLO); proc.exit(79); }], ['79 after the observation', clean(79)],
+    ['80 without observation', proc => { proc.send(HELLO); proc.exit(80); }], ...[74, 71, 1].map(code => [`exit ${code}`, clean(code)]),
+    ['hello only', proc => { proc.send(HELLO); proc.exit(0); }], ['no frame, exit 0', proc => proc.exit(0)],
+    ['a request', clean(0, { kind: 'request', id: 1, tool: 'moe.get_context', args: {} })], ['double hello', clean(0, HELLO)],
+    ['output first', proc => { proc.send(out('x'), HELLO, OBS); proc.exit(0); }], ['observation first', proc => { proc.send(OBS, HELLO, OBS); proc.exit(0); }],
+    ['output after', after(out('x'))], ['second observation', after(OBS)], ['garbage', after(framed('nope'))], ['truncated', after(header(9))],
+    ['child error', proc => { clean()(proc); proc.emit('error', new Error('x')); }],
+    ['stdin error', proc => { proc.stdin.emit('error', new Error('x')); clean()(proc); }],
+    ['stdout error', proc => { proc.stdout.emit('error', new Error('x')); clean()(proc); }],
+    ['abort', (proc, controller) => { proc.send(HELLO, OBS); controller.abort(); proc.exit(0); }],
+    ['write error', clean(), undefined, {}, { write: (chunk, done) => done(new Error('EPIPE')) }],
+    ['write never completes', clean(), undefined, {}, { write: never }],
+    ['write throws', clean(), undefined, {}, { prepare: proc => { proc.stdin.write = () => { throw new Error('x'); }; } }],
+    ['write hangs, then the write deadline', () => {}, undefined, {}, { write: never }],
+    ['EOF, then a hung provider killed', proc => { proc.send(HELLO, OBS); proc.stdout.end(); }, undefined, {}, { hung: true }],
+    ['killed after a protocol stop', proc => proc.send(HELLO, { kind: 'request', id: 1, tool: 'moe.get_context', args: {} }), undefined, {}, { hung: true }],
+    ['budget mid-job', proc => proc.send(HELLO), ended('timeout'), { budgetMs: 100 }],
+    ['budget after the observation', proc => proc.send(HELLO, OBS), ended('timeout'), { budgetMs: 100 }],
+    ['budget, then a hung provider killed', proc => proc.send(HELLO), ended('timeout'), { budgetMs: 100 }, { hung: true }]];
+  const procs = [];
+  for (const [label, script, expected = ended('infra-failure'), options = {}, fake = {}] of rows) {
+    const proc = checkProvider(fake);
+    procs.push(proc);
+    fake.prepare?.(proc);
+    const controller = new AbortController();
+    const promise = hostCheck(proc, { signal: controller.signal, ...options });
+    script(proc, controller);
+    assert.deepEqual(await promise, expected, label);
+    assert.deepEqual(proc.kills, fake.hung ? ['SIGKILL'] : [], label);
+  }
+  for (const proc of procs) proc.emit('error', new Error('late')); // after settle: no teardown, timer or kill
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  assert.deepEqual(procs.map(proc => proc.kills.length), rows.map(row => (row[4]?.hung ? 1 : 0)));
+});
+
+test('C6 outputTail is the last 16384 UTF-8 bytes of the combined output, starting on a whole character, for every outcome', { timeout: 30_000 }, async () => {
+  const ascii = (length, seed = 0) => Buffer.from(Array.from({ length }, (_, i) => 0x21 + ((seed + i) % 90)));
+  const big = Array.from({ length: 32 }, (_, i) => ascii(65_536, i));
+  const odd = Array.from({ length: 7 }, (_, i) => ascii(9_999, i * 7));
+  const lastOf = chunks => Buffer.concat(chunks).subarray(-MAX_CHECK_TAIL_BYTES).toString();
+  const rows = [[[], ''], [['a'.repeat(16_384)], 'a'.repeat(16_384)], [[`b${'a'.repeat(16_384)}`], 'a'.repeat(16_384)],
+    [[`\u00e9${'a'.repeat(16_383)}`], 'a'.repeat(16_383)], [[`\u{1F600}${'a'.repeat(16_381)}`], 'a'.repeat(16_381)],
+    [['A', ['B', 'stderr'], 'C'], 'ABC'], [[Buffer.of(0xc3), [Buffer.of(0xa9), 'stderr']], '\u00e9'], [[Buffer.of(0xff, 0x41)], '\ufffdA'],
+    [[Buffer.alloc(20_000, 0xff)], '\ufffd'.repeat(5_461)], [big, lastOf(big)], [odd, lastOf(odd)]];
+  for (const [chunks, tail] of rows) {
+    const proc = checkProvider();
+    const promise = hostCheck(proc);
+    proc.send(HELLO, ...chunks.map(chunk => (Array.isArray(chunk) ? out(...chunk) : out(chunk))), OBS);
+    proc.exit(0);
+    const result = await promise;
+    assert.deepEqual(result, ended('passed', 0, null, tail), `${chunks.length} ${tail.slice(0, 20)}`);
+    assert.ok(Buffer.byteLength(result.outputTail) <= MAX_CHECK_TAIL_BYTES);
+  }
+  const timedOut = checkProvider();
+  const promise = hostCheck(timedOut, { budgetMs: 100 });
+  timedOut.send(HELLO, out('so far\n'));
+  assert.deepEqual(await promise, ended('timeout', null, null, 'so far\n'));
+});
+
+// C7's harness is the supervisor's own main(), as root, with the test user as the check identity and no mounts. Its stdin
+// is the session's pipe, which stays open, so the check frame really travels as the session's first write.
+const SESSION_HARNESS = `${PLANT({ 'a.txt': 'A\n' })}m.protect_mounts = lambda workspace, paths: None
+sys.exit(m.main(['check'], geteuid=lambda: 0, workspace=workspace, sessions=sessions, identity=(os.getuid(), os.getgid(), None), netns=False))
+`;
+
+test('C7 through the real supervisor check mode, real exit codes give passed, code-failure, skipped and inconclusive',
+  { skip: NO_GUEST || (process.platform !== 'linux' && 'the busy-host guard reads /proc'), timeout: 60_000 }, async t => {
+    const tasks = userTasks();
+    if (tasks >= 1792) return t.skip(`the test user already runs ${tasks} tasks, too near RLIMIT_NPROC`);
+    const good = blobOid('A\n');
+    const flipped = `${good[0] === '0' ? '1' : '0'}${good.slice(1)}`;
+    const children = [];
+    t.after(() => { for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+    for (const [command, list, expected, homes] of [['exit 0', [], ended('passed', 0), 1], ['echo boom; exit 3', [], ended('code-failure', 3, null, 'boom\n'), 1],
+      ['exit 0', [{ path: 'a.txt', oid: flipped }], ended('skipped'), 0], ['rm -f a.txt', [{ path: 'a.txt', oid: good }], ended('inconclusive', 0), 1]]) {
+      const dir = mkdtempSync(join(tmpdir(), 'moe-r11c-'));
+      t.after(() => rmSync(dir, { recursive: true, force: true }));
+      const calls = [];
+      const spawn = (executable, argv, options) => {
+        calls.push([executable, argv, options]);
+        const child = spawnChild('python3', ['-I', '-B', '-c', `${PY_LOAD}${CHECK_DIRS}${SESSION_HARNESS}`, SUPERVISOR, dir, 'ws'], { stdio: 'pipe' });
+        children.push(child);
+        return child;
+      };
+      const result = await runCheckSession({ name: NAME, check: { id: 'unit-1', command, protected: list }, provider: { spawn }, budgetMs: 20_000, timeoutMs: 5_000 });
+      assert.deepEqual(result, expected, command);
+      assert.deepEqual(calls.map(([executable, argv]) => [executable, argv]), [['multipass', checkArgv(NAME)]]);
+      assert.deepEqual(existsSync(join(dir, 'sessions')) ? readdirSync(join(dir, 'sessions')).length : 0, homes, command);
+    }
   });

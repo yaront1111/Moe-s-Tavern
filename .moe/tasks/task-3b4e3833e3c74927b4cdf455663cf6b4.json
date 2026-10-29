@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:23.882Z",
-  "updatedAt": "2026-10-29T19:26:51.193Z",
+  "updatedAt": "2026-10-29T19:27:22.669Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:41:30.489Z",
     "plannedStepCount": 6,
@@ -201,7 +201,12 @@
     "packages/moe-daemon/src/tools/index.ts",
     "packages/moe-daemon/src/server/McpAdapter.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
-    "packages/moe-daemon/src/index.ts"
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+    ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+    ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
+    ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+    ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json"
   ],
   "completionSummary": "CQ-V03a round 2, after the size-only QA reject (qa-952969be, 19:16Z). No byte changes, per QA's route. The delivery is still completion 1607abf2 (tree bfa7730b). The 6 owned paths at HEAD b2d1a6af are byte-identical to 1607abf2; the only commit since 7f04b869 is board JSON.\n\nSize waiver: prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL, PENDING, a human decision). It names 1607abf2 and the per-file numstat:\n- runnerChannel.test.ts +299/-0\n- runnerChannel.ts +111/-0\n- WebSocketServer.ts +48/-20\n- index.ts +7/-0\n- McpAdapter.ts +4/-0\n- tools/index.ts +2/-0\nNet 451 = 152 runtime + 299 tests. The rail allows growth only by QA-required fixes. Pinged #governors (msg-3adbbd5a). QA's route: approve once APPROVED; park from REVIEW while PENDING.\n\nFresh gate (19:22Z), a pure git archive of HEAD 7f04b869 with no overlay:\n- npm ci, then env -i with a scratch HOME, NO_COLOR=1 and node v24.21.0 on a Linux-only PATH.\n- npm test exit 0: 181 files, 5041 passed | 16 skipped; runnerChannel.test.ts 41/41. tsc --noEmit exit 0.\n- The real ~/.moe/runner-keys was absent before and after.\nMutants were not re-run, because the bytes are unchanged: QA's 12 kills cover the plan's 6.\n\nSelf-review found no defects:\n- runner reaches handle() only from the authenticated /runner branch.\n- /runner/.., /RUNNER and //runner get no identity.\n- The loopback check comes before the file read, and nothing leaks.\n- Theoretical: a crash mid-provisioning can leave an unswept 0600 .tmp in the 0700 dir.\nQA's advisory notes add no bytes.\n\nLANDING NOTE: peer staged bytes sit in packages/moe-daemon/src/index.ts (a --version hunk, baseline P fb60c011) and in package.json/package-lock.json. They are not this task's bytes and were neither declared nor touched.",
   "commits": [
@@ -230,6 +235,25 @@
       "treeId": "bfa7730b69023beaf3475dd4a2153b6ceb845f0a",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "1eada7de9941c85eff3619401c5116945e078e72",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T19:16:34Z",
+      "paths": [
+        ".moe/tasks/task-16628bef427b426aa9d8fc6ac1d19534.json",
+        ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
+        ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
+        ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T19:27:22.669Z",
+      "treeId": "4600b346c2e053b4b79d57e988446443c9da1591",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -238,11 +262,10 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "refused",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
-    "sessionId": "qa-952969be@2026-10-29T19:11:15Z",
-    "at": "2026-10-29T19:17:11.614Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T19:16:34Z",
+    "at": "2026-10-29T19:27:22.669Z"
   },
   "reviewCompletedAt": "2026-10-29T19:16:31.820Z",
   "rejectionDetails": {

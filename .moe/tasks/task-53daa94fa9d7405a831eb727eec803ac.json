@@ -17,55 +17,95 @@
     {
       "stepId": "step-1",
       "description": "checkArgv and checkFrame in scripts/local-runner/guest-bridge.mjs, plus rows C1-C2 in scripts/tests/local-runner-check.test.mjs (DoD 1).\n\nRead first: the LANDED R10c bytes of guest-bridge.mjs (AGENT_JOBS, jobFrame, and exactKeys as a key-set comparison) and the LANDED R11a/R11b supervisor (read_check's rules and the constants PROTECTED_MISMATCH = 79 and PROTECTED_CHANGED = 80). This plan follows their approved plans; if the landed code differs, follow it and note it.\n\nguest-bridge.mjs:\n- checkArgv(name): owned names only (isOwnedInstanceName), else BRIDGE_INPUT_INVALID. Return Object.freeze(['exec', '--no-map-working-directory', name, '--', 'sudo', '-n', GUEST_LAYOUT.supervisor, 'check']), exactly like bridgeArgv.\n- checkFrame({id, command, protected}) returns encodeFrame({kind: 'check', version: 1, id, command, protected}), built from validated copies in that key order. Any refusal throws bridgeError('BRIDGE_INPUT_INVALID'). The rules mirror the supervisor's read_check, which mirrors the daemon:\n  - input: a plain record whose key set is exactly {id, command, protected} (R10c's exactKeys);\n  - id: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;\n  - command: a string with command.trim() !== '', command.isWellFormed(), length <= 1000 (String.length is UTF-16 units, as the supervisor measures) and no /[\\u0000-\\u001f\\u007f-\\u009f\u2028\u2029]/;\n  - protected: an array of at most 2000 entries, each a plain record whose keys are exactly {path, oid}:\n    - oid matches /^[0-9a-f]{40}$/;\n    - path is a well-formed string of at most 500 units, with no '\\\\', '�' or control character, and no '' / '.' / '..' segment;\n    - paths are strictly ascending by Buffer.compare of their UTF-8.\n  Copy the entries as {path, oid} literals, so a later caller edit or a getter cannot change the bytes.\n- Error handling: fixed text only (bridgeError); no value is ever echoed.\n\nTests (CQ-R11c section):\n- C1:\n  - checkArgv: deepEqual to the literal for an owned name, and Object.isFrozen. 'vm', '', 'moe-x', 42 and undefined each give BRIDGE_INPUT_INVALID.\n  - checkFrame: for a valid input, the bytes equal a 4-byte big-endian length + JSON.stringify of the literal frame, built in the test. Each refusal class gives BRIDGE_INPUT_INVALID with the fixed message: bad and boundary ids, commands and paths, an extra or missing key, unsorted or duplicate paths, 2001 entries, a lone '\\ud800' in a command or path, and non-record input.\n- C2, drift; skip on win32 (POSIX python3):\n  - Table-drive about 16 boundary inputs through BOTH sides: 64/65-char ids; 1000/1001 commands; '\\x9f' vs '\\xa0'; '\u2028'; 500/501-unit paths; 2000/2001 entries; '.', '..', '' and '\\\\' paths.\n  - The supervisor side runs read_check through R11a's python3 -I -B importlib loader on a pipe holding the frame. Host-refused inputs are framed by hand with the same JSON. Assert that checkFrame accepts exactly when read_check returns, and refuses exactly when read_check raises ValueError.\n  - Also assert that the supervisor's m.PROTECTED_MISMATCH and m.PROTECTED_CHANGED equal check-session.mjs's constants (step 2 exports them).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/guest-bridge.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bridge.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "checkArgv = bridgeArgv's argv with 'check' as the last element (reuses its owned-name validation, frozen). checkFrame mirrors landed read_check/protected_entries, including R11b's JS-trim rule for paths (path.trim() === path), which the plan text omitted but the landed supervisor enforces. Entries are copied once ({path, oid}) before validation; the list length is read once. C1: argv literal and refusals, byte-exact frames for valid inputs and boundary accepts, a getter read once, and 60+ refusal rows. C2: a 24-row drift table through the real read_check (one python3 -I -B process reading concatenated frames from stdin), plus PROTECTED_MISMATCH/CHANGED parity. Verified in a scratch archive with a stub check-session.mjs (the test statically imports it, and step 2 creates it): C1 and C2 pass. Non-ASCII escapes were re-escaped with a chr(92) script (the known heredoc/Edit trap); both files are ASCII again. The shared tree has many dirty peer paths; I did not touch them.",
+      "startedAt": "2026-10-29T19:02:08.839Z",
+      "completedAt": "2026-10-29T19:09:55.137Z"
     },
     {
       "stepId": "step-2",
       "description": "A new scripts/local-runner/check-session.mjs with runCheckSession, plus rows C3-C5 (DoD 1, DoD 2).\n\nModel it on guest-session.mjs's runGuestSession (R08): its input validation, the child shape check, later/cancel timers, the idempotent stop (destroy stdin, then SIGKILL only the local provider timeoutMs later) and settle. There are no requests, forwards or pending queue. Do not edit guest-session.mjs.\n\n- Header comment: one check per `multipass exec ... moe-supervisor check`. Every guest byte is untrusted. A local kill is never evidence that the guest job ended. This is local session logic: executionReady stays false and verified-local stays unavailable.\n- Exports: PROTECTED_MISMATCH = 79 and PROTECTED_CHANGED = 80, both mirroring guest-supervisor.py and pinned by C2. MAX_BUDGET_MS = 86_400_000.\n- runCheckSession({name, check, provider = {}, budgetMs, timeoutMs = 30_000, signal}). Before any spawn, validate:\n  - provider is a plain record with executable = 'multipass' (non-blank, no control character) and spawn = child_process.spawn (a function);\n  - budgetMs is a safe integer, 1 to MAX_BUDGET_MS;\n  - timeoutMs is a safe integer, 1 to 60_000;\n  - signal is undefined or an AbortSignal;\n  - argv = checkArgv(name) and frame = checkFrame(check), both computed here.\n  Any failure throws Object.assign(new Error('Check session input was invalid.'), {code: 'CHECK_SESSION_INPUT_INVALID'}), and nothing is spawned.\n  An already-aborted signal resolves 'infra-failure' without a spawn. A spawn that throws, or a child without kill, on, stdin, stdout and stderr, resolves 'infra-failure'.\n- Spawn: spawn(executable, argv, {shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']}).\n  - The FIRST and ONLY stdin write is frame, bounded by timeoutMs; a write error or timeout means failure.\n  - stdin then stays open: the supervisor reads host EOF as a gone host and kills the job (74).\n  - stderr is drained unread.\n  - The budgetMs timer starts at spawn. When it fires: timedOut = true, then stop().\n  - Abort, a child 'error' and a stdin or stdout 'error' each mark failure and call stop().\n- Frames go through createFrameDecoder() and parseGuestFrame:\n  - the first frame must be hello, and only once;\n  - then output frames, which only feed the tail (step 3);\n  - then exactly one observation, with no frame after it.\n  A request frame (a check job has no Moe route), a malformed or extra frame, or a truncated frame at stdout end (decoder.end()) marks failure and calls stop().\n- settle() runs on child 'close' or after the stop kill. It resolves Object.freeze({outcome, exitCode, signal, outputTail}). The outcome is decided in this order:\n  1. timedOut gives 'timeout';\n  2. a failure, a kill, or no clean stdout end gives 'infra-failure';\n  3. close code 79 with no frame at all gives 'skipped';\n  4. no hello or no observation gives 'infra-failure';\n  5. close code 80 gives 'inconclusive';\n  6. any other nonzero close code gives 'infra-failure';\n  7. otherwise 'passed' when observation.code === 0, else 'code-failure'.\n  exitCode and signal come from the observation for passed, code-failure and inconclusive, and are null otherwise.\n- Error handling: every failure path resolves exactly one outcome, never a throw after spawn and never 'passed'. All timers and the abort listener are cleared on settle.\n\nTests: copy the bridge test's fakeProvider (exit 74 on stdin close; async kill and close via setImmediate, per the Serena memory gotcha-local-runner-supervisor-tests) into the check file.\n- C3: each input refusal throws CHECK_SESSION_INPUT_INVALID with the fixed text and spawn.calls === 0. Cover a bad name, a bad check, a provider that is not a record, a non-function spawn, a blank executable or one containing '\\n', budgetMs 0, 1.5, '1' and MAX_BUDGET_MS + 1, timeoutMs 0 and 60_001, and signal {}. An aborted signal resolves 'infra-failure' with no spawn.\n- C4: proc.written[0] deep-equals checkFrame(check), written.length === 1, and stdin is not ended before close.\n- C5, an outcome table:\n  - passed (observation code 0, close 0);\n  - code-failure for code 3 and for signal 'SIGKILL', with exitCode or signal reported;\n  - inconclusive for close 80 after observation code 0 and after code 3;\n  - skipped for close 79 with no frames;\n  - infra-failure for: close 79 after hello; close 80 without observation; observation 0 then close 74, 71 or 1; hello only, then close 0; a request frame, even if observation 0 and close 0 follow; double hello; output before hello; a frame after the observation; garbage bytes; a truncated frame; a spawn error; a child 'error'; an abort mid-session; a provider that never closes after a protocol stop (killed);\n  - timeout for the budget firing mid-job (the fake exits 74), and for the budget firing after the observation, before close;\n  - a hung fake ignoring stdin close is killed timeoutMs later and gives 'timeout', never 'passed'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs"
       ],
       "newFiles": [
         "scripts/local-runner/check-session.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "New check-session.mjs: runCheckSession, plus the exports PROTECTED_MISMATCH 79, PROTECTED_CHANGED 80, MAX_BUDGET_MS and MAX_CHECK_TAIL_BYTES. It follows runGuestSession's structure: validation in a try, the child shape check, later/cancel, and an idempotent stop that destroys stdin and SIGKILLs the provider timeoutMs later. It also covers step 3's tail code, keep/tailOf, since it is part of the same module; C6 lands in step 3.\n\nDeviations, each stricter or equivalent:\n(1) 'passed' (and every non-timeout outcome) also needs the frame's write callback to have succeeded (`written`). A stream with hello, observation and close 0 but no completed write is infra-failure.\n(2) As in guest-session, a clean stdout EOF calls stop(), which destroys stdin and arms the kill timer, so a provider that never exits after EOF is bounded by timeoutMs. stdin stays open for the whole job. C4 asserts it is neither ended nor destroyed before the guest's EOF.\n(3) Rule 3's \"no frame at all\" is checked as !opened. Hello must be the first frame, so any other first frame is already a failure.\n(4) stop() is a no-op after settle, so an 'error' after 'close' arms no timer.\n\nC3: 19 refusal rows with spawn.calls 0, non-record input, an aborted signal, and spawn throwing, returning null or returning a bad child. C4: the first and only write is byte-equal to checkFrame, the spawn argv/options are the fixed ones, stdin is open before EOF, no kill, and the abort listener is removed. C5: 36 outcome rows, including write error, write never completing, write throwing synchronously, the write deadline, hung-provider kills, and 3 budget rows. Scratch run: C1-C5 pass (about 1 s).",
+      "startedAt": "2026-10-29T19:09:56.142Z",
+      "completedAt": "2026-10-29T19:12:45.478Z"
     },
     {
       "stepId": "step-3",
       "description": "outputTail, plus row C6 (DoD 3).\n\nIn check-session.mjs:\n- Append each output frame's bytes (stdout and stderr, in arrival order) to a buffer.\n- Whenever the buffer exceeds 2 * MAX_CHECK_TAIL_BYTES (MAX_CHECK_TAIL_BYTES = 16384, CheckRun's MAX_CHECK_LOG_BYTES), keep only its last 2 * MAX_CHECK_TAIL_BYTES. Memory stays bounded however long the job runs, and the window is wide enough that UTF-8 resynchronization and U+FFFD expansion never reach the kept end.\n- At settle:\n  - decode with a non-fatal TextDecoder, so malformed bytes become U+FFFD;\n  - re-encode to UTF-8 and take the last 16384 bytes;\n  - move the start past any continuation byte ((b & 0xc0) === 0x80);\n  - decode that slice.\n  This is the daemon checkRunStore tail rule. Every outcome carries its tail; '' when nothing was sent.\n\nError handling: the tail never throws, and a malformed byte becomes U+FFFD, never a failure.\n\nC6, with the fake provider:\n- exactly 16384 ASCII bytes are kept whole; 16385 drops the first;\n- a 2-byte and a 4-byte character straddling the cut are dropped whole, and the tail starts on a character;\n- interleaved stdout and stderr keep arrival order;\n- invalid bytes give U+FFFD, and Buffer.byteLength(tail) stays <= 16384;\n- a 2 MiB stream of 65,536-byte output frames keeps the right last 16384 bytes;\n- no output gives ''.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/local-runner/check-session.mjs",
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Tail code (keep/tailOf in check-session.mjs, written with the module in step 2). Rather than concatenating and trimming the buffer, it uses a fixed 32 KiB ring (TAIL_WINDOW = 2 * MAX_CHECK_TAIL_BYTES). Memory is O(1), and each output frame costs O(its own length). Concat-then-trim would copy 32 KiB per frame, which a guest sending 1-byte frames could turn into a quadratic CPU cost. The semantics are the plan's: the last 32 KiB of raw stdout+stderr bytes in arrival order, decoded non-fatally (Buffer toString, which keeps a BOM, unlike TextDecoder's default), re-encoded, cut to the last 16384 bytes, and the start moved past any continuation byte (checkRunStore boundOutputTail). C6 has 11 passed rows: empty; 16384 ASCII kept whole; 16385 drops the first byte; a 2-byte and a 4-byte character straddling the cut are dropped whole; stdout/stderr interleaving; a character split across a stdout and a stderr frame; invalid bytes become U+FFFD; 20000 invalid bytes give 5461 U+FFFD (16383 bytes, at most 16384); a 2 MiB stream of 65536-byte frames; and 7 unaligned 9999-byte frames, which wrap the ring. A timeout row carries its tail too. Scratch run: C6 passes.",
+      "startedAt": "2026-10-29T19:12:46.419Z",
+      "completedAt": "2026-10-29T19:13:24.634Z"
     },
     {
       "stepId": "step-4",
       "description": "End-to-end row C7 through the real supervisor's check mode (DoD 4).\n\nSkip on win32 (POSIX python3), and with R11a K3's busy-host RLIMIT_NPROC guard, since GUARD forks the job as the test user.\n\n- provider.spawn ignores multipass's argv except its final 'check' (assert it), and runs spawnProcess('python3', ['-I', '-B', '-c', LOAD + harness, SUPERVISOR, workspace, sessions], {stdio: 'pipe'}).\n- The harness:\n  - stubs m.protect_mounts with a no-op;\n  - calls sys.exit(m.main(['check'], geteuid=lambda: 0, workspace=, sessions=, identity=(os.getuid(), os.getgid(), None), netns=False)).\n  stdin is the session's own pipe, so the check frame really travels as the first write.\n- Rows. Commands are shell builtins only, so the job forks nothing:\n  - 'exit 0' resolves {outcome: 'passed', exitCode: 0, signal: null, outputTail: ''};\n  - 'echo boom; exit 3' resolves 'code-failure', exitCode 3, outputTail 'boom\\n';\n  - a protected entry with a flipped oid resolves 'skipped' from the real exit 79, with no job.\n- Kill your own leftovers in after(): spawnSync timeouts and pgrep markers, per gotcha-local-runner-supervisor-tests.\n\nError handling: a harness failure must fail the row, never skip it.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner-check.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "C7 runs runCheckSession end to end. Its provider.spawn records the call, asserts multipass plus the exact checkArgv(NAME), and spawns python3 -I -B with PY_LOAD + CHECK_DIRS + SESSION_HARNESS. The harness plants a.txt, stubs protect_mounts, and calls main(['check'], geteuid=lambda: 0, ..., identity=(uid, gid, None), netns=False). Its stdin is the session's own pipe, which stays open.\n\nRows, all driven by the real supervisor's exit codes:\n- 'exit 0' is passed, with exitCode 0 and an empty tail.\n- 'echo boom; exit 3' is code-failure, with exitCode 3 and outputTail 'boom\\n'.\n- A flipped oid is skipped, from the real 79 with no frames and no session home.\n- 'rm -f a.txt' on a protected a.txt is inconclusive, from the real 80 after the observation. This row is an addition to the plan: the only process it forks is rm, under the same busy-host guard as K8's real row.\n\nEach row asserts the session-home count: 1 when the job ran, 0 when skipped. The test skips on win32, and on non-Linux because of the /proc busy-host guard. It uses userTasks() >= 1792 as K3 does. t.after SIGKILLs any child still running and removes the temp dirs. A harness failure is a nonzero close, i.e. infra-failure, so it fails the deepEqual and never skips the row. Scratch run: C1-C7 all pass.",
+      "startedAt": "2026-10-29T19:13:25.567Z",
+      "completedAt": "2026-10-29T19:14:38.349Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification. Run this once, fresh, from the repo root: `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`.\n\nOn WSL, run `env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs`. Exit 0 is required, and its output tail is the complete_task verification evidence (DoD 4).\n\nAlso confirm the following. They are not evidence.\n- Every pre-existing bridge (B, S, I, H, J) and check (E, K) row passes unchanged, with no removed line in either test file.\n- No scripts/local-runner/__pycache__.\n- git diff --numstat plus wc -l of the new module totals at most 400 changed lines. Budget: runtime up to 160 (bridge about 35, session about 125) and tests up to 240.\n  If the honest diff exceeds 400, do not cut a DoD row. Stop, and comment on the task with the measured split, so the architect can propose a size rail as for R08/R09c.\n- LF line endings.\n\nNote peers' dirty paths and continue. Error handling for the gate itself: fix a failure's cause with a test, never by weakening or skipping a row, then re-run the whole command.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs"
+      ],
+      "note": "The first measurement was 423 changed lines, 23 over the 400 cap. No row was cut. I simplified check-session.mjs instead (176 lines down to 148, behavior unchanged):\n- three named timers (budget, deadline, kill) replace a timer Set with later/cancel helpers;\n- fail() is folded into stop(s, failed);\n- the end and write callbacks are one-liners.\n\nFinal numstat: guest-bridge.mjs +30/-0, check-session.mjs 148 (new), local-runner-check.test.mjs +217/-0. That is 395 of 400: runtime 178, tests 217.\n\nThe bridge test file is untouched, and no line was removed from either test file. No scripts/local-runner/__pycache__. LF endings and ASCII only.\n\nGate, fresh from the repo root (env -i, nvm node v24.21.0): `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs` exits 0: 84 tests, 83 pass, 0 fail, 1 skipped. The skip is K9, root-only and pre-existing. 84 = R11b's 77 + C1-C7.\n\nPeers' dirty paths in the shared tree were left untouched.",
+      "startedAt": "2026-10-29T19:14:39.269Z",
+      "completedAt": "2026-10-29T19:16:36.970Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review of this task's diff only. Load the adversarial-self-review skill first, then read it as each attacker in turn:\n- A hostile guest stream: a forged observation inside output data (it stays bytes); frames split byte by byte; a request frame; a second observation; a huge or truncated frame; output after the observation; an exit code of 79 or 80 sent with the wrong frames.\n- A slow or hung provider: one that never closes; a close before the write callback; 'error' after 'close'.\n- A caller: a frozen or getter-bearing check object; a budget at the edges; abort at every phase.\n\nCheck that:\n- 'passed' needs hello, exactly one observation with code 0, a clean EOF and close 0, and nothing else;\n- every path settles exactly once and clears its timers and listener;\n- the frame is written once and first;\n- the tail is bounded in memory and bytes;\n- verified-local, executionReady and isolation claims are untouched;\n- there is no .moe edit and no Git write.\n\nMutation spot-check in a scratch `git archive HEAD | tar -x` copy, scored by exit code with --test-name-pattern='^C[1-7] ' and a timeout. Mutants, and the row that should kill each:\n- dropping the request-frame refusal: C5;\n- accepting close 80 as passed: C5;\n- treating 79 after hello as skipped: C5;\n- outcome from the observation alone (ignoring the close code): C5;\n- a kill treated as clean: C5;\n- no budget: C5;\n- a tail cut by characters: C6;\n- no continuation skip: C6;\n- an unbounded buffer: C6, by its 2 MiB row's heap check if feasible; otherwise judge it;\n- frame keys reordered: C1;\n- a rule drifting from the supervisor: C2.\n\nFix anything found with a test, then re-run step 5's command fresh before complete_task.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-session.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "note": "Adversarial review plus mutation sweep. 36 mutants in a scratch git-archive copy with my working files overlaid, scored by exit code with --test-name-pattern='^C[1-7] ' and timeout 120. 35 were killed. kill-as-clean (dropping `s.killed ||`) survives as a proven equivalent: every kill path calls settle(s, null), and `code !== 0` maps null to infra-failure. Its observable sibling (drop killed and settle 0) is killed by C5's 'EOF, then a hung provider killed' row.\n\nFixed one survivor, stop-after-settle (`if (s.closing)` with no settled guard). The fake's exit() always ends stdout before 'close', so no row ever settled with closing false. Added C5 row 'close before EOF' (close 0 while stdout is still open gives infra-failure). With it, the late-error check kills the mutant: the mutant arms a kill timer and kills after settle.\n\nThe rest of the planned mutant list was killed, including: the request refusal, 80 as passed, 79 after hello as skipped, ignoring the close code, no budget, the tail cut by chars, no continuation skip, window 1x, no wrap copy, frame keys reordered, trim, UTF-16 order, 2001 entries, isWellFormed, blank command, argv 'bridge', written, write deadline, write catch, abort listener, listener kept, timers kept, ended, aborted precheck, observation always, budget 0, control exec, child shape, stdin destroy, error listeners. Unbounded buffer is judged: the ring is a fixed TAIL_WINDOW Buffer.alloc, so it is O(1) by construction, and C6's 2 MiB row covers the bytes.\n\nTheoretical, not fixed: a signal aborted synchronously inside provider.spawn is not seen, because the listener is attached after spawn. guest-session.mjs has the same gap.\n\nverified-local, executionReady and isolation are untouched; no .moe edit, no Git write. Diff is 30+223+147 = 400 lines, ASCII-only, no forbidden patterns, no __pycache__. Scratch dirs removed; no MOE_R11C_MUT processes left.\n\nFresh gate from repo root, exit 0: tests 84, pass 83, fail 0, skipped 1 (K9 root-only).",
+      "startedAt": "2026-10-29T19:16:37.969Z",
+      "completedAt": "2026-10-29T19:27:37.346Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -82,20 +122,29 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:27:28.562Z",
-  "updatedAt": "2026-10-29T16:53:27.368Z",
+  "updatedAt": "2026-10-29T19:27:59.098Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T16:49:58.492Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "worker-fe18a9a9"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T16:53:27.255Z",
   "planningNotes": {
@@ -118,5 +167,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T16:53:27.368Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T19:02:08.839Z",
+  "reviewStartedAt": "2026-10-29T19:27:59.095Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-check.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ C1 checkArgv is the fixed check argv for owned names only, and checkFrame is the exact check frame or BRIDGE_INPUT_INVALID\n✔ C2 checkFrame accepts exactly the check frames the supervisor read_check accepts, and the exit codes match\n✔ C3 invalid input rejects with CHECK_SESSION_INPUT_INVALID before any spawn; an abort, spawn failure or bad child is infra-failure\n✔ C4 the check frame is the first and only stdin write, under the fixed argv, and stdin stays open while the job runs\n✔ C5 each outcome arises only from its condition, and only hello, one observation of code 0, EOF and exit 0 is passed\n✔ C6 outputTail is the last 16384 UTF-8 bytes of the combined output, starting on a whole character\n✔ C7 through the real supervisor check mode, real exit codes give passed, code-failure, skipped and inconclusive (233.51146ms)\n﹣ K9 under the real mounts a root check job cannot write, chmod, rename, replace or unlink a protected file, nor rename its directory # needs root for a mount namespace; CQ-R13 certifies it on real guests\nℹ tests 84\nℹ suites 0\nℹ pass 83\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 14623.93134",
+    "reportedAt": "2026-10-29T19:27:59.095Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-bridge.mjs",
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/check-session.mjs"
+  ],
+  "completionSummary": "CQ-R11c host check session: 400 changed lines (30 + 223 + 147).\n\nguest-bridge.mjs adds checkArgv(name) and checkFrame(check).\n- checkArgv is frozen: the bridge argv with 'check' in place of 'bridge', for owned names only.\n- checkFrame builds the byte-exact {kind:'check',version:1,id,command,protected} frame or throws BRIDGE_INPUT_INVALID.\n  - Its rules mirror read_check plus R11b's JS-trim path rule: at most 2000 entries, read once and copied; 40-hex oids; paths strictly ascending by UTF-8 bytes.\n  - C2 drives 24 rows through the real read_check.\n\nNew check-session.mjs exports runCheckSession plus PROTECTED_MISMATCH=79, PROTECTED_CHANGED=80, MAX_BUDGET_MS and MAX_CHECK_TAIL_BYTES=16384.\n- Invalid input rejects CHECK_SESSION_INPUT_INVALID before spawn.\n- The frame is the first and only stdin write, and stdin stays open.\n- Outcome order: timeout (budget); then infra-failure (failure, kill, unwritten or no clean EOF); then skipped (79 with no frame); then infra-failure (no hello or no observation); then inconclusive (80); then infra-failure (other nonzero code); then passed or code-failure from the observation.\n- A request frame, a duplicate hello, a second observation or output after the observation stops the session as infra-failure.\n- Every path settles once and clears its timers and the abort listener.\n- outputTail is a fixed 32 KiB ring, cut like checkRunStore boundOutputTail (last 16384 bytes, then skip continuation bytes).\n\nTests C1-C7 in local-runner-check.test.mjs. C7 runs the real supervisor's check mode and gets passed, code-failure (tail 'boom\\n'), skipped and inconclusive.\n\nMutation sweep: 36 mutants, 35 killed. The one survivor, kill-as-clean, is a proven equivalent (a kill always settles with code null, which maps to infra-failure). The sweep found one gap (stop not guarded by settled); a new row, 'close before EOF', now kills it.\n\nTheoretical, not fixed: an abort fired synchronously inside provider.spawn is missed (guest-session has the same gap).\n\nexec"
 }
