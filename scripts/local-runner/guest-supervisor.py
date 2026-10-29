@@ -3,14 +3,17 @@
 # GUEST_LAYOUT.supervisor, and guest-bridge.mjs is the protocol source of truth. This process is the ONLY writer of
 # its stdout: child bytes reach the host only inside base64 'output' frames, and termination only as this process's
 # own 'observation' frame from waitpid. Standard library only; the guest has python3 for cloud-init and no Node.
-# Modes: 'bridge' (CQ-R08b/c), 'materialize' (CQ-R09c: one snapshot from host frames on stdin into WORKSPACE) and
-# 'export' (CQ-R09: WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
+# Modes: 'bridge' (CQ-R08b/c; CQ-R10b: one host job frame on stdin, then that agent CLI job as the AGENT_IDENTITY
+# account), 'materialize' (CQ-R09c: one snapshot from host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
+# WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
 # Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
-# unreadable export manifest or workspace root, or an export over its bounds; 71 the job could not start (child or agent
-# socket: hello, then EOF, no observation; or no AGENT_IDENTITY account, or the export could not become it); 73 the
-# workspace or its manifest already exists; 74 I/O failure or host EOF (child group killed); 75 SIGTERM, SIGHUP or SIGINT
-# (child group killed, no observation); 76 host protocol violation (child group killed); 77 not root; 78 root bridge with
-# no job.
+# unreadable export manifest or workspace root, an export over its bounds, or a malformed or disallowed job frame; 66 no
+# materialized workspace for the job; 71 the job could not start (child or agent socket: hello, then EOF, no
+# observation; or no AGENT_IDENTITY account or session home, or the export could not become it); 73 the workspace or its
+# manifest already exists; 74 I/O failure or host EOF (child group killed), including EOF before a whole job frame; 75
+# SIGTERM, SIGHUP or SIGINT (child group killed, no observation); 76 host protocol violation (child group killed); 77 not
+# root. A bridge refusal before hello (65, 66, 74, and 71 for a missing account or session home) writes no frame, nor
+# does 77.
 import base64
 import hashlib
 import json
@@ -47,8 +50,10 @@ EX_TERMINATED = os.EX_TEMPFAIL
 # The job's session leader. It runs the job in its own group and exits with the job's status. On EOF of the life pipe
 # (the supervisor died before reaping it) it SIGKILLs that group, whose id this live member pins. A stand-down byte,
 # sent after the output pipes close, lets it exit once the job has; the start pipe gets '+' once the job runs, and
-# EOF once this process is gone.
-GUARD = '''import os, resource, signal, subprocess, sys, threading
+# EOF once this process is gone. argv[3] is the job's Popen identity, groups, umask and cwd as JSON (CQ-R10b); the job's
+# environment is this process's own, so a credential travels in no argv or file. On Linux the job, and anything it
+# execs, can never gain privileges (PR_SET_NO_NEW_PRIVS); a guard that cannot set the bit never starts the job.
+GUARD = '''import json, os, resource, signal, subprocess, sys, threading
 life, start = int(sys.argv[1]), int(sys.argv[2])
 for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
     signal.signal(number, lambda *_: None)  # group-wide signals are for the job; a caught signal resets at its exec
@@ -60,7 +65,11 @@ def watch():
         released.set()
 threading.Thread(target=watch, daemon=True).start()
 try:
-    job = subprocess.Popen(sys.argv[3:])
+    if sys.platform == 'linux':
+        import ctypes
+        if ctypes.CDLL(None, use_errno=True).prctl(38, *map(ctypes.c_ulong, (1, 0, 0, 0))):  # PR_SET_NO_NEW_PRIVS
+            raise OSError(ctypes.get_errno(), 'PR_SET_NO_NEW_PRIVS')
+    job = subprocess.Popen(sys.argv[4:], **json.loads(sys.argv[3]))  # in C, after fork: groups, gid, uid, then exec
 except Exception:
     os._exit(1)  # no '+': the supervisor reports EX_OSERR
 try:
@@ -352,15 +361,17 @@ def reap(child):
 
 
 # in_fd carries host response frames, and its EOF is a gone host. agent_socket opens the CQ-R08c ingress for peers
-# whose uid is agent_uid (default: the AGENT_IDENTITY account); peer_uid is injectable from Python only (tests).
-def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=peer_uid):
+# whose uid is agent_uid (default: the AGENT_IDENTITY account); peer_uid is injectable from Python only (tests). job is
+# None, for GUARD to run argv as this process with its environment, or start_job's {'env': the job's whole environment,
+# 'spawn': GUARD's Popen keywords for the job}.
+def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=peer_uid, job=None):
     # An inherited SIG_IGN (it survives exec) lets the kernel discard the child's status before waitpid reads it.
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     termination = Termination()
     wakeup = signal.set_wakeup_fd(termination.wake_w, warn_on_full_buffer=False)  # a full pipe already wakes
     saved = [(number, signal.signal(number, termination.handle)) for number in TERMINATION_SIGNALS]
     try:
-        return run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination)
+        return run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination, job)
     except Terminated:
         return EX_TERMINATED  # run_bridge's finally has killed and reaped the group and closed the bridge
     finally:
@@ -371,7 +382,7 @@ def relay(argv, out_fd=1, in_fd=0, agent_socket=None, agent_uid=None, peer_uid=p
         os.close(termination.wake_w)
 
 
-def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination):
+def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, termination, job):
     try:
         write_frame(out_fd, {'kind': 'hello', 'protocol': PROTOCOL})
     except OSError:
@@ -382,9 +393,10 @@ def run_bridge(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, terminati
     try:
         bridge.selector.register(termination.wake_r, selectors.EVENT_READ, termination.drain)  # wakes pump's select
         bridge.open(in_fd, agent_socket, agent_uid)
-        child = subprocess.Popen([sys.executable, '-I', '-B', '-c', GUARD, str(life), str(start), *argv],
+        env, spawn = (None, {}) if job is None else (job['env'], job['spawn'])
+        child = subprocess.Popen([sys.executable, '-I', '-B', '-c', GUARD, str(life), str(start), json.dumps(spawn), *argv],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True, pass_fds=(life, start))
+                                 start_new_session=True, pass_fds=(life, start), env=env)
     except (OSError, KeyError):  # KeyError: no AGENT_IDENTITY account
         os.close(life_end)
         os.close(start_end)
@@ -726,8 +738,95 @@ def export(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, drop=drop_t
         os.close(root)
 
 
-# geteuid is injectable from Python only (tests), never from argv or the environment. No path writes to stdout.
-def main(argv, geteuid=os.geteuid):
+# CQ-R10b: the agent CLIs a bridge job may run, as JOBS[cli] = (executable, the credential names it may get). argv is
+# the executable alone; CQ-R10d installs the CLIs and owns their flags, prompt and MCP wiring.
+JOBS = {'claude': ('/opt/moe/agents/claude', ('ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN')),
+        'codex': ('/opt/moe/agents/codex', ('OPENAI_API_KEY', 'CODEX_API_KEY'))}
+JOB_ROLES = ('worker', 'qa')
+JOB_PATH = '/usr/local/bin:/usr/bin:/bin'
+SESSIONS = '/var/lib/moe/sessions'
+CREDENTIAL = re.compile(r'[\x21-\x7e]{1,4096}')
+
+
+def read_exact(fd, size):
+    data = bytearray()
+    while len(data) < size:
+        chunk = os.read(fd, size - len(data))  # never past size: every later stdin byte belongs to relay()
+        if not chunk:
+            raise EOFError('host EOF before a whole job frame')
+        data += chunk
+    return bytes(data)
+
+
+def read_job(in_fd, jobs):
+    length = struct.unpack('>I', read_exact(in_fd, 4))[0]
+    if not 0 < length <= MAX_HOST_FRAME_BYTES:
+        raise ValueError('frame length outside its limit')  # before any body byte is read
+    frame = json.loads(read_exact(in_fd, length).decode('utf-8'))
+    secret = frame.get('credential') if type(frame) is dict else None
+    # type(cli) before `in jobs`: an unhashable cli must be refused, never raise TypeError.
+    if not (type(frame) is dict and frame.keys() == {'kind', 'version', 'cli', 'role', 'credential'}
+            and frame['kind'] == 'job' and type(frame['version']) is int and frame['version'] == 1
+            and type(frame['cli']) is str and frame['cli'] in jobs and frame['role'] in JOB_ROLES
+            and type(secret) is dict and secret.keys() == {'name', 'value'} and secret['name'] in jobs[frame['cli']][1]
+            and type(secret['value']) is str and CREDENTIAL.fullmatch(secret['value'])):
+        raise ValueError('not a job frame')  # fixed text: the frame holds a credential
+    return frame
+
+
+def session_home(sessions, uid, gid):
+    # 0711: a job reaches its own home by name but cannot list earlier ones. Like the agent socket directory, sessions
+    # must be writable only by this euid (root in the guest), so no job can plant or swap a home.
+    os.makedirs(sessions, 0o711, exist_ok=True)
+    info = os.lstat(sessions)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise PermissionError('the session directory is not private')
+    home = tempfile.mkdtemp(prefix='home-', dir=sessions)  # 0700 and a fresh name per job; never reused or deleted
+    os.chown(home, uid, gid)
+    return home
+
+
+# One bridge session runs one agent CLI job. The host's first frame, read before hello, picks the CLI, the role and the
+# one credential, which reaches the job only through its environment; nothing from the frame reaches argv. identity is
+# (uid, gid, groups): by default the AGENT_IDENTITY account with groups [], which is setgroups([]); None keeps the
+# caller's groups, for a non-root test only. workspace, sessions, identity, jobs, agent_socket and peer_uid are
+# injectable from Python only (tests). A refusal writes no frame, starts no job and echoes nothing from the frame: 74
+# host EOF, 65 a malformed or disallowed frame, 71 no account, 66 no workspace owned by the job uid, 71 no session home.
+def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, jobs=JOBS, agent_socket=AGENT_SOCKET,
+              peer_uid=peer_uid):
+    try:
+        frame = read_job(in_fd, jobs)
+    except (EOFError, OSError):
+        return os.EX_IOERR
+    except (ValueError, RecursionError):  # JSON and UTF-8 errors are ValueErrors
+        return os.EX_DATAERR
+    if identity is None:
+        try:
+            entry = pwd.getpwnam(AGENT_IDENTITY)
+        except KeyError:
+            return os.EX_OSERR
+        identity = (entry.pw_uid, entry.pw_gid, [])
+    uid, gid, groups = identity
+    try:
+        info = os.lstat(workspace)  # never through a symlink
+    except OSError:
+        return os.EX_NOINPUT
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+        return os.EX_NOINPUT
+    try:
+        home = session_home(sessions, uid, gid)
+    except OSError:
+        return os.EX_OSERR
+    secret = frame['credential']
+    env = {'PATH': JOB_PATH, 'HOME': home, 'USER': AGENT_IDENTITY, 'LOGNAME': AGENT_IDENTITY, 'LANG': 'C.UTF-8',
+           'MOE_ROLE': frame['role'], secret['name']: secret['value']}
+    spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace}
+    return relay([jobs[frame['cli']][0]], out_fd, in_fd, agent_socket, uid, peer_uid, job={'env': env, 'spawn': spawn})
+
+
+# geteuid and start_job's keywords (seams) are injectable from Python only (tests), never from argv or the environment.
+# No refusal writes to stdout.
+def main(argv, geteuid=os.geteuid, **seams):
     if argv not in (['bridge'], ['materialize'], ['export']):  # bridgeArgv and snapshotArgv pass exactly these
         return os.EX_USAGE
     if geteuid() != 0:
@@ -736,8 +835,7 @@ def main(argv, geteuid=os.geteuid):
         return materialize(0, 1)
     if argv == ['export']:
         return export(1)
-    # The job a bridge session runs comes from the CQ-R10/R11 job tables; until one exists a root bridge fails closed.
-    return os.EX_CONFIG
+    return start_job(0, 1, **seams)
 
 
 if __name__ == '__main__':

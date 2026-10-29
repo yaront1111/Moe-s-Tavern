@@ -13,9 +13,64 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). First read the LANDED V08 (task-2720c13b). If it exports a shared verified-delivery predicate, build on it instead of step 2's composition, and adapt.\n\nCreate packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts.\n- Use ToolTestHarness, and reuse the candidate, check-run, review and receipt fixture helpers of delivery/requiredChecks.delivery.test.ts and state/dependencyUnblock.test.ts.\n- A STRICT consumer is one whose resolveTaskDeliveryPolicy is not 'legacy', e.g. executionPolicySnapshot v2 deliveryPolicy 'local-branch'.\n- A legacy prerequisite carries a v2 snapshot with deliveryPolicy 'legacy'.\n- Assert exact unmet lists and tokens, table-driven.\n\nDoD1. For a strict consumer, each of these is UNMET:\n- a legacy-policy DONE prerequisite: token legacy-delivery;\n- a missing or deleted id: prerequisite-missing;\n- an ARCHIVED prerequisite without verified delivery: archived-without-verified-delivery;\n- a non-DONE prerequisite.\nThe SAME prerequisites under a LEGACY consumer stay satisfied exactly as today.\n\nDoD2. An ARCHIVED strict prerequisite satisfies a strict consumer when all of these hold:\n- evaluateDeliveryEvidence is satisfied;\n- its current candidate has a passing runner-observed check;\n- the LAST review on that candidate is 'approve';\n- a delivery receipt exists for that candidate.\nRemoving any one of them makes it unmet, one row each.\n\nDoD3:\n- set_task_dependencies by a non-architect gives NOT_ALLOWED and writes nothing.\n- By an architect: the TASK_DEPENDENCIES_SET activity entry names the actor, and the system message lists the removed ids.\n- After removing a missing prerequisite, the claim gate opens, but the consumer's own evaluateDeliveryEvidence result is byte-identical: no evidence is manufactured.\n- delete_task of a prerequisite never satisfies a strict consumer.\n\nPaths. Run one case per consumer path, each with a strict consumer and a legacy-DONE prerequisite:\n- the claim_next_task WORKING withholding;\n- wait_for_task;\n- the runDependencyUnblock restore (it stays BLOCKED);\n- report_blocked dependenciesSatisfied (false);\n- describeUnmetDependency naming the token;\n- the get_context, list_tasks and search_tasks unmet counts.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make the predicate consumer-aware in packages/moe-daemon/src/state/dependencyUnblock.ts. It stays ONE shared predicate, never a parallel one.\n\nError handling: isDependencySatisfied keeps failing closed. Any throw, including an unrecognised consumer policy, means unmet.\n\n- dependencyShortfall(state, taskId, consumer?: Task) and isDependencySatisfied(state, taskId, consumer?).\n- A consumer is strict when resolveTaskDeliveryPolicy(state.project?.settings, consumer) is not 'legacy'.\n- Without a consumer, or with a legacy one, the logic stays BYTE-identical to today.\n- For a strict consumer:\n  - a missing prerequisite gives {satisfied:false, missingEvidence:['prerequisite-missing']};\n  - a status other than DONE or ARCHIVED gives unmet with [];\n  - a prerequisite whose own resolveTaskDeliveryPolicy is 'legacy' gives ['legacy-delivery'];\n  - DONE gives evaluateDeliveryEvidence(state, dep), the qa_approve rule;\n  - ARCHIVED gives evaluateDeliveryEvidence plus immutable proof of delivery: the current candidate (the last listCandidatesForTask), the last listReviewsForTask entry for that candidate being 'approve', and getDeliveryReceiptForCandidate non-null. Otherwise ['archived-without-verified-delivery'].\n- unmetDependsOn and unmetBlockedOnTaskIds pass their task as the consumer. Widen their parameter types just enough for policy resolution, and fix the callers' types without behavior changes.\n- describeUnmetDependency(state, id, consumer?) names the strict tokens.\n- Update the module header and the doc comments: 'gone or ARCHIVED satisfies' holds only for legacy consumers.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Pass the consumer at the direct call sites:\n- tools/claimNextTask.ts, about line 243: dependencyShortfall(state, id, task);\n- tools/reportBlocked.ts, about line 231: isDependencySatisfied(state, id, task) when computing satisfiedBlockedOnIds;\n- tools/reportBlocked.ts, about lines 488 and 495: the held-on-evidence filter and describeUnmetDependency(state, id, task).\nThe task is the reporting row.\n\nNo other behavior changes. claimNextTask.ts is also edited by C07 (task-93dee42f): build on its landed bytes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "Make dependency removal auditable in packages/moe-daemon/src/tools/setTaskDependencies.ts. The architect/governor role gate stays.\n- Pass params.workerId as the actorWorkerId of state.updateTask(..., 'TASK_DEPENDENCIES_SET', actor), so the activity log names who changed the gate.\n- Extend the system message with explicit `removed: [...]` and `added: [...]` lists.\n- Update the response message, which says 'already DONE/ARCHIVED', so it does not promise readiness for a strict consumer. Keep the dependsOnUnmet count consumer-aware.\n- Do not add an activity event type: ACTIVITY_EVENT_TYPES is mirrored in moe-vscode.\n- Removal never writes evidence or status.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/setTaskDependencies.ts"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify once. This changes the shared readiness predicate, so run the FULL gate fresh in an isolated Linux snapshot of HEAD: whole-repo git archive, overlay only this task's files, native deps, MOE_* unset, Linux-only PATH (mem:gotcha-daemon-linux-snapshot-gate). The gate is `cd packages/moe-daemon && npm test` plus `npx tsc --noEmit`, and both must exit 0. Every pre-existing dependency, unblock and claim test must stay green unchanged, which proves legacy consumers are untouched. Supply the npm test command, exit code and output tail to complete_task.\n\nMutants, on scratch copies, restored and cmp'd afterwards:\n1. a missing prerequisite satisfies strict consumers: the DoD1 row;\n2. legacy DONE satisfies strict consumers: the DoD1 row;\n3. ARCHIVED without the review: the DoD2 row;\n4. reportBlocked without a consumer: its path case;\n5. no actor in updateTask: the DoD3 audit case.\nKeep the diff at or under 400 net lines.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts",
+        "packages/moe-daemon/src/tools/setTaskDependencies.ts"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "One adversarial self-review of this task's diff, the last step (load adversarial-self-review). Check:\n- Can any readiness, unblock or cycle path still judge a strict consumer's prerequisite without the consumer, for example through the stale-block alert or the sweep?\n- Can a wedge appear that has no remedy? A strict consumer with a deleted prerequisite needs set_task_dependencies, and the remedy must be named in describeUnmetDependency.\n- Can a forged or late review or receipt satisfy a prerequisite? Reviews and receipts are append-only, so only the last review on the CURRENT candidate counts.\n- Policy resolution throwing: fail closed.\n- Performance: per-prerequisite store lookups in list_tasks over 500 rows.\n- Legacy byte-identity.\n- No .moe edits, no forbidden-pattern tokens, no new activity types.\nWrite the handoff memory.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/tools/reportBlocked.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,8 +83,43 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:02.918Z",
-  "updatedAt": "2026-10-27T13:37:43.821Z",
+  "updatedAt": "2026-10-29T17:00:33.660Z",
   "dependsOn": [
     "task-2720c13bc79b438e840b14cbba4fea50"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-29T16:58:05.289Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T17:00:33.577Z",
+  "planningNotes": {
+    "approachesConsidered": "1. A separate strict predicate module. Rejected: the epic requires ONE shared completion/dependency predicate. The consumer becomes an optional parameter of the existing dependencyShortfall and isDependencySatisfied, and evaluateDeliveryEvidence stays the judge.\n2. Requiring a review and a receipt for DONE prerequisites too. Rejected for now: DONE under a strict policy already passed qa_approve's identical evaluateDeliveryEvidence. Only ARCHIVED, which never claims a delivery, needs the immutable proof. If V08 lands a stronger shared verified-delivery predicate, use it for both.\n3. Keeping 'deleted satisfies' for strict consumers. Rejected by DoD1 and DoD3. The remedy is an authenticated, audited set_task_dependencies removal, which never writes evidence.",
+    "codebaseInsights": "- state/dependencyUnblock.ts: dependencyShortfall and isDependencySatisfied (fail-closed catch), unmetDependsOn and unmetBlockedOnTaskIds (which already receive the consumer task), describeUnmetDependency.\n- Callers: util/claimEligibility.ts:44, tools/claimNextTask.ts:243 (dependencyShortfall directly), tools/reportBlocked.ts:231/488/495 (isDependencySatisfied and describe directly), getContext/listTasks/searchTasks/setTaskDependencies (unmet counts).\n- delivery/policy.ts resolveTaskDeliveryPolicy(settings, task) and evaluateDeliveryEvidence; LANDING_JUDGED skips landing for DONE and ARCHIVED.\n- Stores: reviewStore.listReviewsForTask (append-only), receiptStore.getDeliveryReceiptForCandidate (immutable), candidateStore.listCandidatesForTask.\n- StateManager.updateTask(taskId, updates, event?, actorWorkerId?). set_task_dependencies currently omits the actor.",
+    "risks": "- V08 is unplanned (dependsOn): adapt to its landed predicate if it lands one.\n- claimNextTask.ts overlaps C07: rebase on its landed bytes.\n- Strict consumers can now wedge on deleted prerequisites by design: the message must name the set_task_dependencies remedy.\n- Shared predicate: run the full suite. The legacy byte-identity is proven by the unchanged existing tests.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/delivery/policy.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/tools/setTaskDependencies.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T17:00:33.660Z",
+  "approvedPlanRevision": 1
 }

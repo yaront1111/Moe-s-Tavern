@@ -390,7 +390,7 @@ test('S7 the supervisor is an isolated stdlib-only script whose CLI accepts only
     const run = spawnSync('python3', ['-I', SUPERVISOR, ...args]);
     assert.deepEqual([run.status, run.stdout.length], [64, 0], `${args} ${run.stderr}`);
   }
-  for (const [code, status] of [["['bridge'], geteuid=lambda: 0", 78], ["['relay'], geteuid=lambda: 0", 64], ["['bridge'], geteuid=lambda: 1000", 77]]) {
+  for (const [code, status] of [["['bridge'], geteuid=lambda: 0", 74], ["['relay'], geteuid=lambda: 0", 64], ["['bridge'], geteuid=lambda: 1000", 77]]) {
     const run = harness(`sys.exit(m.main(${code}))`);
     assert.deepEqual([run.status, run.stdout.length], [status, 0], `${code} ${run.stderr}`);
   }
@@ -1149,3 +1149,154 @@ test('S17 a connection the listener still queues when relay() ends reads EOF, ne
     try { process.kill(host.child, 'SIGKILL'); } catch { /* already gone */ }
   }
 });
+
+// CQ-R10b: a root bridge reads one job frame from stdin before hello, then runs that agent CLI as the agent identity.
+// Paths, the identity and the job table reach main() only as Python keywords, through the harness's own argv. A non-root
+// runner cannot setgroups, so OWN passes None for the groups; J3 pins the real account's [] with a recorder.
+const SECRET = 'sk-R10b!~test0';
+const JOB = Object.freeze({ kind: 'job', version: 1, cli: 'claude', role: 'worker', credential: Object.freeze({ name: 'ANTHROPIC_API_KEY', value: SECRET }) });
+const QA_JOB = Object.freeze({ kind: 'job', version: 1, cli: 'codex', role: 'qa', credential: Object.freeze({ name: 'CODEX_API_KEY', value: SECRET }) });
+const jobFrame = value => encodeFrame(value, MAX_HOST_FRAME_BYTES);
+const OWN = 'identity=(os.getuid(), os.getgid(), None)';
+// A fresh dir holds ws, a regular file and a link to ws; sessions does not exist yet.
+const JOB_DIRS = `import types
+os.umask(0o022)  # sudo's, under which the guest supervisor runs
+base = sys.argv[2]
+workspace, sessions = os.path.join(base, sys.argv[3]), os.path.join(base, 'sessions')
+os.makedirs(os.path.join(base, 'ws'))
+open(os.path.join(base, 'file'), 'w').close()
+os.symlink(os.path.join(base, 'ws'), os.path.join(base, 'link'))
+`;
+// The recorder stands in for relay(), which must get job by keyword: it prints its call and returns 42.
+const RECORD = `def record(argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid, *, job):
+    print(json.dumps([argv, out_fd, in_fd, agent_socket, agent_uid, peer_uid is m.peer_uid, job]))
+    return 42
+m.relay = record
+`;
+function bridgeJob(input, { workspace = 'ws', setup = '', seams = OWN, runs = 1 } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'moe-r10b-'));
+  const code = `${LOAD}${JOB_DIRS}${RECORD}${setup}
+codes = [m.main(['bridge'], geteuid=lambda: 0, workspace=workspace, sessions=sessions, ${seams}) for _ in range(${runs})]
+sys.exit(codes[0] if len(set(codes)) == 1 else 99)
+`;
+  const run = spawnSync('python3', ['-I', '-B', '-c', code, SUPERVISOR, dir, workspace], { input, maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
+  const sessions = join(dir, 'sessions');
+  return Object.assign(run, { dir, sessions, homes: existsSync(sessions) ? readdirSync(sessions) : null });
+}
+
+test('J1 a malformed, disallowed or cut job frame, or no workspace, fails before hello with no frame, job or home', { skip: NO_GUEST, timeout: 30_000 }, t => {
+  const raw = bytes => framed(Buffer.from(bytes));
+  const valued = value => ({ ...JOB, credential: { ...JOB.credential, value } });
+  const malformed = [raw('{'), raw('[]'), raw('null'), raw(`﻿${JSON.stringify(JOB)}`), raw('['.repeat(100_000) + ']'.repeat(100_000)),
+    raw(Buffer.concat([Buffer.from('{"kind":"'), Buffer.from([0xff]), Buffer.from('"}')])), header(0), header(MAX_HOST_FRAME_BYTES + 1),
+    ...[{ ...JOB, extra: 1 }, { ...JOB, credential: { ...JOB.credential, extra: 1 } }, { ...JOB, role: undefined }, { ...JOB, kind: 'jobs' },
+      ...[2, true, '1'].map(version => ({ ...JOB, version })), ...['gemini', [], {}].map(cli => ({ ...JOB, cli })),
+      ...['architect', 'WORKER'].map(role => ({ ...JOB, role })), ...['x', null].map(credential => ({ ...JOB, credential })),
+      ...['OPENAI_API_KEY', 'PATH'].map(name => ({ ...JOB, credential: { ...JOB.credential, name } })), { ...JOB, cli: 'codex' },
+      ...['', 'a b', 'a\tb', 'a\nb', 'a\x7fb', 'café', 'x'.repeat(4097), 7, null].map(valued)].map(jobFrame)];
+  const cases = [...malformed.map(input => [65, input, {}]), [74, Buffer.alloc(0), {}], [74, header(9).subarray(0, 2), {}],
+    [74, jobFrame(JOB).subarray(0, 20), {}], [74, Buffer.alloc(0), { workspace: 'absent' }],
+    ...['absent', 'file', 'link'].map(workspace => [66, jobFrame(JOB), { workspace }]),
+    [66, jobFrame(JOB), { seams: 'identity=(os.getuid() + 1, os.getgid(), None)' }]];
+  for (const [status, input, options] of cases) {
+    const run = bridgeJob(input, options);
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    assert.deepEqual([run.status, run.stdout.length, run.stderr.length, run.homes], [status, 0, 0, null],
+      `${input.subarray(0, 64)} ${JSON.stringify(options)} ${run.stderr}`);
+  }
+});
+
+test('J2 the job frame is read byte-exact up to the host frame limit, leaving every later stdin byte to relay()', { skip: NO_GUEST, timeout: 30_000 }, t => {
+  const unread = 'm.relay = lambda *args, **options: print(os.read(0, 64).decode()) or 42\n';
+  const runs = [bridgeJob(Buffer.concat([jobFrame(JOB), Buffer.from('after')]), { setup: unread }),
+    bridgeJob(framed(Buffer.from(JSON.stringify(JOB).padEnd(MAX_HOST_FRAME_BYTES)))),
+    bridgeJob(jobFrame({ ...JOB, credential: { ...JOB.credential, value: 'x'.repeat(4096) } }))];
+  for (const run of runs) t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+  assert.deepEqual(runs.map(run => run.status), [42, 42, 42], runs.map(run => String(run.stderr)).join('\n'));
+  assert.equal(String(runs[0].stdout), 'after\n');
+});
+
+test('J3 main() routes a root bridge to relay as the real agent account with no supplementary groups, and each job gets a fresh kept home',
+  { skip: NO_GUEST, timeout: 30_000 }, t => {
+    const account = `m.pwd = types.SimpleNamespace(getpwnam=lambda name: print(name, file=sys.stderr) or types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid()))
+os.chown = lambda path, uid, gid, chown=os.chown: print('chown', path, uid, gid, file=sys.stderr) or chown(path, uid, gid)  # a no-op for the owner
+`;
+    const run = bridgeJob(Buffer.concat([jobFrame(JOB), jobFrame(QA_JOB)]), { setup: account, seams: '', runs: 2 });
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    const calls = String(run.stdout).trim().split('\n').map(line => JSON.parse(line));
+    const uid = process.getuid();
+    assert.equal(calls.length, 2);
+    const chowned = calls.map(call => `moe-agent\nchown ${call[6].env.HOME} ${uid} ${process.getgid()}\n`).join('');
+    assert.deepEqual([run.status, String(run.stderr)], [42, chowned]);
+    for (const [index, { cli, role, credential }] of [JOB, QA_JOB].entries()) {
+      const [argv, outFd, inFd, socket, agentUid, realPeer, job] = calls[index];
+      assert.deepEqual([argv, outFd, inFd, socket, agentUid, realPeer], [[`/opt/moe/agents/${cli}`], 1, 0, '/run/moe/agent.sock', uid, true]);
+      const home = job.env.HOME;
+      assert.deepEqual(job, { env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, USER: 'moe-agent', LOGNAME: 'moe-agent', LANG: 'C.UTF-8',
+        MOE_ROLE: role, [credential.name]: SECRET }, spawn: { user: uid, group: process.getgid(), extra_groups: [], umask: 0o077, cwd: join(run.dir, 'ws') } });
+      assert.equal(dirname(home), run.sessions);
+      const info = statSync(home);
+      assert.deepEqual([info.isDirectory(), info.mode & 0o7777, info.uid], [true, 0o700, uid]);
+    }
+    assert.notEqual(calls[0][6].env.HOME, calls[1][6].env.HOME);
+    assert.deepEqual(run.homes.map(name => join(run.sessions, name)).sort(), calls.map(call => call[6].env.HOME).sort());
+    assert.equal(statSync(run.sessions).mode & 0o7777, 0o711);
+    const refusals = [['def gone(name):\n    raise KeyError(name)\nm.pwd = types.SimpleNamespace(getpwnam=gone)\n', ''],
+      ['os.mkdir(sessions)\nos.chmod(sessions, 0o730)\n', OWN], ['os.mkdir(sessions)\nos.chmod(sessions, 0o703)\n', OWN],
+      ["os.mkdir(sessions + '.real')\nos.symlink(sessions + '.real', sessions)\n", OWN]];
+    for (const [setup, seams] of refusals) {
+      const refused = bridgeJob(jobFrame(JOB), { setup, seams });
+      t.after(() => rmSync(refused.dir, { recursive: true, force: true }));
+      assert.deepEqual([refused.status, refused.stdout.length, refused.stderr.length, refused.homes ?? []], [71, 0, 0, []], `${setup} ${refused.stderr}`);
+    }
+  });
+
+// The probe job reports what it was given. The harness is the supervisor: it moves stdin into a pipe whose write end it
+// keeps, so relay() sees no host EOF, and the job frame, credential included, never enters its argv.
+const PROBE = `import json, os
+def parent(pid):
+    return int(open('/proc/%d/stat' % pid).read().rsplit(')', 1)[1].split()[1])
+def cmdline(pid):
+    return open('/proc/%d/cmdline' % pid, 'rb').read().decode('latin1')
+environ = open('/proc/self/environ', 'rb').read().decode().split('\\0')
+status = open('/proc/self/status').read().splitlines()
+print(json.dumps({'env': dict(entry.split('=', 1) for entry in environ if entry), 'cwd': os.getcwd(), 'umask': os.umask(0),
+                  'nnp': [line for line in status if line.startswith('NoNewPrivs:')],
+                  'cmdlines': [cmdline(pid) for pid in (os.getpid(), os.getppid(), parent(os.getppid()))]}))
+`;
+const HELD = groups => `data = b''.join(iter(lambda: os.read(0, 65536), b''))
+r, w = os.pipe()
+os.write(w, data)
+os.dup2(r, 0)
+probe = os.path.join(base, 'probe')
+with open(probe, 'w') as f:
+    f.write('#!%s -I\\n%s' % (sys.executable, sys.argv[4]))
+os.chmod(probe, 0o700)
+jobs = {cli: (probe, names) for cli, (_, names) in m.JOBS.items()}
+sys.exit(m.main(['bridge'], geteuid=lambda: 0, workspace=workspace, sessions=sessions, identity=(os.getuid(), os.getgid(), ${groups}),
+                jobs=jobs, agent_socket=None))
+`;
+
+test('J4 the job gets exactly the allowlisted environment and its one credential, the workspace, umask 077 and NoNewPrivs, and no argv holds the credential',
+  { skip: NO_GUEST || (process.platform !== 'linux' && 'the job probes read /proc'), timeout: 30_000 }, t => {
+    const dir = mkdtempSync(join(tmpdir(), 'moe-r10b-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const held = (name, groups, input) => spawnSync('python3', ['-I', '-B', '-c', `${LOAD}${JOB_DIRS}${HELD(groups)}`, SUPERVISOR, join(dir, name), 'ws', PROBE],
+      { input, maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
+    const { exit, stdout } = session(held('kept', 'None', jobFrame(QA_JOB)));
+    assert.deepEqual(exit, EXIT);
+    const probe = JSON.parse(stdout);
+    const homes = readdirSync(join(dir, 'kept', 'sessions'));
+    assert.equal(homes.length, 1);
+    assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'kept', 'sessions', homes[0]), USER: 'moe-agent',
+      LOGNAME: 'moe-agent', LANG: 'C.UTF-8', MOE_ROLE: 'qa', CODEX_API_KEY: SECRET });
+    assert.deepEqual([probe.cwd, probe.umask, probe.nnp], [join(dir, 'kept', 'ws'), 0o077, ['NoNewPrivs:\t1']]);
+    assert.ok(probe.cmdlines[1].includes('\0-c\0import json, os, resource, signal'), 'the parent is the guard');
+    assert.ok(probe.cmdlines[2].includes(`\0${SUPERVISOR}\0`), 'the grandparent is the supervisor');
+    assert.deepEqual(probe.cmdlines.filter(line => line.includes(SECRET)), []);
+    if (process.getuid() !== 0) { // setgroups needs root: a guard that applies extra_groups [] cannot start the job
+      const groups = held('dropped', '[]', jobFrame(JOB));
+      assert.equal(groups.status, 71, String(groups.stderr));
+      assert.deepEqual(decodeAll([groups.stdout]).map(parseGuestFrame), [HELLO]);
+    }
+  });
