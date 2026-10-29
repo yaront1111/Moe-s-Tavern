@@ -1,5 +1,5 @@
 // Guest bootstrap readiness only: bounded waiting for cloud-init, then boundary evidence (zero mounts,
-// protected supervisor and credential, locked unprivileged identities, bounded resources). bootstrapReady
+// protected supervisor, credential and MCP shim, locked unprivileged identities, bounded resources). bootstrapReady
 // is NOT execution readiness or isolation: executionReady is always false and verified-local stays
 // unavailable until certification. Facts relied on (canonical/multipass tag v1.17.0 and cloud-init):
 // - src/client/cli/formatter/json_formatter.cpp generate_instance_details: image_hash is the image id,
@@ -19,8 +19,9 @@ import { classifyFailure, MAX_PROBE_BUFFER, providerError } from './multipass.mj
 const CONTROL = /[\x00-\x1f\x7f]/;
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const WAITING = new Set(['Starting', 'Restarting']);
-const LAYOUT_PATHS = [...GUEST_LAYOUT.supervisorDirs, GUEST_LAYOUT.supervisor, GUEST_LAYOUT.credentialDir, GUEST_LAYOUT.credential];
-const EXACT_MODES = new Map([[GUEST_LAYOUT.supervisor, '500:-r-x------'], [GUEST_LAYOUT.credential, '400:-r--------']]);
+const { supervisor, credential, shim, shimTools } = GUEST_LAYOUT;
+const LAYOUT_PATHS = [...GUEST_LAYOUT.supervisorDirs, supervisor, GUEST_LAYOUT.credentialDir, credential, shim, shimTools];
+const EXACT_MODES = new Map([[supervisor, '500:-r-x------'], [credential, '400:-r--------'], [shim, '555:-r-xr-xr-x'], [shimTools, '444:-r--r--r--']]);
 // A root-owned directory with no group or other write bit, as %A spells it.
 const SAFE_DIR = /^d[r-][w-][xsS-][r-]-[xsS-][r-]-[xtT-]$/;
 // proc(5): id parent major:minor root mount-point options [optional fields...] - fstype source super-options
@@ -70,8 +71,9 @@ function layoutFailure({ code, stdout }) {
   return valid ? null : 'LAYOUT_INVALID';
 }
 
-const hashFailure = ({ code, stdout }, { supervisorSha256 }) =>
-  (code === 0 && stdout === `${supervisorSha256}  ${GUEST_LAYOUT.supervisor}\n` ? null : 'SUPERVISOR_HASH_MISMATCH');
+// A pinned file's check: its sha256sum line must carry the bootstrap digest under key, else failure.
+const digestCheck = (id, file, key, failure) => [id, ['sudo', '-n', 'sha256sum', file],
+  ({ code, stdout }, context) => (code === 0 && stdout === `${context[key]}  ${file}\n` ? null : failure)];
 
 function lockedFailure({ code, stdout }, id) {
   const [line, ...rest] = code === 0 ? outputLines(stdout) : [];
@@ -96,7 +98,9 @@ function identityChecks(id) {
 const CHECKS = [
   ['mountinfo', ['cat', '/proc/self/mountinfo'], mountFailure],
   ['layout', ['sudo', '-n', 'stat', '--format=%U:%G:%a:%A:%n', ...LAYOUT_PATHS], layoutFailure],
-  ['supervisorHash', ['sudo', '-n', 'sha256sum', GUEST_LAYOUT.supervisor], hashFailure],
+  digestCheck('supervisorHash', supervisor, 'supervisorSha256', 'SUPERVISOR_HASH_MISMATCH'),
+  digestCheck('shimHash', shim, 'shimSha256', 'SHIM_HASH_MISMATCH'),
+  digestCheck('shimToolsHash', shimTools, 'shimToolsSha256', 'SHIM_TOOLS_HASH_MISMATCH'),
   ...JOB_IDENTITIES.flatMap(identityChecks),
 ];
 
@@ -198,11 +202,11 @@ function resourceFailure({ cpuCount, memoryTotal, diskTotal }) {
 }
 
 /** Every check runs once, in order; failures are codes only, deduplicated in first-seen order. */
-async function boundaryFailures(name, provider, info, supervisorSha256) {
+async function boundaryFailures(name, provider, info, bootstrap) {
   const failures = new Set();
   for (const [id, , evaluate] of CHECKS) {
     let failure;
-    try { failure = evaluate(await runGuestProbe(name, id, provider), { info, supervisorSha256 }); } catch (error) { failure = reported(error); }
+    try { failure = evaluate(await runGuestProbe(name, id, provider), { ...bootstrap, info }); } catch (error) { failure = reported(error); }
     if (failure) failures.add(failure);
   }
   const resources = resourceFailure(info);
@@ -222,7 +226,7 @@ async function pinnedSource(sourceImage) {
 const validInputs = ({ ledger, sleep, pollMs, maxWaitMs, bootstrap }) => isRecord(ledger)
   && typeof ledger.read === 'function' && typeof ledger.recordImage === 'function' && typeof sleep === 'function'
   && [pollMs, maxWaitMs].every(ms => Number.isSafeInteger(ms) && ms > 0)
-  && typeof bootstrap?.supervisorSha256 === 'string' && /^[0-9a-f]{64}$/.test(bootstrap.supervisorSha256);
+  && ['supervisorSha256', 'shimSha256', 'shimToolsSha256'].every(key => typeof bootstrap?.[key] === 'string' && /^[0-9a-f]{64}$/.test(bootstrap[key]));
 
 /**
  * Bootstrap readiness for an owned guest: inputs and ownership before any provider call, a bounded wait for
@@ -242,7 +246,7 @@ export async function waitForGuestReady({
   if (record.phase !== 'owned') throw lifecycleError('LIFECYCLE_PHASE_INVALID');
   const { supervisorSha256 } = bootstrap;
   const { info, failure } = await awaitCloudInit({ name, provider, sleep, pollMs, polls: Math.ceil(maxWaitMs / pollMs) });
-  const failures = failure ? [failure] : await boundaryFailures(name, provider, info, supervisorSha256);
+  const failures = failure ? [failure] : await boundaryFailures(name, provider, info, bootstrap);
   if (failures.length === 0) {
     try {
       await ledger.recordImage(record, { sourceSha256: source.sha256, providerImageHash: info.providerImageHash });

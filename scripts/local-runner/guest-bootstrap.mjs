@@ -1,5 +1,5 @@
 // Guest bootstrap only: pinned source-image verification and the deterministic cloud-init user-data that
-// installs the protected supervisor and the locked job identities. It makes no execution readiness or
+// installs the protected supervisor, the guest MCP shim and its tools, and the locked job identities. It makes no execution readiness or
 // isolation claim; verified-local stays unavailable.
 // Launch MUST use the verified LOCAL file (file://): Multipass v1.17.0 src/daemon/default_vm_image_vault.cpp
 // derives an HTTP image's id from the URL string, not its content, and records compute_file_hash of the
@@ -7,7 +7,7 @@
 // differ and are recorded separately. Hash-then-launch is a TOCTOU window: R03-R05 must keep the verified
 // image in a controller-private directory until launch.
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, readFileSync } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
 import { loadCertifiedProvider } from './doctor.mjs';
@@ -15,6 +15,8 @@ import { loadCertifiedProvider } from './doctor.mjs';
 export const GUEST_LAYOUT = Object.freeze({
   supervisor: '/opt/moe/bin/moe-supervisor',
   supervisorDirs: Object.freeze(['/opt/moe', '/opt/moe/bin']),
+  shim: '/opt/moe/bin/moe-mcp-shim',
+  shimTools: '/opt/moe/bin/tools.json',
   credential: '/etc/moe/supervisor.credential',
   credentialDir: '/etc/moe',
 });
@@ -30,6 +32,7 @@ const MESSAGES = {
   IMAGE_UNREADABLE: 'Source image could not be read.',
   IMAGE_CHECKSUM_MISMATCH: 'Source image does not match the pinned manifest checksum.',
   BOOTSTRAP_INPUT_INVALID: 'Guest bootstrap input was invalid.',
+  BOOTSTRAP_ASSET_INVALID: 'A bundled guest asset was missing or invalid.',
 };
 
 export function bootstrapError(code) {
@@ -92,6 +95,14 @@ const validPayload = (value, max) => Buffer.isBuffer(value) && value.length > 0 
 const writeFile = (file, permissions, bytes) => [
   `  - path: ${file}`, '    owner: root:root', `    permissions: '${permissions}'`, '    encoding: b64', `    content: '${bytes.toString('base64')}'`,
 ];
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+// A guest asset bundled beside this module, read only when user-data is built, never at import.
+function readAsset(name) {
+  let bytes = null;
+  try { bytes = readFileSync(new URL(`./${name}`, import.meta.url)); } catch { /* missing or unreadable */ }
+  if (!validPayload(bytes, MAX_SUPERVISOR_BYTES)) throw bootstrapError('BOOTSTRAP_ASSET_INVALID');
+  return bytes;
+}
 
 /**
  * Deterministic user-data built only from constants and base64. '- default' stays: Multipass execs as the
@@ -102,12 +113,16 @@ export function buildUserData(input) {
   if (!validPayload(supervisor, MAX_SUPERVISOR_BYTES) || !validPayload(credential, MAX_CREDENTIAL_BYTES)) {
     throw bootstrapError('BOOTSTRAP_INPUT_INVALID');
   }
+  const shim = readAsset('guest-mcp-shim.py');
+  const shimTools = readAsset('guest-mcp-tools.json');
   const lines = [
     '#cloud-config', 'ssh_pwauth: false', 'disable_root: true', 'mounts: []', 'users:', '  - default',
     ...JOB_IDENTITIES.flatMap(name => [`  - name: ${name}`, '    lock_passwd: true', '    shell: /bin/bash']),
     'write_files:',
     ...writeFile(GUEST_LAYOUT.supervisor, '0500', supervisor),
+    ...writeFile(GUEST_LAYOUT.shim, '0555', shim),
+    ...writeFile(GUEST_LAYOUT.shimTools, '0444', shimTools),
     ...writeFile(GUEST_LAYOUT.credential, '0400', credential),
   ];
-  return Object.freeze({ userData: `${lines.join('\n')}\n`, supervisorSha256: createHash('sha256').update(supervisor).digest('hex') });
+  return Object.freeze({ userData: `${lines.join('\n')}\n`, supervisorSha256: sha256(supervisor), shimSha256: sha256(shim), shimToolsSha256: sha256(shimTools) });
 }

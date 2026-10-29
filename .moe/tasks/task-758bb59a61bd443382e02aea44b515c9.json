@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:30.772Z",
-  "updatedAt": "2026-10-29T23:08:05.112Z",
+  "updatedAt": "2026-10-29T23:08:40.229Z",
   "dependsOn": [
     "task-6f3725e6ae56471c982fc39492ca2069",
     "task-63930ba4a46344f9af3c41cfef60ae0d"
@@ -199,7 +199,10 @@
     ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
     ".moe/tasks/task-b64659ca3ddf4f629975f9f472c24c3c.json",
     ".moe/tasks/task-beb698a44f27417fa9dba51e85968e84.json",
-    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json"
+    ".moe/tasks/task-f18eef7acc5140cdbe6f545a7f82434d.json",
+    ".moe/tasks/task-41fc271bec774d0b910c88691b18a2ea.json",
+    ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+    ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json"
   ],
   "completionSummary": "CQ-I05 delivered (plan rev 1, 5/5 steps): a VS Code 'Managed VMs' native TreeView over CQ-I03a's vm-control.mjs, mirroring JB I03.\n\nFiles:\n- NEW src/util/ManagedVm.ts: pure. decode, readiness, strongProfile, rows, actions, notes, commandArgs, runVmControl.\n- NEW src/providers/ManagedVmTreeProvider.ts.\n- NEW tests/managed-vm.test.cjs (V1-V4, 9 tests).\n- settings-wire S6.\n- extension.ts +10 (view and 3 commands).\n- package.json: view, commands, enablement, title menu.\n- MoeDaemonClient.resolveDaemonRuntime made public.\n\nAdapted to the landed I03 rules and comment-5c9de848:\n- decode takes the command (schema bound to it); a top-level code gives refused;\n- rows hide collision and deleted;\n- cleanup needs a LAUNCHED row;\n- distinct unreadable reasons.\n\nDoD:\n1. readiness gives 3 lines; only a literal true counts. Rows are owned only. A foreign or duplicate name anywhere makes the whole report not-owned.\n2. strongProfile is a constant (blocked); there is no activation path. actions are refresh, reconcile and cleanup, single flight.\n3. S6: executionProfile, deliveryPolicy, checkEnvironments and repairPolicy are never sent and survive SETTINGS_UPDATED.\n4. Gate exit 0, 175/175 (165 baseline + 10 new), tsc clean.\n\nMutants: 12/12 killed by their named cases (scratch copy, restored, cmp identical).\n\nSize: 400 net (+405/-5) over moe-vscode, at the cap. Code was compacted to get there; no behavior was dropped.\n\nDeviations:\n- the first status run happens on the view's first render, not at activation;\n- no explicit onView activation (VS Code 1.74+ generates it);\n- unknown-code wording is 'Unknown code X: …'.\n\nSelf-review fix: a disconnected client shows the profile as 'unknown (not connected)', not 'legacy'.\n\nResiduals:\n- headless only: no real VM and no extension-host run;\n- CI wiring of the producer test is owed by I06;\n- a grandchild holding stdout could delay close (theoretical);\n- a stderr flood reads as too-large;\n- cancelling cleanup can interrupt a delete (reconcile repairs ",
   "commits": [
@@ -229,6 +232,24 @@
       "treeId": "baed2924f3af4204a6f34a512500603cbe7706d7",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "dac6761deb64b29062eca1cc5dedd227d30d74c3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T23:03:54Z",
+      "paths": [
+        ".moe/tasks/task-41fc271bec774d0b910c88691b18a2ea.json",
+        ".moe/tasks/task-6dbeb9712cda46488b80ce23afe35198.json",
+        ".moe/tasks/task-758bb59a61bd443382e02aea44b515c9.json",
+        ".moe/tasks/task-f2d3d553bd684eff997498a55c564f13.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T23:08:40.229Z",
+      "treeId": "805f8b31b5c8328b61e20a2ed72a516b306c8efd",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -239,9 +260,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b5749787@2026-10-29T22:46:07Z",
-    "at": "2026-10-29T23:03:46.645Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T23:03:54Z",
+    "at": "2026-10-29T23:08:40.229Z"
   },
   "completedAt": "2026-10-29T23:08:05.112Z",
   "reviewCompletedAt": "2026-10-29T23:08:05.112Z",

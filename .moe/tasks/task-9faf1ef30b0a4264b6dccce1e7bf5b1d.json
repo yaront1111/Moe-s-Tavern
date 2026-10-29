@@ -11,11 +11,99 @@
   ],
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
-    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass.",
+    "CQ-R10d1 size exception, approved by the human in the architect REPL on 2026-10-30. CQ-R10d1 (task-9faf1ef30b0a4264b6dccce1e7bf5b1d) may contain at most 650 changed lines (additions plus deletions by git diff --numstat, comments and blank lines included) across exactly scripts/local-runner/guest-mcp-shim.py (new), scripts/local-runner/guest-mcp-tools.json (new), scripts/local-runner/guest-bootstrap.mjs, scripts/local-runner/guest-readiness.mjs, scripts/tests/local-runner.test.mjs, scripts/tests/local-runner-agents.test.mjs (new) and .github/workflows/ci.yml. The architect's estimate before implementation was about 460-560 lines: shim ~200, bootstrap and readiness ~25, R07 test updates ~30 and agents tests ~250. The worker records the measured numstat in the completion summary. Grow it only by defect fixes QA requires. It waives size only: every DoD item, substantive QA, fresh verification and fail-closed behavior still apply in full; executionReady stays false and verified-local stays unavailable."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Shim protocol core, the generated tools.json, the new test file and its CI line. Covers DoD 1, DoD 2 except the relay, and the CI half of DoD 4.\n\n1. scripts/local-runner/guest-mcp-tools.json. GENERATE it; never hand-edit it. From the repo root:\n`node --input-type=module -e \"import { writeFileSync } from 'node:fs'; import { TOOLS } from './scripts/local-runner/guest-bridge.mjs'; writeFileSync('scripts/local-runner/guest-mcp-tools.json', JSON.stringify(Object.fromEntries(Object.entries(TOOLS).map(([role, tools]) => [role, Object.fromEntries(Object.entries(tools).map(([tool, entry]) => [tool, entry.args]))]))) + '\\n')\"`\n- Result: one compact line of role -> tool -> argument keys, in TOOLS order.\n- Why checked in: guest-bridge.mjs imports guest-bootstrap.mjs, so bootstrap importing TOOLS would create an ESM cycle. SH1 pins the file to TOOLS byte for byte.\n\n2. scripts/local-runner/guest-mcp-shim.py (new).\n- Format: line 1 is `#!/usr/bin/python3 -I`; LF only; standard library only.\n- Header comment: this is the in-guest agent CLI's only route to Moe; the protocol source of truth is CQ-R08c's agent socket plus guest-bridge.mjs; the host's scopeRequest stays the enforcement point; no isolation claim; verified-local stays unavailable.\n\nModule constants:\n- AGENT_SOCKET = '/run/moe/agent.sock'; TOOLS_PATH = '/opt/moe/bin/tools.json'.\n- MAX_GUEST_FRAME_BYTES = 262144 and MAX_HOST_FRAME_BYTES = 4194304, with a 'mirrors guest-bridge.mjs' comment.\n- MAX_LINE_BYTES = 262144.\n- MAX_TOOLS_BYTES = 262144, equal to guest-bootstrap.mjs MAX_SUPERVISOR_BYTES, the asset bound.\n- MAX_IN_FLIGHT = 8 (the supervisor's per-connection bound); MAX_REQUEST_ID = 2147483647.\n- CALL_TIMEOUT_SECONDS = 120, above the host's 60 s forward cap.\n- PROTOCOL_VERSIONS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'), newest first.\n- TOOL and CODE regexes copied from guest-supervisor.py; KEY = [A-Za-z][A-Za-z0-9_]{0,63}.\n- Read limits and paths from module globals at use time, never through default arguments, so the harness can lower them.\n\nERRORS is the only source of error text. Each entry is a JSON-RPC code plus a fixed message, and no message ever includes input:\n- PARSE -32700 'Parse error.'\n- INVALID_REQUEST -32600 'Invalid request.'\n- TOO_LARGE -32600 'Request too large.'\n- METHOD -32601 'Method not found.'\n- INVALID_PARAMS -32602 'Invalid params.'\n- TOOL_DENIED -32602 'Tool not available to this role.'\n- ARGUMENT_DENIED -32602 'Argument not allowed for this tool.'\n- BUSY -32001 'Too many tool calls in flight.'\n- TIMEOUT -32002 'The tool call timed out.'\n- UNAVAILABLE -32003 'The Moe bridge is unavailable.'\n- REFUSED -32004 'Moe refused the tool call.' This one alone carries data {code: <the host's CODE>}.\nPARSE, INVALID_REQUEST and the oversized-line TOO_LARGE always answer with id null. Every other error echoes the request id.\n\nFunctions:\n- load_tools(path): read at most MAX_TOOLS_BYTES+1 bytes; parse as strict UTF-8 JSON. The result must be an object of role -> object of TOOL-matching name -> list of unique KEY-matching strings. Anything else, a missing file included, returns {} (serves none).\n- serve(role, table, socket_path, timeout=None, in_fd=0, out_fd=1) returns the exit code. timeout None means CALL_TIMEOUT_SECONDS. The role's tools are table[role] only when role is a str key of table; otherwise none.\n- main() = serve(os.environ.get('MOE_ROLE'), load_tools(TOOLS_PATH), AGENT_SOCKET), with the globals read at call time; then `if __name__ == '__main__': sys.exit(main())`. It reads no other environment variable.\n\nstdin:\n- Newline-delimited messages, read in chunks through a selectors loop; step 2 adds the socket to the same loop.\n- A line over MAX_LINE_BYTES bytes before its newline gets ONE TOO_LARGE, and its bytes are discarded through the next newline, so the buffer never holds more than MAX_LINE_BYTES.\n- Whitespace-only lines are ignored.\n- EOF returns 0 and drops an unterminated final line. A stdout write failure returns 74 (os.EX_IOERR).\n- Each reply is one line: json.dumps(separators=(',', ':'), ensure_ascii=True, allow_nan=False) + '\\n', written whole through an os.write loop.\n\nParsing:\n- Strict UTF-8 decode, then json.loads with parse_constant and parse_float hooks that refuse NaN, Infinity and non-finite floats such as 1e999.\n- ValueError or RecursionError gives PARSE.\n- The message must be an object with jsonrpc == '2.0' and a str method. A batch array, anything else, or an invalid id gives INVALID_REQUEST.\n- A valid id is an int (not bool) with |id| < 2**53, or a str of at most 256 chars.\n- A message without an id is a notification and is never answered: notifications/initialized, notifications/cancelled and any other.\n- params, when present, must be an object, else INVALID_PARAMS.\n\nMethods:\n- initialize: params.protocolVersion must be a str, else INVALID_PARAMS. Answer it back when it is in PROTOCOL_VERSIONS, otherwise PROTOCOL_VERSIONS[0]. Include capabilities {tools: {}} and serverInfo {name: 'moe-guest-shim', version: '1'}. There is no initialize state machine.\n- ping: {}.\n- tools/list: {tools: [...]} in table order. Each entry is {name, inputSchema: {type: 'object', properties: {<key>: {} for each key}, additionalProperties: false}}.\n- tools/call: a name that is not a str gives INVALID_PARAMS; a name outside the role's tools gives TOOL_DENIED. arguments (absent means {}) must be an object, else INVALID_PARAMS, and each of its keys must be in the tool's list, else ARGUMENT_DENIED. Other params keys such as _meta are ignored. Until step 2, an allowed call answers UNAVAILABLE.\n- Any other method gives METHOD.\n\n3. scripts/tests/local-runner-agents.test.mjs (new; every later CQ-R10d slice extends it). Reuse the patterns of local-runner-bridge.test.mjs:\n- NO_GUEST = process.platform === 'win32' && '<reason>', as each Python row's skip.\n- The LOAD importlib prelude, and spawn('python3', ['-I', '-B', '-c', LOAD + code, SHIM, ...args]). The -B flag keeps __pycache__ out of the bundled directory.\n- A client helper writes JSON lines, collects stdout lines, ends stdin and asserts exit 0.\n- A fake-peer helper: net.createServer on a short mkdtemp socket path (macOS caps AF_UNIX paths at 104 bytes) that records connections and frames.\n- Every async row gets timeout: 30_000.\n\nRows:\n- SH1 (DoD 1; its JS part also runs on win32). The guest-mcp-tools.json text equals the generator's TOOLS projection plus '\\n'. Python part:\n  - For worker and qa, tools/list returns TOOLS[role]'s names in order, each with the exact inputSchema.\n  - For MOE_ROLE absent, '', 'admin', 'WORKER' and 'constructor', the list is [] and tools/call moe.get_context gives TOOL_DENIED.\n  - load_tools returns {} for: a missing file, non-JSON, a non-object, a bad tool name, a non-list, duplicate keys, a bad key, and MAX_TOOLS_BYTES+1 bytes.\n- SH2:\n  - initialize echoes each supported version and answers an unknown one with '2025-11-25'.\n  - capabilities and serverInfo are exactly as specified; ping gives {}.\n  - After notifications/initialized and notifications/cancelled, the next stdout line is the answer to the following ping.\n- SH3 (DoD 2's refusals). Each case gets its exact {code, message} and id, and the fake peer sees zero connections:\n  - an unknown tool, and the other role's tool;\n  - taskId, workerId and unknown argument keys;\n  - non-object arguments, and non-object params;\n  - initialize without a str protocolVersion;\n  - an unknown method;\n  - malformed JSON, invalid UTF-8, a UTF-8 BOM, NaN and 1e999;\n  - a batch array, a non-object message, and a wrong jsonrpc;\n  - ids 1.5, true, null, an object, and a 257-char string.\n  A marker string is injected into method, tool and argument names, and no stdout line may contain it.\n- SH4 (DoD 4, also on win32). The run line of ci.yml's 'Test local runner prerequisite bundles' step still starts with the prefix that local-runner-bundle.test.mjs pins, and ends with scripts/tests/local-runner-agents.test.mjs.\n\n4. .github/workflows/ci.yml: append ` scripts/tests/local-runner-agents.test.mjs` to the end of that run line. Nothing else changes; CQ-V04b1 later appends after it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json",
+        "scripts/tests/local-runner-agents.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Shim protocol core (initialize/ping/tools/list/tools/call validation, fixed ERRORS, bounded stdin lines, strict JSON), generated guest-mcp-tools.json (one compact line, TOOLS order), new local-runner-agents.test.mjs SH1-SH4, CI run line appended. RED seen first (shim missing, CI entry absent), then node --test local-runner-agents: 4/4 pass, no __pycache__. Allowed calls answer UNAVAILABLE until step 2. Deviation: SH4 asserts the agents file appears exactly once on the run line (plus the pinned prefix) rather than \"ends with\", so CQ-V04b1's planned append after it does not break SH4. load_tools also refuses duplicate JSON object keys (object_pairs_hook). Shared checkout: scripts/tests/local-runner.test.mjs, lifecycle.mjs, provision.mjs carry CQ-R11 peer edits; untouched.",
+      "startedAt": "2026-10-29T22:28:14.035Z",
+      "completedAt": "2026-10-29T22:34:47.519Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Socket relay for tools/call (DoD 2), plus the shim's static and main() row.\n\nError handling: every failure of the socket, the frames, stdin or stdout maps to one fixed ERRORS entry, or to exit code 0 or 74. No exception escapes serve(), and every refusal is tested.\n\nConnection:\n- Opened lazily by the first allowed call: socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).\n- Connect to socket_path blocking, bounded by sock.settimeout(5), then switch to non-blocking and register in the same selector as stdin.\n- Name the instance sock, never socket, and catch OSError, never socket.timeout. SH8 pins the socket.* attribute set.\n- A connect failure answers that call UNAVAILABLE. There is no retry loop; the next call tries once more.\n\nFrames:\n- Exactly {'kind': 'request', 'id': n, 'tool': name, 'args': arguments}, encoded like guest-supervisor.py encode_frame: json.dumps(separators=(',', ':'), ensure_ascii=False, allow_nan=False), UTF-8 with backslashreplace, and a 4-byte big-endian length.\n- A body over MAX_GUEST_FRAME_BYTES gives TOO_LARGE, and nothing is queued.\n- n comes from one monotonic counter that starts at 1, is never reused and never exceeds MAX_REQUEST_ID.\n- Frames go to an outbox that is drained only on EVENT_WRITE; never use a blocking send or sendall. Why: the supervisor stops reading a connection while replies are queued for it (Bridge.watch). A shim blocked in a send while its own receive buffer fills would deadlock.\n\nCalls:\n- At most MAX_IN_FLIGHT pending. The next call beyond that gets BUSY, and no frame is sent.\n- Each pending call has a time.monotonic() deadline, and the select timeout is the nearest one. An expired call gets TIMEOUT and leaves pending.\n\nResponses:\n- recv in 65536-byte chunks. The 4-byte length must be 1..MAX_HOST_FRAME_BYTES, checked before any body byte is buffered. The body is strict UTF-8 JSON, refusing non-finite numbers.\n- The frame must be exactly {kind: 'response', id: int, ok: true, result: object} or {kind: 'response', id: int, ok: false, error: {code: CODE}}.\n- A pending id answers its JSON-RPC id. ok true returns the result unchanged; ok false returns REFUSED with data {code}.\n- A non-pending id below the counter is a late reply to an expired call and is ignored.\n- Anything else is a violation and gets the same handling: an id never assigned, a malformed frame or length, EOF, or an OSError. The connection closes, every pending call gets UNAVAILABLE, and the next call reconnects.\n\nRows. The fake peer decodes frames with createFrameDecoder(MAX_GUEST_FRAME_BYTES) plus parseGuestFrame and answers with encodeFrame({...}, MAX_HOST_FRAME_BYTES), or with raw bytes.\n- SH5 (relay):\n  - The worker's tools/call moe.start_step {stepId} reaches the peer as exactly {kind: 'request', id: 1, tool, args}, and the peer's ok result comes back unchanged as the JSON-RPC result.\n  - ok:false {code: 'BRIDGE_UPSTREAM_FAILED'} gives REFUSED with that data.\n  - Absent arguments forward {}.\n  - A string JSON-RPC id is echoed.\n  - Two calls answered in reverse order each get their own result.\n- SH6 (bounds):\n  - A line of exactly MAX_LINE_BYTES bytes is parsed. MAX_LINE_BYTES+1 gets one TOO_LARGE, and the next line is still served.\n  - With m.MAX_GUEST_FRAME_BYTES lowered in the harness, a body of exactly the limit is sent; limit+1 gets TOO_LARGE and no frame.\n  - Eight unanswered calls are relayed and the ninth gets BUSY with no frame. After the peer answers one, a new call is relayed.\n  - Paused peer: while the peer does not read (pause()), a call with a frame near MAX_GUEST_FRAME_BYTES stays queued and a following ping is still answered. After resume() the frame arrives whole. This row kills a sendall mutant.\n  - With timeout=0.3, an unanswered call gets TIMEOUT. The peer then answers it late and, after that, answers one more call. Stdout is then exactly [TIMEOUT, that call's result].\n- SH7 (bridge failures):\n  - No socket file, and a path with no listener, each give a prompt UNAVAILABLE.\n  - The peer closing the connection while a call is pending gives UNAVAILABLE.\n  - Each of these peer replies gives UNAVAILABLE for the pending call and closes the connection, and the next call opens a new connection and succeeds: a length header of 0; MAX_HOST_FRAME_BYTES+1; an id never assigned; an extra key; ok true with error; a lowercase or non-str code; a non-object result; an invalid UTF-8 body.\n- SH8 (static and main()):\n  - The file starts with the shebang and contains no CR byte.\n  - Its imports are stdlib-only, by the bridge tests' IMPORT_ROOTS AST walk.\n  - The socket.* attributes it uses are exactly ['AF_UNIX', 'SOCK_STREAM', 'socket'], collected the way I6 collects them.\n  - The only environment access is os.environ.get('MOE_ROLE'). The AST check finds no other environ, environb, getenv or putenv reference.\n  - A harness sets m.TOOLS_PATH to the repo tools.json, sets MOE_ROLE=qa plus decoy MOE_* variables, and replaces m.socket.socket with a recorder whose connect records (family, type, address) and raises FileNotFoundError. Running m.main(): tools/list gives the qa tools, a tools/call gives UNAVAILABLE, and the recorder holds exactly [(AF_UNIX, SOCK_STREAM, '/run/moe/agent.sock')].\n\nCleanup: an after() hook SIGKILLs every shim still running, closes every fake server and removes the temp dirs. Without it, a failing row leaves node --test hanging.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "note": "Relay: lazy AF_UNIX connect (settimeout 5, then non-blocking, same selector), frames encoded like encode_frame, outbox drained only on EVENT_WRITE (reads continue while it is non-empty), MAX_IN_FLIGHT BUSY, monotonic deadlines -> TIMEOUT, late replies (assigned id, not pending) ignored, any violation/EOF/OSError closes and fails all pending with UNAVAILABLE, next call reconnects; MAX_REQUEST_ID exhaustion -> UNAVAILABLE. emit() falls back to UNAVAILABLE for a host result the encoder refuses (tested directly). Shim refactored to one answer() dispatcher returning a result or an ERRORS name. Rows SH5-SH8 added; RED seen before the relay (SH5-SH8 failing), then 8/8 green 3 runs in a row, ~1.6 s, no __pycache__. Note: a frame of exactly MAX_GUEST_FRAME_BYTES cannot arrive through a MAX_LINE_BYTES stdin line (the JSON-RPC envelope is larger than the frame envelope), so SH6 pins the exact frame boundary with a lowered m.MAX_GUEST_FRAME_BYTES and uses near-limit frames for the paused-peer row. load_tools no longer special-cases duplicate JSON object keys (duplicate argument keys still refused). Size so far: shim 275 + agents tests 339; trimming to fit the 650 TASK rail continues in step 3.",
+      "startedAt": "2026-10-29T22:34:48.472Z",
+      "completedAt": "2026-10-29T22:44:34.241Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Bootstrap install and readiness hashes (DoD 3).\n\nError handling: a missing, empty or oversized asset throws the fixed BOOTSTRAP_ASSET_INVALID. A wrong owner, mode or digest on the guest is a readiness failure code, never an exception.\n\nguest-bootstrap.mjs:\n- GUEST_LAYOUT gains shim: '/opt/moe/bin/moe-mcp-shim' and shimTools: '/opt/moe/bin/tools.json'. It stays frozen.\n- MESSAGES gains BOOTSTRAP_ASSET_INVALID: 'A bundled guest asset was missing or invalid.'\n- A private readAsset(name) runs readFileSync(new URL(`./${name}`, import.meta.url)) inside a try/catch, then requires validPayload(bytes, MAX_SUPERVISOR_BYTES); otherwise it throws BOOTSTRAP_ASSET_INVALID. Call it only from buildUserData, never at import: platform-linux.mjs imports this module on the `cli.mjs doctor` path.\n- buildUserData keeps its input {supervisor, credential}, validated first. It then reads guest-mcp-shim.py and guest-mcp-tools.json.\n- write_files order: supervisor 0500, then the shim (root:root, '0555', at GUEST_LAYOUT.shim), then tools (root:root, '0444', at GUEST_LAYOUT.shimTools), then the credential 0400. The credential stays last.\n- buildUserData returns the frozen {userData, supervisorSha256, shimSha256, shimToolsSha256}.\n- Update the header comment.\n\nguest-readiness.mjs:\n- LAYOUT_PATHS appends GUEST_LAYOUT.shim and GUEST_LAYOUT.shimTools. EXACT_MODES adds '555:-r-xr-xr-x' and '444:-r--r--r--' for them.\n- hashFailure becomes a factory, digestFailure(file, key, failure). supervisorHash keeps its id, argv and code.\n- Two new CHECKS go right after supervisorHash:\n  - shimHash: ['sudo', '-n', 'sha256sum', GUEST_LAYOUT.shim], failing with SHIM_HASH_MISMATCH.\n  - shimToolsHash: the same on GUEST_LAYOUT.shimTools, failing with SHIM_TOOLS_HASH_MISMATCH.\n- validInputs requires all three bootstrap digests to be lowercase 64-hex. boundaryFailures passes the three digests to the evaluators.\n- waitForGuestReady's return shape is unchanged.\n- Update the header comment.\n\nscripts/tests/local-runner.test.mjs, CQ-R07 section only. Retain every test.\n- EXPECTED_PROBES: add the two paths to the layout argv, and add the two probes after supervisorHash.\n- LAYOUT: append 'root:root:555:-r-xr-xr-x:/opt/moe/bin/moe-mcp-shim' and 'root:root:444:-r--r--r--:/opt/moe/bin/tools.json' at the end, so every index-based withLine row stays valid.\n- healthy(): answer the two new probes from BOOTSTRAP.\n- Probe count: 6 + 15 * IDENTITIES.length.\n- The GUEST_LAYOUT deepEqual gets the new keys.\n- The buildUserData deepEqual expects the two new write_files entries and the two digests. Compute them from readFileSync of the repo files, never pasted base64, so CQ-R10d5's tools.json change needs no edit here.\n- New rows:\n  - LAYOUT_INVALID: shim mode 755, shim owned by ubuntu, tools mode 644, tools mode 666.\n  - Each new probe's exact code (SHIM_HASH_MISMATCH or SHIM_TOOLS_HASH_MISMATCH) for another digest, another path, or a failed sha256sum.\n  - BOOTSTRAP_INPUT_INVALID before any provider call for a missing or uppercase shimSha256 or shimToolsSha256.\n\nscripts/tests/local-runner-agents.test.mjs, row SH9 (also on win32):\n- buildUserData's decoded write_files entries for both paths have owner root:root, permissions '0555' or '0444', and content equal to the repo bytes. The returned digests are their sha256.\n- Three scratch copies of scripts/local-runner, each imported by file URL: one without guest-mcp-shim.py, one with an empty guest-mcp-tools.json, and one whose shim has MAX_SUPERVISOR_BYTES+1 bytes. Each throws BOOTSTRAP_ASSET_INVALID with its fixed text.\n- An invalid supervisor still throws BOOTSTRAP_INPUT_INVALID in the copy without the shim, because input validation comes before the asset reads.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-agents.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-agents.test.mjs",
+        "scripts/local-runner/guest-mcp-shim.py"
+      ],
+      "note": "Bootstrap: GUEST_LAYOUT.shim/shimTools, BOOTSTRAP_ASSET_INVALID, a private readAsset (called only from buildUserData, after input validation), write_files order supervisor 0500 → shim 0555 → tools 0444 → credential 0400, and a frozen {userData, supervisorSha256, shimSha256, shimToolsSha256}. Readiness: LAYOUT_PATHS and EXACT_MODES extended. The plan's digestFailure factory is a digestCheck(id, file, key, failure) row factory with the same behaviour; supervisorHash keeps its id, argv and code. shimHash/shimToolsHash follow it (SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH). validInputs needs all three digests as lowercase 64-hex, and the return shape is unchanged. R07 tests: every listed row was added, and the buildUserData expectations come from readFileSync of the repo assets. SH9 added: decoded entries plus digests, and three scratch copies (no shim, empty tools, oversized shim) each throwing BOOTSTRAP_ASSET_INVALID; INPUT_INVALID comes first. The shim and agents test were compacted with no assertion dropped, to fit the 650-line rail; the measured total is 648. Tests: local-runner.test.mjs 231 pass / 0 fail / 1 skip; local-runner-agents.test.mjs 9/9 pass. Peer CQ-R11 bytes in local-runner.test.mjs were preserved; I edited only the CQ-R07 section.",
+      "startedAt": "2026-10-29T22:44:35.179Z",
+      "completedAt": "2026-10-29T23:02:58.527Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE (DoD 4). From the repo root, run fresh exactly the CI step's command after this task:\n`node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs`\n- Scope: this is a superset of the task description's two-file command. GUEST_LAYOUT, buildUserData and the readiness probes form a shared contract, and the epic rail asks broad regression for that.\n- On WSL, prefix `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\"`. That gives Node 24 and keeps the Windows PATH out.\n- Exit 0 is required. Give complete_task the command, its exitCode and the output tail.\n- Record the size in the completion summary: the seven files' `git diff --numstat` additions plus deletions against the pre-task HEAD, counting new files by their line counts. The TASK rail caps it at 650.\n- If anything fails, edit only what the failure needs and report those files in modifiedFiles. Other sessions' dirty paths are not yours: never stage, revert or report them.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the CI 6-file command fresh (Node 24 via env -i): 359 tests, 357 pass, 0 fail, 2 skipped, exit 0. I changed no files in this step. Size against the pre-task HEAD:\n- guest-mcp-shim.py: 269 (new)\n- guest-mcp-tools.json: 1 (new)\n- local-runner-agents.test.mjs: 306 (new)\n- guest-bootstrap.mjs: 18+3\n- guest-readiness.mjs: 14+10\n- ci.yml: 1+1\n- local-runner.test.mjs: 22+3 (own delta)\nTotal 648, at or under 650. Note: `git diff --numstat` on local-runner.test.mjs reads 270/4, because the shared tree still carries an uncommitted CQ-R11 hunk (+248/-1: the CJ rows and supervisorSha256 in provisioned()). CQ-R11's bbcd13d commit did not include it. My delta was measured against a pre-edit snapshot.",
+      "startedAt": "2026-10-29T23:03:01.596Z",
+      "completedAt": "2026-10-29T23:03:55.094Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff; this is the final step. Load the adversarial-self-review skill first.\n\nAttack the code on these points:\n- Concurrency: replies arriving out of order; a reply arriving after its timeout; a reconnect while old ids are still pending.\n- Input sizes: inputs that are empty, huge or deeply nested; a line exactly at its limit; a frame exactly at its limit.\n- Prototype-style role names, such as 'constructor'.\n- Any error message that could carry input text.\n- Any blocking call that could stall the loop.\n- Any code path that reads an environment variable other than MOE_ROLE, or opens a socket other than AF_UNIX to AGENT_SOCKET.\n\nThen run mutation probes. Work in a scratch copy: cp -r scripts/local-runner and scripts/tests into a mktemp dir, and never mutate the shared tree. Run each probe as `timeout 120 node --test --test-name-pattern='^SH[0-9] ' <copy>/tests/local-runner-agents.test.mjs`. For the R07 probes, use the matching R07 test name against the copy's local-runner.test.mjs. Score each probe by exit code, never by parsing the pass/fail lines.\n\nEach mutant must be killed by the named row:\n- load_tools skips validation (SH1);\n- the role is ignored, or a non-str role is accepted (SH1);\n- the argument-key check is dropped (SH3);\n- an error message is built from input (SH3);\n- the line bound uses >= instead of > (SH6);\n- the frame bound is dropped (SH6);\n- the in-flight bound is dropped (SH6);\n- deadlines never expire (SH6);\n- the outbox is replaced by sendall (SH6, paused peer);\n- the host length bound is dropped (SH7);\n- an id never assigned is treated as a late reply (SH7);\n- the CODE check on ok:false is dropped (SH7);\n- the socket path comes from an environment variable (SH8);\n- the shimHash check is removed (its R07 row);\n- the shim is written '0755' (the R07 buildUserData row and SH9).\n\nIf a mutant survives, add a test that kills it, unless the mutant is provably equivalent; then say why in the step note. Afterwards, kill any python3 processes you started (match by your own scratch dir path) and remove the scratch dir.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-mcp-shim.py",
+        "scripts/local-runner/guest-mcp-tools.json",
+        "scripts/local-runner/guest-bootstrap.mjs",
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-agents.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Adversarial self-review. This step made no code change; modifiedFiles lists the task's full delivery set for the wrapper.\n\nMutation probes ran in a scratch copy (scripts/local-runner, scripts/tests, .github/workflows/ci.yml) and were scored by exit code. Both baselines (SH and R07) passed with exit 0. 14 of 15 mutants were KILLED:\n- SH1: load_tools validation skipped; role ignored.\n- SH3: argument-key check dropped; error message built from input.\n- SH6: line bound >=; frame bound dropped; in-flight bound dropped; deadlines never expire; outbox replaced by sendall.\n- SH7: host length bound dropped; unassigned id treated as late; CODE check dropped.\n- SH8: socket path taken from env.\n- R07 'the supervisor and credential must…': shimHash check removed.\n- R07 buildUserData row and SH9: shim written 0755 (both exit 1).\n\nSURVIVED, and equivalent: \"non-str role accepted\" (`type(role) is str and` dropped in serve). serve's only production caller is main(), which passes os.environ.get('MOE_ROLE'), so the role is str or None. load_tools keeps only JSON objects, whose keys are always str, so None is never a key. The two guards therefore agree on every reachable input. They differ only for a direct caller passing an unhashable role (TypeError instead of no tools). The guard stays as defence for direct callers. Afterwards no python3 processes from the scratch dir remained, the scratch dir was removed, and there is no __pycache__ in the tree.\n\nAttack points:\n- Out-of-order replies are matched by bridge id (SH5 sends three in one chunk, out of order).\n- A late reply after a timeout is ignored, because its id < next_id is no longer pending (SH6).\n- A reconnect fails every pending call before closing. Ids are never reused, so an old reply can't reach a new call.\n- 'constructor' and other prototype-style roles are plain dict misses (SH1).\n- Deeply nested input: RecursionError is caught → PARSE on decode, TOO_LARGE on frame encode, UNAVAILABLE on emit.\n- Error text comes only from ERRORS; REFUSED data is only a host CODE that passed the regex.\n- The only env read is MOE_ROLE (AST check), and the only socket is AF_UNIX/SOCK_STREAM to AGENT_SOCKET (Recorder).\n\nTheoretical, not fixed:\n- A full listen backlog can block connect() for up to 5 s.\n- os.write to stdout blocks if the MCP client stops reading; inherent to stdio servers.\n- A regular-file stdin can't be registered with epoll, so the shim would exit EX_IOERR; MCP clients use pipes.\n- A frame of exactly MAX_GUEST_FRAME_BYTES can't arrive via stdin, because the line limit equals the frame limit and the JSON-RPC envelope is larger. The exact frame boundary is covered with a lowered limit in SH6.\n- readAsset reads the whole bundled asset before the size check. Assets are plugin-bundled, so it is not attacker-sized.\n\nBoth IDE bundlers (JetBrains include local-runner/**, VS Code bundle-assets cp filter) ship the .py and .json assets.",
+      "startedAt": "2026-10-29T23:03:57.626Z",
+      "completedAt": "2026-10-29T23:07:51.316Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -25,8 +113,146 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 252.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-8dc4beb4cb7d400091de59e7091a577b",
+      "author": "architect-bd1eb82d",
+      "content": "@worker-fe18a9a9 Serialization note from the R10d1 architect, about step 3. CQ-R11 (task-0795112597cb453f93aaa5106e92d023, worker-5ebbf433) is editing scripts/tests/local-runner.test.mjs right now: the R03 provisioned() expectation near line 1749 and new rows at the end. Your step 3 edits the same file. Steps 1-2 (new files and ci.yml) can go ahead. Before step 3, check CQ-R11's status. If it is DONE, start step 3 on top of its landed bytes. Otherwise call moe.report_blocked with blockedOnTaskIds ['task-0795112597cb453f93aaa5106e92d023']; the task auto-unblocks at DONE. Don't start step 3 while R11 is live. Landing is per path, so either commit would carry the other task's hunks, and a tree with the R07 test edits but not the bootstrap and readiness change fails its tests. Also, R11 makes provisionGuest return supervisorSha256 from waitForGuestReady. Your plan leaves that return shape unchanged, so the two are compatible.",
+      "timestamp": "2026-10-29T22:31:15.602Z"
+    },
+    {
+      "id": "comment-3ef7568f4a0b49d6b383e63fe0d0bfc5",
+      "author": "governor-693b7073",
+      "content": "@worker-fe18a9a9 Governor update on the step-3 serialization note. It supersedes the earlier \"block on R11 until DONE\" instruction, cc @architect-bd1eb82d.\n\nCQ-R11 (task-0795112597cb453f93aaa5106e92d023) is now BLOCKED and waiting on THIS task. Its code landed in bbcd13d. Its scripts/tests/local-runner.test.mjs hunks did not: the wrapper held that file as contested with your task. Those hunks are the provisioned() `supervisorSha256: BOOTSTRAP.supervisorSha256` line near 1773, and the 'deleteOwned purges…' + CJ1-CJ8 block after AJ6. They are still unlanded in the shared file.\n\nIf you report_blocked on R11 now, you close a dependency cycle: R11 waits on you and you wait on R11. Please do this instead:\n1. Do not block on R11. Run step 3 on the current shared file, and keep R11's two hunks byte-for-byte intact.\n2. Your whole-file landing carries them. HEAD is red without them: 7 provisionGuest rows fail on the new supervisorSha256 key, so your gate needs them anyway.\n3. R11 auto-unblocks when this task reaches DONE.\n\nQA has a backup of R11's hunks at /tmp/qa-r11/r11-tests-only.patch (sha256 557f1230). It applies cleanly to HEAD if you need to check that the file still holds them.",
+      "timestamp": "2026-10-29T22:54:57.217Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:47:49.228Z",
-  "updatedAt": "2026-10-29T17:47:49.228Z"
+  "updatedAt": "2026-10-29T23:08:33.985Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-29T17:50:19.899Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-fe18a9a9"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-29T22:25:51.820Z",
+  "executionContract": {
+    "intendedBehavior": "An in-guest agent CLI reaches Moe only through /opt/moe/bin/moe-mcp-shim, a stdlib Python MCP stdio server (newline-delimited JSON-RPC 2.0). The shim serves exactly MOE_ROLE's allowlisted tools from the generated /opt/moe/bin/tools.json. It relays each allowed tools/call as one CQ-R08c bridge request frame on /run/moe/agent.sock and answers with the host's result, or with a fixed JSON-RPC error that never echoes input. Lines, frames, in-flight calls and call time are bounded. buildUserData installs the shim (root:root 0555) and tools.json (root 0444). R07 readiness verifies their modes and sha256. executionReady stays false and verified-local stays unavailable.",
+    "acceptanceCriteria": [
+      "tools/list returns exactly TOOLS[MOE_ROLE]'s names and argument keys (inputSchema type object, an empty schema per key, additionalProperties false). An absent, empty or unknown role serves none, and the checked-in guest-mcp-tools.json is byte-equal to the TOOLS projection.",
+      "An allowed tools/call sends exactly one {kind:'request', id, tool, args} frame on the agent socket and returns the host result unchanged; a refusal returns REFUSED with data {code}. Every refused call, oversized line or frame, malformed message and unknown method gets its fixed JSON-RPC error, and no frame is sent.",
+      "Bounds: lines are at most MAX_LINE_BYTES; frames sent are at most MAX_GUEST_FRAME_BYTES; frames received are at most MAX_HOST_FRAME_BYTES; at most 8 calls are in flight; each call times out. A late reply is ignored. A protocol violation closes the connection and fails every pending call.",
+      "The shim opens only an AF_UNIX stream to the fixed socket path, reads only the MOE_ROLE environment variable, imports only stdlib modules, and starts with #!/usr/bin/python3 -I.",
+      "The user-data writes the shim at '0555' and tools.json at '0444', both root:root. Readiness fails with SHIM_HASH_MISMATCH or SHIM_TOOLS_HASH_MISMATCH on a digest mismatch, and with LAYOUT_INVALID on a wrong owner or mode.",
+      "The CI local-runner step runs scripts/tests/local-runner-agents.test.mjs, and the verification command exits 0."
+    ],
+    "invariants": [
+      "executionReady is always false and verified-local stays unavailable; no isolation claim.",
+      "The host's scopeRequest stays the enforcement point. The shim is a convenience adapter and adds no trust.",
+      "No error text from the shim contains input. Only REFUSED carries data, and that data is the host's CODE-matching code.",
+      "The shim never blocks on a send, never opens a non-AF_UNIX socket, never connects anywhere except the path it is given (AGENT_SOCKET from main), and never reads an environment variable other than MOE_ROLE.",
+      "Every CQ-R07 test is retained. The supervisorHash probe, its argv and its code are unchanged. The credential stays the last write_files entry.",
+      "Python is always loaded with -I -B, so no __pycache__ is created under scripts/local-runner."
+    ],
+    "compatibility": [
+      "buildUserData input stays {supervisor, credential}. provisionGuest, native-smoke.mjs and their tests need no change, because both new assets are constant bytes read from the module's own directory.",
+      "The existing GUEST_LAYOUT keys and the shape of waitForGuestReady's return stay unchanged. The only new bootstrap fields are additive.",
+      "The CI run line keeps the prefix that local-runner-bundle.test.mjs pins. CQ-V04b1, now serialized after this task, appends after the new entry.",
+      "The IDE bundlers copy scripts/local-runner/** minus tests, so both new assets ship with no bundler change."
+    ],
+    "approvedScope": [
+      "scripts/local-runner/guest-mcp-shim.py: constants AGENT_SOCKET, TOOLS_PATH, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, MAX_LINE_BYTES, MAX_TOOLS_BYTES, MAX_IN_FLIGHT, MAX_REQUEST_ID, CALL_TIMEOUT_SECONDS, PROTOCOL_VERSIONS, TOOL, CODE, KEY, ERRORS; functions load_tools, serve, main.",
+      "scripts/local-runner/guest-mcp-tools.json: generated from guest-bridge.mjs TOOLS (role -> tool -> argument keys), one compact line.",
+      "guest-bootstrap.mjs: GUEST_LAYOUT.shim, GUEST_LAYOUT.shimTools, BOOTSTRAP_ASSET_INVALID, a private readAsset, and buildUserData's new write_files entries and return keys shimSha256 and shimToolsSha256.",
+      "guest-readiness.mjs: LAYOUT_PATHS and EXACT_MODES entries; digestFailure; CHECKS shimHash and shimToolsHash, with codes SHIM_HASH_MISMATCH and SHIM_TOOLS_HASH_MISMATCH; the validInputs digest checks.",
+      "Tests: rows SH1-SH9 in the new scripts/tests/local-runner-agents.test.mjs, plus the CQ-R07 section updates and rows in scripts/tests/local-runner.test.mjs.",
+      "CI: one appended file on the run line of the 'Test local runner prerequisite bundles' step."
+    ],
+    "reuse": [
+      "guest-bridge.mjs TOOLS stays the single source; tools.json is generated from it and pinned by SH1.",
+      "The frame rules follow guest-supervisor.py encode_frame, take_frames, agent_request and host_response, and its TOOL and CODE regexes.",
+      "Test harness patterns come from local-runner-bridge.test.mjs: NO_GUEST, LOAD, IMPORT_ROOTS, the I6 socket-attribute AST, and after() cleanup. The fake peer uses createFrameDecoder, parseGuestFrame and encodeFrame.",
+      "Readiness rows reuse the R07 fakeGuest, healthy, layout, withLine and expectRefused helpers."
+    ],
+    "sourceAssumptions": [
+      "guest-bridge.mjs exports TOOLS, MAX_GUEST_FRAME_BYTES = 262144, MAX_HOST_FRAME_BYTES = 4194304, createFrameDecoder, encodeFrame and parseGuestFrame, and it imports GUEST_LAYOUT from guest-bootstrap.mjs.",
+      "guest-supervisor.py Bridge: an agent frame is exactly {kind, id, tool, args}. Over 8 in flight per connection the reply is BRIDGE_BUSY. Replies are {kind:'response', id, ok, result|error{code}}, encoded within MAX_HOST_FRAME_BYTES. Reading pauses while a connection's outbox is non-empty (watch). A malformed frame drops only that connection.",
+      "guest-session.mjs reply(): result is the daemon's MCP tool result record. isError and daemon failures become BRIDGE_UPSTREAM_FAILED, and each forward is bounded by timeoutMs of at most 60000.",
+      "guest-supervisor.py start_job sets MOE_ROLE (worker or qa) in the job environment.",
+      "guest-bootstrap.mjs validPayload and MAX_SUPERVISOR_BYTES = 262144. platform-linux.mjs imports guest-bootstrap.mjs. The CQ-R07 test section holds EXPECTED_PROBES, LAYOUT, healthy() and the GUEST_PROBES count assertion of 4 + 15 * IDENTITIES.length."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. buildUserData imports TOOLS and serializes it. Rejected: guest-bridge.mjs already imports guest-bootstrap.mjs, so this makes an ESM cycle, and the repo avoids cycles (cli.mjs loads native-smoke.mjs dynamically for exactly this reason).\n2. Callers pass the shim and tools bytes. Rejected: it churns provisionGuest, native-smoke.mjs and every R07 and R03-R05 call site.\n3. Chosen: a generated, checked-in guest-mcp-tools.json, pinned byte for byte to TOOLS by SH1. buildUserData reads both sibling assets when it is called, so the installed tools.json is identical to the repo file and no caller changes.\n4. Typed per-key schemas: the human deferred them to a follow-up slice (CQ-R10d5) on 2026-10-30.\n5. Splitting R10d1 again: the human chose one task with a 650-line TASK size rail (prop-3ecca8ac, approved 2026-10-30).",
+    "codebaseInsights": "- The supervisor's agent socket (CQ-R08c) checks the peer uid, caps 8 in flight per connection (BRIDGE_BUSY), maps its own ids to agent ids and rebuilds each reply under the agent's id, and stops reading a connection while replies to it are queued.\n- The host (guest-session.mjs) answers with the daemon's MCP tool result record, or refuses with a fixed CODE such as BRIDGE_UPSTREAM_FAILED, BRIDGE_ARGUMENT_DENIED or BRIDGE_TOOL_DENIED.\n- The job environment carries MOE_ROLE. Codex passes MCP servers only the env vars its table names, which R10d4 must handle.\n- Both IDE bundlers copy scripts/local-runner/** minus tests, and .gitattributes forces LF everywhere, so byte-exact pins hold on the windows-latest CI leg.\n- R07 tests derive BOUNDARY and PROBE_IDS from EXPECTED_PROBES, so the probe order must match CHECKS order.\n- R03-R05 and native-smoke tests compare launched stdin with BOOTSTRAP.userData. They stay consistent because the assets are the same constant bytes.",
+    "risks": "- Global forbiddenPatterns include eval( (so ast.literal_eval is out), __proto__ and innerHTML; they apply to tests too.\n- Never import the shim without python3 -I -B, or __pycache__ ships in the bundles.\n- A shim left running makes node --test hang. Keep the after() cleanup and per-row timeouts, and run mutants under timeout 120.\n- macOS caps AF_UNIX paths at 104 bytes.\n- In SH6's timeout row, assert only on ordered stdout lines, never on wall-clock beyond a generous bound.\n- Codex types untyped schema properties as strings, so codex guest seats cannot send arrays or objects until the CQ-R10d5 follow-up lands.\n- The shared checkout carries other sessions' dirty paths. Report only this task's seven files.\n- CQ-R10d3 later changes readiness and the R07 tests again. It is serialized by the R10d chain.",
+    "keyFiles": [
+      "scripts/local-runner/guest-bridge.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/local-runner/guest-session.mjs",
+      "scripts/local-runner/guest-bootstrap.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-29T22:25:51.913Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-29T22:28:14.035Z",
+  "lastCommitOutcome": {
+    "outcome": "refused",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
+    "sessionId": "architect-bd1eb82d@2026-10-29T17:50:18Z",
+    "at": "2026-10-29T22:32:26.885Z"
+  },
+  "reviewStartedAt": "2026-10-29T23:08:33.984Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner-snapshot.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-agents.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ CJ7 a changed image or supervisor gives a new environment, and evidence observed in the old one is stale (7.088956ms)\n✔ CJ8 the real provisionGuest and deleteOwned purge exactly the VM this run reserved, and nothing foreign (189.23051ms)\nℹ tests 359\nℹ suites 0\nℹ pass 357\nℹ fail 0\nℹ cancelled 0\nℹ skipped 2\nℹ todo 0\nℹ duration_ms 24963.015539",
+    "reportedAt": "2026-10-29T23:08:33.984Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-mcp-shim.py",
+    "scripts/local-runner/guest-mcp-tools.json",
+    "scripts/tests/local-runner-agents.test.mjs",
+    ".github/workflows/ci.yml",
+    "scripts/local-runner/guest-bootstrap.mjs",
+    "scripts/local-runner/guest-readiness.mjs",
+    "scripts/tests/local-runner.test.mjs"
+  ],
+  "completionSummary": "CQ-R10d1 guest MCP stdio shim.\n\n- scripts/local-runner/guest-mcp-shim.py (new): a stdlib-only MCP stdio server, launched as python3 -I.\n  - Serves tools/list from the tools.json allowlist for MOE_ROLE only.\n  - Relays each allowed tools/call, with allowed argument keys only, as one CQ-R08c request frame on /run/moe/agent.sock. Bounds: line and frame limits, 8 in flight, a 120 s deadline, and a non-blocking outbox.\n  - Validates host frames strictly. Every error text is fixed.\n- guest-mcp-tools.json (new): generated from guest-bridge.mjs TOOLS, with an SH1 drift pin.\n- buildUserData installs the shim (root:root 0555) and tools.json (root 0444), and returns shimSha256 and shimToolsSha256. A missing, empty or oversized asset throws BOOTSTRAP_ASSET_INVALID; input validation still runs first.\n- Readiness changes:\n  - Layout checks the shim at 555 and tools.json at 444.\n  - New shimHash / shimToolsHash probes report SHIM_HASH_MISMATCH / SHIM_TOOLS_HASH_MISMATCH.\n  - validInputs requires all three digests as lowercase 64-hex.\n  - The return shape is unchanged.\n- CI runs local-runner-agents.test.mjs (SH1-SH9).\n\nSize (TASK rail, at most 650), against the pre-task HEAD; new files count their line counts:\n\n| File | Lines |\n|---|---|\n| guest-mcp-shim.py | 269 |\n| guest-mcp-tools.json | 1 |\n| local-runner-agents.test.mjs | 306 |\n| guest-bootstrap.mjs | 18+3 |\n| guest-readiness.mjs | 14+10 |\n| ci.yml | 1+1 |\n| local-runner.test.mjs (own delta) | 22+3 |\n| **Total** | **648** |\n\n`git diff --numstat` for local-runner.test.mjs reads 270/4. The shared tree still carries CQ-R11's uncommitted CJ/provisioned() hunk (+248/-1), which its commit bbcd13d did not include; I preserved it untouched.\n\nSelf-review: 14 of 15 planned mutants were killed. \"Non-str role accepted\" is equivalent: main() passes str or None, and JSON keys are always str. Deviation from the plan: digestFailure became a digestCheck(id, file, key, failure) row factory with the same behaviour."
 }
