@@ -24,12 +24,9 @@
       "newFiles": [
         "packages/moe-daemon/src/server/runnerChannel.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/runnerChannel.test.ts"
-      ],
-      "note": "Created runnerChannel.test.ts: K1 (path, relative/blank env), K2 (43-char base64url, 0600/0700 incl. tightening a 0755 dir/0644 file, reuse, malformed replace, race, no .tmp), A1 (loopback v4/v6/mapped incl. uppercase; one refusal test each: absent, wrong, 42 chars, '=' padding, inner space, two values, non-loopback/128.x/undefined, missing file, malformed file, no socket), M1 (probe tool via private tools map; options.runner forwarded; argument forgery ignored), W1 real sockets (each refusal → 1008 'runner authentication failed' + probe never called, non-loopback via prependListener upgrade override, missing key file; authenticated /runner?query → runnerId; /mcp with header → null; /runnerx → plugin STATE_SNAPSHOT; logger spies never contain the key). MOE_RUNNER_KEY_DIR → mkdtemp per test, restored after. RED in /tmp Linux snapshot (git archive HEAD + npm ci, env -i): fails on missing ./runnerChannel.js import, as expected. Shared tree has many peer dirty paths; untouched.",
-      "startedAt": "2026-10-29T17:47:32.045Z",
-      "completedAt": "2026-10-29T17:50:39.898Z"
+      "note": "Round 2 after the size-only QA reject. No byte changes, following QA's route: no rewrite or re-slice of landed bytes.\n\nrunnerChannel.test.ts landed in completion 1607abf2 (+299/-0). `git log 1607abf2..HEAD` on all 6 owned paths is empty, and `git diff 1607abf2 HEAD` over them is empty, so HEAD 7f04b869 equals 1607abf2.\n\nRED evidence: QA round 1 killed 12 mutants on these exact bytes, so the tests fail when guarded lines break.\n\nThe size exception is filed as prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL, PENDING) and pinged in #governors (msg-3adbbd5a).\n\nDirty-tree note: packages/moe-daemon/src/index.ts carries a PEER's staged `--version` hunk. It is recorded in the pre-flight baseline as P fb60c011 and is not this task's bytes, so it is not reported here. The merge markers in scripts/CLAUDE.md are also peer debris and untouched.",
+      "startedAt": "2026-10-29T19:20:30.308Z",
+      "completedAt": "2026-10-29T19:20:43.725Z"
     },
     {
       "stepId": "step-2",
@@ -39,13 +36,9 @@
       "newFiles": [
         "packages/moe-daemon/src/server/runnerChannel.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/runnerChannel.ts",
-        "packages/moe-daemon/src/server/runnerChannel.test.ts"
-      ],
-      "note": "Created server/runnerChannel.ts (no logger import): RUNNER_KEY_HEADER, RunnerIdentity, runnerKeyPath (trimmed MOE_RUNNER_KEY_DIR resolved, else ~/.moe/runner-keys; 32 hex of sha256(projectPath)), ensureRunnerKey (mkdir 0700 + POSIX chmod; reuse valid key with chmod 0600; else 'wx' 0600 temp <file>.<pid>.<8hex>.tmp + rename, unlink+rethrow on rename failure; non-ENOENT read errors propagate), authenticateRunner (loopback '::1'/'127.'/'::ffff:127.' case-insensitive; headersDistinct exactly one KEY_RE value; fresh readFileSync of stored key; timingSafeEqual over sha256 digests; try/catch → null). Didn't reuse util/atomicWrite: its temp file gets the default mode, which is wrong for a secret. Test tweak: the race test is POSIX-only (win32 concurrent rename can EPERM; daemon vitest runs on ubuntu only in CI), and the wait helper drops to 3s so a failure reports its own message rather than vitest's timeout. Snapshot run: K1/K2/A1 28 green; M1 forward + W1 runner cases red, as expected until steps 3–4.",
-      "startedAt": "2026-10-29T17:50:41.060Z",
-      "completedAt": "2026-10-29T17:53:00.227Z"
+      "note": "No byte changes (size-only reject route). runnerChannel.ts landed in 1607abf2 as +111/-0 and is identical at HEAD 7f04b869: empty `git diff 1607abf2 HEAD`, clean in the worktree.\n\nIt provides RUNNER_KEY_HEADER, RunnerIdentity, runnerKeyPath, ensureRunnerKey and authenticateRunner as planned.\n\nQA round 1 verified it, with mutants killed for loopback dropped, loose v4 prefix, key compare dropped, malformed key reused, no temp unlink, no 0600 tighten and runnerId length. The size waiver is prop-a439fe725cd2425b88e248e529c1b529 (PENDING).",
+      "startedAt": "2026-10-29T19:20:46.660Z",
+      "completedAt": "2026-10-29T19:20:56.492Z"
     },
     {
       "stepId": "step-3",
@@ -55,13 +48,9 @@
         "packages/moe-daemon/src/tools/index.ts",
         "packages/moe-daemon/src/server/McpAdapter.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/tools/index.ts",
-        "packages/moe-daemon/src/server/McpAdapter.ts"
-      ],
-      "note": "tools/index.ts: ToolCallContext gains `runner?: { readonly runnerId: string }`, defined structurally (no server/ import) with the one-line provenance comment. McpAdapter.ts: type import RunnerIdentity; McpHandleOptions.runner; the tools/call invoke literal spreads `...(options.runner ? { runner: options.runner } : {})`, forwarded unchanged and never read from arguments. +6 lines total; both files were clean vs HEAD before the edit. Snapshot `npx vitest run src/server/runnerChannel.test.ts -t M1`: 2 passed (forward + argument-forgery null).",
-      "startedAt": "2026-10-29T17:53:01.486Z",
-      "completedAt": "2026-10-29T17:54:35.122Z"
+      "note": "No byte changes (size-only reject route). The context plumbing landed in 1607abf2:\n- tools/index.ts +2/-0: ToolCallContext.runner, structural;\n- McpAdapter.ts +4/-0: McpHandleOptions.runner, spread only when set.\n\nBoth are identical at HEAD and clean in the worktree. The planned affectedFiles for this step have no dirty bytes, so the fallback attributes nothing.\n\nQA killed the mutants for 'runner read from args' and '/mcp given a runner'. M1 is among the 41/41 runnerChannel.test.ts passes in QA's gate; the fresh gate comes in step-5.",
+      "startedAt": "2026-10-29T19:20:57.220Z",
+      "completedAt": "2026-10-29T19:21:04.690Z"
     },
     {
       "stepId": "step-4",
@@ -71,35 +60,27 @@
         "packages/moe-daemon/src/server/WebSocketServer.ts",
         "packages/moe-daemon/src/index.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/WebSocketServer.ts",
-        "packages/moe-daemon/src/index.ts"
-      ],
-      "note": "WebSocketServer.ts: the /mcp branch body moved verbatim into private attachMcpClient(ws, runner?) (endpoint label 'mcp' unchanged for /mcp, 'runner' for /runner). After the unchanged /mcp startsWith, a new exact `pathnameOf(url) === '/runner'` branch runs authenticateRunner(req, state.projectPath) BEFORE any handler: on null it calls logger.warn({endpoint:'runner', remoteAddress}, 'Runner channel authentication failed') and ws.close(1008, 'runner authentication failed'), then returns. On success it calls attachMcpClient(ws, runner). handleMcpMessage(ws, raw, runner?) passes runner into the mcpAdapter.handle options. pathnameOf is a module-level helper whose new URL is in try/catch ('' on parse failure), so a malformed upgrade URL cannot throw inside the 'connection' handler. index.ts: import, plus try { await ensureRunnerKey(projectPath) } catch → logger.warn({error: message only}, 'Runner channel key unavailable; /runner refuses every connection') just before new MoeWebSocketServer. Snapshot: `npx vitest run src/server/` 11 files / 281 tests passed (runnerChannel.test.ts 39); `npx tsc --noEmit` exit 0.",
-      "startedAt": "2026-10-29T17:54:36.272Z",
-      "completedAt": "2026-10-29T17:56:20.801Z"
+      "note": "No byte changes (size-only reject route). Both files landed in 1607abf2 and are identical at HEAD:\n- WebSocketServer.ts +48/-20: an exact '/runner' pathname branch that authenticates before any handler (1008 'runner authentication failed'), with attachMcpClient shared with /mcp;\n- index.ts +7/-0: ensureRunnerKey in a try/catch before new MoeWebSocketServer.\n\nLANDING CAUTION: the worktree's packages/moe-daemon/src/index.ts holds a PEER's staged, unlanded hunk, `case '--version'/'-v'/'version'` plus the usage string (+6/-1). The pre-flight baseline records it as P fb60c011. It is NOT this task's bytes and must stay out of this task's commit. I make no edit to that path and do not declare it. QA's advisory notes (no test for the provisioning try/catch; the redundant stored-key KEY_RE) are non-blocking. QA said to add no bytes for them, so none were added.",
+      "startedAt": "2026-10-29T19:21:05.376Z",
+      "completedAt": "2026-10-29T19:21:15.984Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then `cmp` afterwards. Each must fail at least one test:\n   1. Drop the loopback check: the A1 remote cases fail.\n   2. Compare the keys with === instead of timingSafeEqual over digests, and accept a different key: A1 fails. Also inspect the code for the timing-safe compare.\n   3. Accept headers['x-moe-runner-key'] joined values: the A1 two-values case fails.\n   4. Read runner from arguments in McpAdapter: M1 fails.\n   5. Attach the message handler before authenticating: the W1 probe-never-called case fails.\n   6. Use startsWith('/runner'): add a '/runnerx' W1 case if needed.\n2. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate).\n   - Take `git archive HEAD` of the WHOLE repo.\n   - Overlay ONLY this task's 6 files.\n   - Run `npm ci --no-audit --no-fund` after checking that the lockfile matches the tree modulo CR.\n   - Use `env -i` with HOME set to a SCRATCH directory (so even a stray default path cannot reach the real home), NO_COLOR=1 and the nvm node bin on a Linux-only PATH.\n   - Run `cd packages/moe-daemon && npm test` and `npx tsc --noEmit`. Both must exit 0.\n   - `cmp` the overlay against the worktree.\n3. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n4. Supply the npm test command, its exit code and the output tail (the Test Files and Tests lines) to complete_task.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Mutants, each applied to the snapshot copy and then restored (cmp 0 for all three source files), each killed: (1) drop loopback → 6 failed (A1 remotes, no-socket, W1 non-loopback); (2) length-only compare → 2 failed (A1 different key, W1 wrong key); timingSafeEqual over sha256 digests confirmed by inspection; (3a) req.headers joined, first part → 6 failed (A1 valid cases, W1 repeated header); (3b) first headersDistinct value → 2 failed (A1 two values, W1 repeated); (4) runner from arguments → M1 forgery test failed; (5) message handler before auth → 7 failed (every W1 refusal: probe called); (6) startsWith('/runner') → the /runnerx case failed. No source edits needed. GATE: fresh `git archive HEAD` (2cbfdd38) of the whole repo, overlaid with only the 6 task files, lockfile/package.json equal modulo CR, `npm ci` then `env -i HOME=<scratch> NO_COLOR=1 PATH=<nvm v24.21.0 bin>:/usr/local/bin:/usr/bin:/bin`. `cd packages/moe-daemon && npm test` exit 0: Test Files 180 passed (180), Tests 4906 passed | 16 skipped (4922). `npx tsc --noEmit` exit 0. All 6 overlay files cmp-identical to the worktree. The scratch HOME has no .moe/runner-keys and neither does the real ~/.moe/runner-keys, so no test touched a default key path. Snapshot at /tmp/moe-v03a-gate.t9bqTx.",
-      "startedAt": "2026-10-29T17:56:22.070Z",
-      "completedAt": "2026-10-29T17:58:31.008Z"
+      "note": "FRESH GATE (this session, 2026-10-29 19:22Z). No byte changes.\n\nSnapshot and setup:\n- A pure `git archive HEAD` 7f04b869 of the whole repo into /tmp/moe-v03a-gate.CAQzzL, with NO overlay. All 6 owned paths are cmp-identical to `git show 1607abf2:<path>`.\n- Overlaying the worktree would have imported a peer's staged index.ts --version hunk, which is why there is none.\n- The worktree's packages/moe-daemon/package.json and package-lock.json carry a peer's staged dependency edit, so the snapshot uses HEAD's own self-consistent package.json and lockfile.\n- `npm ci --no-audit --no-fund` exit 0, under env -i HOME=<scratch> NO_COLOR=1 PATH=nvm v24.21.0 bin:/usr/local/bin:/usr/bin:/bin.\n\nResults:\n- `cd packages/moe-daemon && npm test` exit 0: Test Files 181 passed (181); Tests 5041 passed | 16 skipped (5057); duration 29.79s; ✓ src/server/runnerChannel.test.ts (41 tests).\n- `npx tsc --noEmit` exit 0.\n\nIsolation:\n- The scratch HOME holds only .npm/_logs and .local/share/vitest, with no .moe.\n- The real /home/sysadmin/.moe/runner-keys was absent before and after.\n\nMutants: not re-run, because the bytes are unchanged. QA round 1's independent run on these identical bytes killed 12 mutants, covering all 6 the plan names:\n1. loopback dropped;\n2. key compare dropped;\n3. repeated header accepted;\n4. runner read from args;\n5. fall-through after refuse;\n6. startsWith('/runner').\nIt also covered loose v4 prefix, malformed key reused, no temp unlink, no 0600 tighten, runnerId length, and /mcp given a runner.",
+      "startedAt": "2026-10-29T19:21:16.666Z",
+      "completedAt": "2026-10-29T19:23:32.928Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an agent trying to obtain a runner identity:\n\n1. Forgery:\n   - any path that reaches context.runner without authenticateRunner;\n   - /mcp or /ws setting it;\n   - an argument or header on /mcp influencing it;\n   - '/runner/..', '/RUNNER' or a query string bypassing the exact match.\n2. Network: WSL agent mode binds 0.0.0.0, and the loopback check must hold for IPv4, IPv6 and v4-mapped addresses.\n3. Leaks: the key in logs, close reasons, error messages, daemon.json or test output. The key file mode and the temp file left after a failure.\n4. Robustness:\n   - two concurrent ensureRunnerKey calls (the last rename wins; both callers end with a valid key on disk);\n   - an unreadable key file (null, never a throw in onConnection);\n   - the daemon still starts when provisioning fails.\n5. Rails: no .moe edits, no Git writes, no forbidden-pattern tokens, and verified-local untouched.\n\nWrite the Serena handoff memory 'task-task-3b4e3833e3c74927b4cdf455663cf6b4-handoff' with the landed names for CQ-V03 (task-9cc13170) and CQ-V04 (task-a9d1a74d). A host runner connects to ws://127.0.0.1:<daemon.json port>/runner with header x-moe-runner-key read from runnerKeyPath(daemon.json projectPath).",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/server/runnerChannel.ts",
-        "packages/moe-daemon/src/server/runnerChannel.test.ts"
-      ],
-      "note": "Adversarial review of the task's 6 paths only.\n\nFIXED: ensureRunnerKey left a partially written temp file when writeFile failed mid-write (only the rename was inside the try). The write is now inside the same try that unlinks and rethrows. New tests cover a failed write (red on the old ordering, verified) and a failed rename. The test file is held at 299 lines by folding the three malformed-key A1 cases into it.each.\n\nCHECKED, no change needed:\n(1) Forgery. mcpAdapter.handle has one caller. runner reaches it only from attachMcpClient on the authenticated branch. /ws never calls the adapter. /runner/.. normalizes to '/', and /RUNNER, //runner and /%72unner all fall through to the plugin branch. A query or fragment still requires auth. /mcp/../runner is MCP with no runner.\n(2) Network. The loopback check covers v4, ::1 and v4-mapped. A WSL-gateway peer is refused; the theoretical limit is mirrored-mode loopback, which is already under the documented no-trust legacy limit.\n(3) Leaks. The refusal log carries only remoteAddress, and the close reason is a fixed string. fs errors carry paths only. index.ts logs only the message. Nothing in src logs headers, and daemon.json is untouched. The temp file is 0600 'wx' from creation.\n(4) Robustness. Concurrent calls: the last rename wins and the file stays valid (tested on POSIX). An unreadable key returns null via catch. Daemon startup is guarded. Node <18.3 fails closed.\n(5) Rails. No .moe edits and no Git writes (read-only archive/diff/status/log only). No forbidden tokens (grep rc=1). verified-local untouched.\n\nFresh gate after the fix, on git archive HEAD b71c0fd plus the 6-file overlay (cmp-identical) under env -i with a scratch HOME: npm test exit 0, 180 files and 4908 passed | 16 skipped; tsc --noEmit exit 0. Handoff memory task-task-3b4e3833e3c74927b4cdf455663cf6b4-handoff written.",
-      "startedAt": "2026-10-29T17:58:32.407Z",
-      "completedAt": "2026-10-29T18:01:26.592Z"
+      "note": "Adversarial self-review of the landed runtime diff in 1607abf2. No defects were found and no bytes changed.\n\n1. Forgery:\n   - The ONLY mcpAdapter.handle caller is WebSocketServer.ts:1192, which receives `runner` only from attachMcpClient. Only the /runner branch passes it, after authenticateRunner returns non-null. The /mcp branch passes none.\n   - No other non-test code sets ToolCallContext.runner; contextDelta's `runner` is an unrelated attempt-runner string.\n   - onConnection attaches nothing before routing; there is only the isClosed check.\n   - '/runner/..' normalizes to '/', and '/RUNNER', '/runnerx' and '//runner' (host 'runner', pathname '/') all become plugin connections with no identity.\n   - '/runner?q' and an absolute-form 'http://h/runner' still hit the auth gate. '/mcp…' never carries a runner.\n2. Network:\n   - The loopback check runs before any file read, covering 127/8, ::1 and ::ffff:127.x. A hex-form v4-mapped address is refused, which fails closed.\n   - Under WSL 0.0.0.0, a gateway-IP client is refused. A guest has no key, and the R08 bridge adds none.\n3. Leaks:\n   - The refusal warn carries remoteAddress only, and the close reason is a fixed string.\n   - fs errors carry paths and codes only, and the module has no logger.\n   - The key is 0600 (umask can only tighten it) in a 0700 dir, reused keys are chmod 0600, and the temp file is unlinked on a write or rename failure.\n   - THEORETICAL: a crash between the temp write and the rename leaves an unused 0600 .tmp in the 0700 dir that is never swept. Its exposure is no wider than the live key's; a sweep can follow if it matters.\n4. Robustness:\n   - Concurrent ensureRunnerKey calls use distinct temp names and the last rename wins. authenticateRunner reads fresh, so all callers agree, and the atomic rename means a reader never sees a partial key.\n   - An unreadable key file returns null without throwing.\n   - The daemon still starts when provisioning fails (index.ts try/catch, by inspection, per QA's advisory note).\n5. Rails:\n   - No .moe edits and no Git writes.\n   - The forbidden-pattern grep over the added lines is clean.\n   - 'verified-local' appears only in the header comment.\n\nThe Serena handoff 'task-task-3b4e3833e3c74927b4cdf455663cf6b4-handoff' is updated with a round-2 section. The attribution traps are added to mem:decision-size-only-reject-of-landed-bytes.",
+      "startedAt": "2026-10-29T19:23:33.631Z",
+      "completedAt": "2026-10-29T19:25:59.763Z"
     }
   ],
   "planRevision": 1,
@@ -107,8 +88,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "SIZE-ONLY reject. The substance is fully green; no DoD item failed. Completion 1607abf2 (on moe/work-2026-10-24) measures `git show --numstat --format= 1607abf2 -- packages/`: +471/-20 = 451 net, over the 400 net-LOC QA cap. No project, epic or task rail waives size, and no proposal in .moe/proposals names this task or commit. Per file: index.ts +7/-0, McpAdapter.ts +4/-0, WebSocketServer.ts +48/-20, runnerChannel.ts +111/-0, tools/index.ts +2/-0, runnerChannel.test.ts +299/-0. That is 152 net runtime and 299 tests.\n\nROUTE (no byte changes, no re-slice of landed bytes; see mem:decision-size-only-reject-of-landed-bytes): the worker files moe.propose_rail as an EPIC ADD_RAIL size exception for CQ-V03a. It names commit 1607abf2, the six files with the +/- counts above, and \"grow only by QA-required fixes\". Ping #governors with the prop id, then complete_task with fresh verification. QA approves once the proposal is APPROVED; if it is still PENDING, QA parks the row rather than rejecting again.\n\nQA EVIDENCE (independent):\n- Pure `git archive HEAD` 7f04b869, with all 6 owned files cmp-identical to 1607abf2. No overlay.\n- npm ci, then env -i HOME=<scratch> NO_COLOR=1 with a node v24.21.0 Linux-only PATH.\n- `cd packages/moe-daemon && npm test` exit 0: Test Files 181 passed (181), Tests 5041 passed | 16 skipped. runnerChannel.test.ts 41/41.\n- `npx tsc --noEmit` exit 0.\n- The scratch HOME has no .moe, and the real ~/.moe/runner-keys is absent.\n- 12 QA mutants, all killed: repeated header accepted, loopback dropped, loose v4 prefix, key compare dropped, malformed key reused, no temp unlink, no 0600 tighten, runnerId length, runner read from args, startsWith('/runner'), fall-through after refuse, /mcp given a runner.\n- DoD 1-5 each map to tests.\n- Key handling: this module has no logger; the refusal log carries remoteAddress only; the close reason is a fixed string.\n- Forbidden-pattern grep is clean; verified-local is untouched.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-9cc131704d214e66afc8a51a524b35c2",
   "priority": "HIGH",
@@ -116,19 +97,21 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:38:23.882Z",
-  "updatedAt": "2026-10-29T18:02:24.927Z",
+  "updatedAt": "2026-10-29T19:26:51.193Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:41:30.489Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 6,
-    "executedStepCount": 6
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0",
-    "worker-e60b90bd"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "planSizeWarnings": [
@@ -206,29 +189,21 @@
   "planApprovedAt": "2026-10-29T17:43:24.974Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-29T17:47:32.045Z",
-  "reviewStartedAt": "2026-10-29T18:01:53.513Z",
+  "reviewStartedAt": "2026-10-29T19:26:51.191Z",
   "verification": {
     "command": "cd packages/moe-daemon && npm test",
     "exitCode": 0,
-    "outputTail": "Fresh Linux snapshot: git archive HEAD b71c0fd0 (whole repo) + overlay of the 6 task files (cmp-identical to worktree), npm ci (lockfile equal modulo CR), env -i HOME=<scratch> NO_COLOR=1 PATH=<nvm v24.21.0 bin>:/usr/local/bin:/usr/bin:/bin.\n ✓ src/server/runnerChannel.test.ts (41 tests) 1331ms\n\n Test Files  180 passed (180)\n      Tests  4908 passed | 16 skipped (4924)\n   Start at  20:00:23\n   Duration  30.24s (tests 92%, transform 4%, import 4%)\n\nAlso: npx tsc --noEmit exit 0 in the same snapshot.",
-    "reportedAt": "2026-10-29T18:01:53.513Z",
+    "outputTail": "Fresh Linux snapshot 2026-10-29 19:22Z:\n- pure git archive HEAD 7f04b869 of the whole repo, NO overlay; the 6 owned paths are cmp-identical to 1607abf2;\n- npm ci --no-audit --no-fund exit 0;\n- env -i HOME=<scratch> NO_COLOR=1 PATH=<nvm v24.21.0 bin>:/usr/local/bin:/usr/bin:/bin.\n\n ✓ src/server/runnerChannel.test.ts (41 tests) 1260ms\n\n Test Files  181 passed (181)\n      Tests  5041 passed | 16 skipped (5057)\n   Start at  21:22:08\n   Duration  29.79s (tests 92%, transform 4%, import 4%)\n\nAlso in the same snapshot: npx tsc --noEmit exit 0. The real ~/.moe/runner-keys was absent before and after.",
+    "reportedAt": "2026-10-29T19:26:51.191Z",
     "source": "agent-reported"
   },
   "filesModified": [
-    "packages/moe-daemon/src/server/runnerChannel.test.ts",
-    "packages/moe-daemon/src/server/runnerChannel.ts",
     "packages/moe-daemon/src/tools/index.ts",
     "packages/moe-daemon/src/server/McpAdapter.ts",
     "packages/moe-daemon/src/server/WebSocketServer.ts",
-    "packages/moe-daemon/src/index.ts",
-    ".moe/tasks/task-37dd3edb921c42eca56efefb36832992.json",
-    ".moe/tasks/task-3b4e3833e3c74927b4cdf455663cf6b4.json",
-    ".moe/tasks/task-465fb4b958934707b311fc0e7731cc7b.json",
-    ".moe/tasks/task-66e8d7d1e9ef4ba281cdb2f505d47e7d.json",
-    ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
-    ".moe/tasks/task-e493ed19006d4be4a96e3ca2f80a5ab4.json"
+    "packages/moe-daemon/src/index.ts"
   ],
-  "completionSummary": "CQ-V03a runner channel identity.\n\nNew server/runnerChannel.ts (no logger import):\n- RUNNER_KEY_HEADER 'x-moe-runner-key' and RunnerIdentity.\n- runnerKeyPath: <MOE_RUNNER_KEY_DIR | ~/.moe/runner-keys>/<32 hex of sha256(projectPath)>.key.\n- ensureRunnerKey: a 43-character base64url key, 0600 in a 0700 directory on POSIX. A valid key is reused; a malformed one is replaced through a 'wx' 0600 temp file and an atomic rename. The temp file is unlinked on a write or rename failure.\n- authenticateRunner: loopback only (v4, ::1, v4-mapped), exactly one headersDistinct value matching KEY_RE, the stored key read fresh, and timingSafeEqual over sha256 digests. It returns null and never throws. runnerId = 'runner-' + 16 hex of sha256(key).\n\nWiring:\n- ToolCallContext.runner (structural, tools/index.ts).\n- McpHandleOptions.runner, spread into the tools/call context only when set and never read from arguments.\n- WebSocketServer: an exact pathname '/runner' branch (URL parse inside try/catch), after the unchanged /mcp check. Authentication runs before any handler; a refusal is a warn with remoteAddress only plus close 1008 'runner authentication failed'. Success goes through a private attachMcpClient shared verbatim with /mcp.\n- index.ts: try { await ensureRunnerKey(projectPath) } catch → warn (message only), and the daemon keeps running.\n\nTests in runnerChannel.test.ts (41):\n- K1 path cases and K2 provisioning: modes, tightening, reuse, malformed replace, POSIX race, write and rename failure cleanup.\n- A1: every refusal is its own test.\n- M1: adapter forwarding, and argument forgery ignored.\n- W1 real sockets: each refusal closes with 1008 and the probe is never called (missing, wrong, malformed and repeated header; non-loopback; missing key file). An authenticated /runner?query gets the runnerId. /mcp with the header and forged arguments gets null. /runnerx is a plugin connection. Logger spies never see the key.\n- MOE_RUNNER_KEY_DIR points at a temp directory, and the scratch HOME",
+  "completionSummary": "CQ-V03a round 2, after the size-only QA reject (qa-952969be, 19:16Z). No byte changes, per QA's route. The delivery is still completion 1607abf2 (tree bfa7730b). The 6 owned paths at HEAD b2d1a6af are byte-identical to 1607abf2; the only commit since 7f04b869 is board JSON.\n\nSize waiver: prop-a439fe725cd2425b88e248e529c1b529 (EPIC ADD_RAIL, PENDING, a human decision). It names 1607abf2 and the per-file numstat:\n- runnerChannel.test.ts +299/-0\n- runnerChannel.ts +111/-0\n- WebSocketServer.ts +48/-20\n- index.ts +7/-0\n- McpAdapter.ts +4/-0\n- tools/index.ts +2/-0\nNet 451 = 152 runtime + 299 tests. The rail allows growth only by QA-required fixes. Pinged #governors (msg-3adbbd5a). QA's route: approve once APPROVED; park from REVIEW while PENDING.\n\nFresh gate (19:22Z), a pure git archive of HEAD 7f04b869 with no overlay:\n- npm ci, then env -i with a scratch HOME, NO_COLOR=1 and node v24.21.0 on a Linux-only PATH.\n- npm test exit 0: 181 files, 5041 passed | 16 skipped; runnerChannel.test.ts 41/41. tsc --noEmit exit 0.\n- The real ~/.moe/runner-keys was absent before and after.\nMutants were not re-run, because the bytes are unchanged: QA's 12 kills cover the plan's 6.\n\nSelf-review found no defects:\n- runner reaches handle() only from the authenticated /runner branch.\n- /runner/.., /RUNNER and //runner get no identity.\n- The loopback check comes before the file read, and nothing leaks.\n- Theoretical: a crash mid-provisioning can leave an unswept 0600 .tmp in the 0700 dir.\nQA's advisory notes add no bytes.\n\nLANDING NOTE: peer staged bytes sit in packages/moe-daemon/src/index.ts (a --version hunk, baseline P fb60c011) and in package.json/package-lock.json. They are not this task's bytes and were neither declared nor touched.",
   "commits": [
     {
       "sha": "1607abf284c245c3caed8ff5c3115b7fde100141",
@@ -263,9 +238,46 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-29T17:45:46Z",
-    "at": "2026-10-29T18:02:24.927Z"
-  }
+    "outcome": "refused",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE",
+    "sessionId": "qa-952969be@2026-10-29T19:11:15Z",
+    "at": "2026-10-29T19:17:11.614Z"
+  },
+  "reviewCompletedAt": "2026-10-29T19:16:31.820Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Diff is 451 net LOC under packages/ (+471/-20; 152 runtime + 299 tests), over the 400 cap, with no waiving rail. Fix: the worker files an epic ADD_RAIL size exception via moe.propose_rail naming 1607abf2 and the per-file numstat in the reason, pings #governors, and calls complete_task with no byte changes. No rewrite or re-slice of landed bytes.",
+        "file": "packages/moe-daemon/src/server/runnerChannel.test.ts"
+      },
+      {
+        "type": "other",
+        "description": "Advisory, non-blocking: the index.ts ensureRunnerKey try/catch ('daemon still starts when provisioning fails') is verified by inspection only; no test exercises it. It is not a DoD item, so do not add bytes for it unless the rail allows. Also, the stored-key KEY_RE check in authenticateRunner is redundant after a digest match with a KEY_RE-valid presented key; it is harmless.",
+        "file": "packages/moe-daemon/src/index.ts",
+        "line": 615
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "SIZE-ONLY reject. The substance is fully green; no DoD item failed. Completion 1607abf2 (on moe/work-2026-10-24) measures `git show --numstat --format= 1607abf2 -- packages/`: +471/-20 = 451 net, over the 400 net-LOC QA cap. No project, epic or task rail waives size, and no proposal in .moe/proposals names this task or commit. Per file: index.ts +7/-0, McpAdapter.ts +4/-0, WebSocketServer.ts +48/-20, runnerChannel.ts +111/-0, tools/index.ts +2/-0, runnerChannel.test.ts +299/-0. That is 152 net runtime and 299 tests.\n\nROUTE (no byte changes, no re-slice of landed bytes; see mem:decision-size-only-reject-of-landed-bytes): the worker files moe.propose_rail as an EPIC ADD_RAIL size exception for CQ-V03a. It names commit 1607abf2, the six files with the +/- counts above, and \"grow only by QA-required fixes\". Ping #governors with the prop id, then complete_task with fresh verification. QA approves once the proposal is APPROVED; if it is still PENDING, QA parks the row rather than rejecting again.\n\nQA EVIDENCE (independent):\n- Pure `git archive HEAD` 7f04b869, with all 6 owned files cmp-identical to 1607abf2. No overlay.\n- npm ci, then env -i HOME=<scratch> NO_COLOR=1 with a node v24.21.0 Linux-only PATH.\n- `cd packages/moe-daemon && npm test` exit 0: Test Files 181 passed (181), Tests 5041 passed | 16 skipped. runnerChannel.test.ts 41/41.\n- `npx tsc --noEmit` exit 0.\n- The scratch HOME has no .moe, and the real ~/.moe/runner-keys is absent.\n- 12 QA mutants, all killed: repeated header accepted, loopback dropped, loose v4 prefix, key compare dropped, malformed key reused, no temp unlink, no 0600 tighten, runnerId length, runner read from args, startsWith('/runner'), fall-through after refuse, /mcp given a runner.\n- DoD 1-5 each map to tests.\n- Key handling: this module has no logger; the refusal log carries remoteAddress only; the close reason is a fixed string.\n- Forbidden-pattern grep is clean; verified-local is untouched.",
+      "rejectedAt": "2026-10-29T19:16:31.820Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Diff is 451 net LOC under packages/ (+471/-20; 152 runtime + 299 tests), over the 400 cap, with no waiving rail. Fix: the worker files an epic ADD_RAIL size exception via moe.propose_rail naming 1607abf2 and the per-file numstat in the reason, pings #governors, and calls complete_task with no byte changes. No rewrite or re-slice of landed bytes.",
+          "file": "packages/moe-daemon/src/server/runnerChannel.test.ts"
+        },
+        {
+          "type": "other",
+          "description": "Advisory, non-blocking: the index.ts ensureRunnerKey try/catch ('daemon still starts when provisioning fails') is verified by inspection only; no test exercises it. It is not a DoD item, so do not add bytes for it unless the rail allows. Also, the stored-key KEY_RE check in authenticateRunner is redundant after a digest match with a KEY_RE-valid presented key; it is harmless.",
+          "file": "packages/moe-daemon/src/index.ts",
+          "line": 615
+        }
+      ]
+    }
+  ]
 }

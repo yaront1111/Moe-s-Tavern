@@ -1,0 +1,29 @@
+{
+  "id": "task-16628bef427b426aa9d8fc6ac1d19534",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: architectureRules lexer desync hides imports on later lines",
+  "description": "extractImports in packages/moe-daemon/src/delivery/architectureRules.ts assumes a lexing misread stays on one line. That holds for strings and regexes, but not for template or `/* */` state. A regex/division misread, an Annex-B `<!--` comment, or a backtick in JSX text flips that state, so imports on LATER lines are hidden until the next backtick or `*/`. No uncertainty is reported.\n\nProbed on HEAD 7f04b869: every case below gives imports=[] and uncertain=[], and in a node vm Script the require in (1)-(3) really executes.\n1. `const a = {} / 1, b = `/;` NL `\\`;` NL require('../tools/t.js') NL `// \\``\n2. `class A extends /`/.constructor {}` NL require NL `// \\``\n3. `<!-- \\`` NL require NL `// \\``\n4. TSX `<p>Use \\` here</p>` NL require NL `// \\``\n5. `export default /\\/*/;` NL require NL `// */`\n6. `const r = a! / b; const p = `${x}/${y}`;` NL require NL `const q = \\`z\\`;`\n\nCases (4) and (6) can happen by accident.\n\nThis needs an architect decision. The V10a contract forbids adding an uncertainty reason, so the options are a new 'ambiguous' reason, parser-backed extraction, or something else. CQ-V10 must not trust 'passed' until this is resolved.\n\nFound in the CQ-V10a (task-2cd62d2c) step-5 adversarial review. Not fixed there, because its bytes are frozen under size waiver prop-7401cd0b.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-2cd62d2c87ab4e118222a5a8b841db6c"
+  ],
+  "priority": "HIGH",
+  "order": 252.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T19:25:18.471Z",
+  "updatedAt": "2026-10-29T19:25:18.471Z"
+}

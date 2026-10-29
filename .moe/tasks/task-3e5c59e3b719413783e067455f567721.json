@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:49:02.792Z",
-  "updatedAt": "2026-10-29T19:23:08.194Z",
+  "updatedAt": "2026-10-29T19:23:45.720Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T14:52:10.212Z",
     "plannedStepCount": 5,
@@ -160,7 +160,10 @@
     "packages/moe-daemon/src/context/commitMaterializer.ts",
     "packages/moe-daemon/src/context/commitMaterializer.test.ts",
     ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
-    ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json"
+    ".moe/tasks/task-44a9e97be68a4166822b64416cea7ab5.json",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-54dc3d385ef542a08a0a8e9aa2ce8969.json",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json"
   ],
   "completionSummary": "CQ-C03a adds context/commitMaterializer.ts (195 lines) with its test (204 lines, 26 tests), and exports readOnlyGitEnv/readOnlyGitArgs from util/cachedPlanPaths.ts (+2/-2; runGit and runGitHead unchanged). Net 399 lines.\n\nAPI, exact names for CQ-C03: materializeCommit, MATERIALIZE_LIMITS, MaterializeLimits, MaterializedCommit and MaterializeResult.\n- INVALID_INPUT is thrown before any IO for a bad commit, a bad limit or unknown limit key, or a relative tmpRoot. A relative projectRoot is refused too, added in self-review: '.' would resolve against the daemon's cwd.\n- Every other failure is a reason: repository, commit-invalid, git-failed:ls-tree, git-failed:cat-file, limit-exceeded:files, limit-exceeded:bytes, path-collision, tmp-inside-project, tmp-failed, fs-failed, timeout.\n\nApproach: rev-parse ^{commit}/^{tree}; ls-tree -r -z -l through openProjectGit's git.head (16 MiB cap); then ONE cat-file --batch stream with an exact per-record header and LF check and an exact maxBuffer. Never --filters, archive or checkout. Writes are 'wx' with mode 0644/0755 under a mkdtemp dir created 0700.\n\nTests, real Git:\n- M1: dirty, staged and untracked bytes are ignored; exec bits kept.\n- M2: smudge filter, eol and info/attributes never run, with a non-vacuous precondition.\n- M3: symlink, gitlink, .moe, .GIT, CON and non-UTF-8 entries are skipped and counted.\n- M4/M5: bounds come before any blob read, proven with a header-only blob.\n- M6/M6b: unreadable or missing blob. M13 (POSIX): '<oid> missing' with exit 0.\n- M7: tmpRoot inside the project. M8: the repo and .git are byte- and mtime-unchanged.\n- M9: dispose. M10: invalid input. M11: case-fold collision. M12: non-commit ids.\n\nMutation sweep: 18/18 killed.\n\nGit finding: `ls-tree -l` prints size BAD with exit 0 for a missing blob, so deleting a blob cannot prove that the bounds come first. Recorded in mem gotcha-git-tree-read-pathspec-and-maxbuffer.\n\nGate: npm test exit 0 (178 files; 4858 passed, 16 skipped) and tsc exit 0. A Window",
   "commits": [
@@ -188,6 +191,24 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "b2d1a6af21c75865765a7f64ce65ab49a8b7cc05",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-29T19:17:43Z",
+      "paths": [
+        ".moe/tasks/task-3e5c59e3b719413783e067455f567721.json",
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-54dc3d385ef542a08a0a8e9aa2ce8969.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-29T19:23:45.720Z",
+      "treeId": "4be6d8718ad7d9b393419898ff63119d5a7cafc2",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -197,9 +218,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-0062feec@2026-10-29T17:17:15Z",
-    "at": "2026-10-29T17:36:56.277Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-29T19:17:43Z",
+    "at": "2026-10-29T19:23:45.720Z"
   },
   "completedAt": "2026-10-29T19:23:08.194Z",
   "reviewCompletedAt": "2026-10-29T19:23:08.194Z",
