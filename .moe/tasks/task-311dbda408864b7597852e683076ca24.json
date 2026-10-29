@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -127,19 +127,22 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T08:11:42.283Z",
-  "updatedAt": "2026-10-29T17:16:08.735Z",
+  "updatedAt": "2026-10-29T17:21:23.040Z",
   "metrics": {
     "firstClaimAt": "2026-10-25T10:41:48.492Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T17:21:23.040Z",
+    "wallClockMs": 369574548
   },
   "contextFetchedBy": [
     "architect-26ba32c3",
     "architect-1520cc31",
     "architect-e4b7eee0",
     "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-0062feec",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -195,23 +198,44 @@
       "treeId": "f8cb650e75e2d2b0a59cc35c738824ae2268c271",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "85c095c7258eeb10c09a663be74e8d60fcb93fae",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T17:04:53Z",
+      "paths": [
+        ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+        ".moe/tasks/task-7f928d96060341f382d37cf5e22f7d53.json",
+        "packages/moe-daemon/src/context/snapshotSource.test.ts",
+        "packages/moe-daemon/src/context/snapshotSource.ts"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T17:16:42.101Z",
+      "treeId": "98692509f5d1ace9640fe14cfac37adc716e7ac2",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/context/repositorySource.ts",
     "packages/moe-daemon/src/context/snapshotSource.ts",
-    "packages/moe-daemon/src/context/snapshotSource.test.ts"
+    "packages/moe-daemon/src/context/snapshotSource.test.ts",
+    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
+    ".moe/tasks/task-7f928d96060341f382d37cf5e22f7d53.json"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/context/repositorySource.ts",
-    "packages/moe-daemon/src/context/snapshotSource.ts"
+    "packages/moe-daemon/src/context/snapshotSource.ts",
+    "packages/moe-daemon/src/context/snapshotSource.test.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-29T16:57:45Z",
-    "at": "2026-10-29T17:04:20.459Z"
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-29T17:04:53Z",
+    "at": "2026-10-29T17:16:42.101Z"
   },
   "reviewStartedAt": "2026-10-29T17:16:08.733Z",
   "verification": {
@@ -221,5 +245,9 @@
     "reportedAt": "2026-10-29T17:16:08.733Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-C02b adds the snapshot manifest source adapter. The bounded C02 source queries are now served from R09b's SourceSnapshot, and only after C02b1's verifySourceSnapshot has checked it.\n\nFiles: +348/-2 (net 346, under the 400 cap, no size exception).\n- repositorySource.ts: capTotal is exported as a generic. No behaviour change (2 lines).\n- snapshotSource.ts (new, 149 lines): pure and synchronous. Imports only util/errors, repositorySource and snapshotManifest.\n- snapshotSource.test.ts (new, 197 lines, 39 tests).\n\nInterface for C04/C05: `readSnapshotSource(snapshot: unknown, {commit, base?, overlay?}, queries, {limits})` returns `{manifest {commit, tree, base, overlay}, items, complete, limitations, bytes}`.\n- Caller errors throw INVALID_INPUT before verification.\n- Items and search matches carry provenance `{layer, manifest, sha256}`. manifest is the recomputed layer digest; sha256 is the verifier's recomputed hash of the served private copy.\n\nDoD:\n1. Base and overlay bytes are served with provenance derived from the bytes (S1-S3, S12, E2E). The test computes each sha256 itself.\n2. Refusals:\n- Control paths are refused as 'control-path' and R09-invalid paths as 'path-invalid' (S5/S6).\n- Traversal throws (S7).\n- Symlink, .moe overlay, hash and digest tampering give every item unavailable 'snapshot-unverifiable:<code>' (S10, base-only paths included).\n- The E2E .moe/state.json is refused.\n3. A delete gives 'deleted-in-overlay', and a commit, base or overlay mismatch gives 'snapshot-stale' (S4, S11). There is never a base, worktree or Git fallback.\n- E2E: a real git repo through the landed exportSourceSnapshot, compared with C02 readRepositorySource on committed bytes.\n4. Fresh `npm test` exit 0 (177 files, 4832 passed | 16 skipped); tsc exit 0.\n\nOnly C02's reason strings are reused verbatim. The new reasons are control-path, path-invalid, deleted-in-overlay, snapshot-unverifiable:<code>, snapshot-stale and time-budget.\n\nMutation testing: 19 mutants, 18 killed. The one "
+  "completionSummary": "CQ-C02b adds the snapshot manifest source adapter. The bounded C02 source queries are now served from R09b's SourceSnapshot, and only after C02b1's verifySourceSnapshot has checked it.\n\nFiles: +348/-2 (net 346, under the 400 cap, no size exception).\n- repositorySource.ts: capTotal is exported as a generic. No behaviour change (2 lines).\n- snapshotSource.ts (new, 149 lines): pure and synchronous. Imports only util/errors, repositorySource and snapshotManifest.\n- snapshotSource.test.ts (new, 197 lines, 39 tests).\n\nInterface for C04/C05: `readSnapshotSource(snapshot: unknown, {commit, base?, overlay?}, queries, {limits})` returns `{manifest {commit, tree, base, overlay}, items, complete, limitations, bytes}`.\n- Caller errors throw INVALID_INPUT before verification.\n- Items and search matches carry provenance `{layer, manifest, sha256}`. manifest is the recomputed layer digest; sha256 is the verifier's recomputed hash of the served private copy.\n\nDoD:\n1. Base and overlay bytes are served with provenance derived from the bytes (S1-S3, S12, E2E). The test computes each sha256 itself.\n2. Refusals:\n- Control paths are refused as 'control-path' and R09-invalid paths as 'path-invalid' (S5/S6).\n- Traversal throws (S7).\n- Symlink, .moe overlay, hash and digest tampering give every item unavailable 'snapshot-unverifiable:<code>' (S10, base-only paths included).\n- The E2E .moe/state.json is refused.\n3. A delete gives 'deleted-in-overlay', and a commit, base or overlay mismatch gives 'snapshot-stale' (S4, S11). There is never a base, worktree or Git fallback.\n- E2E: a real git repo through the landed exportSourceSnapshot, compared with C02 readRepositorySource on committed bytes.\n4. Fresh `npm test` exit 0 (177 files, 4832 passed | 16 skipped); tsc exit 0.\n\nOnly C02's reason strings are reused verbatim. The new reasons are control-path, path-invalid, deleted-in-overlay, snapshot-unverifiable:<code>, snapshot-stale and time-budget.\n\nMutation testing: 19 mutants, 18 killed. The one ",
+  "completedAt": "2026-10-29T17:21:23.040Z",
+  "reviewCompletedAt": "2026-10-29T17:21:23.040Z",
+  "reviewSummary": "APPROVED CQ-C02b.\nDelivery: completion 85c095c and checkpoint 4c88897 are on moe/work-2026-10-24 (branch --contains) and recorded as pushed. HEAD is 85c095c; the files are clean.\nSize: 3 files, +348/-2, net 346, under 400.\n- repositorySource.ts: capTotal export/generic only, no behaviour change.\n- snapshotSource.ts: new, pure and sync.\n- Tests: 39 new.\n\nRe-run in a fresh Linux snapshot (git archive 85c095c, own npm ci, env -i, node 24):\n- npm test exit 0: 177/177 files, 4832 passed | 16 skipped. snapshotSource 39/39, repositorySource 133/133.\n- tsc --noEmit exit 0.\nThis matches task.verification.\n\nDoD:\n1. Bytes come only from the verifier's private copies. provenance is {layer, recomputed layer digest, recomputed sha256}. Tests check sha256s they compute themselves (S1-3, S12), and the E2E test checks C02 parity through the landed exportSourceSnapshot.\n2. Refusals:\n- A '..' query throws INVALID_INPUT before verification.\n- Control paths give control-path, and R09-invalid paths give path-invalid.\n- Symlink, .moe, hash and digest tampering give every item snapshot-unverifiable:<code>.\n- Scratch probes (snapshot only, deleted afterwards): overlay '../escape', 'a/../../b', '/abs', 'x\\y', 'sub/.git/hooks/x' and '.Moe/x' all give every item unavailable, with no content. A throwing Proxy does not throw. Replaced base bytes never leak.\n3. A delete gives deleted-in-overlay with no base fallback. A commit, base or overlay mismatch gives snapshot-stale. There is no fs, Git or worktree path; the S17 purity check covers it.\n4. Fresh npm test exit 0.\n\nNo forbidden tokens, no weakened tests, scope matches the plan.\n\nNon-blocking notes:\n- An omitted request.base/overlay pins only the commit. C04/C05 should pass the identity.\n- classify spreads all keys per lookup. That is bounded; view.sorted would be leaner.\n- undecodable-match uses ??= where C02 overwrites.",
+  "requiredCheckAtDone": null
 }

@@ -96,8 +96,8 @@
     }
   ],
   "planRevision": 13,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-fe18a9a9",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -128,7 +128,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-25T11:02:10.593Z",
-  "updatedAt": "2026-10-29T16:41:37.261Z",
+  "updatedAt": "2026-10-29T17:20:54.828Z",
   "dependsOn": [
     "task-c532d223459b4ef4b5bab2ba0eb4005e",
     "task-5c71dff9ff2a488d8f75ec375c4f99f8",
@@ -257,30 +257,39 @@
       "treeId": "ccbba440f0f43825d3e375489ea504dc575d4b1e",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "1c9c71aa2399a2275f702c3f672d2695875ce9a8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T16:24:35Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T17:11:14.307Z",
+      "treeId": "23979cea25e77f1a8aa2ec4e1f16c29518c3ad1f",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-6aa460bb33184e1b84fc9c9e5c0a4560.json",
-    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
     "scripts/tests/postflight-owner-guard.cjs",
-    "scripts/tests/postflight.ps1",
     "scripts/tests/postflight.sh",
-    ".moe/tasks/task-915d7e84821448139086c97f77743f29.json",
-    ".moe/tasks/task-f12b03e83a1a491494a08e42c7a58504.json",
-    "docs/TROUBLESHOOTING.md",
-    "scripts/CLAUDE.md",
-    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1",
     "scripts/moe-agent.sh",
-    ".moe/tasks/task-311dbda408864b7597852e683076ca24.json",
-    ".moe/tasks/task-34632f08a9a549a28bcf2b9f6946244b.json",
-    ".moe/tasks/task-5dc76be6e63f47a58f30e9f7a6923511.json"
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/TROUBLESHOOTING.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-29T14:12:28Z",
-    "at": "2026-10-29T15:03:46.276Z"
+    "sessionId": "worker-fe18a9a9@2026-10-29T16:24:35Z",
+    "at": "2026-10-29T17:11:14.307Z"
   },
   "declaredFiles": [
     "scripts/tests/postflight-owner-guard.cjs"
@@ -291,5 +300,14 @@
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md",
     "docs/TROUBLESHOOTING.md"
-  ]
+  ],
+  "reviewStartedAt": "2026-10-29T17:20:54.826Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/6aa4-run/gate.sh  # plan step-5 chain on one snapshot (git archive HEAD 7c7ce76 + the 7 owned paths; PS legs on a byte-identical D: copy; MOE_*/CLAUDE* stripped): bash -n scripts/moe-agent.sh && MOE_POSTFLIGHT_TIMEOUT_SEC=180 postflight.sh && parity-check.sh && powershell.exe {ParseFile moe-agent.ps1; postflight.ps1; parity-check.ps1} && pwsh.exe {same} && (cd packages/moe-daemon && npm test)",
+    "exitCode": 0,
+    "outputTail": "Extract of gate.log (leg, PASS and summary lines). Run 2026-10-29T16:40:43Z-17:16:00Z. Launched detached by this seat's previous session (pre-flight 16:24:35Z, died ~17:11Z) and watched to completion by this session. Afterward the 10 gated files (7 owned + postflight-fake-proxy.js + parity-check.{sh,ps1}) were sha256-checked: equal in the snapshot, the D: copy, the live tree and HEAD 85c095c. HEAD's commits since 7c7ce76 touch only packages/moe-daemon/src/context/* and scripts/local-runner/*, plus board JSON.\n=== LEG bash-n 2026-10-29T16:40:43Z\n=== LEG postflight.sh 2026-10-29T16:40:43Z\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 12\ncommit-scope scenarios run: 38\nPASS postflight.sh\n=== LEG parity-check.sh 2026-10-29T16:50:46Z\nPASS parity-check.sh\n=== LEG powershell.exe 2026-10-29T16:50:47Z\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 12\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AE] skipped: this host cannot create symlinks\ncommit-scope scenarios run: 37\nPASS postflight.ps1\nPASS parity-check.ps1\n=== LEG pwsh.exe 2026-10-29T17:03:49Z\nPASS frozen candidate scenarios: 74\nPASS owner guard scenarios: 12\n[scenario AD] link variant skipped: this host cannot create symlinks\n[scenario AE] skipped: this host cannot create symlinks\ncommit-scope scenarios run: 37\nPASS postflight.ps1\nPASS parity-check.ps1\n=== LEG npm-test 2026-10-29T17:15:30Z\nTest Files  174 passed (174)\nTests  4717 passed | 16 skipped (4733)\n=== GATE_EXIT=0 2026-10-29T17:16:00Z\nSupplementary (not part of the plan's chain): daemon npm test on a full git archive of HEAD 85c095c, env -i, 17:17:41Z-17:18:05Z: Test Files 177 passed (177); Tests 4832 passed | 16 skipped (4848); exit 0.",
+    "reportedAt": "2026-10-29T17:20:54.826Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Owner guard in both wrappers: a session that is not the task's assignee lands none of its bytes while the owner is protected.\nRule (sh landing_owner_guard, ps1 Get-MoeOwnerGuard; **Owner guard** in scripts/CLAUDE.md):\n- The assignee lands.\n- Foreign owner with assigneeProtected true, or another seat's well-formed `finalizing` attempt (QA's window note): MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE.\n- Foreign owner with an absent/non-boolean answer, malformed owner, taskId mismatch, failed check or disk fallback: MOE_COMMIT_REFUSED_OWNER_UNKNOWN.\n- Unassigned, or foreign owner with JSON false and nothing finalizing: lands as before (orphan recovery unchanged).\nRuns first in post-flight landing, pre-flight recovery (fresh scope) and teardown rescue. A refusal touches no tree, index, ref or baseline; it records record_commit outcome=refused (code, role, sessionId, no paths), prints commit=none outcome=refused code=..., and sets landing-done so teardown cannot re-land.\nTests: new shared suite scripts/tests/postflight-owner-guard.cjs (12 cases), run from postflight.sh and .ps1. Sequential case: the architect refuses, then the owner's completion commits the bytes (committed row, no NOTHING_TO_COMMIT). Frozen suite gains teardown-protected. RED: 8/12 plus teardown-protected failed on pre-fix wrappers (sh, PS 5.1).\nDocs: scripts/CLAUDE.md, docs/TROUBLESHOOTING.md. Size: +427/-29, net 398, 7 files.\nGate: step-5 chain, GATE_EXIT=0, 16:40-17:16Z.\n- bash: -n OK; postflight.sh frozen 74, owner guard 12, commit-scope 38; parity PASS.\n- PS 5.1, pwsh 7: ParseFile OK, frozen 74, owner guard 12, commit-scope 37 (AD-link/AE skip: no symlink rights, pre-existing); postflight.ps1 + parity PASS.\n- daemon: 174 files, 4717 passed.\nMy previous session launched the run; this one watched it finish. Gated bytes sha256-match HEAD 85c095c. Extra: daemon tests on an 85c095c archive: 177/177 files, 4832 passed.\nResidual: scope read and CAS not atomic. Filed task-3d0be568 (sh/ps1 ledger ref)."
 }
