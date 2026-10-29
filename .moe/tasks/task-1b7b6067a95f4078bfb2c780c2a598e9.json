@@ -98,7 +98,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -111,7 +111,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:32.232Z",
-  "updatedAt": "2026-10-29T20:43:19.069Z",
+  "updatedAt": "2026-10-29T20:49:06.266Z",
   "dependsOn": [
     "task-8d00971692974bbdb2f8b3c3b181c46d",
     "task-311dbda408864b7597852e683076ca24"
@@ -120,12 +120,15 @@
     "firstClaimAt": "2026-10-26T09:35:47.194Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T20:49:06.266Z",
+    "wallClockMs": 299599072
   },
   "contextFetchedBy": [
     "architect-1520cc31",
     "architect-e4b7eee0",
-    "worker-b5749787"
+    "worker-b5749787",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -186,18 +189,38 @@
       "treeId": "157a399820c448fc070d231ad84310b5afbf3113",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "b0048c90b38d8676d1ccf119cb8077a7d9ef365a",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b5749787@2026-10-29T20:16:12Z",
+      "paths": [
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        "packages/moe-daemon/src/context/sourceCache.test.ts",
+        "packages/moe-daemon/src/context/sourceCache.ts"
+      ],
+      "recordedBy": "worker-b5749787",
+      "recordedAt": "2026-10-29T20:43:45.152Z",
+      "treeId": "febfa8ae037e20e0f8e5d69800436fc6b4c14fca",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/context/sourceCache.ts",
-    "packages/moe-daemon/src/context/sourceCache.test.ts"
+    "packages/moe-daemon/src/context/sourceCache.test.ts",
+    ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-e4b7eee0@2026-10-29T15:07:33Z",
-    "at": "2026-10-29T17:09:21.329Z"
+    "kind": "completion",
+    "sessionId": "worker-b5749787@2026-10-29T20:16:12Z",
+    "at": "2026-10-29T20:43:45.152Z"
   },
   "workStartedAt": "2026-10-29T20:22:30.276Z",
   "reviewStartedAt": "2026-10-29T20:43:19.067Z",
@@ -208,5 +231,13 @@
     "reportedAt": "2026-10-29T20:43:19.067Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-C04: positive-only, in-memory LRU source cache.\n\nFiles are new: src/context/sourceCache.ts (170 lines) and sourceCache.test.ts (230 lines, 33 tests), 400 net. No provider file changed.\n\nAPI:\n- SourceCache: maxEntries 2048 and maxBytes 32 MiB; structuredClone on get and set; set never throws; stats().\n- sourceCacheKey(parts), isPositiveSource, isPositiveAnswer.\n- cachedRepositorySource, cachedSnapshotSource and cachedSemanticSource are drop-ins for the C02, C02b and C03 providers.\n\nMerge rule:\n- On a full miss, run the uncached call.\n- Otherwise run one subset call. Any unavailable, omitted or time-budget item falls back to the full call.\n- Reassemble in query order, reapply capTotal, and rebuild the envelope in the provider's key order.\n- Every test asserts JSON equality with the uncached provider.\n\nKeys:\n- git-read and git-search carry (root, commit).\n- snapshot-read carries (path, executable, sha256, maxFileBytes). snapshot-search carries a scopeDigest over in-scope path\\0sha256 and a manifest guard; provenance is restamped.\n- semantic carries (root, commit, launch.command, server, the tool's inputSchema, tool, args, maxResponseBytes).\n\nDoD:\n1. Porcelain-unchanged dirty edits invalidate: S1, S2, S5.\n2. Lock, toolchain and config changes invalidate the right slices. Commit and snapshot identity cover the lock and config bytes. The analyzer command, server and schema cover the semantic toolchain (M2, M3).\n3. Loss or restart costs only performance: fail-open, with C1, C7 and the uncached equality checks.\n4. Gate: fresh, 183 files, 5107 passed | 16 skipped, exit 0; tsc exit 0.\n\nMutation proof: all 11 mutants killed. They dropped the sha256, the scopeDigest, the server or the commit from keys, the positivity checks, the clone, the omitted or unavailable fallbacks, the provenance restamp and the manifest guard.\n\nAdversarial review found no code issues. Residuals: a semantic hit still starts the analyzer; a snapshot miss verifies twice; a dev analyzer with an unchange"
+  "completionSummary": "CQ-C04: positive-only, in-memory LRU source cache.\n\nFiles are new: src/context/sourceCache.ts (170 lines) and sourceCache.test.ts (230 lines, 33 tests), 400 net. No provider file changed.\n\nAPI:\n- SourceCache: maxEntries 2048 and maxBytes 32 MiB; structuredClone on get and set; set never throws; stats().\n- sourceCacheKey(parts), isPositiveSource, isPositiveAnswer.\n- cachedRepositorySource, cachedSnapshotSource and cachedSemanticSource are drop-ins for the C02, C02b and C03 providers.\n\nMerge rule:\n- On a full miss, run the uncached call.\n- Otherwise run one subset call. Any unavailable, omitted or time-budget item falls back to the full call.\n- Reassemble in query order, reapply capTotal, and rebuild the envelope in the provider's key order.\n- Every test asserts JSON equality with the uncached provider.\n\nKeys:\n- git-read and git-search carry (root, commit).\n- snapshot-read carries (path, executable, sha256, maxFileBytes). snapshot-search carries a scopeDigest over in-scope path\\0sha256 and a manifest guard; provenance is restamped.\n- semantic carries (root, commit, launch.command, server, the tool's inputSchema, tool, args, maxResponseBytes).\n\nDoD:\n1. Porcelain-unchanged dirty edits invalidate: S1, S2, S5.\n2. Lock, toolchain and config changes invalidate the right slices. Commit and snapshot identity cover the lock and config bytes. The analyzer command, server and schema cover the semantic toolchain (M2, M3).\n3. Loss or restart costs only performance: fail-open, with C1, C7 and the uncached equality checks.\n4. Gate: fresh, 183 files, 5107 passed | 16 skipped, exit 0; tsc exit 0.\n\nMutation proof: all 11 mutants killed. They dropped the sha256, the scopeDigest, the server or the commit from keys, the positivity checks, the clone, the omitted or unavailable fallbacks, the provenance restamp and the manifest guard.\n\nAdversarial review found no code issues. Residuals: a semantic hit still starts the analyzer; a snapshot miss verifies twice; a dev analyzer with an unchange",
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/sourceCache.ts",
+    "packages/moe-daemon/src/context/sourceCache.test.ts"
+  ],
+  "completedAt": "2026-10-29T20:49:06.266Z",
+  "reviewCompletedAt": "2026-10-29T20:49:06.266Z",
+  "reviewSummary": "Reviewed completion b0048c9 on moe/work-2026-10-24 (contains ok). Diff: 2 new files, sourceCache.ts +170 and .test.ts +230 = 400 net (at the cap, not over). No provider file changed; worktree equals commit.\n\nGate, re-run fresh: Linux snapshot of git archive b0048c9, native node_modules with an equal lock, env -i, node v24.21.0. `cd packages/moe-daemon && npm test` exit 0: 183 files, 5107 passed | 16 skipped (sourceCache 33/33). tsc --noEmit exit 0. No forbiddenPatterns tokens.\n\nDoD:\n1. Dirty edit with porcelain unchanged: S1 runs real Git and the R09b export; porcelain stays 'M src/a.ts' while the overlay digest changes. Snapshot keys use sha256, and searches add a scopeDigest.\n2. S2: only the lockfile read and the unscoped search miss. M2/M3 cover commit, server version, analyzer command and inputSchema.\n3. Loss/restart: C4, G1, S5 and M1 each equal the uncached provider as JSON.\n4. Evidence matches the plan's command and reproduces.\n\nTraced the merge against the providers:\n- Positive items don't depend on batch-mates (classify uses each query's own prefixes).\n- A capped or failed subset falls back to the full call; limitations equal the uncached union.\n- A deleted scope that is also a directory prefix is refused by the verifier (SNAPSHOT_PATH_COLLISION).\n\nMy own mutants, all killed and restored (sha256sum -c OK): sha256 dropped from the read key, the scopeDigest framing, the manifest guard, inputSchema dropped from the semantic key, the literal-search-only limitation.\n\nAdvisory, plan-approved:\n- The semantic key omits launcher prefixArgs and the language-server cache (the documented dev-build residual).\n- A C02 full hit doesn't re-check the repository (affects availability only).\n- Not wired into the daemon yet; activation is CQ-C11.",
+  "requiredCheckAtDone": null
 }
