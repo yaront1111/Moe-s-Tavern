@@ -15,59 +15,77 @@
     {
       "stepId": "step-1",
       "description": "join_team + shared helpers (joinTeam.ts), test-first. Load test-driven-development: write the join cases in the new packages/moe-daemon/src/tools/workerType.test.ts, watch them fail, then implement.\n\n(a) Export two helpers from joinTeam.ts; claimNextTask.ts imports them in step 2. One definition only: no runtime constant in types/schema.ts, no new util file.\n- normalizeWorkerType(value: unknown): WorkerType. Returns the value only when it is a string that is EXACTLY one of CLAUDE, CODEX, GEMINI, GROK (case-sensitive). Build the allowlist as Record<WorkerType, true> so tsc fails if WorkerType ever grows, and test membership with Object.hasOwn so prototype names such as 'constructor' or 'toString' never match. Every other value ('codex', ' CODEX', '', 'OPENAI', null, 42, true, arrays, objects) returns 'CLAUDE'. Never throws: no new rejection.\n- refreshWorkerType(state, workerId: string | undefined, reported: unknown): Promise<void>. No-op when workerId is falsy, when reported === undefined (the key was omitted = not reported, so an existing record keeps its type), or when no record exists (it never creates one). Otherwise normalize; if the result equals the stored type, do nothing: no disk write and no WORKER_UPDATED, because idle wrappers poll claim_next_task. Else call state.updateWorker(workerId, { type, lastActivityAt: worker.lastActivityAt }). Passing the stored lastActivityAt keeps a type change from counting as presence (updateWorker otherwise stamps now); status is untouched, so a DEAD record stays DEAD with its prune clock intact. For error handling, wrap the write in try/catch and logger.warn({ workerId, type, error }, ...) on failure. A failed type write never fails the calling tool: type is informational, and updateWorker writes disk before the map, so the old type stays consistent.\n\n(b) join_team: add an optional workerType property to inputSchema.properties ({ type: 'string', description naming the four values, the CLAUDE fallback and that omitting it leaves an existing record's type alone }). Do NOT add it to required, and add no enum: an enum lets MCP clients refuse values the daemon must accept. Read it as unknown. Keep the existing order and add the type at two points:\n1. required teamId/workerId;\n2. the team must exist (an unknown team throws before ANY write, as today);\n3. auto-register a missing record with type: normalizeWorkerType(params.workerType) (omitted gives CLAUDE);\n4. addTeamMember (a full team still throws here; a record step 3 just created keeps its reported type, since the pre-existing auto-register-then-join order does not change);\n5. revive a DEAD record to IDLE;\n6. await refreshWorkerType(state, params.workerId, params.workerType) LAST, so only a successful join refreshes an existing record. It never touches currentTaskId, status, teamId, memberIds or chatCursors.\nMention the field in the tool description.\n\nTests (join part of workerType.test.ts). Use the ToolTestHarness pattern of joinTeam.notification.test.ts. afterEach runs vi.restoreAllMocks() then h.cleanup().\n1. inputSchema.properties has workerType, and required does not include it.\n2. it.each over the four names: a new seat joins with that value. Its in-memory record type AND the JSON at .moe/workers/<id>.json (fs.readFileSync + JSON.parse) both equal the value.\n3. it.each fallback for a new seat, each giving CLAUDE with the join resolving to the team (no throw): omitted, 'codex', 'Codex', ' CODEX', '', 'OPENAI', 'constructor', null, 42, true, ['CODEX'], {}.\n4. A busy existing member (status CODING, currentTaskId 'task-1', a chat cursor, already in the team) rejoins with 'GEMINI'. Type becomes GEMINI. Every other field, lastActivityAt included, equals the before-snapshot, and memberIds is unchanged (no duplicate).\n5. An existing CODEX member rejoins with workerType omitted: the record toEqual the before-snapshot. This pins backward compatibility, and the landed joinTeam.notification.test.ts relies on it too; do not edit that file.\n6. An existing CODEX member rejoins with 'aider': type becomes CLAUDE.\n7. A DEAD seat (made DEAD with deregisterWorkerTool) rejoins with 'GROK': status IDLE, type GROK.\n8. Refusals, each with workerType 'GROK':\n- an unknown teamId for an unknown seat throws, and no record or file exists afterwards;\n- an unknown teamId for an existing CODEX seat throws, and its type stays CODEX;\n- a full team (maxSize 1, already occupied) for an existing CODEX seat throws 'is full', and its type stays CODEX.\n9. Error handling: vi.spyOn(h.state, 'updateWorker').mockRejectedValueOnce(new Error('EBUSY')) during an existing member's type-only rejoin. The join still resolves with the team, and the type is unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/joinTeam.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/workerType.test.ts"
-      ]
+      ],
+      "note": "Reopen 1, after a size-only QA reject (no code change requested). No bytes changed. joinTeam.ts (f2213312) and workerType.test.ts (1f030e8a) are byte-identical at f107447, HEAD 9978b61 and the worktree (git hash-object = rev-parse). Fresh evidence on a pure git archive of HEAD (Linux, node 24.21.0, env -i): workerType.test.ts 57/57. Mutants on a scratch copy, restored and cmp-checked, failures out of 57:\n- J1, case-insensitive normalize: 3\n- J2, `in` instead of Object.hasOwn: 1 (the prototype-name row)\n- J3, an omitted value resets an existing type: 4\n- J4, a type write stamps lastActivityAt: 2\n- J5, writes when the type is unchanged: 1\n- J6, a failed write propagates: 2\n- J7, the join refresh is dropped: 5\n- J8, the refresh moves before the team check: 2\nOne survivor, J9 (join's createWorker hardcodes CLAUDE). It is equivalent on every successful join, because the trailing refresh re-records the reported type. It differs only for a NEW seat refused by a full team, and no test pins that case. I left it alone: no byte change this round, and growth is only by QA-required fixes. modifiedFiles is [] on purpose, so the MODIFIED-FILES-OMITTED fallback is expected; the planned paths are unchanged. The shared tree's foreign dirty paths were not touched.",
+      "startedAt": "2026-10-29T12:41:57.269Z",
+      "completedAt": "2026-10-29T12:45:53.939Z"
     },
     {
       "stepId": "step-2",
       "description": "claim_next_task (claimNextTask.ts), test-first, importing normalizeWorkerType/refreshWorkerType from './joinTeam.js'.\n\n(a) Add an optional workerType to inputSchema.properties (string; same description as join_team; no enum; not required). Add workerType?: unknown to the params cast.\n\n(b) Refresh only after input validation, and before every return path:\n- These validations come first, unchanged: empty statuses (MISSING_REQUIRED), readProcessIdentity (a malformed or half runner identity gives INVALID_INPUT), and an unloaded project. A claim refused by any of them writes nothing.\n- Governor redirect: inside the resolveWorkerRole(...) === 'governor' branch, which today answers BEFORE the claimable-status check, first await refreshWorkerType(state, params.workerId, params.workerType), then return the existing enter_governance nudge unchanged.\n- Every other caller: right after assertAgentClaimableStatuses(statuses), so BACKLOG/DONE/BLOCKED statuses throw first and refresh nothing, add await refreshWorkerType(state, params.workerId, params.workerType). It sits before blockingHold, the finalizing hold, the explicit-taskId checks, the ranked pool, the no-work return and the candidate loop. That covers alreadyAssigned (the wrapper's resume relaunch), no work, an explicit resume, and a claim refused later for a non-input reason. Because the helper never creates a record, an unknown seat whose claim ends without an assignment still has no record.\n\n(c) Success path: in the createWorker branch, replace the hardcoded const workerType: WorkerType = 'CLAUDE' with normalizeWorkerType(params.workerType) (omitted gives CLAUDE). Leave the existing-record update branch alone: the up-front refresh already recorded the type, DEAD records included. Do not change ranking, eviction, attempt open/adopt, healTeamMembership, the '<id> is online' post or any response shape. Drop the WorkerType import only if nothing uses it any more.\n\nTests (claim part of workerType.test.ts). Each it.each row needs its own fresh harness (beforeEach h.init/setupMoeFolder), because claim_next_task refuses a second solo seat on the same epic+status. Write epic-1 and a PLANNING task-1, then await h.state.load(). Call claimNextTaskTool(h.state).handler({ statuses: ['PLANNING'], workerId, workerType, ... }, h.state).\n1. inputSchema exposes workerType, and it is not required.\n2. it.each over the four names: a new seat claims, gets hasNext true, and its record type and disk JSON equal the value. Fallback rows (omitted, 'grok', 'UNKNOWN', null, 7) give CLAUDE and still hasNext true.\n3. An existing IDLE CLAUDE seat claims with 'GEMINI': task-1 is assigned to it and its type is GEMINI.\n4. Resume. A seat claims task-1 with 'CODEX'; keep attemptId and generation.\n- An explicit re-claim { taskId: 'task-1', workerType: 'GROK' } gives hasNext true, the SAME attemptId and generation, assignedWorkerId unchanged, and type GROK.\n- A ranked re-claim with 'CODEX' gives alreadyAssigned.taskId 'task-1' and type CODEX, and listAttempts(h.state, 'task-1') toEqual the previous list.\n5. No work (no claimable task): an existing seat claims with 'CODEX'. Expect hasNext false, nextAction.tool 'moe.wait_for_task', and type CODEX. Status, currentTaskId, epicId, teamId and lastActivityAt equal the before-snapshot: no presence change.\n6. Governor: a registered 'governor-<x>' seat (role from the id prefix) claims with 'CODEX'. Expect nextAction.tool 'moe.enter_governance', type CODEX, and no task assigned.\n7. workerType omitted on an existing CODEX seat (both a successful claim and a no-work claim): the type stays CODEX. A no-work claim reporting the type the record already has leaves updateWorker uncalled (spy).\n8. Invalid invocations write nothing. Run each with workerType 'GROK', for an existing CODEX seat and for an unknown seat:\n- statuses [] gives MISSING_REQUIRED;\n- ['BACKLOG'] gives INVALID_INPUT;\n- processStartedAt without host gives INVALID_INPUT;\n- a blank host gives INVALID_INPUT.\nAssert the codeName. The existing seat stays CODEX, the unknown seat has no record and no file, and nothing is assigned.\n9. A denied claim never creates a record. Use an unknown seat with 'GEMINI' in each case:\n- (i) the board has no claimable task;\n- (ii) an explicit taskId is assigned to another live seat, which throws NOT_ALLOWED;\n- (iii) another live seat holds a PLANNING task in epic-1 and a second PLANNING task is free, so the epic+status rule refuses the solo seat.\nIn each case the seat has no record and no file, and every task assignment is unchanged.\n10. The error handling path: updateWorker is rejected once during a type-only refresh on a no-work claim. The claim still answers hasNext false, and the type is unchanged.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/workerType.test.ts"
-      ]
+      ],
+      "note": "No bytes changed. claimNextTask.ts (46fe52b7) is byte-identical at f107447, HEAD 9978b61 and the worktree. Focused run on a pure git archive of HEAD (Linux, node 24.21.0, env -i): 5 files, 187/187. That is claimNextTask.test 68, .contract 49, .race 6, joinTeam.notification 7 (the existing files are unedited) and workerType 57. Mutants on a scratch copy, restored and cmp-checked, all killed, failures out of 57:\n- C1, createWorker hardcodes CLAUDE: 4 (CODEX/GEMINI/GROK new-seat rows plus list_workers)\n- C2, the post-validation refresh is dropped: 4 (existing claim, resume/alreadyAssigned, no work, failed write)\n- C3, the refresh moves before assertAgentClaimableStatuses: 1 (BACKLOG row)\n- C4, the governor-branch refresh is dropped: 1\n- C5, the refresh moves before input validation: 4 (statuses [], BACKLOG, half identity, blank host)\nmodifiedFiles is [] on purpose; the planned path is unchanged.",
+      "startedAt": "2026-10-29T12:45:58.566Z",
+      "completedAt": "2026-10-29T12:46:39.206Z"
     },
     {
       "stepId": "step-3",
       "description": "chat_who projection (chatWho.ts) + list_workers proof.\n\nAdd type: worker.type to all three online.push sites (channel-filtered cursor, unfiltered, and waiting), and add type to the online element's declared shape. The 'both' upgrade reuses the cursor entry, so it carries type too. Do not change the 120s presence window, the filters, the seen map, ordering or any other field. listWorkers.ts already projects w.type, so leave it unchanged.\n\nTests (workerType.test.ts):\n1. chat_who with channel 'chan-x'. Seats:\n- a CODEX seat with chatCursors['chan-x'] and fresh lastActivityAt: source 'cursor';\n- a GEMINI seat with no cursor but in activeChatWaiters watching chan-x: 'waiting';\n- a GROK seat with a cursor that is also waiting: 'both';\n- a CLAUDE seat whose waiter has channels null (watches every channel): 'waiting'.\nThese must be absent: a stale seat (lastActivityAt 10 minutes old) with a cursor; a fresh seat with neither a cursor nor a waiter; a waiter on another channel only.\nAssert online, sorted by workerId, toEqual the full objects { workerId, type, status, lastActivity, currentTaskId, source }. Then dropping type from any one branch, or any presence or membership drift, fails the test.\n2. chat_who without a channel: every fresh seat appears exactly once with source 'cursor' and its type. The stale seat is absent.\n3. list_workers: seats registered through join_team and claim_next_task with each of the four names report that type. After a rejoin with a new value, list_workers shows the new one.\n\nWaiters: activeChatWaiters.set(id, { resolve: () => {}, unsubscribe: () => {}, timer: setTimeout(() => {}, 60_000), channels: new Set(['chan-x']) or null }). afterEach clears every waiter's timer and then the map, as the WebSocketServer tests do, so a failing test leaks nothing into other files. Sort before comparing, because state.workers follows directory-listing order, which differs by OS.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/chatWho.ts"
       ],
       "newFiles": [
         "packages/moe-daemon/src/tools/workerType.test.ts"
-      ]
+      ],
+      "note": "No bytes changed. chatWho.ts (09cfd1fd) is byte-identical at f107447, HEAD 9978b61 and the worktree. listWorkers.ts is unchanged since f107447 and still projects `type: w.type` (line 75). Mutants on a scratch copy, restored and cmp-checked, all killed:\n- W1, the channel cursor push drops type: 1/57 (cursor/waiting/both/all-channels test)\n- W2, the unfiltered push drops type: 1/57 (no-channel test)\n- W3, the waiting push drops type: 1/57 (cursor/waiting/both/all-channels test)\nlist_workers is also pinned by step-2's C1, which failed the list_workers registration test. modifiedFiles is [] on purpose; the planned path is unchanged.",
+      "startedAt": "2026-10-29T12:46:43.237Z",
+      "completedAt": "2026-10-29T12:47:04.084Z"
     },
     {
       "stepId": "step-4",
       "description": "Contract docs (docs/MCP_SERVER.md). Edit only the moe.claim_next_task, moe.join_team, moe.chat_who and moe.list_workers sections.\n\nFirst run git diff -- docs/MCP_SERVER.md. As of 2026-10-27 it already carries another task's unlanded hunks: task-cd2e4477's epic finalTaskId text near get_context and create_epic/update_epic. Its landing 4137865 held them because task-72184c65 contests the file. Never revert, reformat or stage those hunks, and name them in your step note. Make your edits with the built-in Edit tool, which is the wrapper's TOOL witness for a contested, already-dirty path.\n\n1. claim_next_task. Add to the Parameters block: workerType?: string // the seat's CLI: CLAUDE | CODEX | GEMINI | GROK. Add a paragraph **Reported worker type (optional):** covering:\n- names are exact and case-sensitive;\n- any other supplied value (another case, an unknown name, blank, null, a non-string) is recorded as CLAUDE and never refused;\n- omitted: a record this claim creates is CLAUDE, and an existing record keeps its type;\n- a claim that passes input validation refreshes an existing record BEFORE it answers. That covers a claim, a resume, alreadyAssigned, no work, the governor redirect, and a refusal after validation. It changes only type, never the assignment, attempt, status or lastActivityAt, and it writes only when the value changes;\n- the refresh never creates a record; auto-registration still happens only on a successful claim;\n- a claim refused for its input (missing or non-claimable statuses, a malformed runner identity) writes nothing;\n- a failed type write is logged and does not fail the claim;\n- the field is informational only: it is unauthenticated, any caller can report any value, and nothing is gated on it.\n2. join_team. Add workerType?: string to the Parameters block. The revive clause '(type, current task and chat cursors kept)' must now say that current task and chat cursors are kept and the type follows a supplied workerType. State that:\n- a successful join records the reported type on a new or an existing record, with the same normalization (omitted: CLAUDE for a new record, unchanged for an existing one);\n- it changes no current task, status, membership or lastActivityAt;\n- an unknown team is refused before any write;\n- a full team is refused after a missing record was auto-registered (as before), and an existing record keeps its type.\n3. chat_who. Returns becomes { online: Array<{ workerId, type, status, lastActivity, currentTaskId, source }> }. Add a note that type is the record's WorkerType, present on every entry whatever its source; this is an additive change.\n4. list_workers. Comment the type field: one of the four values, as claim_next_task/join_team recorded it.\n\nLeave MOE_WORKER_TYPE, proxy injection and launcher wording out. They belong to task-eb85340b and task-bdf6db6f, which document them once the code exists. No new error codes, so the Errors lists stay as they are.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "note": "No bytes changed. docs/MCP_SERVER.md (d5c3e6de) is byte-identical at f107447, HEAD 9978b61 and the worktree. `git diff HEAD -- docs/MCP_SERVER.md` is empty, so no foreign dirty hunks are present now: cd2e4477's hunks landed earlier in 201d5ab. `git log f107447..HEAD` on the file is empty. This task's own hunks (+11/-4) sit only in the claim_next_task, list_workers, join_team and chat_who sections.\n\nI re-read the docs against the code and they match:\n- names are exact and case-sensitive (Object.hasOwn on a Record<WorkerType,true>); anything else becomes CLAUDE and is never refused (WORKER_TYPE_SCHEMA has no enum, and workerType is not in required for either tool);\n- omitted: a new record is CLAUDE, an existing record keeps its type;\n- the claim refresh comes after input validation and covers the governor redirect;\n- the refresh never creates a record, keeps lastActivityAt, and writes only on a change;\n- join checks the team first, refreshes last, and leaves an existing seat's type alone on a full team;\n- a failed write is warn-logged;\n- chat_who's type field is additive.\nmodifiedFiles is [] on purpose.",
+      "startedAt": "2026-10-29T12:47:09.265Z",
+      "completedAt": "2026-10-29T12:47:48.476Z"
     },
     {
       "stepId": "step-5",
       "description": "Verification gate, run once. From the repository root, run exactly: (cd packages/moe-daemon && npx tsc --noEmit && npm test). It must exit 0. Submit the command, exitCode and outputTail (the vitest test-file and test totals) to moe.complete_task.\n\nEnvironment:\n- The shared checkout's node_modules are Windows-native, so under WSL vitest dies at startup with 'Cannot find native binding'. Never npm install in the shared checkout.\n- Run the gate either from Windows Git Bash at the repo root, or in a Linux snapshot as described in Serena gotcha-daemon-linux-snapshot-gate:\n  1. git archive HEAD of the WHOLE repo (initFiles.test.ts and the benchmarks read root files);\n  2. overlay ONLY this task's five paths;\n  3. symlink a native node_modules;\n  4. run with MOE_* unset;\n  5. cmp the five files against the worktree before citing the run.\n- tsconfig excludes *.test.ts, so tsc does not type-check the new test file; vitest runs it.\n\nThis task changes no shared types, schema, migration or wire framing (one optional input field plus one additive output field), so this daemon suite is its full regression. The parent task-bdf6db6f re-runs the daemon and proxy suites together at the end.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh gate, run once, in the foreground. Setup:\n- a pure `git archive` of HEAD 5441805 (whole repo, no overlay);\n- a native `npm ci`;\n- env -i (MOE_* and the Windows PATH unset), node v24.21.0, the version CI uses;\n- the five owned paths cmp-equal the worktree, and their HEAD blobs equal f107447's.\nRan `(cd packages/moe-daemon && npx tsc --noEmit && npm test)`: GATE_EXIT=0. tsc reported 0 errors. vitest: 172 files passed, 4536 passed, 16 skipped (4552). This task's suites:\n- workerType 57/57\n- claimNextTask.test 68, .contract 49, .race 6\n- joinTeam.notification 7\n- listWorkers 4\nThe `Error: EBUSY` stacks in the log are workerType.test.ts:146/324's injected updateWorker rejections, warn-logged with `err` as designed. HEAD moved 9978b61 to 5441805 during the run, board JSON only, and packages/moe-daemon tree c0c1d73 is unchanged. Script and log: /tmp/moe-0b40-r2-scripts/gate.sh and gate.log. No repo bytes changed.",
+      "startedAt": "2026-10-29T12:48:04.427Z",
+      "completedAt": "2026-10-29T12:49:42.539Z"
     },
     {
       "stepId": "step-6",
       "description": "Adversarial self-review, run once. Load the adversarial-self-review skill and read the diff of your five paths as an attacker:\n- Ordering: can any input-validation failure (empty or non-claimable statuses, a half or malformed runner identity, missing teamId/workerId, an unknown team) reach a type write? Can any claim that ends without an assignment create a record?\n- Presence: does a type write move lastActivityAt, status, currentTaskId, epicId, teamId, memberIds or chatCursors? Does anything write or emit when the type is unchanged (claim_next_task is polled)?\n- Inputs: do 'constructor', 'toString', lowercase, surrounding whitespace, '', null, arrays, objects and numbers all give CLAUDE? Does omitted give CLAUDE for a new record and leave an existing one unchanged?\n- Concurrency: both tools run under the state mutex, so two seats or two calls can only race last-writer-wins on metadata. Confirm nothing awaits outside it.\n- Error handling: a rejected updateWorker during a refresh is logged and the tool still answers. Nothing that was fatal before is swallowed now: creation and assignment errors still propagate.\n- Compatibility: callers that never send workerType get the same behavior (joinTeam.notification.test.ts and claimNextTask*.test.ts pass unchanged). The chat_who field is additive, and existing .moe/ worker files load as before.\n- Docs: they match the code on normalization, both claim refresh points, the omitted case, join ordering and failure logging.\n\nMutation probe, on a scratch copy or reverted immediately: drop type from one chat_who branch, then separately make normalization case-insensitive. Confirm that a test in workerType.test.ts fails for each, then restore. If the review changes any bytes, rerun the step-5 command and submit only fresh exit-0 evidence.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of f107447's diff on the five paths. No defect found and no bytes changed, so the step-5 evidence stands.\n- Ordering: empty statuses, a half or malformed identity and an unloaded project all throw before either claim refresh. assertAgentClaimableStatuses throws before the main one (C3/C5 killed). join throws on a missing teamId/workerId or an unknown team before any write, and refreshes last (J8 killed). The helper returns early without a record, so no claim that ends unassigned creates one; this is test-pinned.\n- Presence: the update is { type, lastActivityAt: stored }, so status, task, epic, team, members and cursors are untouched (J4 killed). An unchanged type writes and emits nothing (J5 killed).\n- Inputs: typeof plus Object.hasOwn on a module-private Record, so prototype names ('constructor', '__proto__'), case or space variants, '', null, numbers, arrays and objects all give CLAUDE (J1/J2 killed). Omitted gives CLAUDE for a new record and keeps an existing one (J3 killed).\n- Concurrency: both handlers run under the global state mutex (claim also under runExclusive), and every await stays inside it. Concurrent reports race last-writer-wins on metadata only.\n- Errors: a rejected updateWorker is warn-logged with `err` and the tool answers (J6 killed). createWorker, addTeamMember and assignment errors still propagate.\n- Compatibility: an omitted field behaves as before (the old hardcoded CLAUDE equals normalize(undefined)). The existing suites pass unedited, the chat_who field is additive, and there is no schema or .moe/ change. WORKER_TYPE_SCHEMA is shared by two tools, but no non-test code mutates an inputSchema in place, and the claim-to-join import adds no cycle.\n- Re-ran the plan's probes: case-insensitive normalize fails 3/57, chat_who waiting branch without type fails 1/57; both restored and cmp-checked.\nTheoretical only, left as is:\n(a) The governor redirect refreshes the type even for non-claimable statuses. This is the pre-existing ordering; the plan placed it there and the docs list the redirect as a refresh point.\n(b) Refreshing a DEAD record emits WORKER_DELETED (updateWorker semantics), and the UI drops DEAD seats anyway.\n(c) J9, a new seat on a full team, is not pinned by a test (see step 1).",
+      "startedAt": "2026-10-29T12:49:45.952Z",
+      "completedAt": "2026-10-29T12:51:07.708Z"
     }
   ],
-  "planRevision": 14,
-  "status": "WORKING",
+  "planRevision": 26,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -87,7 +105,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T15:28:17.007Z",
-  "updatedAt": "2026-10-29T12:12:01.148Z",
+  "updatedAt": "2026-10-29T12:52:44.773Z",
   "dependsOn": [
     "task-8333866a53464d07bcaf88134f259ff4"
   ],
@@ -95,19 +113,27 @@
     "firstClaimAt": "2026-10-27T08:46:00.620Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6,
+    "executedStepCount": 12,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "qa-6fa5d758",
-    "governor-693b7073"
+    "governor-693b7073",
+    "worker-0062feec"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-27T09:01:38.576Z",
   "planningNotes": {
@@ -189,21 +215,17 @@
   ],
   "filesModified": [
     "packages/moe-daemon/src/tools/joinTeam.ts",
-    "packages/moe-daemon/src/tools/workerType.test.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "packages/moe-daemon/src/tools/chatWho.ts",
-    "docs/MCP_SERVER.md",
-    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
-    ".moe/tasks/task-4af8b8c17d1f4949b0d85e24e69f986f.json",
-    ".moe/tasks/task-6971d6897bc24817b72ad673dfd68a67.json",
-    ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json"
+    "docs/MCP_SERVER.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "qa-6fa5d758@2026-10-27T17:42:11Z",
-    "at": "2026-10-27T17:46:13.653Z"
+    "code": "MOE_CHECKPOINT_SKIPPED_LAUNCH_FAILURE_BOARD_ONLY",
+    "sessionId": "worker-0062feec@2026-10-29T12:38:04Z",
+    "at": "2026-10-29T12:39:32.495Z"
   },
   "workStartedAt": "2026-10-27T17:30:31.781Z",
   "declaredFiles": [
@@ -213,15 +235,15 @@
     "packages/moe-daemon/src/tools/workerType.test.ts",
     "docs/MCP_SERVER.md"
   ],
-  "reviewStartedAt": "2026-10-27T17:40:50.135Z",
+  "reviewStartedAt": "2026-10-29T12:52:44.771Z",
   "verification": {
-    "command": "(cd packages/moe-daemon && npx tsc --noEmit && npm test)  # run in a Linux snapshot: git archive HEAD of the whole repo + only the 5 owned paths overlaid (cmp-identical to the worktree) + native node_modules symlink, env -i (MOE_* unset), per gotcha-daemon-linux-snapshot-gate",
+    "command": "(cd packages/moe-daemon && npx tsc --noEmit && npm test)  # from the repo root of a pure git archive of HEAD 5441805 (whole repo, no overlay; the 5 owned paths cmp-equal the worktree and equal f107447), native npm ci, env -i (MOE_* unset), node v24.21.0",
     "exitCode": 0,
-    "outputTail": "GATE_EXIT=0\n ✓ src/util/qaCommitPolicy.test.ts (8 tests) 4ms\n ✓ src/tools/toolAudience.test.ts (2 tests) 4ms\n\n Test Files  171 passed (171)\n      Tests  4418 passed | 16 skipped (4434)\n   Duration  29.06s\n\nworkerType.test.ts 57/57; claimNextTask.test 68/68, claimNextTask.contract 49/49, claimNextTask.race 6/6, joinTeam.notification 7/7 (all four existing files unedited).",
-    "reportedAt": "2026-10-27T17:40:50.135Z",
+    "outputTail": "HEAD=54418051e3c5b11527d1d419786f767a704e97c7 node=v24.21.0 snapshot=/tmp/moe-0b40-r2-gate.B5zcXD\nowned paths: snapshot == worktree (cmp) and HEAD blob == f107447 blob\n... (tsc --noEmit: no output, 0 errors)\nexcerpt:\n ✓ src/tools/workerType.test.ts (57 tests)\n ✓ src/tools/claimNextTask.test.ts (68 tests)\n ✓ src/tools/claimNextTask.contract.test.ts (49 tests)\n ✓ src/tools/claimNextTask.race.test.ts (6 tests)\n ✓ src/tools/joinTeam.notification.test.ts (7 tests)\n ✓ src/tools/listWorkers.test.ts (4 tests)\ntail:\n Test Files  172 passed (172)\n      Tests  4536 passed | 16 skipped (4552)\n   Start at  14:48:52\n   Duration  29.54s (tests 91%, transform 5%, import 4%)\n\nGATE_EXIT=0",
+    "reportedAt": "2026-10-29T12:52:44.771Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Daemon now records the seat's reported CLI type. DELIVERED (5 paths): joinTeam.ts, claimNextTask.ts, chatWho.ts, new workerType.test.ts, docs/MCP_SERVER.md. No launcher, proxy or schema change.\n- joinTeam.ts exports normalizeWorkerType (exact case-sensitive CLAUDE/CODEX/GEMINI/GROK via a Record<WorkerType,true> + Object.hasOwn; anything else, including 'constructor', lowercase, padded, '', null, arrays, objects, numbers, gives CLAUDE; never refuses), refreshWorkerType (no-op for omitted/no record/unchanged; never creates a record; passes the stored lastActivityAt so it is not presence; a failed write is logger.warn'd with `err`, never fails the tool) and WORKER_TYPE_SCHEMA (no enum, not required). join_team: unknown team throws before any write; a new record gets the normalized type; refresh runs LAST, after addTeamMember and the DEAD revive, so a full team leaves an existing seat's type alone.\n- claimNextTask.ts: optional workerType; refresh runs after statuses/identity/project validation and assertAgentClaimableStatuses, before blockingHold, so it covers resume, alreadyAssigned, no work and a later refusal; also inside the governor redirect. A new seat is created with normalizeWorkerType(...) instead of the hardcoded CLAUDE. No ranking, attempt, eviction or response-shape change.\n- chatWho.ts: type on all three push sites (cursor, unfiltered, waiting; 'both' reuses the cursor entry). list_workers already projected type (unchanged, proven by a test).\n- Docs: claim_next_task (param + \"Reported worker type\" paragraph), join_team, chat_who (additive), list_workers. docs/MCP_SERVER.md had no foreign dirty hunks (git diff was empty before my edits); my diff there is +11/-4 in those four sections only.\nEVIDENCE: TDD RED first on each step (8/25 join tests, 8 claim tests, 2 chat_who tests failed on the untouched source). Gate: exit 0, 171 files, 4418 passed | 16 skipped. workerType.test.ts has 57 tests (join 25, claim 25, chat_who/list_workers 7). 16 mutation probes on a ",
+  "completionSummary": "Reopen 1, size-only QA reject (failedDodItems empty). No bytes changed.\nDelivery: completion f107447 on moe/work-2026-10-24, pushed. Own non-board +509/-11, net 498 (runtime+docs 66, tests 432): joinTeam.ts +50/-4, claimNextTask.ts +12/-3, chatWho.ts +4, workerType.test.ts +432, docs/MCP_SERVER.md +11/-4.\nWaiver: prop-3aea89536f004d529d67e8820b933d03 (EPIC ADD_RAIL the governor filed 2026-10-29; counts match), still PENDING. As the governor asked: no second waiver, no split. QA: approve once the rail is in allRails.epic; if still PENDING, park from REVIEW with no task-… ids in the reason (route back is set_task_status).\nBytes: the 5 owned paths are identical at f107447, HEAD 5441805 and the worktree; docs has no foreign dirty hunks. Steps sent modifiedFiles [] on purpose; filesModified lists the planned paths, all unchanged.\nFresh gate: pure git archive of HEAD 5441805, native npm ci, env -i, node 24.21.0. GATE_EXIT=0, tsc 0 errors, vitest 172 files, 4536 passed, 16 skipped. workerType 57/57; claimNextTask 68, .contract 49, .race 6; joinTeam.notification 7; listWorkers 4 (all unedited).\nMutants on a scratch copy (restored, cmp-checked), failures out of 57:\n- J1 case-insensitive 3; J2 `in` for hasOwn 1; J3 omitted resets 4; J4 stamps lastActivityAt 2; J5 writes when unchanged 1; J6 write error propagates 2; J7 join refresh dropped 5; J8 refresh before the team check 2\n- C1 claim create hardcodes CLAUDE 4; C2 claim refresh dropped 4; C3 refresh before the status check 1; C4 governor refresh dropped 1; C5 refresh before the input checks 4\n- W1-W3, a chat_who branch untyped: 1 each\n16 of 17 killed. Survivor J9 (join create hardcodes CLAUDE): equivalent on a successful join (the trailing refresh re-records the type); differs only for a NEW seat refused by a full team, untested. Left as is.\nSelf-review: no defect. Theoretical: the governor redirect refreshes even for non-claimable statuses (pre-existing, plan-placed); refreshing a DEAD record emits WORKER_DELETED.",
   "touchedFiles": [
     "packages/moe-daemon/src/tools/workerType.test.ts",
     "packages/moe-daemon/src/tools/joinTeam.ts",
