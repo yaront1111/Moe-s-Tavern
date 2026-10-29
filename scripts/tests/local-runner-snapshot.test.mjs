@@ -333,6 +333,7 @@ test('E5 the overlay holds exactly the dirty worktree bytes, leaving out ignored
   put(dir, { 'mod.txt': 'new\n', 'new/dir/u.txt': 'untracked', 'ignored.log': 'x', 'staged.txt': 'staged', '.moe/state.json': '{"a":1}' });
   rmSync(join(dir, 'del.txt'));
   git(dir, 'add', 'staged.txt');
+  git(dir, 'update-index', '--add', '--cacheinfo', `100644,${blob(dir, 'g')},ghost`, '--skip-worktree', 'ghost'); // Listed, not in base: no delete.
   git(dir, 'rm', '-q', '--cached', 'mod.txt'); // Now listed by both diff-index and ls-files, but read once.
   utimesSync(join(dir, 'same.txt'), 1e9, 1e9);
   if (!win32) chmodSync(join(dir, 'mod.txt'), 0o755);
@@ -381,13 +382,14 @@ test('E7 Git runs in the read-only envelope: no replace objects, no inherited GI
   const snapshot = await exportAt(dir, head).finally(() => saved.forEach(restore));
   assert.deepEqual([snapshot.base.entries.map(e => Buffer.from(e.data).toString()), snapshot.overlay.entries], [['original'], []]);
   mkdirSync(join(dir, 'sub'));
-  for (const repoDir of [join(dir, 'sub'), join(dir, 'missing'), tempDir(t, 'moe-norepo-')]) {
-    await failsWith(exportSourceSnapshot({ repoDir, commit: head }), 'EXPORT_REPOSITORY_UNSUPPORTED', repoDir);
-  }
-  for (const [key, value] of [['extensions.partialclone', 'o'], ['remote.o.promisor', 'true'], ['core.worktree', dir], ['filter.x.clean', 'cat']]) {
-    git(dir, 'config', key, value);
-    await failsWith(exportAt(dir, head), 'EXPORT_REPOSITORY_UNSUPPORTED', key);
-    git(dir, 'config', '--unset', key);
+  const nonRoots = [join(dir, 'sub'), join(dir, 'missing'), tempDir(t, 'moe-norepo-')];
+  for (const repoDir of nonRoots) await failsWith(exportSourceSnapshot({ repoDir, commit: head }), 'EXPORT_REPOSITORY_UNSUPPORTED', repoDir);
+  git(dir, 'config', 'extensions.worktreeConfig', 'true'); // Git now applies .git/config.worktree too, which `config --local` skips.
+  const keys = [['extensions.partialclone', 'o'], ['remote.o.promisor', 'true'], ['core.worktree', dir], ['filter.x.clean', 'cat']];
+  for (const [scope, key, value] of ['--local', '--worktree'].flatMap(scope => keys.map(pair => [scope, ...pair]))) {
+    git(dir, 'config', scope, key, value);
+    await failsWith(exportAt(dir, head), 'EXPORT_REPOSITORY_UNSUPPORTED', `${scope} ${key}`);
+    git(dir, 'config', scope, '--unset', key);
   }
 });
 

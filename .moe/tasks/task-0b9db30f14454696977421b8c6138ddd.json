@@ -1,0 +1,27 @@
+{
+  "id": "task-0b9db30f14454696977421b8c6138ddd",
+  "epicId": "epic-fe5e32c32b044a20944c693dfd79411b",
+  "title": "bug: daemon openProjectGit refusal misses worktree-scoped Git config",
+  "description": "packages/moe-daemon/src/util/cachedPlanPaths.ts:134 refuses partialclone/promisor/core.worktree repos via `git config --local --includes --get-regexp`, but --local never reads $GIT_DIR/config.worktree, which Git applies to every command once extensions.worktreeConfig=true. So `git config --worktree remote.o.promisor true` (or core.worktree) passes the refusal, and per the code's own comment Git <2.44 ignores GIT_NO_LAZY_FETCH. Same defect QA found in CQ-R09b (task-697fb2de19324ccb851defaf9f24043b, fixed there by dropping --local since system/global are env-masked; repro row E7 in scripts/tests/local-runner-snapshot.test.mjs).",
+  "definitionOfDone": [
+    "openProjectGit's config refusal reads every unmasked scope (local, worktree, command line), and a test with extensions.worktreeConfig=true plus a --worktree promisor or core.worktree key is refused",
+    "Daemon tests for cachedPlanPaths pass"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 250.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T12:21:36.378Z",
+  "updatedAt": "2026-10-29T12:21:36.378Z"
+}

@@ -60,14 +60,12 @@ function gitRunner(git, root, timeoutMs) {
       else if (exit1 && error.code === 1 && !error.killed) resolve(null);
       else reject(exportError('EXPORT_GIT_FAILED'));
     });
-    // A child that exits early fails this write; its exit status decides the outcome.
-    child.stdin.on('error', () => {});
-    child.stdin.end(input);
+    child.stdin.on('error', () => {}).end(input); // A child that exits early fails this write; its exit status decides.
   });
 }
 
-// repoDir must really be the toplevel of a repository with no partial clone, promisor, core.worktree or filter driver
-// (diff-index runs one on a racily clean entry), never ending '/*'. The commit must peel to itself: a tag or tree fails.
+// repoDir must really be the toplevel, never ending '/*'. No config scope left unmasked (local, worktree, -c: `--local` skips
+// config.worktree) may set a partial clone, promisor, core.worktree or filter driver (diff-index runs one). A tag or tree fails the peel.
 async function openCommit({ repoDir, commit, git, timeoutMs }) {
   const unsupported = () => exportError('EXPORT_REPOSITORY_UNSUPPORTED');
   const root = await realpath(repoDir).catch(() => { throw unsupported(); });
@@ -76,7 +74,7 @@ async function openCommit({ repoDir, commit, git, timeoutMs }) {
   const top = await run(['rev-parse', '--show-toplevel']).then(out => realpath(utf8.decode(out).replace(/\n$/, '')))
     .catch(() => { throw unsupported(); });
   if (pathKey(top) !== pathKey(root)) throw unsupported();
-  if (await run(['config', '--local', '--includes', '--get-regexp',
+  if (await run(['config', '--includes', '--get-regexp',
     '^(extensions\\.partialclone|remote\\..*\\.promisor|core\\.worktree|filter\\..*)$'], { exit1: true }) !== null) throw unsupported();
   const peel = async type => {
     const out = await run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${commit}^{${type}}`], { exit1: true });
