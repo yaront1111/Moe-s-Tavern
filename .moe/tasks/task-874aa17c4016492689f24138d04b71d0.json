@@ -87,7 +87,7 @@
     }
   ],
   "planRevision": 11,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -100,16 +100,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T13:26:31.537Z",
-  "updatedAt": "2026-10-29T13:45:48.292Z",
+  "updatedAt": "2026-10-29T13:47:44.985Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T13:30:37.641Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T13:47:44.984Z",
+    "wallClockMs": 1027343
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -151,7 +154,46 @@
   "filesModified": [
     "scripts/local-runner/check-evidence.mjs",
     "scripts/tests/local-runner-check.test.mjs",
+    ".github/workflows/ci.yml",
+    ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+    ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json"
+  ],
+  "completionSummary": "Added scripts/local-runner/check-evidence.mjs (pure, no provider call). CHECK_BOUNDARIES is deep-frozen and pins identity moe-check, a loopback-only private network namespace, VM size from GUEST_RESOURCES, rlimits CORE 0 / FSIZE 1073741824 / NOFILE 4096 / NPROC 2048, session-group teardown, a fresh VM per run, a fresh 0700 home, protected paths verified before and after the run, a 0400 supervisor credential that job identities are denied, and a host-enforced budget. checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources}) returns 'moe-local-vm-v1:' + the sha256 of a sorted-key canonical JSON of boundaries and inputs (80 characters). It uses an exact enumerable key set, a typeof string check plus a lowercase 64-hex regex, a safe integer >= 1 for each resource, and one read per value. Any invalid input, extra key, or throwing accessor/Proxy trap refuses with CHECK_INPUT_INVALID and the fixed text. evidenceStatus(observation, current) returns 'fresh' only when environment, treeSha, definitionDigest and planRevision are all own, valid and strictly equal on both sides; otherwise 'stale', and it never throws. New scripts/tests/local-runner-check.test.mjs has 11 tests (E1-E8) and is appended at the end of the CI local-runner run line in .github/workflows/ci.yml, which the bundle test's prefix check still accepts. Mutation probes: 43 mutants in a scratch copy, 40 killed and 3 equivalent survivors judged. Diff is 397 changed lines. executionReady stays false and verified-local stays unavailable; nothing claims isolation.",
+  "commits": [
+    {
+      "sha": "fdaf5ff4ce0fb60d0fac56da795375ebd26c6618",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T13:40:31Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".moe/tasks/task-0b40957cd116453aa76965059743fefb.json",
+        ".moe/tasks/task-874aa17c4016492689f24138d04b71d0.json",
+        "scripts/local-runner/check-evidence.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T13:46:20.605Z",
+      "treeId": "3cc6e3ada703b2a830f43540ba61b30128ccfc72",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-check.test.mjs",
+    "scripts/local-runner/check-evidence.mjs",
     ".github/workflows/ci.yml"
   ],
-  "completionSummary": "Added scripts/local-runner/check-evidence.mjs (pure, no provider call). CHECK_BOUNDARIES is deep-frozen and pins identity moe-check, a loopback-only private network namespace, VM size from GUEST_RESOURCES, rlimits CORE 0 / FSIZE 1073741824 / NOFILE 4096 / NPROC 2048, session-group teardown, a fresh VM per run, a fresh 0700 home, protected paths verified before and after the run, a 0400 supervisor credential that job identities are denied, and a host-enforced budget. checkEnvironment({sourceImageSha256, providerImageHash, supervisorSha256, resources}) returns 'moe-local-vm-v1:' + the sha256 of a sorted-key canonical JSON of boundaries and inputs (80 characters). It uses an exact enumerable key set, a typeof string check plus a lowercase 64-hex regex, a safe integer >= 1 for each resource, and one read per value. Any invalid input, extra key, or throwing accessor/Proxy trap refuses with CHECK_INPUT_INVALID and the fixed text. evidenceStatus(observation, current) returns 'fresh' only when environment, treeSha, definitionDigest and planRevision are all own, valid and strictly equal on both sides; otherwise 'stale', and it never throws. New scripts/tests/local-runner-check.test.mjs has 11 tests (E1-E8) and is appended at the end of the CI local-runner run line in .github/workflows/ci.yml, which the bundle test's prefix check still accepts. Mutation probes: 43 mutants in a scratch copy, 40 killed and 3 equivalent survivors judged. Diff is 397 changed lines. executionReady stays false and verified-local stays unavailable; nothing claims isolation."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-29T13:40:31Z",
+    "at": "2026-10-29T13:46:20.605Z"
+  },
+  "completedAt": "2026-10-29T13:47:44.984Z",
+  "reviewCompletedAt": "2026-10-29T13:47:44.984Z",
+  "reviewSummary": "Approved. Reviewed recorded completion commit fdaf5ff (on moe/work-2026-10-24, pushed); the owned paths match the working tree.\n\nRe-ran verification fresh: env -i + nvm Node 24, `node --test scripts/tests/local-runner-check.test.mjs` -> exit 0, 11/11 (E1-E8). Bundle test 'cross-platform CI' passes, so the CI run-line prefix pin holds. Size 397 changed lines (112 + 283 + ci.yml 1/1), under 400.\n\nDoD 1: checkEnvironment is deterministic and changes with any input or boundary change (E2 independent oracle, E3 per-input, E4 60+ boundary mutants all distinct). E5 pins CHECK_INPUT_INVALID with fixed text for bad types, array/String/BigInt, missing/extra/non-enumerable keys, throwing accessors and Proxy traps; one read per value.\n\nDoD 2: CHECK_BOUNDARIES deep-frozen; E1 deepStrictEquals a retyped literal incl. rlimits and checks every node frozen.\n\nDoD 3: evidenceStatus 'fresh' only for four own, valid, strictly equal fields; E6/E7 cover changed, missing, blank, inherited, malformed, hostile and throwing inputs.\n\nDoD 4: ci.yml appends the file at the end of the local-runner line; E8 asserts it.\n\nRails: forbidden-pattern grep clean; module pure; no isolation or verified-local claim; no tests weakened.\n\nNotes: CheckRun lacks definitionDigest until CQ-V03; R11a drift test must pin the rlimits. I did not re-run the worker's mutation probe.",
+  "requiredCheckAtDone": null
 }
