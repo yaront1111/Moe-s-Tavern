@@ -21,7 +21,17 @@
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "TESTS FIRST (red). Build on the LANDED C08 module packages/moe-daemon/src/context/recipes/recipe.ts. The names follow C08's plan and msg-c7ac9a51; adapt them if the landed code differs:\n- RecipeKind, recipeKinds, instantiateRecipe;\n- RECIPE_DEFINITIONS_PATH ('.moe/recipes.json');\n- recipeInputsDigest, recipeDefinitionDigest, readRecipeInstance;\n- Task.recipeInstance.\n\nCreate docsLiteralReplace.test.ts.\n\nFixture: copy C08's recipe.test.ts fixture:\n- ToolTestHarness;\n- a real temp Git repo, with GIT_* masked and fixed identities;\n- settings patched in memory, with approvalMode TURBO.\nCommit .moe/recipes.json = {version:1, recipes:[DEF]} together with docs/a.md, where DEF = {id:'docs-fix', kind:'docs-literal-replace', version:1, requiredChecks:[{id:'docs', command:'npm run lint'}], params:{allowedPaths:['docs']}}. The recipes file exists only in temp repos, never in the real project. Import docsLiteralReplace.ts so it self-registers.\nINPUTS = {path:'docs/a.md', originalSha256:<sha256 of the committed bytes>, oldText, newText}.\nAssert exact reasons and exact objects, never truthiness. Keep the cases table-driven (it.each).\n\n(DoD1) instantiateRecipe(h.state, {taskId, recipeId:'docs-fix', inputs:INPUTS}) instantiates only when both hold:\n- the sha256 of the committed bytes at the pinned commit equals originalSha256;\n- oldText occurs exactly once.\nUnder TURBO that gives {instantiated:true, status:'WORKING', planRevision}.\nEach refusal is the fallback {instantiated:false, fallback:'ordinary-planning', reason}, with the kind's reason verbatim and the row untouched:\n- docs-replace-hash-mismatch. Include a worktree-only edit of docs/a.md, which must not count: committed bytes only.\n- docs-replace-old-text-missing.\n- docs-replace-old-text-ambiguous, including the overlapping repeat 'aa' in 'aaa'.\n- docs-replace-source-unavailable, for a missing path, a symlink, a 100755 file, binary or non-UTF-8 bytes, and a file over the provider's 64 KiB cap.\n\n(DoD2) Definition and input refusals:\n- docs-replace-definition-invalid: params missing; allowedPaths missing, empty or not normalized; or extra keys in params.\n- docs-replace-inputs-invalid: missing, extra or non-string input keys; an originalSha256 that is not 64 lowercase hex; an oldText that is empty or over 2000 chars; a newText over 2000 chars; a NUL; or newText === oldText.\n- docs-replace-path-not-allowed: a path outside allowedPaths, under .moe/, or not *.md.\nOn success:\n- The stored plan is exactly one step, with affectedFiles ['docs/a.md'].\n- The step text contains 'error handling' and 'test', the project's required rail patterns.\n- executionContract.checkRefs equals ['npm run lint'], and approvedScope is exactly ['docs/a.md'].\n- requiredChecks deep-equals the definition's checks plus C08's appended '.moe/recipes.json' config. The framework owns requiredChecks; the kind never returns them.\n- readRecipeInstance(task) returns the record, with kind 'docs-literal-replace'.\n\n(DoD3) docsLiteralReplace.assessPostpatch(root, {taskId, instance, definition, postCommit}), over real commits built on instance.commit:\n- {ok:true} when exactly docs/a.md changed to the expected bytes, and also when the postCommit additionally changes the task's own .moe/tasks/<taskId>.json;\n- docs-replace-extra-edits for any other changed path, including .moe/recipes.json;\n- docs-replace-postpatch-mismatch for an extra change inside docs/a.md;\n- docs-replace-patch-missing when nothing changed;\n- docs-replace-inputs-changed for an instance whose inputs no longer match its inputsDigest;\n- docs-replace-recipe-mismatch for a definition whose digest, id, kind or version differs from the instance;\n- docs-replace-postpatch-unavailable for an unresolvable postCommit;\n- nothing throws.\n\nRun npx vitest run src/context/recipes/docsLiteralReplace.test.ts. Every case must fail for the right reason: the missing module.",
+          "reason": "Align with C08's actual interface (C08 plan, and msg-c7ac9a51 in chan-b6d8273b): the RecipeKind hooks, the recipeKinds registry and instantiateRecipe; requiredChecks owned by the framework; inputs flat; definitions in a committed .moe/recipes.json.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T16:34:25.710Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -32,7 +42,17 @@
       ],
       "newFiles": [
         "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Implement docsLiteralReplace.ts as the C08 RecipeKind 'docs-literal-replace'. It is one module, and it self-registers at the bottom with recipeKinds.set(docsLiteralReplace.name, docsLiteralReplace).\n\nError handling: every hook returns a typed refusal reason and never throws. Git, IO, timeout and decode failures map to the unavailable reasons.\n\n(a) validateDefinition(def):\n- def.params is exactly {allowedPaths}: a non-empty list of at most 16 normalized repo-relative prefixes (normalizeAffectedFile(p) === p), none under .moe.\n- requiredChecks presence and shape are the framework's job (recipe-definitions-invalid). Do not duplicate them.\n\n(b) validateInputs(inputs, def):\n- Exact keys {path, originalSha256, oldText, newText}, all strings.\n- path is normalized, ends in .md, is not under .moe/, and is equal to or under an allowedPaths prefix. Compare whole segments: 'docs' covers 'docs/a.md', not 'docsx/a.md'.\n- originalSha256 is 64 lowercase hex.\n- oldText is 1-2000 chars and newText 0-2000 chars. Neither contains NUL, and newText !== oldText.\n\n(c) assessSource(projectRoot, commit, inputs, def):\n- REUSE readRepositorySource(projectRoot, commit, [{id:'doc', purpose:'source', op:'read', path}]), in try/catch, at its default limits.\n- Require status 'served' and mode '100644'. A symlink, submodule, missing, refused, truncated or omitted item gives docs-replace-source-unavailable.\n- Require sha256(Buffer.from(content,'utf8')) === originalSha256. The provider decodes fatal UTF-8 with the BOM kept, so the round trip is byte-exact.\n- Count occurrences with indexOf(oldText, i + 1), so overlapping repeats count.\n- Return {ok:true, assessment:{oid, offset, expectedSha256}}. expectedSha256 is the sha256 of the content with that single occurrence replaced.\n\n(d) instantiate(inputs, def, assessment, commit): deterministic, with no IO.\n- One step: replace the single literal in <path>.\n  - JSON-quote oldText and newText.\n  - State the expected post-patch sha256, and 'change nothing else, in this file or any other'.\n  - Include error handling: if the file no longer matches, stop and call moe.report_blocked rather than edit.\n  - Then run each required test check (the definition's commands).\n  - affectedFiles [path].\n- executionContract:\n  - intendedBehavior;\n  - acceptanceCriteria: the post-patch sha256, and no other path changed;\n  - approvedScope [path];\n  - sourceAssumptions: commit, oid, originalSha256 and offset;\n  - checkRefs: the definition's commands;\n  - never requiredChecks, which C08 supplies.\n- If the description would exceed MAX_STEP_DESCRIPTION_CHARS (util/planSize.ts), refuse with docs-replace-plan-too-large rather than truncate.\n\nMake the DoD1 and DoD2 cases green. Do not edit recipe.ts, submitPlan.ts, taskStore.ts or schema.ts.",
+          "reason": "Align with C08's RecipeKind signatures: definition params, flat string inputs, the assessment payload, and instantiate without requiredChecks. Also add the rail phrases that the project's submit_plan validation requires of the step text.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T16:34:45.809Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
@@ -41,7 +61,17 @@
       "affectedFiles": [
         "packages/moe-daemon/src/context/recipes/docsLiteralReplace.ts",
         "packages/moe-daemon/src/context/recipes/docsLiteralReplace.test.ts"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Implement docsLiteralReplace.assessPostpatch(projectRoot, {taskId, instance, definition, postCommit}), with the same error handling: it never throws.\n\nC08 lands no post-patch call site, by agreement (msg-c7ac9a51 and C08's planningNotes). Wiring it into complete_task or the delivery policy is activation (C11 or a follow-up). Do NOT edit those files or C08's.\n\nOrder, cheap first:\n1. The definition's id, kind, version and recipeDefinitionDigest(definition) must equal the instance's recipeId, kind, recipeVersion and definitionDigest. Otherwise: docs-replace-recipe-mismatch.\n2. recipeInputsDigest(definition, instance.inputs) === instance.inputsDigest, and validateInputs passes. Otherwise: docs-replace-inputs-changed.\n3. postCommit is 40 or 64 lowercase hex.\n4. Bounded, read-only Git through openProjectGit (util/cachedPlanPaths.ts): `diff-tree -r -z --no-renames --no-ext-diff --no-textconv --raw <instance.commit> <postCommit>`, with a bounded maxBuffer.\n   - Parse strictly; any parse failure is unavailable.\n   - Ignore only .moe/tasks/<taskId>.json.\n   - Any other path gives docs-replace-extra-edits.\n   - No entry for the path gives docs-replace-patch-missing.\n5. Re-read the path at instance.commit and at postCommit through readRepositorySource.\n   - The original must still hash to originalSha256.\n   - The post bytes must equal the original with the single occurrence replaced, and the mode must stay 100644. Otherwise: docs-replace-postpatch-mismatch.\n\nGit or read failures give docs-replace-postpatch-unavailable.\n\nDocument in one comment that postCommit must contain only this task's changes on top of instance.commit, so interleaved peer commits fail closed as extra edits.\n\nMake the DoD3 cases green, within 400 net lines over the 2 files.",
+          "reason": "C08 deliberately lands no post-patch call site (C08 planningNotes, msg-c7ac9a51). Wiring the check into delivery is activation, which is out of scope, so step 3 now implements and tests assessPostpatch directly instead of reporting C08 blocked.",
+          "amendedBy": "architect-4ae016fb",
+          "amendedAt": "2026-10-29T16:34:45.898Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-4",
@@ -62,7 +92,7 @@
       ]
     }
   ],
-  "planRevision": 1,
+  "planRevision": 4,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -76,7 +106,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:48.454Z",
-  "updatedAt": "2026-10-29T13:40:27.856Z",
+  "updatedAt": "2026-10-29T16:34:45.898Z",
   "dependsOn": [
     "task-f12b03e83a1a491494a08e42c7a58504"
   ],
