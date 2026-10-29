@@ -97,7 +97,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -110,7 +110,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:33.467Z",
-  "updatedAt": "2026-10-29T21:11:40.039Z",
+  "updatedAt": "2026-10-29T21:18:54.897Z",
   "dependsOn": [
     "task-1b7b6067a95f4078bfb2c780c2a598e9"
   ],
@@ -118,12 +118,15 @@
     "firstClaimAt": "2026-10-26T09:50:56.486Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-29T21:18:54.897Z",
+    "wallClockMs": 300478411
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
     "architect-4ae016fb",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -167,7 +170,46 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/context/negativeSearch.test.ts",
+    "packages/moe-daemon/src/context/negativeSearch.ts",
+    ".moe/tasks/task-025249c9051749e5bf23685a1c00ca29.json",
+    ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+    ".moe/tasks/task-9ef257f58b7f4c4191f206f67bf3d865.json"
+  ],
+  "completionSummary": "CQ-C05: negative search provenance, held in C04's SourceCache (no second store).\n\nFiles: 2 new, 338 net lines (110 code + 228 test, 52 tests); no other file changed:\n- src/context/negativeSearch.ts\n- src/context/negativeSearch.test.ts\n\nAPI:\n- negativeSearchKey: sourceCacheKey(['negative-search', 1, namespace, literal, sorted paths, exclusions]). Exclusions are ['gitlinks'] for repository and SNAPSHOT_CONTROL_SEGMENTS for snapshot.\n- snapshotScopeGeneration(raw, paths): verifies the snapshot, then hashes each in-scope file (path, exec bit, recomputed sha256). Unverifiable gives null.\n- repositoryScopeGeneration(root, commit, paths): bounded ls-tree -r of the scope (mode, type, oid, path; no commit id). Any failure gives null.\n- recordNegative(cache, q, result, gen): stores only a single served, zero-match, complete search. Otherwise returns {ok:false, reason: '<status>:<reason>' or a named reason}.\n- lookupNegative: 'absent' only on an equal generation, 'stale' on a different one, 'unknown' for a null generation or a missing, evicted or malformed entry.\n\nDoD:\n1. New, untracked or deleted files make a negative stale: N1 (untracked helper, empty file), N2 (overlay and committed delete), N3, N5. Changes outside the scope keep it absent: docs/ and srcx/ (N4, N5).\n2. Incomplete stays unknown: N6 refuses every C02 and C02b truncated, omitted, missing, refused and unavailable result, including a zero-match cut by the time budget and an undecodable-only match. N7 covers 8 null-generation paths; N8 covers miss, clear, restart, eviction and malformed entries.\n3. Status metadata is never freshness: N9 rewrites a file with the same porcelain, size and mtime and gets stale. N10 shows no fs, watcher or status input.\n4. Gate passed fresh.\n\n19 mutants, all killed:\n- 1/1b: content dropped from the snapshot or repository generation.\n- 2: overlay deletes fall through.\n- 3/3b/3c: truncated or incomplete results recorded.\n- 4: missing entry reads absent.\n- 5: generation memoized.\n- 6/6b:",
+  "commits": [
+    {
+      "sha": "e3743f843ff39cc95da83d411861c9ab7d39daeb",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-29T20:49:12Z",
+      "paths": [
+        ".moe/tasks/task-025249c9051749e5bf23685a1c00ca29.json",
+        ".moe/tasks/task-1b7b6067a95f4078bfb2c780c2a598e9.json",
+        ".moe/tasks/task-9ef257f58b7f4c4191f206f67bf3d865.json",
+        "packages/moe-daemon/src/context/negativeSearch.test.ts",
+        "packages/moe-daemon/src/context/negativeSearch.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-29T21:12:14.161Z",
+      "treeId": "03c08f7eafb244e6e9f93f25bcbceba4701169ae",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/context/negativeSearch.test.ts",
     "packages/moe-daemon/src/context/negativeSearch.ts"
   ],
-  "completionSummary": "CQ-C05: negative search provenance, held in C04's SourceCache (no second store).\n\nFiles: 2 new, 338 net lines (110 code + 228 test, 52 tests); no other file changed:\n- src/context/negativeSearch.ts\n- src/context/negativeSearch.test.ts\n\nAPI:\n- negativeSearchKey: sourceCacheKey(['negative-search', 1, namespace, literal, sorted paths, exclusions]). Exclusions are ['gitlinks'] for repository and SNAPSHOT_CONTROL_SEGMENTS for snapshot.\n- snapshotScopeGeneration(raw, paths): verifies the snapshot, then hashes each in-scope file (path, exec bit, recomputed sha256). Unverifiable gives null.\n- repositoryScopeGeneration(root, commit, paths): bounded ls-tree -r of the scope (mode, type, oid, path; no commit id). Any failure gives null.\n- recordNegative(cache, q, result, gen): stores only a single served, zero-match, complete search. Otherwise returns {ok:false, reason: '<status>:<reason>' or a named reason}.\n- lookupNegative: 'absent' only on an equal generation, 'stale' on a different one, 'unknown' for a null generation or a missing, evicted or malformed entry.\n\nDoD:\n1. New, untracked or deleted files make a negative stale: N1 (untracked helper, empty file), N2 (overlay and committed delete), N3, N5. Changes outside the scope keep it absent: docs/ and srcx/ (N4, N5).\n2. Incomplete stays unknown: N6 refuses every C02 and C02b truncated, omitted, missing, refused and unavailable result, including a zero-match cut by the time budget and an undecodable-only match. N7 covers 8 null-generation paths; N8 covers miss, clear, restart, eviction and malformed entries.\n3. Status metadata is never freshness: N9 rewrites a file with the same porcelain, size and mtime and gets stale. N10 shows no fs, watcher or status input.\n4. Gate passed fresh.\n\n19 mutants, all killed:\n- 1/1b: content dropped from the snapshot or repository generation.\n- 2: overlay deletes fall through.\n- 3/3b/3c: truncated or incomplete results recorded.\n- 4: missing entry reads absent.\n- 5: generation memoized.\n- 6/6b:"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-29T20:49:12Z",
+    "at": "2026-10-29T21:12:14.161Z"
+  },
+  "completedAt": "2026-10-29T21:18:54.897Z",
+  "reviewCompletedAt": "2026-10-29T21:18:54.897Z",
+  "reviewSummary": "Reviewed completion e3743f8 on moe/work-2026-10-24 (git branch --contains confirms). It adds 2 new files, 338 net LOC (negativeSearch.ts 110, negativeSearch.test.ts 228), plus the wrapper's board JSON. Under the 400 cap, with no scope drift.\n\nRe-ran the gate myself in a Linux snapshot: git archive of e3743f8 (cmp ok), native node_modules with an equal lock, env -i, node v24.21.0.\n- `cd packages/moe-daemon && npm test`: exit 0, 184 files, 5159 passed | 16 skipped. negativeSearch has 52 tests.\n- `npx tsc --noEmit`: exit 0.\n\nRan 9 mutants of my own, separate from the worker's 19:\n- 8 were killed: base-only merged view, repository generation hashing the count only, null generation reading absent, served reason ignored, non-segment prefix, stored key unchecked, ls-tree without -r, ls-tree without scopes.\n- 1 survived: dropping the exec bit from the snapshot generation. C02b's search ignores the mode, so this is an equivalent mutant and not a defect.\n\nDoD:\n1. N1, N2 and N3 (snapshot: untracked, empty or deleted file, changed bytes) and N5 (commit add or delete) read stale. docs/ and srcx/ stay absent.\n2. Incomplete results are refused at record time with an exact status:reason, so nothing is stored (N6, covering C02 and C02b, including time-budget). A null generation, or a missing or malformed entry, reads unknown (N7, N8).\n3. N9 keeps the same porcelain, size and mtime and gets stale. Generations come only from verifier-recomputed sha256 values and ls-tree oids (N10).\n4. Gate evidence was supplied and reproduces.\n\nRails: no second store (C04 SourceCache is used under a 'negative-search' key), no forbidden tokens (grep exit 1), no Git writes, no .moe edits.\n\nNon-blocking notes:\n- C11 must pair the result and the generation from the same commit or snapshot (documented).\n- A stale entry is never deleted; this is safe and leaves LRU pressure only.\n- The test casts `as never` on SourceCache limits; that is C04 bug task-025249c9.",
+  "requiredCheckAtDone": null
 }
