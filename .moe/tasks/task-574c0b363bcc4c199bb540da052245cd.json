@@ -1,0 +1,28 @@
+{
+  "id": "task-574c0b363bcc4c199bb540da052245cd",
+  "epicId": "epic-be924fb8",
+  "title": "bug: NO_TEAM_MEMBERSHIP tells agent seats to call moe.join_team, which their tools/list hides",
+  "description": "Observed 2026-10-30 in an interactive architect session (architect-32ff5555):\n- The seat had teamId null, while every other architect, QA and most workers were on team-a94dc136bb2b49c2aa8df6977c354696.\n- In-session moe.claim_next_task {statuses:['PLANNING']} returned hasNext:false, code NO_TEAM_MEMBERSHIP, with nextAction moe.join_team. Six unassigned PLANNING tasks sat in epic-be924fb8, and architect-4ae016fb held that epic's PLANNING column.\n- The agent could not follow the nextAction. TOOL_AUDIENCE in packages/moe-daemon/src/tools/index.ts maps 'moe.join_team' and 'moe.list_teams' to [], so toolsForRole hides them from the architect, worker and QA tools/list.\n- The wrapper's pre-claim join retry (scripts/moe-agent.sh, around line 2082) only runs between CLI sessions, never for claims made inside an interactive session.\n- util/teamMembershipHeal.ts only heals tombstoned former members.\nNet effect: the session's only recourse is to end early.\n\nDeliverable: an agent seat refused for missing team membership gets a remedy it can actually execute. Two options:\n- name a role-visible action, e.g. 'end the session; the wrapper retries moe.join_team before its next claim';\n- or have the claim path heal a teamless seat into its role team, as the wrapper would.\nThe planner picks one.\n\nNOT in scope: changing the solo epic+status rule or the TOOL_AUDIENCE policy for other tools.\n\nVerification: cd packages/moe-daemon && npm test",
+  "definitionOfDone": [
+    "A NO_TEAM_MEMBERSHIP refusal served to an architect, worker or qa caller names only actions that caller can take: no tool missing from toolsForRole(role). New vitest cases assert this for each of the three roles.",
+    "Existing teamMembershipHeal and solo epic+status rule tests pass unchanged.",
+    "`cd packages/moe-daemon && npm test` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 267.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T23:30:26.694Z",
+  "updatedAt": "2026-10-29T23:30:26.694Z"
+}

@@ -91,17 +91,24 @@
       "author": "architect-32ff5555",
       "content": "Architect note, 2026-10-30: task-16628bef (plan rev 1, now WORKING; this task depends on it) widens ImportUncertainty.reason with 'ambiguous-syntax'.\n\nThe new reason marks a line inside a multi-line template-text or block-comment region that would import if it were code. It is reported after an earlier lexing ambiguity: a code-position '/', '<!--' or '-->' with a backtick, '/*', or a '}' inside a substitution later on its line, or a JSX-like '<'.\n\nevaluateArchitecture still maps any uncertainty to 'inconclusive', so V10 should surface 'ambiguous-syntax' as a named exit-2 reason next to the existing three, and its docs should explain it. Same-line misreads stay an accepted V10a residual, so document them too.",
       "timestamp": "2026-10-29T23:22:50.050Z"
+    },
+    {
+      "id": "comment-d24d67ff34044e42808dec7b0e94a916",
+      "author": "architect-4ae016fb",
+      "content": "From architect-4ae016fb, 2026-10-30: this task now also dependsOn task-a60a1616 (\"`moe-daemon status` from WSL deletes the live .moe/daemon.json\").\n\nBoth tasks edit packages/moe-daemon/src/index.ts, so the epic's file-overlap rail requires them to run in sequence. Your step-3 `case 'check-architecture'` sits in main(). task-a60a1616 changes the lifecycle helpers, statusDaemon, stopDaemon, the start paths and the export list. task-a60a1616 has no dependencies and is small, so it should land well before your other five prerequisites clear.\n\nRe-read index.ts's landed bytes before step 3.",
+      "timestamp": "2026-10-29T23:31:11.022Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:07.154Z",
-  "updatedAt": "2026-10-29T23:22:50.050Z",
+  "updatedAt": "2026-10-29T23:31:11.022Z",
   "dependsOn": [
     "task-a9d1a74d845b4d3d83f359bf864f8651",
     "task-9ef257f58b7f4c4191f206f67bf3d865",
     "task-2cd62d2c87ab4e118222a5a8b841db6c",
     "task-16628bef427b426aa9d8fc6ac1d19534",
-    "task-54dc3d385ef542a08a0a8e9aa2ce8969"
+    "task-54dc3d385ef542a08a0a8e9aa2ce8969",
+    "task-a60a1616ec5c414fa1ed8d13c1e0ae95"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T17:00:43.546Z",

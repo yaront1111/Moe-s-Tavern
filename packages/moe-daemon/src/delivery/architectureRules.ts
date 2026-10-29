@@ -20,7 +20,12 @@ export interface ArchitectureRules { readonly version: 1; readonly rules: readon
 export interface ImportRef { readonly line: number; readonly specifier: string }
 export interface ImportUncertainty {
   readonly line: number;
-  readonly reason: 'dynamic-import' | 'non-literal-require' | 'unresolved-relative';
+  /**
+   * 'ambiguous-syntax': a line inside a multi-line template-text or block-comment
+   * region that would import if it were code, reported because an earlier
+   * lexing ambiguity means the lexer may have misread that region.
+   */
+  readonly reason: 'dynamic-import' | 'non-literal-require' | 'unresolved-relative' | 'ambiguous-syntax';
 }
 export interface ArchitectureFinding {
   readonly ruleId: string;
@@ -107,6 +112,15 @@ export function parseArchitectureRules(text: string): ArchitectureRules {
 // Lexer: one linear pass over the text, emitting only significant tokens.
 // Comments vanish, string and template text become cooked values, and regex
 // bodies become opaque tokens, so none of them is ever read as code.
+//
+// Its regex-versus-division guess, and its blindness to JSX and Annex-B
+// `<!--`/`-->` comments, can misread a construct. Strings and regexes recover
+// at a line break; template and block-comment state do not, so one misread can
+// hide every later line until the next backtick or `*/`. The lexer records its
+// first risk point and every multi-line template or comment region, and
+// extractImports re-scans the regions after that point line by line: a line
+// that would import is reported as 'ambiguous-syntax' instead of passing
+// silently. Residual: a misread can still hide an import on its OWN line.
 // -----------------------------------------------------------------------------
 
 type TokenKind = 'id' | 'str' | 'tpl' | 'punct' | 'other';
@@ -188,8 +202,22 @@ function escapeAt(text: string, j: number): [string, number] {
   return [c, j + 2];
 }
 
+/** May an operand (a regex, a JSX element) start after `p`? The lexer's regex-versus-division guess. */
+function operandMayFollow(p: Token | null): boolean {
+  return p === null
+    || (p.kind === 'punct' && ((p.value !== ')' && p.value !== ']') || p.control))
+    || (p.kind === 'id' && !p.member && REGEX_KEYWORDS.has(p.value));
+}
+
+/** Template text or a block comment that crossed a line break; `line` is where it starts. */
+interface Region { readonly start: number; readonly end: number; readonly line: number }
+
 class Lexer {
   readonly tokens: Token[] = [];
+  /** Every multi-line template-text and block-comment region, in text order. */
+  readonly regions: Region[] = [];
+  /** Start of the first token after which this view may differ from a real parse, or -1. */
+  firstRisk = -1;
   private i = 0;
   private line = 1;
   private prev: Token | null = null;
@@ -199,6 +227,10 @@ class Lexer {
   private readonly parens: boolean[] = [];
   /** After a failed regex scan, every `/` before this index is division (keeps the pass linear). */
   private regexOffUntil = 0;
+  /** Line-remainder cache: the end of the scanned span, its last backtick or `/*`, and its last `}`. */
+  private hazardEnd = 0;
+  private lastHazard = -1;
+  private lastBrace = -1;
 
   constructor(private readonly text: string) {}
 
@@ -249,12 +281,14 @@ class Lexer {
 
   private skipBlock(): void {
     const { text } = this;
+    const line = this.line;
     let j = this.i + 2;
     while (j < text.length && !(text[j] === '*' && text[j + 1] === '/')) {
       const br = breakLen(text, j);
       if (br) this.line++;
       j += br || 1;
     }
+    if (this.line > line) this.regions.push({ start: this.i + 2, end: j, line });
     this.i = Math.min(j + 2, text.length);
   }
 
@@ -289,7 +323,8 @@ class Lexer {
   private templateText(head: boolean): void {
     const { text } = this;
     const line = this.line;
-    let j = this.i;
+    const start = this.i;
+    let j = start;
     let value = '';
     while (j < text.length && text[j] !== '`' && !(text[j] === '$' && text[j + 1] === '{')) {
       const br = breakLen(text, j);
@@ -303,6 +338,7 @@ class Lexer {
         j = after;
       } else value += text[j++];
     }
+    if (this.line > line) this.regions.push({ start, end: j, line });
     const substitution = text[j] === '$';
     if (substitution) this.braces.push(0);
     this.i = substitution ? j + 2 : Math.min(j + 1, text.length);
@@ -336,10 +372,8 @@ class Lexer {
   }
 
   private slash(): void {
-    const p = this.prev;
-    const regexAllowed = this.i >= this.regexOffUntil && (p === null
-      || (p.kind === 'punct' && ((p.value !== ')' && p.value !== ']') || p.control))
-      || (p.kind === 'id' && !p.member && REGEX_KEYWORDS.has(p.value)));
+    this.risk(true);
+    const regexAllowed = this.i >= this.regexOffUntil && operandMayFollow(this.prev);
     const end = regexAllowed ? this.regexEnd(this.i + 1) : -1;
     if (end < 0) {
       this.emit('punct', '/', this.line);
@@ -371,7 +405,46 @@ class Lexer {
     return -1;
   }
 
+  /**
+   * Record `this.i` as the first risk point. A gated candidate (a `/`, or an
+   * Annex-B `<!--` or `-->`) counts only when the rest of its line could flip
+   * template or comment state: such a misread never reaches past its own line.
+   */
+  private risk(gated: boolean): void {
+    if (this.firstRisk < 0 && (!gated || this.lineHazard(this.i))) this.firstRisk = this.i;
+  }
+
+  /** Does the rest of `i`'s line hold a backtick, a `/*` or, inside a substitution, a `}`? Scans each line once. */
+  private lineHazard(i: number): boolean {
+    const { text } = this;
+    if (i >= this.hazardEnd) {
+      this.lastHazard = this.lastBrace = -1;
+      let j = i;
+      for (; j < text.length && !breakLen(text, j); j++) {
+        if (text[j] === '`' || (text[j] === '/' && text[j + 1] === '*')) this.lastHazard = j;
+        else if (text[j] === '}') this.lastBrace = j;
+      }
+      this.hazardEnd = j;
+    }
+    return this.lastHazard > i || (this.braces.length > 0 && this.lastBrace > i);
+  }
+
+  /** R2 an Annex-B `<!--` or `-->` (gated); R3 a JSX-like `<`, ungated because JSX text spans lines. */
+  private markupRisk(ch: string): void {
+    const { text, i, prev: p } = this;
+    if (text.startsWith(ch === '<' ? '<!--' : '-->', i)) {
+      this.risk(true);
+      return;
+    }
+    const operand = operandMayFollow(p) || (p !== null && p.kind === 'id' && !p.member && p.value === 'default');
+    if (ch !== '<' || !operand) return;
+    let j = i + 1;
+    while (text[j] === ' ' || text[j] === '\t') j++;
+    if (text[j] === '>' || isIdStart(text.charCodeAt(j))) this.risk(false);
+  }
+
   private punct(ch: string): void {
+    if (this.firstRisk < 0 && (ch === '<' || ch === '-')) this.markupRisk(ch);
     const depth = this.braces.length - 1;
     if (ch === '.' && this.text.startsWith('...', this.i)) {
       this.i += 3;
@@ -417,9 +490,8 @@ function clauseSource(tokens: readonly Token[], k: number): Token | undefined {
   return undefined;
 }
 
-/** Every string-literal import specifier in JS/TS text, plus each call whose target it cannot read. */
-export function extractImports(text: string): { imports: ImportRef[]; uncertain: ImportUncertainty[] } {
-  const tokens = new Lexer(text).run();
+/** Every string-literal import specifier in the tokens, plus each call whose target it cannot read. */
+function recognize(tokens: readonly Token[]): { imports: ImportRef[]; uncertain: ImportUncertainty[] } {
   const imports: ImportRef[] = [];
   const uncertain: ImportUncertainty[] = [];
   const found = (t: Token) => imports.push({ line: t.line, specifier: t.value });
@@ -443,6 +515,45 @@ export function extractImports(text: string): { imports: ImportRef[]; uncertain:
     }
   });
   return { imports, uncertain };
+}
+
+/** Would this one line, read as code, import a relative path or call import()/require() on an unreadable target? */
+function wouldImport(segment: string): boolean {
+  const { imports, uncertain } = recognize(new Lexer(segment).run());
+  return uncertain.length > 0 || imports.some(ref => isRelative(ref.specifier));
+}
+
+/** Re-lex each line of each region on its own; flag every line that would import, once, in ascending order. */
+function flagHiddenLines(text: string, regions: readonly Region[], into: ImportUncertainty[]): void {
+  let flagged = 0;
+  for (const { start, end, line: first } of regions) {
+    let line = first;
+    let from = start;
+    for (let j = start; ; ) {
+      const br = j < end ? breakLen(text, j) : 0;
+      if (j < end && !br) {
+        j++;
+        continue;
+      }
+      if (line > flagged && wouldImport(text.slice(from, j))) {
+        into.push({ line, reason: 'ambiguous-syntax' });
+        flagged = line;
+      }
+      if (j >= end) break;
+      line++;
+      j += br;
+      from = j;
+    }
+  }
+}
+
+/** Every string-literal import specifier in JS/TS text, plus each call whose target it cannot read. */
+export function extractImports(text: string): { imports: ImportRef[]; uncertain: ImportUncertainty[] } {
+  const lexer = new Lexer(text);
+  const found = recognize(lexer.run());
+  const risk = lexer.firstRisk;
+  if (risk >= 0) flagHiddenLines(text, lexer.regions.filter(region => region.start > risk), found.uncertain);
+  return found;
 }
 
 // -----------------------------------------------------------------------------
