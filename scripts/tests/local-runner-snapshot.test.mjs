@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync,
   writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { exportSourceSnapshot } from '../local-runner/source-export.mjs';
 import {
@@ -410,4 +410,44 @@ test('E8 an export writes nothing to the repository and runs no fsmonitor hook',
   const before = files();
   const { overlay } = await exportAt(dir, head);
   assert.deepEqual([overlay.entries.map(e => e.path), files(), existsSync(marker)], [['a.txt', 'u.txt'], before, false]);
+});
+
+test('E9 a bare, relative or in-repository git is refused before any process spawns, and an omitted git comes only from a fully qualified PATH entry outside the repository', async t => {
+  const { dir, head } = repo(t, { a: 'a' });
+  const was = process.cwd();
+  t.after(() => process.chdir(was)); // Runs before the temp dirs go, which Windows could not remove under its cwd.
+  const cwd = tempDir(t, 'moe-cwd-');
+  const marker = join(tempDir(t, 'moe-ran-'), 'ran');
+  const name = win32 ? 'git.exe' : 'git';
+  // On POSIX a planted git only records that it ran: it never execs git, because '.' on PATH would make it call itself.
+  // On win32 it is an empty file that is never executed. One sits in the cwd, outside the repository: a relative git or
+  // PATH entry would resolve to it there, so only the fully qualified rule refuses it.
+  for (const where of [dir, join(dir, 'bin'), join(dir, 'tools'), cwd]) {
+    mkdirSync(where, { recursive: true });
+    writeFileSync(join(where, name), win32 ? '' : `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
+  }
+  process.chdir(cwd);
+  const refused = async (extra, why, code = 'EXPORT_INPUT_INVALID') => {
+    await failsWith(exportAt(dir, head, extra), code, why);
+    assert.equal(existsSync(marker), false, `${why} ran a planted git`);
+  };
+  const missing = join(tempDir(t, 'moe-nogit-'), name);
+  for (const git of ['git', 'git.exe', './git', 'bin/git', '..\\git', '\\git.exe', 'C:git.exe', join(dir, 'tools', name), missing]) {
+    await refused({ git }, git);
+  }
+  const saved = process.env.PATH;
+  t.after(() => { process.env.PATH = saved; });
+  process.env.PATH = `.${delimiter}${delimiter}${saved}`; // A relative and an empty entry come first.
+  await refused({ git: 'git' }, 'bare git with a relative PATH entry');
+  assert.deepEqual((await exportAt(dir, head)).base.entries.map(e => e.path), ['a'], 'relative and empty entries are skipped');
+  process.env.PATH = '.';
+  await refused({}, 'no fully qualified PATH entry', 'EXPORT_GIT_FAILED');
+  process.env.PATH = `${join(dir, 'bin')}${delimiter}${saved}`;
+  await refused({}, 'the first git on PATH lies inside the repository');
+  if (win32) return; // Symlinks and the exec bit need POSIX.
+  const link = join(tempDir(t, 'moe-link-'), 'git');
+  symlinkSync(join(dir, 'tools', 'git'), link);
+  await refused({ git: link }, 'a symlink whose realpath lies inside the repository');
+  assert.equal(spawnSync(join(dir, 'git')).status, 1);
+  assert.equal(existsSync(marker), true, 'positive control: the planted git records a run');
 });

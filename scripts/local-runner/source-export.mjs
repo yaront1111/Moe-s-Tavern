@@ -5,9 +5,12 @@
 // (Git 2.43), so tracked dirt comes from plumbing `diff-index`; a stat-only path it lists is dropped when bytes and mode
 // match. `ls-files --others` lists a nested repository as 'name/' and never a FIFO. v1 limits (fail-closed): a directory
 // replaced by a file collides in validateImport; a line-ending-only change is not dirty, so the base bytes stand.
+// git is fully qualified, or omitted and resolved by pathGit, and its realpath lies outside the repository: Windows libuv
+// searches the spawn cwd for a bare name (task-d72fe292), so a bare or in-repository git would run repository code as the
+// controller. exportGit checks this before any spawn, as admission.mjs admitCandidate does.
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, open, realpath } from 'node:fs/promises';
+import { access, lstat, open, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { MAX_IMPORT_BYTES, MAX_IMPORT_ENTRIES, snapshotError, validateImport, validateImportPath } from './source-snapshot.mjs';
 
@@ -174,14 +177,42 @@ async function readOverlay(run, root, commit, base, keep) {
   return validateImport(entries);
 }
 
+// On win32 only a drive-absolute or UNC path is fully qualified (the daemon's gitExecutable rule): '\x', 'C:x' and 'x' are cwd-relative to libuv.
+const fullyQualified = p => (process.platform === 'win32' ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(p) : path.isAbsolute(p));
+
 function readInput(input) {
   try {
-    const { repoDir, commit, git = 'git', timeoutMs = 120_000 } = input;
+    const { repoDir, commit, git, timeoutMs = 120_000 } = input;
     const text = value => typeof value === 'string' && value !== '' && !CONTROL_CHAR.test(value);
-    if (text(repoDir) && path.isAbsolute(repoDir) && text(commit) && FULL_ID.test(commit) && text(git)
+    if (text(repoDir) && path.isAbsolute(repoDir) && text(commit) && FULL_ID.test(commit) && (git === undefined || (text(git) && fullyQualified(git)))
       && Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 600_000) return { repoDir, commit, git, timeoutMs };
   } catch { /* refused below */ }
   throw exportError('EXPORT_INPUT_INVALID');
+}
+
+// The first git in a fully qualified PATH entry, in PATH order: git.com then git.exe on win32 (as libuv), else git, which must be
+// executable. Empty, relative, drive-relative and root-relative entries are skipped, and a miss is null, never a bare name. Only stats.
+async function pathGit() {
+  const win = process.platform === 'win32';
+  const runnable = file => stat(file).then(async s => s.isFile() && (win || await access(file, constants.X_OK).then(() => true, () => false)), () => false);
+  for (const raw of (process.env.PATH ?? '').split(path.delimiter)) {
+    const dir = win ? raw.trim().replace(/^"(.*)"$/, '$1') : raw;
+    if (!fullyQualified(dir)) continue;
+    for (const name of win ? ['git.com', 'git.exe'] : ['git']) if (await runnable(path.join(dir, name))) return path.join(dir, name);
+  }
+  return null;
+}
+
+// The git to run: an explicit one, else pathGit's, as its realpath (case not folded), so a symlink re-pointed after this check cannot
+// change what runs. Inside the repository is refused. An unreadable repoDir passes here; openRepository then refuses it as before.
+export async function exportGit(repoDir, git) {
+  const candidate = git ?? await pathGit();
+  if (candidate === null) throw exportError('EXPORT_GIT_FAILED');
+  const binary = await realpath(candidate).catch(() => { throw exportError('EXPORT_INPUT_INVALID'); });
+  const root = await realpath(repoDir).catch(() => null);
+  const below = root === null ? '..' : path.relative(pathKey(root), pathKey(binary));
+  if (below !== '..' && !below.startsWith(`..${path.sep}`) && !path.isAbsolute(below)) throw exportError('EXPORT_INPUT_INVALID');
+  return binary;
 }
 
 // Resolves the frozen SourceSnapshot {version: 1, commit, tree, base, overlay, excluded} or throws one fixed-code
@@ -189,6 +220,7 @@ function readInput(input) {
 export async function exportSourceSnapshot(input) {
   try {
     const options = readInput(input);
+    options.git = await exportGit(options.repoDir, options.git); // No process is spawned before this guard.
     const { root, run, tree } = await openCommit(options);
     let excluded = 0;
     const keep = name => {
