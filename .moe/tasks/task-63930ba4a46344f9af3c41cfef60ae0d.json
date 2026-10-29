@@ -92,7 +92,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,10 +102,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 228.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-b764a5aacd8a42998406a7863cfb29ff",
+      "author": "qa-952969be",
+      "content": "QA review (qa-952969be), round 1. The substance is GREEN. Size is the only open item.\n\nDelivery: completion d53c62e on moe/work-2026-10-24 (git branch --contains confirms it, pushed=true). Reviewed from `git show`, not from the dirty tree.\n\nGate (re-run by QA): a clean `git archive d53c62e moe-jetbrains` snapshot at D:\\projexts\\moes-i03-qa. All 6 task files are cmp-identical to the commit, and there are no conflict markers (the shared tree is still mid-merge, so this is the only compilable tree). It ran under the jetbrains-gradle lease (since released) as `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes-i03-qa\\moe-jetbrains && .\\gradlew.bat test --rerun\"`, the Windows equivalent of the pinned `cd moe-jetbrains && ./gradlew test`, because WSL has no JDK. Result: exit 0, BUILD SUCCESSFUL in 18s, 11/11 tasks executed. The XMLs show 22 suites and 316 tests with 0 failures, 0 errors and 0 skipped. ManagedVmPresentationTest has 7 tests and 0 failures, stamped 20:36:42Z.\n\nIndependent QA mutants: 5/5 killed by their named cases.\n- Allow a duplicate name: P2.\n- Enable cleanup with any row, not only a LAUNCHED one: P3.\n- Ignore trailing JSON: P5.\n- Show collision rows: P2.\n- Enable reconcile without a ready provider: P3.\nThe source was restored and its sha256 verified after each.\n\nDoD:\n1. PASS. readiness() always gives 3 separate lines, and only a literal JSON true counts for execution or verification. P1 covers null, \"true\", 1, {}, absent and false.\n2. PASS. ManagedVmCommand.args has 2 parameters and yields exactly [script, verb, --project, basePath]. A foreign or repeated name anywhere in a report makes the whole report NOT_OWNED. collision and deleted rows are hidden. I checked against the producer: the regex matches lifecycle.mjs isOwnedInstanceName, the PHASES/STATES/LAUNCHED sets match, and the row shape matches statusReport.\n3. PASS. strongProfile() is a constant BLOCKED, and there is no activation action. The daemon keeps verifiedLocal:false, and EXECUTION_PROFILE_NOT_READY is unchanged.\n4. PASS. See the gate above.\n\nRails: no .moe writes, no settings sends and no Git writes in the diff. No forbidden patterns. IO runs off the EDT. Arguments go to ProcessBuilder as a list and stderr is discarded. The supervisor's node, PATH and env resolution under PROTECTED is mirrored through its side-effect-free constructor. The script resolves from the plugin bundle (build.gradle.kts local-runner/**).\n\nAdvisory only, not blocking:\n- Producer codes VERSION_MISMATCH, MANIFEST_INVALID, PROVIDER_OUTPUT_INVALID, PROVIDER_COMMAND_FAILED and PROVIDER_OUTPUT_LIMIT have no specific text. They fall back to UNKNOWN_CODE with the code shown, which is safe. Worth adding in I05/I06.\n- The residuals in the worker's handoff stand: unbounded stdout until the timeout, and WSL bindHost 0.0.0.0 preserves everything.\n\nSIZE: +619/-1, so 618 net over moe-jetbrains (numstat Presentation +227, Panel +181, Test +153, Bundle +54, ToolWindow +3, Launcher +1/-1). That is over the 400 cap, and no rail waives it. The waiver prop-30944337eea941b7b76576c1aa0938c5 (EPIC ADD_RAIL) is PENDING, and its numbers equal the numstat.\n- QA is parking the row rather than rejecting it, because a rejection would only burn a reopen on landed, green bytes.\n- If the waiver is APPROVED: set_task_status REVIEW, and QA re-gates and approves, naming 618 net.\n- If it is REJECTED: set_task_status PLANNING to re-slice for review.",
+      "timestamp": "2026-10-29T20:39:39.979Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:23.379Z",
-  "updatedAt": "2026-10-29T20:33:27.722Z",
+  "updatedAt": "2026-10-29T20:39:53.612Z",
   "dependsOn": [
     "task-df5384bf7fbd4b7ba3dedb43d7373ffa",
     "task-deba1a56a8104786ae25b84c58c363b4",
@@ -121,13 +128,14 @@
   "contextFetchedBy": [
     "architect-26fd4d71",
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
-  "blockedReason": null,
+  "blockedReason": "QA parked from REVIEW, not rejected: the substance is green and size is the only gap. The completion is d53c62e on moe/work-2026-10-24. QA re-ran the gate, the Windows gradlew test --rerun in a clean git-archive snapshot of that commit (WSL has no JDK, and the shared tree is mid-merge): exit 0, 22 suites, 316 tests, 0 failures; ManagedVmPresentationTest 7/7. QA mutants: 5/5 killed. All 4 DoD items pass, and the rails hold (no .moe or settings writes, no Git writes, IO off the EDT, strong profile always blocked). The size is 618 net over moe-jetbrains (+619/-1), above the 400 QA cap, and no epic or project rail waives it. The waiver prop-30944337eea941b7b76576c1aa0938c5 (EPIC ADD_RAIL) is PENDING, and only a human can resolve it in the IDE. If it is APPROVED: set_task_status REVIEW, and QA re-gates and approves, naming 618 net. If it is REJECTED: set_task_status PLANNING to re-slice the landed bytes for review. The full evidence is in comment-b764a5aacd8a42998406a7863cfb29ff on this row.",
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": null,
-  "blockedAt": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-29T20:39:53.612Z",
   "priorBlockedReason": "Cannot produce an executable consumer-only plan for DoD2 without a producer contract. Source exploration: scripts/local-runner/cli.mjs accepts only doctor, prerequisites, native-smoke; it has no list/provision/reconcile/cancel/cleanup API. R06 lifecycle.mjs provides internal ledger/owner/attempt/lease helpers, not an IDE-callable authority; neither daemon WebSocketServer nor wrappers expose these operations. clientCapabilities.ts intentionally advertises runnerStatus:false and verifiedLocal:false. Declared prerequisite CQ-R10 task-e6411b76f42a43c5b679c725947336af is BACKLOG with no plan/transport contract, and waits on unfinished R09. Need authoritative projected status + ownership-validated control requests/responses, refusal codes, attempt/generation/lease checks and host routing before planning Swing controls. Do not replace this with disabled-only controls, direct unverified Multipass actions, caller-supplied ownership/lease truth or an IDE-owned ledger. Recommended split: producer transport with tests first, then I03 Kotlin consumer with tests; I06 remains sole final hardening task. REPL asked daemon API vs host CLI preference, but this block is grounded in missing source/contract, NOT lack of a reply. Preserve all existing dependencies and no activation.",
   "tier": "heavy",
   "effort": "xhigh",
@@ -183,7 +191,49 @@
     "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+    ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+    ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+    ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json"
   ],
-  "completionSummary": "CQ-I03 delivered (plan rev 1, 5/5 steps): a JetBrains 'Managed VMs' tab that consumes CQ-I03a's vm-control.mjs.\n- ManagedVmPresentation.kt is pure. decode(command, stdout, exit, timedOut) never throws.\n  - Unreadable(fixed key): timeout, nonzero exit, more than 64 KiB, more than one line, non-strict JSON, trailing data, schema/command mismatch, a bad field, phase or state, a bad code.\n  - Unreadable(NOT_OWNED): any foreign or repeated VM name.\n  - Refused(code): a top-level producer code.\n  - readiness() gives 3 separate lines (provider, execution, verification); only a literal JSON true counts.\n  - strongProfile() is always blocked. Actions are refresh, reconcile and cleanup only, single flight. Commands take no instance argument.\n  - Fixed refusal text for 13 codes and 4 preserve reasons.\n- ManagedVmPanel.kt: all IO runs in a Task.Backgroundable.\n  - It resolves the bundled script and resolves node exactly as the supervisor does per profile; under PROTECTED the env is scrubbed.\n  - ProcessBuilder(arg list, stderr DISCARD) runs through CapturingProcessHandler.runProcessWithProgressIndicator: 120 s, or 20 min for cleanup.\n  - Cleanup asks for confirmation. A refresh follows each action. dispose cancels the run. No .moe writes and no settings changes.\n- Wiring: MoeToolWindowPanel +3; TerminalAgentLauncher.resolveBundledPath made internal; MoeBundle +54. MoeDaemonSupervisor.kt is untouched, because it holds a peer's merge conflict.\nDoD: 1 P1 plus mutants M1/M2. 2 P2 plus M3a/M3b; the producer ledger is the only ownership source. 3 P4 plus M5; there is no activation entry. 4 Gate above. Mutants: 8/8 killed by their named cases.\nSIZE: +619/-1, 618 net, over the 400 cap. EPIC size-exception rail prop-30944337eea941b7b76576c1aa0938c5 filed, PENDING human; #governors pinged.\nResiduals: unbounded stdout capture until the timeout (the producer caps at 64 KiB); a killed node can leave a multipass delete running (reconcile repairs it); WSL bindHost 0.0.0.0 preserves everything"
+  "completionSummary": "CQ-I03 delivered (plan rev 1, 5/5 steps): a JetBrains 'Managed VMs' tab that consumes CQ-I03a's vm-control.mjs.\n- ManagedVmPresentation.kt is pure. decode(command, stdout, exit, timedOut) never throws.\n  - Unreadable(fixed key): timeout, nonzero exit, more than 64 KiB, more than one line, non-strict JSON, trailing data, schema/command mismatch, a bad field, phase or state, a bad code.\n  - Unreadable(NOT_OWNED): any foreign or repeated VM name.\n  - Refused(code): a top-level producer code.\n  - readiness() gives 3 separate lines (provider, execution, verification); only a literal JSON true counts.\n  - strongProfile() is always blocked. Actions are refresh, reconcile and cleanup only, single flight. Commands take no instance argument.\n  - Fixed refusal text for 13 codes and 4 preserve reasons.\n- ManagedVmPanel.kt: all IO runs in a Task.Backgroundable.\n  - It resolves the bundled script and resolves node exactly as the supervisor does per profile; under PROTECTED the env is scrubbed.\n  - ProcessBuilder(arg list, stderr DISCARD) runs through CapturingProcessHandler.runProcessWithProgressIndicator: 120 s, or 20 min for cleanup.\n  - Cleanup asks for confirmation. A refresh follows each action. dispose cancels the run. No .moe writes and no settings changes.\n- Wiring: MoeToolWindowPanel +3; TerminalAgentLauncher.resolveBundledPath made internal; MoeBundle +54. MoeDaemonSupervisor.kt is untouched, because it holds a peer's merge conflict.\nDoD: 1 P1 plus mutants M1/M2. 2 P2 plus M3a/M3b; the producer ledger is the only ownership source. 3 P4 plus M5; there is no activation entry. 4 Gate above. Mutants: 8/8 killed by their named cases.\nSIZE: +619/-1, 618 net, over the 400 cap. EPIC size-exception rail prop-30944337eea941b7b76576c1aa0938c5 filed, PENDING human; #governors pinged.\nResiduals: unbounded stdout capture until the timeout (the producer caps at 64 KiB); a killed node can leave a multipass delete running (reconcile repairs it); WSL bindHost 0.0.0.0 preserves everything",
+  "commits": [
+    {
+      "sha": "d53c62eb99699c5ea82dae47f3616da14c93afb3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-29T20:09:40Z",
+      "paths": [
+        ".moe/tasks/task-63930ba4a46344f9af3c41cfef60ae0d.json",
+        ".moe/tasks/task-6a612b08446e4e3cad10bf9cc44cecf6.json",
+        ".moe/tasks/task-8d00971692974bbdb2f8b3c3b181c46d.json",
+        ".moe/tasks/task-c2a900aa5107479aa4c630f1b3837ed0.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-29T20:34:08.432Z",
+      "treeId": "99b792462c22acc6e20f31e6e4ea5db2d105de2e",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ManagedVmPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPresentation.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/ManagedVmPanel.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-29T20:09:40Z",
+    "at": "2026-10-29T20:34:08.432Z"
+  }
 }
