@@ -13,6 +13,7 @@ import {
   isClaimGatedByDependsOn
 } from '../util/claimEligibility.js';
 import { logger } from '../util/logger.js';
+import { awaitingPlanReuse } from '../context/planReuseJob.js';
 
 const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
   CRITICAL: 0,
@@ -195,7 +196,12 @@ function findMatchingTask(
     // event, and builds an Error only for a strict or malformed row. It never
     // throws: a malformed setting matches nothing, and only an explicit claim
     // names the reason.
-    .filter((t) => !executionAdmissionRefusal(state, t, workerId));
+    .filter((t) => !executionAdmissionRefusal(state, t, workerId))
+    // Approved-plan reuse (CQ-C07) — the SAME predicate as claim_next_task's
+    // ranked pool; a drift here re-creates the wake→claim→refuse spin. A pending
+    // row starts its assessment here too, and the job's record or resume write
+    // emits TASK_UPDATED, which re-runs this matcher.
+    .filter((t) => !awaitingPlanReuse(state, t));
   // Single-worker-per-epic-status (solo workers only): claim skips a
   // candidate when a live OTHER worker holds a different task in the same
   // epic+status — mirror that too. Effective membership, exactly as

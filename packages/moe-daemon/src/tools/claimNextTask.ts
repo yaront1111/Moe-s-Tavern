@@ -30,6 +30,7 @@ import { recommendSkillFor } from '../util/recommendSkill.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
 import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
+import { awaitingPlanReuse, planReuseContext } from '../context/planReuseJob.js';
 import {
   healTeamMembership,
   noTeamMembershipRefusal,
@@ -513,6 +514,12 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
             // reason: a thrown refusal here reads to the sh wrapper as a dead
             // daemon. Only an explicit-taskId claim names why.
             .filter((t) => !executionAdmissionRefusal(state, t, params.workerId))
+            // Approved-plan reuse (CQ-C07): a PLANNING row whose current approved
+            // plan awaits its source assessment is withheld from planners, and
+            // evaluating it starts that assessment outside the lock
+            // (context/planReuseJob.ts). Mirrored in wait_for_task's matcher. An
+            // explicit taskId claim still gets the row.
+            .filter((t) => !awaitingPlanReuse(state, t))
             .sort((a, b) => {
               // Priority first, the same order wait_for_task ranks by: a
               // higher-priority task outranks a lower one in any epic. Ranking
@@ -792,6 +799,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
 
       const launch = resolveLaunch(task, state.project?.settings, resolveWorkerRole(state, params.workerId ?? ''));
+      const reuse = planReuseContext(task);
       return {
         hasNext: true,
         task: {
@@ -821,6 +829,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               reopenWarning: `WARNING: This task was rejected by QA (${task.reopenCount} time(s)). Read reopenReason and rejectionDetails carefully. Fix the identified issues before proceeding.`
             }
           : {}),
+        ...(reuse ? { planReuse: reuse } : {}),
         ...(chatHint ? { chatHint } : {}),
         ...(handoffHint ? { handoffHint } : {}),
         ...(fileCollision.length > 0 ? { fileCollision } : {}),

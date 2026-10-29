@@ -17,31 +17,48 @@
     {
       "stepId": "step-1",
       "description": "Assessment job: create packages/moe-daemon/src/context/planReuseJob.ts. It is the only writer of approved-plan reuse decisions.\n\nIt consumes two prerequisites:\n- CQ-C07a (task-a50bf5b5): PlanReuseRecord in types/schema.ts; readPlanSourceBasis, readPlanningEntry and readPlanReuseRecord in context/planReuseState.ts; and the private daemonOwned.planReuse argument of updateTask in state/taskStore.ts.\n- CQ-C07b (task-6971d689): planReuseView, planSourcePaths, assessPlanSource, decidePlanReuse and the planReuseGit seam in context/planReuse.ts.\n\nRead both landed modules first. Use their landed names if they differ from these. Never re-implement their logic here.\n\nExports:\n(a) planReuseContext(task) is the planReuse value that claim and get_context serve.\n- It is null when planReuseView(task) is null.\n- Return the decoded record when readPlanReuseRecord(task) decodes and record.planRevision equals the task's planRevision (absent reads as 0). In PLANNING, record.entrySeq must also equal readPlanningEntry(task)?.seq.\n- Otherwise return the view {decision, reasons}.\n\n(b) awaitingPlanReuse(state, task) is true only when status is PLANNING, assignedWorkerId is empty, and planReuseView(task)?.decision === 'pending'.\n- When true, it calls ensurePlanReuseAssessment and returns true.\n- It is a side-effecting filter by design: the ONE trigger, with no timer, no queue and no scheduler (epic rail). Say so in its doc comment.\n\n(c) ensurePlanReuseAssessment(state, task) never throws.\n- Keep a per-StateManager pending map: WeakMap<StateManager, Map<taskId, Promise<void>>>. An id already pending returns at once.\n- Take the snapshot synchronously, under the caller's lock, as a structuredClone. It holds: taskId, planRevision, approvedPlanRevision, entrySeq, basisCommit, paths = planSourcePaths(task), and the current candidate. The candidate is the last of listCandidatesForTask(state, task.id) in state/candidateStore.ts, as {baseRevision, deliveryTarget}.\n- Then start the job INSIDE state.detachFromMutexContext(...). This is mandatory, not optional. MCP dispatch runs claim_next_task inside the lock's async context, because the tool is not blocking: true. Without the detach, the job's later runExclusive would re-enter and write without the lock. The SPEED timer comment in tools/submitPlan.ts documents the same trap.\n- In a finally, delete the map entry only if it still holds this promise.\n\n(d) settlePlanReuseAssessments(state) resolves once every pending job has finished. Tests use it.\n\nThe job:\n- Await assessPlanSource(state.projectPath, {basisCommit, paths, candidate}) outside the lock, then call decidePlanReuse(paths, assessment).\n- Build a PlanReuseRecord: {version 1, decision, planRevision, entrySeq, reasons, assessedAt: ISO now, basisCommit, headCommit?, changedPaths? (only when non-empty), candidate?}.\n- Error handling: any throw before apply becomes a reassess record with reasons ['assessment-failed: <first line, at most 200 chars>']. A row must never stay pending because its job failed.\n- Then call state.runExclusive(apply).\n\napply runs under the lock and writes nothing unless ALL of these still hold:\n- the task exists, is in PLANNING and is unassigned;\n- planRevision and approvedPlanRevision equal the snapshot's;\n- readPlanningEntry(task)?.seq equals entrySeq;\n- readPlanSourceBasis(task)?.commit equals basisCommit;\n- planReuseView(task)?.decision is still 'pending'.\n\nThen, by decision:\n- reuse or refresh:\n  - Call updateTask(state, id, { status: 'WORKING', contextFetchedBy: [] }, 'TASK_UPDATED', undefined, { planReuse: record }). Import updateTask from state/taskStore.js: StateManager's public updateTask has no daemonOwned argument.\n  - planRevision, approvedPlanRevision and planApprovedAt stay untouched. This is the existing approval for exactly this revision, never a new one.\n  - If that write throws a MoeError (for example EXECUTION_PROFILE_NOT_READY from the store's progression backstop), write a reassess record instead, with reasons [`resume-refused:${codeName ?? code}`]. Rethrow anything else.\n- reassess: write the record only, with updateTask(state, id, {}, 'TASK_UPDATED', undefined, { planReuse: record }).\n\nAfter a successful write, call state.postSystemMessage(id, 'Plan reuse: <decision> (plan revision N): <first three reasons, or \"source unchanged\">') best-effort, with .catch(() => {}).\n\nA failed apply is logged with logger.warn and swallowed. The row stays pending, and the next claim triggers it again.\n\nTests go in the new packages/moe-daemon/src/context/planReuseJob.test.ts. Set up a ToolTestHarness, a real temporary Git repo in h.testDir, and a TURBO project.\n- Copy the git()/repo() fixture and Git env masking from delivery/requiredChecks.snapshot.test.ts.\n- Rows for this step's cases may be seeded as raw JSON with h.createTask: approvedPlanRevision === planRevision, planSourceBasis {version 1, commit = git rev-parse HEAD, planRevision}, planningEntry {from 'BACKLOG', at, seq 1}, a plan whose affectedFiles and sourceAssumptions anchors exist in the repo, and status PLANNING.\n- Keep the file table-driven and lean: QA rejects more than 400 net changed lines, and tests count.\n\nNamed cases:\n- J1 failure fallback: a planReuseGit.run spy rejects. The row gets a reassess record whose reason starts with 'source-unavailable' and is no longer pending.\n- J2 revalidation: hold the job with a planReuseGit.run spy awaiting a deferred. Meanwhile change the plan with h.state.updateTask (planRevision advances). Release and settle. Nothing is written: no planReuse, and the row is still PLANNING.\n- J3 dedupe: while the job is held, a second ensure call starts no second job. HEAD was resolved once, per the spy's call count.\n- J4 lock: start ensure inside an h.state.runExclusive that keeps the lock until a deferred resolves. After the Git spy has been called and one more macrotask, planReuse is still absent. Release and settle, and it is present. Removing the detach must make J4 fail; record that mutation proof in the completion summary.\n- J5 resume refused: seed the row with a strict verified-local executionPolicySnapshot as raw JSON (see how src/state/taskExecutionPolicy.test.ts seeds strict rows; mem decision-task-snapshot-persistence-and-progression-backstop). The row stays PLANNING, with a reassess record carrying 'resume-refused:EXECUTION_PROFILE_NOT_READY'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/context/planReuseJob.ts",
         "packages/moe-daemon/src/context/planReuseJob.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/context/planReuseJob.ts",
+        "packages/moe-daemon/src/context/planReuseJob.test.ts"
+      ],
+      "note": "Added context/planReuseJob.ts (127 lines). Exports: planReuseContext, awaitingPlanReuse, ensurePlanReuseAssessment (detached, deduped per StateManager in a WeakMap, never throws) and settlePlanReuseAssessments. Uses the landed C07a/C07b names unchanged. ensure also returns early when the row is not pending.\n\nTests: planReuseJob.test.ts, J1-J5 (J1 has two rows: a Git rejection gives source-unavailable, and a throwing projectPath getter gives assessment-failed).\n\nFocused run in the Linux snapshot /tmp/moe-c07.lSN4iv (git archive HEAD 2fe9137, native node_modules with an equal lock, env -i, node v24.21.0): 6/6 pass.\n\nRed check: with the detach removed, J4 fails (1 failed, 5 passed).\n\nShared checkout has many dirty and UU paths from other sessions; I did not touch them.",
+      "startedAt": "2026-10-29T21:21:55.347Z",
+      "completedAt": "2026-10-29T21:25:22.871Z"
     },
     {
       "stepId": "step-2",
       "description": "Scheduling and context wiring. These are the existing scheduling surfaces; nothing new schedules work.\n\n1. tools/claimNextTask.ts, ranked pool (the no-taskId branch):\n- After the execution-profile admission filter, append .filter((t) => !awaitingPlanReuse(state, t)).\n- Comment: approved-plan reuse (CQ-C07). A PLANNING row whose current approved plan awaits its source assessment is withheld from planners. Evaluating the row starts that assessment outside the lock (context/planReuseJob.ts). Mirrored in wait_for_task's matcher.\n- Explicit taskId claims are unchanged: a deliberate claim by id still gets the row.\n- In the hasNext:true response, add `...(reuse ? { planReuse: reuse } : {})` beside reopenWarning, where reuse = planReuseContext(task) for the claimed task.\n\n2. tools/waitForTask.ts, ranked matcher:\n- Add the same filter last, after executionAdmissionRefusal.\n- Say in the comment that it is the SAME predicate as claim_next_task's pool. A drift here re-creates the wake, claim, refuse spin.\n- The job's record or resume write emits TASK_UPDATED, which re-runs this matcher.\n\n3. tools/getContext.ts, task payload:\n- Add `...(planReuse ? { planReuse } : {})` next to executionContract, where planReuse = planReuseContext(task).\n- Serve it to every role; never role-trim it. A worker on a refresh resume needs changedPaths, and an architect needs the reasons.\n- Do not touch packetManifest or servedContext logic.\n\nTests, appended to context/planReuseJob.test.ts under describe('scheduling'). Each case goes through the real tools:\n- S1 (DoD1):\n  - Seed through the real path: in the Git repo, submitPlanTool on a TURBO task gives WORKING, with planSourceBasis and approvedPlanRevision captured by C07a.\n  - Park it: h.state.updateTask status BACKLOG, then status PLANNING. The entry is from BACKLOG.\n  - The ranked claim_next_task {statuses:['PLANNING']} of a registered architect seat returns hasNext:false: the row is withheld. Follow tools/claimNextTask.test.ts for seat and team setup.\n  - After settlePlanReuseAssessments, the row is WORKING. planRevision, approvedPlanRevision and planSubmittedAt equal their pre-park values (no PLAN_SUBMITTED ran). planReuse.decision is 'reuse'.\n  - A worker's claim_next_task {statuses:['WORKING']} gets it, with planReuse in the response.\n  - get_context for that worker serves task.planReuse.\n- S2 (explicit replan): move a WORKING row with a current approval to PLANNING with h.state.updateTask. The architect's ranked claim returns it immediately, with planReuse {decision 'replan', reasons ['replan-requested-from-WORKING']}. No job ran: the planReuseGit.run spy was never called.\n- S3 (wait matcher):\n  - Hold the job on a gated planReuseGit.run spy. A PLANNING row whose sourceAssumptions anchor changed in a commit after the basis makes waitForTaskTool {statuses:['PLANNING'], workerId, timeoutMs ~200} return timedOut:true.\n  - Release and settle. The row now carries a reassess record, and a second wait returns hasNext:true.\n\nRun these focused tests with npx vitest run src/context/planReuseJob.test.ts while iterating. The full suite runs once, in the verification step.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/tools/claimNextTask.ts",
         "packages/moe-daemon/src/tools/waitForTask.ts",
         "packages/moe-daemon/src/tools/getContext.ts",
         "packages/moe-daemon/src/context/planReuseJob.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/getContext.ts",
+        "packages/moe-daemon/src/context/planReuseJob.test.ts"
+      ],
+      "note": "Wiring: +20/-1 across the 3 tools, against HEAD with no foreign hunks.\n- claim_next_task: the ranked pool filters with !awaitingPlanReuse after execution admission; the hasNext:true response carries planReuse = planReuseContext(task). Explicit taskId claims are unchanged.\n- wait_for_task: the matcher applies the same filter last.\n- get_context: task.planReuse sits next to executionContract and is never role-trimmed.\n\nTests S1-S3 go through the real tools: TURBO submit_plan, park to BACKLOG, re-enter PLANNING.\n- S1: the architect's claim gets hasNext:false; the row resumes WORKING with planRevision, approvedPlanRevision, planSubmittedAt and planApprovedAt unchanged; the worker's claim and get_context both serve planReuse.\n- S2: a re-entry from WORKING gets replan, and the Git spy is never called.\n- S3: wait gets timedOut, then reassess with assumption-changed, then hasNext:true.\n\nRed before the wiring: 3 failed, 6 passed. After: 9/9.\nRegression: the claimNextTask*, waitForTask* and getContext* test files all pass, 9 files and 281 tests, in the Linux snapshot.",
+      "startedAt": "2026-10-29T21:25:27.147Z",
+      "completedAt": "2026-10-29T21:27:02.715Z"
     },
     {
       "stepId": "step-3",
       "description": "End-to-end DoD2 and DoD3 cases. Tests only, appended to context/planReuseJob.test.ts under describe('source movement'). Each follows S1's real path (submit_plan TURBO in the Git repo, park to BACKLOG, re-enter PLANNING), then the architect's ranked claim, then settlePlanReuseAssessments.\n- E1 (DoD2): a commit changing only a file the plan never references (no affectedFiles, newFiles or assumption anchor). The row resumes WORKING with planReuse {decision 'reuse', headCommit != basisCommit} and planRevision unchanged. It never reaches a planner.\n- E2 (DoD3, broken): a commit changing a path named as an anchor in executionContract.sourceAssumptions.\n  - The row stays PLANNING.\n  - The next ranked architect claim returns it, with planReuse {decision 'reassess'} and reasons containing 'assumption-changed:<path>'.\n  - get_context for that architect serves the same planReuse.\n- E3 (DoD3, unavailable): stub planReuseGit.run to reject. The row stays PLANNING with a reassess record whose reason starts with 'source-unavailable', and the next ranked claim hands it to the architect.\n- E4 (DoD3, target movement):\n  - Before parking, record a candidate for the task. Seed it the way tools/recordCandidate.test.ts does, through a worker attempt: baseRevision = the basis commit, deliveryTarget = the fixture's branch name.\n  - After the re-entry, commit an unrelated file on that branch.\n  - The record carries candidate 'revalidate' and the reason 'target-moved', while the plan decision stays 'reuse' and the row resumes WORKING.\n  - With no commit, the same flow gives candidate 'current'.\n\nIf an E-case exposes a defect in C07b's library, fix it here only when it is a one-line consumer mismatch. Otherwise stop and call moe.report_blocked naming task-6971d6897bc24817b72ad673dfd68a67: C07b does not depend on this task, so there is no cycle.\n\nKeep the whole task diff, tests included, at or under 400 net changed lines (`git diff --numstat`). If it will not fit, merge the E-cases into one it.each table rather than dropping any assertion.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/context/planReuseJob.test.ts"
-      ]
+      ],
+      "startedAt": "2026-10-29T21:27:06.399Z"
     },
     {
       "stepId": "step-4",
@@ -69,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -89,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:38.745Z",
-  "updatedAt": "2026-10-29T13:32:13.627Z",
+  "updatedAt": "2026-10-29T21:30:59.912Z",
   "dependsOn": [
     "task-9ef257f58b7f4c4191f206f67bf3d865",
     "task-72184c6505cc41e8b6066732011ffb70",
@@ -99,17 +116,22 @@
   "metrics": {
     "firstClaimAt": "2026-10-27T16:46:29.052Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-2c9d5121",
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-b5749787"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-27T17:16:22.099Z",
   "planningNotes": {
@@ -128,5 +150,13 @@
       "docs/plans/2026-10-24-ai-code-quality-and-context.md"
     ]
   },
-  "planApprovedAt": "2026-10-27T17:16:22.211Z"
+  "planApprovedAt": "2026-10-27T17:16:22.211Z",
+  "workStartedAt": "2026-10-29T21:21:55.347Z",
+  "blockedReason": "File overlap with CQ-C06 (task-d75f71d7664848fd859a3f877e74ba43, WORKING under worker-e60b90bd). Both plans edit packages/moe-daemon/src/tools/getContext.ts, and no dependency serializes them. C06 already has +98/-8 of uncommitted edits in that file.\n\nThe wrapper lands whole paths, so either landing would carry the other task's hunks:\n- My landing would hold the path (contested, skip-untouched). That leaves the get_context wiring out of my commit and fails my tests at that tree.\n- C06's landing would carry my import of context/planReuseJob.js.\n\nPer the epic rail (\"serialize overlapping affectedFiles; preserve peer bytes\"), I took my 4-line get_context hunk back out. getContext.ts now holds only C06's bytes. I also withheld the 3 get_context assertions so the checkpoint is self-consistent.\n\nCheckpoint contents: planReuseJob.ts and its test (14 tests), plus the claimNextTask.ts and waitForTask.ts wiring.\nCheckpoint gate: Linux snapshot of HEAD 2fe9137 plus those 4 files, with getContext.ts at HEAD. Full npm test EXIT 0: 185 files, 5173 passed, 16 skipped.\n\nOn resume: re-add the exact hunk and assertions recorded in Serena memory task-task-93dee42f71db4a6a8e47a8de052ad411-handoff, then finish steps 3-5.",
+  "blockedOnTaskIds": [
+    "task-d75f71d7664848fd859a3f877e74ba43"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-29T21:30:59.912Z"
 }
