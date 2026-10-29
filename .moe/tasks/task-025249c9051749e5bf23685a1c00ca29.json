@@ -1,0 +1,27 @@
+{
+  "id": "task-025249c9051749e5bf23685a1c00ca29",
+  "epicId": "epic-9d76d843b4ec484987139b930d1d681e",
+  "title": "bug: SourceCache limits parameter is typed as the frozen literal defaults, so custom limits do not compile",
+  "description": "packages/moe-daemon/src/context/sourceCache.ts types the constructor's limits as Partial<typeof SOURCE_CACHE_LIMITS>. Object.freeze infers the literal types 2048 and 33554432, so `new SourceCache({ maxEntries: 1 })` fails tsc with TS2322 \"Type '1' is not assignable to type '2048'\". The tests only pass because tsconfig excludes *.test.ts, and C11's daemon wiring couldn't pass custom limits without a cast. Fix: type the limits as `{ maxEntries: number; maxBytes: number }`.",
+  "definitionOfDone": [
+    "`new SourceCache({ maxEntries: 1, maxBytes: 10 })` typechecks under `npx tsc --noEmit` from non-test code (or a test file included in a typecheck)",
+    "Existing runtime validation of limits unchanged; `cd packages/moe-daemon && npm test` exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 249.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-29T21:02:27.701Z",
+  "updatedAt": "2026-10-29T21:02:27.701Z"
+}
