@@ -65,7 +65,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,10 +75,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 8.4,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d7aa683042804623a75e7601ed723efd",
+      "author": "qa-952969be",
+      "content": "QA round 2 (qa-952969be, 2026-10-29 ~19:40Z): substance re-verified. PARKED pending the human size waiver prop-7401cd0b8ba34ff89a31ea3056142e61, which is still PENDING (resolvedAt null, and no matching rail in allRails.epic). This is not a second reject.\n\nEvidence:\n- Bytes: architectureRules.ts and architectureRules.test.ts have not changed since completion 7664bbba (`git log 7664bbba..HEAD -- <both>` is empty). In a fresh `git archive HEAD` (513b8d5) snapshot, both files are cmp-equal to the 7664bbba blobs and to the worktree, and package.json and package-lock.json are cmp-equal to the HEAD blobs.\n- Size: `git show --numstat --format= 7664bbba -- packages/` gives module +527/-0 and tests +398/-0, net 925. That matches the waiver text exactly. The round-2 completion 6df1c05 carries only .moe board JSON (0 packages/ lines).\n- Gate (npm ci, env -i, NO_COLOR=1, Linux-only PATH, node v24.21.0):\n  - `cd packages/moe-daemon && npm test` exit 0: Test Files 181 passed (181); Tests 5041 passed | 16 skipped (5057); architectureRules.test.ts 133/133. The skips are pre-existing: baselineRun 6, accounts/cli 1, claudeHook 4, gitExecutable 2, heartbeatStop 3.\n  - `npx tsc --noEmit` exit 0.\n- Static: exactly the 10 documented exports. Imports are only invalidInput and normalizeAffectedFile. No module-level let/var, no localeCompare, and no forbidden tokens in code or tests.\n\nLexer desync (the worker's step-5 finding), reproduced independently with a tsx probe on the snapshot.\n- Setup: a rule from src/state forbidding src/tools; tree {src/tools/t.ts}; a later line holding `const t = require('../tools/t.js');`.\n- Control (the require alone): failed.\n- All six repros give imports [] and uncertain [], so the outcome is passed:\n  - `{} / 1` plus a template;\n  - `extends /regex/`;\n  - `<!--` plus a backtick;\n  - a backtick in TSX text;\n  - `export default /\\/*/`;\n  - `a! / b` plus a `${x}/${y}` template.\n\nQA classification: a real silent false negative, but it comes from the approved plan's lexing design.\n- The implementation follows the plan's regex-start rule (any punctuator except `)` and `]`) and its JSX-as-code choice exactly. The plan's premise that recovery is line-local is false for template and block-comment state.\n- Any fix needs an architect decision, because the contract forbids new uncertainty reasons and forbids scanning template text.\n- It is tracked as HIGH bug task-16628bef427b426aa9d8fc6ac1d19534. It is not a DoD failure of this row under the approved plan.\n- Even before this, an aliased require was already an accepted trivial bypass, so 'passed' never meant \"no forbidden import\".\n\nGating recommendation (architect): V10 (task-db328cda8c094df3a4551f0015679fed) depends on this row but not on task-16628bef427b426aa9d8fc6ac1d19534 or task-54dc3d385ef542a08a0a8e9aa2ce8969. Add those dependencies, or have the epic final require them, so the consumer never ships a known false-'passed' path.\n\nRoute:\n- If the waiver is APPROVED: set_task_status REVIEW. The next QA confirms the rail is in allRails.epic, that the numstat still equals +527/+398, and that `git log 7664bbba..HEAD -- <both files>` is still empty, then re-runs a fresh gate and approves naming the size.\n- If it is REJECTED: set_task_status PLANNING, and the architect splits the review scope, not the bytes.\n- unblock_worker cannot reach this unassigned parked row.",
+      "timestamp": "2026-10-29T19:40:44.534Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:02:38.354Z",
-  "updatedAt": "2026-10-29T19:29:31.378Z",
+  "updatedAt": "2026-10-29T19:41:15.367Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T17:10:01.337Z",
     "plannedStepCount": 5,
@@ -274,5 +281,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "QA park, not a reject. The substance re-verified green; the only blocker is a human decision on size waiver prop-7401cd0b8ba34ff89a31ea3056142e61 (EPIC ADD_RAIL). As of 19:40Z it is PENDING with resolvedAt null, and allRails.epic has no matching rail.\n\nSize: landed completion 7664bbba is net 925 under packages/ (architectureRules.ts +527/-0, architectureRules.test.ts +398/-0). That matches the waiver text exactly, and the bytes are unchanged at HEAD 513b8d5.\n\nGate: fresh git-archive snapshot of HEAD, npm ci, env -i, node v24.21.0.\n- `cd packages/moe-daemon && npm test` exit 0: 181 files; 5041 passed and 16 pre-existing skips; architectureRules 133/133.\n- `npx tsc --noEmit` exit 0.\n- Static: exactly the 10 documented exports, pure, no forbidden tokens.\n\nQA reproduced the worker's lexer-desync finding independently: 6/6 repros give a false passed. It is a plan-level design gap, tracked as a HIGH backlog bug, not a DoD failure of this row. Full evidence and a gating recommendation are in the latest task comment.\n\nRoute:\n- On APPROVED: set_task_status REVIEW. The next QA re-runs a fresh gate and approves, naming the size.\n- On REJECTED: set_task_status PLANNING. The architect splits the review scope, not the bytes.\n- unblock_worker cannot reach this unassigned parked row.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-29T19:41:15.367Z"
 }
