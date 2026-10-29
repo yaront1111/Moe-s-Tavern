@@ -80,7 +80,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T16:47:48.719Z",
-  "updatedAt": "2026-10-29T23:41:28.878Z",
+  "updatedAt": "2026-10-29T23:41:56.916Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T17:00:24.524Z",
@@ -163,7 +163,42 @@
   },
   "filesModified": [
     "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+    ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+    ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json"
+  ],
+  "completionSummary": "The daemon CLI no longer deletes or signals a daemon.json owned by the other side of the WSL/Windows boundary. Changes are in packages/moe-daemon/src/index.ts only, plus its tests.\n- isSameProjectPath now uses moe-proxy's comparableProjectPath rule, so /mnt/<d>/x matches <D>:/x (backslash, drive-case and trailing-slash variants).\n- New exported isForeignDaemonInfo: a drive/UNC projectPath read outside Windows, or an absolute POSIX path read on Windows; relative paths stay local. validateDaemonInfoForProject judges a foreign file only by /health, probing loopback first and then the WSL gateway read from /proc/net/route. It never runs a pid check on it and marks the result foreign, including on projectPath mismatch.\n- statusDaemon is read-only, except that it removes a LOCAL daemon.json whose pid is dead. Its log reports status running/unknown/stopped and the owner; exit code 0.\n- stopDaemon refuses a foreign daemon: no signal, no sentinel, no deletion.\n- New exported existingDaemonBlocksStart, shared by start/_run/init. It treats a healthy foreign daemon as already running. An unreachable foreign one is refused with exit 1 and kept. Native stale recovery is unchanged.\n- The lock-wait cleanup and staleLockReason never remove a foreign daemon.lock.\n- canonicalProjectPath (the written form) and main() are untouched; no MCP contract change.\nTests: X1-X7 per plan, plus X8 (foreign lock, foreign file under a non-matching path) and relative-path rows in X2. Rows went red before the fix. Mutation probes removing each guard all fail tests.\nKnown gaps: the lock-wait guard has no row (it needs real lock contention). A hostile bindHost probe predates this change and can only end in a refusal or a report.",
+  "commits": [
+    {
+      "sha": "65e48668b9a6c5cce36cfe41d7f0d54aa7908308",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-29T23:32:12Z",
+      "paths": [
+        ".moe/tasks/task-4e412148225f480c8c0d5a1706a3cc76.json",
+        ".moe/tasks/task-89e10b2a14594ab5bf14bdf35474ef0c.json",
+        ".moe/tasks/task-a60a1616ec5c414fa1ed8d13c1e0ae95.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-29T23:41:56.916Z",
+      "treeId": "71b4f6c8a851ee19fd6086bbd7fb70ab8dd73980",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/index.test.ts",
     "packages/moe-daemon/src/index.ts"
   ],
-  "completionSummary": "The daemon CLI no longer deletes or signals a daemon.json owned by the other side of the WSL/Windows boundary. Changes are in packages/moe-daemon/src/index.ts only, plus its tests.\n- isSameProjectPath now uses moe-proxy's comparableProjectPath rule, so /mnt/<d>/x matches <D>:/x (backslash, drive-case and trailing-slash variants).\n- New exported isForeignDaemonInfo: a drive/UNC projectPath read outside Windows, or an absolute POSIX path read on Windows; relative paths stay local. validateDaemonInfoForProject judges a foreign file only by /health, probing loopback first and then the WSL gateway read from /proc/net/route. It never runs a pid check on it and marks the result foreign, including on projectPath mismatch.\n- statusDaemon is read-only, except that it removes a LOCAL daemon.json whose pid is dead. Its log reports status running/unknown/stopped and the owner; exit code 0.\n- stopDaemon refuses a foreign daemon: no signal, no sentinel, no deletion.\n- New exported existingDaemonBlocksStart, shared by start/_run/init. It treats a healthy foreign daemon as already running. An unreachable foreign one is refused with exit 1 and kept. Native stale recovery is unchanged.\n- The lock-wait cleanup and staleLockReason never remove a foreign daemon.lock.\n- canonicalProjectPath (the written form) and main() are untouched; no MCP contract change.\nTests: X1-X7 per plan, plus X8 (foreign lock, foreign file under a non-matching path) and relative-path rows in X2. Rows went red before the fix. Mutation probes removing each guard all fail tests.\nKnown gaps: the lock-wait guard has no row (it needs real lock contention). A hostile bindHost probe predates this change and can only end in a refusal or a report."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-29T23:32:12Z",
+    "at": "2026-10-29T23:41:56.916Z"
+  }
 }

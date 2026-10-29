@@ -52,7 +52,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -65,7 +65,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T21:02:27.701Z",
-  "updatedAt": "2026-10-29T23:30:30.714Z",
+  "updatedAt": "2026-10-29T23:43:20.249Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T22:13:29.794Z",
@@ -75,11 +75,14 @@
     "firstClaimAt": "2026-10-29T23:25:40.722Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-10-29T23:43:20.249Z",
+    "wallClockMs": 1059527
   },
   "contextFetchedBy": [
     "architect-32ff5555",
-    "worker-b5749787"
+    "worker-b5749787",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -193,5 +196,9 @@
     "kind": "completion",
     "sessionId": "worker-b5749787@2026-10-29T23:28:17Z",
     "at": "2026-10-29T23:30:30.714Z"
-  }
+  },
+  "completedAt": "2026-10-29T23:43:20.249Z",
+  "reviewCompletedAt": "2026-10-29T23:43:20.249Z",
+  "reviewSummary": "Verified. Completion commit 5e86af4 is recorded in task.commits and is on moe/work-2026-10-24. I reviewed its diff with git show: sourceCache.ts +4/-3 type lines, sourceCache.test.ts +6 (C2b), negativeSearch.test.ts +1/-2 (as-never cast removed), plus 2 board JSON files; ~10 net LOC. The 3 owned files are byte-identical at HEAD 65e4866 and in 5e86af4.\n\nRe-ran the worker's command in a fresh Linux snapshot of HEAD (native node_modules, lockfile md5 matches HEAD, node v24.21.0, env -i): npm test = 187 files, 5246 passed, 16 skipped, exit 0; tsc --noEmit exit 0; file-level tsc (--ignoreConfig --strict ...) over sourceCache.test.ts and negativeSearch.test.ts exit 0.\n\nMutation proof: restoring Partial<typeof SOURCE_CACHE_LIMITS> in a scratch copy makes the file-level tsc exit 1 with 7 TS2322, including C2b at sourceCache.test.ts:49 (1 not assignable to 2048, 10 not assignable to 33554432) and negativeSearch.test.ts:214. So C2b and the cast removal guard the fix.\n\nDoD: (1) new SourceCache({maxEntries:1,maxBytes:10}) typechecks via the file-level typecheck that includes C2b. (2) Runtime validation unchanged: the diff touches only the interface, constant annotation, field type and ctor param type. C5 refusal rows untouched and green; no test deleted or weakened. SOURCE_CACHE_LIMITS is still Object.freeze with 2048 and 33_554_432. C2b asserts both custom limits are enforced together.\n\nScope matches the plan. No forbidden patterns. The type only widens, so existing callers are unaffected. Not run: JetBrains/VS Code gates, which this task does not touch.",
+  "requiredCheckAtDone": null
 }
