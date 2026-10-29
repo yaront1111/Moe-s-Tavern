@@ -82,7 +82,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -105,14 +105,16 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T16:54:17.650Z",
-  "updatedAt": "2026-10-29T12:28:03.834Z",
+  "updatedAt": "2026-10-29T12:37:22.033Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:00:08.522Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
     "executedStepCount": 10,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-10-29T12:37:22.033Z",
+    "wallClockMs": 157033511
   },
   "contextFetchedBy": [
     "qa-952969be",
@@ -160,7 +162,10 @@
   },
   "filesModified": [
     "scripts/local-runner/source-export.mjs",
-    "scripts/tests/local-runner-snapshot.test.mjs"
+    "scripts/tests/local-runner-snapshot.test.mjs",
+    ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+    ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+    ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json"
   ],
   "completionSummary": "Round 2 fixes QA's DoD-4 defect in scripts/local-runner/source-export.mjs.\n\nThe fix:\n- The repo refusal now runs `git config --includes --get-regexp` with no scope flag; it used `--local` before.\n- System and global config are masked by env, so the check reads every scope Git still applies: local, worktree ($GIT_DIR/config.worktree under extensions.worktreeConfig) and -c.\n- A repo whose local or worktree config sets extensions.partialclone, remote.*.promisor, core.worktree or filter.* is refused with EXPORT_REPOSITORY_UNSUPPORTED.\n- QA's probe-wt.mjs is now refused at both scopes, and the filter marker is never created.\n\nTests:\n- E7 enables extensions.worktreeConfig and checks all four keys in --local and --worktree scope (8 rows). Against the old module it fails, first at '--worktree extensions.partialclone'.\n- E5 adds a skip-worktree index-only 'ghost', which kills the `if (prior) entries.push` survivor. QA's suggested staged-then-removed file is never listed by diff-index, so it could not have killed it.\n- Mutation sweep (QA's harness plus a '--local' mutant): 22 of 24 killed. The survivors are the two QA already accepted: `filled !== now.size` (a read race) and `endsWith('/*')` (inherited from the daemon).\n- Probes:\n  - No false refusal: sparse-checkout cone (which writes config.worktree) and a plain linked worktree both resolve.\n  - Still refused: a worktree-scoped include.path to a filter.\n\nGate:\n- Linux (env -i, node v24.21.0): exit 0, 22/22, shared .git/index unchanged.\n- Native Windows (node v24.16.0, Git 2.54): exit 0, 21 pass, 1 skipped (E6 is POSIX-only).\n\nSize: 400 net (module +197, test +204/-1 vs 01ca00b^). To make room, the stdin on().end() calls are chained and E7's non-root loop is one line.\n\nKnown limits, unchanged:\n- Worktree reads are bounded in bytes, not time.\n- The overlay is not atomic across files.\n- Repos with local or worktree LFS/filter config are unsupported.\n- As in git diff, assume-unchanged or skip-worktree flags hide a path's worktr",
   "commits": [
@@ -228,19 +233,39 @@
       "treeId": "1c18a7f5ee9a0a87f162c0354fa4d94be511c0ac",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "f0fac16ba8e84e0ff0a920fd7e1af553c9d71e89",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-29T12:09:26Z",
+      "paths": [
+        ".moe/tasks/task-0b9db30f14454696977421b8c6138ddd.json",
+        ".moe/tasks/task-697fb2de19324ccb851defaf9f24043b.json",
+        ".moe/tasks/task-a50bf5b5d9a4442b88a33554ee5b967f.json",
+        "scripts/local-runner/source-export.mjs",
+        "scripts/tests/local-runner-snapshot.test.mjs"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-29T12:28:40.416Z",
+      "treeId": "377f0f5305f51d9943368b44dd2a671b0bdf450d",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "touchedFiles": [
-    "scripts/local-runner/source-export.mjs"
+    "scripts/local-runner/source-export.mjs",
+    "scripts/tests/local-runner-snapshot.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-0062feec@2026-10-29T12:03:17Z",
-    "at": "2026-10-29T12:09:22.928Z"
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-29T12:09:26Z",
+    "at": "2026-10-29T12:28:40.416Z"
   },
-  "reviewCompletedAt": "2026-10-29T11:58:32.818Z",
+  "reviewCompletedAt": "2026-10-29T12:37:22.033Z",
   "rejectionDetails": {
     "failedDodItems": [
       "Git runs only through the read-only envelope (no inherited GIT_* environment, replace objects, optional locks, or system or global config; protocol.allow=never; toplevel check), and an export leaves the repository's index, refs and config byte-identical."
@@ -295,5 +320,8 @@
         }
       ]
     }
-  ]
+  ],
+  "completedAt": "2026-10-29T12:37:22.033Z",
+  "reviewSummary": "Round 2 approved. The DoD-4 defect from round 1 is fixed.\n\nEvidence:\n- Completion commit f0fac16 is on moe/work-2026-10-24; the shared-tree files match it.\n- Size vs 01ca00b^: +401/-1, so 400 net, at the bar (no size rail covers R09b).\n- Fresh gate, exact task.verification command: exit 0, 22/22, shared .git/index unchanged.\n- Native Windows (node v24.16.0, Git 2.54): exit 0, 21 pass, 1 skip (E6, POSIX-only).\n\nDoD 4 fix (the config check has no scope flag):\n- My round-1 probe is now refused in local and worktree scope, and the filter never runs. The old 01ca00b module still resolves the worktree case and runs it.\n- Also refused, filter never run: a worktree include.path, a local includeIf gitdir, and a linked worktree's own config.worktree. The main worktree still exports.\n- No false refusal: sparse-checkout cone. On Windows, Git skips a %PROGRAMDATA% config under this env.\n\nMutation sweep, 33 mutants on a git archive of f0fac16: 27 killed.\n- Killed: restoring --local (E7), each of the 4 refused keys (E7), and the round-1 'if (prior)' survivor (E5 ghost).\n- Survivors, non-blocking:\n  - dropping --includes: equivalent (Git follows includes by default with no scope; probed);\n  - filled !== now.size and the dev/ino check: race-only;\n  - endsWith('/*'): accepted in round 1;\n  - the overlay names.length and now.size > room bounds: the final validateImport gives the same SNAPSHOT_LIMIT_EXCEEDED, so they only bound memory and work.\n\nOther checks:\n- DoD 1-3 guards are still killed by E1-E6. E8 still shows index, refs and config unchanged.\n- No test weakened: E7's non-root loop was folded with the same 3 paths.\n- Both files are ASCII-only, with no forbidden patterns and no verified-local change.\n- The worker was right that my optional setup could not reach the guard: diff-index drops a new index-only entry missing from disk unless it is skip-worktree.",
+  "requiredCheckAtDone": null
 }
