@@ -105,12 +105,12 @@
     }
   ],
   "planRevision": 13,
-  "status": "BLOCKED",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Human approved EPIC size waiver prop-be47d22c (cap 720, CQ-R09c only) and rejected the superseded prop-55374799 (2026-10-29 13:22Z). The rail is now in epic-fe5e32c3 epicRails. Per the parked resume path, QA checks the rail against efffad6's numstat (+696/-7 = 703), re-runs the gate and approves. No worker bytes are needed.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -130,18 +130,21 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T16:55:14.489Z",
-  "updatedAt": "2026-10-29T11:51:29.019Z",
+  "updatedAt": "2026-10-29T13:26:15.402Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:03:21.357Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-29T13:26:15.402Z",
+    "wallClockMs": 159774045
   },
   "contextFetchedBy": [
     "architect-4c57a52b",
     "worker-7d158765",
     "qa-6fa5d758",
-    "governor-693b7073"
+    "governor-693b7073",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -241,8 +244,14 @@
     "sessionId": "qa-6fa5d758@2026-10-27T17:29:25Z",
     "at": "2026-10-27T17:36:48.422Z"
   },
-  "blockedReason": "QA substance PASSES and the review is parked on size only. Full evidence is in comment-09c971cd779e4d8bb4e99e6c5821e899.\n\nSize: completion efffad6 (on moe/work-2026-10-24, equal to HEAD) is 703 changed lines (+696/-7): snapshot-transfer.mjs +193, guest-supervisor.py +167/-6, guest-readiness.mjs +1/-1, local-runner.test.mjs +335. That is above the 400 default. No epic rail waives CQ-R09c, and the epic rail says other tasks keep normal sizing limits. The worker's EPIC ADD_RAIL proposal prop-be47d22cbb414b8f9506a6818178e845 (cap 720, exact numstat match) is PENDING human review.\n\nEvidence:\n- Fresh full-tree archive gate (the 4-file task.verification command, Node 24.21, env -i): exit 0, 271/270/1 skip.\n- Windows Node: exit 0, with T1-T6 passing.\n- QA mutation sweep: 24/26 killed. Two masked guards (O_EXCL on duplicate paths, per-file size bound) are advisory and non-blocking.\n- All 5 DoD items are evidenced by tests T1-T7 and M1-M4.\n\nResume path:\n- APPROVED: the governor adds the rail and calls set_task_status REVIEW. QA then checks the rail against numstat, re-runs the gate and approves. No worker bytes are needed.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope into file-disjoint slices of at most 400, never re-slicing the landed bytes.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-27T17:35:50.954Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA substance PASSES and the review is parked on size only. Full evidence is in comment-09c971cd779e4d8bb4e99e6c5821e899.\n\nSize: completion efffad6 (on moe/work-2026-10-24, equal to HEAD) is 703 changed lines (+696/-7): snapshot-transfer.mjs +193, guest-supervisor.py +167/-6, guest-readiness.mjs +1/-1, local-runner.test.mjs +335. That is above the 400 default. No epic rail waives CQ-R09c, and the epic rail says other tasks keep normal sizing limits. The worker's EPIC ADD_RAIL proposal prop-be47d22cbb414b8f9506a6818178e845 (cap 720, exact numstat match) is PENDING human review.\n\nEvidence:\n- Fresh full-tree archive gate (the 4-file task.verification command, Node 24.21, env -i): exit 0, 271/270/1 skip.\n- Windows Node: exit 0, with T1-T6 passing.\n- QA mutation sweep: 24/26 killed. Two masked guards (O_EXCL on duplicate paths, per-file size bound) are advisory and non-blocking.\n- All 5 DoD items are evidenced by tests T1-T7 and M1-M4.\n\nResume path:\n- APPROVED: the governor adds the rail and calls set_task_status REVIEW. QA then checks the rail against numstat, re-runs the gate and approves. No worker bytes are needed.\n- REJECTED: set_task_status PLANNING. The architect splits the review scope into file-disjoint slices of at most 400, never re-slicing the landed bytes.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-10-29T13:26:15.402Z",
+  "reviewCompletedAt": "2026-10-29T13:26:15.402Z",
+  "reviewSummary": "QA approve (qa-952969be). Resumes the size-only park; the substance review is in comment-09c971cd.\n\nSize: the epic rail \"CQ-R09c size exception\" (cap 720) is in allRails.epic. `git show --numstat efffad6`: snapshot-transfer.mjs +193, guest-supervisor.py +167/-6, guest-readiness.mjs +1/-1, local-runner.test.mjs +335. That is 703 (+696/-7), exactly the rail's figures. The other paths are .moe board records only.\n\nDelivery: completion efffad6 (tree a5bea8b) is on moe/work-2026-10-24. HEAD is 0887b9b; the 4 owned paths are unchanged efffad6..HEAD and clean.\n\nGate (fresh, env -i, Node 24.21.0, the exact 4-file command):\n- full-tree archive of efffad6: exit 0, 271 tests, 270 pass, 0 fail, 1 skip (the pre-existing macOS smoke);\n- full-tree archive of HEAD: exit 0, 279/278/0/1.\nAll 11 T1-T7/M1-M4 rows pass, with no __pycache__.\n\nDoD:\n1. T4 deepEquals the only spawn as multipass + snapshotArgv(GUEST,'materialize') + {shell:false, stdio pipes}. The provider run calls are exactly info, mountinfo, info, mountinfo, and stdin equals hostFrames.\n2. Mounts are checked before and after; T5 shows no spawn on a pre-check refusal and refuses late mounts.\n3. The supervisor recomputes R09a's digest from the written bytes, and the host accepts exactly one matching {kind,digest} frame (M2/M3/T6).\n4. Dir-fd O_NOFOLLOW/O_EXCL creates, 73 on an existing target, and the staging tree removed on failure (M3/M4).\n5. Gate green.\n\nexecutionReady stays false; verified-local is untouched.\n\nAdvisory: the O_EXCL and per-file size bound guards are masked by later checks. A write_frame failure after the rename leaves a complete workspace and manifest, so a retry gives 73 (fail-closed).",
+  "requiredCheckAtDone": null
 }

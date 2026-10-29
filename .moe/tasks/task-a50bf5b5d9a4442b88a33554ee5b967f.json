@@ -91,12 +91,12 @@
     }
   ],
   "planRevision": 26,
-  "status": "BLOCKED",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "SIZE-ONLY reject: no DoD behaviour failed (failedDodItems empty). Recorded bytes 94cfc66 (checkpoint) + 8677661 (completion), `git diff --numstat 94cfc66^ 8677661` over the 8 owned packages/ files: +425/-7 = net 418 (planReuseState.test.ts +201, planReuseState.ts +116, schema.ts +48, taskStore.ts +30/-3, WebSocketServer.test.ts +19, submitPlan.ts +5/-1, WebSocketServer.ts +3, executionContract.test.ts +3/-3). That exceeds the 400 net QA cap and no rail waives it for this task (the CQ-C epic's only size rail is CQ-C02's, which says other size requirements remain unchanged). A past over-cap approval is not a rail.\n\nSubstance reviewed in full and PASSES, so the next round needs no code change:\n- QA re-ran the gate fresh in a Linux git archive of 8677661 (owned files cmp-equal, npm ci, node v22.23.4, env -i): `cd packages/moe-daemon && npm test` exit 0, 172 files, 4536 passed, 16 skipped; `npx tsc --noEmit` exit 0.\n- DoD 1-4 each map to named passing cases (planReuseState.test.ts 117; the WS spy case).\n- QA mutants all killed: denylist entry removed, caller strip removed, BLOCKED exception removed, else-delete of the basis removed, basis not passed by submitPlan, daemonOwned planReuse unvalidated.\n- No other writer moves a row INTO PLANNING outside updateTask.\n\nRoute (mem decision-size-only-reject-of-landed-bytes): (a) RECOMMENDED: file moe.propose_rail as an EPIC ADD_RAIL naming exactly this landed slice (both shas, 8 files, +425/-7 net 418, grow only by QA-required fixes; none are required). Ping #governors, change no bytes, re-run the gate, then complete_task. QA parks while the proposal is PENDING and approves once it is APPROVED. (b) Trim at least 19 net lines without dropping any named DoD case, then re-gate and complete_task.",
+  "reopenReason": "Human approved EPIC size waiver prop-af8be424 (C07a only, 94cfc66+8677661, net 418) on 2026-10-29 13:22Z. The rail is now in epic-9d76d843 epicRails. Per QA's parked route: confirm the rail text, re-gate and approve, naming net 418. The bytes stay unchanged.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -117,7 +117,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-27T17:11:22.617Z",
-  "updatedAt": "2026-10-29T12:46:52.774Z",
+  "updatedAt": "2026-10-29T13:22:25.614Z",
   "metrics": {
     "firstClaimAt": "2026-10-27T17:16:47.252Z",
     "plannedStepCount": 6,
@@ -335,8 +335,10 @@
       ]
     }
   ],
-  "blockedReason": "QA park (qa-952969be, 2026-10-29 12:45Z): the substance passes. The row waits only on the human's decision on EPIC size waiver prop-af8be424a8694c2ab4aa7701a56fb06e, which is still PENDING. No rail in allRails.epic waives the 400 net-LOC cap yet, so QA cannot approve, and a second size-only reject would only burn a reopen.\nBytes are unchanged since the round-1 review: 94cfc66 + 8677661, 8 packages/moe-daemon paths, +425/-7 (net 418), each file's count equal to the waiver text. The HEAD 9978b61 blobs, the 8677661 blobs and the worktree are equal. The round-2 completion d224ff4 is board-only.\nFresh gate on a pure git archive of HEAD (npm ci, node v22.23.4, env -i): `cd packages/moe-daemon && npm test` exit 0, 172 files, 4536 passed, 16 skipped; `npx tsc --noEmit` exit 0. Each of DoD 1-5 maps to a named passing case.\nRoute:\n- APPROVED: set_task_status REVIEW. QA then confirms the rail text, re-gates and approves, naming net 418.\n- REJECTED: set_task_status PLANNING for route (b): trim at least 19 net lines without dropping a named DoD case, or split the review scope.\nunblock_worker cannot reach this unassigned parked row. The full evidence is in the row's latest QA comment.",
+  "blockedReason": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-10-29T12:45:26.640Z"
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "QA park (qa-952969be, 2026-10-29 12:45Z): the substance passes. The row waits only on the human's decision on EPIC size waiver prop-af8be424a8694c2ab4aa7701a56fb06e, which is still PENDING. No rail in allRails.epic waives the 400 net-LOC cap yet, so QA cannot approve, and a second size-only reject would only burn a reopen.\nBytes are unchanged since the round-1 review: 94cfc66 + 8677661, 8 packages/moe-daemon paths, +425/-7 (net 418), each file's count equal to the waiver text. The HEAD 9978b61 blobs, the 8677661 blobs and the worktree are equal. The round-2 completion d224ff4 is board-only.\nFresh gate on a pure git archive of HEAD (npm ci, node v22.23.4, env -i): `cd packages/moe-daemon && npm test` exit 0, 172 files, 4536 passed, 16 skipped; `npx tsc --noEmit` exit 0. Each of DoD 1-5 maps to a named passing case.\nRoute:\n- APPROVED: set_task_status REVIEW. QA then confirms the rail text, re-gates and approves, naming net 418.\n- REJECTED: set_task_status PLANNING for route (b): trim at least 19 net lines without dropping a named DoD case, or split the review scope.\nunblock_worker cannot reach this unassigned parked row. The full evidence is in the row's latest QA comment.",
+  "blockedOnTaskIds": null
 }
