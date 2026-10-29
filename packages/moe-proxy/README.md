@@ -51,6 +51,7 @@ Send JSON-RPC 2.0 messages via stdin:
 - `MOE_DAEMON_PORT` - Daemon port (default: read from .moe/daemon.json)
 - `MOE_SESSION_ID` - The session id the proxy stamps onto the identity tools (see Execution identity)
 - `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION` - The execution attempt the proxy stamps onto the identity tools; set both or neither
+- `MOE_WORKER_TYPE` - The agent CLI the launcher started, added to the registration tools (see Worker type)
 
 ## Execution identity
 
@@ -73,7 +74,17 @@ A presented field must equal the stamped env value exactly (`===`: `"7"` does no
 - `EXECUTION_IDENTITY_SUBSTITUTED` (JSON-RPC `-32003`): a presented `attemptId`, `generation` or `sessionId` differs from the session's value. Omit the field so the proxy supplies it.
 - `EXECUTION_IDENTITY_INVALID` (`-32602`): the env group a tool carries is malformed or partial, or the check hit an unexpected error (it fails closed). A broken attempt group refuses only the tools that carry it, so `moe.get_context` still gets its `sessionId`.
 
-The error carries `error.data = { tool, codeName }`. A JSON-RPC batch is fenced per element, and one refusal drops the whole frame. With no identity env the proxy is the legacy proxy: it adds nothing, the daemon decides, and the line is forwarded byte-for-byte unless another step (alias rename, `workerId` or runner identity) already rewrote it.
+The error carries `error.data = { tool, codeName }`. A JSON-RPC batch is fenced per element, and one refusal drops the whole frame. With no identity env the proxy is the legacy proxy: it adds nothing, the daemon decides, and the line is forwarded byte-for-byte unless another step (alias rename, `workerId`, runner identity or worker type) already rewrote it.
+
+## Worker type
+
+The proxy adds `workerType` from `MOE_WORKER_TYPE` to `moe.claim_next_task` and `moe.join_team`, under every spelling (`moe.x`, `moe_x` and bare `x`). It does so even when the call names its own `workerId`, as the wrapper's pre-flight claim and join always do. No other tool, no `tools/list` and no JSON-RPC batch gets it.
+
+- A blank or unset value adds nothing.
+- A `workerType` key the caller already set is forwarded untouched, whatever its value.
+- The value is sent verbatim: never trimmed, re-cased or checked.
+
+The launcher (`scripts/moe-agent.{sh,ps1}`) owns the value, the CLI it started. The daemon owns validation (exactly `CLAUDE`, `CODEX`, `GEMINI` or `GROK`; anything else registers as `CLAUDE`) and records or refreshes `worker.type`. See `moe.claim_next_task` and `moe.join_team` in [`docs/MCP_SERVER.md`](../../docs/MCP_SERVER.md). It is registration metadata: unlike the execution identity it is never compared or refused, and it authorizes nothing.
 
 ## MCP Tools
 

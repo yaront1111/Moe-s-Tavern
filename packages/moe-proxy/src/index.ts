@@ -10,6 +10,7 @@ import {
   getProjectPath,
   injectRunnerIdentity,
   injectWorkerId,
+  injectWorkerType,
   readDaemonInfoResult,
   resolveToolCallName,
   rewriteToolsListResult,
@@ -567,10 +568,12 @@ function connect(projectPath: string): void {
           const renamed = resolveToolCallName(parsed, toolAliases);
           const mutated = injectWorkerId(parsed, process.env.MOE_WORKER_ID);
           const stamped = injectRunnerIdentity(parsed, process.env.MOE_RUNNER_PROCESS_STARTED_AT, process.env.MOE_RUNNER_HOST);
+          // Its own flag: a pre-flight claim or join has no other mutation.
+          const typed = injectWorkerType(parsed, process.env.MOE_WORKER_TYPE);
           // Last, so it checks the daemon name and exactly what is forwarded.
           const identity = fenceExecutionIdentity(parsed);
           if (identity === null) continue;
-          const payload = (renamed || mutated || stamped || identity) ? JSON.stringify(parsed) : line;
+          const payload = (renamed || mutated || stamped || typed || identity) ? JSON.stringify(parsed) : line;
           if (TOOL_NAME_STYLE === 'underscore' && parsed.method === 'tools/list' &&
               parsed.id !== undefined && parsed.id !== null) {
             pendingToolsListIds.add(parsed.id);

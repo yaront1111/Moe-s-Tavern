@@ -241,6 +241,42 @@ export function injectRunnerIdentity(
   }
 }
 
+/** The two tools that register a seat: the daemon records the reported worker type on either. */
+const WORKER_TYPE_TOOLS = new Set([...CLAIM_TOOL, 'moe.join_team', 'moe_join_team', 'join_team']);
+
+/**
+ * Add the launcher's MOE_WORKER_TYPE, the agent CLI it started, as `workerType`
+ * on moe.claim_next_task and moe.join_team, so the daemon records which CLI a
+ * seat runs. Unlike injectWorkerId it does not bail when the call names its own
+ * workerId (the wrapper's pre-flight claim and join always do) and it never
+ * touches tools/list. A `workerType` key the caller already set wins whatever
+ * its value, and a blank value counts as unset, as for MOE_WORKER_ID. The value
+ * is sent verbatim: the daemon owns validation (CLAUDE, CODEX, GEMINI or GROK,
+ * anything else registers as CLAUDE). Returns true if the parsed object was
+ * mutated. Never throws.
+ */
+export function injectWorkerType(
+  parsed: unknown,
+  envWorkerType: string | undefined
+): boolean {
+  try {
+    if (typeof envWorkerType !== 'string' || envWorkerType.trim() === '') return false;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const msg = parsed as Record<string, unknown>;
+    if (msg.method !== 'tools/call') return false;
+    const params = msg.params as Record<string, unknown> | undefined;
+    if (!params || typeof params !== 'object') return false;
+    if (typeof params.name !== 'string' || !WORKER_TYPE_TOOLS.has(params.name)) return false;
+    const args = params.arguments as Record<string, unknown> | undefined;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+    if (Object.prototype.hasOwnProperty.call(args, 'workerType')) return false;
+    args.workerType = envWorkerType;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface ExecutionIdentityRefusal { code: number; codeName: string; message: string }
 
 type IdentityGroup = 'attempt' | 'session';
