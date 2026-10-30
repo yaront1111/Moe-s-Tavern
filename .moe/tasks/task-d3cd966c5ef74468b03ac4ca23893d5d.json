@@ -120,7 +120,7 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -146,7 +146,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:07:30.476Z",
-  "updatedAt": "2026-10-30T05:10:24.805Z",
+  "updatedAt": "2026-10-30T05:31:02.484Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T19:06:04.530Z",
@@ -156,11 +156,14 @@
     "firstClaimAt": "2026-10-30T00:16:06.171Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-30T05:31:02.484Z",
+    "wallClockMs": 18896313
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-093a65d0"
+    "worker-093a65d0",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-a2a55bc6059048e78174e551c32a6e73",
@@ -262,7 +265,62 @@
     "scripts/tests/postflight-owner-guard.cjs",
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+    ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json"
   ],
-  "completionSummary": "The owner guard in both wrappers now takes the finalizing hold from get_commit_scope.finalizingAttempt instead of scanning every .moe/attempts record.\n- The field decides only when it came from the RPC scope (sh fallback != '1'; ps1 Source 'rpc') and is null or well-formed: non-blank string ids and an int generation in 1..2^53-1.\n  - Another worker's attempt is refused with MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE and the same detail text, 'attempt <id> of <worker> is still finalizing'.\n  - The caller's own attempt, or null, lands.\n- An absent field (older daemon), a malformed value or the disk fallback runs the old scan, byte-for-byte unchanged.\n\nChanges:\n- moe-agent.sh: +12/-1.\n- moe-agent.ps1: +12/-2. FinalizingSet and Finalizing are added to both scope hashtables, the raw property is kept, and the guard block uses Get-MoeProp, Test-MoeGeneration and -cne. BOM kept.\n- Fake proxy: knob FAKE_SCOPE_FINALIZING=computed|null|malformed. When unset there is no key, so the default reply is unchanged.\n- Owner guard: new cases finalizing-field, finalizing-own, finalizing-null and finalizing-malformed, plus a shared detail assertion. 16 cases total.\n\nEvidence:\n- RED: finalizing-null fails against HEAD's wrapper on both sh and ps1, because the scan refuses.\n- GATE: the amended step-6 command, run once as one invocation, exits 0. Daemon 5408 passed. sh: scope 13/13, frozen 3, owner guard 16, parity. ps1: frozen 3, owner guard 16.\n- An 18-case edge matrix run against the real guard code gives identical results on python3, PS 5.1 and pwsh 7. It covers string, bool, float, 0 and 2^53 generations, 'null', arrays, blank ids, case, an empty WORKER_ID and the disk fallback.\n\nDelivery note for QA:\n- The docs/MCP_SERVER.md hunk (the Returns entry and the **Finalizing hold.** note, +5) is already on the branch. Peer task-95b610e3's completion 6ead6a0 landed the file whole, with the trailer `Moe-Contested: docs/MCP_SERVER.md (task-d3cd966c…)`, so this completion shows no docs diff. Check it w"
+  "completionSummary": "The owner guard in both wrappers now takes the finalizing hold from get_commit_scope.finalizingAttempt instead of scanning every .moe/attempts record.\n- The field decides only when it came from the RPC scope (sh fallback != '1'; ps1 Source 'rpc') and is null or well-formed: non-blank string ids and an int generation in 1..2^53-1.\n  - Another worker's attempt is refused with MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE and the same detail text, 'attempt <id> of <worker> is still finalizing'.\n  - The caller's own attempt, or null, lands.\n- An absent field (older daemon), a malformed value or the disk fallback runs the old scan, byte-for-byte unchanged.\n\nChanges:\n- moe-agent.sh: +12/-1.\n- moe-agent.ps1: +12/-2. FinalizingSet and Finalizing are added to both scope hashtables, the raw property is kept, and the guard block uses Get-MoeProp, Test-MoeGeneration and -cne. BOM kept.\n- Fake proxy: knob FAKE_SCOPE_FINALIZING=computed|null|malformed. When unset there is no key, so the default reply is unchanged.\n- Owner guard: new cases finalizing-field, finalizing-own, finalizing-null and finalizing-malformed, plus a shared detail assertion. 16 cases total.\n\nEvidence:\n- RED: finalizing-null fails against HEAD's wrapper on both sh and ps1, because the scan refuses.\n- GATE: the amended step-6 command, run once as one invocation, exits 0. Daemon 5408 passed. sh: scope 13/13, frozen 3, owner guard 16, parity. ps1: frozen 3, owner guard 16.\n- An 18-case edge matrix run against the real guard code gives identical results on python3, PS 5.1 and pwsh 7. It covers string, bool, float, 0 and 2^53 generations, 'null', arrays, blank ids, case, an empty WORKER_ID and the disk fallback.\n\nDelivery note for QA:\n- The docs/MCP_SERVER.md hunk (the Returns entry and the **Finalizing hold.** note, +5) is already on the branch. Peer task-95b610e3's completion 6ead6a0 landed the file whole, with the trailer `Moe-Contested: docs/MCP_SERVER.md (task-d3cd966c…)`, so this completion shows no docs diff. Check it w",
+  "commits": [
+    {
+      "sha": "263a19896894efe6d06361d05c010f3d7459eeb3",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T04:56:18Z",
+      "paths": [
+        ".moe/tasks/task-95b610e3726c4e099c84eaedf098602a.json",
+        ".moe/tasks/task-d3cd966c5ef74468b03ac4ca23893d5d.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-guard.cjs"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T05:17:00.725Z",
+      "treeId": "e463269c0739382e15cb69b3c61c15cc5dae5ebc",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/tests/postflight-fake-proxy.js",
+          "taskId": "task-c4e076cd306f4f84a4aa08bf2a4682b2"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "docs/MCP_SERVER.md",
+    "scripts/tests/postflight-fake-proxy.js"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T04:56:18Z",
+    "at": "2026-10-30T05:17:00.725Z"
+  },
+  "completedAt": "2026-10-30T05:31:02.484Z",
+  "reviewCompletedAt": "2026-10-30T05:31:02.484Z",
+  "reviewSummary": "APPROVED. Completion 263a198 is on moe/work-2026-10-24 and pushed. Its scripts diff holds only this task's hunks: sh +12/-1, ps1 +12/-2, fake +34/-2, owner-guard.cjs +8, net 61 LOC. The docs hunk (+5: the Returns entry and the Finalizing hold note) landed in peer 6ead6a0 under Moe-Contested and was checked against getCommitScope.ts and claimEligibility.\nGATE: re-ran the task.verification command verbatim (step-6 cmd1 + checkRefs 2/3) as one invocation, with MOE_* scrubbed and SIGINT at default. GATE_EXIT=0.\n- Daemon: 193 files, 5450 passed / 16 skipped.\n- sh: owner-scope 13/13, frozen 3, owner guard 16, parity PASS.\n- ps1 (PS 5.1): frozen 3, owner guard 16.\nRED: the new cases fail against 263a198^'s sh wrapper at [finalizing-null] one checkpoint.\nPROBE: my own 17-case matrix on the real guard code (sh python verbatim; ps1 AST-loaded, only Invoke-MoeRpc mocked). PS 5.1 and pwsh 7 give results identical to sh, 0 failures.\n- Foreign field refuses with the same detail.\n- Own or null lands, even over a foreign disk record.\n- Malformed values fall back to the scan and are never trusted: string, bool, 0, float and 2^53 generations; the 'null' string; blank workerId; numeric attemptId; array; missing generation.\n- The absent key and the disk fallback also scan.\n- Case-different workerId refuses.\n- OWNER_UNKNOWN error paths are untouched.\nDoD 1 and DoD 2 are met.\nNon-blocking: finalizing-malformed alone cannot tell a scan fallback from trusting the field, since both name the same worker. My probe's case A (malformed foreign field, empty disk, lands) covers that. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
