@@ -9,26 +9,38 @@ import { macosPlatform } from './platform-macos.mjs';
 import { windowsPlatform } from './platform-windows.mjs';
 
 const PLATFORMS = Object.freeze({ win32: windowsPlatform, linux: linuxPlatform, darwin: macosPlatform });
-const COMMANDS = ['doctor', 'prerequisites', 'native-smoke'];
-const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>] | native-smoke --work-dir <absolute path>';
+const FLAGS = Object.freeze({
+  doctor: { '--executable': 'executable' },
+  prerequisites: { '--executable': 'executable', '--cache-dir': 'cacheDir' },
+  'native-smoke': { '--work-dir': 'workDir' },
+});
+const ABSOLUTE = new Set(['cacheDir', 'workDir']);
+const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path>';
 
 function argumentsFor(argv) {
-  if (!Array.isArray(argv) || !COMMANDS.includes(argv[0])) return null;
-  const smoke = argv[0] === 'native-smoke';
-  if (argv.length === 1 && !smoke) return { command: argv[0], options: {} };
-  if (argv.length !== 3 || argv[1] !== (smoke ? '--work-dir' : '--executable') || typeof argv[2] !== 'string' ||
-      argv[2].trim() === '' || /[\x00-\x1f\x7f]/.test(argv[2]) || (smoke && !path.isAbsolute(argv[2]))) return null;
-  return { command: argv[0], options: smoke ? { workDir: argv[2] } : { executable: argv[2] } };
+  if (!Array.isArray(argv) || typeof argv[0] !== 'string' || !Object.hasOwn(FLAGS, argv[0]) || argv.length % 2 === 0) return null;
+  const table = FLAGS[argv[0]];
+  const options = {};
+  for (let at = 1; at < argv.length; at += 2) {
+    const [flag, value] = [argv[at], argv[at + 1]];
+    const option = typeof flag === 'string' && Object.hasOwn(table, flag) ? table[flag] : null;
+    if (option === null || Object.hasOwn(options, option) || typeof value !== 'string' || value.trim() === '' || /[\x00-\x1f\x7f]/.test(value) ||
+        (ABSOLUTE.has(option) && !path.isAbsolute(value))) return null;
+    options[option] = value;
+  }
+  return argv[0] === 'native-smoke' && !Object.hasOwn(options, 'workDir') ? null : { command: argv[0], options };
 }
 
 /** The platform module for a process.platform id, or null. */
 export const platformFor = id => (Object.hasOwn(PLATFORMS, id) ? PLATFORMS[id] : null);
 
-/** This host's operator prerequisites; a host without a platform module is unsupported, never ready. */
-export async function hostPrerequisites({ executable }) {
-  const platform = platformFor(process.platform);
+/**
+ * This host's operator prerequisites; a host without a platform module is unsupported, never ready.
+ * `platform` is a test seam: the default is this host's module, chosen per call.
+ */
+export async function hostPrerequisites({ executable, cacheDir } = {}, { platform = platformFor(process.platform) } = {}) {
   if (!platform) return { code: 'PLATFORM_UNSUPPORTED', ready: false, executionReady: false };
-  const report = await platform.prerequisites({ provider: { executable } });
+  const report = await platform.prerequisites({ provider: { executable }, cacheDir });
   return {
     platform: report.platform, ready: report.ready === true, executionReady: false,
     providerCode: report.providerCode, prerequisites: report.prerequisites,

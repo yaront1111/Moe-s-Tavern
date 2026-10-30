@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { loadCertifiedProvider, runDoctor, validateManifest } from '../local-runner/doctor.mjs';
 import { probeMultipass, MAX_PROBE_BUFFER, MAX_PROBE_TIMEOUT_MS } from '../local-runner/multipass.mjs';
-import { runCli } from '../local-runner/cli.mjs';
+import { hostPrerequisites, runCli } from '../local-runner/cli.mjs';
 
 const AGENT_TMP_ROOT = tmpdir(); // Capture before any test can redirect the temp environment.
 const host = { platform: 'win32', arch: 'x64' };
@@ -2115,7 +2115,7 @@ test('a launched guest that fails readiness keeps its record for reconcile and i
   assert.equal(exhausted.fake.commands().includes('delete'), false);
 });
 
-const USAGE = 'Usage: cli.mjs doctor|prerequisites [--executable <path>] | native-smoke --work-dir <absolute path>';
+const USAGE = 'Usage: cli.mjs doctor [--executable <path>] | prerequisites [--executable <path>] [--cache-dir <absolute path>] | native-smoke --work-dir <absolute path>';
 
 test('CLI prerequisites prints one JSON report and exits 0 only when every prerequisite is ready', async () => {
   const executable = 'C:\\Program Files\\Multipass\\bin\\multipass.exe';
@@ -2141,7 +2141,13 @@ test('CLI prerequisites prints one JSON report and exits 0 only when every prere
 });
 
 for (const args of [['prerequisites', 'extra'], ['prerequisites', '--executable'], ['prerequisites', '--executable', ' '], ['prerequisites', '--executable', 'a\nb'],
-  ['prerequisites', '--executable', 'a', '--executable', 'b'], ['prerequisites', '--manifest', 'evil'], ['Prerequisites']]) {
+  ['prerequisites', '--executable', 'a', '--executable', 'b'], ['prerequisites', '--manifest', 'evil'], ['Prerequisites'],
+  // R13a: --cache-dir is an absolute path, once, on prerequisites only.
+  ['prerequisites', '--cache-dir'], ['prerequisites', '--cache-dir', 'relative/dir'], ['prerequisites', '--cache-dir', ''], ['prerequisites', '--cache-dir', ' '],
+  ['prerequisites', '--cache-dir', '/a\nb'], ['prerequisites', '--cache-dir', '/a\u007f'], ['prerequisites', '--cache-dir', '/a', '--cache-dir', '/b'],
+  ['prerequisites', '--cache-dir', '/a', '--executable'], ['prerequisites', '--executable', 'x', '--cache-dir', '/a', '--executable', 'y'],
+  ['doctor', '--cache-dir', '/a'], ['native-smoke', '--work-dir', '/a', '--cache-dir', '/b'], ['native-smoke', '--work-dir', '/a', '--executable', 'x'], ['constructor'], ['toString', '--executable', 'x'],
+  ['prerequisites', 'constructor', '/a'], ['native-smoke', 'hasOwnProperty', '/a']]) {
   test(`CLI rejects ${JSON.stringify(args)} before any prerequisite call`, async () => {
     let calls = 0;
     const writes = [];
@@ -2150,6 +2156,25 @@ for (const args of [['prerequisites', 'extra'], ['prerequisites', '--executable'
     assert.deepEqual(JSON.parse(writes[0]), { code: 'CLI_INPUT_INVALID', providerReady: false, executionReady: false, message: USAGE });
   });
 }
+
+test('R13a prerequisites passes --cache-dir and --executable through, alone or together, in either order', async () => {
+  const [E, D] = ['/opt/moe-test/multipass', '/home/u/moe-images'];
+  for (const [args, options] of [
+    [['prerequisites', '--cache-dir', D], { cacheDir: D }], [['prerequisites', '--executable', E], { executable: E }],
+    [['prerequisites', '--executable', E, '--cache-dir', D], { executable: E, cacheDir: D }], [['prerequisites', '--cache-dir', D, '--executable', E], { executable: E, cacheDir: D }],
+  ]) {
+    const seen = [];
+    await runCli(args, { prerequisites: async received => { seen.push(received); return { ready: false }; }, write: () => {} });
+    assert.deepEqual(seen, [options], JSON.stringify(args));
+  }
+  for (const [options, expected] of [[{ executable: E, cacheDir: D }, { provider: { executable: E }, cacheDir: D }], [{}, { provider: { executable: undefined }, cacheDir: undefined }]]) {
+    const seen = [];
+    const recorder = { prerequisites: async received => { seen.push(received); return { platform: 'linux', ready: true, providerCode: 'P', prerequisites: [], primaryName: 'extra' }; } };
+    const report = await hostPrerequisites(options, { platform: recorder });
+    assert.deepEqual(seen, [expected]);
+    assert.deepEqual(report, { platform: 'linux', ready: true, executionReady: false, providerCode: 'P', prerequisites: [] });
+  }
+});
 
 test('CLI prerequisites refuse a host without a platform module', async () => {
   // R04 gave Linux a platform module, so an unsupported host is simulated.
@@ -2440,6 +2465,44 @@ test('Linux provisioning launches the pinned image through the snap client witho
   assert.deepEqual(h.fake.guest.unexpected, []);
   const record = await h.ledger.read(GUEST);
   assert.deepEqual([readdirSync(h.ledgerDir), record.phase, record.image], [[`${GUEST}.json`], 'owned', { sourceSha256: SOURCE.sha256, providerImageHash: PROVIDER_HASH }]);
+});
+
+test('R13a an explicit provider.executable carries every Multipass call in provisionGuest', { skip: process.platform === 'win32' }, async t => {
+  const h = provisionHarness(t);
+  const vm = linuxVm(h);
+  const custom = '/opt/moe-test/multipass';
+  assert.deepEqual(await provisionWith(h, { platform: onLinux(h), provider: { run: vm.run, executable: custom } }), { ...provisioned(), prerequisites: LINUX_READY });
+  assert.deepEqual([...new Set(vm.executables)].sort(), [custom, SNAP].sort());
+  assert.equal(vm.executables.includes(SNAP_MULTIPASS), false);
+  for (const { argv } of vm.transport.calls) assert.ok(argv[0] === SNAP || argv[0] === custom, JSON.stringify(argv));
+});
+
+test('R13a a Linux host whose every prerequisite holds is ready only with --cache-dir', async () => {
+  const transport = linuxTransport();
+  const platform = {
+    ...linuxPlatform,
+    prerequisites: options => linuxPlatform.prerequisites({ ...ROOMY, cacheDir: undefined, ...options, provider: { ...options.provider, run: transport.run } }),
+  };
+  const run = async args => {
+    const writes = [];
+    const code = await runCli(args, { prerequisites: options => hostPrerequisites(options, { platform }), write: text => writes.push(text) });
+    return [code, JSON.parse(writes[0])];
+  };
+  assert.deepEqual(await run(['prerequisites', '--cache-dir', '/home/u/moe-images']), [0, {
+    platform: 'linux', ready: true, executionReady: false, providerCode: 'PROVIDER_PREREQUISITES_READY', prerequisites: LINUX_READY,
+  }]);
+  const missing = await run(['prerequisites']);
+  assert.deepEqual([missing[0], missing[1].ready, satisfiedOf(missing[1])], [2, false, only(10, U)]);
+  const hidden = await run(['prerequisites', '--cache-dir', '/home/u/.cache/moe']);
+  assert.deepEqual([hidden[0], satisfiedOf(hidden[1])], [2, only(10, F)]);
+  const custom = '/opt/moe-test/multipass';
+  transport.calls.length = 0;
+  const both = await run(['prerequisites', '--cache-dir', '/home/u/moe-images', '--executable', custom]);
+  assert.deepEqual([both[0], both[1].ready], [0, true]);
+  const doctorCalls = transport.calls.filter(call => ['version', 'get'].includes(call.argv[1]));
+  assert.ok(doctorCalls.length >= 3, JSON.stringify(doctorCalls));
+  assert.deepEqual(doctorCalls.filter(call => call.argv[0] !== custom), []);
+  assert.equal(transport.calls.some(call => call.argv[0] === SNAP_MULTIPASS), false);
 });
 
 test('Windows provisioning keeps its own multipass client and ignores the cache location argument', async t => {
