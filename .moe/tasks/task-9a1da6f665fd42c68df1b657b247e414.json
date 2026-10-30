@@ -79,7 +79,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:03:38.016Z",
-  "updatedAt": "2026-10-30T22:33:20.899Z",
+  "updatedAt": "2026-10-30T22:37:25.993Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:23:39.043Z",
@@ -113,11 +113,14 @@
     "firstClaimAt": "2026-10-30T17:26:41.727Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T22:37:25.993Z",
+    "wallClockMs": 18644266
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-c75a6f39"
+    "worker-c75a6f39",
+    "qa-b29f7b3d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -205,19 +208,42 @@
       "treeId": "c60efb29eef7df93947790d05547fadac54341b4",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "bdb623adba539385d53e4381b6042c4d00f19a7c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-30T22:18:55Z",
+      "paths": [
+        ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+        ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
+        ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-30T22:33:41.072Z",
+      "treeId": "73dac7800e892e22e8a020e41819a337b4a01ec2",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+    ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
+    ".moe/tasks/task-c7ee939a460641eab87eb799a38e6ff9.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-4ae016fb@2026-10-30T17:26:42Z",
-    "at": "2026-10-30T17:49:55.900Z"
+    "kind": "completion",
+    "sessionId": "worker-c75a6f39@2026-10-30T22:18:55Z",
+    "at": "2026-10-30T22:33:41.072Z"
   },
   "workStartedAt": "2026-10-30T22:21:28.235Z",
   "reviewStartedAt": "2026-10-30T22:33:20.897Z",
@@ -228,5 +254,13 @@
     "reportedAt": "2026-10-30T22:33:20.897Z",
     "source": "agent-reported"
   },
-  "completionSummary": "On a Windows host, JetBrains profile() now honors a PROTECTED record stored under another spelling of the same folder (subst root, subst parent, \\\\.\\Volume{GUID}\\, share or mapped letter), by file identity. POSIX, verified-local reads, and PROTECTED/UNTRUSTED own records are unchanged. 3 files, +180/-11; no existing test line changed; the selection code of 1c2bfeca, 52fb6178 and dd545bf1 is untouched.\n- ProtectedStateStore.names(): read()'s root rules (never creates the root), valid names only, sorted, no file read.\n- RuntimeSelectionPolicy: projectPath extracted from projectKey. sameDirectory seam (Files::isSameFile, restored by resetForTest). protectedAliases reads store() and returns [] on any failure, with one warn. aliasOrNull checks strict v1 'protected', project != key, isPlainLocalPath(string) and that the file name matches, all before the only Paths.get; then it checks the folder name and calls sameDirectory. The lookup runs only when the own record is ABSENT or LEGACY. A confirmed downgrade persists LEGACY under the key and every alias key, through usableStore.\n- Tests: PS8; D7 (real subst plus volume GUID; stranger and twin controls; a downgrade through an alias rewrites the local record); D8 (fake identity: UNC, device, copied-name and other-name records are never opened; POSIX looks up nothing; a legacy own record does not hide a protected one; a throwing identity or an unlistable store gives LEGACY).\n- RED: protectedAliases forced to []: D7 fails at Z:\\, D8 at PROTECTED. Restored and green.\n- Deviation: D8's unlistable store sits inside the project. A regular-file store passed to storedProfile reads UNTRUSTED (PROTECTED) before the lookup runs.\nResiduals for RF07 (task-f3f364a6):\n- A root-keyed record, or a project at a volume root, is never compared.\n- Non-ASCII case folds can change a stored key.\n- POSIX bind mounts are unchanged.\n- A root-spelled open opens every named stored local path; a stale mapped letter can delay it.\n- A ReFS or FAT id collisi"
+  "completionSummary": "On a Windows host, JetBrains profile() now honors a PROTECTED record stored under another spelling of the same folder (subst root, subst parent, \\\\.\\Volume{GUID}\\, share or mapped letter), by file identity. POSIX, verified-local reads, and PROTECTED/UNTRUSTED own records are unchanged. 3 files, +180/-11; no existing test line changed; the selection code of 1c2bfeca, 52fb6178 and dd545bf1 is untouched.\n- ProtectedStateStore.names(): read()'s root rules (never creates the root), valid names only, sorted, no file read.\n- RuntimeSelectionPolicy: projectPath extracted from projectKey. sameDirectory seam (Files::isSameFile, restored by resetForTest). protectedAliases reads store() and returns [] on any failure, with one warn. aliasOrNull checks strict v1 'protected', project != key, isPlainLocalPath(string) and that the file name matches, all before the only Paths.get; then it checks the folder name and calls sameDirectory. The lookup runs only when the own record is ABSENT or LEGACY. A confirmed downgrade persists LEGACY under the key and every alias key, through usableStore.\n- Tests: PS8; D7 (real subst plus volume GUID; stranger and twin controls; a downgrade through an alias rewrites the local record); D8 (fake identity: UNC, device, copied-name and other-name records are never opened; POSIX looks up nothing; a legacy own record does not hide a protected one; a throwing identity or an unlistable store gives LEGACY).\n- RED: protectedAliases forced to []: D7 fails at Z:\\, D8 at PROTECTED. Restored and green.\n- Deviation: D8's unlistable store sits inside the project. A regular-file store passed to storedProfile reads UNTRUSTED (PROTECTED) before the lookup runs.\nResiduals for RF07 (task-f3f364a6):\n- A root-keyed record, or a project at a volume root, is never compared.\n- Non-ASCII case folds can change a stored key.\n- POSIX bind mounts are unchanged.\n- A root-spelled open opens every named stored local path; a stale mapped letter can delay it.\n- A ReFS or FAT id collisi",
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+  ],
+  "completedAt": "2026-10-30T22:37:25.993Z",
+  "reviewCompletedAt": "2026-10-30T22:37:25.993Z",
+  "reviewSummary": "Reviewed completion bdb623ad (pushed, on moe/work-2026-10-24; moe-jetbrains tree clean vs it). Non-board +180/-11, net 169: ProtectedStateStore.kt +13, RuntimeSelectionPolicy.kt +61/-11, RuntimeSelectionPolicyTest.kt +106/-0.\nGate re-run by QA under the jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, :test executed; 28 XML from this run: 499 tests, 0 skip/fail/err; RSPT 73 (PS8, D7, D8 ran), MDST 79.\nDoD1: alias branch runs protectedAliases (Windows only, store() not usableStore, failure -> []); aliasOrNull checks v1/protected/project!=key/isPlainLocalPath/recordsFile==file before Paths.get, then name, then sameDirectory. D7: real subst root, subst parent and volume GUID resolve PROTECTED with a prompt; stranger/twin LEGACY; alias downgrade rewrites the local record; all LEGACY after restart. D8: //srv, volume{}, copied-name, other-name and legacy records never reach identity; throwing identity or unlistable store -> LEGACY.\nDoD2: lookup only for own ABSENT/LEGACY and not verified-local; POSIX []; selection code of 1c2bfeca/52fb6178/dd545bf1 untouched; 0 existing test lines changed; prior rows green.\nDoD3: verification matches checkRef, reproduced exit 0.\nRails: writes only via persist/usableStore; no forbidden patterns; profile() callers are not per-frame.\nNon-blocking (in RF07 residuals): a stale mapped letter in a same-named stored key can delay isSameFile; root-keyed records never compared; D8 unlistable fixture is inside the project (documented deviation).",
+  "requiredCheckAtDone": null
 }
