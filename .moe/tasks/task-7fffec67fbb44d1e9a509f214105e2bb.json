@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -94,16 +94,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:16.380Z",
-  "updatedAt": "2026-10-30T15:53:37.475Z",
+  "updatedAt": "2026-10-30T15:55:40.959Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:39:59.978Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T15:55:40.959Z",
+    "wallClockMs": 33340981
   },
   "contextFetchedBy": [
     "architect-e4b7eee0",
-    "worker-c2da129d"
+    "worker-c2da129d",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -148,7 +151,42 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-bridge.test.mjs",
-    "scripts/tests/local-runner-check.test.mjs"
+    "scripts/tests/local-runner-check.test.mjs",
+    ".moe/tasks/task-6c56fe88c60f4a8fab7d1fd5508a0f66.json",
+    ".moe/tasks/task-6dd3ce1fbf204f0e9427fd0693118a0c.json",
+    ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json"
   ],
-  "completionSummary": "Tests-only CQ-R13b: H4 manual Promise resolver retains late-answer timeout semantics; C5 close-before-EOF now defers close with setImmediate, retaining every assertion. Two files +5/-4, no runtime/docs edits. Fresh Node24 two-file suite 115 tests/113 passed/0 failed/2 existing skips,19.08s; H4 Node20 and Node24 each pass1/fail0. Scratch mutation control exit0, EOF-guard mutant exit1 at close-before-EOF (passed vs infra-failure), separately restored stop-after-settle mutant exit1 at kill-count index7 (1 vs0). Runtime byte-identical to HEAD; scoped diff check clean. Adversarial review no findings. Stale plan doc premise disclosed in task comment: landed docs already recommends Node24, preserved untouched. Peer dirty paths preserved; wrapper owns landing. Handoff and C5 gotcha saved in Serena."
+  "completionSummary": "Tests-only CQ-R13b: H4 manual Promise resolver retains late-answer timeout semantics; C5 close-before-EOF now defers close with setImmediate, retaining every assertion. Two files +5/-4, no runtime/docs edits. Fresh Node24 two-file suite 115 tests/113 passed/0 failed/2 existing skips,19.08s; H4 Node20 and Node24 each pass1/fail0. Scratch mutation control exit0, EOF-guard mutant exit1 at close-before-EOF (passed vs infra-failure), separately restored stop-after-settle mutant exit1 at kill-count index7 (1 vs0). Runtime byte-identical to HEAD; scoped diff check clean. Adversarial review no findings. Stale plan doc premise disclosed in task comment: landed docs already recommends Node24, preserved untouched. Peer dirty paths preserved; wrapper owns landing. Handoff and C5 gotcha saved in Serena.",
+  "commits": [
+    {
+      "sha": "86b1215279eec50771982c36f8f3577353970e44",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T15:49:50Z",
+      "paths": [
+        ".moe/tasks/task-6c56fe88c60f4a8fab7d1fd5508a0f66.json",
+        ".moe/tasks/task-6dd3ce1fbf204f0e9427fd0693118a0c.json",
+        ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T15:53:55.910Z",
+      "treeId": "a5523ee80d8c0272cef744ac6fabd2a5e85b86e6",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-c2da129d@2026-10-30T15:49:50Z",
+    "at": "2026-10-30T15:53:55.910Z"
+  },
+  "completedAt": "2026-10-30T15:55:40.959Z",
+  "reviewCompletedAt": "2026-10-30T15:55:40.959Z",
+  "reviewSummary": "Reviewed completion commit 86b12152 (on moe/work-2026-10-24): two test files +5/-4, no runtime/docs change (plus 3 wrapper-landed .moe board records). H4: Promise.withResolvers -> manual resolver, assertions unchanged. C5 'close before EOF': close deferred via setImmediate, expected value and kills unchanged, other rows untouched.\nRe-ran fresh, foreground:\n- Verification cmd (env -i, nvm Node 24, two-file node --test): exit 0, 115 tests/113 pass/0 fail/2 existing skips.\n- /usr/local/bin/node v20.18.0 env -i H4 only: exit 0, pass 1, fail 0; no withResolvers left in the file.\n- Mutation proof redone in my own git-archive scratch (edited tests overlaid; working tree never mutated, scratch removed): control C5 exit 0; mutant A (drop || !s.ended) exit 1 at 'close before EOF', actual passed vs expected infra-failure; mutant B (drop || s.settled, A restored first) exit 1 at final kill counts, index 7 is 1 vs 0.\n- git diff --quiet HEAD on check-session.mjs and docs/DEVELOPMENT.md: exit 0.\nAll 4 DoD items met. Note: plan premise 'DEVELOPMENT.md keeps Node 18+' is stale (HEAD already recommends Node 24); worker rightly left docs untouched. No findings.",
+  "requiredCheckAtDone": null
 }

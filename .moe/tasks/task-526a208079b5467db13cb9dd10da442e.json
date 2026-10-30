@@ -1,0 +1,35 @@
+{
+  "id": "task-526a208079b5467db13cb9dd10da442e",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: JetBrains protected selection treats a UNC (network-share) spelling of the local project as outside it",
+  "description": "Objective: under the protected profile on Windows, JetBrains must not keep a PATH entry, or accept a node candidate, that names the local project through a network share. Found on 2026-10-30 while re-planning CQ-RF06b (task-032c973941bc41d9b051eedacb7de0b6).\n\nEvidence (native Windows, architect probes):\n- `\\\\localhost\\C$\\<project path>` and `\\\\127.0.0.1\\C$\\<project path>` name the local project through the loopback admin share.\n- A JDK 17 probe shows Path.toRealPath keeps the UNC form (`\\\\localhost\\C$\\...\\project`, startsWithProject=false).\n- So RuntimeSelectionPolicy.isOutsideProject finds no project prefix in either form (normalize, toRealPath) and answers true, and MoeDaemonSupervisor.protectedPathEntries keeps the entry.\n- With the same rule in VS Code, a bare-name spawn from an outside cwd ran a project executable through such an entry.\n- select/installedExecutable accept a node candidate whose real path is UNC the same way. A mapped network drive that targets such a share resolves to UNC too.\n- JetBrains already refuses trailing-dot spellings, because toRealPath applies GetFullPathName. Only the UNC part applies here.\n\nDeliverable: on a Windows host, RuntimeSelectionPolicy treats any UNC form (spelling or real path: \\\\server\\share, //server/share, \\\\?\\UNC\\, \\\\.\\UNC\\) as not provably outside the project.\n- isOutsideProject answers false, so the protected daemon PATH drops the entry.\n- select refuses such a candidate with a named reason.\nThis mirrors the UNC part of CQ-RF06b's VS Code isWindowsAlias rule. Accepted cost: network-share PATH entries and a network node are not used under the protected profile.\n\nNot in scope:\n- VS Code (RF06b owns it).\n- Trailing-dot spellings (already refused).\n- Mapping a share back to its local path.\n- Persistent state.\n- Enabling verified-local.\nLocal drive-qualified spellings and \\\\?\\C:\\ device spellings, POSIX hosts and the legacy profile do not change.\n\nDepends on task-0ef30f9f1c0f4211946a16324dc60921, which edits the same JetBrains PATH filter.\n\nVerification command: cd moe-jetbrains && ./gradlew test. There is no Linux JDK, so from WSL run it as cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat test\". It must exit 0.",
+  "definitionOfDone": [
+    "On a Windows host, RuntimeSelectionPolicy.isOutsideProject returns false for UNC spellings (\\\\srv\\sh\\x, //srv/sh/x, \\\\?\\UNC\\srv\\sh\\x) and for a path whose real path is UNC, and the protected daemon PATH drops such entries. Shown by new JetBrains unit tests that need no network access.",
+    "On a Windows host, a node candidate whose real path is UNC is refused with a named reason and no daemon is spawned. Shown by tests.",
+    "Local drive-qualified and \\\\?\\C:\\ device spellings, POSIX hosts and the legacy profile behave as before: the existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest cases pass unchanged.",
+    "cd moe-jetbrains && ./gradlew test exits 0 (from WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat test\"), with output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0ef30f9f1c0f4211946a16324dc60921"
+  ],
+  "priority": "MEDIUM",
+  "order": 295.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T15:54:56.266Z",
+  "updatedAt": "2026-10-30T15:54:56.266Z"
+}
