@@ -59,26 +59,38 @@
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE (DoD 1-2). The fresh output of this exact command is the complete_task evidence, and QA re-runs it. It runs on a snapshot of HEAD's scripts plus exactly this task's four script files, so peers' dirty bytes cannot redden it and no harness run reads a file mid-save:\n\ncd /mnt/d/projexts/moes && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-f31d415d.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/seat-registration.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash -n scripts/moe-agent.sh; bash scripts/tests/parity-check.sh; node --test scripts/tests/seat-registration.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh'\n\n- Run it in the background with output to a log file, and poll. postflight.sh alone runs for many minutes, and the Bash tool kills a foreground command at 600 s.\n- Pass means all of: exit 0; '[stale offset] ok' in the log; the harness's final PASS line; seat-registration's bash tests passing (its PowerShell engines skip on Linux).\n- In complete_task, quote the exact command, $S, the exit code and the log tail, plus step 1's RED evidence.\n- A failure means fixing inside the owned files (.sh files via the copy-and-mv save), then rerunning this exact command.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-30T13:26:22.702Z"
+      "note": "Fresh verification PASS exit0, log /mnt/d/moe-scratch/f31d415d/verification.log. Governor-approved setup-only deviation msg-4324a9774ac4430fb083153c2d8cdf5c / comment-5240aaba774a4c90a369fb710c1602e2: archive HEAD scripts .github/workflows/ci.yml instead of scripts only; all check commands verbatim. Original exact command was first run: parity PASS, 19 seat pass/38 PS unavailable skips, exit1 solely CI guard ENOENT (.github/workflows/ci.yml); retained verification-original.log. Corrected run: bash -n PASS; parity PASS; node seat tests58 total,20pass,0fail,38 unavailable Windows PS5.1/pwsh skips; postflight PASS including [stale offset] ok: same-inode edit, own tail and exit0, post-flight posted; frozen74, owner16, commit-scope42. Snapshot path/log tail captured in verification.log; all four overlays cmp-equal current files after run. Source bytes swept into manual f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 per governor comment-ee2b7fd9; review will use that commit's parent, not an empty HEAD diff. Step1 RED retained /mnt/d/moe-scratch/red-f31d415d.7YnL1a/red.log: e: command not found / seat127.",
+      "startedAt": "2026-10-30T13:26:22.702Z",
+      "completedAt": "2026-10-30T13:41:13.710Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW of this task's own diff, the one review pass (load adversarial-self-review). This row is epic-final only by the highest-order fallback: epic-be924fb8 has no finalTaskId, and every sibling had its own QA. So the review covers this diff, not the whole epic. Check and note each item:\n(1) Group bounds.\n- `{` sits after the launch-hash capture and directly before the main `while`.\n- `exit` is the group's last command, and `}` is the file's last line with nothing after it.\n- `git diff HEAD -- scripts/moe-agent.sh` shows only the added comment, `{`, `exit` and `}`: no re-indent, and no mode change in `git diff --summary`.\n(2) Exit parity and error handling.\n- A teamless one-shot still prints MOE_SEAT_UNREGISTERED and exits 1 (seat-registration covers it).\n- Every other loop end exits 0, as before.\n- The cleanup_temp EXIT trap, the INT/TERM trap, set -e and the hot-reload exec at the loop top are unaffected.\n(3) bash 3.2 (macOS seats): a brace group is POSIX, and nothing in the loop relies on alias expansion or parse-time shopt.\n(4) The arm is not vacuous. It fails on a rename-based edit (inode check), on an edit that never landed, or on a nonzero seat exit. Step 1's RED log shows it failing on the pre-fix wrapper with 'e: command not found'.\n(5) The ps1 diff is comment-only: every added line of `git diff HEAD -- scripts/moe-agent.ps1` starts with '#', nothing is removed, the BOM is kept, and nothing sits inside a here-string.\n(6) seat-registration's sh tail ends before `}` and asserts the boundary. Its ps1 tail is unchanged.\n(7) Saves: moe-agent.sh and postflight.sh reached the repo only through one same-filesystem `mv -f` each. Say so explicitly.\n(8) Docs: the Hot reload bullet states both DoD-3 facts and names the arm.\nFix any finding inside the five owned files, saving .sh files by copy and mv. Rerun the step-4 command if a runtime or test file changed. Report every modified path in complete_step.modifiedFiles.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/seat-registration.test.mjs",
         "scripts/CLAUDE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/seat-registration.test.mjs",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "Adversarial review PASS, no findings or new edits. Reviewed only these five paths vs f6da2d7f^ (governor comment-ee2b7fd9: manual f6da2d7f swept our bytes; HEAD diff empty). Own total +69/-2 net67. (1) Exact byte assertion proves removing comment/{ and final exit/} reconstructs original sh; group follows hash capture, exit last command, } EOF; diff summary no mode changes. (2) Gate confirms teamless one-shot1 and registered0; exact-byte parity leaves cleanup_temp EXIT, INT/TERM, set-e, reload exec unchanged. (3) Only POSIX grouping added; grep finds no alias/shopt assumptions; bash3.2 not separately run. (4) Arm asserts same inode before marker, landed foreign string, dirty diff exit1 and wrapper0; RED seat127/e: command not found proves non-vacuity; no foreign/error/restart output GREEN, posted CLI0. (5) ps1 exact bytes minus 3 ASCII comments equals original, BOM/LF retained, insertion outside here-string above try/do. (6) Fixture boundary asserted with between; extracted tail separately bash-n PASS, ps1 tail untouched. (7) moe-agent.sh and postflight.sh each reached repo through ONE checked same-device /mnt/d mv-f, never in-place; no additional saves. (8) Hot reload docs cover one-group parse, older-seat/pre-loop residuals, safe atomic saves, ps1 and arm. Concurrency: fixture per-mktemp, production grouping no new shared state. Inputs/failure/cleanup: no production input/IO changes; harness nonzero/missing-marker paths hard fail and existing EXIT cleanup retained. Gate snapshot qj2K6S and current overlays cmp equal; no runtime/test edits after passing verification.",
+      "startedAt": "2026-10-30T13:41:13.745Z",
+      "completedAt": "2026-10-30T13:42:02.164Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-6e57c4f8",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -96,16 +108,28 @@
       "author": "worker-6e57c4f8",
       "content": "@architect-4ae016fb Step 1 is running RED in /mnt/d/moe-scratch/red-f31d415d.7YnL1a; all five owned paths were clean and prerequisite 5998f871 is landed. Found a verification-setup omission before step 4: seat-registration.test.mjs final test reads ../../.github/workflows/ci.yml, but the exact snapshot command archives only scripts. Request approval for the setup-only correction `git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\"` (all checks otherwise verbatim); no repository scope growth. Without it the named check necessarily fails ENOENT on ci.yml.",
       "timestamp": "2026-10-30T13:19:07.468Z"
+    },
+    {
+      "id": "comment-5240aaba774a4c90a369fb710c1602e2",
+      "author": "governor-693b7073",
+      "content": "@worker-6e57c4f8 Approved by the governor, as a setup-only correction for step 4 (#general msg-4324a9774ac4430fb083153c2d8cdf5c).\n- Build the snapshot with `git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\"` in place of the scripts-only archive.\n- Every check stays verbatim, with no source-scope growth.\n- Record it in the step-4 note as a governor-approved verification-setup deviation, so QA sees it.\n\n@architect-4ae016fb, this stands unless you rule otherwise.",
+      "timestamp": "2026-10-30T13:27:13.550Z"
+    },
+    {
+      "id": "comment-ee2b7fd9a6c94d8a94ff5801773d1161",
+      "author": "governor-693b7073",
+      "content": "@worker-6e57c4f8 Governor note, 13:31Z. Your in-progress bytes were swept into the manual commit f6da2d7f \"D\" at 13:27:12Z, which was not a wrapper landing: scripts/moe-agent.sh (+7, the `{ … exit }` group), scripts/moe-agent.ps1 (+3), scripts/CLAUDE.md, scripts/tests/postflight.sh (+57) and scripts/tests/seat-registration.test.mjs.\n- They are now in HEAD and pushed. Every idle sh seat restarted into them at 13:27:17Z.\n- Keep working normally. Edits after that point show as dirty again and land with your completion as usual.\n- In your completion evidence, name f6da2d7f as containing your earlier bytes.\n- QA: review this task's paths across f6da2d7f plus the task's own commits.",
+      "timestamp": "2026-10-30T13:29:45.225Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:24:40.085Z",
-  "updatedAt": "2026-10-30T13:26:22.702Z",
+  "updatedAt": "2026-10-30T13:43:10.092Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T12:24:52.244Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -118,7 +142,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T12:51:13.718Z",
@@ -187,7 +213,11 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-f31d415d5185424ca5f7e375a8b15134.json"
+    "scripts/tests/postflight.sh",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/seat-registration.test.mjs",
+    "scripts/CLAUDE.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -196,5 +226,14 @@
     "sessionId": "architect-4ae016fb@2026-10-30T12:24:52Z",
     "at": "2026-10-30T12:52:34.466Z"
   },
-  "workStartedAt": "2026-10-30T13:17:57.534Z"
+  "workStartedAt": "2026-10-30T13:17:57.534Z",
+  "reviewStartedAt": "2026-10-30T13:43:10.088Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-f31d415d.XXXXXX) && git archive HEAD scripts .github/workflows/ci.yml | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/seat-registration.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S\" && env $(env | sed -n 's/^\\(\\(MOE\\|CLAUDE\\)[A-Za-z0-9_]*\\)=.*/-u \\1/p') bash -c 'set -e; bash -n scripts/moe-agent.sh; bash scripts/tests/parity-check.sh; node --test scripts/tests/seat-registration.test.mjs; MOE_POSTFLIGHT_TIMEOUT_SEC=180 bash scripts/tests/postflight.sh'",
+    "exitCode": 0,
+    "outputTail": "[scenario AB2] ok\n[scenario AC] an edit to a CRLF-committed file lands under autocrlf=true, autocrlf=input and text=auto\n[scenario AC] ok\n[scenario AD] a CRLF-committed file rewritten, deleted, or replaced by a directory or a symlink after the snapshot still drops as MOE_ATTR_CONCURRENT\n[scenario AD] ok\n[scenario AE] a retargeted symlink lands; a symlink whose target changed, and a dangling one, stay MOE_ATTR_PREEXISTING\n[scenario AE] ok\n[scenario AF] an unwitnessed own contested path lands only when clean at pre-flight and every contesting task is idle\n[scenario AF] ok\n[scenario AG] a declared, pre-flight-dirty contested path stays held and the session-ended line names the working remedy\n[scenario AG] ok\n[scenario AH] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs\n[scenario AH] ok\n[scenario AI] a held contested path reaches record_commit on both nothing landings\n[scenario AI] ok\n[scenario AJ] peel failures and rescue records retain held contested paths\n[scenario AJ1] ok\n[scenario AJ2] ok\n[scenario AJ] ok\ncommit-scope scenarios run: 42\n[team join] a full team is reported and the NO_TEAM_MEMBERSHIP claim refusal is named\n[team join] ok\n[team heal] a refused startup join is retried and heals when the team has room\n[team heal] ok\nPASS postflight.sh\n\nSnapshot: /mnt/d/moe-scratch/v-f31d415d.qj2K6S\nEXIT=0\n",
+    "reportedAt": "2026-10-30T13:43:10.088Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Implemented parsed sh { main loop + teamless tail; exit } group, comment-only ps1, asserted fixture tail boundary, same-inode +2-byte single-shot regression, and atomic-save docs. Five paths +69/-2 net67. IMPORTANT: source bytes carried by manual f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (governor comment-ee2b7fd9), not our wrapper commit; QA review those paths vs f6da2d7f^ plus task commits. Both sh saves used checked /mnt/d same-filesystem single mv-f; other sessions' bytes untouched. RED /mnt/d/moe-scratch/red-f31d415d.7YnL1a/red.log: earlier arms passed, seat127/e: command not found. Fresh GREEN snapshot /mnt/d/moe-scratch/v-f31d415d.qj2K6S: bash-n/parity PASS; seat20pass/0fail/38 unavailable PS skips; full postflight PASS, frozen74/owner16/scope42, [stale offset] ok own tail/exit0/postflight. Log /mnt/d/moe-scratch/f31d415d/verification.log. Governor-approved setup-only deviation msg-4324a977/comment-5240aaba archives .github/workflows/ci.yml alongside scripts; unchanged checks (original command failed solely missing CI file, retained verification-original.log). Current four script files cmp snapshot; adversarial review clean; sh only exact added lines, ps1 BOM/LF retained, teamless1/registered0 covered. No native bash3.2/PS execution claimed. Handoff and gotcha memories saved."
 }
