@@ -167,6 +167,9 @@ async function guestNetwork(context) {
       const { code, stdout } = await probe(context, ['sudo', '-n', '-u', JOB_IDENTITIES[0], 'python3', '-I', '-c', CONNECT_PROBE, ...args]);
       agent = verdict(code === 0 && stdout === CLOSED, code === 1 && stdout === OPEN);
     } catch (error) { agentError = error; }
+    // A completed TCP handshake can still have an undispatched accept. Keep listening across a poll turn before sampling:
+    // one immediate could run in this turn's check phase; nesting it forces the next turn's I/O before the verdict.
+    await new Promise(resolve => setImmediate(() => setImmediate(resolve)));
     if (check === 'open' || agent === 'open' || listener.accepted() > 0) return failed('CERTIFY_GUEST_NETWORK_REACHABLE');
     if (agentError) throw agentError;
     return check === 'closed' && agent === 'closed' ? passed : failed('CERTIFY_GUEST_NETWORK_UNKNOWN');

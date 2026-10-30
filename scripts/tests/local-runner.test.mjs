@@ -3253,6 +3253,29 @@ test('GN5 guest-network runs after bridge-eof and before teardown; a bridge-eof 
   [['delete', '--purge', GUEST]], []]);
 });
 
+test('GN6 a completed connect with a pending accept beats closed, unknown and provider failure', { timeout: 30_000 }, async t => {
+  for (const [label, reply] of [['closed', answering('closed\n')], ['unknown', probeExit(2, '')], ['provider failure', KILLED]]) {
+    await t.test(label, async t => {
+      const createServer = net.createServer;
+      let accepted = 0, beforeVerdict, connection;
+      t.mock.method(net, 'createServer', (...args) => createServer(...args).on('connection', () => { accepted += 1; }));
+      const h = certifyHarness(t, { network: { agent: async args => {
+        // Resume from I/O, then complete a real handshake while the host loop cannot dispatch its accept callback.
+        await fsPromises.stat(h.workDir);
+        connection = spawnSync(process.execPath, ['-e', 'require("node:net").connect({host:"127.0.0.1",port:Number(process.argv[1])})'
+          + '.once("connect",function(){console.log("connected");this.destroy();}).once("error",()=>process.exit(1));', args.at(-2)],
+        { encoding: 'utf8', timeout: 5_000 });
+        beforeVerdict = accepted;
+        return reply(); // No yield to accept, unlike GN4's connects helper.
+      } } });
+      const report = await h.certify();
+      assert.deepEqual([connection.status, connection.stdout, beforeVerdict], [0, 'connected\n', 0]);
+      assert.deepEqual([h.deletes, await refusesConnect(portOf(h))], [[['delete', '--purge', GUEST]], true]);
+      assert.deepEqual([report, accepted], [networkFailed('CERTIFY_GUEST_NETWORK_REACHABLE'), 1]);
+    });
+  }
+});
+
 // CQ-R09c copy-only snapshot materialization
 import { validateImport } from '../local-runner/source-snapshot.mjs';
 import { EventEmitter } from 'node:events';
