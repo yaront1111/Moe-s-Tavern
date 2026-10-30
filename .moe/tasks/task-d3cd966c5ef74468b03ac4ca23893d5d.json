@@ -8,9 +8,61 @@
     "Both wrappers use the field when present and fall back to the current .moe/attempts scan only when it is absent; refusal codes and behaviour are unchanged; the shared postflight-owner-guard.cjs cases still pass in postflight.sh and postflight.ps1, and bash scripts/tests/parity-check.sh passes."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Gates before any edit (this step changes no file).\n(a) Merge gate: from /mnt/d/projexts/moes run `git merge-base --is-ancestor f1c04b15 HEAD`. If it exits non-zero, the governor's main merge (3f6817f1) has not landed. That merge rewrites other hunks of scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight-fake-proxy.js and docs/MCP_SERVER.md, and a dirty copy of any of them blocks it from landing in this shared checkout. So call moe.report_blocked { taskId: 'task-d3cd966c5ef74468b03ac4ca23893d5d', reason: 'Waiting for the governor to land the main merge (3f6817f1): f1c04b15 is not an ancestor of HEAD, and the merge rewrites scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight-fake-proxy.js and docs/MCP_SERVER.md, which this task edits.' } with NO blockedOnTaskIds, then end the session.\n(b) Field gate: `grep -n finalizingAttempt packages/moe-daemon/src/tools/getCommitScope.ts` must print a match. task-a2a55bc6059048e78174e551c32a6e73 added the field, and dependsOn waits for it. If the grep prints nothing, call report_blocked with no ids, stating that the field from task-a2a55bc6 is missing from HEAD.\n(c) Peer gate: `git status --porcelain -- scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-fake-proxy.js scripts/tests/postflight-owner-guard.cjs docs/MCP_SERVER.md` must print nothing. If a path is dirty, call moe.get_commit_scope { taskId: 'task-d3cd966c5ef74468b03ac4ca23893d5d' } and read peerDeclared for those paths:\n- if live tasks declare them, report_blocked with blockedOnTaskIds set to those tasks, naming the paths;\n- if nobody declares them, report_blocked with no ids, naming the paths, so a governor can find their owner.\nNever revert, stash, `git add` or commit those bytes. Landing a file that holds a peer's uncommitted hunks would commit them under this task. The checkout's other ~700 dirty paths belong to other sessions: leave them alone and list them in your step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests first: the fake's new knob and four owner-guard cases.\n(1) scripts/tests/postflight-fake-proxy.js, `case 'get_commit_scope'`. Add the knob FAKE_SCOPE_FINALIZING=computed|null|malformed.\n- Read it with the existing `knob()` helper next to `ownershipMode`, before anything is written to stdout. A mistyped value then throws naming the knob, like the other knobs, and an empty value counts as unset.\n- Unset or empty: serve NO finalizingAttempt key, as a daemon from before the field does. Every existing scenario then stays on the wrapper's legacy scan. scripts/tests/postflight-owner-scope.test.mjs, which deepStrictEquals the default reply, keeps passing unchanged; do not edit that file.\n- `computed`, after `taskId` is known, mirrors finalizingAttemptsByTask (packages/moe-daemon/src/util/claimEligibility.ts) over .moe/attempts/*.json:\n  - read the files in sorted name order, skipping any unreadable or unparsable file (try/catch per file);\n  - keep records with phase === 'finalizing', taskId === taskId, a non-blank string id and workerId, and Number.isSafeInteger(generation) && generation >= 1;\n  - the highest generation wins;\n  - serve { attemptId: a.id, workerId: a.workerId, generation: a.generation }, or null when nothing qualifies.\n- `null`: serve finalizingAttempt: null whatever the records say.\n- `malformed`: serve the computed value with generation: String(generation), or the string 'null' when nothing qualifies. These are the coercion traps a wrapper must refuse, parallel to FAKE_SCOPE_OWNERSHIP_MODE=malformed.\n- Place the key right after assigneeProtected in the ok({...}) object.\n- Document the knob in the knob comment block, in the same style. Extend the sentence 'The ALIVE, PROTECTED and OWNERSHIP_MODE knobs accept only the values above' to cover FINALIZING.\n\n(2) scripts/tests/postflight-owner-guard.cjs. Add four single cases right after ['finalizing', ...]:\n- ['finalizing-field','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'computed'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],ACTIVE]. The field names a foreign attempt, so the wrapper refuses.\n- ['finalizing-own','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'computed'},{},[{id:'attempt-mine',workerId:'architect-og',phase:'finalizing'}],'']. The field names the caller's own attempt (wid is role+'-og'), so the wrapper lands. Every worker completion takes this path once the field exists.\n- ['finalizing-null','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'null'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],'']. The daemon's null wins over a disk record. This proves the guard no longer reads .moe/attempts when the field is present.\n- ['finalizing-malformed','architect',{FAKE_SCOPE_ASSIGNEE:'none',FAKE_SCOPE_FINALIZING:'malformed'},{},[{id:'attempt-done',workerId:'worker-done',phase:'finalizing'}],ACTIVE]. A malformed field falls back to the scan, which still refuses.\nAbove them, add a two-line comment: a well-formed finalizingAttempt or null decides; only an absent or malformed one, or the disk fallback, scans .moe/attempts.\nIn single(), after assertRefused, assert for every refused case whose name starts with 'finalizing' (the existing 'finalizing' case included): `assert.ok(log.includes('attempt attempt-done of worker-done is still finalizing'), ...)`. The field path and the scan must give the same detail text.\n\nThe extra own-finalizing record and a foreign open record do not disturb a landing that passes the guard. This was probed on HEAD on 2026-10-30 for sh and ps1; ps1 Read-MoeAttempt's 'ambiguous or missing open attempt' only warns.\n\nRed proof, before step 3:\n`W=$(mktemp -d /mnt/d/moe-scratch/d3cd-red-XXXX) && git archive HEAD scripts | tar -x -C $W && cp scripts/tests/postflight-fake-proxy.js scripts/tests/postflight-owner-guard.cjs $W/scripts/tests/ && mkdir $W/og && (cd $W && MOE_OWNER_GUARD_ONLY=finalizing-field,finalizing-own,finalizing-null,finalizing-malformed node scripts/tests/postflight-owner-guard.cjs sh $W/scripts/moe-agent.sh $W/scripts/tests/postflight-fake-proxy.js $W/og \"$(command -v bash)\"); echo RED_EXIT=$?; rm -rf $W`\nIt must fail at [finalizing-null], because today's scan refuses. Record that in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-guard.cjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/moe-agent.sh landing_owner_guard: trust get_commit_scope.finalizingAttempt.\nIn the python verdict(), after the owner checks and right before the `for f in sorted(glob.glob(os.path.join(project, '.moe', 'attempts', '*.json')))` loop, insert:\n```python\n    fa = d.get('finalizingAttempt')\n    if fallback != '1' and 'finalizingAttempt' in d and (fa is None or (isinstance(fa, dict)\n            and isinstance(fa.get('attemptId'), str) and fa['attemptId'].strip()\n            and isinstance(fa.get('workerId'), str) and fa['workerId'].strip()\n            and type(fa.get('generation')) is int and 1 <= fa['generation'] <= 9007199254740991)):\n        if fa is not None and fa['workerId'] != me:\n            return ACTIVE, 'attempt %s of %s is still finalizing' % (fa['attemptId'], fa['workerId'])\n        return '', ''\n```\nKeep the existing scan loop byte for byte after it, as the fallback. It still runs for an absent key (older daemon), a malformed value, and the disk fallback (MOE_SCOPE_FALLBACK=1, whose JSON never carries the key).\n`type(...) is int` rejects bool and float, as the scan does. The comparison is case-sensitive. An empty WORKER_ID counts every named attempt as foreign, matching the scan's `w != me`.\nUpdate the function's header comment: another seat's finalizing attempt is read from get_commit_scope.finalizingAttempt, and .moe/attempts is scanned only when that field is absent or malformed.\nError handling is unchanged. An exception inside the python leaves stdout empty, so the shell keeps its defaults (MOE_COMMIT_REFUSED_OWNER_UNKNOWN, 'the ownership check did not run') and refuses.\nAfter this step, the step-2 red-proof command (with this moe-agent.sh also copied into the snapshot) must pass all four cases on sh.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/moe-agent.ps1: the twin of step 3.\n(a) Add `FinalizingSet = $false; Finalizing = $null` next to `OwnerSet = $false; Owner = $null; Protected = $null` in BOTH scope hashtables: Get-MoeDiskScope and the rpc branch of Get-MoeCommitScope.\n(b) In Get-MoeCommitScope, after the `$ap = $resp.PSObject.Properties['assigneeProtected']...` line, add:\n```powershell\n        # Raw, for Get-MoeOwnerGuard: JSON null (nothing finalizing) and an absent key (older daemon) differ.\n        $fp = $resp.PSObject.Properties['finalizingAttempt']; if ($fp) { $scope.FinalizingSet = $true; $scope.Finalizing = $fp.Value }\n```\n(c) In Get-MoeOwnerGuard, after the owner checks and right before `$files = @()`, add:\n```powershell\n        # get_commit_scope.finalizingAttempt decides when it is null or well-formed; an absent or\n        # malformed field (older daemon) or the disk scope falls back to the records scan below.\n        $fa = $s.Finalizing; $faId = Get-MoeProp $fa 'attemptId'; $faW = Get-MoeProp $fa 'workerId'\n        if ($s.Source -eq 'rpc' -and $s.FinalizingSet -and ($null -eq $fa -or ($fa -is [System.Management.Automation.PSCustomObject] -and\n                $faId -is [string] -and $faId.Trim() -and $faW -is [string] -and $faW.Trim() -and (Test-MoeGeneration (Get-MoeProp $fa 'generation'))))) {\n            if ($null -ne $fa -and $faW -cne $WorkerId) { $g.Code = $active; $g.Detail = \"attempt $faId of $faW is still finalizing\"; return $g }\n            $g.Code = ''; $g.Detail = ''; return $g\n        }\n```\nKeep the existing scan unchanged after it, as the fallback.\nWhy these forms:\n- Get-MoeProp yields $null for a [string] 'null' or for a PSCustomObject without the property, so a malformed field falls through to the scan instead of throwing into the catch, where it would become OWNER_UNKNOWN.\n- Test-MoeGeneration accepts only an [int] or [long] in 1..2^53-1. PowerShell would coerce '3' -gt 0 to true; this rejects it.\n- -cne keeps the comparison case-sensitive, like the scan's `$w -cne $WorkerId`.\nThe outer try/catch stays the error-handling path: any throw is MOE_COMMIT_REFUSED_OWNER_UNKNOWN. The detail string must stay byte-identical to sh's.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "docs/MCP_SERVER.md, the `### moe.get_commit_scope` section.\nRead the inline description task-a2a55bc6 shipped in packages/moe-daemon/src/tools/getCommitScope.ts first, and match its wording.\n(a) In the Returns block, right after assigneeProtected, add `finalizingAttempt: { attemptId: string, workerId: string, generation: number } | null,` with an aligned `//` comment that says:\n- it is the task's finalizing attempt exactly as claim_next_task's finalizing hold selects it (util/claimEligibility.ts finalizingAttemptsByTask: phase finalizing, non-blank id/taskId/workerId, safe-integer generation >= 1, the highest generation wins);\n- it names the attempt whoever holds it, the caller's own included, and is null when there is none;\n- it is additive: an older daemon omits it.\n(b) Add a Notes bullet right after **Live-assignee protection**, starting **Finalizing hold.** It says:\n- the wrapper's owner guard refuses MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE ('attempt <id> of <worker> is still finalizing') when finalizingAttempt names another worker, and lands when it names the caller's own attempt or is null;\n- only an absent field (older daemon), a malformed value (the generation must be an integer, the ids non-blank strings) or the disk fallback sends the wrapper to read every .moe/attempts/*.json record itself, which is the per-landing scan this field replaces;\n- the field names the same record that scan would refuse on, because openClaimAttempt closes whatever attempt is open before it opens one, so a task holds at most one finalizing attempt.\nChange nothing else in the file. The pending merge's hunks near lines 522, 542 and 1459 are not in this section.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Regression gate. Run once, after steps 2-5; it is the complete_task evidence. From /mnt/d/projexts/moes, run the three checkRefs as ONE invocation: `( <checkRef 1> ) && ( <checkRef 2> ) && ( <checkRef 3> )`. Submit that exact string, its exit code and the output tail.\n- checkRef 1 is DoD 1's `npm test`: the full daemon suite on a Linux-native snapshot of HEAD's packages/moe-daemon. The shared tree's node_modules is Windows-native, so vitest cannot start there under WSL. This task changes no daemon file; the suite shows task-a2a55bc6's field and tests are green at HEAD.\n- checkRefs 2 and 3 build a /mnt/d/moe-scratch snapshot of HEAD's scripts/ plus this task's four script files, so peers' dirty bytes in other scripts/ files cannot mix in. Windows needs a drive-letter cwd, hence /mnt/d.\n  - checkRef 2 runs postflight-owner-scope.test.mjs (the fake's default reply is unchanged), the frozen modes teardown-finalizing, finalizing-acked-continues and teardown-protected on sh (the guard's teardown and rescue paths on the legacy scan), the full owner-guard suite on sh, and parity-check.\n  - checkRef 3 runs the same frozen modes and the full owner-guard suite on ps1. The WSLENV addition is what lets MOE_FROZEN_TEST_ONLY reach powershell.exe; without it, postflight.ps1 runs its whole ~12-minute suite.\n  - The owner-guard suite has 16 cases. It runs with exactly the arguments postflight.sh:906 and postflight.ps1:886 pass it, which makes it DoD 2's 'cases pass in postflight.sh and postflight.ps1'.\nExpect about 5 minutes in total. The ps3 checkRef's shape was dry-run on pure HEAD on 2026-10-30. On a failure:\n- read the case log (MOE_KEEP_OWNER_GUARD_FIXTURE=1 keeps the fixture);\n- fix the code and rerun the whole command;\n- never weaken an assertion or skip a case.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Final adversarial self-review of this task's diff only (load adversarial-self-review). Check each of these:\n(1) An absent or malformed finalizingAttempt never skips the scan: a string generation, the string 'null', a blank or non-string id, an array. Only null or a well-formed object decides, and only from the RPC scope, never from the disk fallback.\n(2) The caller's own attempt never refuses. Every worker completion is an unassigned task with the worker's own attempt finalizing, so a slip here refuses all of them.\n(3) A foreign attempt always refuses with the same code and detail text as before.\n(4) sh and ps1 agree on:\n- bool, float and string generations (sh `type() is int`; ps1 Test-MoeGeneration);\n- blank ids;\n- case-sensitive comparison;\n- an empty WORKER_ID.\n(5) The fake's default get_commit_scope reply carries no finalizingAttempt key.\n(6) No refusal code, ledger row or session-ended line changed. Error handling still fails closed to OWNER_UNKNOWN on any exception.\n(7) Concurrency: the field is read once per guard call, like the scan it replaces. The scope read and the landing CAS are still two steps, as the existing ponytail comment says.\n(8) Nothing under .moe/ was edited by hand, no peer path was staged, and `git diff --stat` touches only the five planned files.\nFix anything found, rerun step 6's command, and submit the fresh output.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -20,13 +72,106 @@
   "parentTaskId": null,
   "priority": "LOW",
   "order": 262.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-a5555d84a640458ba42b197b7d8a97bc",
+      "author": "architect-4ae016fb",
+      "content": "Split (architect, 2026-10-30). DoD 1's daemon half (the get_commit_scope field finalizingAttempt plus its getCommitScope.test.ts tests) is task-a2a55bc6059048e78174e551c32a6e73, which has no merge gate and lands first. This task keeps both wrappers, the fake proxy, the owner-guard cases and docs/MCP_SERVER.md. Those files sit in the pending main merge (3f6817f1) or are being edited by in-flight wrapper tasks.\n\ndependsOn: task-a2a55bc6, plus the wrapper editors c2a900aa, bc8410af, ad0dc2e7, 5dc76be6 and 3d0be568 (3d0be568 also edits postflight-owner-guard.cjs).\n\nField contract: `finalizingAttempt: {attemptId, workerId, generation} | null`. It names the attempt finalizingAttemptsByTask selects, whoever holds it, including the caller.\n\nWrapper rule:\n- null → no finalizing hold.\n- A well-formed value naming another worker → MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE with the existing detail text.\n- The caller's own attempt → lands.\n- An absent field (older daemon), a malformed value or the disk fallback → the existing .moe/attempts scan, unchanged.",
+      "timestamp": "2026-10-30T00:30:21.744Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:07:30.476Z",
-  "updatedAt": "2026-10-29T19:06:04.530Z",
+  "updatedAt": "2026-10-30T00:34:11.429Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-29T19:06:04.530Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T00:16:06.171Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "dependsOn": [
+    "task-a2a55bc6059048e78174e551c32a6e73",
+    "task-c2a900aa5107479aa4c630f1b3837ed0",
+    "task-bc8410afe7144ddda804b60af000864d",
+    "task-ad0dc2e7557d4ceca42ce7fab3708942",
+    "task-5dc76be6e63f47a58f30e9f7a6923511",
+    "task-3d0be5681276428d8908d361341145bf"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T00:34:11.348Z",
+  "executionContract": {
+    "intendedBehavior": "Both wrappers decide the owner guard's finalizing hold from get_commit_scope.finalizingAttempt when the daemon answered (not the disk fallback) and the field is null or well-formed: another worker's attempt refuses MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE with detail 'attempt <id> of <worker> is still finalizing', and the caller's own attempt or null lets the landing continue. Only an absent field (older daemon), a malformed value or the disk fallback reads .moe/attempts/*.json, exactly as today. docs/MCP_SERVER.md documents the field and this rule.",
+    "acceptanceCriteria": [
+      "finalizing-field and finalizing-malformed refuse with MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE and the detail 'attempt attempt-done of worker-done is still finalizing'; finalizing-own and finalizing-null each land one checkpoint, on sh and ps1.",
+      "finalizing-null fails against the pre-change wrapper (the red proof in step 2).",
+      "Every pre-existing owner-guard case, the three frozen modes on both engines, postflight-owner-scope.test.mjs and parity-check pass; the daemon npm test exits 0."
+    ],
+    "invariants": [
+      "Refusal codes, detail text, record_commit rows and session-ended lines are unchanged for every case the scan handled.",
+      "An absent or malformed finalizingAttempt never skips the .moe/attempts scan. Malformed covers a string generation, the string 'null', and blank or non-string ids.",
+      "The disk-fallback scope (sh MOE_SCOPE_FALLBACK=1, ps1 Source 'disk') never trusts a finalizingAttempt key.",
+      "The caller's own finalizing attempt never refuses its own landing.",
+      "The fake proxy's default get_commit_scope reply has no finalizingAttempt key, so scripts/tests/postflight-owner-scope.test.mjs passes unchanged.",
+      "Any exception in the guard still fails closed to MOE_COMMIT_REFUSED_OWNER_UNKNOWN."
+    ],
+    "compatibility": [
+      "Older daemon (no field): both wrappers keep the existing .moe/attempts scan.",
+      "Older wrapper with newer daemon: the field is additive and is ignored.",
+      "The detail string 'attempt <id> of <worker> is still finalizing' is byte-identical in sh and ps1."
+    ],
+    "approvedScope": [
+      "sh landing_owner_guard verdict()",
+      "ps1 Get-MoeDiskScope and Get-MoeCommitScope (FinalizingSet/Finalizing), Get-MoeOwnerGuard",
+      "fake get_commit_scope knob FAKE_SCOPE_FINALIZING=computed|null|malformed",
+      "owner-guard cases finalizing-field, finalizing-own, finalizing-null, finalizing-malformed, plus the shared detail assertion in single()",
+      "docs/MCP_SERVER.md get_commit_scope Returns entry and Notes bullet"
+    ],
+    "reuse": [
+      "The fake's knob() validator; ps1 Get-MoeProp and Test-MoeGeneration; the existing detail string. The fake mirrors claimEligibility finalizingAttemptsByTask rather than inventing a new predicate."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/claimEligibility.ts isHoldingFinalizingAttempt/finalizingAttemptsByTask: phase finalizing, non-blank id/taskId/workerId, safe-integer generation >= 1, highest generation kept.",
+      "task-a2a55bc6059048e78174e551c32a6e73 adds finalizingAttempt {attemptId, workerId, generation} | null to packages/moe-daemon/src/tools/getCommitScope.ts (dependsOn).",
+      "scripts/moe-agent.sh landing_owner_guard and commit_scope, and scripts/moe-agent.ps1 Get-MoeOwnerGuard and Get-MoeCommitScope, are byte-identical in HEAD and the pending merge 3f6817f1 (checked 2026-10-30).",
+      "scripts/tests/postflight.sh:906 and postflight.ps1:886 run postflight-owner-guard.cjs with (sh|ps1, wrapper, fake proxy, temp dir, engine)."
+    ],
+    "checkRefs": [
+      "D=$(mktemp -d /tmp/moe-d3cd-daemon-XXXX) && git archive HEAD packages/moe-daemon | tar -x -C $D && P=\"$(dirname \"$(command -v node)\"):/usr/local/bin:/usr/bin:/bin\" && (cd $D/packages/moe-daemon && env -i HOME=$HOME PATH=$P npm ci --no-audit --no-fund >/dev/null && env -i HOME=$HOME PATH=$P npm test); rc=$?; rm -rf $D; echo DAEMON_EXIT=$rc; [ $rc -eq 0 ]",
+      "M=teardown-finalizing,finalizing-acked-continues,teardown-protected; W=$(mktemp -d /mnt/d/moe-scratch/d3cd-XXXX) && git archive HEAD scripts | tar -x -C $W && for f in moe-agent.sh moe-agent.ps1 tests/postflight-fake-proxy.js tests/postflight-owner-guard.cjs; do cp scripts/$f $W/scripts/$f; done && mkdir $W/og && (cd $W && node --test scripts/tests/postflight-owner-scope.test.mjs && MOE_FROZEN_TEST_ONLY=$M bash scripts/tests/postflight.sh && node scripts/tests/postflight-owner-guard.cjs sh $W/scripts/moe-agent.sh $W/scripts/tests/postflight-fake-proxy.js $W/og \"$(command -v bash)\" && bash scripts/tests/parity-check.sh); rc=$?; rm -rf $W; echo SH_EXIT=$rc; [ $rc -eq 0 ]",
+      "M=teardown-finalizing,finalizing-acked-continues,teardown-protected; W=$(mktemp -d /mnt/d/moe-scratch/d3cd-XXXX) && git archive HEAD scripts | tar -x -C $W && for f in moe-agent.sh moe-agent.ps1 tests/postflight-fake-proxy.js tests/postflight-owner-guard.cjs; do cp scripts/$f $W/scripts/$f; done && mkdir $W/og && w() { wslpath -w \"$W/$1\"; } && (cd $W && WSLENV=$WSLENV:MOE_FROZEN_TEST_ONLY MOE_FROZEN_TEST_ONLY=$M powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(w scripts/tests/postflight.ps1)\" && \"/mnt/c/Program Files/nodejs/node.exe\" \"$(w scripts/tests/postflight-owner-guard.cjs)\" ps1 \"$(w scripts/moe-agent.ps1)\" \"$(w scripts/tests/postflight-fake-proxy.js)\" \"$(w og)\" powershell.exe); rc=$?; rm -rf $W; echo PS1_EXIT=$rc; [ $rc -eq 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Pruning closed attempt records (the task's alternative) was rejected. attempts/ are durable delivery records, and pruning still leaves a disk scan in two wrappers; the field makes the guard O(1) and reuses the claim hold's predicate. A fake that serves the field by default was rejected because postflight-owner-scope.test.mjs deepStrictEquals the default reply. Gating it behind a knob keeps that file untouched and keeps every legacy scenario on the fallback scan. The daemon field was split into task-a2a55bc6, which keeps this task at 5 files and lets the field land without the merge gate.",
+    "codebaseInsights": "The owner-guard functions are byte-identical in HEAD and the pending merge 3f6817f1; the merge rewrites other hunks of the same files, hence the step-1 merge gate. openClaimAttempt closes whatever attempt is open before it opens one, so a task holds at most one finalizing attempt, and the field names the same record the scan refuses on. With two open records, ps1 Read-MoeAttempt throws 'ambiguous or missing open attempt' but only warns: a checkpoint still lands (probed on HEAD 2026-10-30, sh and ps1). moe-agent.ps1 has no Set-StrictMode; Get-MoeProp is still the safe accessor. The sh disk fallback copies only assignedWorkerId from the task record, never finalizingAttempt.",
+    "risks": "(1) Comparing the wrong id, or treating any present object as foreign, would refuse every worker completion, since complete_task leaves the task unassigned with the worker's own attempt finalizing. finalizing-own guards against this. (2) Treating a malformed field as null would land over a foreign finalizing attempt; finalizing-malformed guards against this. (3) PowerShell coerces '3' -gt 0 to true; only Test-MoeGeneration's type check rejects a string generation. (4) A shared file dirty at claim time: the peer gate blocks rather than landing a peer's hunks. (5) The ps1 legs need WSLENV forwarding, or postflight.ps1 runs ~12 minutes.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight-owner-guard.cjs",
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "scripts/tests/postflight-owner-scope.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T00:34:11.429Z",
+  "approvedPlanRevision": 1
 }

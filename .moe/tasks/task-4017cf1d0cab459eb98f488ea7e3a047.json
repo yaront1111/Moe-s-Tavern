@@ -108,7 +108,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-30T00:30:30.142Z",
+  "updatedAt": "2026-10-30T00:30:52.015Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:26:25.711Z",
     "plannedStepCount": 5,
@@ -205,7 +205,44 @@
     "scripts/tests/local-runner-agents.test.mjs",
     "scripts/tests/local-runner-bundle.test.mjs",
     "scripts/local-runner/agent-binaries.json",
+    "scripts/local-runner/agent-cache.mjs",
+    ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+    ".moe/tasks/task-5b0a2bcf70f34c62ba29df0f7ff99988.json"
+  ],
+  "completionSummary": "CQ-R10d2 delivered: a host-side cache of pinned agent CLIs, with nothing wired into it yet.\nNew files:\n- scripts/local-runner/agent-binaries.json: pins hashed from real downloads on 2026-10-30. claude 2.1.308 (stable channel) is a raw linux-x64/arm64 ELF; its hashes match the release manifest.json. codex rust-v0.166.0 is a musl tar.gz; the archive hashes match the GitHub asset digests, and the single-member sha/size come from the extracted bytes.\n- scripts/local-runner/agent-cache.mjs:\n  - validateAgentManifest takes the exact shape only, with fixed https URL templates; anything else fails with a fixed code.\n  - loadAgentManifest (64 KiB cap).\n  - fetchAgentBinary({cli,arch,cacheDir},{fetch,manifest}) returns a frozen {file,sha256,size}. It follows redirects manually (at most 5, https only). The download is bounded by the pinned size with a 0600 exclusive .part and a sync, and is hashed before any parse. A streaming ustar/gunzip member extract is bounded by memberSize and checked against its pin; the file is renamed in only after that; every .part is unlinked on all paths. A cache hit is re-verified through one O_NOFOLLOW fd; a corrupt entry is removed and downloaded once more; a non-regular entry is refused and never followed or deleted.\n  - Fixed codes AGENT_BINARY_*.\nTests: AB1-AB11 in local-runner-agents.test.mjs (no network, nothing under .moe). In the bundle test, a `shipped` list (not `required`, because onboarding.mjs does not check these files yet) checks the bundle carries the module and manifest.\nEvidence:\n- Verification: 32/32 pass.\n- local-runner.test.mjs: 241 pass, 1 skipped.\n- Windows Node 24.16: AB1-AB11 pass.\n- Mutants: 24/26 killed (2 layered POSIX-equivalent).\n- Manual real-network run: claude 1 fetch, codex 2 (302 to release-assets), member hashes equal to the pins; repeat calls made 0 fetches.\nSize is 576 net lines against a 400 target.\nFound along the way: a pipeline async sink must drain to EOF or it stalls (Serena gotcha-node-pipeline-sink-mu",
+  "commits": [
+    {
+      "sha": "baa52df533afb69c4676166cf6291e35df06e583",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T00:04:52Z",
+      "paths": [
+        ".moe/tasks/task-4017cf1d0cab459eb98f488ea7e3a047.json",
+        ".moe/tasks/task-5b0a2bcf70f34c62ba29df0f7ff99988.json",
+        "scripts/local-runner/agent-binaries.json",
+        "scripts/local-runner/agent-cache.mjs",
+        "scripts/tests/local-runner-agents.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T00:30:52.015Z",
+      "treeId": "468589b247d7c8c8c4cb404231cecba99bfd786e",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/local-runner-agents.test.mjs",
+    "scripts/tests/local-runner-bundle.test.mjs",
+    "scripts/local-runner/agent-binaries.json",
     "scripts/local-runner/agent-cache.mjs"
   ],
-  "completionSummary": "CQ-R10d2 delivered: a host-side cache of pinned agent CLIs, with nothing wired into it yet.\nNew files:\n- scripts/local-runner/agent-binaries.json: pins hashed from real downloads on 2026-10-30. claude 2.1.308 (stable channel) is a raw linux-x64/arm64 ELF; its hashes match the release manifest.json. codex rust-v0.166.0 is a musl tar.gz; the archive hashes match the GitHub asset digests, and the single-member sha/size come from the extracted bytes.\n- scripts/local-runner/agent-cache.mjs:\n  - validateAgentManifest takes the exact shape only, with fixed https URL templates; anything else fails with a fixed code.\n  - loadAgentManifest (64 KiB cap).\n  - fetchAgentBinary({cli,arch,cacheDir},{fetch,manifest}) returns a frozen {file,sha256,size}. It follows redirects manually (at most 5, https only). The download is bounded by the pinned size with a 0600 exclusive .part and a sync, and is hashed before any parse. A streaming ustar/gunzip member extract is bounded by memberSize and checked against its pin; the file is renamed in only after that; every .part is unlinked on all paths. A cache hit is re-verified through one O_NOFOLLOW fd; a corrupt entry is removed and downloaded once more; a non-regular entry is refused and never followed or deleted.\n  - Fixed codes AGENT_BINARY_*.\nTests: AB1-AB11 in local-runner-agents.test.mjs (no network, nothing under .moe). In the bundle test, a `shipped` list (not `required`, because onboarding.mjs does not check these files yet) checks the bundle carries the module and manifest.\nEvidence:\n- Verification: 32/32 pass.\n- local-runner.test.mjs: 241 pass, 1 skipped.\n- Windows Node 24.16: AB1-AB11 pass.\n- Mutants: 24/26 killed (2 layered POSIX-equivalent).\n- Manual real-network run: claude 1 fetch, codex 2 (302 to release-assets), member hashes equal to the pins; repeat calls made 0 fetches.\nSize is 576 net lines against a 400 target.\nFound along the way: a pipeline async sink must drain to EOF or it stalls (Serena gotcha-node-pipeline-sink-mu"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T00:04:52Z",
+    "at": "2026-10-30T00:30:52.015Z"
+  }
 }
