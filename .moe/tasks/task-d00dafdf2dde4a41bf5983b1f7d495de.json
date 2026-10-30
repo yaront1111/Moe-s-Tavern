@@ -18,10 +18,16 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nEdit the LANDED bytes. CQ-R13e1 (task-b29d022e) lands first, with:\n- scripts/local-runner/certify-bridge.mjs;\n- BRIDGE_CHECKS [bridge-framing, bridge-eof];\n- watchedSession (result {outcome, exitCode, exit, stdout, overflow, broken});\n- BRIDGE_BOUNDS on context.bounds;\n- the certify harness's spawn fake for materialize and check sessions.\nCQ-R13d lands certify.mjs and the CF rows before that. Re-read certify.mjs, certify-bridge.mjs and the certify rows of scripts/tests/local-runner.test.mjs first.\n\nHARNESS. Extend the certify fake provider. Its run intercepts exactly two argv shapes before delegating to the fake VM, and each takes a per-row override (argv => result, or an execFile-style rejection with an integer code and string stdout, as runGuestProbe expects):\n- the gateway probe ['exec','--no-map-working-directory',NAME,'--','ip','-4','route','show','default']. Default stdout: 'default via 10.20.30.1 dev eth0 proto dhcp src 10.20.30.40 metric 100\\n'.\n- the agent probe ['exec','--no-map-working-directory',NAME,'--','sudo','-n','-u','moe-agent','python3','-I','-c',CONNECT_PROBE, ...args]. Default stdout: 'closed\\n'.\nThe check-session fake answers a frame whose command starts with \"python3 -I -c '\". By default it sends hello, then out('closed\\n'), then observation exit 0, a clean end and exit 0. That is overridable per row.\n\nROWS (each failure row also asserts that teardown passed and that the listener port refuses a host connect afterwards):\n- GN1, literals and argv.\n  - CONNECT_PROBE has no \"'\" and no control character.\n  - For the listener's port P, the check-identity frame is exactly { id: 'certify-network', command: `python3 -I -c '${CONNECT_PROBE}' 10.20.30.1 ${P} 9876`, protected: [] }, and the command is at most 1000 chars.\n  - The agent argv is exactly ['exec','--no-map-working-directory',NAME,'--','sudo','-n','-u',JOB_IDENTITIES[0],'python3','-I','-c',CONNECT_PROBE,'10.20.30.1',String(P),'9876'].\n  - The gateway argv is exact.\n  - P was held by a real 127.0.0.1 listener during the check.\n- GN2, gatewayOf(stdout).\n  - It returns '10.20.30.1' for the default line, with or without the trailing newline or the trailing fields.\n  - It returns null for each of: ''; two default lines; '10.0.0.256'; a leading zero ('10.0.0.01'); a first octet of 0, 127 or >= 224; IPv6 'default via fe80::1 dev eth0'; text before 'default'; a device name with a control character; a non-string.\n- GN3, pass. guest-network passes when both identities print 'closed' and the listener accepted nothing. CF1 (all pass) still passes with 'guest-network' in the list.\n- GN4, fail mapping.\n  - REACHABLE, each of these is CERTIFY_GUEST_NETWORK_REACHABLE:\n    - agent exit 1 with 'open\\n';\n    - a check-identity observation code 1 with 'open\\n';\n    - the fake agent probe really connects to 127.0.0.1:P (as a slirp-like gateway-to-loopback map would), then prints 'closed\\n' and exits 0, and the listener counted it.\n  - UNKNOWN, each of these is CERTIFY_GUEST_NETWORK_UNKNOWN:\n    - agent exit 2 or 3 (Multipass's own codes);\n    - exit 0 with 'open\\n';\n    - exit 0 with '';\n    - exit 1 with 'closed\\n';\n    - extra stdout;\n    - a check session ending 'infra-failure' or 'timeout', or 'passed' with stdout other than 'closed\\n'.\n  - Gateway probe exit 1, or malformed stdout, is CERTIFY_GATEWAY_UNKNOWN, with no check session spawned, no agent probe and no listener opened.\n  - A gateway or agent probe whose provider fails (a killed execFile error) gives its own PROVIDER_* code from classifyFailure.\n- GN5, composition.\n  - The ids of CERTIFY_CHECKS end [..., 'bridge-framing', 'bridge-eof', 'guest-network', 'teardown'].\n  - A 'bridge-eof' failure leaves 'guest-network' not-run, with no gateway probe.\n  - A 'guest-network' failure still deletes the VM.\n\nRun `node --test scripts/tests/local-runner.test.mjs`. The new rows fail and every other row passes.\n\nERROR HANDLING in the tests: assert fixed codes, never messages. Every listener a row opens is closed, and every scratch directory is removed in t.after.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "RED. certifyHarness gains `network` overrides for the two exec probes (gateway `ip -4 route show default`, agent `sudo -n -u moe-agent python3 -I -c`) recorded in h.probes; BRIDGE_SCRIPTS answers 'certify-network' with hello/closed/exit 0. Updated R13d/R13e1 constants for the new id (CERTIFY_IDS, BRIDGE_NOT_RUN, CF3 undeleted, CF5 teardown index 5->6, CB1 ids, CB6 failedBridge). New GN1-GN5 (literal+argv+order+listener held, gatewayOf table, pass, REACHABLE/UNKNOWN/GATEWAY/PROVIDER mapping with teardown + listener-closed assertions, composition). GN rows use a namespace import until the exports exist. Red run: 316 tests, 304 pass, 11 fail (CF1/2/3/5, CB1/6, GN1-5, all from the missing check/exports), 1 skip. Log /tmp/moe-d00d-worker/red.log. Peer dirty paths untouched.",
+      "startedAt": "2026-10-30T17:22:36.587Z",
+      "completedAt": "2026-10-30T17:27:28.091Z"
     },
     {
       "stepId": "step-2",
@@ -47,7 +53,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-73c29a03",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -66,7 +72,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:05.532Z",
-  "updatedAt": "2026-10-30T06:34:06.297Z",
+  "updatedAt": "2026-10-30T17:27:28.091Z",
   "dependsOn": [
     "task-a8a3a502b8264cc5adcb660f59656a00",
     "task-b29d022e7d9e4698b40517340f48e31c"
@@ -74,16 +80,20 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T06:18:53.556Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 2
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-e4b7eee0"
+    "architect-e4b7eee0",
+    "worker-73c29a03"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T06:34:06.277Z",
   "planningNotes": {
@@ -107,5 +117,6 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T06:34:06.297Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T17:22:36.587Z"
 }
