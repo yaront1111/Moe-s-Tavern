@@ -83,7 +83,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -133,7 +133,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:16.594Z",
-  "updatedAt": "2026-10-30T22:00:53.464Z",
+  "updatedAt": "2026-10-30T22:09:32.589Z",
   "dependsOn": [
     "task-d00dafdf2dde4a41bf5983b1f7d495de",
     "task-001d8ab383ef41088e045b2e41ed0e1e",
@@ -144,13 +144,16 @@
     "firstClaimAt": "2026-10-30T06:29:13.938Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T22:09:32.589Z",
+    "wallClockMs": 56418651
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
     "architect-899a90d6",
     "architect-915213a1",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-12f7cf2d"
   ],
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -190,20 +193,46 @@
       "treeId": "be2c883071368eeb9b99fefd63cdb5b128939b18",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "3a393e4a3da1b0c072f9ba1e3b1551f6b9377c61",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-25da16b2@2026-10-30T21:45:58Z",
+      "paths": [
+        ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+        ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+        ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json",
+        "scripts/local-runner/certify-bridge.mjs",
+        "scripts/local-runner/certify-containment.mjs",
+        "scripts/local-runner/certify.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-25da16b2",
+      "recordedAt": "2026-10-30T22:01:14.533Z",
+      "treeId": "db6673869cfff6ad3c1fea75b5849b2d1f62f0b1",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/certify-bridge.mjs",
     "scripts/local-runner/certify-containment.mjs",
-    "scripts/local-runner/certify.mjs"
+    "scripts/local-runner/certify.mjs",
+    ".moe/tasks/task-0921d6d76a6b40a685077245b19ac639.json",
+    ".moe/tasks/task-7a4aab5e0bfa48e0978eb76506edfd57.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-915213a1@2026-10-30T20:24:29Z",
-    "at": "2026-10-30T21:18:08.004Z"
+    "kind": "completion",
+    "sessionId": "worker-25da16b2@2026-10-30T21:45:58Z",
+    "at": "2026-10-30T22:01:14.533Z"
   },
   "tier": "standard",
   "effort": "xhigh",
@@ -297,5 +326,15 @@
     "reportedAt": "2026-10-30T22:00:53.463Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-R13f adds 'writer-containment' and 'controller-replacement' around R13f1's 'check-containment', applying the architect prototype to R13h's final landed bytes (5fb1eef7). check-containment's code is unchanged.\n\nwriter-containment: as root it makes another job's home, then installs the real pinned toolchain (fetchNodeToolchain + installToolchain). One fixed python probe then runs as moe-agent. It exits 0 only when each of the 7 targets exists and access(2) refuses it: credential, manifest, /opt/moe, the other home, the supervisor, toolchain bin and node. Probe exits 10+i are CERTIFY_WRITER_<KIND>_ALLOWED, 20+i TARGET_MISSING, anything else UNKNOWN; a failed home setup is SETUP_FAILED.\n\ncontroller-replacement: `sudo -n cp /usr/bin/true` over the supervisor, then waitForGuestReady with buildUserData digests. It requires failures exactly [SUPERVISOR_HASH_MISMATCH]. It then rewrites this VM's own ledger record to another attempt. deleteOwned with this run's owner must reject LIFECYCLE_NOT_OWNER, while the record stays 'owned' with that attempt and the VM stays present. The original bytes are restored in finally. Otherwise NOT_REPLACED, ACCEPTED, UNKNOWN or RECORD_NOT_KEPT.\n\nOrder: writer, check, controller, then R13h's cancellation and recovery; teardown stays last.\n\nTests: WC1-WC3, CR1-CR2, pinned lists, and CF5's vacuous index-6 rows now use the last index.\n\nSelf-review finding, fixed: the 'failures not exact' mutant survived, because the layout failure row fails BEFORE the hash. I added the CR2 row 'a later failure too' (shim hash, +2 lines).\n\nEvidence:\n- Base 333/332/1; RED on the missing WRITER_PROBE export.\n- Final fresh run: exit 0, 338 tests, 337 pass, 1 existing skip.\n- 12/12 scratch mutants killed by AssertionErrors (/tmp/r13f-mut.muOsnP), restored cmp-identical.\n- diff --check clean. 229 changed lines (+203/-24) across the 4 approved files.\n\nNative certify is operator-only and was not run. executionReady false; verified-local unavailable. No Git writes or .m"
+  "completionSummary": "CQ-R13f adds 'writer-containment' and 'controller-replacement' around R13f1's 'check-containment', applying the architect prototype to R13h's final landed bytes (5fb1eef7). check-containment's code is unchanged.\n\nwriter-containment: as root it makes another job's home, then installs the real pinned toolchain (fetchNodeToolchain + installToolchain). One fixed python probe then runs as moe-agent. It exits 0 only when each of the 7 targets exists and access(2) refuses it: credential, manifest, /opt/moe, the other home, the supervisor, toolchain bin and node. Probe exits 10+i are CERTIFY_WRITER_<KIND>_ALLOWED, 20+i TARGET_MISSING, anything else UNKNOWN; a failed home setup is SETUP_FAILED.\n\ncontroller-replacement: `sudo -n cp /usr/bin/true` over the supervisor, then waitForGuestReady with buildUserData digests. It requires failures exactly [SUPERVISOR_HASH_MISMATCH]. It then rewrites this VM's own ledger record to another attempt. deleteOwned with this run's owner must reject LIFECYCLE_NOT_OWNER, while the record stays 'owned' with that attempt and the VM stays present. The original bytes are restored in finally. Otherwise NOT_REPLACED, ACCEPTED, UNKNOWN or RECORD_NOT_KEPT.\n\nOrder: writer, check, controller, then R13h's cancellation and recovery; teardown stays last.\n\nTests: WC1-WC3, CR1-CR2, pinned lists, and CF5's vacuous index-6 rows now use the last index.\n\nSelf-review finding, fixed: the 'failures not exact' mutant survived, because the layout failure row fails BEFORE the hash. I added the CR2 row 'a later failure too' (shim hash, +2 lines).\n\nEvidence:\n- Base 333/332/1; RED on the missing WRITER_PROBE export.\n- Final fresh run: exit 0, 338 tests, 337 pass, 1 existing skip.\n- 12/12 scratch mutants killed by AssertionErrors (/tmp/r13f-mut.muOsnP), restored cmp-identical.\n- diff --check clean. 229 changed lines (+203/-24) across the 4 approved files.\n\nNative certify is operator-only and was not run. executionReady false; verified-local unavailable. No Git writes or .m",
+  "touchedFiles": [
+    "scripts/tests/local-runner.test.mjs",
+    "scripts/local-runner/certify-bridge.mjs",
+    "scripts/local-runner/certify-containment.mjs",
+    "scripts/local-runner/certify.mjs"
+  ],
+  "completedAt": "2026-10-30T22:09:32.589Z",
+  "reviewCompletedAt": "2026-10-30T22:09:32.589Z",
+  "reviewSummary": "Reviewed completion 3a393e4a (on moe/work-2026-10-24, pushed). Source diff: 229 changed lines (+203/-24) across exactly the 4 approved files. check-containment's code, certify-lifecycle.mjs and R13h's LC rows are untouched.\n\nRe-ran the verification in a clean git archive of 3a393e4a: env -i Node v24.21.0 node --test scripts/tests/local-runner.test.mjs. Exit 0: 338 tests, 337 pass, 0 fail, 1 existing skip, matching the evidence. diff --check is clean.\n\nDoD:\n1. writer-containment. WC2 runs the real probe in python3 with stubbed exists/access: 0 only when every target exists and is refused, 10+i if granted, 20+i if absent, first failure wins. WC3 gives every outcome a fixed code. WC1 pins the argv, the ops order and the supervisor drift guards.\n2. check-containment: R13f1's bytes, unchanged; CC1-CC6 green.\n3. controller-replacement. CR1 covers the pass path, with the record restored so teardown deletes. CR2 has 11 negative rows, each asserting its end state. LC7 and CERTIFY_IDS pin it last on the certify VM.\n4. Verification reproduced, exit 0.\n\nMy 7 independent mutants are all killed by AssertionErrors: swapped 10/20 offsets, no ACCEPTED check, ledger part skipped, install timeout changed, the shim replaced instead of the supervisor, cleanup owner from the rewritten attempt, no toolchain install. The restored copy is cmp-identical and 7/7.\n\nNatively runIsolationCertify passes deps {} with native=true, so the seams exist only on the injected transport. executionReady false; verified-local unavailable.\n\nNon-blocking:\n(a) \"Another home\" is a moe-check-owned home, per the contract; same-uid agent homes are not distinguished.\n(b) A failing finally writeFile leaves the record rewritten, and teardown then fails closed.\n\nNative certify is operator-only and was not run.",
+  "requiredCheckAtDone": null
 }
