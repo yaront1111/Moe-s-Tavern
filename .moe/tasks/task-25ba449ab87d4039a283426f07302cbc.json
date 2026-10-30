@@ -112,7 +112,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:27:29.451Z",
-  "updatedAt": "2026-10-30T14:47:10.294Z",
+  "updatedAt": "2026-10-30T14:48:06.462Z",
   "planningEntry": {
     "from": "BLOCKED",
     "at": "2026-10-30T13:53:23.489Z",
@@ -229,7 +229,8 @@
     ".moe/tasks/task-24a5ad5bb5d74180bb71f5cbff76225a.json",
     ".moe/tasks/task-25ba449ab87d4039a283426f07302cbc.json",
     ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
-    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json"
+    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json",
+    ".moe/tasks/task-eea78d1d1dc54ae1a01a61e0e211cfa0.json"
   ],
   "completionSummary": "Reopen #1 (rev2): native lifecycle identity is now reconciled in packages/moe-daemon/src/index.ts. Only index.ts (+15/-6) and index.test.ts (+99/-1) changed; the six landed transport files are untouched. Task-wide net is 275 of 400.\n\nQA P1-1 (existingDaemonBlocksStart under //tmp/x vs /tmp/x, or C:\\x vs /x, deleted a healthy daemon.json and lock with 0 probes): fixed. validateDaemonInfoForProject and probeDaemonHealth (metadata check and /health body) now compare recorded and reported paths, as written, against own = canonicalProjectPath(--project). Only our own request is resolved. X12, canonical and alias: start is blocked after 1 probe, the files are byte-identical, status reports running/local, and stop sends SIGTERM only to the validated pid. X13: the probe accepts an alias of our own path and rejects a recorded or reported alias.\n\nQA P1-2 (staleLockReason unlinked a live lock and admitted a second writer): fixed. It now compares the lock's canonical path with canonicalProjectPath(--project). X14, canonical/alias and alias/alias: a real child process holds the lock, the contender's acquireLock returns false, the lock bytes are unchanged and the owner stays alive.\n\nQA 3 (permanent tests): X12×2, X13 and X14×2 run and pass on both Linux and native Windows, with no skips. Against HEAD's index.ts, 4 fail; mutating each site fails its matching test.\n\nUnchanged: foreign classification of the original spelling, local pids never trusted for foreign metadata, storage, health and MCP shapes, cleanup, TTL and lock policy, and the transport table. One fail-safe edge: a daemon started under an alias is treated as foreign, so start exits 1 and status says unknown, but nothing is deleted.\n\nFiled, all pre-existing: task-eea78d1d (a symlink spelling deletes a live daemon.json), task-4ca62c89 (an empty lock in the create-to-write window gets replaced), task-f33bf7af (doctor and proxy own-path checks). task-c83d7847 is superseded and has a comment saying so.",
   "commits": [
@@ -298,6 +299,21 @@
       "treeId": "ab046bdc378d7649ac7aaf1dc9edbcc4f7279d1b",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "d02883e0669d5a8695342d4606fcd091ae2b9635",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T14:34:51Z",
+      "paths": [
+        ".moe/tasks/task-eea78d1d1dc54ae1a01a61e0e211cfa0.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T14:48:06.462Z",
+      "treeId": "1bf64e8b84e8d0c6a3d902b576e26d9d45c58570",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -311,9 +327,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T13:58:13Z",
-    "at": "2026-10-30T14:34:29.847Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T14:34:51Z",
+    "at": "2026-10-30T14:48:06.462Z"
   },
   "reviewCompletedAt": "2026-10-30T14:47:10.294Z",
   "rejectionDetails": {
