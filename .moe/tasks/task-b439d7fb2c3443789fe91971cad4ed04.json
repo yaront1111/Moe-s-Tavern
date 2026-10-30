@@ -15,10 +15,11 @@
     {
       "stepId": "step-1",
       "description": "Verify the premises before writing anything. This is a spike: the deliverable is a decision, and the decision below holds only if these facts hold. Re-read the code and record the exact file:line references the document will cite (Serena find_symbol, or a read-only grep):\n\nF1. moe-jetbrains MoeDaemonSupervisor.readDaemonInfo reads <project>/.moe/daemon.json, which is repository-visible content. The IDE then connects to ws://127.0.0.1:<port>/ws taken from that file (MoeProjectService.doConnect). Under PROTECTED, activationRefusal → RuntimeSelectionPolicy.verifyProvenance checks only the pid: (pid, start instant) or its direct parent against IDE spawn records, persisted by CQ-RF01 when landed. Nothing binds the port to that pid.\nF2. scripts/local-runner/guest-session.mjs daemonRefusal runs before the spawn (runGuestSession) and again before every forward (reply()). It does an O_NOFOLLOW read with a 16 KiB cap and admits only an absent bindHost or a literal loopback one. forward is a host-controller function. The guest gets no daemon address, port or token.\nF3. packages/moe-daemon/src/server/WebSocketServer.ts: /ws and /mcp take any loopback client without authentication; only /runner authenticates (authenticateRunner).\nF4. The daemon CLI's stop and status validate daemon.json through validateDaemonInfoForProject and probeDaemonHealth (packages/moe-daemon/src/index.ts). That validation is self-reported by whatever answers on the port.\nF5. Guests reach no host loopback port. That is R08's design (the guest has no daemon URL); CQ-R13e certifies it with guest-network probes on real hardware.\nF6. Same-user host processes can already change everything the protected profile relies on:\n- the user-writable installed plugin and runtime;\n- the owner-only IDE store (CQ-RF01);\n- the IDE JVM and the daemon process (same-user debug, ptrace or OpenProcess);\n- node.\n\nIf any fact contradicts its premise, do NOT write the planned decision. Examples: a path where repository content or guest code alone can start or reach a host loopback listener, or an authenticated /ws. Instead, add a task comment with the evidence, then moe.report_blocked, so that the architect re-decides.\n\nError handling: a reference you cannot confirm is left out of the document, never guessed.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "docs/ARCHITECTURE.md"
-      ]
+      ],
+      "startedAt": "2026-10-30T07:18:39.191Z"
     },
     {
       "stepId": "step-2",
@@ -56,7 +57,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -66,10 +67,17 @@
   "parentTaskId": null,
   "priority": "MEDIUM",
   "order": 278.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4bef89841e674c1dac21be7b54c90284",
+      "author": "worker-0062feec",
+      "content": "Step-1 premise check: BLOCKING per the plan's stop rule. No document written, no files changed.\n\nCONFIRMED: F1 (MoeDaemonSupervisor.kt:47 readDaemonInfo; MoeProjectService.kt:247/250/264 doConnect→activationRefusal→ws://127.0.0.1:<port>/ws; RuntimeSelectionPolicy.kt:251 verifyProvenance checks only pid+start or the supervisor parent, nothing binds the port). F2 (guest-session.mjs:66 and :173 daemonRefusal, defined at :78; O_NOFOLLOW at :83, MAX_DAEMON_INFO_BYTES=16_384 at :18, LOOPBACK set at :23, forward at :181; header :3-5 says the guest gets no address, port or token). F3 (WebSocketServer.ts:227 has no verifyClient; onConnection :289-310: /mcp attaches with no auth, only /runner calls authenticateRunner at :301, everything else is a plugin client). F4 (index.ts:302 probeDaemonHealth accepts the /health self-report of pid; :355 validateDaemonInfoForProject). F6: general.\n\nCOUNTEREXAMPLE to the planned Open Point 2 claim (\"changing daemon.json needs a host writer, a same-user process; guest code cannot\"):\n1. Repository content can rewrite daemon.json. .moe/daemon.json is gitignored (.gitignore:63), and git treats ignored files as expendable. An upstream commit that force-adds .moe/daemon.json silently overwrites the daemon's live file on `git pull`. Reproduced in a scratch repo: the local {\"bindHost\":\"0.0.0.0\"} became the repo's {\"port\":9876,\"pid\":1}, pull exit 0, no conflict.\n2. PROTECTED can bind a wildcard. MoeDaemonSupervisor.kt:222 protectedDaemonCommand appends `--host 0.0.0.0` when wslAgentsEnabled().\n3. The chain: an operator has WSL agents on, so the daemon is on 0.0.0.0 and daemonRefusal would refuse with SESSION_DAEMON_NOT_LOOPBACK. A pulled daemon.json without bindHost then makes daemonRefusal pass, so guest sessions spawn and forward. The guest's network can reach the host's non-loopback interfaces, where an unauthenticated /mcp listens (F3). Guest code can probe the default port 9876 with no address handed to it.\nSo in-model attackers (repository content, then guest code) defeat the only tripwire. It needs an operator setting, but no same-user attacker. The bug is not the TOCTOU window. It is that the tripwire trusts repository-writable bytes about the daemon's bind. Point 1 (port↔pid) still holds: a pulled file cannot start a listener.\n\nALSO for the re-decision: /ws and /mcp do no Origin check (there is no Origin handling in packages/moe-daemon/src). Any web page in a local browser can open ws://127.0.0.1:9876/mcp. That attacker class is neither repository content, guest code nor a host process, and the planned \"Threat model\" section does not name it.\n\nOptions the architect may weigh:\n(a) Under PROTECTED, refuse guest sessions when the IDE launched the daemon with --host (a trusted source, not daemon.json).\n(b) Take bindHost from the daemon's /health self-report over loopback, or from the controller's own spawn config, instead of the file.\n(c) Forbid the WSL-agents wildcard under PROTECTED.\n(d) Keep the decision but state the WSL-mode exception and file a follow-up row.",
+      "timestamp": "2026-10-30T07:21:44.240Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:45.773Z",
-  "updatedAt": "2026-10-30T07:16:54.662Z",
+  "updatedAt": "2026-10-30T07:21:59.953Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:52:10.852Z",
@@ -81,7 +89,8 @@
     "plannedDistinctFileCount": 2
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-0062feec"
   ],
   "tier": "standard",
   "effort": "high",
@@ -112,5 +121,10 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T07:16:54.662Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:18:39.191Z",
+  "blockedReason": "Step-1 premise check failed, so per the plan's stop rule the planned decision was not written. In-model repository content can rewrite .moe/daemon.json: it is gitignored, and `git pull` silently overwrites an ignored file that upstream force-added (reproduced). Under PROTECTED with WSL agents on, the daemon binds 0.0.0.0 (MoeDaemonSupervisor.kt:222). A pulled daemon.json without bindHost then defeats guest-session.mjs daemonRefusal, and guest code could reach the unauthenticated /mcp through the host interface. This contradicts Open Point 2's claim that only a same-user host writer can change daemon.json. Also, /ws and /mcp have no Origin check, so browser pages are an unlisted attacker class. The architect must re-decide; the options are in comment-4bef8984.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T07:21:59.953Z"
 }

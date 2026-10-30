@@ -1,0 +1,40 @@
+{
+  "id": "task-032c973941bc41d9b051eedacb7de0b6",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "[CQ-RF06b] VS Code protected daemon spawn",
+  "description": "Objective: under the protected profile, the VS Code extension starts the Moe daemon only from the runtime installed with the extension. This mirrors JetBrains MoeDaemonSupervisor.protectedDaemonCommand / protectedDaemonEnvironment / protectedCommandOrRefuse. Split out of CQ-RF06 (task-98ffe33f448746e6bc802db0b5624fd0) by architect-bd1eb82d on 2026-10-30 to keep each diff under the 400-LOC review cap. RF06 lands the shared policy as exported functions in moe-vscode/src/services/MoeDaemonClient.ts: runtimeProfile (strict, fail-closed, session pin), comparablePath/isWithin, installedRoot(extensionPath) = <extensionPath>/bundled and installedArtifact. This row consumes them in the same file.\n\nDeliverable: when runtimeProfile(projectPath) is 'protected', MoeDaemonClient.startDaemon:\n1. Selects the daemon with installedArtifact(installedRoot, 'daemon/index.js', projectPath). resolveGlobalConfigDaemonPath and any project copy are never consulted.\n2. Selects node as an absolute, real, regular file outside the project (a mirror of JetBrains installedExecutable). It tries, in this order:\n   - MOE_NODE_COMMAND;\n   - on non-Windows, ~/.local/share/moe/node/current/bin/node;\n   - an in-process lookup of node or node.exe over PATH entries that are absolute and outside the project (never a bare name resolved by spawn);\n   - on Windows, the resolveNodeExecutable candidates (ProgramFiles, ProgramFiles(x86), LOCALAPPDATA\\Programs\\nodejs, LOCALAPPDATA\\nvm\\current, APPDATA\\nvm).\n3. Spawns [node, daemon, 'start', '--project', projectPath] with cwd = the installed daemon's directory. The env drops NODE_OPTIONS and NODE_PATH, and PATH (matched case-insensitively on Windows) keeps only absolute entries outside the project.\n4. Refuses instead of falling back: any rejection starts nothing, logs the reason and shows `Protected execution profile: <reason>. Project and PATH copies of the Moe daemon are not used.`\n5. The legacy profile is byte-for-byte unchanged.\n\nOut of scope:\n- Running-daemon provenance (JetBrains activationRefusal, spawn records, RF03 replacement). VS Code under protected still connects to an existing daemon.json daemon. Node has no portable process start-time API, so this stays a known gap, recorded for CQ-RF07.\n- Persistent state, JetBrains changes, .moe edits, enabling verified-local.\n\nConstraint: five test harnesses (daemon-start, daemon-json-cap, approval-paths, plan-approval-client, settings-wire) transpile MoeDaemonClient.ts alone with a closed require shim. Add no new local runtime import to MoeDaemonClient.ts.\n\nVerification command (fresh, exit 0 required): cd moe-vscode && npm test && npm run compile",
+  "definitionOfDone": [
+    "Under the protected profile, startDaemon spawns exactly [real node outside the project, real installed bundled/daemon/index.js, 'start', '--project', projectPath], with cwd = the installed daemon dir and an env without NODE_OPTIONS, NODE_PATH or relative/project PATH entries. Shown by tests in a new moe-vscode/tests/*.test.cjs.",
+    "Under the protected profile, a missing installed daemon, or no acceptable node, spawns nothing, shows the 'Protected execution profile: … Project and PATH copies of the Moe daemon are not used.' refusal, and never consults the global-config daemon. Shown by tests.",
+    "The legacy profile behaves exactly as before: the existing daemon-start tests pass unchanged.",
+    "The verification command exits 0 with its output supplied to complete_task."
+  ],
+  "taskRails": [
+    "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
+    "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
+  ],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-98ffe33f448746e6bc802db0b5624fd0"
+  ],
+  "priority": "MEDIUM",
+  "order": 285.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:22:02.365Z",
+  "updatedAt": "2026-10-30T07:22:05.161Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-10-30T07:22:05.161Z",
+    "seq": 1
+  }
+}

@@ -7,9 +7,105 @@
     "Task completed as described"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (test-driven-development) in packages/moe-daemon/src/tools/getCommitScope.test.ts.\n\n(a) Extend ScopeResult.peerDeclared to `{ path: string; taskId: string; peerActive: boolean; taskIds: string[]; editingTaskIds: string[] }[]`.\n\n(b) Add the e67ca0e repro: \"counts a peer's IN_PROGRESS step path, names every contesting task and flags the live mid-step one\".\n- Landing task 'task-1': WORKING, assigned worker-1, with a COMPLETED step whose modifiedFiles is ['docs/MCP_SERVER.md'].\n- Peer 'task-66e8': WORKING, unassigned, one PENDING step with affectedFiles ['docs/MCP_SERVER.md'].\n- Peer 'task-9cc1': WORKING, assignedWorkerId 'worker-live' (h.createWorker, status CODING, lastActivityAt now), one IN_PROGRESS step with affectedFiles ['docs/MCP_SERVER.md','docs/SCHEMA.md'].\n- Call scope({ workerId: 'worker-1', since: now-5min }).\n- Assert with exact toEqual:\n  - the MCP_SERVER entry is {path:'docs/MCP_SERVER.md', taskId:'task-66e8', peerActive:true, taskIds:['task-66e8','task-9cc1'], editingTaskIds:['task-9cc1']};\n  - the SCHEMA entry is {path:'docs/SCHEMA.md', taskId:'task-9cc1', peerActive:true, taskIds:['task-9cc1'], editingTaskIds:['task-9cc1']}.\n\n(c) Add describe('peerDeclared[].editingTaskIds'), one exact-array assertion per rule, reusing the peerTask/createWorker/openAttempt fixture patterns already in this file:\n- With since:\n  - IN_PROGRESS step + an active assignee: editing.\n  - IN_PROGRESS + unassigned + no attempts: not editing, but still in taskIds.\n  - IN_PROGRESS + an open attempt (openAttempt, no assignee): editing.\n  - PENDING step + an active assignee: not editing.\n  - COMPLETED step naming the path + an active assignee: not editing.\n- An IN_PROGRESS step naming raw './src\\\\x.ts' marks the stored 'src/x.ts' entry.\n- An active task whose IN_PROGRESS step names src/a.ts and that also declareFiles src/b.ts is editing for src/a.ts only.\n- Without since, an unassigned IN_PROGRESS peer is editing (fail closed).\n- A peer that dependsOn the landing task, with an IN_PROGRESS step on a path only its plan names, contributes no entry (the waits-on-this rule is unchanged).\n- Error-handling test: a peer whose IN_PROGRESS step has affectedFiles ['/abs.ts','../up.ts', 42] and a non-array newFiles does not throw, and adds no entry for those values.\n\n(d) Update the existing exact-equality case \"ORs over every task contributing a path, keeping the first claimant as taskId\" (about line 512) to also expect taskIds ['task-p1','task-p2'] and editingTaskIds []. Do not loosen it.\n\nRun `npx vitest run src/tools/getCommitScope.test.ts` and confirm the new and updated cases fail only on the missing fields.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "RED in a Linux-native snapshot (/tmp/moe-f943-dev.SQ0Nkx, HEAD archive + hardlinked native node_modules, lock cmp-equal): getCommitScope.test.ts 8 failed | 46 passed. All 8 fail only because taskIds/editingTaskIds are undefined (e67ca0e repro, the updated first-claimant toEqual, and 6 editing-rule cases). The waits-on-this case already passes (expects no entry; rule unchanged). Note: the plan's 'non-array newFiles' junk case uses null, because collectTaskPathTiers (attributionTiers.ts, out of scope) spreads a truthy non-iterable list and throws; filed as a separate bug task. 831 other dirty paths belong to peers; none touched.",
+      "startedAt": "2026-10-30T07:14:36.304Z",
+      "completedAt": "2026-10-30T07:15:58.778Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement in packages/moe-daemon/src/tools/getCommitScope.ts. No change to util/attributionTiers.ts.\n\n1. Add a local helper next to peerTaskActive: `inProgressStepPaths(task: Task): PathSet`. It returns the union of affectedFiles, newFiles and modifiedFiles over every implementationPlan step whose status === 'IN_PROGRESS'.\n2. Error handling: a peer's record is worker-typed. Guard implementationPlan and each file list with Array.isArray. Let PathSet.addAll drop absolute, traversal and non-string entries. Never throw, so one peer's junk cannot fail another task's scope; this is the same contract as collectTaskPathTiers.\n3. In the peer loop, keep `const active = peerTaskActive(state, other, nowMs, sinceMs)`, then `const editing = active ? inProgressStepPaths(other) : null`.\n4. For each stored path:\n   - New entry: `{ path: stored, taskId: other.id, peerActive: active, taskIds: [other.id], editingTaskIds: editing?.has(stored) ? [other.id] : [] }`.\n   - Existing entry: `entry.peerActive ||= active`, push other.id to taskIds, and push it to editingTaskIds when editing?.has(stored).\n5. Ordering and duplicates: sortedById makes both lists ascending, and peerPaths is already a deduped set per task, so no id repeats.\n6. Keep the first-claimant taskId and the peerActive OR exactly as they are.\n7. Waits-on-this peers still contribute only asserted paths, and editing only marks paths a task already contributes.\n8. Update the tool description's PEER-map clause to name:\n   - taskIds: every contributing task, in id order;\n   - editingTaskIds: contributors with an IN_PROGRESS step naming the path that are active by the peerActive rule.\n\nStep 1's tests must now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "note": "GREEN in snapshot /tmp/moe-f943-dev.SQ0Nkx: getCommitScope.test.ts 54 passed (was 8 failed); tsc --noEmit exit 0. Added local inProgressStepPaths(task) (Array.isArray guards, PathSet drops junk), the editing gate `active ? inProgressStepPaths(other) : null`, taskIds/editingTaskIds on each peerDeclared entry, and the tool-description clause. taskId and peerActive logic untouched; attributionTiers.ts untouched. Mutants all killed: no activity gate (1 fail), any step status (1 fail), no editing push on an existing entry (2 fails). Filed bug task-7e39a63f6b024acf9f5f06c92bfafd59 for the out-of-scope collectTaskPathTiers non-iterable throw.",
+      "startedAt": "2026-10-30T07:16:01.463Z",
+      "completedAt": "2026-10-30T07:16:55.952Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "record_commit recognises the wrapper's editing hold. Write the tests first in packages/moe-daemon/src/tools/recordCommit.test.ts, inside describe('held contested paths (MOE_CONTESTED_HELD)'):\n\n(1) A committed landing with skipped [{path:'docs/x.md', code:'MOE_ATTR_CONTESTED_EDITING(task-peer)'}] and contested [{path:'docs/x.md', taskId:'task-peer'}]:\n- posts a task-channel line starting `MOE_CONTESTED_HELD task=<id>: docs/x.md(task-peer)`;\n- that line contains the editing remedy and neither the untouched nor the strict remedy;\n- #governors is alerted once.\n\n(2) Error-handling cases: the codes `MOE_ATTR_CONTESTED_EDITING(peer)` and `MOE_ATTR_CONTESTED_EDITING()`, and an editing code on an unnormalisable path such as '../x', are not holds and do not throw. There is no MOE_CONTESTED_HELD line, and no governors alert when nothing else qualifies.\n\n(3) One untouched hold plus one editing hold give a single line naming both paths. Its remedies come in the order untouched, editing, never.\n\nThen implement in packages/moe-daemon/src/tools/recordCommit.ts:\n- Add `CONTESTED_EDITING_RE = /^MOE_ATTR_CONTESTED_EDITING\\((task-[A-Za-z0-9_-]+)\\)$/` next to CONTESTED_UNTOUCHED_RE.\n- Add the constant HELD_REMEDY_EDITING with exactly this text: 'MOE_ATTR_CONTESTED_EDITING: a contesting peer task was mid-step on the path with an active session at this landing, so this session\\'s editing tool did not release it (the file can carry that peer\\'s unfinished hunks). Coordinate that peer; after its step completes, either this task\\'s own assignee session edits the path with a wrapper-observed successful editing tool before the next landing, or the peer\\'s own landing carries these bytes (name its commit in the summary).'\n- Change HeldPath.strict:boolean to kind: 'untouched' | 'editing' | 'strict'. Untouched and editing holds take the peer from their code; a strict hold takes it from the contested entry.\n- heldContestedLine joins the remedies in the order untouched, editing, strict, then HELD_REMEDY_NEVER.\n\nError handling stays as it is: tolerantNormalizePath skips bad paths, and a failed chat post never changes the ledger outcome (the existing try/catch). Every existing held-path test stays green unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/recordCommit.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "note": "RED then GREEN in snapshot /tmp/moe-f943-dev.SQ0Nkx. RED: recordCommit.test.ts 5 failed | 67 passed (the 5 positive editing cases; the 9 negative malformed-code/bad-path cases pass by design). GREEN after impl: recordCommit.test.ts + getCommitScope.test.ts 126 passed, tsc --noEmit exit 0. Impl: CONTESTED_EDITING_RE, HELD_REMEDY_EDITING (byte-equal to the plan text), HeldPath.strict -> kind 'untouched'|'editing'|'strict' (untouched/editing take the peer from their code, strict from the contested entry), heldContestedLine order untouched, editing, strict, never. Mutants killed: loosened regex (2 fails), editing/strict order swap (1), editing peer from contested (4), editing classed untouched (4). All pre-existing held-path tests unchanged and green.",
+      "startedAt": "2026-10-30T07:16:57.871Z",
+      "completedAt": "2026-10-30T07:18:27.355Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Contract docs, in docs/MCP_SERVER.md only. This is a shared hot file, so first:\n- `git status --porcelain -- docs/MCP_SERVER.md` must print nothing. If another session's hunks are there, do not edit over them: comment on or @mention that task's seat, then call moe.report_blocked with that task id.\n- Call moe.declare_files for docs/MCP_SERVER.md before the first edit.\n- Edit with the Edit tool so the wrapper sees a TOOL witness.\n\n(1) In `### moe.get_commit_scope` Returns:\n- Change peerDeclared to `{ path: string, taskId: string, peerActive: boolean, taskIds: string[], editingTaskIds: string[] }[]`.\n- Add comment lines saying:\n  - taskIds is every contributing task in id order (taskId === taskIds[0]);\n  - editingTaskIds is the contributing tasks with an IN_PROGRESS plan step naming the path (affectedFiles ∪ newFiles ∪ modifiedFiles) that are active by the peerActive rule (always active without since); otherwise [];\n  - a waits-on-this peer still contributes only its asserted paths;\n  - both fields are additive: a wrapper that predates them reads taskId and peerActive, and one that finds them absent treats taskIds as [taskId] and editingTaskIds as [], which is today's landing.\n\n(2) In `### moe.record_commit`, Held contested paths:\n- Add `MOE_ATTR_CONTESTED_EDITING(task-<peer>)` to the codes that classify a hold, with the peer taken from the code.\n- Add a remedy bullet with the same text as HELD_REMEDY_EDITING.\n- Note that the wrappers start emitting this code in task-01f37ac63316409ab581f5a189002cb8.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md was CLEAN before the edit (git status --porcelain printed nothing; HEAD f4e99ab2 last touched it). declare_files called first; all edits via the Edit tool. Diff is 10+/3- in 4 hunks: get_commit_scope peerDeclared type + taskIds/editingTaskIds comment lines (additive/older-wrapper behaviour), and record_commit Held contested paths: new code in the classifier sentence, peer-from-code rule, first-wins, remedy order, and a MOE_ATTR_CONTESTED_EDITING bullet quoting HELD_REMEDY_EDITING (verified byte-identical, 472 chars) plus the note that task-01f37ac6 starts the wrapper emission.",
+      "startedAt": "2026-10-30T07:18:32.692Z",
+      "completedAt": "2026-10-30T07:19:12.253Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate. Run it once, fresh, in a Linux-native snapshot, per the epic notes.\n\nSnapshot setup:\n- `git archive HEAD` into a scratch dir.\n- Overlay this task's 5 owned files, cmp-equal to the worktree.\n- Run `npm ci` in packages/moe-daemon inside the snapshot. Never install over the checkout's Windows node_modules.\n- Run under `env -i` with a Linux-only PATH and NO_COLOR=1.\n\nCommand: `cd packages/moe-daemon && npx tsc --noEmit && npm test`.\n\nRun the full daemon test suite (about 30 s) because get_commit_scope's response is a wire contract the wrappers consume. Record the file and test counts.\n\nBefore claiming green, attribute any failure outside the touched files with git log on the failing file. Fresh output of this exact command is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "packages/moe-daemon/src/tools/recordCommit.test.ts"
+      ],
+      "note": "Gate green, fresh, in snapshot /tmp/moe-f943-gate.SzkFpV (git archive HEAD 1b16fd8d; npm ci natively, lock equal to the checkout; the 5 owned files cmp-equal; env -i, Linux-only PATH, NO_COLOR=1): `npx tsc --noEmit && npm test` exit 0. Test Files 201 passed (201); Tests 5645 passed | 16 skipped (5661); getCommitScope.test.ts 54, recordCommit.test.ts 72; no skips in the owned test files. The ERROR/WARN lines in the log are expected failure-path logging from other suites. No failure to attribute. Log: /tmp/moe-f943-gate.log.",
+      "startedAt": "2026-10-30T07:19:16.750Z",
+      "completedAt": "2026-10-30T07:20:13.194Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff only (load the adversarial-self-review skill). Check that:\n\n(a) taskId and peerActive are unchanged for every entry, so an older wrapper sees identical values.\n(b) taskIds is strictly ascending with no duplicates, even when two raw spellings of one path ('./src/a.ts', 'src\\\\a.ts') come from the same task or from different tasks.\n(c) editingTaskIds is a subset of taskIds, never holds an inactive task when since is given, and needs no repository read.\n(d) Error handling: junk step data never throws, including absolute or traversal paths, non-string entries, and a non-array affectedFiles or implementationPlan.\n(e) The landing task's own paths never leak into peerDeclared.\n(f) The new regex matches only `task-[A-Za-z0-9_-]+` and leaves the strict and untouched classification unchanged.\n(g) The remedy text is byte-identical in recordCommit.ts and docs/MCP_SERVER.md.\n\nIn the completion summary, report:\n- the net non-board LOC, which must be well under 400;\n- whether docs/MCP_SERVER.md was clean before the edit;\n- the snapshot test counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/recordCommit.ts"
+      ],
+      "note": "Self-review of own diff, items (a)-(g). FOUND+FIXED: my first Edit of recordCommit.ts dropped a space and turned the pre-existing `const HELD_REMEDY_STRICT = '...` into `...STRICT ='...` (whitespace noise on a line I must not touch); restored, diff now shows it as context only. ADDED a test for (b): one task claiming ./src/a.ts, src\\a.ts and src/a.ts three ways, plus a second task, lists each id once. (a) taskId set only on first insert and peerActive OR unchanged. (b) per-task paths are PathSet-deduped by pathKey before the peer loop, and sortedById fixes id order. (c) editing only pushed for paths already in peerPaths, so it is a subset of taskIds; null when inactive with since; reads only in-memory state. (d) helper guards the plan, each list and a null/primitive step; PathSet drops bad paths. OUT OF SCOPE: collectTaskPathTiers (attributionTiers.ts) itself throws on a truthy non-iterable list, filed as task-7e39a63f6b024acf9f5f06c92bfafd59. (e) `other.id === task.id` skip untouched. (f) regex anchored with task-[A-Za-z0-9_-]+, cannot overlap the strict exact code or the untouched regex. (g) remedy verified byte-identical in recordCommit.ts and docs (472 chars). Fresh full gate on final bytes: exit 0, 201 files, 5646 passed | 16 skipped; getCommitScope 55, recordCommit 72. Net non-board LOC 298 (+316/-18), tests 242 of it.",
+      "startedAt": "2026-10-30T07:20:15.352Z",
+      "completedAt": "2026-10-30T07:21:32.984Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -22,10 +118,119 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:24:43.213Z",
-  "updatedAt": "2026-10-30T06:51:57.615Z",
+  "updatedAt": "2026-10-30T07:22:14.516Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:51:57.615Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:53:44.549Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-5ebbf433"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:14:09.639Z",
+  "executionContract": {
+    "intendedBehavior": "moe.get_commit_scope names, for each peer path, every nonterminal task that contests it (peerDeclared[].taskIds, in id order) and the ones mid-step on it with an active session (peerDeclared[].editingTaskIds). moe.record_commit treats the wrapper skip code MOE_ATTR_CONTESTED_EDITING(task-<peer>) as a held contested path in its MOE_CONTESTED_HELD line and its #governors alert. Finding: the peer set already counted an IN_PROGRESS step's planned affectedFiles, because collectPeerPaths unions every step's affectedFiles, newFiles and modifiedFiles. The e67ca0e trailer named only task-66e8d7d1 because each entry carried only the first claimant in id order. The sweep happened because a TOOL witness releases a contested path even while a peer is mid-step on it; the wrapper side of that fix is task-01f37ac63316409ab581f5a189002cb8.",
+    "acceptanceCriteria": [
+      "The e67ca0e repro test passes: the MCP_SERVER entry has taskId task-66e8, peerActive true, taskIds [task-66e8, task-9cc1] and editingTaskIds [task-9cc1], with exact toEqual",
+      "Each editingTaskIds rule (active, inactive, open attempt, PENDING, COMPLETED, raw spelling, per-path, no since, waits-on-this, junk step data) has an exact-array test",
+      "The existing first-claimant exact-equality test is updated to the new fields, not loosened",
+      "record_commit: an editing hold yields a MOE_CONTESTED_HELD line naming the peer, the editing remedy and one #governors alert; malformed editing codes are not holds; the mixed untouched + editing order is pinned",
+      "`cd packages/moe-daemon && npx tsc --noEmit && npm test` exits 0 in a Linux-native snapshot"
+    ],
+    "invariants": [
+      "editingTaskIds is a subset of taskIds; both are ascending and duplicate-free",
+      "With since, a task is in editingTaskIds only when peerTaskActive is true; without since, every IN_PROGRESS contributor counts (fail closed)",
+      "Paths that cannot be normalised are dropped and never throw",
+      "get_commit_scope stays read-only apart from the caller's liveness touch"
+    ],
+    "compatibility": [
+      "peerDeclared[].taskId stays the first claimant in id order, and peerActive keeps its OR-over-contributors meaning byte-for-byte; taskIds and editingTaskIds are additive",
+      "record_commit keeps the classification, remedy text and remedy order of MOE_ATTR_CONTESTED and MOE_ATTR_CONTESTED_UNTOUCHED(task-<peer>) unchanged, and a contested entry alone never classifies a hold",
+      "Waits-on-this peers (dependsOn or blockedOnTaskIds, transitively) still contribute only their asserted paths",
+      "No wrapper, fake-proxy or attributionTiers.ts change here: the wrapper consumer is task-01f37ac63316409ab581f5a189002cb8"
+    ],
+    "approvedScope": [
+      "getCommitScope.ts: peerDeclared entry fields taskIds and editingTaskIds, a local inProgressStepPaths helper, and the tool description's PEER-map clause",
+      "recordCommit.ts: CONTESTED_EDITING_RE, HELD_REMEDY_EDITING, HeldPath.kind, and the heldContestedLine remedy order",
+      "docs/MCP_SERVER.md: the get_commit_scope Returns peerDeclared fields and the record_commit Held contested paths code and remedy"
+    ],
+    "reuse": [
+      "PathSet from util/attributionTiers.ts for step-path normalisation",
+      "peerTaskActive as the activity test for editingTaskIds",
+      "The ToolTestHarness, h.createTask/createWorker, openAttempt/setAttemptPhase and peerTask fixtures already in getCommitScope.test.ts, and the held-path fixtures in recordCommit.test.ts"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts getCommitScopeTool peer loop: peerByKey keeps the first claimant's taskId, ORs peerActive and visits tasks in sortedById order; peerTaskActive(state, other, nowMs, sinceMs) is the activity test",
+      "packages/moe-daemon/src/util/attributionTiers.ts collectPeerPaths = asserted ∪ planned, where planned = every step's affectedFiles ∪ newFiles ∪ modifiedFiles ∪ inferredPaths, minus asserted. IN_PROGRESS steps already count",
+      "PathSet.add returns the first stored spelling, or null when the path cannot be normalised; PathSet.has normalises its argument",
+      "types/schema.ts: StepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'",
+      "packages/moe-daemon/src/tools/recordCommit.ts: heldContestedPaths, heldContestedLine, CONTESTED_UNTOUCHED_RE and the HELD_REMEDY_* constants",
+      "task.touchedFiles is written only by record_commit at landing, so a mid-step peer's claim comes from its IN_PROGRESS plan step"
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npx tsc --noEmit && npm test"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Make the peer set count an IN_PROGRESS step's planned affectedFiles. Not needed: collectPeerPaths already unions every step's files, so task-9cc13170 was in the PEER map at 06:22:35. It shared one entry with task-66e8d7d1, which sorts first and so became the named claimant. Neither task waits on task-574c0b36 (checked). (2) Fix only the trailer. Not enough: the sweep happened because 574c0b36's own Edit (a TOOL witness) releases a contested path whatever else is in the file, and 9cc13170 was mid-step-4 on it, so its unfinished hunks landed. This is the broken-HEAD class in mem gotcha-shared-file-hunks-land-under-first-committer. (3) A daemon-only hold via excludePrefixes or a policy override. Rejected: it hides the reason, applies to every path, and the TOOL tier is wrapper-side. (4) Hunk-level staging. Rejected as too risky. Chosen: this task makes the daemon expose taskIds and editingTaskIds and has record_commit recognise MOE_ATTR_CONTESTED_EDITING. task-01f37ac63316409ab581f5a189002cb8 (BACKLOG; depends on this task and on task-a2f243a1, which has the wrapper files dirty) makes moe-agent.{sh,ps1} hold and name the peers.",
+    "codebaseInsights": "getCommitScope visits peers in id order: the first claimant wins taskId and peerActive is ORed. touchedFiles is updated only by record_commit at landing, so mid-step a peer's claim is its IN_PROGRESS step's affectedFiles (planned tier). On the wrapper side, resolve_attribution does PEER.setdefault(taskId), ANDs PEER_IDLE across entries and prints only PEER[pk] in the Moe-Contested trailer. record_commit classifies holds only from skip codes (CONTESTED_UNTOUCHED_RE, the strict code).",
+    "risks": "- docs/MCP_SERVER.md is the hottest shared file. It was clean at planning time. task-48edc21b, task-66e8d7d1, task-ced85748 and task-b621ddc9, whose plans edit it, now depend on this task. task-4d67e805 (REVIEW) asserts the path from a completion that has already landed; if it is reopened while this task runs, check git status and coordinate before editing.\n- Every exact toEqual on peerDeclared entries must be updated, never loosened.\n- The checkout's node_modules are Windows-installed. Run tests only in a Linux-native snapshot, as in step 5.\n- Activity semantics: editing reuses peerTaskActive, so an open attempt counts as active (fail closed), while a released or parked task's stale IN_PROGRESS step does not hold a path. That avoids the never-clearing hold that mem decision-contested-idle-peer-exception warns about.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "packages/moe-daemon/src/util/attributionTiers.ts",
+      "packages/moe-daemon/src/tools/recordCommit.ts",
+      "packages/moe-daemon/src/tools/recordCommit.test.ts",
+      "docs/MCP_SERVER.md",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:14:09.663Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:14:36.304Z",
+  "declaredFiles": [
+    "docs/MCP_SERVER.md"
+  ],
+  "reviewStartedAt": "2026-10-30T07:22:14.514Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && npx tsc --noEmit && npm test",
+    "exitCode": 0,
+    "outputTail": "Linux-native snapshot /tmp/moe-f943-gate.SzkFpV (git archive HEAD ca28588d-equivalent daemon tree; npm ci natively; 5 owned files cmp-equal to the worktree; env -i, Linux-only PATH, NO_COLOR=1)\n ✓ src/tools/recordCommit.test.ts (72 tests)\n ✓ src/tools/getCommitScope.test.ts (55 tests)\n Test Files  201 passed (201)\n      Tests  5646 passed | 16 skipped (5662)\n   Start at  09:20:49\n   Duration  26.59s (tests 94%, import 4%, transform 2%)\nexit=0 (tsc --noEmit clean)",
+    "reportedAt": "2026-10-30T07:22:14.514Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "packages/moe-daemon/src/tools/recordCommit.test.ts",
+    "packages/moe-daemon/src/tools/recordCommit.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Finding: the peer set already counted a mid-step peer (collectPeerPaths unions every step's affectedFiles/newFiles/modifiedFiles, IN_PROGRESS included); e67ca0e named only task-66e8d7d1 because each peerDeclared entry carried just the first claimant, and a TOOL witness released the path while task-9cc13170 was mid-step on it. Delivered (daemon side; wrapper consumer stays task-01f37ac6): (1) get_commit_scope peerDeclared[] gains additive taskIds (every contributor, id order, taskId===taskIds[0]) and editingTaskIds (contributors with an IN_PROGRESS step naming the path AND active by the peerActive rule; fail closed without since); taskId/peerActive unchanged; helper inProgressStepPaths guards non-array plan/lists. (2) record_commit classifies MOE_ATTR_CONTESTED_EDITING(task-<peer>) as a held path with its own remedy; HeldPath.kind untouched|editing|strict, remedy order untouched, editing, strict, never; the peer comes from the code. (3) docs/MCP_SERVER.md updated (remedy byte-identical to the constant, 472 chars); the file was CLEAN before my edit. Tests: e67ca0e repro with exact toEqual; one exact-array test per editing rule; the first-claimant test updated (not loosened); record_commit hold line/remedy/one alert, 8 malformed codes + bad paths not holds, mixed order pinned. RED first (8 + 5 failing), then GREEN; 7 mutants all killed. Gate (Linux-native snapshot of HEAD, npm ci, env -i): tsc --noEmit + npm test exit 0, 201 files, 5646 passed | 16 skipped; getCommitScope.test.ts 55, recordCommit.test.ts 72. Net non-board LOC 298 (+316/-18; tests 242), under the 400 cap. Self-review caught and fixed a dropped space on a pre-existing line in recordCommit.ts. Out of scope, filed as bug task-7e39a63f6b024acf9f5f06c92bfafd59: collectTaskPathTiers throws on a truthy non-iterable step file list (the junk test therefore uses newFiles: null). 831 other dirty paths in the shared checkout are peers' and untouched."
 }
