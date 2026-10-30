@@ -17,11 +17,17 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). Load test-driven-development.\n\nThese prerequisites are landed by WORKING time; adapt to their landed names and never re-implement them:\n- V04b1: scripts/local-runner/runner-client.mjs, openRunnerChannel;\n- CQ-V03's tool params, and CQ-V04's admission codes;\n- R11 final's orchestrator;\n- R09b's exportSourceSnapshot.\n\nCreate scripts/tests/local-runner-dispatch.test.mjs (node:test). Keep it to about 230 lines, because tests count toward QA's 400-net cap.\n\nThe fakes:\n- `call`: records every (tool, args) and returns scripted results or rejections.\n- `runCheck`: records VM create and delete, calls onReady(environment) before 'running', and returns scripted {outcome, exitCode, outputTail, environment, workspace}.\n- a get_context-shaped context: task.executionContract.requiredChecks, task.requiredCheckSnapshot, task.isEpicFinal, currentCandidate {id, treeSha}, servedContext {planRevision, approvedPlanRevision}, project.settings {qualityGate, qualityGateScope, autoCommit, checkEnvironments}.\n\nAssert exact call lists, args, codes and create/delete pairs; never truthiness.\n\nCases:\n- O, owedChecks(context):\n  - defs only when requiredCheckSnapshot is present, as {checkId, command trimmed, protected: snapshot entries under the def's configs, scripts and assertionRoots (path === root or under root/)};\n  - the gate {command, protected: []} only for a non-blank trimmed qualityGate, autoCommit not false, and scope everyTask or isEpicFinal, and only when no def already runs that command;\n  - [] when planRevision !== approvedPlanRevision.\n- B, binding:\n  - snapshot.tree !== currentCandidate.treeSha: RUNNER_SNAPSHOT_MISMATCH;\n  - no currentCandidate: RUNNER_NO_CANDIDATE;\n  - both with zero runCheck and zero dispatch calls.\n- H, happy path (DoD 1): two owed checks run sequentially. Each has:\n  - a frame {id: checkId or 'quality-gate', command, protected};\n  - onReady, then record_check_dispatch with exactly {id: /^dispatch-[0-9a-f]{32}$/, taskId, candidateId, planRevision, command, environment}, plus checkId for a def (none for the gate);\n  - then record_check_observation with exactly {id: /^check-[0-9a-f]{32}$/, dispatchId, exitCode, outcome, outputTail, environment};\n  - one create and one delete.\n- E, environment (DoD 1): an environment not in settings.checkEnvironments gives no dispatch; onReady throws, the VM is deleted, and the run stops with RUNNER_ENVIRONMENT_NOT_APPROVED. Later checks never start.\n- F, refusal (DoD 1): a record_check_dispatch rejection (RUNNER_TOOL_ERROR, codeName CHECK_DEFINITION_NOT_APPROVED) gives no observation; the VM is deleted, and the run stops naming that codeName.\n- I, integrity (DoD 2):\n  - passed with workspace 'changed' is observed 'inconclusive';\n  - passed with 'unverified' is observed 'inconclusive';\n  - passed with 'intact' is observed 'passed';\n  - code-failure, timeout and infra-failure pass through unchanged.\n- R, recovery:\n  - a dispatch whose response is lost is retried with the SAME dispatch id;\n  - an observation that fails with RUNNER_DISCONNECTED is retried with the SAME check id, up to 3 attempts, then the run stops with RUNNER_OBSERVATION_UNRECORDED naming the dispatch id.\n- V, cleanup (DoD 3): across E, F, R, a runCheck rejection and an abort signal, every create has exactly one delete, and the run never starts a second VM after a stop.\n- K, key (DoD 3): the CLI entry run with a fake channel whose rejection message holds a sentinel key prints only fixed codes; neither stdout nor stderr contains the sentinel.\n\nRun `node --test scripts/tests/local-runner-dispatch.test.mjs`: every case fails before implementation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/local-runner-dispatch.test.mjs"
       ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "RED. scripts/tests/local-runner-dispatch.test.mjs has 10 node:test cases (O, B, H, E, F, I, R, Y, V, K), 250 lines. It fails with ERR_MODULE_NOT_FOUND because check-dispatch.mjs does not exist yet.\n\nThe fakes share one event log: the /runner `call` and a `runCheck` that logs create/delete around onReady, like the landed runCheckJob. Assertions are exact: call traces, deepEqual args with id regexes, stop codes, and an assertPaired create/delete alternation.\n\nAdapted to landed code:\n- runCheckJob (check-lifecycle.mjs) has both seams: onReady, and the R11f verifyWorkspace 'intact'/'changed'/'unverified'.\n- get_context over /runner (no workerId) is the untrimmed view; vm-control's cleanup already relies on its servedContext.\n- V05b's `repair` field is not landed yet; the scripted fakes cover it.\n\nAdditions beyond the plan text:\n1. runCheck also receives `owner` ({taskId, servedContext.attemptId, generation}). runCheckJob needs a ledger owner, and vm-control cleanup treats a VM as running only under the task's open attempt.\n2. A null exitCode (timeout, infra) is observed as -1, because the daemon requires a safe integer.\n3. B adds RUNNER_PLAN_NOT_APPROVED and RUNNER_NOTHING_OWED, so the CLI never exits 0 on zero checks.\n4. A pre-dispatch infra stop (onReady never called) stops with RUNNER_CHECK_FAILED plus R11's fixed failure code.\n5. F also covers the racing-coordinator refusal CHECK_DISPATCH_ALREADY_OBSERVED.\n\nShared checkout: 817 pre-existing dirty paths belong to other sessions; none touched.",
+      "startedAt": "2026-10-30T07:02:17.640Z",
+      "completedAt": "2026-10-30T07:05:56.894Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -36,11 +42,17 @@
     {
       "stepId": "step-2",
       "description": "Create scripts/local-runner/check-dispatch.mjs: pure coordination, with every dependency injected and Node stdlib only. Budget about 150 lines. The header comment states:\n- it publishes evidence only through the injected /runner channel, and 'passed' only after the post-run integrity report;\n- it never claims isolation and never enables verified-local.\n\nExports:\n1. owedChecks(context): mirrors CQ-V04's delivery/policy.ts owedChecks exactly, as tested in O. The daemon's dispatch admission (CHECK_DEFINITION_NOT_APPROVED) is the backstop, so a mirror drift fails closed.\n2. dispatchFocusedChecks({ taskId, snapshot, call, runCheck, signal }), in this order:\n   - context = await call('moe.get_context', { taskId }), then the binding checks (B).\n   - For each owed check, sequentially:\n     - run runCheck({ snapshot, check: { id, command, protected }, signal, onReady }).\n     - onReady(environment) throws RUNNER_ENVIRONMENT_NOT_APPROVED unless settings.checkEnvironments includes the environment. Otherwise it calls record_check_dispatch with a fresh 'dispatch-<32 hex>' id, retrying only a transport failure with the same id.\n     - After the run, outcome = (result.outcome === 'passed' && result.workspace !== 'intact') ? 'inconclusive' : result.outcome.\n     - Call record_check_observation with a fresh 'check-<32 hex>' id and the dispatch's environment, retrying only RUNNER_DISCONNECTED or RUNNER_CALL_TIMEOUT with the same id, up to 3 attempts.\n   - It stops at the first refusal or failure, with one fixed RUNNER_* code, plus the daemon codeName when there is one.\n   - It resolves a frozen summary {taskId, candidateId, results: [{checkId?, command, dispatchId, outcome}], stopped?: {code, codeName?, dispatchId?}}.\n   - Ids come from crypto.randomBytes(16).\n\nError handling: every thrown error carries `code`. A runCheck rejection stops the run with RUNNER_CHECK_FAILED, and no observation is invented for it. The seam contract says runCheck deletes its VM before it settles; the coordinator never starts another check after a stop.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/local-runner/check-dispatch.mjs"
       ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs"
+      ],
+      "note": "GREEN for the coordinator. The new scripts/local-runner/check-dispatch.mjs is 125 lines, stdlib-only (node:crypto). Exports:\n- owedChecks(context): a mirror of delivery/policy.ts owedChecks plus requiredCheckCommand, read from get_context. It returns [] unless planRevision === approvedPlanRevision.\n- dispatchFocusedChecks({taskId, snapshot, call, runCheck, signal}).\n\nBehaviour:\n- Binding stops, in order: RUNNER_NO_CANDIDATE, RUNNER_SNAPSHOT_MISMATCH (the tree must be a string equal to currentCandidate.treeSha), RUNNER_PLAN_NOT_APPROVED, RUNNER_CONTEXT_INVALID, RUNNER_NOTHING_OWED.\n- Per check, a frozen frame {id: checkId or 'quality-gate', command, protected}.\n- onReady: the environment allowlist check first, then record_check_dispatch with the 'dispatch-<32hex>' id, retried (same args) only on RUNNER_DISCONNECTED or RUNNER_CALL_TIMEOUT, 3 attempts in all.\n- Observation: passed with a non-intact workspace becomes 'inconclusive'. A null exitCode is sent as -1. The 'check-<32hex>' id gets the same retry; exhaustion stops with RUNNER_OBSERVATION_UNRECORDED and the dispatchId.\n- repair.action 'retry-infra' re-runs the same check with fresh ids, at most 10 re-runs, then RUNNER_RETRY_LIMIT.\n- Abort is checked before every run.\n\nOnly fixed codes leave the module (code matches RUNNER_*, codeName and failure match an upper-snake pattern). A summary or stop never carries a message.\n\nVerification: the 9 coordinator cases (O, B, H, E, F, I, R, Y, V) pass, 9/9, run from a temp copy with K stripped. K needs step 3's runDispatchCli, so the full file is run in step 3 and step 4.",
+      "startedAt": "2026-10-30T07:05:59.206Z",
+      "completedAt": "2026-10-30T07:07:27.141Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -55,28 +67,51 @@
     {
       "stepId": "step-3",
       "description": "In scripts/local-runner/check-dispatch.mjs, add the CLI entry, a main guarded by import.meta.url like cli.mjs. Report the file in modifiedFiles.\n\nUsage: `node scripts/local-runner/check-dispatch.mjs --project <absolute path> --task <task id> --commit <40- or 64-hex>`. Argument rules match cli.mjs: exact flags, no control characters, and an absolute project path.\n\nThe entry composes:\n- V04b1's openRunnerChannel({ projectPath }), always closed in finally;\n- R09b's exportSourceSnapshot({ repoDir: projectPath, commit }), which is the snapshot;\n- runCheck, bound through a small adapter to R11 final's landed orchestrator. It supplies onReady before the job and reports workspace. If the landed orchestrator lacks either seam (see the comment on task-07951125), the entry refuses with RUNNER_SEAM_UNAVAILABLE and dispatches nothing;\n- then dispatchFocusedChecks.\n\nOutput is ONE JSON line holding only fixed codes, codeNames, ids, commands and outcomes. It never prints an error message from the channel or the orchestrator (case K). Exit 0 only when every owed check was observed 'passed'; otherwise exit 2.\n\nAlso edit .github/workflows/ci.yml: append scripts/tests/local-runner-dispatch.test.mjs to the explicit file list of the 'Test local runner prerequisite bundles' step, after V04b1's entry. Nothing else changes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "CLI entry added to check-dispatch.mjs, with a main guarded by import.meta.url like cli.mjs. Command: `--project <abs> --task <task-id> --commit <40|64 hex>`, exact flag order, no control characters.\n\nrunDispatchCli(argv, {open, exportSnapshot, loadRunCheck, signal, write}) runs in this order:\n1. Refuses RUNNER_CLI_INPUT_INVALID before any work.\n2. loadRunCheck, the R11 adapter, dynamically imports check-lifecycle (runCheckJob) and snapshot-transfer (verifyWorkspace). If either seam is missing it gives RUNNER_SEAM_UNAVAILABLE, with no channel opened.\n3. exportSourceSnapshot({repoDir, commit}).\n4. openRunnerChannel({projectPath, timeoutMs: 15000}), closed in finally. It reopens for the next call after RUNNER_DISCONNECTED, because V04b1's channel stays down once dropped, so a same-id retry can land.\n5. dispatchFocusedChecks.\n\nOutput and exit:\n- One JSON line: the summary, or {code}. A thrown error yields only a fixed upper-snake code, otherwise RUNNER_DISPATCH_FAILED.\n- Exit 0 only when nothing stopped and every owed check's LAST run was observed passed, so a re-run supersedes its infra failure. Otherwise exit 2.\n- SIGINT and SIGTERM abort through the signal, so runCheckJob still deletes its VM.\n\nThe adapter passes runCheckJob these inputs:\n- platformFor(process.platform), from cli.mjs;\n- createLedger(ownedLedgerDir(project)), the VM ledger vm-control reconciles;\n- cacheDir `<runner-state>/<hash>/images`;\n- supervisor: the guest-supervisor.py bytes;\n- a fresh randomBytes(32) credential per job;\n- the owner from servedContext;\n- budgetMs 1h and timeoutMs 60s, so the 3×15s dispatch tries fit the onReady bound.\n\ncli.mjs and the R modules are unchanged. ci.yml +1/-1 appends scripts/tests/local-runner-dispatch.test.mjs after local-runner-channel.test.mjs.\n\nSize: module 187 + test 212 = 399, plus ci net 0. I compacted both files to fit the cap, keeping every case.\n\nVerification:\n- `node --test scripts/tests/local-runner-dispatch.test.mjs` (env -i, Node 24.21.0): 10/10 pass.\n- A smoke of the REAL adapter (temp MOE_RUNNER_STATE_DIR, fake channel, hand-built snapshot) passed runCheckJob's strict parse, then failed closed: stopped {RUNNER_CHECK_FAILED, failure: CHECK_PROVISION_UNAVAILABLE}, since Multipass is not on PATH. Only get_context was called and no ledger record was reserved.",
+      "startedAt": "2026-10-30T07:07:28.358Z",
+      "completedAt": "2026-10-30T07:11:37.765Z"
     },
     {
       "stepId": "step-4",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. Mutants. Apply each to a scratch copy, restore it, then cmp. Each must fail a named case:\n   - observe 'passed' regardless of workspace: I;\n   - dispatch before the environment check: E;\n   - continue after a refusal: F and V;\n   - a fresh id on retry: R;\n   - print error.message: K;\n   - include the gate when a def already runs its command: O.\n2. Run the verification command fresh: `node --test scripts/tests/local-runner-dispatch.test.mjs`. On WSL, run it as `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-dispatch.test.mjs`, with no MOE_* in the environment. It must exit 0.\n3. Also run, and report: the CI local-runner list `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-channel.test.mjs`, so nothing nearby broke.\n4. Size: numstat over this task's files must be at most 400 net.\n5. Supply the command, its exit code and the output tail to complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "VERIFY. This step needed no edits.\n\n1. Mutants: each applied to a scratch copy of scripts/local-runner and the test, run with the TAP reporter. The scratch module was restored and cmp-equal to the repo. 12/12 killed, all six plan mutants among them:\n   - passed regardless of workspace: killed by I.\n   - environment check removed (dispatch before it): E.\n   - continue after a refusal: E, F, R, V.\n   - fresh id on retry: R.\n   - print error.message: K.\n   - gate kept despite a def running its command: O.\n   - Extras: retry cap +1 (Y); tree check removed (B); revision check removed from owedChecks (O); observation environment taken from the result plus an extra key (H); observation retry unbounded (R); abort ignored (V).\n2. Fresh `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-dispatch.test.mjs`: EXIT 0, 10 tests, 10 pass, 0 fail. env -i strips all MOE_* variables.\n3. The full CI local-runner list (8 files: local-runner, bundle, bridge, snapshot, check, agents, channel, dispatch): EXIT 0, 440 tests, 438 pass, 0 fail. The 2 skips are pre-existing: K9 (needs root) and the macOS native smoke.\n4. Size: numstat is ci.yml +1/-1, check-dispatch.mjs +187, local-runner-dispatch.test.mjs +212. That is 400 added, 1 deleted, 399 net, so at most 400.",
+      "startedAt": "2026-10-30T07:11:38.845Z",
+      "completedAt": "2026-10-30T07:13:12.833Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an attacker trying to publish a trusted pass that was never earned:\n- a definition taken from candidate bytes instead of get_context's approved snapshot;\n- a snapshot that is not the candidate's tree;\n- dispatching in an unlisted environment;\n- 'passed' published with a changed or unverified workspace;\n- a retry minting a second dispatch or observation;\n- a VM left running on any path;\n- the key or a raw error message reaching output;\n- two coordinators racing one task: the daemon's one-observation-per-dispatch rule and the dispatch currency checks refuse the loser, which is reported.\n\nAlso check: Node 22+ only, the absence of WebSocket handled by V04b1's code, no network beyond loopback, no Git writes (exportSourceSnapshot is read-only), no .moe edits, and verified-local untouched.\n\nWrite the Serena memory 'task-task-340a07b33a764c65b2486d16b30d7aef-handoff' with the landed names and the seam contract, for CQ-V12's activation (the wrapper strong-path call) and CQ-R13.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "ADVERSARIAL SELF-REVIEW found one REAL issue, now fixed.\n\nThe issue: exportSourceSnapshot returns the commit's `base` PLUS the checkout's `overlay`, i.e. tracked modifications and untracked files from diff-index and ls-files --others. snapshot.tree is still the commit's tree, so the tree check alone passed while the VM materialized the shared checkout's dirty bytes, here 817 peer paths. That is an unearned 'passed' bound to the candidate tree.\n\nFix:\n1. The CLI uses the commit alone: `{...exported, overlay: validateImport([])}`.\n2. The coordinator refuses RUNNER_SNAPSHOT_MISMATCH unless overlay.entries is exactly [].\n\nTests: B gains two cases (dirty overlay, and a missing overlay record), each isolating one rule. K's exportSnapshot returns a dirty export, so not stripping fails K. Mutants for both are killed (B and K). Memory: gotcha-local-runner-snapshot-overlay.\n\nThe rest of the checklist:\n- Definitions come only from get_context's executionContract plus the bound requiredCheckSnapshot. The `under` rule is identical to requiredChecks.ts `covers`.\n- An unlisted, null or absent environment is refused in onReady before any dispatch.\n- passed with a workspace other than 'intact' becomes 'inconclusive'.\n- Retries reuse args, and with them the ids. Only retry-infra re-runs mint new ids, capped at 10.\n- VMs: at most one at a time. A stop ends the loop. SIGINT/SIGTERM abort through the signal, so runCheckJob still deletes. A SIGKILL is left to R06 reconcile.\n- Output carries only regex-validated fixed codes. Outcomes are printed only after the daemon accepted the observation. The key never touches this module.\n- Racing coordinators: the daemon's CHECK_DISPATCH_ALREADY_OBSERVED and NOT_CURRENT refusals are reported (F).\n- Node 22+ only; V04b1 owns the WebSocket and loopback handling. No Git writes (the export is read-only plumbing), no .moe edits, verified-local untouched, no forbidden patterns.\n\nTheoretical risks, recorded in the handoff:\n(a) The runCheckJob owner is the task's OPEN attempt. With none open, runCheckJob refuses before any VM; V12 must call while an attempt is open.\n(b) A dispatch whose response is lost on all 3 tries may sit unobserved on the daemon. A later run mints a new one, and nothing counts without an observation.\n(c) owedChecks does not mirror requiredCheckAtDone for DONE/ARCHIVED rows.\n\nFinal runs:\n- `node --test scripts/tests/local-runner-dispatch.test.mjs`: EXIT 0, 10/10.\n- The CI local-runner list (8 files): EXIT 0, 438 pass, 2 pre-existing skips.\n- Size: 401 added, 1 deleted, 400 net.\n\nHandoff memory written: task-task-340a07b33a764c65b2486d16b30d7aef-handoff.",
+      "startedAt": "2026-10-30T07:13:14.128Z",
+      "completedAt": "2026-10-30T07:16:47.409Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,20 +137,28 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:16:07.737Z",
-  "updatedAt": "2026-10-29T22:21:03.348Z",
+  "updatedAt": "2026-10-30T07:17:05.011Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:18:44.976Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-093a65d0"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-29T18:25:53.073Z",
   "executionContract": {
@@ -180,5 +223,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T18:25:53.157Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T07:02:17.640Z",
+  "reviewStartedAt": "2026-10-30T07:17:05.009Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner-dispatch.test.mjs",
+    "exitCode": 0,
+    "outputTail": "✔ O: owedChecks mirrors the daemon rule from get_context\n✔ B: no candidate, a foreign snapshot tree or an unapproved revision dispatches nothing\n✔ H: each owed check is dispatched with its frozen frame, observed once, on its own VM\n✔ E: an environment outside settings.checkEnvironments is never dispatched and stops the run\n✔ F: a daemon refusal stops the run, naming its codeName, with no observation and no further check\n✔ I: a pass is published only with an intact workspace; other outcomes pass through (0.958749ms)\n✔ R: a lost dispatch or observation is retried with the same id; three transport failures stop the run (0.938738ms)\n✔ Y: a retry-infra decision re-runs the same check with fresh ids, capped at 10 re-runs (0.617762ms)\n✔ V: a run that cannot be observed stops without inventing an observation, and no VM starts after a stop (0.460549ms)\n✔ K: the CLI prints one line of fixed codes and never an error message or the key (78.267982ms)\nℹ tests 10\nℹ suites 0\nℹ pass 10\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 195.257036\n\nAlso run (CI local-runner list, 8 files incl. this one): EXIT 0, tests 440, pass 438, fail 0, skipped 2 (pre-existing K9 root-only, macOS native smoke).",
+    "reportedAt": "2026-10-30T07:17:05.009Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-dispatch.test.mjs",
+    "scripts/local-runner/check-dispatch.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "completionSummary": "CQ-V04b, the runner's focused check dispatch client. Net 400 non-board LOC, at the cap:\n- scripts/local-runner/check-dispatch.mjs: 187 lines.\n- scripts/tests/local-runner-dispatch.test.mjs: 212 lines.\n- ci.yml +1/-1: the new test is appended to the local-runner list.\nNo daemon change. cli.mjs and the R modules are untouched; verified-local is untouched.\n\nWhat it does:\n- owedChecks(context) mirrors the daemon's owedChecks and requiredCheckCommand from get_context: the bound approved definitions, with protected entries matched by requiredChecks.ts `covers`, then the gate. It returns [] off the approved revision.\n- dispatchFocusedChecks first refuses, before any VM: no candidate; a snapshot tree that is not the candidate's, or a snapshot with a non-empty overlay; an unapproved revision; nothing owed. It then runs checks one at a time through runCheck:\n  - onReady checks the environment allowlist, then calls record_check_dispatch with id 'dispatch-<32hex>';\n  - the observation uses id 'check-<32hex>'; passed with a workspace other than 'intact' is sent as 'inconclusive', and a null exitCode as -1;\n  - transport retries reuse the same id, 3 attempts in all;\n  - V05b's retry-infra re-runs the check with fresh ids, at most 10 times;\n  - it stops on the first refusal or failure with one fixed RUNNER_* code, plus a codeName when the daemon sent one.\n- CLI: `--project --task --commit`. It composes V04b1's openRunnerChannel, exportSourceSnapshot and an adapter onto R11's runCheckJob. The channel reopens after a disconnect. The adapter refuses RUNNER_SEAM_UNAVAILABLE when a seam is missing. Output is one JSON line of fixed codes. SIGINT/SIGTERM abort so the VM is still deleted.\n\nSelf-review fix: exportSourceSnapshot includes the checkout's dirty overlay, which in this checkout is peers' bytes, so a matching tree did not prove the bytes checked. The CLI now uses the commit alone, and the coordinator refuses any overlay.\n\nDoD:\n1. H, E, F (exact params; unlisted environment or ref"
 }

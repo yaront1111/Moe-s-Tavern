@@ -4642,14 +4642,67 @@ OUTAGEJS
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AH] ok"
 
+  # Scenario AI -- a held contested path reaches record_commit on BOTH nothing
+  # landings (task-a2f243a1; twin: scenario AI in postflight.ps1). The task's
+  # only own path, held.txt, is declared (declaredFiles), dirty BEFORE the
+  # pre-flight and declared by a peer too, so it is held and nothing lands:
+  #   AI1  completion, skip-untouched -> zero candidates, one declared path: the unchanged-tree nothing
+  #   AI2  completion, contested=skip -> same; the strict code names no peer, only `contested` does
+  #   AI3  checkpoint, contested=skip -> zero candidates: the no-candidate nothing
+  # The last record_commit row carries both lists as JSON arrays (the daemon
+  # refuses a non-array): skipped names held.txt under the run's code and
+  # contested names its peer. The daemon builds its MOE_CONTESTED_HELD task
+  # line and #governors alert from them.
+  echo "[scenario AI] a held contested path reaches record_commit on both nothing landings"
+  scope_ai_check='
+const [f,kind,code]=process.argv.slice(1),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+try {
+  assert.deepStrictEqual([r.outcome,r.code,r.kind],["nothing","MOE_COMMIT_NOTHING_TO_COMMIT",kind],"last row");
+  assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),"skipped and contested must be JSON arrays");
+  assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code}],"skipped");
+  assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),"contested must name held.txt with task-peer");
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)); process.exit(1); }'
+  for scope_ai_run in 1 2 3; do
+    SCOPE_AI_DIR="$TMP_DIR/scope-ai$scope_ai_run"
+    scope_ai_out="$TMP_DIR/scope-ai$scope_ai_run.out"
+    scope_ai_status=REVIEW; scope_ai_kind=completion; scope_ai_settings='{}'; scope_ai_code='MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)'
+    case "$scope_ai_run" in
+      2) scope_ai_settings='{"attribution":{"contested":"skip"}}'; scope_ai_code='MOE_ATTR_CONTESTED' ;;
+      3) scope_ai_settings='{"attribution":{"contested":"skip"}}'; scope_ai_code='MOE_ATTR_CONTESTED'
+         scope_ai_status=WORKING; scope_ai_kind=checkpoint ;;
+    esac
+    make_scope_project "$SCOPE_AI_DIR" '[]' "$scope_ai_status" '[]' "$scope_ai_settings"
+    "$NODE_FOR_TEST" -e 'const f=process.argv[1],fs=require("fs");const t=JSON.parse(fs.readFileSync(f,"utf8"));t.declaredFiles=["held.txt"];fs.writeFileSync(f,JSON.stringify(t)+"\n");' \
+      "$SCOPE_AI_DIR/.moe/tasks/task-postflight.json"
+    git -C "$SCOPE_AI_DIR" commit -qm ai-declared .moe/tasks/task-postflight.json >/dev/null
+    echo pre > "$SCOPE_AI_DIR/held.txt"
+    scope_ai_commits="$(git -C "$SCOPE_AI_DIR" rev-list --all --count)"
+    set +e
+    FAKE_TASK_STATUS="$scope_ai_status" FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='held.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=1 \
+      run_scope_wrapper "$SCOPE_AI_DIR" "$scope_ai_out"
+    scope_ai_rc=$?
+    set -e
+    [ "$scope_ai_rc" -eq 0 ] || scope_fail "AI$scope_ai_run" "wrapper exited with $scope_ai_rc" "$scope_ai_out"
+    [ "$(git -C "$SCOPE_AI_DIR" rev-list --all --count)" = "$scope_ai_commits" ] \
+      || scope_fail "AI$scope_ai_run" "nothing may be committed" "$scope_ai_out"
+    scope_ai_status_z="$(git -C "$SCOPE_AI_DIR" status --porcelain -z | tr '\0' '\n')"
+    printf '%s\n' "$scope_ai_status_z" | grep -Fqx '?? held.txt' && [ "$(cat "$SCOPE_AI_DIR/held.txt")" = pre ] \
+      || scope_fail "AI$scope_ai_run" "held.txt must stay untracked with its pre-flight bytes" "$scope_ai_out"
+    "$NODE_FOR_TEST" -e "$scope_ai_check" "$SCOPE_AI_DIR/.moe/record_commit.jsonl" "$scope_ai_kind" "$scope_ai_code" \
+      || scope_fail "AI$scope_ai_run" "the $scope_ai_kind nothing row must name held.txt under $scope_ai_code in skipped and its peer in contested" "$scope_ai_out"
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AI] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=40
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=39
+  scope_expected_runs=41
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=40
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

@@ -1,0 +1,27 @@
+{
+  "id": "task-7e39a63f6b024acf9f5f06c92bfafd59",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: collectTaskPathTiers throws on a truthy non-iterable step file list and splits a string into characters",
+  "description": "Repro (probe in a Linux snapshot, found by task-f943b687): util/attributionTiers.ts collectTaskPathTiers spreads `[...(step.affectedFiles || []), ...(step.newFiles || []), ...(step.modifiedFiles || [])]`. With newFiles: 7 or {a:1} it throws \"(step.newFiles || []) is not iterable\", which fails get_commit_scope for EVERY task that has that peer; with newFiles: 'src/str.ts' it plans the characters 's','r','c','t'. The header and get_commit_scope promise a peer's junk never fails another task's scope. Fix with Array.isArray guards (null/false already tolerated) plus a test; completedStepFiles has the same unguarded `s.modifiedFiles || s.affectedFiles || []` flatMap.",
+  "definitionOfDone": [
+    "collectTaskPathTiers and collectAssertedPaths return the valid entries and never throw for a non-array affectedFiles/newFiles/modifiedFiles (number, object, string)",
+    "Tests pin each shape in attributionTiers.test.ts and one get_commit_scope case with a junk peer"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 282.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:16:11.740Z",
+  "updatedAt": "2026-10-30T07:16:11.740Z"
+}

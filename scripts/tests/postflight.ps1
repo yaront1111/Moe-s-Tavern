@@ -3937,13 +3937,78 @@ try {
                 $scopeScenariosRun++
                 Write-Host '[scenario AH] ok'
 
+                # Scenario AI -- a held contested path reaches record_commit on
+                # BOTH nothing landings (task-a2f243a1; twin: scenario AI in
+                # postflight.sh). The task's only own path, held.txt, is
+                # declared (declaredFiles), dirty BEFORE the pre-flight and
+                # declared by a peer too, so it is held and nothing lands:
+                #   AI1  completion, skip-untouched -> zero candidates, one declared path: the unchanged-tree nothing
+                #   AI2  completion, contested=skip -> same; the strict code names no peer, only `contested` does
+                #   AI3  checkpoint, contested=skip -> zero candidates: the no-candidate nothing
+                # The last record_commit row carries both lists as JSON arrays
+                # (the daemon refuses a non-array, and one held path is the
+                # one-element case PS 5.1 can unwrap): skipped names held.txt
+                # under the run's code and contested names its peer. The daemon
+                # builds its MOE_CONTESTED_HELD task line and #governors alert
+                # from them. The console line pins which send ran; only its
+                # ASCII part is matched (the redirected child writes the OEM
+                # code page).
+                Write-Host '[scenario AI] a held contested path reaches record_commit on both nothing landings'
+                $aiCheck = Join-Path $tempRoot 'scope-ai-check.cjs'
+                [System.IO.File]::WriteAllText($aiCheck, @'
+const [f,kind,code]=process.argv.slice(2),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse),r=rows[rows.length-1];
+try {
+  assert.deepStrictEqual([r.outcome,r.code,r.kind],["nothing","MOE_COMMIT_NOTHING_TO_COMMIT",kind],"last row");
+  assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),"skipped and contested must be JSON arrays");
+  assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code}],"skipped");
+  assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),"contested must name held.txt with task-peer");
+} catch (e) { console.error(e.message+"\nrow: "+JSON.stringify(r)); process.exit(1); }
+'@, (New-Object System.Text.UTF8Encoding($false)))
+                foreach ($aiRun in 1..3) {
+                    $aiName = "AI$aiRun"
+                    $aiDir = Join-Path $tempRoot "scope-ai$aiRun"
+                    $aiOut = Join-Path $tempRoot "scope-ai$aiRun.out"
+                    $aiStatus = if ($aiRun -eq 3) { 'WORKING' } else { 'REVIEW' }
+                    $aiKind = if ($aiRun -eq 3) { 'checkpoint' } else { 'completion' }
+                    $aiCode = if ($aiRun -eq 1) { 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' } else { 'MOE_ATTR_CONTESTED' }
+                    $aiLine = if ($aiRun -eq 3) { 'no attributable changes to commit' } else { 'the attributable paths already match' }
+                    $aiSettings = if ($aiRun -eq 1) { $null } else { @{ attribution = @{ contested = 'skip' } } }
+                    New-ScopeProject $aiDir @() -Settings $aiSettings -Status $aiStatus
+                    # Literal JSON: PS 5.1's ConvertTo-Json unwraps one-element arrays.
+                    [System.IO.File]::WriteAllText((Join-Path $aiDir '.moe\tasks\task-postflight.json'),
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"' + $aiStatus + '","filesModified":[],"declaredFiles":["held.txt"]}'), (New-Object System.Text.UTF8Encoding($false)))
+                    & git -C $aiDir commit -qm ai-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $aiDir 'held.txt'), "pre`n", (New-Object System.Text.UTF8Encoding($false)))
+                    $aiCommits = (& git -C $aiDir rev-list --all --count 2>$null) -join ''
+                    $env:FAKE_SCOPE_DECLARED_FIELD = '1'
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = 'held.txt:task-peer'
+                    $env:FAKE_SCOPE_PEER_ACTIVE = '1'
+                    try {
+                        Assert-ScopeRun $aiName (Invoke-GateWrapper $aiDir $aiOut -Status $aiStatus) $aiOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_DECLARED_FIELD', 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $aiText = Get-Content -Raw -Path $aiOut
+                    if (((& git -C $aiDir rev-list --all --count 2>$null) -join '') -ne $aiCommits) { Write-Host $aiText; throw "SCENARIO $aiName FAILED: nothing may be committed" }
+                    if (-not (@(& git -C $aiDir status --porcelain 2>$null) -contains '?? held.txt') -or [System.IO.File]::ReadAllText((Join-Path $aiDir 'held.txt')) -ne "pre`n") {
+                        Write-Host $aiText; throw "SCENARIO $aiName FAILED: held.txt must stay untracked with its pre-flight bytes"
+                    }
+                    if (-not $aiText.Contains($aiLine)) { Write-Host $aiText; throw "SCENARIO $aiName FAILED: expected the '$aiLine' landing line" }
+                    & node $aiCheck (Join-Path $aiDir '.moe\record_commit.jsonl') $aiKind $aiCode
+                    if ($LASTEXITCODE -ne 0) { Write-Host $aiText; throw "SCENARIO $aiName FAILED: the $aiKind nothing row must name held.txt under $aiCode in skipped and its peer in contested" }
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AI] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 39
-                if ($symlinksOk) { $scopeExpectedRuns = 40 }
+                $scopeExpectedRuns = 40
+                if ($symlinksOk) { $scopeExpectedRuns = 41 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)

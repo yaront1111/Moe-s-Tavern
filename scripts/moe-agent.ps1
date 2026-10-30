@@ -4092,6 +4092,20 @@ function ConvertTo-MoeRecordPaths([array]$Items, [int]$Cap) {
     }
 }
 
+# The `skipped` and `contested` lists of every landing record that follows
+# attribution, so a held contested path reaches the daemon's MOE_CONTESTED_HELD
+# alert whatever the outcome (twin: sh record_commit_rpc). MOE_ATTR_EXCLUDED
+# skips (.moe/**, tool config) are static noise that would crowd the 100-entry
+# cap out of meaningful skips; staging-time drops count as skips. Paths go back
+# ROOT-relative. Both lists are always arrays, empty when nothing is held.
+function Get-MoeRecordHeldFields($Attr, [array]$Dropped, [string]$Rel) {
+    $sk = @(@($Attr.Skipped) | Where-Object { $null -ne $_ -and $_.Code -ne 'MOE_ATTR_EXCLUDED' }) + @(@($Dropped) | Where-Object { $null -ne $_ })
+    return @{
+        skipped = @($sk | Select-Object -First 100 | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Rel); code = $_.Code } })
+        contested = @(@($Attr.Contested) | Where-Object { $null -ne $_ } | Select-Object -First 100 | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Rel); taskId = $_.TaskId } })
+    }
+}
+
 # Section 7.4: rescue ref refs/moe/rescue/<taskId>/<utc-ts>. HEAD, branch and
 # shared index untouched; never pushed. Builds the tree from the candidates
 # (or a prebuilt tree) against HEAD's tree so `git show <ref> --stat` reads
@@ -4708,11 +4722,12 @@ function Invoke-MoeLanding {
             # Any commits the worker made mid-session are already pathspec-scoped
             # and must still reach the remote (today's behaviour for completions).
             if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $res.Branch $Kind $TaskId }
-            Send-MoeRecordCommit @{
+            # No build ran yet, so there are no staging-time drops.
+            Send-MoeRecordCommit (@{
                 taskId = $TaskId; outcome = $outcome; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId
                 sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = $code
-                unattributedPaths = $unattrRecPaths; skipped = @(@($attr.Skipped | Where-Object { $_.Code -ne 'MOE_ATTR_EXCLUDED' } | Select-Object -First 100) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); code = $_.Code } })
-            } | Out-Null
+                unattributedPaths = $unattrRecPaths
+            } + (Get-MoeRecordHeldFields $attr @() $Git.Rel)) | Out-Null
             return $res
         }
 
@@ -4816,7 +4831,7 @@ function Invoke-MoeLanding {
                 $res.Outcome = 'nothing'; $res.Code = 'MOE_COMMIT_NOTHING_TO_COMMIT'
                 if ($bl) { Write-MoeBaseline $baselinePath $TaskId $bl.Head $B $newU $landedFlag $blSession $blP (Get-MoeCarryRows $attr.Own @()) | Out-Null }
                 if ($Kind -eq 'completion') { $res.Pushed = Push-MoeBranch $Git.Top $branch $Kind $TaskId }
-                Send-MoeRecordCommit @{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } | Out-Null
+                Send-MoeRecordCommit (@{ taskId = $TaskId; outcome = 'nothing'; kind = $Kind; status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed; code = 'MOE_COMMIT_NOTHING_TO_COMMIT'; unattributedPaths = $unattrRecPaths } + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)) | Out-Null
                 return $res
             }
             $landedInferred = @($landed | Where-Object { $_.Inferred }).Count
@@ -4930,10 +4945,8 @@ function Invoke-MoeLanding {
         $treeId = ''
         $tr = Invoke-MoeGit -Top $Git.Top -GitArgs @('rev-parse', "$sha^{tree}")
         if ($tr.Rc -eq 0 -and $tr.Out.Count -gt 0) { $treeId = ($tr.Out -join '').Trim() }
-        # MOE_ATTR_EXCLUDED skips (.moe/**, tool config) are static noise and
-        # would crowd the 100-entry cap out of meaningful skips — the sh twin
-        # filters them too. Truncation is computed daemon-side. Every path list
-        # goes back ROOT-relative (REL stripped), like record_commit_rpc.
+        # Truncation is computed daemon-side. Every path list goes back
+        # ROOT-relative (REL stripped), like record_commit_rpc.
         $recArgs = @{
             taskId = $TaskId; outcome = 'committed'; kind = $Kind; sha = $sha; treeId = $treeId; ref = $branch
             status = $Status; role = $Role; workerId = $WorkerId; sessionId = $Sid; cliExitCode = $CliExit; pushed = $res.Pushed
@@ -4941,9 +4954,7 @@ function Invoke-MoeLanding {
             inferredPaths = @($inferredPaths | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
             touchedPaths = @($script:MoeToolWritten.Values | Select-Object -First 500 | ForEach-Object { ConvertTo-MoeRootRelative $_ $Git.Rel })
             unattributedPaths = $unattrRecPaths
-            skipped = @(@(@($attr.Skipped | Where-Object { $_.Code -ne 'MOE_ATTR_EXCLUDED' }) + @($dropped) | Select-Object -First 100) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); code = $_.Code } })
-            contested = @(@($attr.Contested) | ForEach-Object { @{ path = (ConvertTo-MoeRootRelative $_.Path $Git.Rel); taskId = $_.TaskId } })
-        }
+        } + (Get-MoeRecordHeldFields $attr $dropped $Git.Rel)
         $recReply = Send-MoeRecordCommit $recArgs
         $ledgerAcked = ($null -ne $recReply -and (Get-MoeProp $recReply 'success') -eq $true)
         $recorded=$true

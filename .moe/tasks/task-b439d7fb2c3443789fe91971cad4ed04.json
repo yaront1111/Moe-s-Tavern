@@ -11,9 +11,52 @@
   "taskRails": [
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Verify the premises before writing anything. This is a spike: the deliverable is a decision, and the decision below holds only if these facts hold. Re-read the code and record the exact file:line references the document will cite (Serena find_symbol, or a read-only grep):\n\nF1. moe-jetbrains MoeDaemonSupervisor.readDaemonInfo reads <project>/.moe/daemon.json, which is repository-visible content. The IDE then connects to ws://127.0.0.1:<port>/ws taken from that file (MoeProjectService.doConnect). Under PROTECTED, activationRefusal → RuntimeSelectionPolicy.verifyProvenance checks only the pid: (pid, start instant) or its direct parent against IDE spawn records, persisted by CQ-RF01 when landed. Nothing binds the port to that pid.\nF2. scripts/local-runner/guest-session.mjs daemonRefusal runs before the spawn (runGuestSession) and again before every forward (reply()). It does an O_NOFOLLOW read with a 16 KiB cap and admits only an absent bindHost or a literal loopback one. forward is a host-controller function. The guest gets no daemon address, port or token.\nF3. packages/moe-daemon/src/server/WebSocketServer.ts: /ws and /mcp take any loopback client without authentication; only /runner authenticates (authenticateRunner).\nF4. The daemon CLI's stop and status validate daemon.json through validateDaemonInfoForProject and probeDaemonHealth (packages/moe-daemon/src/index.ts). That validation is self-reported by whatever answers on the port.\nF5. Guests reach no host loopback port. That is R08's design (the guest has no daemon URL); CQ-R13e certifies it with guest-network probes on real hardware.\nF6. Same-user host processes can already change everything the protected profile relies on:\n- the user-writable installed plugin and runtime;\n- the owner-only IDE store (CQ-RF01);\n- the IDE JVM and the daemon process (same-user debug, ptrace or OpenProcess);\n- node.\n\nIf any fact contradicts its premise, do NOT write the planned decision. Examples: a path where repository content or guest code alone can start or reach a host loopback listener, or an authenticated /ws. Instead, add a task comment with the evidence, then moe.report_blocked, so that the architect re-decides.\n\nError handling: a reference you cannot confirm is left out of the document, never guessed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create docs/design/protected-profile-threat-model.md, the decision record. Use exactly these level-2 headings, in this order: Status, Threat model, Open points, Options considered, Decision, Follow-up rows.\n\n## Status\nDecided 2026-10-30 by CQ-RF05 (task-b439d7fb, epic CQ-RF), from the architect plan. A human may revise it. It applies to the protected (verified-local) profile; legacy is unchanged.\n\n## Threat model\nIN the model:\n- untrusted repository content, including every file under .moe/ that the repository or a pull can supply (daemon.json, project.json);\n- all code running inside Moe-provisioned guests (agents and checks).\nOUT of the model:\n- same-user host processes, with the F6 reasons. No in-process check can hold against them, and claiming otherwise would be false assurance.\n- other local OS users. The loopback /ws and /mcp are unauthenticated (F3), so the protected profile assumes a single-user host. On shared multi-user hosts it is unsupported until loopback channels are authenticated.\n\n## Open points\nEach point gets its code references from step 1, who could exploit it, and why that attacker is in or out of the model:\n- 'The daemon.json port↔pid binding (CQ-R01 follow-up 5)': exploiting it needs a live listener on the named loopback port. Repository content cannot start one, and guests cannot reach host loopback (F5). Only same-user or other-user host processes can, and both are out of the model.\n- 'The per-request daemon.json re-check (CQ-R08 handoff point 3)': the window between daemonRefusal and forward. Changing daemon.json, or rebinding the daemon to a wildcard, needs a host writer: a same-user process. Guest code cannot. The check is a tripwire for the daemon's own exposure; the forward target never comes from guest input.\n\n## Options considered\nEach option with its reason:\n- 'Per-platform OS lookup of the port's owner': rejected. There is no portable Java or Node API: Windows needs GetExtendedTcpTable, Linux needs /proc/net/tcp plus an fd scan that cannot see other users' sockets, macOS needs libproc. It would need native code or PATH tools, and the protected selection forbids PATH lookups. It is brittle, and it defends only against host listeners, which are out of the model.\n- 'A daemon-issued nonce over /health': deferred. Concretely: the IDE generates the nonce at spawn, passes it through the daemon's owner-only environment, keeps it in the CQ-RF01 store, and checks a challenge-response on /health or the /ws handshake. This is the right mechanism once other local users are in the model, because they cannot read another user's process environment. Alone, though, it changes no exposure while /ws and /mcp stay open to local users.\n- 'Accept and document the gap': chosen.\n\n## Decision\nSame-user host processes stay outside the protected profile's threat model. Both open points are accepted and documented, with no code change. The protected profile assumes a single-user host.\n\n## Follow-up rows\nNone are required: the decision changes no behaviour.\nRecommended for when multi-user hosts come into scope, and not created by this row: authenticate the daemon's loopback /ws and /mcp, and bind daemon.json with the spawn nonce above. VS Code parity (CQ-RF06) and the integration row (CQ-RF07) should cite this record.\n\nKeep it to about 150 lines or fewer, with plain sentences. Cite code as path:line from step 1, and add no claim without a reference.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "docs/design/protected-profile-threat-model.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/ARCHITECTURE.md: link the record. ARCHITECTURE.md has no security section today, so add `## Security Notes` immediately before `## Error Handling (Current)`. It holds three short bullets:\n- the protected profile's threat model: repository content and guest code are in it; same-user host processes and other local users are out of it, so a single-user host is assumed;\n- the two accepted gaps, the daemon.json port↔pid binding and the R08 per-request re-check window;\n- a relative link to design/protected-profile-threat-model.md.\nChange no other line.\n\nError handling: none at runtime. This is a docs-only change, checked by step 4.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh, from the repo root (bash on WSL). No unit test applies to a docs-only decision record, so the heading check below is its structural test:\n\nnpm run lint && for h in 'Status' 'Threat model' 'Open points' 'Options considered' 'Decision' 'Follow-up rows'; do grep -qx \"## $h\" docs/design/protected-profile-threat-model.md || { echo \"missing: $h\"; exit 1; }; done && grep -q 'design/protected-profile-threat-model.md' docs/ARCHITECTURE.md\n\nIt must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n\nThen run `git diff --check` over the two files. A read-only `git status --short` must show only these two paths changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: if lint fails on a file this task did not touch, report it with the output; never edit a peer's file to make it pass.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the record as a security reviewer who wants it to be wrong:\n- Does it claim any protection that the code does not give? Every 'cannot' needs a reference from step 1.\n- Is there an in-model attacker (repository content or guest code) who can exploit either open point without a same-user or other-user host process? Check: a pulled daemon.json, a repo-supplied project.json, git hooks (commitHooks is off by default), and a guest reaching host loopback.\n- Is the single-user-host assumption stated where an operator would see it, in the Decision and in ARCHITECTURE's notes?\n- Are the options' reasons accurate: platform APIs, and the PATH rule from the protected selection?\n- Would I be embarrassed if a reviewer found a counterexample?\n\nFix any finding, then re-run step 4's command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "newFiles": [
+        "docs/design/protected-profile-threat-model.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -26,10 +69,48 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:45.773Z",
-  "updatedAt": "2026-10-30T06:52:10.852Z",
+  "updatedAt": "2026-10-30T07:16:54.662Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:52:10.852Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:13:22.778Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:16:54.634Z",
+  "planningNotes": {
+    "approachesConsidered": "- Bringing same-user host processes into the model. Rejected: they can rewrite the user-writable installed plugin and runtime, the owner-only store, and the IDE and daemon processes. No application-level check withstands them, so claiming otherwise would be false assurance.\n- Bringing other local users into the model now. Deferred: /ws and /mcp are unauthenticated loopback endpoints today. Closing only the port↔pid gap (OS lookup or nonce) would leave local users able to drive the daemon directly, a net zero. Both become follow-ups together if multi-user hosts are ever in scope.\n- An OS port-owner lookup. Rejected: per-platform native APIs, PATH tools forbidden under the protected selection, brittle, and defending only against out-of-model attackers.\n- A spawn nonce. Recorded as the preferred future design, because cross-user processes cannot read the daemon's environment.\n- Asking the human in the REPL. Not needed: TURBO delegates plan approval, and the record says a human may revise it.",
+    "codebaseInsights": "- readDaemonInfo (MoeDaemonSupervisor.kt) reads the port and pid from .moe/daemon.json. doConnect (MoeProjectService.kt) connects to ws://127.0.0.1:<port>/ws. verifyProvenance (RuntimeSelectionPolicy.kt) checks only the pid and its start instant, or the direct parent.\n- guest-session.mjs runs daemonRefusal before the spawn (line ~66) and before every forward in reply() (line ~173). It uses an O_NOFOLLOW read with a 16 KiB cap and admits only a loopback bindHost.\n- WebSocketServer.ts authenticates only /runner (authenticateRunner, line ~301). /mcp and /ws accept any loopback client.\n- The daemon CLI's validateDaemonInfoForProject and probeDaemonHealth (packages/moe-daemon/src/index.ts:355) are self-reported.\n- ARCHITECTURE.md has no security section yet. The new one goes before '## Error Handling (Current)'.",
+    "risks": "- The decision rests on F5: guests cannot reach host loopback. It is R08's design and is certified natively by CQ-R13e. If R13e's probe ever fails, this record must be revisited, so the record says so.\n- A worker who finds a contradicting fact must block rather than write the planned decision.\n- npm run lint covers role docs only, so the heading check in step 4 is what proves the record's structure.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "scripts/local-runner/guest-session.mjs",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/index.ts",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:16:54.662Z",
+  "approvedPlanRevision": 1
 }

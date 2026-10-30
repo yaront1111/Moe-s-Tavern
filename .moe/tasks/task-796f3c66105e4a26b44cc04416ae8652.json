@@ -82,7 +82,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:24:18.022Z",
-  "updatedAt": "2026-10-30T07:14:40.980Z",
+  "updatedAt": "2026-10-30T07:15:27.284Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:27:17.977Z",
     "plannedStepCount": 4,
@@ -180,7 +180,9 @@
     "scripts/tests/local-runner.test.mjs",
     "scripts/local-runner/guest-supervisor.py",
     ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
-    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json"
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
   ],
   "completionSummary": "CQ-R10d3a, reopen 1. QA rejected because the size rule had no killing test. This round changes tests only: scripts/tests/local-runner.test.mjs, +14/-7 in AI4. The supervisor is byte-identical to 4f2692a, whose code QA verified as correct. Task total against 4f2692a~1: +219/-11 = 230 lines (cap 400).\n\nFix:\n- Each AI4 refusal row can now carry harness setup, passed to agentsIn.\n- Each size row is a whole binary with a correct hash, so only the size rule refuses it:\n  - 'size 0': a 0-byte claude with the empty sha256 and no data;\n  - 'size true': a valid 1-byte claude with header size true;\n  - 'a size above the cap': `m.MAX_AGENT_BYTES = 6` with the valid 7-byte claude.\n- The install loop adds both bounds: 'size 1' installs, and 'size == cap' (`m.MAX_AGENT_BYTES = 7`) installs.\n- The MAX+1 row became the lowered-cap row, because a stream valid apart from its size would need 2^30+1 bytes. AI1 still pins MAX_AGENT_BYTES == agent-cache.mjs MAX_AGENT_BINARY_BYTES.\n\nMutation proof: a scratch copy, AI1-AI5 run under env -i; the shared files were never edited. The old 4f2692a test stays green on all six mutants.\n- Deleting the whole size check: AI4 red ('size 0').\n- Deleting only `1 <=`: red ('size 0').\n- Deleting only `<= MAX_AGENT_BYTES`: red ('a size above the cap').\n- Three more:\n  - deleting only `type(size) is int`: red ('size true');\n  - `< MAX`: red ('size == cap');\n  - `1 <`: red ('size 1').\n- Against the new file, plan mutants a-i plus QA's j and k are all still killed.\n\nVerification, run fresh at HEAD b1b6d7d8 as `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs`:\n- Exit 0: 247 tests, 246 pass, 0 fail, 1 skip (the pre-existing macOS smoke).\n- Neighbour local-runner-bridge.test.mjs: 55/55.\n- No __pycache__.\n\nNo verified-local or isolation claim.",
   "commits": [
@@ -220,6 +222,23 @@
       "treeId": "5dbb56450a2f96a3c25ea0dbcf2f3bd5a7045a52",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "f56c65ff4aa7b5a35b0470407e7903dd94791524",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T07:06:19Z",
+      "paths": [
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-db328cda8c094df3a4551f0015679fed.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T07:15:27.284Z",
+      "treeId": "06fb5922fd0322b746fdd3118b1c93835226a141",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -229,9 +248,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T06:50:03Z",
-    "at": "2026-10-30T07:02:04.146Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T07:06:19Z",
+    "at": "2026-10-30T07:15:27.284Z"
   },
   "reviewCompletedAt": "2026-10-30T07:14:40.980Z",
   "rejectionDetails": {
