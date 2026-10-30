@@ -93,7 +93,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -113,7 +113,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T16:47:51.273Z",
-  "updatedAt": "2026-10-30T21:56:55.294Z",
+  "updatedAt": "2026-10-30T22:18:43.260Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:23:37.820Z",
@@ -123,12 +123,15 @@
     "firstClaimAt": "2026-10-30T17:24:24.245Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T22:18:43.260Z",
+    "wallClockMs": 17659015
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
     "architect-bc59d28a",
-    "worker-c75a6f39"
+    "worker-c75a6f39",
+    "qa-12f7cf2d"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -273,5 +276,9 @@
     "moe-vscode/src/services/MoeDaemonClient.ts",
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
-  ]
+  ],
+  "completedAt": "2026-10-30T22:18:43.260Z",
+  "reviewCompletedAt": "2026-10-30T22:18:43.260Z",
+  "reviewSummary": "APPROVED. Reviewed completion 1f6c2721 (pushed, in moe/work-2026-10-24 + origin). The tree has no diff from it in moe-vscode/ or moe-jetbrains/. Code +135/-1 (net 134), 4 files. Tests +50/-0 and +48/-0, no existing row changed. Supervisor and store untouched; no new imports or signatures.\nQA re-ran the gate:\n- VS Code native `npm test && npm run compile`: exit 0. 348 tests, 344 pass, 0 fail, 4 existing skips. New row RAN; tsc OK.\n- `gradlew.bat test --rerun`, under the jetbrains-gradle lease (released after): exit 0, :test executed. 28 fresh XML files: 496 tests, 0 skip/fail/err. RSPT 70 (N15 ran, no 8.3 skip), MDST 79.\n- WSL Linux node --test: 344 pass, 4 skip (new row skipped as Windows only).\n- subst empty after each run; no temp leftovers.\nRED reproduced: in a scratch copy outside the repo, the new VS Code row fails on 1f6c2721^ MoeDaemonClient.ts (outside\\to-project\\later true!==false) and passes on 1f6c2721. JetBrains RED by code reading, not a run: old physicalFolder skips a dangling junction via NoSuchFile, so dangling, dangling\\bin and mapped read outside. This matches the worker's recorded 3-entry RED.\nDoD:\n- 1: 8 inside entries dropped, 4 outside kept, exact PATH. The whoami proof gives raw status 0 and filtered ENOENT. N15 checks whole map, parity, supervisor env, mapped seam, LEGACY. No network.\n- 2: POSIX and LEGACY gated (win32 / strict(profile)); existing rows pass.\n- 3: gates green.\nInvariants: no lookup before the spelling checks (alias skip; conjunct last). Fails closed on non-ENOENT, existing-unresolved or no-ancestor. Terminates (dirname fixed point; recursion ≤2).\nResidual, non-blocking: a dangling store root now reads ABSENT, not UNTRUSTED. Deleting the root already gives ABSENT with the same access, so it opens no new downgrade path. Noted for RF07.\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
