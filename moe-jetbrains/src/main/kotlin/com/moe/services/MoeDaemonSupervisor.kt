@@ -167,7 +167,8 @@ class MoeDaemonSupervisor(
 
     /**
      * Under PROTECTED, why the daemon [info] names must not be activated; null when it may be. A spawn an
-     * earlier IDE session persisted verifies only for the daemon installed now; LEGACY never reads the store.
+     * earlier IDE session persisted verifies only for the daemon installed now. LEGACY reads no daemon
+     * provenance; profile selection reads only its own record.
      */
     fun activationRefusal(info: DaemonInfo): String? {
         if (profile() != RuntimeProfile.PROTECTED) return null

@@ -157,22 +157,31 @@ class MoeDaemonSupervisorTest {
         temporaryFolder.newFolder(name).also { File(it, ".moe").mkdirs() }
 
     @Test
-    fun `a legacy spawn and activation neither write nor read the protected state store`() {
+    fun `a legacy spawn and activation neither write nor read daemon provenance`() {
         val root = initializedRoot("legacy-store")
         // The direct command, and a process with a real handle: a legacy spawn that recorded would persist.
         File(root, "packages/moe-daemon/dist/index.js").apply { parentFile.mkdirs() }.writeText("repo")
         val store = ProtectedStateStore(temporaryFolder.newFolder("state").toPath().resolve("moe/protected-state"))
+        // Resolve an installed daemon outside the project so an activation provenance read reaches the store.
+        val installed = temporaryFolder.newFolder("legacy-installed")
+        File(installed, "daemon/index.js").apply { parentFile.mkdirs() }.writeText("installed")
         var consulted = 0
         RuntimeSelectionPolicy.store = { consulted++; store }
         try {
             assertEquals(RuntimeProfile.LEGACY, RuntimeSelectionPolicy.profile(root.absolutePath))
+            assertTrue("the counting store seam is live", consulted > 0)
+            consulted = 0
             val self = ProcessHandle.current()
-            val supervisor = supervisor(root, processStarter = { FakeProcess(self) })
+            // Pin only the supervisor profile so legitimate profile-record reads do not count as provenance.
+            val supervisor = MoeDaemonSupervisor(
+                root.absolutePath, "Test Project", processStarter = { FakeProcess(self) },
+                profile = { RuntimeProfile.LEGACY }, installedRoot = { installed }
+            )
             assertTrue(supervisor.ensureDaemonRunning())
             assertFalse("a legacy spawn persists nothing", Files.exists(store.root))
             store.write("a".repeat(64) + ".json", "garbage")
             assertNull(supervisor.activationRefusal(DaemonInfo(9876, self.pid().toInt(), "now", root.absolutePath)))
-            assertEquals("legacy never consults the store", 0, consulted)
+            assertEquals("a legacy spawn and activation never consult the store", 0, consulted)
         } finally {
             RuntimeSelectionPolicy.resetForTest()
         }
