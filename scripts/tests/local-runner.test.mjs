@@ -3225,6 +3225,14 @@ test('CB6 certifyCore validates deps.bounds before any provider call; a bridge f
     failedBridge('CERTIFY_BRIDGE_FRAMING_SESSION_FAILED'));
 });
 
+// A row selected alone starts while this module is still evaluating, so it can reach only fixtures declared above it or hoisted.
+test('CB7 CB3 selected alone fails only on behavior, never on fixture initialization order', () => {
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT; // set inside a node --test file process, where it makes a nested run report to the parent instead
+  const alone = spawnSync(process.execPath, ['--test-reporter=tap', '--test-name-pattern=^CB3\\b', fileURLToPath(import.meta.url)], { encoding: 'utf8', env, timeout: 60_000 });
+  assert.deepEqual([alone.status, alone.stdout.match(/^# (?:pass|fail) \d+$/gm)], [0, ['# pass 1', '# fail 0']], alone.stdout + alone.stderr);
+});
+
 // CQ-R13e guest-network: neither guest identity may reach the host's daemon ports at the VM gateway. Rows run the whole certify
 // flow, so each failure also shows teardown deleting the VM and the certify listener refusing host connects once it is over.
 import net from 'node:net';
@@ -3734,8 +3742,9 @@ const snapshotOf = (base, overlay = []) => ({
   version: 1, commit: 'a'.repeat(40), tree: 'b'.repeat(40), base: validateImport(base), overlay: validateImport(overlay), excluded: 0,
 });
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
-// A surfaced error is a fixed code whose message carries no path, guest text or byte.
-const transferRefused = code => error => error?.code === code && !/secret|private|[\\/]/.test(error.message);
+// A surfaced error is a fixed code whose message carries no path, guest text or byte. Hoisted (a function, not a const): CB3, above,
+// uses it, and a row selected alone by name starts before this line is evaluated.
+function transferRefused(code) { return error => error?.code === code && !/secret|private|[\\/]/.test(error.message); }
 
 test('T1 workspaceEntries is the validated base plus overlay replacements and additions, minus overlay deletes', () => {
   const merged = workspaceEntries(snapshotOf([fileOf('a', 'A'), fileOf('b', 'B'), fileOf('c/d', 'D', true)],

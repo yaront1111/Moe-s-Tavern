@@ -11,36 +11,57 @@
     {
       "stepId": "step-1",
       "description": "RED: encode the repro as a regression row (test first). All runs use the approved prefix P = env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\". First record your own pre-change baseline: P node --test scripts/tests/local-runner.test.mjs (at planning, HEAD 3aab4a62: 311 tests, 310 pass, 0 fail, 1 skip, ~42 s; siblings R13e/R13h/9eaa4c4e land rows in this file first, so use YOUR numbers), and the filed repro: P node --test --test-name-pattern='^CB3' scripts/tests/local-runner.test.mjs (expect fail 1: ReferenceError: Cannot access 'transferRefused' before initialization, plus an unhandledRejection from the orphaned framingCheck.run promise). Then, in scripts/tests/local-runner.test.mjs, add ONE row directly after the last row of the CQ-R13e1 bridge section (CB6 at planning). Name it with the next free CB number (CB7 unless a landed sibling took it; the name must never match ^CB3, so the child run cannot recurse). Exact prototype (verified red/green by the architect in a scratch copy):\n\n// A row selected alone starts while this module is still evaluating, so it can reach only fixtures declared above it or hoisted.\ntest('CB7 CB3 selected alone fails only on behavior, never on fixture initialization order', () => {\n  const env = { ...process.env };\n  delete env.NODE_TEST_CONTEXT; // set inside a node --test file process, where it makes a nested run report to the parent instead\n  const alone = spawnSync(process.execPath, ['--test-reporter=tap', '--test-name-pattern=^CB3\\\\b', fileURLToPath(import.meta.url)], { encoding: 'utf8', env, timeout: 60_000 });\n  assert.deepEqual([alone.status, alone.stdout.match(/^# (?:pass|fail) \\d+$/gm)], [0, ['# pass 1', '# fail 0']], alone.stdout + alone.stderr);\n});\n\nError handling: every child failure mode fails this row loudly with diagnostics, never a silent pass. A hung child is killed at spawnSync's 60 s timeout (status null). A spawn error sets error with status null and empty stdout (match returns null). A TDZ or any CB3 failure gives status 1 and '# fail 1'. Each mismatches [0, ['# pass 1', '# fail 0']], and the assertion message carries the child's stdout+stderr. Reuse the already-imported spawnSync/fileURLToPath/assert/test (same idiom as the 'real CLI entrypoint returns JSON' row); no new imports, helpers or dependencies. Do NOT assert '# tests 1': Node 20 reports filtered rows as skipped tests (# tests 306). NODE_TEST_CONTEXT deletion is mandatory (inherited 'child-v8' makes the nested run emit v8-serialized reports, so the TAP regex never matches). Use the regex boundary ^CB3\\\\b (JS source), not a trailing space (no Windows argv-quoting question, never matches a future CB30). Run P node --test --test-name-pattern='^CB7' scripts/tests/local-runner.test.mjs and keep the RED evidence: fail 1, an AssertionError whose message carries the child's \"Cannot access 'transferRefused' before initialization\". If a landed sibling already made ^CB3 pass alone, name that commit, keep this row anyway, and take the red evidence from the scratch revert in the self-review step.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Baseline 338 tests/337 pass/1 skip. ^CB3 alone reproduced the TDZ. Added CB7; RED: fail 1, AssertionError carrying child's \"Cannot access 'transferRefused' before initialization\". Dirty .moe task files belong to others, untouched.",
+      "startedAt": "2026-10-30T22:18:37.043Z",
+      "completedAt": "2026-10-30T22:20:16.039Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN: hoist the fixture in place. In the CQ-R09c section of scripts/tests/local-runner.test.mjs, replace the top-level `const transferRefused = code => error => <predicate>;` (under the comment 'A surfaced error is a fixed code whose message carries no path, guest text or byte.') with a function declaration at the SAME position: `function transferRefused(code) { return error => <predicate>; }`, where <predicate> is copied byte-for-byte from the current const (do not retype the regex). Extend the existing comment with the non-obvious why, e.g. '... Hoisted (a function, not a const): CB3, above, uses it, and a row selected alone by name starts before this line is evaluated.' Function declarations and ESM imports are initialized before the module body runs, so this is order-independent for CB3 and every current or future earlier user; moving the const up would protect only rows placed after its new spot. Do NOT move or rename it, and do not touch any of its ~45 call sites, any CB3 statement or any other row. Why it happens (verified on Node 24, and 22 = engines floor): node:test starts a name-matched top-level row synchronously inside its test() call when the root slot is free, and filtered rows no longer occupy the slot, so CB3's synchronous prefix (transferRefused('TRANSFER_DIGEST_MISMATCH') is evaluated as an argument, after framingCheck.run(...) already started) runs while the module is still evaluating; the file has no top-level await and its root before() hook (agent-session section) is registered after CB3. Then run P node --test --test-name-pattern='^CB3' scripts/tests/local-runner.test.mjs (1 pass, 0 fail, no 'before initialization' or unhandledRejection text) and P ... --test-name-pattern='^CB7' (pass).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "transferRefused hoisted in place to a function declaration; predicate byte-identical. ^CB3 and ^CB7 alone 1/1 green, no TDZ text.",
+      "startedAt": "2026-10-30T22:20:16.876Z",
+      "completedAt": "2026-10-30T22:20:26.546Z"
     },
     {
       "stepId": "step-3",
       "description": "VERIFY (the one completion-evidence command; QA re-runs it). Run exactly: env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test --test-name-pattern='^CB3' scripts/tests/local-runner.test.mjs && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs\nExpected: the ^CB3 run passes 1/1 with no TDZ/unhandledRejection text; the full file exits 0 with 0 failures, tests = your step-1 baseline + 1 (the new CB row), skipped count unchanged. Exit 0 is not vacuous: the new CB row inside the full run asserts the isolated ^CB3 child reports '# pass 1' and '# fail 0'. Submit this command, its exit code and output tail as complete_task verification. Mid-epic test-only fix: no wider suite needed (the epic-final R13 task owns full regression).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verify: ^CB3 1/1 pass; full file exit 0, 339 tests (338+1), 338 pass, 0 fail, 1 skip.",
+      "startedAt": "2026-10-30T22:20:27.446Z",
+      "completedAt": "2026-10-30T22:21:54.778Z"
     },
     {
       "stepId": "step-4",
       "description": "ADVERSARIAL SELF-REVIEW (one pass, on this task's diff). Probes run ONLY on scratch copies: cp -r scripts/local-runner and the edited scripts/tests/local-runner.test.mjs into a scratch tree with the same scripts/{local-runner,tests} layout (symlink packages/ only if a selected row needs it). Never edit scripts/local-runner/** or any shared path for a probe. (a) In the scratch test copy revert the declaration to the original const: ^CB7 (new row) must fail with an AssertionError carrying the child's TDZ text and ^CB3 alone with the ReferenceError, which proves the row guards the regression. Restore. (b) In the scratch certify-bridge.mjs, delete the sha256 comparison from framing() so only the length check remains: ^CB3 alone must fail with an AssertionError and ZERO 'before initialization' matches (narrow mutation runs now fail only on behavior). Restore and cmp the scratch copy identical to shared source. Require the expected AssertionError, not merely exit 1 (gotcha-local-runner-certify-bridge-fakes). (c) Run each CB row alone under P (^CB1, ^CB2, ^CB3, ^CB4, '^CB5 bridge', '^CB5 readiness', ^CB6, the new row): all green. Also run ^CB under Node 22 ($HOME/.nvm/versions/node/v22.23.4/bin in PATH). (d) git diff --check clean; git diff --numstat lists only scripts/tests/local-runner.test.mjs (~+11/-2); git diff -U0 shows no hunk outside the declaration, its comment and the new row (CB3 and every call site unchanged). (e) Ask: concurrent suite runs (each child binds its own ephemeral agent-health port and mkdtemp, cleaned by the root after() hook; spawnSync's 60 s timeout bounds a hang); NODE_TEST_CONTEXT deletion; Windows argv (no shell); recursion (the row's name cannot match ^CB3). If any OTHER row fails when selected alone on a fixture TDZ (e.g. one a sibling added), report it and file a follow-up; do not widen this task. PIPES (R09c const) is referenced by CB2/CB4 only after their first await, so it is initialized by then; leave it. Peers' dirty paths untouched; no Git writes; never edit .moe. In Serena, update the last bullet of gotcha-local-runner-certify-bridge-fakes to say the TDZ is fixed and which row guards it, and write the task handoff.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/local-runner.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Self-review done on scratch copies: const revert -> CB7 AssertionError + CB3 ReferenceError; length-only mutant -> AssertionError, no TDZ; all CB rows alone green; Node 22 ^CB 10/10; diff --check clean; numstat 11/2 only the test file, hunks only CB7 and the declaration.",
+      "startedAt": "2026-10-30T22:21:55.753Z",
+      "completedAt": "2026-10-30T22:22:36.969Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -57,7 +78,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:03:44.888Z",
-  "updatedAt": "2026-10-30T17:23:51.075Z",
+  "updatedAt": "2026-10-30T22:22:42.510Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T17:07:01.125Z",
@@ -66,17 +87,24 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T17:07:10.745Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "worker-c0a1ac70"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T17:22:51.490Z",
   "executionContract": {
@@ -155,10 +183,7 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
-    ".moe/tasks/task-9a1da6f665fd42c68df1b657b247e414.json",
-    ".moe/tasks/task-dcde1ed47ee54a23af192f4467271fc9.json",
-    ".moe/tasks/task-dd545bf1cc1843208e23de1d8c2d1756.json"
+    "scripts/tests/local-runner.test.mjs"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -166,5 +191,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-bd1eb82d@2026-10-30T17:07:10Z",
     "at": "2026-10-30T17:23:51.074Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T22:18:37.043Z",
+  "reviewStartedAt": "2026-10-30T22:22:42.508Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test --test-name-pattern='^CB3' scripts/tests/local-runner.test.mjs && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 339\nℹ suites 0\nℹ pass 338\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\n(^CB3 alone: tests 1, pass 1, fail 0; zero 'before initialization' matches in either run)",
+    "reportedAt": "2026-10-30T22:22:42.508Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Hoisted transferRefused in place (const arrow -> function declaration, predicate byte-identical) so ^CB3 alone no longer hits a TDZ ReferenceError; added CB7, which re-runs CB3 alone in a child process (NODE_TEST_CONTEXT removed) and asserts '# pass 1'/'# fail 0'. RED: CB7 failed with an AssertionError carrying the child's \"Cannot access 'transferRefused' before initialization\"; GREEN after the hoist. Full file: 339 tests (baseline 338 + 1), 338 pass, 0 fail, 1 skip. Scratch probes: const revert makes CB7 and CB3 fail on the TDZ; length-only framing mutant makes ^CB3 alone fail with AssertionError and no TDZ text; scratch restored cmp-identical. Every CB row alone is green on Node 24, ^CB is 10/10 on Node 22. Diff is +11/-2 in scripts/tests/local-runner.test.mjs only; git diff --check clean. No product source or .moe edits, no Git writes."
 }
