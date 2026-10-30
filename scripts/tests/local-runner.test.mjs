@@ -3040,6 +3040,238 @@ test('T7 end to end, materializeSnapshot copies the merged view through the real
     assertMaterialized(paths, merged); // the first workspace is untouched
   });
 
+// CQ-R11e2: offline, copy-only Node toolchain install; all tarballs are local fixtures.
+import * as toolchainTransfer from '../local-runner/snapshot-transfer.mjs';
+import { readlinkSync } from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+const HAS_DATA_FILTER = spawnSync('python3', ['-I', '-B', '-c', 'import tarfile; exit(0 if hasattr(tarfile, "data_filter") else 1)']).status === 0;
+const TOOLCHAIN_SKIP = NOT_POSIX || (!HAS_DATA_FILTER && 'python3 tarfile.data_filter is required');
+const { installToolchain, MAX_TOOLCHAIN_BYTES } = toolchainTransfer;
+const NODE_MEMBERS = [
+  { name: 'node-v1.2.3-linux-x64', type: 'dir', mode: 0o4777 },
+  { name: 'node-v1.2.3-linux-x64/bin/node', data: 'node', mode: 0o2777 },
+  { name: 'node-v1.2.3-linux-x64/lib/x.js', data: 'npm', mode: 0o666 },
+  { name: 'node-v1.2.3-linux-x64/bin/npm', type: 'symlink', linkname: '../lib/x.js' },
+];
+function tarballOf(dir, members = NODE_MEMBERS, compression = 'gz') {
+  const file = path.join(dir, 'fixture.tar');
+  const code = `import io, json, sys, tarfile
+with tarfile.open(sys.argv[1], 'w:' + sys.argv[2]) as tar:
+    for row in json.load(sys.stdin):
+        entry = tarfile.TarInfo(row['name'])
+        entry.type = {'file': tarfile.REGTYPE, 'dir': tarfile.DIRTYPE, 'symlink': tarfile.SYMTYPE, 'hardlink': tarfile.LNKTYPE, 'chr': tarfile.CHRTYPE}[row.get('type', 'file')]
+        entry.mode, entry.uid, entry.gid = row.get('mode', 0o644), 12345, 12345
+        entry.linkname = row.get('linkname', '')
+        data = row.get('data', '').encode()
+        entry.size = len(data) if entry.isfile() else 0
+        tar.addfile(entry, io.BytesIO(data))`;
+  const run = spawnSync('python3', ['-I', '-B', '-c', code, file, compression], { input: JSON.stringify(members) });
+  assert.equal(run.status, 0, String(run.stderr));
+  return readFileSync(file);
+}
+const toolchainRows = (bytes, overrides = {}) => [{ kind: 'toolchain', version: 1, size: bytes.length, sha256: sha(bytes), ...overrides },
+  ...dataFrames(bytes), { kind: 'end' }];
+const toolchainFrames = (bytes, overrides) => framesOf(toolchainRows(bytes, overrides));
+function toolchainIn(dir, input, setup = '') {
+  const toolchain = path.join(dir, 'opt', 'toolchain');
+  const code = `${PY_LOAD}${setup}\nsys.exit(m.install_toolchain(0, 1, sys.argv[2]))`;
+  return Object.assign(spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, toolchain], { input, timeout: 60_000 }), { toolchain });
+}
+function assertToolchainRefused(run, status = 65) {
+  assert.deepEqual([run.status, run.stdout.length, existsSync(run.toolchain)], [status, 0, false], String(run.stderr));
+  const parent = path.dirname(run.toolchain);
+  assert.deepEqual(existsSync(parent) ? readdirSync(parent) : [], []);
+}
+function assertToolchainTree(toolchain) {
+  const names = readdirSync(toolchain, { recursive: true }).sort();
+  assert.deepEqual(names, ['bin', 'bin/node', 'bin/npm', 'lib', 'lib/x.js']);
+  for (const name of ['', ...names]) {
+    const info = lstatSync(path.join(toolchain, name));
+    assert.equal(info.uid, process.getuid(), name);
+    if (!info.isSymbolicLink()) assert.equal(info.mode & 0o7022, 0, name);
+  }
+  assert.deepEqual([modeOf(path.join(toolchain, 'bin/node')), readFileSync(path.join(toolchain, 'bin/node'), 'utf8'),
+    readFileSync(path.join(toolchain, 'bin/npm'), 'utf8'), readlinkSync(path.join(toolchain, 'bin/npm'))], [0o755, 'node', 'npm', '../lib/x.js']);
+  assert.deepEqual(readdirSync(path.dirname(toolchain)), ['toolchain']);
+}
+
+test('TC1 toolchain CLI routes only the exact root invocation and shares the host bound', { skip: TOOLCHAIN_SKIP }, () => {
+  for (const argv of [['toolchain', 'x'], ['TOOLCHAIN']]) {
+    const run = spawnSync('python3', ['-I', '-B', PY_SUPERVISOR, ...argv]);
+    assert.deepEqual([run.status, run.stdout.length], [64, 0]);
+  }
+  for (const [uid, status, stderr] of [[1000, 77, ''], [0, 42, '((0, 1), {})']]) {
+    const code = `${PY_LOAD}m.install_toolchain = lambda *a, **k: sys.stderr.write(repr((a, k))) and 42\nsys.exit(m.main(['toolchain'], geteuid=lambda: ${uid}))`;
+    const run = spawnSync('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR]);
+    assert.deepEqual([run.status, run.stdout.length, String(run.stderr)], [status, 0, stderr]);
+  }
+  const run = spawnSync('python3', ['-I', '-B', '-c', `${PY_LOAD}print(m.MAX_TOOLCHAIN_BYTES)`, PY_SUPERVISOR]);
+  assert.deepEqual([run.status, Number(String(run.stdout)), MAX_TOOLCHAIN_BYTES], [0, 134217728, 134217728]);
+});
+test('TC2 gz and xz install only the fixture tree with safe modes and ownership under umask zero', { skip: TOOLCHAIN_SKIP }, t => {
+  for (const compression of ['gz', 'xz']) {
+    const bytes = tarballOf(scratch(t), NODE_MEMBERS, compression);
+    const dir = path.join(scratch(t), 'alias');
+    symlinkSync(scratch(t), dir); // also exercises platforms whose temp parent is itself a symlink
+    const run = toolchainIn(dir, toolchainFrames(bytes), 'os.umask(0)');
+    assert.equal(run.status, 0, String(run.stderr));
+    assert.deepEqual(createFrameDecoder().push(run.stdout), [{ kind: 'installed', sha256: sha(bytes) }]);
+    assertToolchainTree(run.toolchain);
+  }
+});
+test('TC3 malformed streams and mismatched pins leave no install or staging', { skip: TOOLCHAIN_SKIP }, t => {
+  const bytes = tarballOf(scratch(t));
+  const rows = toolchainRows(bytes);
+  const invalid = [{ size: bytes.length + 1 }, { sha256: 'b'.repeat(64) }, { version: 2 }, { version: true }, { size: 0 },
+    { size: 134217729 }, { size: true }, { sha256: 'A'.repeat(64) }, { sha256: 'a' }, { sha256: null }, { extra: true }];
+  const streams = [...invalid.map(head => toolchainRows(bytes, head)),
+    [rows[0], { kind: 'data', data: 'QR==' }, rows.at(-1)], [rows[0], { kind: 'data', data: '' }, ...rows.slice(1)],
+    [rows[0], ...dataFrames(Buffer.concat([bytes, Buffer.from('x')])), rows.at(-1)], rows.slice(0, -1), [...rows, rows.at(-1)],
+    [...rows, Buffer.from([0])], toolchainRows(Buffer.from('not a tarball'))];
+  for (const stream of streams) assertToolchainRefused(toolchainIn(scratch(t), framesOf(stream)));
+});
+test('TC4 hostile tar members never escape staging or install', { skip: TOOLCHAIN_SKIP }, t => {
+  const outside = path.join(scratch(t), 'outside');
+  const members = [
+    [{ name: outside, data: 'escape' }], [{ name: '../escape', data: 'escape' }],
+    ...['/etc', '../../x'].map(linkname => [{ name: 'node/link', type: 'symlink', linkname }]),
+    [{ name: 'node/hard', type: 'hardlink', linkname: outside }], [{ name: 'node/dev', type: 'chr' }],
+    [{ name: 'one', type: 'dir' }, { name: 'two', type: 'dir' }], [{ name: 'node', data: 'file' }],
+    [{ name: 'node', type: 'symlink', linkname: 'missing' }],
+    [{ name: 'node/link', type: 'symlink', linkname: '..' }],
+    [{ name: 'node/hard', type: 'hardlink', linkname: 'missing' }],
+    [{ name: 'node/link', type: 'symlink', linkname: '..' }, { name: 'node/link/escape', type: 'symlink', linkname: '../../x' }],
+    // Inside the staging top, but outside the install once node is renamed: it re-enters through the top's own name.
+    [{ name: 'node', type: 'dir' }, { name: 'node/x', data: 'x' }, { name: 'node/link', type: 'symlink', linkname: '../node/x' }],
+  ];
+  for (const entries of members) assertToolchainRefused(toolchainIn(scratch(t), toolchainFrames(tarballOf(scratch(t), entries))));
+  // Links data_filter never writes ('..' after a name, absolute), planted after extraction; both resolve in staging's top.
+  for (const links of [[['s', '.'], ['escape', 's/../node-v1.2.3-linux-x64/bin/node']], [['abs', 'TOP/bin/node']]]) {
+    assertToolchainRefused(toolchainIn(scratch(t), toolchainFrames(tarballOf(scratch(t))), `real = m.tarfile.TarFile.extractall
+def planted(self, tree, **kwargs):
+    real(self, tree, **kwargs)
+    top = os.path.join(tree, 'node-v1.2.3-linux-x64')
+    for name, target in ${JSON.stringify(links)}: os.symlink(target.replace('TOP', top), os.path.join(top, name))
+m.tarfile.TarFile.extractall = planted`));
+  }
+  assert.equal(existsSync(outside), false);
+});
+test('TC5 existing installs stay untouched and absent data_filter fails closed', { skip: TOOLCHAIN_SKIP }, t => {
+  const input = toolchainFrames(tarballOf(scratch(t)));
+  for (const plant of [file => mkdirSync(file), file => writeFileSync(file, 'kept'), file => symlinkSync('missing', file)]) {
+    const dir = scratch(t), target = path.join(dir, 'opt', 'toolchain');
+    mkdirSync(path.dirname(target));
+    plant(target);
+    const before = lstatSync(target);
+    const run = toolchainIn(dir, input);
+    assert.deepEqual([run.status, run.stdout.length, lstatSync(target), readdirSync(path.dirname(target))], [73, 0, before, ['toolchain']]);
+  }
+  assertToolchainRefused(toolchainIn(scratch(t), input, 'del m.tarfile.data_filter'), 71);
+  for (const call of ['fsync', 'rename']) {
+    assertToolchainRefused(toolchainIn(scratch(t), input, `def fail(*a, **k):\n    raise OSError(5, 'injected')\nos.${call} = fail`), 74);
+  }
+  assertToolchainRefused(toolchainIn(scratch(t), input, "def fail(*a):\n    raise OSError(32, 'gone host')\nm.write_frame = fail"), 74);
+  assertToolchainRefused(toolchainIn(scratch(t), toolchainFrames(tarballOf(scratch(t)), { sha256: 'b'.repeat(64) }),
+    "def fail(*a, **k):\n    raise OSError(5, 'must not extract a mismatch')\nm.tarfile.open = fail"));
+  for (const setup of ["os.geteuid = lambda: os.getuid() + 1",
+    "real = m.tarfile.TarFile.extractall\ndef unsafe(self, tree, **kwargs):\n    real(self, tree, **kwargs)\n    os.chmod(os.path.join(tree, 'node-v1.2.3-linux-x64/bin/node'), 0o4777)\nm.tarfile.TarFile.extractall = unsafe"]) {
+    assertToolchainRefused(toolchainIn(scratch(t), input, setup));
+  }
+});
+
+function cachedToolchain(t, bytes) {
+  const file = path.join(scratch(t), 'node.tar.xz');
+  writeFileSync(file, bytes);
+  return { file, sha256: sha(bytes), size: bytes.length, version: '1.2.3' };
+}
+test('TT1 toolchain streams exactly the verified bytes between mount checks', async t => {
+  assert.equal(typeof installToolchain, 'function');
+  const record = cachedToolchain(t, BIG), reads = {};
+  const toolchain = Object.defineProperties({}, Object.fromEntries(Object.entries(record).map(([key, value]) =>
+    [key, { enumerable: true, get() { reads[key] = (reads[key] ?? 0) + 1; return value; } }])));
+  const p = transferProvider(undefined, proc => proc.reply({ kind: 'installed', sha256: record.sha256 }));
+  const run = p.provider.run;
+  p.provider.run = (...args) => { writeFileSync(record.file, 'changed after verification'); return run(...args); };
+  const result = await installToolchain({ name: GUEST, toolchain, provider: p.provider });
+  assert.deepEqual(reads, { file: 1, sha256: 1, size: 1, version: 1 });
+  assert.deepEqual(result, { instance: GUEST, sha256: record.sha256, version: '1.2.3', executionReady: false });
+  assert.equal(Object.isFrozen(result), true);
+  assert.deepEqual(p.proc.frames(), toolchainRows(BIG));
+  assert.deepEqual([p.proc.before, p.guest.ids(), p.guest.unexpected], [['info', 'mountinfo'], ['info', 'mountinfo', 'info', 'mountinfo'], []]);
+  assert.deepEqual([p.proc.calls, p.proc.kills], [[['multipass', snapshotArgv(GUEST, 'toolchain'), PIPES]], []]);
+});
+test('TT2 invalid input, cache drift, mounts and guest refusals have fixed codes', async t => {
+  assert.equal(typeof installToolchain, 'function');
+  const toolchain = cachedToolchain(t, Buffer.from('cache'));
+  for (const record of [null, {}, { ...toolchain, extra: 1 }, ...[
+    { file: undefined }, { file: 'relative' }, { file: '/bad\npath' }, { sha256: 'A'.repeat(64) }, { size: 0 }, { size: 134217729 },
+    { sha256: `${toolchain.sha256}\n` }, { size: NaN }, { size: 1.5 }, { version: 'v1.2.3' }, { version: '1.2.3\n' },
+  ].map(change => ({ ...toolchain, ...change }))]) {
+    const p = transferProvider();
+    await assert.rejects(installToolchain({ name: GUEST, toolchain: record, provider: p.provider }), transferRefused('TRANSFER_INPUT_INVALID'));
+    assert.deepEqual([p.guest.calls, p.proc.calls], [[], []]);
+  }
+  for (const change of [{ name: 'primary' }, { timeoutMs: 0 }, { provider: { spawn: 3 } }]) {
+    await assert.rejects(installToolchain({ name: GUEST, toolchain, ...change }), transferRefused('TRANSFER_INPUT_INVALID'));
+  }
+  for (const change of [{ size: 1 }, { sha256: 'b'.repeat(64) }, { file: `${toolchain.file}-missing` }]) {
+    const p = transferProvider();
+    await assert.rejects(installToolchain({ name: GUEST, toolchain: { ...toolchain, ...change }, provider: p.provider }), transferRefused('TRANSFER_TOOLCHAIN_MISMATCH'));
+    assert.deepEqual([p.guest.calls, p.proc.calls], [[], []]);
+  }
+  const done = { kind: 'installed', sha256: toolchain.sha256 };
+  for (const [frames, code, exit = 0] of [[[], 'TRANSFER_FRAME_INVALID'], [[done, done], 'TRANSFER_FRAME_INVALID'],
+    [{ ...done, extra: true }, 'TRANSFER_FRAME_INVALID'], [{ ...done, kind: 'other' }, 'TRANSFER_FRAME_INVALID'],
+    [{ ...done, sha256: 'b'.repeat(64) }, 'TRANSFER_DIGEST_MISMATCH'], [done, 'TRANSFER_EXIT_FAILED', 65]]) {
+    const p = transferProvider(undefined, proc => proc.reply(frames, exit));
+    await assert.rejects(installToolchain({ name: GUEST, toolchain, provider: p.provider }), transferRefused(code));
+  }
+  for (const info of [guestDetail({ mounts: HOST_MOUNT }), [guestDetail(), guestDetail({ mounts: HOST_MOUNT })]]) {
+    const p = transferProvider({ info }, proc => proc.reply(done));
+    await assert.rejects(installToolchain({ name: GUEST, toolchain, provider: p.provider }), transferRefused('TRANSFER_MOUNTS_PRESENT'));
+    assert.equal(p.proc.calls.length, Array.isArray(info) ? 1 : 0);
+  }
+});
+test('TT3 host to real supervisor installs a fixture and refuses replacement', { skip: TOOLCHAIN_SKIP, timeout: 60_000 }, async t => {
+  assert.equal(typeof installToolchain, 'function');
+  const toolchain = cachedToolchain(t, tarballOf(scratch(t)));
+  const target = path.join(scratch(t), 'opt', 'toolchain'), guest = fakeGuest(), children = [];
+  t.after(() => children.forEach(child => child.exitCode === null && child.signalCode === null && child.kill('SIGKILL')));
+  const spawn = (exe, argv, options) => {
+    assert.deepEqual(argv, snapshotArgv(GUEST, 'toolchain'));
+    const code = `${PY_LOAD}sys.exit(m.install_toolchain(0, 1, sys.argv[2]))`;
+    const child = spawnChild('python3', ['-I', '-B', '-c', code, PY_SUPERVISOR, target], options);
+    children.push(child);
+    return child;
+  };
+  const install = () => installToolchain({ name: GUEST, toolchain, provider: { run: guest.run, spawn } });
+  assert.equal((await install()).sha256, toolchain.sha256);
+  assertToolchainTree(target);
+  await assert.rejects(install(), transferRefused('TRANSFER_EXIT_FAILED'));
+  assert.deepEqual([children.length, children[1].exitCode], [2, 73]);
+  assertToolchainTree(target);
+});
+test('TT4 a cache file growing after stat cannot cause an unbounded read', async t => {
+  const toolchain = cachedToolchain(t, Buffer.from('cache')), p = transferProvider();
+  const original = { stat: fsPromises.stat, readFile: fsPromises.readFile, open: fsPromises.open };
+  let readBytes = 0;
+  const grow = info => { writeFileSync(toolchain.file, Buffer.alloc(100)); return info; };
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  t.mock.method(fsPromises, 'stat', async (...args) => grow(await original.stat(...args)));
+  t.mock.method(fsPromises, 'readFile', async (...args) => { const bytes = await original.readFile(...args); readBytes += bytes.length; return bytes; });
+  t.mock.method(fsPromises, 'open', async (...args) => {
+    const handle = await original.open(...args), stat = handle.stat.bind(handle), read = handle.read.bind(handle);
+    t.mock.method(handle, 'stat', async () => grow(await stat()));
+    t.mock.method(handle, 'read', async (...args) => { const result = await read(...args); readBytes += result.bytesRead; return result; });
+    return handle;
+  });
+  syncBuiltinESMExports();
+  await assert.rejects(installToolchain({ name: GUEST, toolchain, provider: p.provider }), transferRefused('TRANSFER_TOOLCHAIN_MISMATCH'));
+  assert.deepEqual([p.guest.calls, p.proc.calls], [[], []]);
+  assert.ok(readBytes <= toolchain.size + 1, `read ${readBytes} bytes for a ${toolchain.size}-byte pin`);
+});
+
 // CQ-R09 export rows: export() walks a workspace that materialize() built, changed as the agent would.
 import { chmodSync, renameSync, truncateSync } from 'node:fs';
 

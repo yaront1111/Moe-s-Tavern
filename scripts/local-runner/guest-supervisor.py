@@ -1266,6 +1266,13 @@ def toolchain_members(tar):
         yield member
 
 
+def link_escapes(target, depth):
+    # Rename-invariant: climb no higher than the link's depth below top, and never '..' after a name (it may be a link).
+    parts = target.split('/')
+    ups = next((i for i, part in enumerate(parts) if part != '..'), len(parts))
+    return os.path.isabs(target) or ups > depth or '..' in parts[ups:]
+
+
 def extract_toolchain(archive, tree):
     os.mkdir(tree, 0o700)
     with tarfile.open(archive, mode='r:*') as tar:
@@ -1275,11 +1282,13 @@ def extract_toolchain(archive, tree):
         raise ValueError('not one top-level toolchain directory')
     top = os.path.realpath(os.path.join(tree, entries[0]))
     for root, dirs, files in os.walk(top, followlinks=False):
+        depth = root[len(top):].count(os.sep)  # directories between top and root's entries
         for path in [root, *(os.path.join(root, name) for name in dirs + files)]:
             info = os.lstat(path)
             if info.st_uid != os.geteuid() or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o7022):
                 raise ValueError('an unsafe toolchain owner or mode')
-            if stat.S_ISLNK(info.st_mode) and os.path.commonpath([top, os.path.realpath(path)]) != top:
+            if stat.S_ISLNK(info.st_mode) and (os.path.commonpath([top, os.path.realpath(path)]) != top
+                                               or link_escapes(os.readlink(path), depth)):
                 raise ValueError('a link outside the installed toolchain')
     return top
 
