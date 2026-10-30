@@ -24,12 +24,9 @@
       "affectedFiles": [
         "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts"
-      ],
-      "note": "DoD 6: two CQ-V01 hand-forward tests added to requiredChecks.delivery.test.ts (+14 lines). (1) 'fails closed on a corrupt requiredChecks entry': a matching candidate with passing runs, then requiredChecks [{...defs[0], bogus:1}, defs[1]] -> missing() toStrictEqual ['protected-checks-unapproved'], projection requiredCheckSatisfied false. Deviation: added candidate(tree1, entriesAt(tree1)) first, because deliveryProjection returns undefined with no candidate; this also isolates the corrupt entry as the only defect. (2) it.each first/last: a duplicate of entries[0].path with oid OID -> ['protected-checks-unmeasured']. Landed name drift: the validateExecutionContract catch now lives in declaredChecks() (returns null), not protectedCheckShortfall. Mutants on /tmp snapshot of 35971a84 (native npm ci, env -i, node v24.21.0): declaredChecks catch `return null`->`return []` KILLED (test 1 fails, 1 failed/18); dropping protectedDrift's `|| candidate.has(path)` KILLED (both first and last rows fail, 2 failed/17). policy.ts restored, cmp ok. File 19/19 green. Pre-existing peer dirty paths (.moe/tasks/*, CLAUDE.md, docs/*, moe-jetbrains/*, src/types/schema.ts, moe-proxy utils.ts, scripts/moe-agent.sh) untouched.",
-      "startedAt": "2026-10-30T18:34:06.840Z",
-      "completedAt": "2026-10-30T18:37:02.746Z"
+      "note": "Reopen 1: no change needed. The two CQ-V01 hand-forward tests (requiredChecks.delivery.test.ts:158 corrupt entry -> protected-checks-unapproved; :165 duplicate path first/last -> protected-checks-unmeasured) landed in completion 273aa770 and are byte-unchanged at HEAD 975842e6 (git diff 273aa770 HEAD empty). QA independently killed both named mutants (1 failed/18 passed; 2 failed/17 passed); the QA reject did not touch them. They re-run in step 5's fresh gate. Peer dirty paths (WebSocketServer*.ts, releaseTask.test.ts, scripts/*, .moe/tasks/*) untouched.",
+      "startedAt": "2026-10-30T19:04:04.979Z",
+      "completedAt": "2026-10-30T19:04:24.114Z"
     },
     {
       "stepId": "step-2",
@@ -39,12 +36,9 @@
       "newFiles": [
         "packages/moe-daemon/src/__acceptance__/mcpCall.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/__acceptance__/mcpCall.ts"
-      ],
-      "note": "mcpCall.ts (+13/-6): createMcpCaller(state, adapter = new McpAdapter(state), options: McpHandleOptions = {}); options forwarded to every adapter.handle (tools/call and tools/list) via exchange(). Header comment: options.runner must come from authenticateRunner over a temp host key, never a literal; real /runner upgrade proven by runnerChannel.test.ts W1 and deliveryBypass W1. Error mapping unchanged. Existing producerConsumer.acceptance.test.ts 16/16 green in the snapshot (no-arg callers unchanged). The runnerCall path is exercised in step 3.",
-      "startedAt": "2026-10-30T18:37:06.698Z",
-      "completedAt": "2026-10-30T18:38:11.349Z"
+      "note": "Reopen 1: no change needed. mcpCall.ts's optional `options: McpHandleOptions = {}` (line 81), forwarded to every adapter.handle via exchange (line 54), landed in 273aa770 and is byte-unchanged at HEAD; the QA reject did not touch it. No-arg callers (V11's producerConsumer/dependencyProjection acceptance files) keep V11 behavior; re-proven in step 5's full gate.",
+      "startedAt": "2026-10-30T19:04:26.685Z",
+      "completedAt": "2026-10-30T19:04:31.918Z"
     },
     {
       "stepId": "step-3",
@@ -57,9 +51,9 @@
       "modifiedFiles": [
         "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
       ],
-      "note": "New deliveryBypass.acceptance.test.ts: P0, A0, F1, F2, F3 (5 rows), S1/M2, S2 (two cases), S3. 13/13 green in the snapshot. Harness: TURBO + local-branch + qualityGate 'npm run gate' (everyTask) + checkEnvironments [ENV]. strictInMemory checks that h.state.updateSettings refuses verified-local with EXECUTION_PROFILE_NOT_READY, then spies the executionProfile namespace (restored by vi.restoreAllMocks) and flips the profile in memory. The snapshot captured at submit_plan is therefore verified-local. MOE_RUNNER_KEY_DIR is vi.stubEnv'd to a temp dir under testDir. The runner comes from authenticateRunner over a loopback stub carrying the key. call/runnerCall share one McpAdapter. No handler is imported. Refusals assert the exact codeName and, for evidence, the exact message built by deliveryEvidenceRefusal(tokens). The task file bytes and the reviews dir must be unchanged across qa_approve, and status stays REVIEW.\nAdaptations to the landed code:\n(1) S2 has two cases. On the qa_approve path V06's CANDIDATE_REVISION_STALE always fires first. The run's revision equals its dispatch revision, and the candidate it is bound to has the same producer revision, so V04's run-revision clause is shadowed there. A DONE prerequisite revised to rev 2 reaches V04's clause instead, through a strict consumer's claim: DEPENDENCY_EVIDENCE_MISSING with the exact message for [required-check:npm run gate].\n(2) The M2 tree/HEAD-move form is S1 (a pass on cand-a, then cand-b). The index/worktree form is M1's inconclusive row (step 4).\n(3) The strict consumer task-2 (WORKING, dependsOn task-1, v2 verified-local snapshot) is seeded at boot as a raw row, per mem:decision-strict-consumer-readiness.\nCodes seen: RUNNER_CHANNEL_REQUIRED (NOT_ALLOWED -32003); INVALID_INPUT 'Invalid <key>: is not a supported check observation field'; CANDIDATE_MISMATCH; CANDIDATE_REVISION_STALE; CONTEXT_RECEIPT_STALE.",
-      "startedAt": "2026-10-30T18:43:17.458Z",
-      "completedAt": "2026-10-30T18:44:39.404Z"
+      "note": "Reopen-1 fix for QA issue (deliveryBypass.acceptance.test.ts:216). F3 now expects path.join('dispatches', `${d.id}.json`) instead of a hard-coded '/', because files() returns native fs.readdirSync({recursive:true}) entries. Added a 1-line JSDoc on files() saying so. Exact membership (['dispatches', <native path>]), the INVALID_INPUT codeName/message and refusedApproval assertions are unchanged; no case skipped, no production change.\nRED->GREEN natively on Windows (Node v24.16.0, MOE_* cleared, NO_COLOR=1, own archive D:\\moe-v12a-fix.0YM1ql of HEAD 975842e6 + native npm ci; shared node_modules untouched):\n- unfixed HEAD bytes: `npx vitest run src/__acceptance__/deliveryBypass.acceptance.test.ts` exit 1, 5 failed | 17 passed (all five F3 rows, received \"dispatches\\\\dispatch-1.json\"), reproducing QA;\n- fixed bytes (overlay cmp ok): exit 0, 22 passed (22).\nLogs: D:\\moe-v12a-fix.0YM1ql\\red-unfixed.log, green-fixed.log. Full Linux gate follows in step 5. Peer dirty paths untouched.",
+      "startedAt": "2026-10-30T19:04:34.262Z",
+      "completedAt": "2026-10-30T19:06:49.042Z"
     },
     {
       "stepId": "step-4",
@@ -69,33 +63,27 @@
       "newFiles": [
         "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
       ],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
-      ],
-      "note": "deliveryBypass.acceptance.test.ts +127 (now 357 lines): M1 it.each over five rows (none, skipped, inconclusive = M2 index/worktree form, timeout, infra-failure). Each keeps qa_approve DELIVERY_EVIDENCE_MISSING with exactly [required-check:npm run gate], and the observation's repair is pinned with toStrictEqual: escalate/non-repairable-outcome, or retry-infra attempt 1, remaining 1. T1 ARCHIVED: approved via A0 with trees a,b (b current), set_task_status ARCHIVED, receipt for cand-a. The consumer claim is NOT_ALLOWED containing 'unmet dependencies: task-1 [ARCHIVED, missing delivery-receipt] (', and get_context dependsOnUnmet is [task-1]. Control: a cand-b receipt releases the claim. T1 REVIEW: pass on cand-a, then cand-b; a receipt for cand-b still gives qa_approve DELIVERY_EVIDENCE_MISSING with OWED. T2: receipt, then restart (new StateManager + reconcileRunningAttempts + purgeAllWorkers, callers rebuilt); the identical replay gives duplicate:true, receipt bytes are identical, dependsOnUnmet stays [], and the consumer claim succeeds. W1: a real http + MoeWebSocketServer on 127.0.0.1:0. A wrong key and no key each close {1008, 'runner authentication failed'}; a dispatch frame sent on open writes nothing (checks dir empty). With the key, dispatch and observation go over /runner, the dispatch carries the authenticated runnerId, and approve gives DONE. The key is absent from all spied logger calls. Sockets are terminated and servers closed in finally. Landed-name drift: the ARCHIVED consumer refusal is NOT_ALLOWED (describeUnmetDependency), not DEPENDENCY_EVIDENCE_MISSING (that is DONE only), and the token is delivery-receipt; the dependency verdict is read through get_context.dependsOnUnmet, a read-only tool. 22/22 green in snapshot /tmp/moe-v12a.haYvZj. Task net over packages/ is 378 (357 + 7 + 14).",
-      "startedAt": "2026-10-30T18:46:12.938Z",
-      "completedAt": "2026-10-30T18:49:52.497Z"
+      "note": "Reopen 1: no change needed. The M1 (x5), M2, T1 (ARCHIVED + REVIEW + control), T2 (restart replay) and W1 (real /runner WebSocket, wrong/missing key 1008) fixtures landed in 273aa770 and are unchanged; the only reject finding was F3 (fixed in step 3). Their other directory assertions are separator-free: W1 expects files('checks') toEqual([]), and receiptBytes reads native entries through path.join. All of them passed in the native Windows green run (22/22, D:\\moe-v12a-fix.0YM1ql\\green-fixed.log), so W1 also passes on native Windows. The full Linux gate follows in step 5.",
+      "startedAt": "2026-10-30T19:06:50.893Z",
+      "completedAt": "2026-10-30T19:06:57.726Z"
     },
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\n1. A red fixture is either a fixture bug or a genuine bypass. Fix a fixture bug in the test. A GENUINE bypass is fixed at its source module, with that fixture as the regression, only when the fix is one module and keeps this task within QA's 400-net cap. Otherwise call moe.report_blocked naming the fixture, the module and the proposed fix, so the architect splits a fix task. Never weaken, skip or loosen a fixture.\n2. Mutants against landed production code. Apply each to a scratch copy, restore it, then cmp. Each must fail the named case:\n   - isAuthenticatedCheckRun always true: F1;\n   - drop the record_check_observation runner-channel gate: F2;\n   - accept unknown observation keys: F3;\n   - passedOn counting any outcome at exit 0: M1;\n   - drop the strict planRevision clause (V04, V06): S2;\n   - drop the current-candidate requirement in V09's archived rule: T1;\n   - rewrite a receipt on an identical replay: T2;\n   - authenticateRunner accepting any key: W1;\n   - in this test, call one handler directly: the grep in step 6 catches it.\n3. The GATE runs fresh in an isolated Linux snapshot (mem:gotcha-daemon-linux-snapshot-gate):\n   - take `git archive HEAD` of the whole repo, with every dependency in HEAD;\n   - overlay ONLY this task's files;\n   - run `npm ci` after checking the lockfile against the tree;\n   - use env -i with HOME, NO_COLOR=1 and the nvm node bin on a Linux-only PATH, with MOE_* unset;\n   - `cd packages/moe-daemon && npm test` and `npx tsc --noEmit` must both exit 0;\n   - cmp the overlay against the worktree.\n4. Size: this task's numstat over packages/ must be at most 400 net (QA cap; tests count).\n5. A red run outside this task is compared against a snapshot WITHOUT the overlay. Never edit peer files.\n6. Supply the npm test command, its exit code and the output tail to complete_task.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "VERIFY: no red fixture, so there is no bypass and no production or test edit in this step. GATE in a fresh Linux snapshot: git archive of HEAD 77e9e47c (whole repo; package.json and lock unchanged from 859b6921, whose native npm ci was used), overlay of ONLY the 3 task files (cmp ok), env -i HOME/NO_COLOR=1/nvm node v24.21.0 Linux PATH, MOE_* unset, umask 022. `cd packages/moe-daemon && npm test` EXIT 0: 213 files, 6164 passed, 20 skipped, 33.2s; deliveryBypass 22/22, requiredChecks.delivery 19/19, producerConsumer 16/16. `npx tsc --noEmit` EXIT 0. A scratch tsconfig over the 3 task files (types: node) EXIT 0. An earlier run at 859b6921 gave the same numbers. MUTANTS, exact-string edits to scratch production copies, each restored and cmp'd against the HEAD blob: (1) isAuthenticatedCheckRun always true: F1 only. (2) observation runner-channel gate dropped: F2 only. (3) unknown observation keys accepted: all 5 F3 rows. (4) trustedPassedOn ignoring outcome at exit 0: M1 skipped, inconclusive, timeout and infra-failure. (5a) V04 run.planRevision clause dropped: S2 consumer case. (5b) V06 CANDIDATE_REVISION_STALE dropped: S2 qa_approve case. (6) V09 archived rule accepting any candidate's receipt: T1 ARCHIVED. (7) an identical replay rewriting the stored receipt: T2. (8) authenticateRunner accepting any key: W1. 9/9 KILLED, each failing exactly its named case (Tests lines show real failures, not compile errors). The handler-direct mutant is covered by the step-6 grep. SIZE over packages/ for this task's files: deliveryBypass +357, mcpCall +13/-6, requiredChecks.delivery +14, so net 378 (at most 400). Pre-existing peer dirty paths (.moe/tasks/*, finalizeAttempt*, schema.ts, scripts/*) untouched. Script: /tmp/moe-v12a-scripts/mutants.mjs.",
-      "startedAt": "2026-10-30T18:49:56.015Z",
-      "completedAt": "2026-10-30T18:53:40.333Z"
+      "note": "VERIFY (reopen 1). No new findings; no edits in this step. The F3 fix is in step 3.\n1. No red fixture on either platform; no bypass; no production change.\n2. Mutants: QA killed all 9 acceptance mutants plus both CQ-V01 mutants on the exact completion. Only F3's expected path changed, so I re-ran its mutant (runnerToolCall's unknown-key throw disabled via `&& unknownKey.length < 0`, recordCheckDispatch.ts:43) on a scratch copy. It was KILLED: 5 failed | 17 passed, exactly the five F3 rows, each at the INVALID_INPUT codeName assertion (line 216), not at a compile error. Restored; cmp ok.\n3. GATE: fresh archive of HEAD 975842e6, overlaying ONLY deliveryBypass.acceptance.test.ts. All 3 owned files cmp ok against the worktree. The lock matched modulo CR. Native npm ci; env -i with HOME, NO_COLOR=1 and the node v24.21.0 nvm bin (MOE_* count 0); umask 022.\n   - `cd packages/moe-daemon && npm test`: EXIT 0. 213 files passed; 6204 passed | 20 skipped (6224), the same counts as QA's run. deliveryBypass 22/22, requiredChecks.delivery 19/19, producerConsumer 16/16, dependencyProjection 13/13.\n   - `npx tsc --noEmit`: EXIT 0.\n   - A scratch tsconfig over the 3 task files (types:[node], exclude []): EXIT 0.\n   - Native Windows (step 3): 22/22 EXIT 0.\n4. Size, owned files from e71b0971~ to the worktree: +388/-6, net 382 (≤400).\n5. Nothing red outside this task.\nPeer dirty paths I left untouched: package.json (a prebuild edit that appeared mid-session), WebSocketServer*.ts, releaseTask.test.ts, workerLifecycle.ts, scripts/*, .moe/*.\nLogs: /tmp/moe-v12a-r1.IemeKG/{npm-test.log,tsc.log,tsc-test.log,mutant-f3.log}.",
+      "startedAt": "2026-10-30T19:06:59.668Z",
+      "completedAt": "2026-10-30T19:09:04.019Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review. Read the diff as an agent who wants a fixture to pass without testing anything:\n- vacuity: every refusal case must differ from A0 by exactly one defect, and assert the exact codeName and exact tokens. A refusal for the wrong reason, such as a missing identity, must fail the case.\n- dispatch path: grep the acceptance file for 'Tool(' and '.handler(': there must be no hits. Every call goes through createMcpCaller, apart from the W1 WebSocket.\n- trust: the runner identity comes only from authenticateRunner over the temp host key; the key appears in no log line or assertion message; MOE_RUNNER_KEY_DIR is restored.\n- isolation: the readiness spy is restored in afterEach, and P0 pins production readiness. Restarts rebuild both callers; servers and sockets are closed on every path.\n- rails: verified-local stays unavailable outside the spy; no .moe edits, no Git writes, no forbidden tokens; production changes only for a genuine bypass, each with its fixture.\n\nThen write the Serena memory 'task-task-754fa988748b4d2abb2628f4c91d8ff5-handoff' for V12 (task-b621ddc9). Cover:\n- the fixture classes and their exact codes and tokens;\n- the createMcpCaller options parameter and the runnerCall pattern;\n- any bypass fixed or reported;\n- that V12 re-runs this file unchanged and should list src/__acceptance__ as an assertion root.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "modifiedFiles": [
-        "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
-      ],
-      "note": "ADVERSARIAL SELF-REVIEW over the 3 task paths.\n- Dispatch path: grep 'Tool(|.handler(' gives 0 hits. The only tools/ import is ToolTestHarness.\n- Forbidden tokens: none. No daemonGitDocs phrase.\n- Trust: the runner comes only from authenticateRunner over the temp host key; MOE_RUNNER_KEY_DIR is stubEnv'd and restored by unstubAllEnvs.\n- Isolation: readiness is spied in this file only and restored in afterEach; P0 pins real readiness. restart() rebuilds both callers.\n- Rails: no .moe edits, no Git writes, no production change.\nFIXES (W1 only, +3 lines):\n(a) The key-in-logs check is now a boolean over [key, wrong]. A failure no longer prints the key, and the one-character-off wrong key is checked too.\n(b) listen and MoeWebSocketServer construction moved inside try; finally does `wss?.close()` and closes the server only if it is listening, so cleanup runs on every path.\nVACUITY: every refusal asserts the exact codeName plus exact tokens or message. Each fixture is A0 plus one defect. A T2 strictness probe (the replay drops the in-memory receipt) KILLED T2, so the post-restart verdict is judged strictly, not by legacy ARCHIVED-satisfies. Mutant 8 was re-killed on the edited W1.\nS2's in-memory revision bump is V06's own revise() precedent (reviewBinding.test.ts:50).\nConsidered, theoretical only: within() leaves a 3s timer per wait, as in the runnerChannel W1 precedent.\nFinal gate on final bytes: HEAD 77e9e47c snapshot, npm test EXIT 0 (213 files, 6164 passed / 20 skipped); tsc 0; scratch tsc of the task files 0; overlays cmp ok. File is 360 lines, task net 381. Serena handoff written for V12.",
-      "startedAt": "2026-10-30T18:53:43.320Z",
-      "completedAt": "2026-10-30T18:55:53.592Z"
+      "note": "Adversarial self-review of the reopen diff (+2/-1 in deliveryBypass.acceptance.test.ts):\n- Environment: F3's expectation is now native (path.join), matching files()'s native readdir entries. The sort order is the same on both platforms because 'dispatches' is a prefix. I grepped the file for other hard-coded nested disk paths; the only '/' strings left are Git refs (refs/heads/moe/work, moe/work) and wire values, which are POSIX by contract and passed natively on Windows.\n- Vacuity: the F3 mutant is still killed at the INVALID_INPUT codeName assertion (step 5). The membership check stays exact with toEqual on both entries.\n- Dispatch path: grep for 'Tool(' and '.handler(' in the acceptance file and mcpCall.ts gives no hits.\n- Trust and isolation are unchanged and re-checked:\n  - afterEach runs restoreAllMocks, unstubAllEnvs, clearEmitter and cleanup;\n  - MOE_RUNNER_KEY_DIR is stubbed to a temp dir;\n  - P0 pins the real readiness check;\n  - W1 terminates its sockets and closes the wss and the http server in finally.\n- Rails: no production change, no .moe edits, no Git writes, no forbidden tokens. Concurrency, inputs and partial writes do not apply to a test-expectation change.\nSerena: I updated task-task-754fa988748b4d2abb2628f4c91d8ff5-handoff (a reopen-1 section on top) and gotcha-linux-vitest-reuse-native-node-modules (the native Windows archive recipe, because the shared daemon dir is peer-dirty).",
+      "startedAt": "2026-10-30T19:09:05.995Z",
+      "completedAt": "2026-10-30T19:09:50.577Z"
     }
   ],
   "planRevision": 1,
@@ -103,8 +91,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "One reproducible cross-platform test regression blocks approval. Reviewed recorded checkpoint e71b0971 and completion 273aa770 on moe/work-2026-10-24; owned code diff is +387/-6 (net 381). Fresh exact-completion Linux archive + native npm ci + sanitized env: `cd packages/moe-daemon && npm test` exits 0 (213 files, 6204 passed, 20 skipped); `npx tsc --noEmit` and focused test-file typecheck both exit 0. All 9 acceptance mutants and both CQ-V01 hand-forward mutants were independently killed, and mutated scratch files were restored/cmp'd. Native Windows `npx vitest run src/__acceptance__/deliveryBypass.acceptance.test.ts` on identical committed files exits 1: all five F3 cases fail at line 216 (17 passed/5 failed), before reaching the DoD 1 refusedApproval assertion. fs.readdirSync recursive entries use Windows separators, whereas the expectation hard-codes '/'. A scratch-only change to platform-native expected path construction passes 22/22; that probe was restored. Native Node v24.16.0, fresh npm ci, MOE_* cleared. Logs: D:\\moe-v12a-qa.bNCMaf\\native-test.log and native-path-probe.log; Linux: /tmp/moe-v12a-qa.H06gm8. No shared implementation bytes changed. Re-run the Windows file and required full Linux daemon gate after fixing; no production change or coverage weakening is needed.",
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-b621ddc99fe44d50ab700b2aa51c84fc",
   "dependsOn": [
@@ -117,23 +105,32 @@
   ],
   "priority": "HIGH",
   "order": 250.1,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-4d679d46a2924c04a085c28c65156929",
+      "author": "worker-5ebbf433",
+      "content": "The tail of the completion summary was cut at the 2000-char cap.\n- SIZE: owned files (deliveryBypass.acceptance.test.ts, mcpCall.ts, requiredChecks.delivery.test.ts) from e71b0971~ to this round's bytes are +388/-6, net 382, under the 400 cap. This round's diff is +2/-1, in deliveryBypass.acceptance.test.ts only.\n- Peer dirty paths were not touched: package.json, WebSocketServer*.ts, releaseTask.test.ts, workerLifecycle.ts, scripts/* and .moe/*.\n- Logs:\n  - Linux: /tmp/moe-v12a-r1b.FwDmZJ (HEAD ede0f012) and /tmp/moe-v12a-r1.IemeKG (975842e6, with tsc-test.log and mutant-f3.log);\n  - Windows: D:\\moe-v12a-fix.0YM1ql (red-unfixed.log, green-fixed.log) and D:\\moe-v12a-fix2.WD6urz\\native-test.log.\n  You can delete them after review.",
+      "timestamp": "2026-10-30T19:11:50.790Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T18:13:47.066Z",
-  "updatedAt": "2026-10-30T18:56:50.821Z",
+  "updatedAt": "2026-10-30T19:11:50.790Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T18:57:26.256Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 6
+    "executedStepCount": 12,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-4ae016fb",
-    "worker-e60b90bd",
-    "worker-5ebbf433"
+    "governor-693b7073",
+    "worker-5ebbf433",
+    "qa-ba3f4f35"
   ],
   "tier": "heavy",
-  "effort": "xhigh",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
@@ -144,7 +141,13 @@
     "step-5",
     "step-6"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "Forgery: a /mcp record_check_run claiming runner-observed, a dispatch or observation sent without the /runner context, and observation args carrying runnerId/source/candidateId each leave a strict task's qa_approve refused, with exact codeNames and tokens asserted, proven by src/__acceptance__/deliveryBypass.acceptance.test.ts.",
+      "rejectedAt": "2026-10-30T19:02:44.884Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-29T19:05:12.033Z",
   "executionContract": {
     "intendedBehavior": "Daemon-side acceptance fixtures, all going through McpAdapter dispatch, prove that on a strict task forged, stale, missing, target-raced and crash-replayed evidence never satisfies qa_approve or a strict consumer's dependency. They are paired with a positive control that approves, plus the two CQ-V01 hand-forward tests.",
@@ -247,10 +250,7 @@
   ],
   "filesModified": [
     "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
-    "packages/moe-daemon/src/__acceptance__/mcpCall.ts",
-    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
-    ".moe/tasks/task-754fa988748b4d2abb2628f4c91d8ff5.json",
-    ".moe/tasks/task-9a39bf6a2c4444b4b0799cd16dc2a9f1.json"
+    "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts"
   ],
   "touchedFiles": [
     "packages/moe-daemon/src/delivery/requiredChecks.delivery.test.ts",
@@ -263,13 +263,45 @@
     "sessionId": "worker-5ebbf433@2026-10-30T18:45:45Z",
     "at": "2026-10-30T18:56:50.821Z"
   },
-  "reviewStartedAt": "2026-10-30T18:56:12.670Z",
+  "reviewStartedAt": "2026-10-30T19:11:42.124Z",
   "verification": {
     "command": "cd packages/moe-daemon && npm test",
     "exitCode": 0,
-    "outputTail": "Fresh Linux snapshot: git archive of HEAD 77e9e47c, task's 3 files overlaid (cmp ok), native npm ci, env -i, node v24.21.0, MOE_* unset.\n ✓ src/__acceptance__/deliveryBypass.acceptance.test.ts (22 tests) 5377ms\n ✓ src/delivery/requiredChecks.delivery.test.ts (19 tests) 2640ms\n ✓ src/__acceptance__/producerConsumer.acceptance.test.ts (16 tests) 2826ms\n ✓ src/__acceptance__/dependencyProjection.acceptance.test.ts (13 tests) 1896ms\n Test Files  213 passed (213)\n      Tests  6164 passed | 20 skipped (6184)\n   Start at  20:54:59\n   Duration  29.04s (tests 95%, import 4%, transform 1%)\nnpx tsc --noEmit: exit 0; scratch tsc over the 3 task files: exit 0",
-    "reportedAt": "2026-10-30T18:56:12.670Z",
+    "outputTail": "Fresh Linux snapshot: git archive of HEAD ede0f012 (whole repo), only deliveryBypass.acceptance.test.ts overlaid (3 owned files cmp ok), package-lock identical, native node_modules, env -i HOME NO_COLOR=1, node v24.21.0, MOE_* count 0.\n ✓ src/__acceptance__/deliveryBypass.acceptance.test.ts (22 tests) 9325ms\n ✓ src/__acceptance__/dependencyProjection.acceptance.test.ts (13 tests) 2404ms\n ✓ src/__acceptance__/producerConsumer.acceptance.test.ts (16 tests) 3486ms\n ✓ src/server/WebSocketServer.test.ts (115 tests) 19785ms\n ✓ src/delivery/requiredChecks.delivery.test.ts (19 tests) 3280ms\n ✓ src/tools/releaseTask.test.ts (59 tests) 4799ms\n Test Files  213 passed (213)\n      Tests  6214 passed | 20 skipped (6234)\n   Start at  21:10:18\n   Duration  39.94s (tests 93%, import 3%, transform 3%)\nnpm-test-exit=0; npx tsc --noEmit: exit 0.\nNative Windows (Node v24.16.0, MOE_* cleared, own archive of ede0f012 + fix, npm ci): npx vitest run src/__acceptance__/deliveryBypass.acceptance.test.ts -> Test Files 1 passed (1), Tests 22 passed (22), exit 0 (unfixed bytes at 975842e6: 5 failed | 17 passed).",
+    "reportedAt": "2026-10-30T19:11:42.124Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-V12a: daemon-side delivery bypass acceptance fixtures. No bypass was found, so no production code changed.\nFiles:\n- NEW src/__acceptance__/deliveryBypass.acceptance.test.ts: 360 lines, 22 tests, McpAdapter only (no 'Tool(' or '.handler(').\n- mcpCall.ts: an optional 3rd parameter, options: McpHandleOptions, forwarded to every handle. No-arg callers are unchanged.\n- requiredChecks.delivery.test.ts: +2 CQ-V01 hand-forward tests.\nNet packages/ is 381.\nSetup: strict (verified-local) tasks with readiness spied in this file only; P0 pins that real readiness still refuses. runnerCall carries the identity from authenticateRunner over a temp MOE_RUNNER_KEY_DIR key. A0 approves to DONE.\nDoD, with exact codeName and tokens:\n1. F1: record_check_run runner-observed with the real runnerId and dispatchId gives DELIVERY_EVIDENCE_MISSING [required-check:npm run gate]. F2: /mcp dispatch or observation gives RUNNER_CHANNEL_REQUIRED (-32003) and nothing is written. F3 x5: an observation carrying runnerId, source, candidateId, treeSha or planRevision gives INVALID_INPUT naming the key.\n2. S1: superseded candidate, giving the token and CANDIDATE_MISMATCH. S2a: CANDIDATE_REVISION_STALE. S2b: the consumer gets DEPENDENCY_EVIDENCE_MISSING. S3: CONTEXT_RECEIPT_STALE.\n3. M1 x5: none, skipped, inconclusive, timeout and infra-failure each give the token, with the repair pinned. M2 is the inconclusive row plus S1.\n4. T1: a receipt for a non-current tree. On an ARCHIVED prerequisite the consumer claim gives NOT_ALLOWED '[ARCHIVED, missing delivery-receipt]'; the current-candidate receipt control releases it. On REVIEW, qa_approve is still refused. T2: an identical replay after a fresh StateManager load gives duplicate:true, bytes are identical, and dependsOnUnmet stays [].\n5. W1: the real /runner WebSocket. A wrong or missing key closes 1008 'runner authentication failed' with no write. The keyed evidence then approves, and the key is in no log.\n6. Step-1 mutants were killed.\n7. Gate above.\nMut"
+  "completionSummary": "CQ-V12a reopen 1: fixed the single QA issue, a portable-path assertion. No production change.\n\nFIX, in src/__acceptance__/deliveryBypass.acceptance.test.ts (+2/-1):\n- F3 now expects ['dispatches', path.join('dispatches', `${d.id}.json`)]. It used to hard-code 'dispatches/<id>.json', but files() returns native fs.readdirSync({recursive:true}) entries.\n- A 1-line JSDoc on files() records that its entries are native.\n- Exact membership, the INVALID_INPUT codeName and message, and refusedApproval (DELIVERY_EVIDENCE_MISSING with [required-check:npm run gate]) are unchanged. All 22 cases are kept, none skipped.\n- No other disk-path literals remain. The remaining '/' strings are Git refs and wire values, which are POSIX by contract.\n- mcpCall.ts and requiredChecks.delivery.test.ts are unchanged since 273aa770.\n\nRED to GREEN on native Windows (Node v24.16.0, MOE_* cleared, my own D:\\ archives plus native npm ci; the shared node_modules were not touched):\n- HEAD 975842e6, unfixed: 5 failed | 17 passed, all five F3 rows receiving 'dispatches\\\\dispatch-1.json', which reproduces QA;\n- fixed: 22/22;\n- re-run at HEAD ede0f012 plus the fix: 22/22, exit 0. Log: D:\\moe-v12a-fix2.WD6urz\\native-test.log.\n\nLINUX GATE, fresh archive of HEAD ede0f012 overlaying only this file (all 3 owned files cmp ok; lock identical; env -i, NO_COLOR=1, node v24.21.0, MOE_* count 0):\n- npm test EXIT 0: 213 files, 6214 passed | 20 skipped;\n- npx tsc --noEmit: 0. A scratch tsconfig over the 3 task files: 0, at 975842e6.\n- The earlier run at 975842e6 also exited 0 (6204 passed), the same count as QA's run. Peer WT-03b (ede0f012) landed WebSocketServer and workerLifecycle changes mid-gate, hence this re-run.\n\nMUTANT: with runnerToolCall's unknown-key throw disabled, the run is still KILLED on exactly the five F3 rows, at the INVALID_INPUT assertion (17 others passed, so it compiled). Restored, cmp ok. QA's earlier 9+2 mutant kills cover the unchanged cases.\n\nSIZE: owned files from e71b0971~ to the worktree,",
+  "reviewCompletedAt": "2026-10-30T19:02:44.884Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Forgery: a /mcp record_check_run claiming runner-observed, a dispatch or observation sent without the /runner context, and observation args carrying runnerId/source/candidateId each leave a strict task's qa_approve refused, with exact codeNames and tokens asserted, proven by src/__acceptance__/deliveryBypass.acceptance.test.ts."
+    ],
+    "issues": [
+      {
+        "type": "test_failure",
+        "file": "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+        "line": 216,
+        "description": "F3 expects `dispatches/${d.id}.json`, but files() returns native recursive readdir paths: Windows gives `dispatches\\dispatch-1.json`. All five rows fail before refusedApproval (5 failed/17 passed). Construct the expected path natively or normalize enumeration consistently, preserving exact membership and all refusal assertions. A scratch-only native-path expectation passed 22/22; restore proof and logs are in the reason. Re-run Windows and the full Linux gate; do not skip cases."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "One reproducible cross-platform test regression blocks approval. Reviewed recorded checkpoint e71b0971 and completion 273aa770 on moe/work-2026-10-24; owned code diff is +387/-6 (net 381). Fresh exact-completion Linux archive + native npm ci + sanitized env: `cd packages/moe-daemon && npm test` exits 0 (213 files, 6204 passed, 20 skipped); `npx tsc --noEmit` and focused test-file typecheck both exit 0. All 9 acceptance mutants and both CQ-V01 hand-forward mutants were independently killed, and mutated scratch files were restored/cmp'd. Native Windows `npx vitest run src/__acceptance__/deliveryBypass.acceptance.test.ts` on identical committed files exits 1: all five F3 cases fail at line 216 (17 passed/5 failed), before reaching the DoD 1 refusedApproval assertion. fs.readdirSync recursive entries use Windows separators, whereas the expectation hard-codes '/'. A scratch-only change to platform-native expected path construction passes 22/22; that probe was restored. Native Node v24.16.0, fresh npm ci, MOE_* cleared. Logs: D:\\moe-v12a-qa.bNCMaf\\native-test.log and native-path-probe.log; Linux: /tmp/moe-v12a-qa.H06gm8. No shared implementation bytes changed. Re-run the Windows file and required full Linux daemon gate after fixing; no production change or coverage weakening is needed.",
+      "rejectedAt": "2026-10-30T19:02:44.884Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Forgery: a /mcp record_check_run claiming runner-observed, a dispatch or observation sent without the /runner context, and observation args carrying runnerId/source/candidateId each leave a strict task's qa_approve refused, with exact codeNames and tokens asserted, proven by src/__acceptance__/deliveryBypass.acceptance.test.ts."
+      ],
+      "issues": [
+        {
+          "type": "test_failure",
+          "file": "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
+          "line": 216,
+          "description": "F3 expects `dispatches/${d.id}.json`, but files() returns native recursive readdir paths: Windows gives `dispatches\\dispatch-1.json`. All five rows fail before refusedApproval (5 failed/17 passed). Construct the expected path natively or normalize enumeration consistently, preserving exact membership and all refusal assertions. A scratch-only native-path expectation passed 22/22; restore proof and logs are in the reason. Re-run Windows and the full Linux gate; do not skip cases."
+        }
+      ]
+    }
+  ]
 }
