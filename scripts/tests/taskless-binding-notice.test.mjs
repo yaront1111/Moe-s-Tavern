@@ -34,6 +34,7 @@ PYTHON_CMD=${process.platform === 'win32' ? 'python' : 'python3'}; GENERAL_CHANN
 MOE_TOP=/no-real-repo; PREFLIGHT_HELD_TASK_ID='${held}'
 git() { printf ' M peer.txt\\0'; }
 moe_rpc() { if [ "$1" = get_context ]; then printf '{"task":{"id":"task-fixture"}}'; else printf '%s' "$2" > "$NOTICE_FILE"; fi; }
+moe_rpc_unserved() { moe_rpc "$@"; }
 ` + block(sh) : `$ErrorActionPreference='Stop'
 $generalChannelId='general'; $WorkerId='worker-fixture'
 $moeGit=@{Top='/no-real-repo'}; $preflightHeldTaskId='${held}'
@@ -42,6 +43,7 @@ function Invoke-MoeRpc { param($Tool, [Alias('Args')]$RpcArgs)
  if ($Tool -eq 'get_context') { return [pscustomobject]@{task=[pscustomobject]@{id='task-fixture'}} }
  [IO.File]::WriteAllText($env:NOTICE_FILE, (ConvertTo-Json $RpcArgs -Compress))
 }
+function Invoke-MoeRpcUnserved { param($Tool, [Alias('Args')]$RpcArgs) Invoke-MoeRpc -Tool $Tool -Args $RpcArgs }
 ` + block(ps);
       try {
         writeFileSync(file, engine === 'bash' ? script : '\ufeff' + script);
