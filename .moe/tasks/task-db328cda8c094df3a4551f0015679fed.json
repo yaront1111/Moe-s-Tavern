@@ -97,7 +97,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -135,7 +135,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:07.154Z",
-  "updatedAt": "2026-10-30T07:13:01.569Z",
+  "updatedAt": "2026-10-30T07:19:25.933Z",
   "dependsOn": [
     "task-a9d1a74d845b4d3d83f359bf864f8651",
     "task-9ef257f58b7f4c4191f206f67bf3d865",
@@ -148,11 +148,14 @@
     "firstClaimAt": "2026-10-29T17:00:43.546Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T07:19:25.933Z",
+    "wallClockMs": 51522387
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -237,5 +240,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-30T06:59:07Z",
     "at": "2026-10-30T07:13:01.569Z"
-  }
+  },
+  "completedAt": "2026-10-30T07:19:25.933Z",
+  "reviewCompletedAt": "2026-10-30T07:19:25.933Z",
+  "reviewSummary": "Reviewed completion 87f7316f (tree c47c72bf), on moe/work-2026-10-24.\n\nGate, re-run fresh: git archive 87f7316f (whole repo), native npm ci, env -i, node v24.21.0. `cd packages/moe-daemon && npm test` exit 0: 201 files, 5614 passed, 16 skipped; checkArchitecture 21/21. `npx tsc --noEmit` exit 0.\n\nSize: 160+202+9 = 371 net non-board LOC (<=400).\n\nDoD:\n1. A1: plan prose passes checkPlanRails, yet the committed forbidden import exits 1 with the exact violation. Batch, 5-extension and rename rows hold too.\n2. A2: dynamic-import exits 2 inconclusive; non-literal-require is kept beside a real violation.\n3. A3: worktree and index edits are ignored (committed bytes via readRepositorySource only). A4: a weakened arch.json, or an edited checker or engine, gives protected-check-changed through V01 under local-branch.\n4. Gate green, as above.\n\nE2E via tsx src/index.ts on a temp repo: forbidden exits 1, missing rules 2, empty diff 0. Always 1 stdout JSON line, 0 bytes stderr.\n\nQA mutants, all killed with real failures, source restored cmp-ok: inconclusive->0, deletions scanned, read all changed, source-unreadable ignored, base default tree.\n\nThe CLI's read set equals the engine's scan set (covers + SCANNED_EXTENSIONS). readRepositorySource returns items in query order, so the index mapping is sound.\n\nNo forbidden patterns, no Git writes, no .moe edits by the agent, verified-local untouched.\n\nNon-blocking:\n- The \"Outcome last\" comment is inaccurate for inconclusive reports, where reason follows outcome.\n- task-efbf1742 (dist/index.js loads unprotected modules) is correctly deferred to activation.",
+  "requiredCheckAtDone": null
 }

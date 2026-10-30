@@ -13,9 +13,43 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read the landed epic, then write docs/ARCHITECTURE.md. This task starts only after CQ-RF01..RF06 are DONE, through the dependsOn chain RF05 and RF06 → RF02, RF04 → RF03 → RF01.\n\n1. Collect the epic's facts, read-only:\n   - For each row (RF01 task-fd653cfb, RF02 task-f3485ac9, RF03 task-ec64165c, RF04 task-de91373a, RF05 task-b439d7fb, RF06 task-98ffe33f), read through moe.get_context: completionSummary, reviewSummary and commits.\n   - Read each completion commit with git show.\n   - Note the exact landed names: ProtectedStateStore and its root (<IDE system dir>/moe/protected-state, sha-256 file names), the RF01 spawn record and the RF02 profile record formats, the RF03 replacement flow and dialog, RF04's Windows restart behaviour, RF06's VS Code state location and rules, and the RF05 record (docs/design/protected-profile-threat-model.md).\n   - Document what LANDED. Where a row's plan and its landed bytes differ, the landed bytes win.\n2. docs/ARCHITECTURE.md: extend the '## Security Notes' section that RF05 added, with one short paragraph each on:\n   - the persistent provenance and downgrade-pin state: where it lives, that it is owner-only, and that it fails closed;\n   - the unverified-daemon replacement flow: always confirmed, only through the installed CLI's stop, with a bounded wait that includes the old supervisor, then a start with fresh provenance;\n   - the Windows Restart Daemon behaviour, as RF04 landed it;\n   - VS Code parity, as RF06 landed it.\n   Keep the existing link to the RF05 decision, and change no unrelated line.\n\nError handling: a fact you cannot confirm from landed bytes is left out, never guessed. If a row is not DONE, stop and moe.report_blocked naming it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/TROUBLESHOOTING.md and docs/CONFIGURATION.md: the operator view.\n\ndocs/TROUBLESHOOTING.md, under '## Plugin Issues', gets one '###' entry per symptom, each with cause → fix in the file's existing style, using the landed texts:\n- The protected profile refuses a running daemon that 'was not started by this IDE':\n  - after an IDE restart, RF01 recognizes the IDE's own daemon;\n  - otherwise open the Moe tool window for the replacement dialog ('Stop and Replace'), or stop the process yourself and use Restart Daemon.\n- The project stays protected after project.json says legacy. This is the RF02 confirmation: 'Allow Downgrade' takes effect after an IDE restart. An unreadable record keeps the project protected; as a last resort, a human may delete that record file from the store.\n- Restart Daemon on Windows, as RF04 landed it.\n- The same symptoms for VS Code, if RF06 added user-visible texts.\nLink docs/design/protected-profile-threat-model.md from the first entry, and update the Table of Contents.\n\ndocs/CONFIGURATION.md, under '## File Structure' (or '## IDE Plugin Settings' if it fits better), lists each new state location: the JetBrains store <IDE system dir>/moe/protected-state/ (owner-only, sha-256 file names, never in the repository), with what each record holds, and RF06's VS Code location. Say that these are not settings: nobody edits them by hand.\n\nError handling: docs only. Every text quoted from a dialog or refusal must match the landed source exactly; grep for it.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY: the full regression, once and fresh, with counts. This is the epic's gate.\n\nRun each command below. Record its exit code, its counts (passed, failed, skipped) and the last lines of its output. Every one must exit 0.\n\n1. Daemon vitest. packages/moe-daemon/node_modules holds only the win32 rolldown binding, so run it in a Linux scratch copy, as the CQ-R epic's archive regression did. Never npm install or npm ci inside the shared checkout. The recipe:\n   S=<scratchpad>/rf07; rm -rf \"$S\"; mkdir -p \"$S\"; git archive HEAD | tar -x -C \"$S\"; cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\" sh -c 'npm ci && npm run build && npm test'\n   If this task changed daemon bytes, copy those files over the archive first.\n2. JetBrains. Hold the jetbrains-gradle lease (moe.acquire_resource; if it is busy, moe.report_blocked with that resourceId), run cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\", then release the lease. Take the counts from build/test-results/test/*.xml, not from the console, and label the run as Windows evidence.\n3. VS Code: cd moe-vscode && npm test && npm run compile, under the same env -i Node 24 PATH. If a Windows-only module blocks it, run the same command through cmd.exe and label it.\n4. bash scripts/tests/postflight.sh from the repo root. It takes 12 minutes or more; raise MOE_POSTFLIGHT_TIMEOUT_SEC on a busy box. If peers' in-flight script edits break it, re-run from the step-1 archive and say so.\n5. npm run lint at the repo root.\n\nAny failure: check whether it is this epic's. A failure in a file the epic never touched is reported with its output, and that file is never edited here. Fix this epic's failures in code, never by weakening an assertion.\n\nThen run `git diff --check` over the three docs. A read-only `git status --short` must show only this task's files. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nThe commands, exit codes, counts and tails together are complete_task's verification evidence.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL REVIEW of the WHOLE CQ-RF epic diff, as the final step: RF01..RF06 commits plus this task's docs. Load adversarial-self-review. Two questions drive it: can the protected profile reach a repository-supplied runtime, and can it downgrade silently?\n\nRuntime selection, JetBrains and VS Code:\n- Can any daemon, wrapper, proxy or node selection, any stop command (RF03) or any restart path (RF04) run a project or PATH copy?\n- Can any of them inherit NODE_OPTIONS or NODE_PATH, or use the project as its working directory?\n\nDowngrade:\n- Is there any path where a legacy, observe or absent read gives LEGACY while a 'protected' record exists, or while the record is unreadable or foreign, without an explicit confirmation? Check RF02 and RF06.\n- Can a confirmation apply mid-session?\n\nStore (RF01):\n- Are owner-only checks enforced on read AND write, for both POSIX and the Windows ACL?\n- Are links and in-project roots refused?\n- Is every name a sha-256, so no path from input is ever joined?\n- Is a foreign-project record refused?\n\nProcess signalling:\n- Under PROTECTED, is no pid from daemon.json signalled except through the installed CLI's stop after an explicit confirmation, or through a captured, verified handle?\n- Can the RF03 wait run unbounded?\n- Is the old-supervisor respawn race closed (RF03/RF04)?\n\nThreading: no prompt or wait on the EDT, and no invokeAndWait while holding a lock.\n\nEvidence: no caller-minted evidence. No daemon self-report skips a human check.\n\nDocs: do they claim nothing the code does not do? Is the single-user-host assumption from RF05 stated?\n\nFor each finding:\n- a small, local defect in an epic file gets fixed here, with a test that fails without the fix; declare the file with moe.declare_files;\n- anything larger gets a moe.create_task row in this epic, with the evidence, a DoD and its files.\nList the findings and the rows in complete_task's summary. If no bypass was found, say so explicitly.\n\nIf any byte changed, re-run step 3's affected suites, and the full set for any code change, fresh, before complete_task.\n\nWould I be embarrassed if this epic shipped?",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/TROUBLESHOOTING.md",
+        "docs/CONFIGURATION.md"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,7 +62,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:07:00.327Z",
-  "updatedAt": "2026-10-30T06:52:14.745Z",
+  "updatedAt": "2026-10-30T07:19:14.177Z",
   "dependsOn": [
     "task-b439d7fb2c3443789fe91971cad4ed04",
     "task-98ffe33f448746e6bc802db0b5624fd0"
@@ -37,5 +71,42 @@
     "from": "BACKLOG",
     "at": "2026-10-30T06:52:14.745Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:17:11.675Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:19:14.155Z",
+  "planningNotes": {
+    "approachesConsidered": "- Running the daemon suite in place on WSL. Rejected: the checkout's packages/moe-daemon/node_modules has only @rolldown/binding-win32-x64-msvc, and the CQ-R epic established a Linux archive copy with its own npm ci. A Windows cmd.exe run is an acceptable alternative if the archive cannot build, labelled as such.\n- Splitting the epic-wide review from the task's own self-review. Merged into one final step that sweeps the whole epic diff, as moe-planning prescribes for epic-final tasks.\n- Documenting from the plans. Rejected: the plans for RF04 and RF06 did not exist when this was planned, and earlier plans were amended (RF02 to RF01's store API). The docs describe the landed bytes.",
+    "codebaseInsights": "- docs/ARCHITECTURE.md gets '## Security Notes' from RF05 (before '## Error Handling (Current)').\n- docs/TROUBLESHOOTING.md has '## Plugin Issues' (line ~119) and a Table of Contents.\n- docs/CONFIGURATION.md has '## File Structure' (~434) and '## IDE Plugin Settings' (~459).\n- moe-vscode's npm test is `node --test tests/*.test.cjs` and compile is `tsc -p ./`.\n- The JetBrains gate is Windows gradlew.bat through cmd.exe, under the jetbrains-gradle lease.\n- postflight.sh is daemon-free and slow (12 minutes or more).",
+    "risks": "- The full gate is expensive: postflight takes 12+ minutes, plus Gradle and the daemon suite. Any code fix from the review triggers a full re-run.\n- RF04 and RF06 were unplanned when this was written, so the docs must follow their landed behaviour.\n- Pre-existing failures outside the epic must be reported, not fixed here.\n- verified-local stays unavailable, so no doc may imply the protected profile is enabled or certified.",
+    "keyFiles": [
+      "docs/ARCHITECTURE.md",
+      "docs/TROUBLESHOOTING.md",
+      "docs/CONFIGURATION.md",
+      "docs/design/protected-profile-threat-model.md",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:19:14.177Z",
+  "approvedPlanRevision": 1
 }
