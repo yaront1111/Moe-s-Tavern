@@ -216,9 +216,19 @@ function declaresVerifiedLocal(file: string): boolean {
  * The reason reaches the UI; the absolute path only the log.
  */
 export function installedArtifact(root: string, relative: string, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
-    const label = `installed ${relative}`;
     const realRoot = realPathOrNull(root);
     if (realRoot === null) { return { rejected: 'installed Moe runtime not found' }; }
+    return selectInstalledFile(path.join(root, relative), `installed ${relative}`, basePath, foldCase, realRoot);
+}
+
+/** A bare name is never resolved by spawn; the first selected candidate must pass these checks. */
+export function installedExecutable(p: string | undefined, basePath: string, foldCase = defaultFoldCase): ArtifactSelection {
+    if (!p?.trim()) { return { rejected: 'node executable not found' }; }
+    if (!path.isAbsolute(p)) { return { rejected: 'node executable is not an absolute path' }; }
+    return selectInstalledFile(p, 'node executable', basePath, foldCase);
+}
+
+function selectInstalledFile(file: string, label: string, basePath: string, foldCase: boolean, realRoot?: string): ArtifactSelection {
     const project = realPathOrNull(basePath);
     if (project === null) { return { rejected: 'the project directory cannot be resolved' }; }
     const rejected = (reason: string, detail: string): ArtifactSelection => {
@@ -227,18 +237,108 @@ export function installedArtifact(root: string, relative: string, basePath: stri
     };
     let real: string;
     try {
-        real = fs.realpathSync.native(path.join(root, relative));
+        real = fs.realpathSync.native(file);
         if (!fs.statSync(real).isFile()) { return rejected(`${label} is not a regular file`, real); }
     } catch (err) {
         return rejected(errorCode(err) === 'ENOENT' ? `${label} not found` : `${label} cannot be resolved`, errorText(err));
     }
-    if (!isWithin(comparablePath(real, false), comparablePath(realRoot, false))) {
+    if (realRoot !== undefined && !isWithin(comparablePath(real, false), comparablePath(realRoot, false))) {
         return rejected(`${label} resolves outside the installed Moe runtime`, real);
     }
     if (isWithin(comparablePath(real, foldCase), comparablePath(project, foldCase))) {
         return rejected(`${label} resolves inside the project`, real);
     }
     return { accepted: real };
+}
+
+export function isOutsideProject(p: string, basePath: string, foldCase = defaultFoldCase): boolean {
+    try {
+        if (!path.isAbsolute(p)) { return false; }
+        const projects = pathForms(basePath);
+        return !pathForms(p).some(form => projects.some(project => isWithin(comparablePath(form, foldCase), comparablePath(project, foldCase))));
+    } catch { return false; }
+}
+
+function pathForms(p: string): string[] {
+    const forms = [path.resolve(p)];
+    try { forms.push(fs.realpathSync.native(p)); } catch (err) {
+        // Missing PATH directories are harmless; permission/invalid-path errors must fail closed.
+        if (errorCode(err) !== 'ENOENT') { throw err; }
+    }
+    return forms;
+}
+
+const unquoted = (entry: string): string => entry.trim().replace(/^"(.*)"$/, '$1');
+function safeStat(file: string): fs.Stats | undefined {
+    try { return fs.statSync(file); } catch { return undefined; }
+}
+function pathNames(env: NodeJS.ProcessEnv, windows: boolean): string[] {
+    return windows ? Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort() : ['PATH'];
+}
+
+export function protectedPathEntries(value: string, basePath: string, delimiter = path.delimiter): string[] {
+    return value.split(delimiter).filter(entry => isOutsideProject(unquoted(entry), basePath));
+}
+
+/** In-process lookup: neither which/where nor a bare node can execute workspace code. */
+export function nodeOnProtectedPath(value: string, basePath: string, windows: boolean): string | undefined {
+    return protectedPathEntries(value, basePath).map(entry => path.join(unquoted(entry), windows ? 'node.exe' : 'node'))
+        .find(file => safeStat(file)?.isFile());
+}
+
+function latestNvmNode(home: string): string | undefined {
+    try {
+        const root = path.join(home, '.nvm', 'versions', 'node');
+        const latest = fs.readdirSync(root).filter(name => safeStat(path.join(root, name))?.isDirectory()).sort().pop();
+        return latest ? path.join(root, latest, 'bin', 'node') : undefined;
+    } catch { return undefined; }
+}
+
+export function protectedNodeCandidate(env: NodeJS.ProcessEnv, home: string | undefined, windows: boolean, basePath: string): string | undefined {
+    if (env.MOE_NODE_COMMAND?.trim()) { return unquoted(env.MOE_NODE_COMMAND); }
+    if (!windows && home) {
+        const managed = path.join(home, '.local', 'share', 'moe', 'node', 'current', 'bin', 'node');
+        try {
+            if (fs.statSync(managed).isFile()) { fs.accessSync(managed, fs.constants.X_OK); return managed; }
+        } catch { /* An unavailable managed runtime lets the in-process search continue. */ }
+    }
+    const onPath = nodeOnProtectedPath(env[pathNames(env, windows)[0] ?? 'PATH'] ?? '', basePath, windows);
+    if (onPath) { return onPath; }
+    const under = (base: string | undefined, relative: string): string | undefined => base ? path.join(base, relative) : undefined;
+    const candidates = windows ? [
+        under(env.ProgramFiles, 'nodejs/node.exe'), under(env['ProgramFiles(x86)'], 'nodejs/node.exe'),
+        under(env.LOCALAPPDATA, 'Programs/nodejs/node.exe'), under(env.LOCALAPPDATA, 'nvm/current/node.exe'),
+        under(env.APPDATA, 'nvm/node.exe')
+    ] : ['/opt/homebrew/bin/node', '/usr/local/bin/node', under(home, '.nvm/current/bin/node'),
+        home ? latestNvmNode(home) : undefined, '/usr/bin/node'];
+    return candidates.find((file): file is string => file !== undefined && safeStat(file) !== undefined);
+}
+
+export function protectedDaemonCommand(basePath: string, root: string, node: string | undefined):
+    { refused: string } | { ready: { node: string; args: string[]; cwd: string } } {
+    const daemon = installedArtifact(root, 'daemon/index.js', basePath);
+    if ('rejected' in daemon) { return { refused: daemon.rejected }; }
+    const executable = installedExecutable(node, basePath);
+    if ('rejected' in executable) { return { refused: executable.rejected }; }
+    return { ready: { node: executable.accepted, args: [daemon.accepted, 'start', '--project', basePath], cwd: path.dirname(daemon.accepted) } };
+}
+
+export function protectedDaemonEnvironment(env: NodeJS.ProcessEnv, basePath: string, nodePath: string, windows: boolean, home: string | undefined): NodeJS.ProcessEnv {
+    const result = { ...env };
+    for (const key of Object.keys(result)) {
+        if (['NODE_OPTIONS', 'NODE_PATH'].includes(windows ? key.toUpperCase() : key)) { delete result[key]; }
+    }
+    const names = pathNames(result, windows), name = names[0] ?? 'PATH';
+    const entries = [path.dirname(nodePath), ...(result[name] ?? '').split(path.delimiter)];
+    for (const duplicate of names.slice(1)) { delete result[duplicate]; }
+    if (!windows && home) {
+        for (const relative of ['.local/share/moe/node/current/bin', '.local/share/moe/npm/bin']) {
+            const directory = path.join(home, relative);
+            if (safeStat(directory)?.isDirectory()) { entries.push(directory); }
+        }
+    }
+    result[name] = protectedPathEntries([...new Set(entries.filter(entry => entry.trim()))].join(path.delimiter), basePath).join(path.delimiter);
+    return result;
 }
 
 export class MoeDaemonClient implements vscode.Disposable {
@@ -878,6 +978,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         if (this.startInProgress) {
             return;
         }
+        if (runtimeProfile(projectPath) === 'protected') { return this.startProtectedDaemon(projectPath); }
         const daemonPath = this.resolveBundledDaemonPath() || this.resolveGlobalConfigDaemonPath();
         if (!daemonPath) {
             log('Daemon not found (bundled or global config). Cannot auto-start.');
@@ -907,6 +1008,39 @@ export class MoeDaemonClient implements vscode.Disposable {
                 });
             });
             log(`Started Moe daemon (${command}) for ${projectPath}`);
+            await this.waitForDaemonInfo(projectPath, 10000);
+        } catch (err) {
+            const detail = err instanceof Error ? err.message : String(err);
+            log(`Failed to start daemon: ${detail}`);
+            const message = (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+                ? 'Moe could not start Node.js. Run the Moe installer and restart VS Code, or set MOE_NODE_COMMAND to its executable path.'
+                : `Moe could not start its daemon: ${detail}`;
+            vscode.window.showErrorMessage(message);
+        } finally {
+            this.startInProgress = false;
+        }
+    }
+
+    private async startProtectedDaemon(projectPath: string): Promise<void> {
+        const home = process.env.HOME || process.env.USERPROFILE, windows = process.platform === 'win32';
+        const selection = protectedDaemonCommand(projectPath, installedRoot(this.extensionPath),
+            protectedNodeCandidate(process.env, home, windows, projectPath));
+        if ('refused' in selection) {
+            const message = `Protected execution profile: ${selection.refused}. Project and PATH copies of the Moe daemon are not used.`;
+            log(message);
+            vscode.window.showErrorMessage(message);
+            return;
+        }
+        this.startInProgress = true;
+        try {
+            const { node, args, cwd } = selection.ready;
+            const env = protectedDaemonEnvironment(process.env, projectPath, node, windows, home);
+            await new Promise<void>((resolve, reject) => {
+                const proc = spawn(node, args, { detached: true, stdio: 'ignore', windowsHide: true, cwd, env });
+                proc.once('error', reject);
+                proc.once('spawn', () => { proc.unref(); resolve(); });
+            });
+            log(`Started Moe daemon (start) for ${projectPath}`);
             await this.waitForDaemonInfo(projectPath, 10000);
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);

@@ -107,7 +107,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:38.299Z",
-  "updatedAt": "2026-10-30T14:38:25.199Z",
+  "updatedAt": "2026-10-30T14:38:47.137Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:20.622Z",
@@ -165,7 +165,42 @@
   "filesModified": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
+    "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+    ".moe/tasks/task-6cf120a38b344e72b7bab8b9faf806f1.json",
+    ".moe/tasks/task-fad5ef971b0941b590621aa40702ad4b.json"
+  ],
+  "completionSummary": "Deliverable: JetBrains plugin reserves <project>/.worktrees as an excluded folder on project open, in every mode, idempotently, via a NEW independent ProjectManagerListener (com.moe.util.WorktreeExclusionListener, registered once in plugin.xml). MoeProjectService.kt and MoeProjectOpenListener.kt untouched; no daemon/wrapper/.moe change; no VCS ignore setting added (native exclusion only). Files: util/WorktreeExclusion.kt (201 lines), WorktreeExclusionTest.kt (300 lines, 21 tests), plugin.xml (+2).\n\nDoD1: pure urlToExclude + fake-module tests prove exact URL <contentRoot's project>/.worktrees, second run adds nothing (no model even opened), no matching/nested/prefix-lookalike content root is a no-op; also UNC, Windows drive, POSIX case-sensitive, tr-TR locale, trailing slashes, spaces/Unicode, ancestor roots, disposal/cancellation/commit-failure paths, plugin.xml registers the class exactly once.\nDoD2: registered in plugin.xml; MoeProjectService.kt not touched.\nDoD3 (sandbox, real `gradlew runIde` on a throwaway project with a linked worktree .worktrees/task-1, a nested unrelated git repo, project-dir content root): idea.log `Excluded .worktrees from 1 of 1 module(s)`; `.worktrees` rendered with the excluded tint in the Project tool window; a second worktree added while open stays excluded; only unrelated balloons shown, none naming a worktree. LIMITS (also in step-3 note): the control is weak (the unrelated nested repo also raised no unregistered-root balloon, so I cannot independently prove the exclusion is what suppresses it), no live re-open/persistence observation (IDE was force-killed before the .iml flushed), folder-absent-at-open is only unit-tested, and a Windows Firewall 'OpenJDK Platform binary' Allow/Cancel prompt from the sandbox JVM is left open on the user's desktop for a human. Throwaway project/init script/screenshots deleted; sandbox JVM and its spawned Moe daemon killed.\nDoD4: chained Windows gradle test --rerun + HEAD-archive parity-check.sh exit ",
+  "commits": [
+    {
+      "sha": "760cdda3b098a451a2861c22f60633dc1e260ed0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T14:20:26Z",
+      "paths": [
+        ".moe/tasks/task-6cf120a38b344e72b7bab8b9faf806f1.json",
+        ".moe/tasks/task-fad5ef971b0941b590621aa40702ad4b.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T14:38:47.137Z",
+      "treeId": "9f98203f1f6dffc1c226e73b16c8e4634039c21b",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/WorktreeExclusion.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/WorktreeExclusionTest.kt",
     "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
   ],
-  "completionSummary": "Deliverable: JetBrains plugin reserves <project>/.worktrees as an excluded folder on project open, in every mode, idempotently, via a NEW independent ProjectManagerListener (com.moe.util.WorktreeExclusionListener, registered once in plugin.xml). MoeProjectService.kt and MoeProjectOpenListener.kt untouched; no daemon/wrapper/.moe change; no VCS ignore setting added (native exclusion only). Files: util/WorktreeExclusion.kt (201 lines), WorktreeExclusionTest.kt (300 lines, 21 tests), plugin.xml (+2).\n\nDoD1: pure urlToExclude + fake-module tests prove exact URL <contentRoot's project>/.worktrees, second run adds nothing (no model even opened), no matching/nested/prefix-lookalike content root is a no-op; also UNC, Windows drive, POSIX case-sensitive, tr-TR locale, trailing slashes, spaces/Unicode, ancestor roots, disposal/cancellation/commit-failure paths, plugin.xml registers the class exactly once.\nDoD2: registered in plugin.xml; MoeProjectService.kt not touched.\nDoD3 (sandbox, real `gradlew runIde` on a throwaway project with a linked worktree .worktrees/task-1, a nested unrelated git repo, project-dir content root): idea.log `Excluded .worktrees from 1 of 1 module(s)`; `.worktrees` rendered with the excluded tint in the Project tool window; a second worktree added while open stays excluded; only unrelated balloons shown, none naming a worktree. LIMITS (also in step-3 note): the control is weak (the unrelated nested repo also raised no unregistered-root balloon, so I cannot independently prove the exclusion is what suppresses it), no live re-open/persistence observation (IDE was force-killed before the .iml flushed), folder-absent-at-open is only unit-tested, and a Windows Firewall 'OpenJDK Platform binary' Allow/Cancel prompt from the sandbox JVM is left open on the user's desktop for a human. Throwaway project/init script/screenshots deleted; sandbox JVM and its spawned Moe daemon killed.\nDoD4: chained Windows gradle test --rerun + HEAD-archive parity-check.sh exit "
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T14:20:26Z",
+    "at": "2026-10-30T14:38:47.137Z"
+  }
 }
