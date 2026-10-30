@@ -370,6 +370,49 @@ describe('daemon lifecycle validation', () => {
       expect(acquireLock(testDir)).toBe(true);
       releaseLock(testDir);
     });
+
+    // The /mnt/<d> mapping must see the resolved path: a relative or
+    // non-normalized --project has to keep matching a native daemon recorded
+    // absolute. POSIX path.resolve reads process.cwd(), so a spy stands in for WSL.
+    it.skipIf(process.platform === 'win32')('X9 isSameProjectPath maps /mnt/<d> after resolving relative and non-normalized paths', () => {
+      vi.spyOn(process, 'cwd').mockReturnValue('/mnt/d/projexts/app');
+      const equal: Array<[string, string]> = [
+        ['.', '/mnt/d/projexts/app'],
+        ['.', 'D:\\projexts\\app'],
+        ['sub/..', 'd:/projexts/app/'],
+        ['/mnt/d/projexts/app/sub/..', 'D:/projexts/app'],
+        ['/mnt/d/projexts/app/./', '/mnt/d/projexts/app'],
+        ['/mnt/d//projexts/app', '/mnt/d/projexts/app'],
+      ];
+      const unequal: Array<[string, string]> = [['sub', '/mnt/d/projexts/app'], ['..', 'D:/projexts/app']];
+      for (const [a, b] of equal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, true, true]);
+      }
+      for (const [a, b] of unequal) {
+        expect([a, b, isSameProjectPath(a, b), isSameProjectPath(b, a)]).toEqual([a, b, false, false]);
+      }
+    });
+
+    it('X10 on win32 a raw /mnt/<d> path is posix-normalized before it is mapped', async () => {
+      const onWin32 = async <T>(fn: () => T): Promise<T> => {
+        if (process.platform === 'win32') return fn();
+        // Off Windows, also stand in win32 path.resolve, which prefixes the cwd drive.
+        const resolve = vi.spyOn(path, 'resolve').mockImplementation((...parts: string[]) => path.win32.resolve('C:\\work', ...parts));
+        try { return await otherSide(async () => fn()); } finally { resolve.mockRestore(); }
+      };
+      const same = (a: string, b: string) => onWin32(() => [isSameProjectPath(a, b), isSameProjectPath(b, a)]);
+      expect(await same('/mnt/d/projexts/app/sub/..', 'D:/projexts/app')).toEqual([true, true]);
+      expect(await same('/mnt/d/projexts/app/./', 'd:\\projexts\\app')).toEqual([true, true]);
+      expect(await same('/mnt/d/projexts/app/sub/../..', 'D:/projexts/app')).toEqual([false, false]);
+    });
+
+    it.skipIf(process.platform === 'win32')('X11 validateDaemonInfoForProject accepts a relative --project naming a live native daemon recorded under /mnt/<d>', async () => {
+      const recorded = '/mnt/d/projexts/app';
+      const info = daemonInfo({ port: await healthServer(recorded), projectPath: recorded });
+      vi.spyOn(process, 'cwd').mockReturnValue(recorded);
+
+      expect(await validateDaemonInfoForProject('.', info)).toEqual({ valid: true, info });
+    });
   });
 });
 

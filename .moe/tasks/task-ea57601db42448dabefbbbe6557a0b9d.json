@@ -1,0 +1,28 @@
+{
+  "id": "task-ea57601db42448dabefbbbe6557a0b9d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-proxy comparableProjectPath maps /mnt/<d> on the raw string, so a relative or non-normalized MOE_PROJECT_PATH is refused as \"a different project\"",
+  "description": "packages/moe-proxy/src/utils.ts comparableProjectPath runs the /mnt/<letter> regex on the raw string, so a path that has to go through path.resolve is never mapped. With cwd /mnt/d/projexts/app: '.' becomes '/mnt/d/projexts/app', '/mnt/d/projexts/app/.' becomes 'd:/projexts/app/.', and '/mnt/d/projexts/app/sub/..' becomes 'd:/projexts/app/sub/..'. All of these differ from 'd:/projexts/app', so readDaemonInfoResult answers \"daemon.json belongs to a different project\" and the proxy exits. Reproduced with tsx while working on task-a60a1616 QA round 1. It is non-destructive, and the launchers pass absolute paths.\nFix: resolve first, then map; on win32, posix-normalize a raw /mnt path. This mirrors the daemon fix in task-a60a1616 (packages/moe-daemon/src/index.ts comparableProjectPath, test rows X9/X10).",
+  "definitionOfDone": [
+    "With cwd /mnt/d/x, moe-proxy comparableProjectPath gives 'd:/x' for '.', '/mnt/d/x/.', '/mnt/d/x/sub/..' and '/mnt/d//x', matching '/mnt/d/x' and 'D:\\\\x'.",
+    "On win32, a raw '/mnt/<d>/…' path is posix-normalized before it is mapped.",
+    "Existing moe-proxy utils tests stay green. New rows in packages/moe-proxy cover relative and non-normalized inputs and are red before the fix."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 268.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T00:07:31.650Z",
+  "updatedAt": "2026-10-30T00:07:31.650Z"
+}

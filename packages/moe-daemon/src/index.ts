@@ -89,23 +89,26 @@ function canonicalProjectPath(projectPath: string): string {
 }
 
 /**
- * Comparison-only form of a project path; never written anywhere. A copy of
+ * Comparison-only form of a project path; never written anywhere. Follows
  * moe-proxy's rule (packages/moe-proxy/src/utils.ts comparableProjectPath), so
  * `/mnt/d/x` (WSL) and `D:\x` (Windows) name the same project on both sides.
- * The special forms are detected on the raw string: path.resolve would treat a
- * drive path as relative on Linux and prefix a /mnt path with a drive on Windows.
+ * A drive path is detected on the raw string, since path.resolve would treat it
+ * as relative on Linux. /mnt/<d> is mapped only after normalizing, so `.`,
+ * `sub/..` and `/mnt/d/x/./` still match `/mnt/d/x`. On Windows that is a posix
+ * normalize: path.resolve would prefix the /mnt path with the cwd drive.
  */
 function comparableProjectPath(projectPath: string): string {
   const raw = projectPath.trim();
   if (/^[a-zA-Z]:[\\/]/.test(raw)) return normalizeWindowsDrivePath(raw);
-  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
+  const isWin32 = process.platform === 'win32';
+  const resolved = path.resolve(raw);
+  const wslMatch = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(isWin32 ? path.posix.normalize(raw) : resolved);
   if (wslMatch) {
     const rest = (wslMatch[2] ?? '').replace(/\/+$/, '');
     return `${wslMatch[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
   }
-  const resolved = path.resolve(raw);
   if (/^[a-zA-Z]:[\\/]/.test(resolved)) return normalizeWindowsDrivePath(resolved);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  return isWin32 ? resolved.toLowerCase() : resolved;
 }
 
 function normalizeWindowsDrivePath(drivePath: string): string {
