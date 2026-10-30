@@ -92,7 +92,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:19.825Z",
-  "updatedAt": "2026-10-30T06:52:28.128Z",
+  "updatedAt": "2026-10-30T06:53:36.394Z",
   "dependsOn": [
     "task-b799056d744749ba8ca9e4888f3452c4",
     "task-e40ad69f14194e2c89b43727588c2b25"
@@ -177,7 +177,56 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-check.test.mjs",
-    "scripts/local-runner/dependency-cache.mjs"
+    "scripts/local-runner/dependency-cache.mjs",
+    ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+    ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+    ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+    ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+    ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json"
   ],
-  "completionSummary": "CQ-R11e3 delivered: a host offline npm dependency cache.\n- scripts/local-runner/dependency-cache.mjs (+102/-1) adds buildDependencyCache(input, options):\n  - The input must be an exact {lockfiles, cpu, cacheDir} record. cacheDir must be absolute with no control characters, and fetch must be a function. Options are read inside a guard.\n  - admitLockfiles runs before any I/O. Then mkdir 0700, then sequential fetchPinnedFile({url, file:<cacheDir>/<sha512>.tgz, size:null, maxBytes:64 MiB, algorithm:'sha512'}) from R11e1.\n  - Each kept file is re-read through an O_NOFOLLOW handle bounded to MAX+1 bytes and re-hashed in memory.\n  - The tree is validateImport over the cacache content-v2 paths plus moe-dependencies.json {\"version\":1,\"dirs\":[...]}. It resolves a frozen {tree, digest, packages, bytes}.\n- Also exported: OFFLINE_INSTALL_ARGS (exact plan order, each flag commented), MAX_PACKAGE_BYTES, MAX_DEPENDENCY_BYTES, and the codes DEPENDENCY_DOWNLOAD_FAILED, _CHECKSUM_MISMATCH, _TOO_LARGE and _CACHE_FAILED.\n  - PINNED_* codes map by suffix; PINNED_INPUT_INVALID becomes CACHE_FAILED (a cached link or non-file).\n  - Messages are fixed text. admitLockfiles and DA1-DA5 are unchanged.\n- Tests DC1-DC5 (+189/-2). DC5 runs the host npm (12.2.0) against a read-only tree with a counting loopback registry:\n  - 0 requests, no root postinstall, aix optional skipped, listing unchanged;\n  - a positive control without --ignore-scripts;\n  - a missing-tarball install that fails with 0 requests. Without this case, a no-`--offline` mutant survived.\n- Size: 294 lines (cap 400). diff --check is clean.\n- Fresh gate: exit 0, 46 tests, 45 pass, 1 skip (K9, root-only, pre-existing).\n- DC1-DC5 also pass on native Windows Node 24.16 / npm 11.13.0, run from WSL. local-runner-agents + -bundle: 32/32 pass.\n- Mutation: 15 probes, 13 killed. Two survivors:\n  - the in-memory re-hash, which is defense-in-depth behind fetchPinnedFile and has no deterministic swap seam;\n  - --logs-max=0 on POSIX, where the re"
+  "completionSummary": "CQ-R11e3 delivered: a host offline npm dependency cache.\n- scripts/local-runner/dependency-cache.mjs (+102/-1) adds buildDependencyCache(input, options):\n  - The input must be an exact {lockfiles, cpu, cacheDir} record. cacheDir must be absolute with no control characters, and fetch must be a function. Options are read inside a guard.\n  - admitLockfiles runs before any I/O. Then mkdir 0700, then sequential fetchPinnedFile({url, file:<cacheDir>/<sha512>.tgz, size:null, maxBytes:64 MiB, algorithm:'sha512'}) from R11e1.\n  - Each kept file is re-read through an O_NOFOLLOW handle bounded to MAX+1 bytes and re-hashed in memory.\n  - The tree is validateImport over the cacache content-v2 paths plus moe-dependencies.json {\"version\":1,\"dirs\":[...]}. It resolves a frozen {tree, digest, packages, bytes}.\n- Also exported: OFFLINE_INSTALL_ARGS (exact plan order, each flag commented), MAX_PACKAGE_BYTES, MAX_DEPENDENCY_BYTES, and the codes DEPENDENCY_DOWNLOAD_FAILED, _CHECKSUM_MISMATCH, _TOO_LARGE and _CACHE_FAILED.\n  - PINNED_* codes map by suffix; PINNED_INPUT_INVALID becomes CACHE_FAILED (a cached link or non-file).\n  - Messages are fixed text. admitLockfiles and DA1-DA5 are unchanged.\n- Tests DC1-DC5 (+189/-2). DC5 runs the host npm (12.2.0) against a read-only tree with a counting loopback registry:\n  - 0 requests, no root postinstall, aix optional skipped, listing unchanged;\n  - a positive control without --ignore-scripts;\n  - a missing-tarball install that fails with 0 requests. Without this case, a no-`--offline` mutant survived.\n- Size: 294 lines (cap 400). diff --check is clean.\n- Fresh gate: exit 0, 46 tests, 45 pass, 1 skip (K9, root-only, pre-existing).\n- DC1-DC5 also pass on native Windows Node 24.16 / npm 11.13.0, run from WSL. local-runner-agents + -bundle: 32/32 pass.\n- Mutation: 15 probes, 13 killed. Two survivors:\n  - the in-memory re-hash, which is defense-in-depth behind fetchPinnedFile and has no deterministic swap seam;\n  - --logs-max=0 on POSIX, where the re",
+  "commits": [
+    {
+      "sha": "4773404ac30b9e87f4675a05d32f7267cc7b5b45",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T06:39:18Z",
+      "paths": [
+        ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+        ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+        ".moe/tasks/task-de91373a5ed84530b29fc4cfbcee974a.json",
+        ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+        ".moe/tasks/task-fd653cfbaea541c39569dfed9452cf5c.json",
+        "scripts/local-runner/dependency-cache.mjs",
+        "scripts/tests/local-runner-check.test.mjs"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T06:53:36.394Z",
+      "treeId": "453dc69a9d05296900dae83eb4b562ac1adc11bb",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T06:39:18Z",
+    "at": "2026-10-30T06:53:36.394Z"
+  }
 }

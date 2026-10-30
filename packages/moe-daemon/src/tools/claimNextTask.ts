@@ -28,7 +28,8 @@ import {
 } from '../util/claimGuards.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
-import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES } from '../util/affectedFiles.js';
+import { computeFileCollisions, DEFAULT_APPEND_ONLY_FILES, type FileCollision } from '../util/affectedFiles.js';
+import { isGroupToken } from '../util/mentionRouter.js';
 import { computeDiskStateSignature } from '../util/diskState.js';
 import { awaitingPlanReuse, planReuseContext } from '../context/planReuseJob.js';
 import {
@@ -256,6 +257,57 @@ function dependsOnClaimRefusal(state: StateManager, task: Task): MoeError {
     prerequisiteTaskId: onEvidence.id,
     missing: onEvidence.missingEvidence.map((token) => ({ token, reason: describeMissingEvidence(token) })),
   });
+}
+
+/** A collision entry; `liveAssignee` is set only when a live seat holds the peer task. */
+type CollisionEntry = FileCollision & { liveAssignee?: string };
+
+/** One @mention token, as parseRawMentions reads it (util/mentionRouter.ts). */
+const MENTION_TOKEN = /^\w[\w-]*$/;
+
+/**
+ * Mark each collision whose peer task is held by a live seat. Live is the claim
+ * path's own claimability predicate: assigned, and the owner neither missing
+ * nor DEAD. A quiet seat is still live; an unassigned row that is only waiting
+ * on its dependencies is not. Dormant entries come back untouched, with no key.
+ */
+function markLivePeers(state: StateManager, collisions: FileCollision[]): CollisionEntry[] {
+  return collisions.map((c) => {
+    const peer = state.tasks.get(c.task);
+    return peer?.assignedWorkerId && !state.isTaskAssignedToInactiveWorker(peer)
+      ? { ...c, liveAssignee: peer.assignedWorkerId }
+      : c;
+  });
+}
+
+/**
+ * The #workers heads-up. Files sit in code spans, which the mention parser
+ * blanks, so an '@' inside a path never pages anyone; a backtick in a path would
+ * end its span early, so it is swapped for a quote.
+ */
+function describeCollision(c: CollisionEntry): string {
+  const files = c.files.slice(0, 3).map((f) => `\`${f.replace(/`/g, "'")}\``).join(', ');
+  return `${c.task}: ${files}${c.files.length > 3 ? '…' : ''}`;
+}
+
+/**
+ * Live peers are listed first and their assignees plus the claimer are
+ * @mentioned, which is what wakes a seat's chat_wait. Dormant-only collisions
+ * mention nobody. An id that is not one mention token is never written with
+ * '@': spaces would let "@worker x" parse as the group token "worker". Nor is
+ * an id that IS a group token (a seat named "qa"), which would page every seat.
+ */
+function collisionNotice(taskId: string, collisions: CollisionEntry[], claimerId: string | undefined): string {
+  const live = collisions.filter((c) => c.liveAssignee);
+  const dormant = collisions.filter((c) => !c.liveAssignee);
+  const list = (entries: CollisionEntry[]): string => entries.map(describeCollision).join(' | ');
+  if (live.length === 0) return `⚠️ file collision on ${taskId}: ${list(dormant)}`;
+  const page = [...new Set([...live.map((c) => c.liveAssignee as string), ...(claimerId ? [claimerId] : [])])]
+    .filter((id) => MENTION_TOKEN.test(id) && !isGroupToken(id))
+    .map((id) => `@${id} `)
+    .join('');
+  const tail = dormant.length > 0 ? `; dormant: ${list(dormant)}` : '';
+  return `${page}⚠️ file collision on ${taskId}. Live: ${list(live)}${tail}. Coordinate before either of you lands.`;
 }
 
 export function claimNextTaskTool(_state: StateManager): ToolDefinition {
@@ -732,22 +784,24 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
       }
 
       // Compute file-collision warnings against every OTHER WORKING task.
-      // Advisory only — never blocks the claim. We post a heads-up to
-      // #workers if there's any overlap so peers can sync diffs.
+      // Advisory only — never blocks the claim: the computation is in-memory
+      // and a failure of it, like of the post, is swallowed (the claim already
+      // wrote its assignment and attempt). We post a heads-up to #workers if
+      // there's any overlap, @mentioning the seats live on a colliding peer and
+      // the claimer so they can coordinate before either lands.
       // Append-only files (CHANGELOG.md by default) are filtered out so the
       // expected shared-file overlap doesn't drown the real ones. `??` — never
       // `||` — because an explicit `[]` deliberately disables suppression.
       const appendOnlyFiles = state.project?.settings?.appendOnlyFiles ?? DEFAULT_APPEND_ONLY_FILES;
-      const fileCollision = computeFileCollisions(task, state.tasks.values(), appendOnlyFiles);
+      let fileCollision: CollisionEntry[] = [];
+      try {
+        fileCollision = markLivePeers(state, computeFileCollisions(task, state.tasks.values(), appendOnlyFiles));
+      } catch (error) {
+        logger.warn({ error, taskId: task.id }, 'claim_next_task: file-collision scan failed; claim continues');
+      }
       if (fileCollision.length > 0) {
         try {
-          const summary = fileCollision
-            .map((c) => `${c.task}: ${c.files.slice(0, 3).join(', ')}${c.files.length > 3 ? '…' : ''}`)
-            .join(' | ');
-          await state.postToRoleChannel(
-            'workers',
-            `⚠️ file collision on ${task.id}: ${summary}`
-          );
+          await state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId));
         } catch { /* never block tool */ }
       }
 
