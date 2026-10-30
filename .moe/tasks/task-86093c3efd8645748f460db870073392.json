@@ -10,10 +10,49 @@
     "`cd packages/moe-proxy && npm test` exits 0, with its output supplied to complete_task."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 4,
-  "status": "PLANNING",
-  "assignedWorkerId": null,
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Phase 0, no bytes: address QA's size-only reject. Read mem:decision-size-only-reject-of-landed-bytes and mem:gotcha-proxy-identity-review-size first.\n(a) Confirm the landed scope.\n- `git branch --contains 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08` lists moe/work-2026-10-24.\n- `git show --format= --numstat 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08` is exactly daemonIdentity.test.ts +302/-0, daemonIdentity.ts +123/-0, index.ts +31/-1. So utils.ts, the README, the daemon and the wrappers are untouched (DoD 3).\n- `git log --oneline 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08..HEAD -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts packages/moe-proxy/src/index.ts` is empty.\n- If a peer commit touched one of those paths since: check per hunk that `git diff 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 <peerSha>^ -- <path>` is empty and that the peer's hunks sit outside this task's lines. Name them in the summary as a peer's hunks, not this task's growth.\n(b) Check waiver prop-ce253f8aee9742d0842fe0eb48868a0f (EPIC ADD_RAIL 'Size exception for task-86093c3efd8645748f460db870073392 only ...').\n- APPROVED (the rail is in get_context allRails.epic) or PENDING: continue. Never report_blocked on PENDING; QA parks the row in REVIEW until a human decides.\n- REJECTED: call moe.request_replan with 'size waiver prop-ce253f8a rejected: apply the review-scope split in its reason', and stop.\n(c) This is a no-byte round.\n- Never edit, revert, re-land or declare_files the three source paths. A peer's dirty bytes in them are foreign.\n- On every complete_step pass modifiedFiles: ['.moe/tasks/task-86093c3efd8645748f460db870073392.json']. An empty list counts as omitted and falls back to affectedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        ".moe/tasks/task-86093c3efd8645748f460db870073392.json"
+      ],
+      "note": "Phase 0, no bytes. (a) `git branch --contains 4f2d53dd` = moe/work-2026-10-24. `git show --format= --numstat 4f2d53dd` = daemonIdentity.test.ts +302/-0, daemonIdentity.ts +123/-0, index.ts +31/-1 (455 net), exactly as planned. `git log 4f2d53dd..HEAD(47b4e438) -- <3 owned paths>` is empty, and so is the worktree diff on the owned paths + utils.ts. The completion touches no utils.ts, README, daemon or scripts (DoD 3). No peer hunks to account for. (b) prop-ce253f8aee9742d0842fe0eb48868a0f (EPIC ADD_RAIL, size exception for this task only) is PENDING (.moe/proposals record, resolvedBy null), and the rail is absent from allRails.epic. Per the plan, continue and do not report_blocked. (c) No-byte round: no source edits, no declare_files; modifiedFiles is only this task's board record. 54 dirty paths in the shared checkout belong to other sessions and are untouched.",
+      "startedAt": "2026-10-30T08:32:16.973Z",
+      "completedAt": "2026-10-30T08:33:00.867Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Mutation proof of the key guards, on a scratch copy only, never the shared checkout.\nSetup:\n- `MUT=$(mktemp -d /tmp/moe-proxy-mut.XXXXXX) && git -C /mnt/d/projexts/moes archive HEAD | tar -x -C \"$MUT\"`.\n- Using the step-3 gate's env -i / node v24.21.0 PATH, run `npm ci --no-audit --no-fund` in $MUT/packages/moe-daemon and in $MUT/packages/moe-proxy.\n- Baseline: `npm test -- src/daemonIdentity.test.ts src/index.test.ts` in $MUT/packages/moe-proxy must be green. npm test's pretest rebuilds dist, which the e2e cases spawn.\nThen apply each mutant ALONE, rerun that command, and record which tests fail. Restore the file between mutants with `git -C /mnt/d/projexts/moes show HEAD:<path> > \"$MUT/<path>\"`. A tsc error is not a kill: rewrite the mutant until it builds (tsconfig has no noUnusedLocals).\nExpected kills:\n- M1 index.ts:400 `identity.kind === 'foreign'` -> `identity.kind === 'foreign' && false`: E1, E1b, E3.\n- M2 daemonIdentity.ts:68, the comparableProjectPath compare -> `served === projectPath`: the 'D:\\\\proj' and 'D:/proj' spelling rows.\n- M3 index.ts:408 `openDaemonSocket(projectPath, info.port);` -> `if (identity.kind === 'same') openDaemonSocket(projectPath, info.port); else process.exit(1);`: E4, plus the index.test.ts e2e cases (their bare ws mocks answer /health with 426, which is unknown).\n- M4 daemonIdentity.ts:43, the isAbsoluteAnyOs body -> `return value.length > 0;`: the five relative-path rows and the isAbsoluteAnyOs reject rows.\n- M5 daemonIdentity.ts:105 `total > MAX_HEALTH_BODY_BYTES` -> `>=`: 'accepts a body of exactly the cap'.\n- M6 daemonIdentity.ts:58 `!HEALTH_STATUS_CODES.has(statusCode)` -> `!HEALTH_STATUS_CODES.has(200)`: the 500/404 rows.\n- M7 daemonIdentity.ts:88, the overall timer `timeoutMs` -> `timeoutMs * 1000`: the trickling-server row.\n- M8 delete index.ts:399 `if (shuttingDown) return;` (inside the probe's .then): expected to SURVIVE, because no test closes the proxy mid-probe. Only a reconnect with queued messages while stdin closes reaches that guard, and gracefulShutdown's 2 s cap exits either way. Record it as a known gap with that reasoning, and add no test unless QA requires one.\nAny other survivor is a finding for step 4. Post the table (mutant, file:line, killed-by tests) as a step note and in the completion summary.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Fresh verification, run once, exactly as written. It takes a Linux-native snapshot of a pinned HEAD (mem:gotcha-daemon-linux-snapshot-gate) with no worktree overlay, so a peer's dirty bytes cannot leak in:\ncd /mnt/d/projexts/moes && REV=$(git rev-parse HEAD) && SNAP=$(mktemp -d /tmp/moe-proxy-gate.XXXXXX) && git archive \"$REV\" | tar -x -C \"$SNAP\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" && echo \"gate ok rev=$REV snap=$SNAP; owned-path diff vs 4f2d53dd follows (empty = identical):\" && git diff --stat 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 \"$REV\" -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts packages/moe-proxy/src/index.ts\nIt must exit 0. The trailing diff --stat must print nothing, which means the three owned paths at the gate's rev equal completion 4f2d53dd. If it prints a peer's hunk, account for it per step 1. Keep the output tail for complete_task (DoD 4): the per-file and total test counts, the 'gate ok rev=' line, and the empty diff.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of `git show 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 -- packages/moe-proxy/src` (load adversarial-self-review). Check:\n(1) Error handling: the probe settles exactly once on every path. That means the done guard, the timer cleared, req destroyed, and a late 'end'/'aborted'/'error' ignored. A synchronous http.request throw resolves 'unknown', and connect()'s .catch mirrors main().catch. The probe adds no per-reconnect listener to process or stdin, and the stdin reader keeps its readableFlowing once-guard (index.ts:556).\n(2) The cap counts bytes, not UTF-16 chars.\n(3) Host and port come from getDaemonHost() and daemon.json, via `hostname`, so IPv6 needs no brackets.\n(4) Only the served path is flattened (displayServedPath); the local projectPath is our own.\n(5) One connect never opens two sockets, and no socket opens after shutdown starts or for a foreign daemon. E3 covers the reconnect; M8 is the untested shutdown case.\n(6) Unknown proceeds exactly as before (E4 and the index.test.ts e2e cases).\n(7) The documented limits stand: TOCTOU between /health and /mcp; a foreign daemon on reconnect is fatal by design; \\\\wsl$ paths are refused earlier by the daemon.json check.\nIf you find a genuine defect: fix it test-first in the owning file, rerun the step-3 command fresh, and report the new numstat in the summary as growth for QA to accept under the waiver's QA-required-fixes clause.\nOtherwise call complete_task with step 3's command, exit code and output tail, the mutant table, prop-ce253f8a and its current status, and modifiedFiles limited to the task's board record.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-proxy/src/daemonIdentity.ts",
+        "packages/moe-proxy/src/index.ts",
+        "packages/moe-proxy/src/daemonIdentity.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 5,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-0062feec",
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -44,84 +83,87 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:43.638Z",
-  "updatedAt": "2026-10-30T08:21:48.616Z",
+  "updatedAt": "2026-10-30T08:33:00.868Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:56:12.926Z",
-    "plannedStepCount": 5,
+    "plannedStepCount": 4,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5,
+    "executedStepCount": 6,
     "rejectCount": 1,
     "reopenCount": 1
   },
   "contextFetchedBy": [
     "worker-55e6716a",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "architect-e4b7eee0",
+    "worker-0062feec"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
-  "failedDodItems": [
-    {
-      "item": "Mandatory QA approval-size gate: at most 400 net changed LOC unless a project/epic rail explicitly waives it for this task.",
-      "rejectedAt": "2026-10-30T08:18:43.932Z",
-      "rejectedBy": "qa-ba3f4f35"
-    }
+  "stepsCompleted": [
+    "step-1"
   ],
-  "planSubmittedAt": "2026-10-30T07:58:50.047Z",
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T08:31:37.077Z",
   "executionContract": {
-    "intendedBehavior": "Before every /mcp connect and reconnect, moe-proxy GETs the daemon's /health. When the reply's projectPath is another project by comparableProjectPath, the proxy writes a JSON-RPC error naming both projects and telling the reader to restart this project's daemon, exits 1, and never opens /mcp. A same-project reply, and every unknown outcome (unreachable, timeout, non-JSON, oversize, non-200, or no projectPath), keep today's behavior.",
+    "intendedBehavior": "Unchanged from the approved plan, and already landed in completion 4f2d53dd. Before every /mcp connect and reconnect, moe-proxy GETs the daemon's /health. When the reply's projectPath is another project by comparableProjectPath, the proxy writes a JSON-RPC error naming both projects and telling the reader to restart this project's daemon, exits 1, and never opens /mcp. A same-project reply keeps today's behavior, and so does every unknown outcome: unreachable, timeout, non-JSON, oversize, a status other than 200/503, or a missing or relative projectPath. This round adds no bytes. It re-verifies those landed bytes under the task-specific size waiver prop-ce253f8a.",
     "acceptanceCriteria": [
-      "E1: against a fake daemon whose /health names another project, the proxy exits 1 with the message and makes no /mcp upgrade.",
+      "E1: against a fake daemon whose /health names another project, the proxy exits 1 with the message and makes no /mcp upgrade. E3 shows the same on reconnect.",
       "The spelling rows (D:\\x, D:/x and /mnt/d/x) classify as same, and every unknown row resolves 'unknown' without rejecting.",
-      "The existing index.test.ts e2e cases still pass, and utils.ts is unchanged."
+      "The existing index.test.ts e2e cases still pass, and utils.ts is unchanged.",
+      "The fresh gate on a pure git archive of a pinned HEAD exits 0, and the three owned paths at that rev equal 4f2d53dd.",
+      "Mutants M1-M7 are each killed by named test failures, not tsc errors. M8 survives as a documented gap unless QA requires a test."
     ],
     "invariants": [
       "The probe never rejects, settles once, and is bounded by the timeout and the 64 KiB body cap.",
       "No /mcp socket opens after shutdown starts or for a foreign daemon, and a single connect never opens two sockets.",
-      "No daemon or wire change, and no edits to utils.ts, the README or the wrappers."
+      "No daemon or wire change, and no edits to utils.ts, the README or the wrappers.",
+      "This round changes no bytes in the three owned paths. The only exception is a genuine defect fix from QA or self-review, made test-first and reported with its numstat."
     ],
     "compatibility": [
       "Daemons whose /health lacks projectPath, or whose /health is unreachable, connect as today.",
       "The 'daemon.json belongs to a different project' path and its message are unchanged."
     ],
     "approvedScope": [
-      "packages/moe-proxy/src/daemonIdentity.ts: DaemonIdentity, probeDaemonIdentity, MAX_HEALTH_BODY_BYTES.",
-      "packages/moe-proxy/src/index.ts: connect() probes, then calls openDaemonSocket (the existing socket code, moved unchanged)."
+      "packages/moe-proxy/src/daemonIdentity.ts: DaemonIdentity, probeDaemonIdentity, MAX_HEALTH_BODY_BYTES, isAbsoluteAnyOs, displayServedPath (landed).",
+      "packages/moe-proxy/src/index.ts: connect() probes, then calls openDaemonSocket, the existing socket and stdin code moved unchanged (landed)."
     ],
     "reuse": [
-      "comparableProjectPath and getDaemonHost from utils.ts; index.test.ts's spawn-the-built-proxy harness pattern."
+      "comparableProjectPath and getDaemonHost from utils.ts.",
+      "The spawn-the-built-proxy harness pattern from index.test.ts.",
+      "The prior worker's mutant set in mem:task-task-86093c3efd8645748f460db870073392-handoff."
     ],
     "sourceAssumptions": [
-      "packages/moe-proxy/src/index.ts connect() (~:366) builds ws://<getDaemonHost()>:<port>/mcp after readDaemonInfoResult. Reconnect timers call connect() again.",
-      "packages/moe-proxy/src/utils.ts exports comparableProjectPath and getDaemonHost.",
-      "packages/moe-daemon/src/index.ts /health returns {status, version, pid, uptime, projectPath, stats, checks}."
+      "packages/moe-proxy/src/index.ts: connect() at :367, the probe call at :396, `if (shuttingDown) return;` at :399, the foreign branch at :400, `openDaemonSocket(projectPath, info.port)` at :408, openDaemonSocket's definition at :417, and the stdin once-guard `if (!process.stdin.readableFlowing)` at :556.",
+      "packages/moe-proxy/src/daemonIdentity.ts: the isAbsoluteAnyOs regex at :43, the status filter at :58, the comparableProjectPath compare at :68, the overall timer at :88, and the byte-cap check at :105.",
+      "packages/moe-proxy/tsconfig.json is strict and has no noUnusedLocals. In package.json, pretest = npm run build.",
+      "Completion 4f2d53dd is on moe/work-2026-10-24, and the owned paths are unchanged at HEAD cb4997e3 (checked at plan time)."
     ],
     "checkRefs": [
-      "cd packages/moe-proxy && npm test"
+      "cd /mnt/d/projexts/moes && REV=$(git rev-parse HEAD) && SNAP=$(mktemp -d /tmp/moe-proxy-gate.XXXXXX) && git archive \"$REV\" | tar -x -C \"$SNAP\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c \"cd '$SNAP/packages/moe-daemon' && npm ci --no-audit --no-fund && cd '$SNAP/packages/moe-proxy' && npm ci --no-audit --no-fund && npm test\" && echo \"gate ok rev=$REV snap=$SNAP; owned-path diff vs 4f2d53dd follows (empty = identical):\" && git diff --stat 4f2d53dd44ad5ecc516b2735ebca6a4ab06f9f08 \"$REV\" -- packages/moe-proxy/src/daemonIdentity.ts packages/moe-proxy/src/daemonIdentity.test.ts packages/moe-proxy/src/index.ts"
     ]
   },
   "planningNotes": {
-    "approachesConsidered": "- Probe /health in the proxy before opening /mcp (chosen; it is what the task describes). It needs no daemon wire change, because /health already reports projectPath (index.ts startDaemon /health handler).\n- Comparing daemon.json's pid with /health's pid: rejected. A stale file names a dead pid while another daemon serves the port; the projectPath answer is what identifies the project.\n- Treating unknown as fatal: rejected. Older daemons and transient /health failures must keep today's behavior, and the reconnect path relies on it.\n- Editing utils.ts: forbidden, because task-a4ad3fdb and task-724e31fa edit it. Import comparableProjectPath instead.\n- Putting the e2e case in index.test.ts: rejected. It goes in daemonIdentity.test.ts so the diff stays at the three files DoD 3 names.",
-    "codebaseInsights": "- index.ts connect() (~:366) is synchronous today: readDaemonInfoResult, then closeWebSocket() and new WebSocket(ws://<getDaemonHost()>:<port>/mcp) with handlers. Reconnects re-enter connect() through a timer that the close handler clears.\n- pendingMessages queues stdin messages while isConnected is false (~:602). shuttingDown (~:54) is set by gracefulShutdown.\n- writeError writes a JSON-RPC error to stdout; writeLog writes to stderr.\n- utils.ts comparableProjectPath maps D:\\x, D:/x and /mnt/d/x to 'd:/x' on every OS.\n- package.json has pretest = build, so e2e tests spawn a fresh dist/index.js.\n- A bare ws WebSocketServer({port}) answers a plain GET with 426, so the existing index.test.ts mocks resolve to 'unknown' and keep passing.\n- workerType.integration.test.ts imports daemon source, so the WSL snapshot needs npm ci in both packages.",
-    "risks": "- The async gap in connect(): handle shutdown during the probe, never open two sockets, and keep queued messages flowing after open.\n- Cross-OS paths: the tests use comparableProjectPath spellings that hold on win32, linux and darwin, because CI runs a 3-OS matrix.\n- Windows-native node_modules: the gate must run in a Linux snapshot with both packages installed.\n- Sibling rows task-90664db1 (JetBrains) and task-e7f4026a (wrappers plus final verification) depend on this one. Keep the message and the rules stable for them.",
+    "approachesConsidered": "- Task-specific epic size waiver for the landed bytes (chosen). prop-ce253f8aee9742d0842fe0eb48868a0f was filed at plan time. It follows mem:decision-size-only-reject-of-landed-bytes, the four approved per-task size rails on this epic, and the JetBrains sibling's pending prop-38260a62.\n- Re-landing the same bytes in slices: rejected. It changes no behavior and costs N plan, work and QA cycles.\n- Deleting tests to fit under 400: rejected. The epic rail requires regression tests, and mem:gotcha-proxy-identity-review-size says not to.\n- If the human rejects the waiver: split the review scope, not the bytes, into file-disjoint slices. daemonIdentity.ts (123 net) becomes a PLANNING child row with a rail saying 'review slice of landed bytes: never re-implement, revert or re-land'. index.ts plus daemonIdentity.test.ts (332 net) stay on this row. task-e7f4026a, which depends on this row, also gets a dependsOn on the child.",
+    "codebaseInsights": "- Completion 4f2d53dd is on moe/work-2026-10-24. Its numstat is +456/-1 and covers exactly the three owned paths. Those paths are unchanged at HEAD cb4997e3. The later checkpoint a6f16a64 touched board records only.\n- index.ts: connect() :367, probe :396, shutdown guard :399, foreign branch :400, openDaemonSocket call :408 and definition :417, stdin once-guard :556.\n- daemonIdentity.ts: regex :43, status filter :58, compare :68, overall timer :88, byte cap :105.\n- tsconfig is strict, without noUnusedLocals. pretest builds dist, and the e2e cases spawn dist/index.js. The index.test.ts mocks are bare ws servers whose /health answers 426, which is unknown.",
+    "risks": "- M8 (the shutdown-during-probe guard) is untested. It is reachable only on a reconnect with queued messages while stdin closes, and gracefulShutdown exits within 2 s either way. The worker documents it, and a test is added only if QA requires one.\n- A peer landing in an owned path mid-round shows up in step 3's diff --stat. Account for it per hunk.\n- A REJECTED waiver means request_replan, so the architect does the split. The worker never splits.\n- Run the gate in a Linux snapshot, because the checkout's node_modules are Windows builds.",
     "keyFiles": [
+      "packages/moe-proxy/src/daemonIdentity.ts",
       "packages/moe-proxy/src/index.ts",
-      "packages/moe-proxy/src/utils.ts",
-      "packages/moe-proxy/src/index.test.ts",
-      "packages/moe-proxy/src/workerType.integration.test.ts",
-      "packages/moe-daemon/src/index.ts"
+      "packages/moe-proxy/src/daemonIdentity.test.ts",
+      "packages/moe-proxy/src/index.test.ts"
     ]
   },
   "executionPolicySnapshot": {
     "version": 2,
     "profile": "legacy",
-    "planRevision": 1,
+    "planRevision": 5,
     "deliveryPolicy": "legacy"
   },
-  "planApprovedAt": "2026-10-30T07:58:50.073Z",
-  "approvedPlanRevision": 1,
+  "planApprovedAt": "2026-10-30T08:31:37.103Z",
+  "approvedPlanRevision": 5,
   "workStartedAt": "2026-10-30T07:59:50.098Z",
   "reviewStartedAt": "2026-10-30T08:15:23.825Z",
   "verification": {
@@ -137,7 +179,10 @@
     "packages/moe-proxy/src/index.ts",
     ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
     ".moe/tasks/task-a4ad3fdb6fbc4f48934aae0daffe853d.json",
-    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json"
+    ".moe/tasks/task-b439d7fb2c3443789fe91971cad4ed04.json",
+    ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+    ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
   ],
   "completionSummary": "moe-proxy now probes the daemon's /health before opening /mcp, on every connect and reconnect, and refuses a daemon that serves another project.\n\nDelivered (3 paths, all in packages/moe-proxy/src): daemonIdentity.ts (new: probeDaemonIdentity, DaemonIdentity, MAX_HEALTH_BODY_BYTES, isAbsoluteAnyOs, displayServedPath), daemonIdentity.test.ts (new, 49 tests), index.ts (connect() probes, then openDaemonSocket = the old socket + stdin code moved verbatim). utils.ts, README, daemon and wrappers untouched (utils.ts diff = 0 lines).\n\nBehavior: foreign (absolute served projectPath that differs by comparableProjectPath) -> JSON-RPC error naming both projects + \"Restart this project's Moe daemon (it takes the next free port)\", exit 1, zero /mcp upgrades. Only HTTP 200/503 with a JSON object body counts; a relative projectPath, 426/500/404, non-JSON, oversize (>64 KiB), timeout, refused and an older daemon with no projectPath are 'unknown' and proceed exactly as before. D:\\x, D:/x and /mnt/d/x all classify 'same'.\n\nEvidence: fresh Linux-native snapshot (git archive HEAD + 3 owned files, npm ci in moe-daemon and moe-proxy), `cd packages/moe-proxy && npm test` exit 0, 6 files / 237 tests passed (daemonIdentity 49, index.test.ts 15, workerType.integration 8, workerType 65, utils 97, input-framing 3). Owned files cmp-identical to the snapshot. Mutants, each killed by real failures: probe skipped -> E1+E3; raw string compare -> spelling rows; unknown-as-foreign (index.ts) -> E4 + 13 index.test.ts e2e + others; unknown-as-foreign (daemonIdentity.ts) -> all unknown rows + E4; displayServedPath dropped -> E1b.\n\nDeviations/notes for QA: (1) The stdin reader stays inside openDaemonSocket (after the probe), not before it: wrapper RPCs write one request and close stdin, and with a live reader the probe's shuttingDown guard would strand the queued request (mem:gotcha-proxy-stdin-before-async-connect; pinned by index.test.ts 'waits for pending response before exiting on stdin close'). (2) Ad",
   "commits": [
@@ -160,6 +205,24 @@
       "treeId": "9b31525c8a491c95ff631f5676fb16c033ff2cda",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "a6f16a648f52ab28b366b6414f6d7e1f625fcc8d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T08:18:58Z",
+      "paths": [
+        ".moe/tasks/task-3fa69c192a2147fa8555b33c86ad2f82.json",
+        ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json",
+        ".moe/tasks/task-efbf1742544b44cb81d6057eb4d2884f.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T08:22:08.116Z",
+      "treeId": "9359a0c8b9b532d86821e3f1c9018ac43a5baebc",
+      "status": "PLANNING",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -170,9 +233,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T07:59:05Z",
-    "at": "2026-10-30T08:16:16.408Z"
+    "kind": "checkpoint",
+    "sessionId": "worker-55e6716a@2026-10-30T08:18:58Z",
+    "at": "2026-10-30T08:22:08.116Z"
   },
   "reviewCompletedAt": "2026-10-30T08:18:43.932Z",
   "rejectionDetails": {

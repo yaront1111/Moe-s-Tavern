@@ -108,11 +108,17 @@
       "author": "architect-4ae016fb",
       "content": "Activation note from planning bug task-efbf1742 (architect-4ae016fb, 2026-10-30). This row's dependsOn is at the 20-id cap, so I could not add the edge; please integrate it.\n\nWhat efbf1742 does: under verified-local, the delivery gate refuses (token `required-check-untrusted-checker:<id>`) any required check that is an architecture check but whose approved command is not exactly `moe-daemon check-architecture [args]`. \"Architecture check\" means the command mentions check-architecture, or the check's scripts protect commands/checkArchitecture.ts or delivery/architectureRules.ts.\n\nWhy: `node packages/moe-daemon/dist/index.js check-architecture` runs code the candidate builds, and index.ts loads every daemon module. Legacy and observe are unchanged.\n\nActivation requirements this hands to V12:\n- The check guest's PATH must resolve `moe-daemon` to a trusted install built at the base revision.\n- That PATH must have no workspace entry and no '.' entry.\n- Optionally, add a submit_plan message that refuses the untrusted form at plan time.\n- The docs sweep should list the new evidence token.",
       "timestamp": "2026-10-30T07:24:47.599Z"
+    },
+    {
+      "id": "comment-bde1787339334031b5ea61116b0444c2",
+      "author": "architect-4ae016fb",
+      "content": "Addendum to comment-ebcd8110, from efbf1742's QA (qa-ba3f4f35, 2026-10-30). This is a PRE-ACTIVATION requirement for verified-local, now owned explicitly by this row. It does not block efbf1742.\n\nThe residual is an opaque protected wrapper. Counterexample:\n- The def is `{id:'arch', command:'bash scripts/lint.sh', scripts:['scripts/lint.sh']}`.\n- lint.sh runs `node packages/moe-daemon/dist/index.js check-architecture --rules arch.json`.\n- The candidate edits only packages/moe-daemon/src/context/repositorySource.ts.\n- Under verified-local, evaluateDeliveryEvidence answers `{satisfied:true, missingEvidence:[]}`. QA log: /tmp/qa-efbf-opaque.log.\n\nefbf1742's classifier (requiredChecks.ts untrustedArchitectureChecks) is pure. It sees only the command text and the protected-path suffixes, never wrapper bytes.\n\nGeneral class: a protected entry that executes unprotected candidate code. That includes a dist built from candidate sources, an unprotected helper script, and an unprotected package.json script. This is a V01 protection-completeness limit, not a classifier bug.\n\nBefore verified-local is enabled, this row (or whoever certifies activation) must:\n(1) Make the binding control a check guest in which candidate-built daemon code cannot serve as the checker. `moe-daemon` must resolve only to the trusted install built at the base revision, with no workspace, '.' or node_modules/.bin entries on PATH.\n(2) Optionally add defense in depth: an approval-time scan of the protected wrapper bytes at the approved revision, applying efbf1742's mention signal (/check-?architecture/i) to them, plus a submit_plan message.\n(3) Have the docs sweep state the V01 limit: protection covers only the entries the approver names. It must also list the `required-check-untrusted-checker:<id>` token.\n\nNot exploitable today: verified-local is off and nothing dispatches checks.",
+      "timestamp": "2026-10-30T08:33:02.471Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-30T08:25:46.903Z",
+  "updatedAt": "2026-10-30T08:33:02.471Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",
@@ -139,7 +145,8 @@
     "worker-b5749787",
     "architect-e4b7eee0",
     "qa-952969be",
-    "qa-ba3f4f35"
+    "qa-ba3f4f35",
+    "architect-4ae016fb"
   ],
   "metrics": {
     "firstClaimAt": "2026-10-29T18:00:07.818Z",
