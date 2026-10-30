@@ -97,7 +97,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:35:53.701Z",
-  "updatedAt": "2026-10-30T21:25:04.608Z",
+  "updatedAt": "2026-10-30T21:25:29.533Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T19:35:58.327Z",
     "plannedStepCount": 4,
@@ -195,18 +195,40 @@
       "treeId": "c5e5f4f4d5310b752f837d767b845c37f12f01b7",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "6c9295ca4acce76c2969d0411472814696ceb633",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c75a6f39@2026-10-30T21:04:42Z",
+      "paths": [
+        ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+        ".moe/tasks/task-54fe1615fb3e49b8ac6dd384108d6ef5.json",
+        ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-c75a6f39",
+      "recordedAt": "2026-10-30T21:25:29.533Z",
+      "treeId": "4f8c4039abfd5926af6546d9babf1e33ebe6d96b",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    ".moe/tasks/task-08bb772304644c91afae8ae78a6c6344.json",
+    ".moe/tasks/task-54fe1615fb3e49b8ac6dd384108d6ef5.json",
+    ".moe/tasks/task-d45d52c0bb3d4569b3b6b5a757812b19.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-6fc3dd5c@2026-10-30T19:35:59Z",
-    "at": "2026-10-30T20:11:53.729Z"
+    "kind": "completion",
+    "sessionId": "worker-c75a6f39@2026-10-30T21:04:42Z",
+    "at": "2026-10-30T21:25:29.533Z"
   },
   "workStartedAt": "2026-10-30T21:09:37.832Z",
   "reviewStartedAt": "2026-10-30T21:25:04.606Z",
@@ -217,5 +239,8 @@
     "reportedAt": "2026-10-30T21:25:04.606Z",
     "source": "agent-reported"
   },
-  "completionSummary": "On Windows a stored pin is now also read when the IDE state store root or the project base has no physical folder, meaning physicalFolder(path) == null. That covers a junction, link or subst onto a drive the lookup cannot place (\\Device\\ImDisk0, a null or throwing windowsDriveTarget), a real path Windows cannot find (toRealPath fails), and a store spelled without a drive. A stored PROTECTED pin keeps profile() PROTECTED and asks for the downgrade once. A confirmed downgrade writes nothing.\nChanges: RuntimeSelectionPolicy.kt +35/-18, with physicalFolder extracted verbatim from outsideByIdentity, whose answers are unchanged. The read gate is `usableFor || windowsHost && (physicalFolder(root)==null || unplainBase(base) || physicalFolder(Paths.get(base))==null)`, with 52fb's term byte-identical. RuntimeSelectionPolicyTest +127/-0 adds D10-D12 and withUnlistable.\nRED on parent 04a3e180, from a soft-report variant: all 12 D10 case/answer combinations (store through a junction, which is DoD 1; store on a drive rooted at a junction; project on such a drive, which is rail prop-a89f8112), D11 (volume GUID store), and both D12 cases (store or project below an unlistable folder). 52fb covers none of them. The final rows fail at their first PROTECTED assert.\nMutants: M2 (first-letter root checks) fails D10 cases 2 and 3 under all 4 answers, D11, and both D12 cases, while D10 case 1 survives. M3 (root term true) fails only the D2 sandbox control. GREEN: 69/69, and the full gate gives 495 tests with 0 failures.\nUnchanged: provably-outside stores, D2 inside stores on a placed drive (ABSENT), missing bases (ABSENT), fresh legacy projects (no ask), and all writes through usableStore.\nRF07 (f3f364a6): reads now also happen for a store spelled without a drive, and for a store under the project whose folder cannot be placed. Both only restrict, and an unreadable record there is PROTECTED plus the ask. A confirmed downgrade there is not persisted, so it is asked after every restart.\nResi"
+  "completionSummary": "On Windows a stored pin is now also read when the IDE state store root or the project base has no physical folder, meaning physicalFolder(path) == null. That covers a junction, link or subst onto a drive the lookup cannot place (\\Device\\ImDisk0, a null or throwing windowsDriveTarget), a real path Windows cannot find (toRealPath fails), and a store spelled without a drive. A stored PROTECTED pin keeps profile() PROTECTED and asks for the downgrade once. A confirmed downgrade writes nothing.\nChanges: RuntimeSelectionPolicy.kt +35/-18, with physicalFolder extracted verbatim from outsideByIdentity, whose answers are unchanged. The read gate is `usableFor || windowsHost && (physicalFolder(root)==null || unplainBase(base) || physicalFolder(Paths.get(base))==null)`, with 52fb's term byte-identical. RuntimeSelectionPolicyTest +127/-0 adds D10-D12 and withUnlistable.\nRED on parent 04a3e180, from a soft-report variant: all 12 D10 case/answer combinations (store through a junction, which is DoD 1; store on a drive rooted at a junction; project on such a drive, which is rail prop-a89f8112), D11 (volume GUID store), and both D12 cases (store or project below an unlistable folder). 52fb covers none of them. The final rows fail at their first PROTECTED assert.\nMutants: M2 (first-letter root checks) fails D10 cases 2 and 3 under all 4 answers, D11, and both D12 cases, while D10 case 1 survives. M3 (root term true) fails only the D2 sandbox control. GREEN: 69/69, and the full gate gives 495 tests with 0 failures.\nUnchanged: provably-outside stores, D2 inside stores on a placed drive (ABSENT), missing bases (ABSENT), fresh legacy projects (no ask), and all writes through usableStore.\nRF07 (f3f364a6): reads now also happen for a store spelled without a drive, and for a store under the project whose folder cannot be placed. Both only restrict, and an unreadable record there is PROTECTED plus the ask. A confirmed downgrade there is not persisted, so it is asked after every restart.\nResi",
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+  ]
 }

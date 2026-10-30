@@ -93,7 +93,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,7 +119,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T14:29:51.358Z",
-  "updatedAt": "2026-10-30T21:04:15.840Z",
+  "updatedAt": "2026-10-30T21:27:34.229Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:38:56.099Z",
@@ -129,11 +129,14 @@
     "firstClaimAt": "2026-10-30T14:45:44.666Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 7,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T21:27:34.228Z",
+    "wallClockMs": 24109562
   },
   "contextFetchedBy": [
     "architect-6fc3dd5c",
-    "worker-25da16b2"
+    "worker-25da16b2",
+    "qa-b29f7b3d"
   ],
   "dependsOn": [
     "task-724e31fadd3e4f5cb137abe9e4147f11",
@@ -268,5 +271,9 @@
     "kind": "completion",
     "sessionId": "worker-25da16b2@2026-10-30T20:31:11Z",
     "at": "2026-10-30T21:04:15.840Z"
-  }
+  },
+  "completedAt": "2026-10-30T21:27:34.228Z",
+  "reviewCompletedAt": "2026-10-30T21:27:34.228Z",
+  "reviewSummary": "Approved completion bdb6a2e6 (pushed to moe/work-2026-10-24). 7 files, +134/-49, 85 net; scope is exactly the plan's files.\n\nGATE: the exact checkRefs command, run in a git archive of bdb6a2e6. Lock-matched native deps, env -i, Node 24.21. Exit 0.\n- proxy: 314 passed.\n- daemon: build OK; 214 files, 6248 passed / 14 skipped.\n- daemon-json-cap: 0 fail, 1 todo (3def0804's). The contract-key row passes against dist/index.js.\n\nNATIVE WINDOWS (my own archive, npm ci):\n- proxy utils and daemonIdentity: 182 passed. The alias row and E5 ran on win32.\n- doctor: 8 passed, D2 skipped by design. D1 (drive-case flip) and D3 (/x alias) passed.\n\nACCEPTANCE CRITERIA: all met.\n- E5 and the alias row pass.\n- getProjectPath = path.resolve(...).\n- D1 and D3 pass.\n- D2 and the different-project and different-pid rows still FAIL.\n- The cap keys are unchanged.\n\nINVARIANTS:\n- The moved block is byte-identical apart from the export keywords (scripted diff).\n- projectPath.ts imports only 'path', and no daemon module imports src/index.ts.\n- index.ts still exports all 3 names.\n- Only the caller's own path is resolved.\n\nMUTATIONS, all killed:\n- revert doctor → D1 fails;\n- drop canonicalProjectPath(own) → D3 fails;\n- case-fold → D2 fails;\n- revert getProjectPath → the alias row and E5 fail.\n\nNo weakened tests. Ponytail found nothing to cut.\n\nResidual, by contract: doctor has no realpath fallback, so a symlinked --project still FAILs.",
+  "requiredCheckAtDone": null
 }
