@@ -72,7 +72,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,10 +85,17 @@
   ],
   "priority": "HIGH",
   "order": 252.2,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2802766ed4414880b02ecfecae375574",
+      "author": "qa-952969be",
+      "content": "QA round 2 (qa-952969be, 2026-10-30): the substance is green, but no size rail exists yet, so the row is PARKED rather than approved or rejected.\n\nBytes:\n- The 4 owned files at HEAD 9a28b0f have the same blob ids as completion baa52df; no later commit touches them, and they are clean in the shared tree.\n- Retry completion 6b62196 carries only board JSON.\n- Size is unchanged at 576 changed lines (+575/-1): agent-cache.mjs +275, agent-binaries.json +21, local-runner-agents.test.mjs +273, local-runner-bundle.test.mjs +6/-1.\n\nFresh gates (pure `git archive` of HEAD, env -i, Node 24.21.0):\n- DoD command `node --test scripts/tests/local-runner-agents.test.mjs scripts/tests/local-runner-bundle.test.mjs`: exit 0, 32/32 pass (AB1-AB11 all pass).\n- `node --test scripts/tests/local-runner.test.mjs`: exit 0, 241 pass, 1 skipped (the existing opt-in macOS smoke).\n\nIndependent checks (none repeat round 1's or the worker's probes):\n- 10 mutants on archive copies, all KILLED:\n  - redirect Location of any protocol accepted (AB5);\n  - 5-hop cap removed (AB5);\n  - tar header checksum check removed (AB7);\n  - URL-template check removed (AB2);\n  - decompression bound removed (AB7);\n  - streamed size bound removed (AB5);\n  - .part cleanup removed (AB5-AB8);\n  - final-URL https check removed (AB5);\n  - duplicate member allowed (AB7);\n  - member-path validator opened (AB2).\n- Vendor metadata: claude 2.1.308 manifest.json (linux-x64/arm64) and the codex rust-v0.166.0 GitHub release (prerelease false, draft false). All 4 pins match on sha256 and size, and both codex URLs equal browser_download_url.\n- Real network, shipped manifest and module: codex x64 took 2 fetches (302, then 200) in 4.8 s.\n  - The member sha256 b8a11fed… and size 319346888 equal the pins.\n  - The file is 0600 in a 0700 dir, with no .part left.\n  - A repeat call made 0 fetches.\n  - The temp cache was removed.\n- Read agent-cache.mjs in full:\n  - no byte is parsed or renamed before its sha256 and size verify;\n  - every failure maps to a fixed code with fixed text;\n  - no forbidden patterns appear in the 4 files.\n  DoD 1-4 are each shown by AB1-AB11 and the gate.\n\nAdvisory, no change requested: fetchAgentBinary(input, null) throws a raw TypeError, a programmer error at the call site that the worker noted too. The `shipped`-not-`required` bundle deviation stays accepted as in round 1.\n\nSize: the waiver, prop-1d021909fe024d5ba7586cab816d91c9 (EPIC ADD_RAIL, 576-line cap), was still PENDING at 01:25Z and is not in allRails.epic, so the row is parked via report_blocked.\n- APPROVED: set_task_status REVIEW. QA confirms the rail text matches the numstat above, re-runs the gate and approves.\n- REJECTED: set_task_status PLANNING, and split the review scope (not the bytes) per the proposal: runtime plus manifest at 296, tests at 280.",
+      "timestamp": "2026-10-30T01:26:42.829Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:04.014Z",
-  "updatedAt": "2026-10-30T01:13:15.677Z",
+  "updatedAt": "2026-10-30T01:26:48.288Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:26:25.711Z",
     "plannedStepCount": 5,
@@ -263,5 +270,9 @@
         }
       ]
     }
-  ]
+  ],
+  "blockedReason": "Size waiver pending, substance green. QA round 2 cannot approve, because the landed slice (completion baa52df, unchanged at HEAD 9a28b0f) is 576 changed lines (+575/-1) against the 400 cap, and no epic rail waives it yet. The worker's waiver is prop-1d021909fe024d5ba7586cab816d91c9 (EPIC ADD_RAIL, 576 cap, filed 01:05Z). It was still PENDING at 01:25Z and only a human can resolve it. A second reject would only burn a reopen, so the row is parked.\n\nFresh evidence (pure git archive of HEAD, env -i, Node 24.21.0):\n- DoD command: exit 0, 32/32.\n- local-runner.test.mjs: exit 0, 241 pass, 1 skipped (existing).\n- 10 independent mutants, all killed.\n- All 4 pins match the vendor release metadata.\n- Real codex x64 fetch: member pin matched, and the cache hit made 0 fetches.\nFull detail is in the latest QA comment on this row.\n\nRoute:\n- APPROVED: set_task_status REVIEW. QA confirms the rail text in allRails.epic matches the numstat, re-runs the gate and approves.\n- REJECTED: set_task_status PLANNING, and split the review scope (not the bytes) per the proposal: agent-cache.mjs plus agent-binaries.json (296 changed lines) and the two test files (280).\nunblock_worker cannot reach the parked, unassigned row.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-30T01:26:48.288Z"
 }
