@@ -9,9 +9,54 @@
     "The JetBrains plugin's daemon adoption is checked for the same gap, and either fixed with a ./gradlew test case or shown in the task comments not to need it."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST. Load test-driven-development.\n\nPrerequisites. dependsOn gates the claim, not the bytes, so first confirm these are DONE:\n- task-86093c3e, the moe-proxy identity probe;\n- task-90664db1, the JetBrains identity check.\n\nRead their landed code, their handoff memories, and this row's first comment. Mirror the proxy's verdict rules and refusal wording:\n- the verdicts are same, foreign and unknown;\n- a relative served projectPath is unknown;\n- a 503 reply with an absolute, different projectPath is foreign.\n\nExtend scripts/tests/daemon-json-cap.test.mjs. It already runs the REAL pre-flight check blocks of both launchers, and CI runs it on Linux and Windows. Add rows named 'identity: ...'.\n\nHarness changes:\n- Rows with a fake /health server must spawn the child asynchronously (child_process.spawn, or execFile wrapped in a promise), never with spawnSync. spawnSync blocks the event loop, so the in-process server could not answer and every probe would time out as unknown.\n- The fake server is http.createServer on 127.0.0.1:0. It answers GET /health with the row's JSON and status, and records each request path.\n- sh: add a segment that runs from the line `probe_daemon_health() {` up to the line `# daemon.json is repository content`. It holds the probe and wsl_gateway_host. Stub `is_wsl() { return 1; }` and set PROJECT in the generated script.\n- ps1: set $projectPath in the generated script. Keep every new helper inside the existing helper segment, after Read-MoeDaemonJsonText.\n- The existing ps1 fixtures use the test runner's live pid and port 9876. On this machine the live moes daemon answers 9876, so those fixtures would now be judged foreign. Move every existing fixture to a port the test reserves and then closes. The verdict there is unknown, so the rows keep today's expectations except the printed port.\n\nRows. Add each one for every engine where its branch exists.\n\n1. sh foreign branch, Linux only. On Git Bash OSTYPE is msys, so the branch never runs there. The fixture has daemon.json projectPath D:\\projexts\\px4swarm and PROJECT /mnt/d/projexts/px4swarm.\n   - /health serves D:\\projexts\\moes: exit 1, and one exact line holds MOE_DAEMON_FOREIGN_PROJECT and both project paths. MOE_DAEMON_HOST is not exported, and daemon.json is byte-identical afterwards.\n   - /health serves d:/projexts/px4swarm/ (the same project in another spelling): RUNNING=true, as today.\n   - /health serves the relative path '.': RUNNING=true.\n\n2. sh PID branch. kill -0 needs a live pid. On Git Bash the generated script writes its own $$ into daemon.json before the check block.\n   - A foreign absolute served path: exit 1 with the refusal line.\n   - The same project: RUNNING=true.\n   - An unreachable /health (closed port): RUNNING=true, as today.\n\n3. ps1, on PowerShell 5.1 and 7, with the existing engine skips. pid is the test runner's own pid.\n   - Foreign: exit 1 with the identical line text.\n   - The same project, with $projectPath D:\\x\\y and served D:\\x\\.\\y, D:/x/y/ and /mnt/d/x/y: running=True.\n   - Unreachable: running=True.\n   - A 503 'unhealthy' reply with a foreign absolute path: exit 1.\n\n4. Static parity row: MOE_DAEMON_FOREIGN_PROJECT appears in both launchers, and the three refusal sentences are byte-identical in both.\n\nAssert exact lines where the wording is fixed. The verify step's mutants prove these rows fail on today's code.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT scripts/moe-agent.sh. Change only the daemon pre-flight.\n\n1. probe_daemon_health takes an optional third argument, the expected project.\n- Exit 0: healthy, and the served path is either the same project or cannot be judged. Callers that pass no project get exactly today's verdict.\n- Exit 1: unreachable, timeout, unhealthy without a judgeable path, non-JSON, or a body over 64 KiB.\n- Exit 3: foreign. Print the served projectPath on stdout.\n- Foreign applies to any parseable reply, a 503 included. urllib raises HTTPError for a 503, so read the body with e.read().\n- In the python, read at most 65537 bytes, with a 3 s timeout.\n\n2. The comparable-path rule mirrors comparableProjectPath in packages/moe-proxy/src/utils.ts and in the daemon. Use ntpath and posixpath explicitly, never os.path, so Windows python under Git Bash behaves the same.\n- A drive path: ntpath.normpath, then '\\' becomes '/', the trailing '/' is stripped, and the result is lowercased.\n- A UNC path: normalize it with ntpath.\n- Any other absolute path: posixpath.normpath, then /mnt/<d>/rest maps to <d>:/rest, lowercased.\n- A served path that is not absolute cannot be judged.\n- On msys/cygwin PROJECT is /d/..., so pass the expected project as `cygpath -m \"$PROJECT\"`. Never refuse because of a spelling difference.\n\n3. Foreign (Windows-owned daemon.json) loop.\n- rc 3: refuse at once. Print the MOE_DAEMON_FOREIGN_PROJECT block and exit 1.\n- rc 0: adopt as today.\n- Anything else: try the next candidate.\n- Capture rc without tripping set -e: `rc=0; SERVED=$(probe_daemon_health ...) || rc=$?`.\n\n4. PID branch. After kill -0 succeeds, and only when DAEMON_PORT is numeric, probe ${MOE_DAEMON_HOST:-127.0.0.1}:$DAEMON_PORT with the project.\n- rc 3: refuse the same way.\n- Anything else: RUNNING=true, as today.\n\n5. The refusal block. Its three sentences are byte-identical in moe-agent.ps1:\n- `[ERROR] MOE_DAEMON_FOREIGN_PROJECT: the daemon at <host>:<port> serves <served>, not this project (<PROJECT>).`\n- `<DAEMON_INFO> is stale: this project's daemon is not running. Start it (the IDE's Restart Daemon, or moe-daemon start --project <PROJECT>); it takes the next free port.`\n- `Refusing to register, claim or bridge to another project's daemon.`\nThe block deletes nothing, starts nothing and exports nothing.\n\nError handling:\n- Every probe failure is unknown and keeps today's behavior. Only a positive, judgeable mismatch refuses.\n- --no-start-daemon still skips the whole block. The proxy's own probe (task-86093c3e) covers that path and every later RPC.\n\nOther peers edit other regions of this file, so preserve their bytes. Leave the fix-options wording to task-724e31fa.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "IMPLEMENT scripts/moe-agent.ps1. Change only the daemon pre-flight.\n\n1. Add two helpers inside the extracted helper range (after Read-MoeDaemonJsonText), so the launcher test can load them.\n- A comparable-path function with step 2's rule. For drive paths, use string operations rather than [IO.Path]::GetFullPath, so pwsh on Linux and PowerShell 5.1 agree.\n- A /health probe built on HttpWebRequest:\n  - Timeout and ReadWriteTimeout are both 3000;\n  - read at most 65537 bytes from the response stream;\n  - on a 503, read the body from the WebException's Response;\n  - return 'same', 'foreign <served>' or 'unknown'; any exception means unknown.\n\n2. In the check block, when $proc is found, probe 127.0.0.1:$($info.port) with $projectPath.\n- Foreign: Write-Host the same three lines as sh, with the ERROR line in red, then exit 1. The exit sits inside the if, not in a throw, so the existing catch cannot swallow it and fall through to starting a daemon.\n- Otherwise: $running = $true, as today.\n\n3. Error handling: any probe failure means unknown. A refusal deletes nothing and starts nothing.\n\n4. Keep the file UTF-8 with a BOM (scripts/CLAUDE.md), and keep the refusal text ASCII.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "DOCS. Change two clauses in the root CLAUDE.md and preserve every other byte. Other rows edit this file too: task-724e31fa, and later the CQ integration rows.\n\n1. The moe-proxy daemon-discovery text. After 'exits immediately on a project-path mismatch', add: 'in daemon.json or in the live daemon's /health reply (a daemon now serving another project)'.\n\n2. The WSL agent mode sentence about the sh pre-flight. Add: 'and stops pre-flight with MOE_DAEMON_FOREIGN_PROJECT, naming both projects, when the reachable daemon's /health projectPath is another project (moe-agent.ps1 does the same for a live PID)'.\n\nLeave that sentence's --host 0.0.0.0 wording to task-724e31fa.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "CLAUDE.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\nNever run the launcher tests in the shared tree: its moe-agent.{sh,ps1} carry peers' dirty edits. First build a snapshot with git archive HEAD of scripts/ and .github/ (the CI row reads ci.yml). Overlay this task's four files only, and cmp-verify each one.\n\n1. Linux. In the snapshot, run `node --test scripts/tests/daemon-json-cap.test.mjs`. That covers bash, plus pwsh if installed.\n\n2. Windows. Copy the snapshot's scripts/ and .github/ to a Windows temp dir and run the same file with Windows node (mem:gotcha-qa-windows-launcher-tests-from-wsl). That covers Git Bash, PowerShell 5.1 and pwsh 7.\n- Report tests, pass, fail and skipped per engine.\n- No identity row may be skipped except by the documented engine or OS skips.\n\n3. Parity. Run `bash scripts/tests/parity-check.sh` in the snapshot, and parity-check.ps1 on Windows.\n\n4. Mutants, on snapshot copies only. A kill counts only when assertions fail.\n- M1: sh treats rc 3 as 0. The sh foreign rows fail.\n- M2: ps1 ignores the foreign verdict. The ps1 foreign rows fail.\n- M3: the comparable rule drops /mnt/<d> folding, in both sh and ps1. The same-project spelling rows fail.\n- M4: a relative served path is judged. The relative row fails.\n\n5. DoD 2 evidence. In a Linux-native snapshot of packages/moe-proxy (mem:gotcha-daemon-linux-snapshot-gate), run `npm ci`, then `npm test`. It must exit 0, and task-86093c3e's identity tests must run.\n\n6. DoD 3 evidence, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If the lease is queued, call moe.report_blocked with that resourceId. Release it in every exit path. Run:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun --tests <task-90664db1's identity test classes>\"\nCite task-90664db1's commit.\n\n7. GATE for complete_task (DoD 1). In the snapshot, run fresh, exit 0:\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\nSupply its output and the Windows run's counts, and cite task-86093c3e's and task-90664db1's commits for DoD 2 and DoD 3.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read this row's diff together with task-86093c3e's and task-90664db1's, once as the px4swarm seat and once as a hostile process holding the port.\n\n- Can a seat still register, claim or bridge to a foreign daemon by any path? Check:\n  - --no-start-daemon;\n  - a resumed seat;\n  - a later loop iteration after the daemon changed (the proxy's per-RPC probe);\n  - MOE_DAEMON_HOST set;\n  - the foreign branch's gateway candidate.\n\n- Can a spelling difference refuse a seat's own daemon? Check:\n  - the D:\\, D:/, /mnt/d and msys /d forms;\n  - case;\n  - a trailing slash;\n  - '.' and '..';\n  - UNC;\n  - a relative served path.\n  Do the sh, ps1, proxy, Kotlin and daemon rules agree on every row?\n\n- Is every read bounded in time and bytes? Can a slow or endless /health stall pre-flight for longer than about 3 s per candidate?\n\n- Can set -e abort on the probe's exit code? Can the ps1 catch swallow the refusal and start a daemon?\n\n- Does the message print anything beyond the two paths and host:port? Is it byte-identical in sh and ps1?\n\n- Rails:\n  - regression tests exist for each slice;\n  - error handling: every failure is unknown and keeps today's behavior;\n  - no MCP contract change;\n  - existing daemon.json files still parse;\n  - no forbidden pattern.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,13 +66,60 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 286.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-d9a7b7ee8a764c38a0c83153fcc30da8",
+      "author": "architect-bd1eb82d",
+      "content": "Planning split (architect-bd1eb82d, 2026-10-30). The fix spans three clients and three packages, about 9 files, so I sliced it on the package seam. This row keeps the wrapper slice and verifies the whole bug last.\n\n- Proxy slice, DoD 2: task-86093c3e. Every wrapper RPC goes through the proxy, so this alone stops registering and claiming on a foreign daemon.\n- JetBrains slice, DoD 3: task-90664db1. I checked the plugin and the gap is real. MoeProjectService.connect/connectWithRetry adopt daemon.json's port whenever isProcessAlive(pid) && isPortOpen(port), with no identity check, so a reused PID attaches the window to another board. Under the PROTECTED profile, activationRefusal already refuses an unrecorded daemon; LEGACY does not.\n- VS Code has the same gap with no PID check at all. It is filed as BACKLOG task-80ed1fe8 for the human to schedule.\n\nThis row dependsOn task-86093c3e and task-90664db1. task-724e31fa now dependsOn this row, because both edit the foreign-daemon probe block of moe-agent.sh. CQ-RF04 (task-de91373a) now dependsOn task-90664db1, because both edit MoeProjectService.kt.\n\nRule shared by all slices: /health reports the daemon's raw --project, which can be relative. A relative served projectPath is 'unknown', never 'foreign'. Only an absolute path (drive, UNC or POSIX) that differs by the comparable-path rule refuses.",
+      "timestamp": "2026-10-30T07:57:31.336Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:43:02.972Z",
-  "updatedAt": "2026-10-30T07:43:11.337Z",
+  "updatedAt": "2026-10-30T07:59:43.710Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:43:11.337Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T07:45:40.066Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "dependsOn": [
+    "task-86093c3efd8645748f460db870073392",
+    "task-90664db1e08a45f7b63c1e0f44eeee09"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T07:59:43.680Z",
+  "planningNotes": {
+    "approachesConsidered": "- One task for all three clients: rejected. That would be three packages and about nine files, over the size cap. It is split on the package seam, as recorded in this row's first comment:\n  - task-86093c3e: proxy;\n  - task-90664db1: JetBrains;\n  - task-80ed1fe8: VS Code, in BACKLOG.\n- A project parameter on the /mcp upgrade, checked by the daemon: deferred.\n  - It is a wire change.\n  - It touches WebSocketServer.ts, which task-801272c4 and task-2f2484b4 are editing.\n  - Client-side /health probes close the bug without any daemon change, and the daemon's own probeDaemonHealth already uses the same rule.\n- Having the wrapper treat the mismatch as stale and start this project's daemon itself: rejected.\n  - DoD 1 says pre-flight stops and names both projects.\n  - From WSL, the wrapper can neither verify nor start the Windows daemon.\n- A new launcher test file: rejected.\n  - CI runs node --test files from an explicit list (task-b8b8faba).\n  - daemon-json-cap.test.mjs already extracts and runs the same check blocks on Linux and Windows.",
+    "codebaseInsights": "- moe-agent.sh pre-flight, around lines 1447-1545:\n  - probe_daemon_health is used only by the foreign branch: a drive-letter projectPath, read outside msys/cygwin;\n  - the PID branch trusts kill -0 alone.\n- moe-agent.ps1 pre-flight, around lines 585-597, trusts Get-Process alone.\n- Every wrapper RPC spawns moe-proxy one-shot, so the proxy's probe also covers every later call.\n- /health returns {status, version, pid, uptime, projectPath, stats, checks}.\n  - projectPath is the raw --project argument, so it can be relative.\n- The daemon's probeDaemonHealth (packages/moe-daemon/src/index.ts) already requires a same-project /health. So `moe-daemon start` after a refusal starts a fresh daemon on the next free port.\n- daemon-json-cap.test.mjs extracts segments by exact anchors.\n  - The sh helper segment starts at daemon_json_field().\n  - probe_daemon_health sits above that segment.",
+    "risks": "- Shared tree:\n  - moe-agent.sh and moe-agent.ps1 appear in many WORKING plans, most of them parked behind dependencies. Edit only the pre-flight lines.\n  - task-724e31fa, which edits the same block, now waits for this row.\n- Test deadlock: spawnSync plus an in-process fake server makes every probe time out. Spawn asynchronously.\n- Port 9876 on this machine answers with the live moes daemon. Move the existing ps1 fixtures off it.\n- Git Bash:\n  - kill -0 cannot see Windows PIDs, so use $$;\n  - PROJECT is /d/..., so use cygpath -m.\n- PowerShell 5.1 vs 7:\n  - HttpWebRequest, and reading a 503 body from the WebException response;\n  - a BOM-less ps1 breaks 5.1.\n- CLAUDE.md is shared. Edit the two clauses only.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      "CLAUDE.md",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T07:59:43.710Z",
+  "approvedPlanRevision": 1
 }

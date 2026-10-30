@@ -1,0 +1,28 @@
+{
+  "id": "task-465ee87556134a378c5f657008c1446b",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "security: under the PROTECTED profile, repository content (.moe/project.json settings.agentCommand) chooses the binary the agent wrapper runs on the host",
+  "description": "architect-4ae016fb flagged this in RF05 rev 2 (task-b439d7fb) as an unowned R01 gap: the R01 memory names it \"agentCommand and WSL/native sessions under strong\", nominally R10's, and no open row covers it. The human approved filing it as HIGH on 2026-10-30.\n\nWhat the code does\n- moe-jetbrains TerminalAgentLauncher.kt:267-268 resolves the command as `agentCommand ?: <project state>.settings.agentCommand ?: \"claude\"`. The project state comes from .moe/project.json, which is repository content. The value goes to the wrapper as --command / -Command (buildBashCommand, buildWslBashCommand, buildPowerShellCommand), with no check of RuntimeSelectionPolicy.profile, so it applies under RuntimeProfile.PROTECTED too.\n- scripts/moe-agent.sh (~360-440) parses --command into a binary and argv, then runs it. The basename only classifies codex, gemini or grok; anything else is treated as claude. There is no allowlist. Check the ps1 twin.\n\nWhy it is in scope\nRF05's threat model puts repository content in scope, including ignored .moe files a pull can overwrite, and rules that a file under the project may add a refusal but never an admission. Choosing which binary runs on the host is an admission.\n\nRequired\nUnder PROTECTED, the agent binary a seat runs must not be selectable by repository content. The architect picks the mechanism, for example IDE-level user settings, or a fixed set of known agent CLIs resolved from trusted locations. Cover both wrappers. VS Code parity can be a follow-up row. Decide whether RF07 (task-f3f364a6) should dependsOn this row.",
+  "definitionOfDone": [
+    "Under RuntimeProfile.PROTECTED, the JetBrains launch path never hands a repository-supplied agent command to the wrapper. A ./gradlew test case covers a project.json that names a non-standard command.",
+    "Under PROTECTED, moe-agent.sh and moe-agent.ps1 refuse to run an agent binary chosen by repository content, with a message naming the rejected command. Launcher tests cover it, and scripts/tests/parity-check.sh passes.",
+    "Legacy (non-protected) behavior is unchanged, or the change is documented in docs/CONFIGURATION.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 290.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:59:43.397Z",
+  "updatedAt": "2026-10-30T07:59:43.397Z"
+}

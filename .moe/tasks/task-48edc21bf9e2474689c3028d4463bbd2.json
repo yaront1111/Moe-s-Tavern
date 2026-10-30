@@ -101,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:45:17.943Z",
-  "updatedAt": "2026-10-30T07:57:23.818Z",
+  "updatedAt": "2026-10-30T07:57:55.818Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:49:15.275Z",
     "plannedStepCount": 5,
@@ -167,7 +167,51 @@
     "packages/moe-daemon/src/tools/chatWait.test.ts",
     "packages/moe-daemon/src/util/chatPayload.ts",
     "docs/MCP_SERVER.md",
-    "packages/moe-daemon/src/util/chatPayload.test.ts"
+    "packages/moe-daemon/src/util/chatPayload.test.ts",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+    ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json"
   ],
-  "completionSummary": "Routine presence lines now page nobody. util/chatPayload.ts: isSystemFeedMessage = system && no mentions && (#general || isRoutinePresenceLine(content)); new exported, total isRoutinePresenceLine matches two anchored shapes: '<id> left (<reason>)' and '🔌 <id> deregistered (<reason>); (no tasks held)' (the released-nothing, dropped-nothing banner). That one predicate drives sendMessage (routingTargets []), chat_wait isRelevant and every agent read, so a mention-less presence line adds no unread, wakes no waiter and no longer pulls its channel into the chatBacklog unread union; legacy stored lines are hidden too. Producers untouched; actionable banners (🚧, ⚠️ stale, ❌ QA reject, file collision, 📦, a deregistration that released tasks or dropped claims) route exactly as before. Tests: chatSystemFeed.test.ts +113 (real deregisterWorkerTool path: 4 presence events with routingTargets [], no unread, parked chat_wait not woken then returns the human post; release banner still routes + unread 1 per channel; 6 table-driven actionable banners; 4 near misses incl. agent sender, '(bye) again', banner with trailing text, '@mention' inside the reason); chatWait.test.ts +19 (DoD 3: busy waiter with channels:[#governors] returns exactly the #governors line + the real @mention, no presence lines); chatPayload.test.ts +33 (matcher unit tests, totality, 10k-char input). RED first: 3 failed | 42 passed. docs/MCP_SERVER.md: 4 hunks (chat_read includeSystem + feed bullet, chat_wait, chat_resync); no foreign hunks. Scope growth: chatPayload.test.ts, a fifth file, for the new exported function's unit tests. Gate in a Linux-native snapshot (all 5 files cmp-equal): tsc --noEmit && npm test exit 0, 204 files, 5755 passed | 16 skipped. Mutants, all killed by real failures: M1 left regex dead (3 failed), M2 banner unanchored (2), M3 sender check dropped (16), M4 mention check dropped (3), M5 #general only (3). Note M2: a released banner never contains '(no tasks held)', so `$` guards the dro"
+  "completionSummary": "Routine presence lines now page nobody. util/chatPayload.ts: isSystemFeedMessage = system && no mentions && (#general || isRoutinePresenceLine(content)); new exported, total isRoutinePresenceLine matches two anchored shapes: '<id> left (<reason>)' and '🔌 <id> deregistered (<reason>); (no tasks held)' (the released-nothing, dropped-nothing banner). That one predicate drives sendMessage (routingTargets []), chat_wait isRelevant and every agent read, so a mention-less presence line adds no unread, wakes no waiter and no longer pulls its channel into the chatBacklog unread union; legacy stored lines are hidden too. Producers untouched; actionable banners (🚧, ⚠️ stale, ❌ QA reject, file collision, 📦, a deregistration that released tasks or dropped claims) route exactly as before. Tests: chatSystemFeed.test.ts +113 (real deregisterWorkerTool path: 4 presence events with routingTargets [], no unread, parked chat_wait not woken then returns the human post; release banner still routes + unread 1 per channel; 6 table-driven actionable banners; 4 near misses incl. agent sender, '(bye) again', banner with trailing text, '@mention' inside the reason); chatWait.test.ts +19 (DoD 3: busy waiter with channels:[#governors] returns exactly the #governors line + the real @mention, no presence lines); chatPayload.test.ts +33 (matcher unit tests, totality, 10k-char input). RED first: 3 failed | 42 passed. docs/MCP_SERVER.md: 4 hunks (chat_read includeSystem + feed bullet, chat_wait, chat_resync); no foreign hunks. Scope growth: chatPayload.test.ts, a fifth file, for the new exported function's unit tests. Gate in a Linux-native snapshot (all 5 files cmp-equal): tsc --noEmit && npm test exit 0, 204 files, 5755 passed | 16 skipped. Mutants, all killed by real failures: M1 left regex dead (3 failed), M2 banner unanchored (2), M3 sender check dropped (16), M4 mention check dropped (3), M5 #general only (3). Note M2: a released banner never contains '(no tasks held)', so `$` guards the dro",
+  "commits": [
+    {
+      "sha": "477d7f523a8a72222f417ffd1c244c16d75042f8",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T07:50:40Z",
+      "paths": [
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json",
+        ".moe/tasks/task-90664db1e08a45f7b63c1e0f44eeee09.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatSystemFeed.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "packages/moe-daemon/src/util/chatPayload.test.ts",
+        "packages/moe-daemon/src/util/chatPayload.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T07:57:55.818Z",
+      "treeId": "b577c84746990a51089266d6d526ea2f4035043e",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/util/chatPayload.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T07:50:40Z",
+    "at": "2026-10-30T07:57:55.818Z"
+  }
 }

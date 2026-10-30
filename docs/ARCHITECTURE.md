@@ -291,6 +291,20 @@ and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
 
 ---
 
+## Security Notes
+
+- The protected profile's threat model is in [design/protected-profile-threat-model.md](design/protected-profile-threat-model.md).
+  Inside it: repository content (including ignored `.moe/` runtime files that a pull can overwrite), guest
+  code, browser pages and network peers. Outside it: same-user host processes, host-launched agent seats and
+  other local users. A single-user host is assumed.
+- On the live daemon, a file under the project, `.moe/daemon.json` included, may add a refusal but never an
+  admission. Trust in the live daemon comes from the daemon itself, or from owner-only state outside the
+  repository.
+- Accepted gaps: the daemon.json port↔pid binding, and the CQ-R08 per-request re-check window. The record
+  lists the open follow-ups.
+
+---
+
 ## Error Handling (Current)
 
 - Missing `.moe` → plugin initializes or daemon throws on start.
