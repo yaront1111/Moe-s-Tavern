@@ -689,6 +689,14 @@ class MoeDaemonSupervisorTest {
     }
 
     @Test
+    fun `RP-S2 stop selection refuses a failed profile read`() {
+        val root = temporaryFolder.newFolder()
+        val service = MoeDaemonSupervisor(root.path, "Test Project", profile = { error("profile unavailable") },
+            installedRoot = { throw AssertionError("must not select") }, nodeExecutable = { throw AssertionError("must not select") })
+        assertNull(service.stopCommandOrNull(root.path))
+    }
+
+    @Test
     fun `W1 Windows restart runs the installed stop before any signal`() {
         for (profile in RuntimeProfile.values()) WinRestart(profile).use { f ->
             f.verified()
@@ -1143,10 +1151,96 @@ class MoeDaemonSupervisorTest {
         assertNull(f.restart(null))
     }
 
+    @Test
+    fun `W31 legacy restart keeps a volume alias node`() = legacyAliasRestart(aliasNode = true)
+
+    @Test
+    fun `W32 legacy restart keeps a volume alias installed root`() = legacyAliasRestart(aliasNode = false)
+
+    private fun legacyAliasRestart(aliasNode: Boolean) = WinRestart().use { f ->
+        Assume.assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        if (aliasNode) f.nodePath = volumeSpelling(f.node) else f.installed = File(volumeSpelling(f.installed))
+        val parent = f.proc(P, startSec = -1)
+        val run = f.proc(f.self, parent, 1)
+        f.stop = { run.alive = false; parent.alive = false; 0 }
+        assertNull(f.restart(f.self))
+        assertEquals(listOf("stop"), f.signals())
+        val node = File(requireNotNull(f.nodePath)).toPath().toRealPath().toFile()
+        val daemon = File(f.installed, "daemon/index.js").toPath().toRealPath().toString()
+        assertEquals(listOf(node.path, daemon, "stop", "--project", f.root.path), f.stops.single())
+        val path = f.stopEnvironments.single().entries.single { it.key.equals("PATH", ignoreCase = true) }.value
+        assertTrue("stop retains the selected node directory", node.parent in path.split(File.pathSeparator))
+        assertEquals(0, parent.kills)
+        assertEquals(0, f.starts)
+        assertTrue(f.statuses.isEmpty())
+    }
+
+    @Test
+    fun `W33 protected stop still refuses volume aliases`() {
+        Assume.assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        for (aliasNode in listOf(true, false)) WinRestart(RuntimeProfile.PROTECTED).use { f ->
+            if (aliasNode) f.nodePath = volumeSpelling(f.node) else f.installed = File(volumeSpelling(f.installed))
+            assertNull(f.service.stopCommandOrNull(f.root.path))
+            assertFalse(f.service.ensureDaemonRunning())
+            val label = if (aliasNode) "node executable" else "installed daemon/index.js"
+            assertEquals("Protected execution profile: $label is not a plain local Windows path. " +
+                "Project and PATH copies of the Moe daemon are not used.", f.service.selectionRefusal())
+            assertTrue(f.stops.isEmpty())
+            assertEquals(0, f.starts)
+        }
+    }
+
+    @Test
+    fun `W34 legacy stop retains existing file and project checks`() {
+        for (bad in listOf("missing-node", "directory", "relative", "project-node", "project-root", "missing-root")) WinRestart().use { f ->
+            when (bad) {
+                "missing-node" -> f.nodePath = File(f.installed, "missing").path
+                "directory" -> f.nodePath = f.installed.path
+                "relative" -> f.nodePath = "node"
+                "project-node" -> f.nodePath = File(f.root, "node").apply { writeText("node") }.path
+                "project-root" -> f.installed = f.root.also { File(it, "daemon/index.js").apply { parentFile.mkdirs(); writeText("daemon") } }
+                "missing-root" -> f.installed = File(f.installed, "missing")
+            }
+            assertNull(bad, f.service.stopCommandOrNull(f.root.path))
+            assertTrue(f.stops.isEmpty())
+            assertEquals(0, f.starts)
+        }
+    }
+
+    @Test
+    fun `W35 legacy stop PATH discovery preserves only the pre-existing safe entries`() = WinRestart().use { f ->
+        Assume.assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        File(f.installed, "node.exe").writeText("node")
+        val alias = volumeSpelling(f.installed)
+        val path = listOf(f.root.path, "relative", "", "${f.installed.path}'", "\"$alias\"", f.installed.path)
+            .joinToString(File.pathSeparator)
+        for (profile in RuntimeProfile.values()) {
+            val env = mutableMapOf("Path" to path, "NODE_OPTIONS" to "--require project.js", "NODE_PATH" to f.root.path, "KEEP" to "value")
+            f.service.protectedDaemonEnvironment(env, f.root.path, profile)
+            val kept = if (profile == RuntimeProfile.LEGACY) listOf(alias, f.installed.path) else listOf(f.installed.path)
+            assertEquals(profile.name, mapOf("Path" to kept.joinToString(File.pathSeparator), "KEEP" to "value"), env)
+            assertEquals(profile.name, File(kept.first(), "node.exe").absolutePath,
+                f.service.nodeOnProtectedPath(path, f.root.path, runtimeProfile = profile))
+        }
+    }
+
+    /** Local, drive-less alias: exercises selection without contacting a share or launching node. */
+    private fun volumeSpelling(file: File): String {
+        val real = file.toPath().toRealPath().toString()
+        val volume = try {
+            val mountvol = File(System.getenv("SystemRoot"), "System32\\mountvol.exe")
+            val process = ProcessBuilder(mountvol.path, real.take(2), "/L").redirectErrorStream(true).start()
+            val output = process.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8).trim()
+            if (process.waitFor() == 0) Regex("""\\\\\?\\(Volume\{[0-9A-Fa-f-]{36}\})\\""").matchEntire(output)?.groupValues?.get(1) else null
+        } catch (_: Exception) { null }
+        Assume.assumeTrue("mountvol returns a local volume GUID", volume != null)
+        return "\\\\.\\$volume\\${real.substring(3)}"
+    }
+
     /** Restart Daemon over [TreeHandle] fakes: every installed stop, signal and tree read lands in [events]. */
     private inner class WinRestart(val profile: RuntimeProfile = RuntimeProfile.LEGACY, windows: Boolean = true) : AutoCloseable {
         val root = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }
-        private val installed = temporaryFolder.newFolder()
+        var installed = temporaryFolder.newFolder()
         val daemon = File(installed, "daemon/index.js").apply { parentFile.mkdirs(); writeText("installed") }
         val node = File(installed, "node").apply { writeText("node") }
         private val store = ProtectedStateStore(temporaryFolder.newFolder().toPath().resolve("moe/state"))
@@ -1155,6 +1249,7 @@ class MoeDaemonSupervisorTest {
         val events = mutableListOf<String>()
         val handles = mutableMapOf<Long, TreeHandle>()
         val stops = mutableListOf<List<String>>()
+        val stopEnvironments = mutableListOf<Map<String, String>>()
         val statuses = mutableListOf<String>()
         var starts = 0
         var nodePath: String? = node.path
@@ -1170,7 +1265,9 @@ class MoeDaemonSupervisorTest {
             MoeDaemonSupervisor(root.path, "Test Project", onStatus = { _, text -> statuses += text }, portProbe = { _, _ -> false },
                 processAliveProbe = { handles[it.toLong()]?.alive == true }, processStarter = { starts++; error("must not start") },
                 profile = { profile }, installedRoot = { installed }, nodeExecutable = { nodePath },
-                processLookup = { lookup(it) }, runStop = { stops += it.command().toList(); events += "stop"; stop() },
+                processLookup = { lookup(it) }, runStop = {
+                    stops += it.command().toList(); stopEnvironments += it.environment().toMap(); events += "stop"; stop()
+                },
                 onDispatchThread = { false }, sleep = { polls++; onSleep() }, exitTimeoutMs = 1_000, windowsRestart = { windows })
         }
         fun proc(pid: Long, parent: TreeHandle? = null, startSec: Long = 0, survives: Boolean = false): TreeHandle =

@@ -238,13 +238,24 @@ object RuntimeSelectionPolicy {
      * [relative] under [root], accepted as its real file only inside the real root (exact
      * comparison) and outside the real project (folded where the file system folds case).
      */
-    fun installedArtifact(root: File?, relative: String, basePath: String, foldCase: Boolean = defaultFoldCase): RuntimeSelection {
+    fun installedArtifact(root: File?, relative: String, basePath: String, foldCase: Boolean = defaultFoldCase): RuntimeSelection =
+        installedArtifact(root, relative, basePath, RuntimeProfile.PROTECTED, foldCase)
+
+    // LEGACY Windows restart shares the installed-file checks, but not protected-only path restrictions.
+    internal fun installedArtifact(
+        root: File?, relative: String, basePath: String, profile: RuntimeProfile, foldCase: Boolean = defaultFoldCase
+    ): RuntimeSelection {
         val realRoot = root?.let { realPathOrNull(it.path) } ?: return RuntimeSelection.Rejected("installed Moe runtime not found")
-        return select("installed $relative", basePath, foldCase, realRoot) { File(root, relative).toPath().toRealPath() }
+        return select("installed $relative", basePath, foldCase, realRoot, profile) { File(root, relative).toPath().toRealPath() }
     }
 
     /** An absolute, real, regular file outside the project; a bare name is never looked up on PATH. */
-    fun installedExecutable(path: String?, basePath: String, foldCase: Boolean = defaultFoldCase): RuntimeSelection {
+    fun installedExecutable(path: String?, basePath: String, foldCase: Boolean = defaultFoldCase): RuntimeSelection =
+        installedExecutable(path, basePath, RuntimeProfile.PROTECTED, foldCase)
+
+    internal fun installedExecutable(
+        path: String?, basePath: String, profile: RuntimeProfile, foldCase: Boolean = defaultFoldCase
+    ): RuntimeSelection {
         if (path.isNullOrBlank()) return RuntimeSelection.Rejected("node executable not found")
         val candidate = try {
             Paths.get(path)
@@ -252,7 +263,7 @@ object RuntimeSelectionPolicy {
             return rejected("node executable is not a valid path", ex)
         }
         if (!candidate.isAbsolute) return RuntimeSelection.Rejected("node executable is not an absolute path")
-        return select("node executable", basePath, foldCase, null) { candidate.toRealPath() }
+        return select("node executable", basePath, foldCase, null, profile) { candidate.toRealPath() }
     }
 
     /**
@@ -266,13 +277,22 @@ object RuntimeSelectionPolicy {
         basePath: String,
         foldCase: Boolean = defaultFoldCase,
         resolve: (String) -> Path? = ::realPathOrNull
+    ): Boolean = isOutsideProject(path, basePath, RuntimeProfile.PROTECTED, foldCase, resolve)
+
+    internal fun isOutsideProject(
+        path: String,
+        basePath: String,
+        profile: RuntimeProfile,
+        foldCase: Boolean = defaultFoldCase,
+        resolve: (String) -> Path? = ::realPathOrNull
     ): Boolean = try {
         val candidate = Paths.get(path)
         val projects = listOfNotNull(Paths.get(basePath).toAbsolutePath().normalize(), realPathOrNull(basePath))
             .map { comparablePath(it.toString(), foldCase) }
-        candidate.isAbsolute && isPlainLocalPath(candidate.normalize().toString()) &&
+        candidate.isAbsolute && (profile == RuntimeProfile.LEGACY || isPlainLocalPath(candidate.normalize().toString())) &&
             listOfNotNull(candidate.normalize(), resolve(path)).map { it.toString() }.all { form ->
-                isPlainLocalPath(form) && comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
+                (profile == RuntimeProfile.LEGACY || isPlainLocalPath(form)) &&
+                    comparablePath(form, foldCase).let { c -> projects.none { isWithin(c, it) } }
             }
     } catch (_: Exception) {
         false
@@ -281,7 +301,9 @@ object RuntimeSelectionPolicy {
     }
 
     // Every check errs toward rejection: the root comparison is exact, the project one folded.
-    private fun select(label: String, basePath: String, foldCase: Boolean, realRoot: Path?, resolve: () -> Path): RuntimeSelection {
+    private fun select(
+        label: String, basePath: String, foldCase: Boolean, realRoot: Path?, profile: RuntimeProfile, resolve: () -> Path
+    ): RuntimeSelection {
         val project = realPathOrNull(basePath) ?: return RuntimeSelection.Rejected("the project directory cannot be resolved")
         val real = try {
             resolve()
@@ -292,7 +314,8 @@ object RuntimeSelectionPolicy {
         }
         return when {
             // Before any further read, so a share is not contacted again.
-            !isPlainLocalPath(real.toString()) -> rejected("$label is not a plain local Windows path", real)
+            profile == RuntimeProfile.PROTECTED && !isPlainLocalPath(real.toString()) ->
+                rejected("$label is not a plain local Windows path", real)
             !Files.isRegularFile(real) -> rejected("$label is not a regular file", real)
             realRoot != null && !isWithin(comparablePath(real.toString(), false), comparablePath(realRoot.toString(), false)) ->
                 rejected("$label resolves outside the installed Moe runtime", real)

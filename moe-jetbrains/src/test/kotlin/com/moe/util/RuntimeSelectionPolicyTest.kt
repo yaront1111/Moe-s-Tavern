@@ -489,6 +489,23 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `N7 legacy PATH keeps alias forms but still enforces containment and lookup failures`() {
+        assumeTrue("Windows path forms", RuntimeSelectionPolicy.windowsHost)
+        val project = temporaryFolder.newFolder("project")
+        val outside = temporaryFolder.newFolder("outside")
+        val legacy = RuntimeProfile.LEGACY
+        val alias = share("localhost", outside)
+        // Inject paths, not SMB lookups: both the spelling and real-path branches must preserve legacy.
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(alias, project.path, legacy, resolve = { Paths.get(it) }))
+        assertTrue(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, legacy, resolve = { Paths.get(alias) }))
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(project.path, project.path, legacy, resolve = { outside.toPath() }))
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, legacy, resolve = { project.toPath() }))
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject("relative", project.path, legacy, resolve = { outside.toPath() }))
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, legacy, resolve = { throw IOException("denied") }))
+        assertFalse(RuntimeSelectionPolicy.isOutsideProject(outside.path, project.path, legacy, resolve = { throw java.io.IOError(IOException("denied")) }))
+    }
+
+    @Test
     fun `V1 a recorded supervisor verifies its daemon, which stays verified after the supervisor exits`() {
         val dir = temporaryFolder.newFolder("a").path
         val live = mutableMapOf(100L to ProcessFacts(100, T0, 1), 200L to ProcessFacts(200, T1, 100))

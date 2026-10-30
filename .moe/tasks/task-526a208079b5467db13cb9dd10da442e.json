@@ -22,11 +22,13 @@
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
       ],
       "modifiedFiles": [
-        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
       ],
-      "note": "RuntimeSelectionPolicy.kt only: added LOCAL_DRIVE regex, internal val windowsHost (same os.name idiom as defaultFoldCase), internal fun isPlainLocalPath(path, windows = windowsHost) = !windows || comparablePath(path,false) starts with a drive letter + '/'. isOutsideProject gains trailing resolve: (String) -> Path? = ::realPathOrNull; the spelling must be plain local (&& short-circuit) BEFORE resolve runs; then every form (normalized spelling, resolved real path) must be plain local and not within any project form. Both catches (Exception, IOError) kept. select gains first when-branch `!isPlainLocalPath(real) -> rejected(\"$label is not a plain local Windows path\", real)`, before isRegularFile. Existing positional callers (protectedPathEntries, ProtectedStateStore.usableFor, tests) compile unchanged; installedArtifact/installedExecutable signatures unchanged. Compile is checked by the Windows gradle run in step 3 (no Linux JDK). Peer dirty paths (board JSONs, .moe/decisions, scripts/*, scripts/mods tsconfigs, docs/TROUBLESHOOTING.md) untouched. Open note: the inverse case (a UNC project BASE, comments on this task from governor-693b7073 and architect-6fc3dd5c) is not in this plan; filing it as a bug row.",
-      "startedAt": "2026-10-30T16:27:31.226Z",
-      "completedAt": "2026-10-30T16:28:27.810Z"
+      "note": "QA reopen 1: verified the false 'LEGACY never calls these' premise by tracing stopCommandOrNull -> protectedDaemonCommand/protectedNode and stopBuilder -> protectedDaemonEnvironment. Scope expanded to supervisor production/tests as required by rejectionDetails; no unrelated changes. Existing selector signatures remain protected-default wrappers; explicit internal profile overloads bypass only the newly added plain-local restriction under LEGACY. Installed stop snapshots profile for node discovery, file checks and sanitized environment; protected replacement/default callers stay protected. Existing absolute/regular-file, root/project containment, quote/PATH and NODE injection filters retained. RED: native focused SupervisorTest exit 1, 77 tests, W31/W32 fail with surviving foreign parent; W33 protected refusals + W34 existing safety checks pass. GREEN: native focused SupervisorTest + RuntimeSelectionPolicyTest exit 0 (130 tests, zero skipped/failures/errors). W31/W32 exercise actual selection, real volume GUID files, fake process trees, and actual stop environment; no network or real node launched. An initial fixture regex caused skips, corrected before recording the valid RED. Prerequisite task-0ef30f9f is DONE/landed per supplied epicSiblings (green 469-test baseline). Shared pre-existing board/docs/scripts dirty paths preserved. No Git writes, no .moe edits.",
+      "startedAt": "2026-10-30T16:44:45.970Z",
+      "completedAt": "2026-10-30T16:51:06.830Z"
     },
     {
       "stepId": "step-2",
@@ -36,20 +38,23 @@
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
       ],
       "modifiedFiles": [
-        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt"
       ],
-      "note": "RuntimeSelectionPolicyTest.kt only; no existing row changed. Added import java.nio.file.Paths; rows N5 (isPlainLocalPath truth table, windows=true/false, any host), N6 (Windows: every UNC/device/loopback-share spelling false with resolve=untouched [throws AssertionError] and with the default lookup; plain spelling with a UNC real path false; controls true), S7 (Windows: protectedDaemonEnvironment whole-map assert keeps only outsideA, outsideB), S8 (Windows: volume-GUID node -> 'node executable is not a plain local Windows path'; volume-GUID root -> 'installed daemon/index.js is not a plain local Windows path'; supervisor spawns nothing, statuses + selectionRefusal show the protected message; loopback-share node rejected, named reason when the share file is readable; local node control Accepted). Helpers share(), nonLocalSpellings(), volumeSpelling() (mountvol <X:> /L via ProcessBuilder, strict VOLUME_LINE match, null on failure), companion DRIVE_PATH and VOLUME_LINE.\nRED (isPlainLocalPath temporarily `true`, focused class `--tests com.moe.util.RuntimeSelectionPolicyTest --rerun`): exit 1, 53 tests, 4 failed: N5 ('\\\\srv\\sh\\x'), N6 ('looked up \\\\srv\\sh\\x' - lookup happened), S7 (PATH kept \\\\srv, \\\\?\\UNC, \\\\.\\Volume, GLOBALROOT and \\\\localhost\\C$\\...\\work\\proj entries - the original bug), S8 ('volume node: Accepted(\\\\.\\Volume{d9fe...}\\...\\runtime\\node)').\nGREEN (restored): exit 0, 53 tests, failures=0 errors=0 skipped=0; N5, N6, S7, S8 pass (not skipped) on the Windows host; \\\\localhost\\C$ is reachable here so S8(iv) asserted the named reason. Note: this JDK did not throw for `\\\\?\\UNC\\srv\\sh\\x` (RED kept it in PATH); GREEN drops it via comparablePath -> //srv. jetbrains-gradle lease held for step 3.",
-      "startedAt": "2026-10-30T16:28:28.544Z",
-      "completedAt": "2026-10-30T16:32:49.803Z"
+      "note": "Reopen regression additions (existing rows unchanged): W31/W32 actual LEGACY restart selection through volume node/root with foreign-parent fake trees and captured real stop env; W33 protected aliases still refused, nothing starts; W34 existing file/project checks; W35 whole-map PATH sanitization and node discovery preserve only LEGACY alias allowance; N7 injected UNC spellings/real paths preserve legacy plus containment/relative/error refusal without SMB. RP-S2 first failed with profile supplier exception, then retained stopCommandOrNull's old signature and moved profile evaluation under its try, with explicit profile helper for stop/replacement. Existing N5/N6/S7/S8 kept unchanged. Fresh mandated mutation isPlainLocalPath=true: RuntimeSelectionPolicyTest exit 1, exactly N5/N6/S7/S8 fail (54 tests, no skips). Separate mutation removing only legacy PATH exemption: W31, W35 and N7 fail, proving env/discovery/lookup regressions detectable. Both mutations restored in finally with byte-equality guard. Final focused GREEN command cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --tests com.moe.util.RuntimeSelectionPolicyTest --rerun\" exits 0: 79+54=133 tests, zero failures/errors/skips. Supervisor edits are QA-required scope from step 1; unrelated dirty bytes untouched.",
+      "startedAt": "2026-10-30T16:51:06.851Z",
+      "completedAt": "2026-10-30T16:55:31.140Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification, run once.\n- Take the `jetbrains-gradle` lease with moe.acquire_resource, and release it afterwards.\n- WSL has no JDK. Run exactly: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"\n  This is the Windows equivalent of `cd moe-jetbrains && ./gradlew test`. Run it from a /mnt/d cwd.\n- It must exit 0, and :test must execute (not UP-TO-DATE).\n- Confirm in moe-jetbrains/build/test-results/test/TEST-*.xml:\n  - failures=0 and errors=0;\n  - the RuntimeSelectionPolicyTest XML is stamped by this run;\n  - N5, N6, S7 and S8 appear without <skipped/>.\n- These existing rows must pass unchanged: S4, N1-N4, D1, PS4 and all of MoeDaemonSupervisorTest.\n- Give complete_task the command, the exit code and the output tail, labeled as the Windows equivalent, plus the test count (469 before this task).",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "note": "Under the jetbrains-gradle lease (released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" (Windows equivalent of cd moe-jetbrains && ./gradlew test; WSL has no JDK) -> exit 0, BUILD SUCCESSFUL in 21s, :test executed. TEST-*.xml: 28 files, total=473 (469 before + N5/N6/S7/S8), failures=0 errors=0 skipped=0. RuntimeSelectionPolicyTest stamped 2026-10-30T16:34:01Z (this run), 53 tests; MoeDaemonSupervisorTest 73/0/0/0. N5, N6, S7, S8 present without <skipped/>; S4, N1-N4, D1, PS4 pass unchanged.",
-      "startedAt": "2026-10-30T16:32:49.822Z",
-      "completedAt": "2026-10-30T16:34:46.166Z"
+      "note": "Fresh full named verification from project root: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" -> exit 0, BUILD SUCCESSFUL in 21s, 11 actionable tasks: 2 executed, 9 up-to-date; :test executed. Windows equivalent of ./gradlew test (WSL has no JDK). 28 XML files, 480 tests, 0 failures/errors/skips (469 pre-task +4 original +7 reopen). RuntimeSelectionPolicyTest timestamp 2026-10-30T16:56:00.340Z: 54/0/0/0; SupervisorTest timestamp 16:55:50.528Z: 79/0/0/0; gate started 16:55:48Z. N5/N6/S7/S8, N7 and W31-W35/RP-S2 all explicitly present without skipped entries; existing cases unchanged. jetbrains-gradle lease acquired for all focused/full runs and now released. Supplemental unchanged QA restart.cmd exits 0 with local/volume/UNC each restart=null and signals=[stop], LEGACY_RESTART_REGRESSIONS=0. Read planner correction comment-429811a1: explicit profile routing implements its strict-default recommendation; inverse-case parity input belongs to separate follow-up, not this fix.",
+      "startedAt": "2026-10-30T16:55:31.159Z",
+      "completedAt": "2026-10-30T16:56:58.271Z"
     },
     {
       "stepId": "step-4",
@@ -58,11 +63,13 @@
       "affectedFiles": [],
       "modifiedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
-        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
       ],
-      "note": "Adversarial self-review of `git diff -- moe-jetbrains/` (exactly the 2 planned files, +140/-6):\n- No share contacted by isOutsideProject: `isPlainLocalPath(spelling) &&` short-circuits before resolve(path); N6's throwing `untouched` resolver proves it (RED showed the lookup when the guard was disabled).\n- Fail closed: catches unchanged (Exception, IOError); isPlainLocalPath/comparablePath are pure string ops and cannot throw; a resolve failure -> null/false.\n- POSIX: windowsHost false -> isPlainLocalPath always true, so `.all { true && projects.none{isWithin} }` == the old `.none { projects.any{isWithin} }`.\n- `C:\\` -> `C:/` matches LOCAL_DRIVE; `\\\\?\\C:\\` / `\\\\.\\C:\\` -> `C:/` via DEVICE_PREFIX, so unchanged.\n- LEGACY: every caller is protected-only (activationRefusal returns early on non-PROTECTED; protectedDaemonCommand/Environment; TerminalAgentLauncher protected runtime; ManagedVmPanel isProtected branch; ProtectedStateStore under protected profile reads). Signatures unchanged; new isOutsideProject param is trailing + defaulted.\n- Refusal reason \"<label> is not a plain local Windows path\" carries no path; rejected() logs the path only.\n- No new shared state (windowsHost is an immutable val).\nTheoretical, noted for QA: (a) per the plan, select does NOT pre-check the node SPELLING, so a UNC node configured explicitly in IDE settings is looked up once (toRealPath) before refusal; nodes from PATH are now filtered by isOutsideProject first, so no share lookup there. (b) The installed root/project base still go through realPathOrNull in installedArtifact/select. (c) A protected state root on a network share (redirected %LOCALAPPDATA%) now reads unusable -> session-only (fail closed; RF07 docs should state this alongside the network PATH/node cost). (d) The test JVM here parsed `\\\\?\\UNC\\srv\\sh\\x` (planning probe said JDK 17 throws); GREEN drops it either way via comparablePath.\nOut of scope, filed: inverse UNC project BASE -> task-52fb6178b3684db89d6e8a5a351c63ea (BACKLOG, dependsOn this row). Subst/mapped drive letters stay task-1c2bfeca. Peer dirty paths (board JSONs, .moe/decisions, scripts/*, scripts/tests/*, docs/TROUBLESHOOTING.md, scripts/mods tsconfigs) untouched.",
-      "startedAt": "2026-10-30T16:34:47.164Z",
-      "completedAt": "2026-10-30T16:35:57.935Z"
+      "note": "Adversarial self-review completed on the four task-owned diffs (QA-required expansion, planner correction comment-429811a1 supersedes old two-file/LEGACY assumption). No new shared state; stop selection/environment use one profile snapshot, protected replacement explicit strict. Default selector APIs preserved; VM, launcher, state and protected startup callers stay strict. Null/blank/relative/non-file/project/root escapes retain old checks; protected candidate spellings still short-circuit before lookup; Exception+IOError catches remain. N5/N6 demonstrate POSIX/local-drive compatibility and no candidate lookup; named refusals contain no paths. No process-ownership/signaling or profile-pin behavior changes. Existing TOCTOU/UNC-base/subst limits intentionally not widened; already tracked separate tasks. New functions <50 lines, files were already over 300; reopen diff +181/-29, net152. Tightened RP-S2 sentinels to unswallowable AssertionError, closed mountvol stdout with use, restored misplaced fixture KDoc. Re-ran the named full gate on these final bytes under renewed/released Gradle lease: exit0, BUILD SUCCESSFUL 23s, 480 tests/0 failures/0 errors/0 skips, 28 XML; policy timestamp 16:59:00.679Z, supervisor 16:58:50.340Z. git diff --check clean. No unrelated dirty paths touched, no Git writes/.moe edits. Handoff memory written and selector/legacy-restart gotcha updated.",
+      "startedAt": "2026-10-30T16:56:58.293Z",
+      "completedAt": "2026-10-30T17:01:29.771Z"
     }
   ],
   "planRevision": 1,
@@ -70,8 +77,8 @@
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": "Governor promote under the human's 2026-10-30 13:00Z delegation. architect-6fc3dd5c filed this at about 16:00Z while re-planning RF06b: Java toRealPath keeps \\\\localhost\\C$\\<project> as UNC, so JetBrains' protected PATH filter and node selection treat the local project as outside it. It is the JetBrains parity twin of RF06b rev 2's UNC refusal, a security fix for the primary IDE. Its only dependency, 0ef30f9f, is DONE. It has no human-gating rails. RF07 f3f364a6 now dependsOn it.",
+  "reopenCount": 1,
+  "reopenReason": "Reject acdcd627 for a new LEGACY Windows Restart Daemon regression (DoD 3 and preserve-legacy rails), not the separately scoped UNC project-base gap. The unconditional select guard is also used by stopCommandOrNull under LEGACY. A valid node via UNC/device spelling now yields no installed stop command, so a foreign supervisor is never stopped and restart refuses. Native probe cmd.exe /d /c D:\\qa-526a-hvl8gybj\\restart.cmd exits 1: local control restart=null, signals=[stop]; volume and loopback-UNC cases return survivor refusal, signals=[kill:<run>], LEGACY_RESTART_REGRESSIONS=2. It uses the existing WinRestart fake tree, actual production stop selection and real existing files; no real process is killed. A second selector probe run.cmd confirms local command versus null for the same node via both aliases. Sources matched acdcd627 throughout; no shared source edits. Recorded Gradle command reran exit 0, 473 tests, 0 failures/errors/skips; new N5/N6/S7/S8 executed, but legacy alias stop-selection coverage is missing. Completion SHA/tree and branch containment verified; code diff +140/-6, net 134. Complexity pass: lean already.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -91,11 +98,41 @@
       "author": "architect-6fc3dd5c",
       "content": "@architect-4ae016fb Parity input while you plan this row: the inverse UNC case from RF06b QA (comment-09feee65 on task-032c9739).\n- The project BASE is UNC: \\\\localhost\\C$\\…\\project, \\\\127.0.0.1\\C$\\…, or a mapped drive whose real path is UNC.\n- RuntimeSelectionPolicy.select computes project = toRealPath(basePath), which keeps UNC per this row's JDK 17 probe. isOutsideProject builds its project forms the same way (normalize + toRealPath).\n- So a local C:\\…\\project PATH entry, or a node physically inside the project, reads as outside. This is by code reading; I ran no JetBrains probe. VS Code reproduces it (QA, UNC_PROJECT_LEAKS=2).\n- DoD 0 here covers UNC entries and candidates, not a UNC base. Consider refusing when either base form is UNC.\n- Caveat: JetBrains opens \\\\wsl$ and \\\\wsl.localhost projects, and those fail closed under protected with such a rule. Don't carve them out blindly: \\\\wsl$\\<distro>\\mnt\\<drive>\\… aliases a local drive folder too.\n- If RF06b gets reopened for this, its fix applies isWindowsAlias to every base form.",
       "timestamp": "2026-10-30T16:21:07.312Z"
+    },
+    {
+      "id": "comment-0fd775aa9d6b476c918ac3b22a45faa9",
+      "author": "architect-4ae016fb",
+      "content": "Planner scope note on comment-a441d201 and comment-88f86890. The UNC project-base (inverse) case is real by code reading at acdcd627, but it is outside this row's scope. DoD 0/1 cover UNC entries and node candidates against a local project base. The base forms (isOutsideProject :271, select :285) never get a plain-local check, and those lines are unchanged since before acdcd627, so the gap is older than this diff and not a regression of it. Judge this row against DoD 0–3 as written. The UNC base goes to a follow-up JetBrains row that depends on this one. The governor has been asked to file it, and the proposed DoD is in chan-b6d8273b.",
+      "timestamp": "2026-10-30T16:40:33.411Z"
+    },
+    {
+      "id": "comment-cdfa777779a34626a1141c3d256a753a",
+      "author": "worker-262588d0",
+      "content": "Reopen investigation confirms QA: stopCommandOrNull calls protectedDaemonCommand and protectedNode for LEGACY Windows restarts; stopBuilder also applies protectedDaemonEnvironment. The plan's claim that LEGACY never calls these is false. I will preserve the pre-change installed-file/project checks and NODE_OPTIONS/NODE_PATH/quote filtering for legacy stops, exempting only the new plain-local restriction there. QA-required scope expands to MoeDaemonSupervisor.kt and MoeDaemonSupervisorTest.kt for explicit profile routing and real-selection WinRestart node/root alias regressions. Existing protected entry points remain protected by default; inverse UNC project-base/subst gaps stay out of scope. Peer dirty files are untouched.",
+      "timestamp": "2026-10-30T16:46:00.719Z"
+    },
+    {
+      "id": "comment-829a827dfa1f4debbe76bd7931876da9",
+      "author": "architect-bd1eb82d",
+      "content": "@architect-4ae016fb Parity input: RF06b rev 3 (task-032c9739, planRevision 3, now WORKING) settled the VS Code rule for the inverse UNC case. Copy it if you keep the IDEs in parity.\nRule, Windows host only. A path form compares only when it is a plain local drive path: drive-qualified (X:\\, optionally behind a \\\\?\\ prefix) with no segment ending in '.' or ' '. Every other form is an alias: UNC, \\\\?\\Volume{GUID}\\, \\\\?\\GLOBALROOT\\, \\\\.\\pipe\\, rooted (\\x) and drive-relative (C:x). It is an allow-list, so no more enumerating spellings.\nIt applies on both sides:\n- Candidate: its normalized form and its real path. An alias means \"not outside\".\n- Project base: its raw spelling, its normalized form and its real path. An alias means nothing is outside it, so PATH keeps nothing and every installed file (daemon, wrapper, proxy, node) is refused with \"the project directory is not a plain local Windows path\".\n- The raw spelling is checked before any filesystem call, so a reachable share, an unreachable share and a rooted spelling all get the same refusal.\nNative probe (node v24.16.0) findings that matter for Java too:\n- realpath of \\\\localhost\\C$\\… and \\\\127.0.0.1\\C$\\… stays UNC.\n- An unreachable host or a missing share fails with code UNKNOWN, not ENOENT.\n- A junction to a literal 'project.' folder has the real path '<project>.'.\n- subst drives realpath to the local path, so they stay accepted.\n- A rooted base resolves against the host cwd drive, while the daemon resolves it against its own cwd drive.\nAccepted cost: a UNC, mapped-drive, \\\\wsl$ or \\\\wsl.localhost workspace starts nothing under protected (architect-6fc3dd5c's \\\\wsl$ caveat applies). Probe sources are in D:\\moe-rf06b-r3-architect-probe; the Serena note decision-protected-windows-alias-refusal has the rule.",
+      "timestamp": "2026-10-30T16:46:26.113Z"
+    },
+    {
+      "id": "comment-429811a18ee84a50b19079d5bf9c7374",
+      "author": "architect-4ae016fb",
+      "content": "Planner correction to plan step 4. It says \"LEGACY never calls these functions\", and that is wrong. On Windows, Restart Daemon under LEGACY reaches the new plain-local rule: stopWindowsRestart → stopOldTree → installedStop → stopCommandOrNull (see its KDoc, MoeDaemonSupervisor.kt:546) → protectedDaemonCommand → select. QA proved it with a native probe at acdcd627: LEGACY stopCommandOrNull returns null for a volume-GUID node and a \\\\localhost\\C$ node, where it returned a command before. LEGACY then skips the graceful stop and force-terminates the tree. That breaches DoD 3 and the epic's preserve-legacy rail, and DoD 3 is not amended.\n\nFix on reopen: apply the plain-local rule only under PROTECTED, through one flag that defaults to strict. Pass it into installedArtifact/installedExecutable/select, isOutsideProject, nodeOnProtectedPath and stopBuilder's PATH filter. Add a Windows-only MoeDaemonSupervisorTest row: under LEGACY the same node gets a stop command, and under PROTECTED it is still refused. Full reasoning is in chan-b6d8273b, msg-25551296.",
+      "timestamp": "2026-10-30T16:46:34.807Z"
+    },
+    {
+      "id": "comment-d9306c58a837400aaab44f845346d336",
+      "author": "worker-262588d0",
+      "content": "Reopen evidence: W31/W32 reproduced the survivor failure before changes, then passed with actual stop selection and captured environment. W33 keeps protected volume-node/root refusals; W34 keeps existing file/project checks; W35/N7 cover legacy-only PATH/realpath allowance and sanitization. Removing the legacy PATH exemption makes W31/W35/N7 fail; forcing isPlainLocalPath=true still fails original N5/N6/S7/S8. All focused 133 tests pass with zero skips. QA's unchanged native probe `cmd.exe /d /c D:\\qa-526a-hvl8gybj\\restart.cmd` now exits 0: local, volume and UNC each restart=null/signals=[stop], LEGACY_RESTART_REGRESSIONS=0. Full recorded Gradle suite is running under the lease. Inverse UNC base and subst remain excluded.",
+      "timestamp": "2026-10-30T16:56:00.913Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T15:54:56.266Z",
-  "updatedAt": "2026-10-30T16:36:27.577Z",
+  "updatedAt": "2026-10-30T17:02:08.675Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T16:01:33.405Z",
@@ -105,14 +142,16 @@
     "firstClaimAt": "2026-10-30T16:01:38.157Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 8,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-4ae016fb",
-    "worker-0062feec"
+    "worker-262588d0",
+    "qa-ba3f4f35"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
@@ -121,7 +160,13 @@
     "step-3",
     "step-4"
   ],
-  "failedDodItems": [],
+  "failedDodItems": [
+    {
+      "item": "Local drive-qualified and \\\\?\\C:\\ device spellings, POSIX hosts and the legacy profile behave as before: the existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest cases pass unchanged.",
+      "rejectedAt": "2026-10-30T16:43:16.743Z",
+      "rejectedBy": "qa-ba3f4f35"
+    }
+  ],
   "planSubmittedAt": "2026-10-30T16:26:39.868Z",
   "executionContract": {
     "intendedBehavior": "Under the protected profile on a Windows host, RuntimeSelectionPolicy treats any path form that is not drive-qualified as not provably outside the project. That covers:\n- UNC forms: `\\\\srv\\sh`, `//srv/sh`, `\\\\?\\UNC\\…` and `\\\\.\\UNC\\…`;\n- device forms: `\\\\.\\Volume{…}\\…` and `\\\\.\\GLOBALROOT\\…`;\nin the spelling or in the real path.\nisOutsideProject answers false for such a path and never looks the spelling up, so the protected daemon PATH drops it.\nselect refuses a node, daemon, wrapper or proxy whose real path has such a form, with \"<label> is not a plain local Windows path\", and nothing is spawned.\nPOSIX hosts, drive-qualified spellings and the legacy profile are unchanged.",
@@ -186,17 +231,101 @@
   "planApprovedAt": "2026-10-30T16:26:39.890Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T16:27:31.226Z",
-  "reviewStartedAt": "2026-10-30T16:36:27.575Z",
+  "reviewStartedAt": "2026-10-30T17:02:08.673Z",
   "verification": {
     "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
     "exitCode": 0,
-    "outputTail": "[Windows equivalent of `cd moe-jetbrains && ./gradlew test`; WSL has no JDK]\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 21s\n11 actionable tasks: 2 executed, 9 up-to-date\n\nTEST-*.xml: 28 files, total=473 (469 before + N5/N6/S7/S8), failures=0 errors=0 skipped=0. RuntimeSelectionPolicyTest stamped 2026-10-30T16:34:01Z (this run): 53 tests, 0/0/0; MoeDaemonSupervisorTest 73/0/0/0. N5, N6, S7, S8 ran (no <skipped/>).",
-    "reportedAt": "2026-10-30T16:36:27.575Z",
+    "outputTail": "[Windows equivalent of cd moe-jetbrains && ./gradlew test; WSL has no JDK]\n> Task :compileTestKotlin\r\n> Task :compileTestJava NO-SOURCE\r\n> Task :testClasses UP-TO-DATE\r\n> Task :instrumentTestCode SKIPPED\r\n> Task :test\r\n\r\nBUILD SUCCESSFUL in 23s\r\n11 actionable tasks: 3 executed, 8 up-to-date\r\nConsider enabling configuration cache to speed up this build: https://docs.gradle.org/9.8.2/userguide/configuration_cache_enabling.html\r\n\nTEST-com.moe.services.MoeDaemonSupervisorTest.xml {'tests': '79', 'failures': '0', 'errors': '0', 'skipped': '0', 'timestamp': '2026-10-30T16:58:50.340Z'}\nPASS: W33 protected stop still refuses volume aliases\nPASS: W34 legacy stop retains existing file and project checks\nPASS: W31 legacy restart keeps a volume alias node\nPASS: W35 legacy stop PATH discovery preserves only the pre-existing safe entries\nPASS: RP-S2 stop selection refuses a failed profile read\nPASS: W32 legacy restart keeps a volume alias installed root\nTEST-com.moe.util.RuntimeSelectionPolicyTest.xml {'tests': '54', 'failures': '0', 'errors': '0', 'skipped': '0', 'timestamp': '2026-10-30T16:59:00.679Z'}\nPASS: N6 on Windows a UNC or device path is never provably outside the project and never looked up\nPASS: S8 on Windows a node whose real path is not plain local spawns nothing\nPASS: N7 legacy PATH keeps alias forms but still enforces containment and lookup failures\nPASS: N5 on Windows only drive-qualified forms are plainly local\nPASS: S7 on Windows the protected daemon PATH keeps only plain local entries outside the project\nXML_FILES 28 TOTAL {'tests': 480, 'failures': 0, 'errors': 0, 'skipped': 0}\n",
+    "reportedAt": "2026-10-30T17:02:08.673Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
     "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
   ],
-  "completionSummary": "JetBrains protected selection now refuses Windows path forms that are not drive-qualified. RuntimeSelectionPolicy.kt changes:\n- New internal windowsHost and isPlainLocalPath(path, windows = windowsHost). On POSIX it is always true. On Windows only `X:/` after comparablePath counts, so `\\\\?\\C:\\` and `\\\\.\\C:\\` stay plain.\n- isOutsideProject gains a trailing `resolve = ::realPathOrNull`. The spelling must be plain local before any lookup, so no share is contacted. Then the spelling and the real path must both be plain local and outside the project. Catches are unchanged (fail closed).\n- select's first branch refuses with \"<label> is not a plain local Windows path\". This covers node, daemon, wrapper and proxy.\n- Existing callers and signatures are unchanged, and LEGACY never calls these functions.\n\nRuntimeSelectionPolicyTest adds four rows and changes none:\n- N5: an isPlainLocalPath truth table that runs on any host.\n- N6, Windows: UNC, device and loopback-share spellings answer false. A resolver that throws AssertionError proves no lookup happens. A UNC real path also answers false, with local controls.\n- S7, Windows: a whole-map PATH assert keeps only the two local outside entries.\n- S8, Windows: a volume-GUID node and installed root are refused with the named reasons and nothing is spawned. A node through the loopback share is refused with the named reason (the share is reachable on this host). A local node control is accepted.\n\nRED was run with the predicate forced true: N5, N6, S7 and S8 failed. S7 kept `\\\\localhost\\C$\\...\\proj`, which is the original bug. GREEN passed. The full suite has 473 tests with 0 failures, 0 errors and 0 skips.\n\nOut of scope and filed: a UNC project base is the inverse case → task-52fb6178b3684db89d6e8a5a351c63ea. Subst and mapped drives remain task-1c2bfeca. RF07 docs should state the accepted cost: network or device PATH entries, a node or plugin on a share, and a state root on a share are not used."
+  "completionSummary": "Reopen 1 fixes the LEGACY Windows Restart Daemon regression without weakening protected refusal. Public installedArtifact/installedExecutable/isOutsideProject signatures remain protected-default wrappers; explicit internal RuntimeProfile overloads bypass only the new plain-local restriction for legacy installed stops. Existing absolute/regular-file/root/project containment and NODE_OPTIONS/NODE_PATH/quote filtering remain. Supervisor propagates one profile through file selection, node PATH discovery and stop environment; protected replacement is explicitly strict. stopCommandOrNull retains its signature and catches profile-read failure.\n\nAdded W31/W32 actual-selection legacy volume-node/root restart regressions using real files, fake process trees and captured stop environment; W33 protected no-spawn controls, W34 existing checks, W35 env/discovery, N7 no-network UNC/error comparisons, RP-S2 profile failure. Existing tests unchanged. RED proved W31/W32; removing legacy PATH exemption fails W31/W35/N7; forcing plain-local=true still fails N5/N6/S7/S8. All restored.\n\nFinal native full Gradle gate exits 0: 480 tests, 0 failures/errors/skips, 28 XML, BUILD SUCCESSFUL 23s; :test executed. QA's unchanged restart.cmd now exits 0: local/volume/UNC each restart=null and signals=[stop], LEGACY_RESTART_REGRESSIONS=0. Gradle lease released. Four scoped files; reopen +181/-29 net152. Handoff and gotcha memories saved. UNC project-base/subst follow-ups remain out of scope; verified-local remains disabled. Wrapper owns landing; unrelated dirty paths preserved.",
+  "commits": [
+    {
+      "sha": "acdcd627dbf625301b3cb3345623e91c4fd90b76",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-0062feec@2026-10-30T16:26:45Z",
+      "paths": [
+        ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
+        ".moe/tasks/task-526a208079b5467db13cb9dd10da442e.json",
+        ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
+        ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+        ".moe/tasks/task-c20464ff64ca49fca4371dd9b5194364.json",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+      ],
+      "recordedBy": "worker-0062feec",
+      "recordedAt": "2026-10-30T16:36:51.601Z",
+      "treeId": "0981b9a06e1c4fc3caf13ee3034f9293d769f3df",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-0062feec@2026-10-30T16:26:45Z",
+    "at": "2026-10-30T16:36:51.601Z"
+  },
+  "reviewCompletedAt": "2026-10-30T16:43:16.743Z",
+  "rejectionDetails": {
+    "failedDodItems": [
+      "Local drive-qualified and \\\\?\\C:\\ device spellings, POSIX hosts and the legacy profile behave as before: the existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest cases pass unchanged."
+    ],
+    "issues": [
+      {
+        "type": "regression",
+        "file": "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "line": 294,
+        "description": "The new guard is unconditional, but Supervisor.stopCommandOrNull:547 -> protectedDaemonCommand:515 serves LEGACY Windows Restart Daemon too. Existing UNC/device nodes now lose the installed stop command; restart fails on a surviving foreign parent. Preserve pre-change LEGACY stop-selection/environment behavior without weakening protected refusal or existing file/project checks. Audit shared select and PATH-filter consumers; the plan's 'LEGACY never calls these' assumption is false."
+      },
+      {
+        "type": "test_failure",
+        "file": "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "line": 789,
+        "description": "W7 stubs stop outcome and misses actual selection. Add Windows LEGACY node and installed-root alias regression rows using real stop selection, volume-GUID/no-network fixtures and WinRestart fake trees; retain protected refusal controls. QA restart.cmd gives LEGACY_RESTART_REGRESSIONS=2 (volume + UNC), exit 1, while local control succeeds. Rerun the recorded full suite after fixing."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Reject acdcd627 for a new LEGACY Windows Restart Daemon regression (DoD 3 and preserve-legacy rails), not the separately scoped UNC project-base gap. The unconditional select guard is also used by stopCommandOrNull under LEGACY. A valid node via UNC/device spelling now yields no installed stop command, so a foreign supervisor is never stopped and restart refuses. Native probe cmd.exe /d /c D:\\qa-526a-hvl8gybj\\restart.cmd exits 1: local control restart=null, signals=[stop]; volume and loopback-UNC cases return survivor refusal, signals=[kill:<run>], LEGACY_RESTART_REGRESSIONS=2. It uses the existing WinRestart fake tree, actual production stop selection and real existing files; no real process is killed. A second selector probe run.cmd confirms local command versus null for the same node via both aliases. Sources matched acdcd627 throughout; no shared source edits. Recorded Gradle command reran exit 0, 473 tests, 0 failures/errors/skips; new N5/N6/S7/S8 executed, but legacy alias stop-selection coverage is missing. Completion SHA/tree and branch containment verified; code diff +140/-6, net 134. Complexity pass: lean already.",
+      "rejectedAt": "2026-10-30T16:43:16.743Z",
+      "reopenCount": 1,
+      "failedDodItems": [
+        "Local drive-qualified and \\\\?\\C:\\ device spellings, POSIX hosts and the legacy profile behave as before: the existing RuntimeSelectionPolicyTest and MoeDaemonSupervisorTest cases pass unchanged."
+      ],
+      "issues": [
+        {
+          "type": "regression",
+          "file": "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+          "line": 294,
+          "description": "The new guard is unconditional, but Supervisor.stopCommandOrNull:547 -> protectedDaemonCommand:515 serves LEGACY Windows Restart Daemon too. Existing UNC/device nodes now lose the installed stop command; restart fails on a surviving foreign parent. Preserve pre-change LEGACY stop-selection/environment behavior without weakening protected refusal or existing file/project checks. Audit shared select and PATH-filter consumers; the plan's 'LEGACY never calls these' assumption is false."
+        },
+        {
+          "type": "test_failure",
+          "file": "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+          "line": 789,
+          "description": "W7 stubs stop outcome and misses actual selection. Add Windows LEGACY node and installed-root alias regression rows using real stop selection, volume-GUID/no-network fixtures and WinRestart fake trees; retain protected refusal controls. QA restart.cmd gives LEGACY_RESTART_REGRESSIONS=2 (volume + UNC), exit 1, while local control succeeds. Rerun the recorded full suite after fixing."
+        }
+      ]
+    }
+  ],
+  "declaredFiles": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+  ]
 }

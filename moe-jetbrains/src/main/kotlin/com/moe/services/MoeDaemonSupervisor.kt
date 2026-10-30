@@ -222,7 +222,7 @@ class MoeDaemonSupervisor(
             if (profile() != RuntimeProfile.PROTECTED) return false
             val refusal = activationRefusal(info) ?: return false
             if (onDispatchThread()) return false
-            val command = stopCommandOrNull(basePath) ?: return false
+            val command = stopCommandForProfile(basePath, RuntimeProfile.PROTECTED) ?: return false
             val target = processLookup(info.pid.toLong()) ?: return false
             val captured = ReplacementTarget(target, target.parent().orElse(null), refusal)
             if (!replaceConfirmer(projectName, info.pid)) return false
@@ -491,7 +491,8 @@ class MoeDaemonSupervisor(
 
     // RF03's installed stop: its sentinel makes a supervisor exit instead of respawning `_run`. Only exit 0 succeeds.
     private fun installedStop(): Boolean = try {
-        stopCommandOrNull(basePath)?.let { runStop(stopBuilder(it)) } == 0
+        val runtimeProfile = profile()
+        stopCommandForProfile(basePath, runtimeProfile)?.let { runStop(stopBuilder(it, runtimeProfile)) } == 0
     } catch (ex: Exception) {
         log.warn("Restart Daemon: the installed stop failed: ${ex.message}")
         if (ex is InterruptedException) Thread.currentThread().interrupt()
@@ -512,12 +513,17 @@ class MoeDaemonSupervisor(
     }
 
     /** The installed node and daemon; project, parent, PATH, env and global-config copies are never consulted. */
-    internal fun protectedDaemonCommand(basePath: String, root: File?, node: String?, subcommand: String = "start"): ProtectedDaemonCommand {
-        val daemon = when (val selection = RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", basePath)) {
+    internal fun protectedDaemonCommand(basePath: String, root: File?, node: String?, subcommand: String = "start"): ProtectedDaemonCommand =
+        installedDaemonCommand(basePath, root, node, subcommand, RuntimeProfile.PROTECTED)
+
+    private fun installedDaemonCommand(
+        basePath: String, root: File?, node: String?, subcommand: String, runtimeProfile: RuntimeProfile
+    ): ProtectedDaemonCommand {
+        val daemon = when (val selection = RuntimeSelectionPolicy.installedArtifact(root, "daemon/index.js", basePath, runtimeProfile)) {
             is RuntimeSelection.Accepted -> selection.file
             is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
         }
-        val nodeFile = when (val selection = RuntimeSelectionPolicy.installedExecutable(node, basePath)) {
+        val nodeFile = when (val selection = RuntimeSelectionPolicy.installedExecutable(node, basePath, runtimeProfile)) {
             is RuntimeSelection.Accepted -> selection.file
             is RuntimeSelection.Rejected -> return ProtectedDaemonCommand.Refused(selection.reason)
         }
@@ -540,49 +546,58 @@ class MoeDaemonSupervisor(
         }
     }
 
-    private fun protectedNode(basePath: String): String? = if (nodeExecutable != null) nodeExecutable.invoke() else
-        resolveNodeExecutable(nodeOnPath = { nodeOnProtectedPath(System.getenv("PATH").orEmpty(), basePath) })
+    private fun protectedNode(basePath: String, runtimeProfile: RuntimeProfile = RuntimeProfile.PROTECTED): String? =
+        if (nodeExecutable != null) nodeExecutable.invoke() else resolveNodeExecutable(nodeOnPath = {
+            nodeOnProtectedPath(System.getenv("PATH").orEmpty(), basePath, runtimeProfile = runtimeProfile)
+        })
 
     /** No status/refusal mutation: Restart Daemon also uses this selector under LEGACY. */
     internal fun stopCommandOrNull(basePath: String): List<String>? = try {
-        when (val selection = protectedDaemonCommand(basePath, installedRoot(), protectedNode(basePath), "stop")) {
-            is ProtectedDaemonCommand.Ready -> selection.command
-            is ProtectedDaemonCommand.Refused -> null.also { log.warn("Installed daemon stop refused: ${selection.reason}") }
-        }
+        stopCommandForProfile(basePath, profile())
     } catch (ex: Exception) {
         log.warn("Cannot build installed daemon stop command", ex)
         null
     }
 
-    private fun stopBuilder(command: List<String>): ProcessBuilder = ProcessBuilder(command).apply {
+    private fun stopCommandForProfile(basePath: String, runtimeProfile: RuntimeProfile): List<String>? =
+        when (val selection = installedDaemonCommand(basePath, installedRoot(), protectedNode(basePath, runtimeProfile), "stop", runtimeProfile)) {
+            is ProtectedDaemonCommand.Ready -> selection.command
+            is ProtectedDaemonCommand.Refused -> null.also { log.warn("Installed daemon stop refused: ${selection.reason}") }
+        }
+
+    private fun stopBuilder(command: List<String>, runtimeProfile: RuntimeProfile = RuntimeProfile.PROTECTED): ProcessBuilder = ProcessBuilder(command).apply {
         directory(File(command[1]).parentFile)
         redirectErrorStream(true)
         redirectOutput(ProcessBuilder.Redirect.DISCARD)
         applyDaemonPath(environment(), command[0])
-        protectedDaemonEnvironment(environment(), basePath)
+        protectedDaemonEnvironment(environment(), basePath, runtimeProfile)
     }
 
     /** Drops what could load repository code into the installed daemon: NODE_OPTIONS, NODE_PATH and unsafe PATH entries. */
-    internal fun protectedDaemonEnvironment(env: MutableMap<String, String>, basePath: String) {
+    internal fun protectedDaemonEnvironment(
+        env: MutableMap<String, String>, basePath: String, runtimeProfile: RuntimeProfile = RuntimeProfile.PROTECTED
+    ) {
         env.remove("NODE_OPTIONS")
         env.remove("NODE_PATH")
         // After applyDaemonPath a Windows map may hold the variable as "Path"; filter whichever one it kept.
         val pathName = if (isWindows()) env.keys.firstOrNull { it.equals("PATH", ignoreCase = true) } ?: "PATH" else "PATH"
-        env[pathName]?.let { env[pathName] = protectedPathEntries(it, basePath).joinToString(File.pathSeparator) }
+        env[pathName]?.let { env[pathName] = protectedPathEntries(it, basePath, runtimeProfile).joinToString(File.pathSeparator) }
     }
 
     // In-process: running `where`/`which` by bare name could start a copy in the IDE's working directory.
-    internal fun nodeOnProtectedPath(path: String, basePath: String, windows: Boolean = isWindows()): String? =
-        protectedPathEntries(path, basePath).asSequence()
+    internal fun nodeOnProtectedPath(
+        path: String, basePath: String, windows: Boolean = isWindows(), runtimeProfile: RuntimeProfile = RuntimeProfile.PROTECTED
+    ): String? =
+        protectedPathEntries(path, basePath, runtimeProfile).asSequence()
             .map { File(it, if (windows) "node.exe" else "node") }
             .firstOrNull { it.isFile }?.absolutePath
 
     // Blank, relative and project entries go, so the daemon's own lookups cannot reach repository executables.
     // Entries come back as the spelling that was validated: libuv's Windows PATH search strips one leading or trailing
     // ' or " (so `<project>'` searches the project) and execvp reads a space-padded entry as relative; both are dropped or trimmed.
-    private fun protectedPathEntries(path: String, basePath: String): List<String> =
+    private fun protectedPathEntries(path: String, basePath: String, runtimeProfile: RuntimeProfile): List<String> =
         path.split(File.pathSeparator).map { unquoted(it) }.filter { entry ->
-            "'\"".none { entry.startsWith(it) || entry.endsWith(it) } && RuntimeSelectionPolicy.isOutsideProject(entry, basePath)
+            "'\"".none { entry.startsWith(it) || entry.endsWith(it) } && RuntimeSelectionPolicy.isOutsideProject(entry, basePath, runtimeProfile)
         }
 
     private fun unquoted(entry: String): String = entry.trim().removeSurrounding("\"")
