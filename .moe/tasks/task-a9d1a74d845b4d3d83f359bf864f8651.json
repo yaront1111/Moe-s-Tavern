@@ -142,7 +142,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:55.999Z",
-  "updatedAt": "2026-10-30T06:50:42.643Z",
+  "updatedAt": "2026-10-30T06:51:15.994Z",
   "dependsOn": [
     "task-9cc131704d214e66afc8a51a524b35c2"
   ],
@@ -264,6 +264,34 @@
       "treeId": "bb72b4c584f087b4cc16d01970bdeb735c25555f",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "b25131b35833e2b3d279e28ce460ca443dbfb829",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T06:36:18Z",
+      "paths": [
+        ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+        ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
+        ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/delivery/policy.ts",
+        "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T06:51:15.994Z",
+      "treeId": "43eb182877f94a43e644b8075ff9c827068635b9",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-4d67e805f2e940518137d70de325defc"
+        }
+      ],
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -271,14 +299,17 @@
     "packages/moe-daemon/src/types/schema.ts",
     "packages/moe-daemon/src/delivery/policy.ts",
     "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
-    "docs/MCP_SERVER.md"
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-43088e9b504b49a5ae59c562fcc0c784.json",
+    ".moe/tasks/task-5e816f2cafe8490596af56d9a5108efe.json",
+    ".moe/tasks/task-a9d1a74d845b4d3d83f359bf864f8651.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-4ae016fb@2026-10-29T17:46:26Z",
-    "at": "2026-10-29T22:13:37.323Z"
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T06:36:18Z",
+    "at": "2026-10-30T06:51:15.994Z"
   },
   "workStartedAt": "2026-10-30T06:37:29.673Z",
   "reviewStartedAt": "2026-10-30T06:50:42.641Z",
@@ -289,5 +320,12 @@
     "reportedAt": "2026-10-30T06:50:42.641Z",
     "source": "agent-reported"
   },
-  "completionSummary": "CQ-V04 daemon core. The verified-local trusted pass rule and record_check_dispatch admission. Legacy and observe are unchanged.\n- delivery/policy.ts (+169/-36):\n  - Exported: OwedCheck, owedChecks (approved defs while the snapshot is bound, then the owed gate unless a def runs it), approvedCheckEnvironments (<=50 ids, each <=255 chars, non-blank, no control chars; malformed is INVALID_INPUT), assertCheckDispatchApproved.\n  - trustedPassedOn requires an authenticated observation (isAuthenticatedCheckRun), outcome 'passed' at exit 0, run.planRevision equal to the approved revision, which must equal the current one, an environment in the live list, and a dispatch naming the command and checkId.\n  - New token required-checks-undeclared.\n  - Each def needs its own dispatch.\n- tools/recordCheckDispatch.ts: a recorded id skips admission (store replay); otherwise admission runs before the write.\n- schema.ts: ProjectSettings.checkEnvironments.\n- MCP_SERVER.md: the admission paragraph and 2 errors.\nDEVIATION: admission runs only for verified-local tasks. Universal admission broke V03's landed tests (an unowed legacy dispatch) and contradicts the 'legacy unchanged' and 'strong branch only under verified-local' rules. Case L pins this.\nDoD to tests (requiredChecks.strong.test.ts, 25 cases; readiness mocked only here, the real one pinned):\n1. A refuses an unowed command, a wrong or missing checkId, an unlisted environment and an absent list, writing nothing; a malformed list is INVALID_INPUT; the replay gives duplicate:true. R1 (revision) and R2 (environment revoked) bring the tokens back. T covers twin ids.\n2. R3 (newer tree), D (record_check_run copying a real binding is refused under verified-local and counted under legacy).\n3. O: none, unobserved, skipped, inconclusive, timeout, infra-failure and code-failure each keep the token, and dependents are withheld (dependencyShortfall/unmetDependsOn).\n4. Gate EXIT 0, tsc 0.\nMutants: 8/8 killed. Size: packages/ net 387 (runtime 152,"
+  "completionSummary": "CQ-V04 daemon core. The verified-local trusted pass rule and record_check_dispatch admission. Legacy and observe are unchanged.\n- delivery/policy.ts (+169/-36):\n  - Exported: OwedCheck, owedChecks (approved defs while the snapshot is bound, then the owed gate unless a def runs it), approvedCheckEnvironments (<=50 ids, each <=255 chars, non-blank, no control chars; malformed is INVALID_INPUT), assertCheckDispatchApproved.\n  - trustedPassedOn requires an authenticated observation (isAuthenticatedCheckRun), outcome 'passed' at exit 0, run.planRevision equal to the approved revision, which must equal the current one, an environment in the live list, and a dispatch naming the command and checkId.\n  - New token required-checks-undeclared.\n  - Each def needs its own dispatch.\n- tools/recordCheckDispatch.ts: a recorded id skips admission (store replay); otherwise admission runs before the write.\n- schema.ts: ProjectSettings.checkEnvironments.\n- MCP_SERVER.md: the admission paragraph and 2 errors.\nDEVIATION: admission runs only for verified-local tasks. Universal admission broke V03's landed tests (an unowed legacy dispatch) and contradicts the 'legacy unchanged' and 'strong branch only under verified-local' rules. Case L pins this.\nDoD to tests (requiredChecks.strong.test.ts, 25 cases; readiness mocked only here, the real one pinned):\n1. A refuses an unowed command, a wrong or missing checkId, an unlisted environment and an absent list, writing nothing; a malformed list is INVALID_INPUT; the replay gives duplicate:true. R1 (revision) and R2 (environment revoked) bring the tokens back. T covers twin ids.\n2. R3 (newer tree), D (record_check_run copying a real binding is refused under verified-local and counted under legacy).\n3. O: none, unobserved, skipped, inconclusive, timeout, infra-failure and code-failure each keep the token, and dependents are withheld (dependencyShortfall/unmetDependsOn).\n4. Gate EXIT 0, tsc 0.\nMutants: 8/8 killed. Size: packages/ net 387 (runtime 152,",
+  "touchedFiles": [
+    "packages/moe-daemon/src/delivery/requiredChecks.strong.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/delivery/policy.ts"
+  ]
 }

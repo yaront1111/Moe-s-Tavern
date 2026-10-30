@@ -62,7 +62,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -75,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T00:07:31.650Z",
-  "updatedAt": "2026-10-30T06:12:54.825Z",
+  "updatedAt": "2026-10-30T06:52:50.317Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:41.770Z",
@@ -85,11 +85,14 @@
     "firstClaimAt": "2026-10-30T05:56:46.961Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T06:52:50.316Z",
+    "wallClockMs": 3363355
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-e60b90bd"
+    "worker-e60b90bd",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "high",
@@ -214,5 +217,9 @@
     "kind": "completion",
     "sessionId": "worker-e60b90bd@2026-10-30T06:10:15Z",
     "at": "2026-10-30T06:12:54.824Z"
-  }
+  },
+  "completedAt": "2026-10-30T06:52:50.316Z",
+  "reviewCompletedAt": "2026-10-30T06:52:50.316Z",
+  "reviewSummary": "APPROVED. Reviewed completion commit e504a5702a on moe/work-2026-10-24 (pushed). Code diff: packages/moe-proxy/src/utils.ts +15/-5, utils.test.ts +43, about 48 net non-board LOC. The Moe-Contested trailers (task-a4ad3fdb) name those files, but the hunks are only this task's.\n\nVerified in a fresh git-archive snapshot of e504a57 (proxy and daemon both npm ci'd; never in the shared checkout):\n- `npx tsc --noEmit -p .` exit 0.\n- `(cd packages/moe-proxy && npm test)` exit 0, 5 files / 178 tests pass. This is the task.verification command and it matches the worker's report.\n- Red-before-fix: HEAD^'s utils.ts with the new tests gives 2 failed / 85 passed, exactly T1 and T2.\n- Mutants I applied all fail a test: win32 uses `resolved` (T2); posix.normalize on every platform (T1); no trailing-slash strip (trailing-separators test and T2).\n- Shared dist/index.js stat unchanged (1793340187 26518). Snapshot removed.\n\nDoD:\n1. With cwd /mnt/d/x, '.', '/mnt/d/x/.', '/mnt/d/x/sub/..', '/mnt/d//x' and 'D:\\\\x' give 'd:/x' (T1, cwd spy). 'sub' gives 'd:/x/sub'; '..' gives 'd:'.\n2. On win32 a raw /mnt path is posix-normalized before mapping. T2 uses a win32 platform flip plus a win32 path.resolve stand-in, so it tells resolve from posix.normalize. '/mnt/d/x/sub/../..' gives 'd:'.\n3. Existing utils tests are green and unchanged; the 2 new tests are red on HEAD^.\n\nInvariants hold: the drive-regex branch still runs on the raw string, the fallthrough is unchanged, the function is pure and synchronous, and readDaemonInfoResult is untouched. The body matches the daemon's comparableProjectPath (index.ts:100-112). Test mocks and the platform descriptor are restored. I did not re-run the worker's real-win32 cmd.exe check; the stand-in plus mutants cover DoD 2. Nothing to cut in the complexity pass. Out of scope: scripts/local-runner/vm-control.mjs keeps the older raw-string rule.",
+  "requiredCheckAtDone": null
 }
