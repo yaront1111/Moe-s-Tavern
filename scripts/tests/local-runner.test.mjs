@@ -3540,24 +3540,46 @@ test('LC4 the recovery child is spawned once, with no shell and a fixed argv, an
     [path.join(h.workDir, 'ledger'), path.join(h.workDir, 'images'), ['taskId', 'attemptId', 'generation'], true, false]);
 });
 
-test('LC5 recovery fails with one fixed code when its child exits early, never launches, outlives its kill, cannot spawn or is not cleaned up', async t => {
+test('LC5 recovery fails with one fixed code when its child exits early, never launches, outlives its kill, cannot spawn or is not cleaned up exactly', async t => {
   const launchingOnly = async ({ ledgerDir, owner: who }, proc, { fake, random }) => fake.present.set((await seed(createLedger(ledgerDir, { random }), 'launching', 1, who)).instance, 'Running');
   const failsOnce = ({ deps: { provider } }, run = provider.run, failed = []) => { // the child's VM's first delete fails
     provider.run = (executable, args, options) => (args[0] === 'delete' && args[2] === nameAt(4) && failed.push(1) === 1 ? Promise.reject(failWith({ code: 1 })) : run(executable, args, options));
   };
-  for (const [child, bounds, code, kills, setup = () => {}] of [
+  // The last four rows each break one conjunct of recovery's pass predicate through the real reconcile and cleanup. twice's child
+  // also seeds nameAt(5) under its own attempt, with no VM, after its first record reads 'owned'; its close awaits that.
+  const twice = async (input, proc, kit) => { await provisions(input, proc, kit); await seed(createLedger(input.ledgerDir, { random: kit.random }), 'owned', 1, input.owner); };
+  const settle = async (h, name, ledger = createLedger(path.join(h.workDir, 'ledger'))) => ledger.update(await ledger.read(name), { phase: 'deleted' });
+  const before = (match, effect) => (h, run = h.deps.provider.run, armed = [true]) => { // effect(h) once, before the first provider call matching
+    h.deps.provider.run = (executable, args, options) => (armed[0] && match(args) ? (armed[0] = false, effect(h).then(() => run(executable, args, options))) : run(executable, args, options));
+  };
+  const infoFails = ({ deps: { provider } }, run = provider.run) => { // every info on nameAt(5) fails: reconcile leaves it unknown, cleanup errors on it
+    provider.run = (executable, args, options) => (args[0] === 'info' && args[1] === nameAt(5) ? Promise.reject(failWith({ code: 1 })) : run(executable, args, options));
+  };
+  // Each of those rows also pins its own end state, so it cannot fail on another conjunct's account: the ledger from nameAt(1) on, then the deletes.
+  const ended = (phases, deleted) => [phases.map((phase, index) => [nameAt(index + 1), phase]), deleted.map(index => ['delete', '--purge', nameAt(index)])];
+  const CLEANUP = 'CERTIFY_RECOVERY_CLEANUP_FAILED';
+  for (const [at, [child, bounds, code, kills, setup = () => {}, end]] of [
     [{ onInput: (input, proc) => proc.close(70) }, {}, 'CERTIFY_RECOVERY_CHILD_EXITED', [[]]],
     [{ onInput: launchingOnly }, { launchMs: 20 }, 'CERTIFY_RECOVERY_NOT_LAUNCHED', [['SIGKILL']]],
     [{ hang: true }, { reapMs: 20 }, 'CERTIFY_RECOVERY_NOT_REAPED', [['SIGKILL', 'SIGKILL']]],
     [{ throws: true }, {}, 'CERTIFY_RECOVERY_SPAWN_FAILED', []],
     [{ onInput: (input, proc) => { proc.emit('error', failWith({ code: 'ENOENT' })); proc.close(-2); } }, {}, 'CERTIFY_RECOVERY_SPAWN_FAILED', [[]]],
-    [{}, {}, 'CERTIFY_RECOVERY_CLEANUP_FAILED', [['SIGKILL']], failsOnce]]) {
+    [{}, {}, CLEANUP, [['SIGKILL']], failsOnce],
+    [{}, {}, CLEANUP, [['SIGKILL']], before(args => args[0] === 'delete' && args[2] === nameAt(4), h => settle(h, nameAt(3))), // the foreign record deleted too
+      ended(['deleted', 'deleted', 'deleted', 'deleted'], [2, 4, 1])],
+    [{ onInput: twice }, {}, CLEANUP, [['SIGKILL']], undefined, ended(['deleted', 'deleted', 'absent', 'deleted', 'deleted'], [2, 4, 1])], // a second VM deleted too
+    [{ onInput: twice }, {}, CLEANUP, [['SIGKILL']], before(args => args[0] === 'info' && args[1] === nameAt(5), async h => { // only another VM deleted:
+      await settle(h, nameAt(4)); // the child's record and VM went mid-reconcile, outside cleanup
+      h.fake.present.delete(nameAt(4));
+    }), ended(['deleted', 'deleted', 'absent', 'deleted', 'deleted'], [2, 1])],
+    [{ onInput: twice }, {}, CLEANUP, [['SIGKILL']], infoFails, ended(['deleted', 'deleted', 'absent', 'deleted', 'owned'], [2, 4, 1])]].entries()) {
     const h = certifyHarness(t, { child });
     Object.assign(h.deps.bounds, bounds);
     setup(h);
-    assert.deepEqual([await h.certify(), h.children.map(({ proc }) => proc.kills)], [failedAt('recovery', code), kills], code);
+    assert.deepEqual([await h.certify(), h.children.map(({ proc }) => proc.kills)], [failedAt('recovery', code), kills], `${code} #${at}`);
     assert.deepEqual([h.children.map(({ proc }) => proc.closed), [...h.fake.present.keys()], (await recordsOf(h)).filter(([name, phase]) => name === nameAt(4) && phase !== 'deleted')],
-      [kills.map(() => code !== 'CERTIFY_RECOVERY_NOT_REAPED'), [], []], code);
+      [kills.map(() => code !== 'CERTIFY_RECOVERY_NOT_REAPED'), [], []], `${code} #${at}`);
+    if (end) assert.deepEqual([await recordsOf(h), h.deletes], end, `${code} #${at}`);
   }
 });
 

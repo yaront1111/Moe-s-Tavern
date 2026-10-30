@@ -84,7 +84,8 @@ async function launched({ state }, ledger, who, { launchMs, pollMs }, sleep) {
 }
 
 // Reconcile, then cleanup with only the child's attempt closed (every other attempt reads unknown, so its VM is preserved):
-// true only when exactly the child's VM was deleted, its record reads 'deleted' and the foreign record survives.
+// true only when exactly the child's VM was deleted, its record reads 'deleted' and the foreign record survives. cleanupOwned
+// marks a record 'deleted' before it reports it, so the record read fails only a cleanup that reports a deletion it never recorded.
 async function recovered({ ledger, provider }, record, foreign, who) {
   try {
     await reconcileOwned({ ledger, provider });
