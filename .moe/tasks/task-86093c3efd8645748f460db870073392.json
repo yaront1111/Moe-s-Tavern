@@ -115,7 +115,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:54:43.638Z",
-  "updatedAt": "2026-10-30T09:49:28.291Z",
+  "updatedAt": "2026-10-30T09:50:13.985Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T07:56:12.926Z",
     "plannedStepCount": 4,
@@ -219,7 +219,10 @@
     ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
     "packages/moe-proxy/src/daemonIdentity.ts",
     "packages/moe-proxy/src/daemonIdentity.test.ts",
-    ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json"
+    ".moe/tasks/task-0c72d59aad37467fb49e5ad699692d78.json",
+    ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+    ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json",
+    ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
   ],
   "completionSummary": "Fixed QA's bracketed-IPv6 foreign-daemon bypass under step 4's explicit defect exception. HTTP hostname now strips brackets only from a valid IPv6 literal; bare IPv6/IPv4 and genuine unknown fail-open stay unchanged. Added direct bare/bracketed same/foreign tests and IPv4+IPv6 E1/E2/E3/E4 e2e health-count assertions. E1 proves exit 1, both project names/restart hint, zero /mcp upgrades; E3 proves reconnect refusal. RED: 6 named failures. GREEN: identity 58/58; fresh full proxy build/test 6 files, 246/246. QA's independent repro now passes: health=1/upgrades=0/proxy exit=1.\nFinal verification uses clean pinned archive 4cc44277 plus exactly the two QA-fix paths, cmp-checked. Exact original pure-archive gate also rerun fresh: 237/237, original owned paths identical to 4f2d53dd; baseline only, not misrepresented as fix verification. Artifact /tmp/moe-proxy-ipv6-gate.AcplTJ/verification.log.\nDelta daemonIdentity.ts +5/-2; daemonIdentity.test.ts +47/-19 = +31 net, cumulative task net486. Approved size waiver prop-ce253f8a allows QA-required growth. index.ts/utils.ts/README/wrappers untouched; no peer dirt claimed. Retained existing consolidated test harness (302->330 lines); probe48 lines.\nMutants built: M1 foreign guard killed E1/E1b/E3; M2 raw compare killed two path spellings; M3 unknown-exit killed E4+13 index cases; M4 absolute guard killed12 rows; M5 >=cap killed exact-cap; M6 status guard killed500/404; M7 long timer killed trickle; M8 survives documented shutdown gap (guard unchanged); M9 broad bracket stripping killed invalid IPv4 hostname regression. Adversarial review and diff --check clean; handoff/gotcha memories saved. Existing health-to-mcp TOCTOU remains deferred.",
   "commits": [
@@ -309,6 +312,24 @@
       "treeId": "666bb9277e5c8a5cb5e2315af2f6b9f69b51db46",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "60a2faf4ed106ee24ec5a0a9de945bba97d12b09",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T09:35:02Z",
+      "paths": [
+        ".moe/tasks/task-2cf1c6bee5814ed98eb3d069d97b32b3.json",
+        ".moe/tasks/task-86093c3efd8645748f460db870073392.json",
+        ".moe/tasks/task-9775fb21ecc34025a045352d643b277f.json",
+        ".moe/tasks/task-ec64165c85f246088a7224cf70b04670.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T09:50:13.984Z",
+      "treeId": "df67b0df8e1231db92b4c646c1f6a3da1d2acecf",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -319,9 +340,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-262588d0@2026-10-30T09:17:10Z",
-    "at": "2026-10-30T09:34:40.985Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T09:35:02Z",
+    "at": "2026-10-30T09:50:13.984Z"
   },
   "reviewCompletedAt": "2026-10-30T09:49:28.291Z",
   "rejectionDetails": {
