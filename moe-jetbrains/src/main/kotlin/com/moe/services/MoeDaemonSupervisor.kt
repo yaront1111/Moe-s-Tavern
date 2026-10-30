@@ -574,12 +574,16 @@ class MoeDaemonSupervisor(
     // In-process: running `where`/`which` by bare name could start a copy in the IDE's working directory.
     internal fun nodeOnProtectedPath(path: String, basePath: String, windows: Boolean = isWindows()): String? =
         protectedPathEntries(path, basePath).asSequence()
-            .map { File(unquoted(it), if (windows) "node.exe" else "node") }
+            .map { File(it, if (windows) "node.exe" else "node") }
             .firstOrNull { it.isFile }?.absolutePath
 
     // Blank, relative and project entries go, so the daemon's own lookups cannot reach repository executables.
+    // Entries come back as the spelling that was validated: libuv's Windows PATH search strips one leading or trailing
+    // ' or " (so `<project>'` searches the project) and execvp reads a space-padded entry as relative; both are dropped or trimmed.
     private fun protectedPathEntries(path: String, basePath: String): List<String> =
-        path.split(File.pathSeparator).filter { RuntimeSelectionPolicy.isOutsideProject(unquoted(it), basePath) }
+        path.split(File.pathSeparator).map { unquoted(it) }.filter { entry ->
+            "'\"".none { entry.startsWith(it) || entry.endsWith(it) } && RuntimeSelectionPolicy.isOutsideProject(entry, basePath)
+        }
 
     private fun unquoted(entry: String): String = entry.trim().removeSurrounding("\"")
 

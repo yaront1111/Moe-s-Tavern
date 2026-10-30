@@ -840,11 +840,14 @@ class RuntimeSelectionPolicyTest {
         val supervisor = supervisorFor(project, { null }, { null })
         val outsideA = temporaryFolder.newFolder("path-a").path
         val outsideB = node.parentFile.path
-        val quotedOutside = "\"${temporaryFolder.newFolder("path c").path}\""
+        val spaced = temporaryFolder.newFolder("path c").path
+        val padded = temporaryFolder.newFolder("path-d").path
         val alias = File(temporaryFolder.root, "path-alias")
         val unbuilt = File(project, "node_modules/.bin").path
+        // Edge-quoted spellings: libuv's Windows PATH search strips one leading or trailing ' or ", so they must never be kept.
+        val edgeQuoted = listOf("${project.path}'", "'${project.path}", "$outsideA'", "$outsideA\"")
         val entries = mutableListOf(outsideA, "", "bin", ".", unbuilt, project.path, "\"${File(project, "tools").path}\"", "  ",
-            "/bad\u0000path", quotedOutside, outsideB)
+            "/bad\u0000path", "  $padded  ", *edgeQuoted.toTypedArray(), "\"$spaced\"", outsideB)
         val linked = symlink(alias.toPath(), project.toPath())
         if (linked) entries += alias.path
         // Unbuilt project dirs have no real path, so only the folded comparison catches a case variant.
@@ -852,7 +855,8 @@ class RuntimeSelectionPolicyTest {
         val env = mutableMapOf("NODE_OPTIONS" to "--require ./evil.js", "NODE_PATH" to project.path, "HOME" to "home",
             "PATH" to entries.joinToString(File.pathSeparator))
         supervisor.protectedDaemonEnvironment(env, project.path)
-        val kept = listOf(outsideA, quotedOutside, outsideB).joinToString(File.pathSeparator)
+        // Each kept entry is exactly the spelling that was validated: trimmed and unquoted.
+        val kept = listOf(outsideA, padded, spaced, outsideB).joinToString(File.pathSeparator)
         assertEquals(mapOf("HOME" to "home", "PATH" to kept), env)
         if (linked) {
             val throughAlias = mutableMapOf("PATH" to listOf(project.path, outsideA).joinToString(File.pathSeparator))
