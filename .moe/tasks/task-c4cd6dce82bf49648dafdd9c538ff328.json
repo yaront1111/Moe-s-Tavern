@@ -118,7 +118,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -128,10 +128,29 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 301.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-7f0d8cf725624531ac2b3a534decfb20",
+      "author": "governor-693b7073",
+      "content": "@qa-952969be Governor note before you decide: 447281cf turned the daemon test gate red. Reported by architect-6fc3dd5c at 17:49Z in #qa; the governor confirmed it.\n\nWhat broke:\n- 447281cf replaced `& $Command` with `Invoke-MoeGuardedCommand` on the ps1 launch lines (7206, 7227, 7248, …).\n- packages/moe-daemon/src/providers/codexDescriptor.ts still pins the old literals at :29, :31 and :462. Each literal is present in 447281cf^:scripts/moe-agent.ps1 and absent at HEAD (grep -F).\n- So providerDescriptor.contract.test.ts \"every emitted fact declares per-wrapper emitter evidence\" fails: 1 failed / 6070 passed in a Linux archive of HEAD.\n\nThis row's DoD (guard + regression test, landings and postflight/parity, docs) does not include the daemon suite, so I filed the fix separately: task-5b0e90fe, HIGH, daemon-only, dependsOn this row. It runs right after you approve, in parallel with 724e31fa.\n\nYour call:\n- (a) Judge this row on its DoD. The regression is tracked.\n- (b) Reject narrowly, only for the three codexDescriptor.ts literals, and I'll archive 5b0e90fe.\nEither is fine with me. Please don't leave the red gate untracked.",
+      "timestamp": "2026-10-30T17:54:57.328Z"
+    },
+    {
+      "id": "comment-cce3d847a44548a988d5a14a88af24a3",
+      "author": "architect-bd1eb82d",
+      "content": "@qa-952969be @governor-693b7073 A second regression from 447281cf, beyond the codexDescriptor one: it also breaks the scripts suite CI runs on all three OSes (ci.yml:242).\n\nscripts/tests/prompt-cache-launcher.test.mjs and usage-launcher.test.mjs cut the real launch blocks by text anchors and run them standalone. 447281cf moved those anchors (`agent_git_exec \"$COMMAND_BIN\" …` / `Invoke-MoeGuardedCommand`, plus guard cleanup after the launch). The cut blocks now also call a guard function the harness never defines (sh exit 127, ps1 \"not recognized\").\n\nMeasured with `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs`:\n- Linux, HEAD fb47f668: 31 pass / 7 fail (all /bin/bash).\n- Linux, `git archive 447281cf^` snapshot: 38 pass / 0 fail.\n- Native Windows node.exe, HEAD: 105 pass / 21 fail. That is the same 7 cases on each of powershell.exe, pwsh.exe and Git Bash.\n- 447281cf is the only commit since its parent that touches the launchers or these two files.\n\nI filed it as task-57bbd302 (HIGH, scripts-tests-only, dependsOn this row, launchers untouched), the same pattern as 5b0e90fe. QA's choice now covers both:\n- (a) Judge this row on its DoD. Both regressions are tracked.\n- (b) Reject narrowly, for the three codexDescriptor.ts literals plus these two test harnesses. The governor then archives 5b0e90fe and 57bbd302.",
+      "timestamp": "2026-10-30T18:03:49.776Z"
+    },
+    {
+      "id": "comment-953942ca633643b7ae1a8450f509eee7",
+      "author": "qa-952969be",
+      "content": "@governor-693b7073 @architect-bd1eb82d QA choice: (a). I am judging this row on its DoD. Both regressions stay tracked by task-5b0e90fe and task-57bbd302. Do not archive either one.\n\nI reproduced both myself:\n- Launcher harnesses: `node --test scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs` on Linux HEAD gives 31 pass / 7 fail. All 7 failures are bash launch blocks (Codex hint/default argv, real Claude/Codex usage and exit). A `git archive 447281cf^` snapshot shows none of those 7. Its 1 other failure is the role-prefix case, an artifact of my scripts-only archive.\n- Daemon contract: providerDescriptor.contract.test.ts under Windows node.exe (the shared node_modules is Windows-native) gives 1 failed / 22 passed. It reports the interactive-tui and exec-headless `& $Command …` literals absent from the codex branches of moe-agent.ps1. grep -F confirms all three PS literals, the probe included, are present at 447281cf^ and absent at 447281cf, and no later commit touched those paths.\n\nWhy (a): DoD 1-3 pass independently on both platforms.\n- Exact task.verification re-run exits 0: guard suite 24/24, postflight-safe bash NONE/Z, parity PASS, docs lint OK.\n- Native Windows PS 5.1.26100 with Git 2.54: guard suite 24/24 with zero skips; postflight-safe powershell exit 0 NONE/Z.\n- Removing the guard makes the incident tests go RED.\n\nA narrow reject would push daemon-lane and shared-suite edits into a wrapper-lane row that is already at 364 net LOC, with no size waiver. Both follow-up DoDs correctly keep the launchers fixed.",
+      "timestamp": "2026-10-30T18:19:09.954Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:35:35.156Z",
-  "updatedAt": "2026-10-30T17:24:33.575Z",
+  "updatedAt": "2026-10-30T18:20:22.912Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:35:41.628Z",
@@ -141,11 +160,14 @@
     "firstClaimAt": "2026-10-30T13:39:18.586Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-10-30T18:20:22.912Z",
+    "wallClockMs": 16864326
   },
   "contextFetchedBy": [
     "architect-eb7de546",
-    "worker-6e57c4f8"
+    "worker-6e57c4f8",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-01f37ac63316409ab581f5a189002cb8"
@@ -199,7 +221,43 @@
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
     "scripts/CLAUDE.md",
-    "docs/TROUBLESHOOTING.md"
+    "docs/TROUBLESHOOTING.md",
+    ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+    ".moe/tasks/task-c4cd6dce82bf49648dafdd9c538ff328.json"
   ],
-  "completionSummary": "Implemented child-only, exact-control-gitdir commit/push guards in both launchers. Native process-scoped Git conditional config and private forwarding hooks preserve caller config, original hook behavior, wrapper landings and human/scratch writes; setup fails closed. All CLI launch paths covered, Bash subshell isolation and PS finally restoration retained. Documented human-only scoped bypass and non-sandbox limits. Final fresh gate: 24/24 Bash guard tests, unchanged bash postflight exit 0/NONE/Z, parity PASS and docs lint OK. Native Windows node.exe guard suite 24/24, zero skips, followed by unchanged powershell postflight exit 0/NONE/Z on Git/PS5.1. Initial incident RED and isolated guard-removal RED proved on both platforms. Adversarial RED/GREEN fixes cover trailing-space/CR hooks paths, Windows lowercase runtime count and corrupt/redirected Git identity. All five source hashes stable throughout final gates; +388/-24 = 364 net LOC. No shared-suite/peer-path edits or manual commit. Unrelated PS wildcard discovery bug filed as task-3ad573a754574dfd92083b2e813c0bff. Serena task handoff and runtime gotchas saved."
+  "completionSummary": "Implemented child-only, exact-control-gitdir commit/push guards in both launchers. Native process-scoped Git conditional config and private forwarding hooks preserve caller config, original hook behavior, wrapper landings and human/scratch writes; setup fails closed. All CLI launch paths covered, Bash subshell isolation and PS finally restoration retained. Documented human-only scoped bypass and non-sandbox limits. Final fresh gate: 24/24 Bash guard tests, unchanged bash postflight exit 0/NONE/Z, parity PASS and docs lint OK. Native Windows node.exe guard suite 24/24, zero skips, followed by unchanged powershell postflight exit 0/NONE/Z on Git/PS5.1. Initial incident RED and isolated guard-removal RED proved on both platforms. Adversarial RED/GREEN fixes cover trailing-space/CR hooks paths, Windows lowercase runtime count and corrupt/redirected Git identity. All five source hashes stable throughout final gates; +388/-24 = 364 net LOC. No shared-suite/peer-path edits or manual commit. Unrelated PS wildcard discovery bug filed as task-3ad573a754574dfd92083b2e813c0bff. Serena task handoff and runtime gotchas saved.",
+  "commits": [
+    {
+      "sha": "447281cf6b3387a6e481c512bf98f8bb67d42cfa",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-6e57c4f8@2026-10-30T16:07:25Z",
+      "paths": [
+        ".moe/tasks/task-6bc91f38c840496c894434404760f3a3.json",
+        ".moe/tasks/task-c4cd6dce82bf49648dafdd9c538ff328.json",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/agent-git-guard.test.mjs"
+      ],
+      "recordedBy": "worker-6e57c4f8",
+      "recordedAt": "2026-10-30T17:24:53.054Z",
+      "treeId": "9b0f8a04e329facb3e771b888aac0b70d1965684",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-6e57c4f8@2026-10-30T16:07:25Z",
+    "at": "2026-10-30T17:24:53.054Z"
+  },
+  "completedAt": "2026-10-30T18:20:22.912Z",
+  "reviewCompletedAt": "2026-10-30T18:20:22.912Z",
+  "reviewSummary": "APPROVED on DoD. 447281cf (tree 9b0f8a04) is pushed and is on moe/work-2026-10-24 and origin; the owned paths match HEAD. Size +388/-24, 364 net LOC.\n\nRe-ran:\n- Exact task.verification: exit 0. Guard 24/24 with 0 skipped; postflight-safe bash exit 0 NONE/Z; parity PASS; docs lint OK.\n- Native Windows node.exe, PS 5.1.26100, Git 2.54: guard 24/24 with 0 skipped; postflight-safe powershell exit 0 NONE/Z.\n- Mutation: removing the agent_git_exec export makes the incident tests RED (commit -am D and push exit 0).\n- Live probe in this guarded seat: pre-commit prints MOE_AGENT_GIT_REFUSED and exits 1; the bypass delegates.\n\nDoD 1: failed-cd `commit -am D`, staged-only, subdir and push are refused on sh and ps1 for all CLI types; sentinels, HEAD and remote unchanged.\n\nDoD 2: hookful and plumbing completions, checkpoints and the human commit pass. Production: completion 2dea91c8 from a guarded seat; human commit cd522777.\n\nDoD 3: scripts/CLAUDE.md and TROUBLESHOOTING cover the guard and the human override.\n\nCodex 0.166 and gemini 0.64 pass GIT_CONFIG_* (measured).\n\nKnown regressions, reproduced and tracked (option (a), per governor and architect):\n- daemon providerDescriptor contract test, 1 fail: task-5b0e90fe\n- launcher harnesses, 7 Linux fails: task-57bbd302\n\nFollow-ups filed:\n- task-2359daf0: the guard refuses QA's self-land fallback (qa.md:15, moe-qa-loop)\n- task-76ae5c47: non-ASCII TEMP mojibake on PS gemini/grok seats; Git 2.31+ undocumented; KEY-stripping CLI policies; CONFIGURATION.md\n\nPonytail: twin JS should be one helper; drop the duplicate env file; ACL is soft yagni. Net -60 lines possible.",
+  "requiredCheckAtDone": null
 }

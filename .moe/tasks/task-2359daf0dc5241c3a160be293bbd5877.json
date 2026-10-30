@@ -1,0 +1,31 @@
+{
+  "id": "task-2359daf0dc5241c3a160be293bbd5877",
+  "epicId": "epic-be924fb8",
+  "title": "bug: QA's empty-ledger self-landing fallback runs a porcelain `git commit` that the agent Git-write guard (447281cf) now refuses",
+  "description": "Found by QA (qa-952969be) while reviewing task-c4cd6dce, completion 447281cf.\n\nWhat breaks:\n- Since 447281cf, every agent CLI and its descendant shells inherit a process-scoped includeIf/core.hooksPath overlay for the exact control-checkout gitdir.\n- Porcelain `git commit` and `git push` there exit 1 with `MOE_AGENT_GIT_REFUSED: the wrapper lands the work`. This holds in shared mode, which is the current default.\n- scripts/CLAUDE.md (Land on every exit, Agent Git-write guard) says agents must not use the MOE_ALLOW_AGENT_GIT_WRITES override to repair landing.\n\nThe QA role still documents a self-landing fallback that is now impossible:\n- docs/roles/qa.md:15: \"land it yourself with the measured-attribution path recipe … then moe.record_commit, then approve\".\n- docs/roles/qa.reference.md:42-46: the path recipe, \"commit with the task trailer\"; partial hunks need \"a bare commit\".\n- docs/skills/moe-qa-loop/SKILL.md, plus its .claude/skills mirror: step 3, \"Approve when\", \"Reject when\", and `allowed-tools … Bash(git add:*), Bash(git commit:*)`.\n\nA QA session that reaches the bounded-wait expiry follows these docs into a refusal. It then has no sanctioned path. Measured in the QA session: `git hook run pre-commit` in /mnt/d/projexts/moes prints the refusal and exits 1.\n\nRelated: WT-18b (task-a28c66bb) scopes this fallback out of worktree mode only, and keeps it for shared mode. This row depends on WT-18b because both edit the same QA docs and regenerate packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts.\n\nThe architect decides the replacement route. Options:\n- (a) An empty ledger after the bounded wait is a qa_reject citing landing.lastCommitOutcome in every mode, the same as WT-18b's worktree rule.\n- (b) Rely on the QA wrapper's own exit landing. First prove that its attribution actually carries the worker's bytes, given the PREEXISTING/ASSERTED tiers.\n- (c) A wrapper-sanctioned landing request.\n\nDo not weaken the guard or teach agents the override.",
+  "definitionOfDone": [
+    "docs/roles/qa.md, docs/roles/qa.reference.md and docs/skills/moe-qa-loop/SKILL.md (and its .claude/skills mirror) no longer instruct a QA session to make a porcelain commit in the control checkout. The empty-ledger fallback names one route that works with the agent Git-write guard active. The skill's allowed-tools no longer list Bash(git commit:*) for that purpose.",
+    "packages/moe-daemon/src/generated/initFiles.ts and skillFiles.ts are regenerated from the edited docs, and a fresh regeneration matches them byte for byte. `npm run lint` passes with qa.md at 40 lines or fewer.",
+    "A test or scripted check proves the documented route works while the guard is active, or pins the reject/escalate wording. Shared-mode sentinels from WT-18b stay consistent. scripts/moe-agent.{sh,ps1} are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a28c66bbd21448c7b25daec49a3fa217"
+  ],
+  "priority": "MEDIUM",
+  "order": 314.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T18:19:37.949Z",
+  "updatedAt": "2026-10-30T18:19:37.949Z"
+}

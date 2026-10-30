@@ -1,0 +1,31 @@
+{
+  "id": "task-76ae5c472f6a4651a45478b1893e07dc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: agent Git guard refuses PowerShell gemini/grok launches when the Windows temp path is non-ASCII, and its setup failure never names the Git >= 2.31 requirement",
+  "description": "QA (qa-952969be) found these robustness edges in 447281cf (task-c4cd6dce). None blocked that row's DoD. This row touches scripts/moe-agent.ps1, so it joins the serialized wrapper lane. It depends on task-57bbd302 because that harness fix pins the launch blocks.\n\n1. PS stdout decoding (measured):\n- Initialize-MoeAgentGitGuard (moe-agent.ps1 ~L5986) captures the guard root path from `node -` stdout. PowerShell decodes that with [Console]::OutputEncoding.\n- The wrapper switches that to UTF-8 only `if ($cliType -in @('claude','codex'))` (~L936-939). Custom commands default to claude, so gemini and grok seats keep the OEM code page.\n- On PS 5.1.26100 the default was ibm850, and node's 'C:/témp' came back as 'C:/t├®mp' (code points 67,58,47,116,9500,174,109,112).\n- So when [IO.Path]::GetTempPath() holds non-ASCII characters (for example a non-ASCII Windows user name), ReadAllText(Join-Path $root 'env.json') throws. The seat refuses launch with a bare .NET error, not MOE_AGENT_GIT_GUARD_FAILED. The real guard directory then leaks in %TEMP%, because Remove-Item gets the garbled path.\n- Fix direction: decode UTF-8 explicitly around that call, or have node emit an ASCII-safe or known path.\n\n2. Git version:\n- GIT_CONFIG_COUNT and `rev-parse --path-format=absolute` both need Git 2.31 or newer.\n- Before 447281cf, only the commitHooks=true path used --path-format. Now every launch in a Git project fails closed with the generic MOE_AGENT_GIT_GUARD_FAILED on older Git, such as Ubuntu 20.04's 2.25.\n- TROUBLESHOOTING lists Git access, GIT_CONFIG_* and temp permissions, but never the minimum Git version.\n\n3. CLI environment policies:\n- If a CLI strips variable names containing KEY but keeps GIT_CONFIG_COUNT and GIT_CONFIG_VALUE_n, every git command in that seat dies: `error: missing config key GIT_CONFIG_KEY_0` / `fatal: unable to parse command-line config`, exit 128 (measured).\n- Measured: codex-cli 0.166 passes the keys through by default. With user-set `shell_environment_policy.ignore_default_excludes=false` it strips GIT_CONFIG_KEY_0 and keeps COUNT and VALUE_0.\n- gemini-cli 0.64 explicitly keeps GIT_CONFIG_* even under redaction. grok was not checked (static binary).\n- Either document this in TROUBLESHOOTING with the fix, or pick an overlay carrier without KEY in its name.\n\n4. docs/CONFIGURATION.md's env-var table lists wrapper variables such as MOE_DISABLE_CHECKPOINT, but not MOE_ALLOW_AGENT_GIT_WRITES. Add it, marked human-only.",
+  "definitionOfDone": [
+    "On native Windows PowerShell 5.1, a gemini or grok seat whose [IO.Path]::GetTempPath() contains non-ASCII characters launches a guarded CLI, and its guard root is removed after exit. A new case in scripts/tests/agent-git-guard.test.mjs proves this: it fails before the fix and passes after.",
+    "When guard setup fails on Git older than 2.31, the wrapper or docs/TROUBLESHOOTING.md (Agent Git-write refusal) names the minimum Git version. TROUBLESHOOTING also documents the KEY-stripping CLI-policy failure and its fix, unless the overlay no longer uses KEY-named variables.",
+    "docs/CONFIGURATION.md lists MOE_ALLOW_AGENT_GIT_WRITES as a human-only override. The guard suite (Linux bash and native Windows PS 5.1), postflight-safe bash and powershell, parity-check, and the two launcher harness test files all pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "QA",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-57bbd302b69241f1986accbe2d170fa3"
+  ],
+  "priority": "LOW",
+  "order": 315.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T18:19:53.148Z",
+  "updatedAt": "2026-10-30T18:19:53.148Z"
+}

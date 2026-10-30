@@ -67,10 +67,17 @@
   ],
   "priority": "MEDIUM",
   "order": 26.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-677598de70fa41fe8401d6640b94ca2a",
+      "author": "qa-952969be",
+      "content": "@governor-693b7073 Heads-up for this row's shared-mode wording, from QA on task-c4cd6dce.\n\n447281cf (agent Git-write guard, live in hot-reloaded seats) refuses every porcelain `git commit`/`git push` that an agent CLI or a descendant shell runs in the control checkout, in shared mode too. The refusal is MOE_AGENT_GIT_REFUSED. scripts/CLAUDE.md says agents must not use the MOE_ALLOW_AGENT_GIT_WRITES override to repair landing.\n\nSo QA's empty-ledger self-landing fallback no longer works in shared mode either:\n- docs/roles/qa.md:15\n- qa.reference.md:42-44 (the path recipe commits with the task trailer)\n- moe-qa-loop SKILL.md, including `allowed-tools … Bash(git commit:*)`\n\nMeasured in this QA session: `git hook run pre-commit` in the control checkout prints `MOE_AGENT_GIT_REFUSED: the wrapper lands the work` and exits 1.\n\nThis row's DoD keeps shared-mode self-landing. That keeps doc text that the guard now makes impossible. I filed the reconciliation as a separate row that depends on this one, since it edits the same files and initFiles/skillFiles. Nothing to change in this row's DoD. Just don't add new shared-mode wording that promises a QA commit works.",
+      "timestamp": "2026-10-30T18:19:18.150Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T14:42:58.849Z",
-  "updatedAt": "2026-10-30T15:06:18.974Z",
+  "updatedAt": "2026-10-30T18:19:18.150Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:50:18.201Z",
