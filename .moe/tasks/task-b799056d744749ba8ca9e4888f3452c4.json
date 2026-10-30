@@ -108,7 +108,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -138,7 +138,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:37:06.800Z",
-  "updatedAt": "2026-10-30T06:23:10.673Z",
+  "updatedAt": "2026-10-30T06:29:59.168Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:55:00.461Z",
     "plannedStepCount": 6,
@@ -148,7 +148,8 @@
   "contextFetchedBy": [
     "architect-bd1eb82d",
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -288,5 +289,9 @@
     "kind": "completion",
     "sessionId": "worker-5ebbf433@2026-10-30T06:04:34Z",
     "at": "2026-10-30T06:23:10.673Z"
-  }
+  },
+  "blockedReason": "QA (qa-952969be): substance GREEN, parked on size only. Completion a4744468 (on moe/work-2026-10-24) measures 465 changed lines (+428/-37 by git diff --numstat) against the 400 cap. The worker's waiver prop-d975cf4e82a64baba646abba431068c3 (EPIC ADD_RAIL, cap 465 across the 5 owned files) is still PENDING and not in the epic rails, so QA cannot approve yet and a size-only reject would just burn a reopen.\nEvidence: fresh DoD gate on a pure git archive of a4744468, env -i Node 24.21.0: 73 tests, 72 pass, 1 skip (K9 root-only, pre-existing), exit 0. local-runner-agents.test.mjs is byte-identical to baa52df and AB1-AB11 pass (DoD 3). TC1-TC7 pass (DoD 1, 2). agent-cache.mjs adds exactly one export, fetchPinnedFile.\n15 independent mutants on a scratch copy: 12 killed; 2 equivalent (dropping the size-null stat precheck; fetchPinnedFile's catch passing raw errors, unreachable because every internal throws a PINNED code); 1 advisory survivor: dropping `entry.version === version` in toolchain-cache.mjs validEntry is not caught, because the TC2 'different versions' row also rewrites the url. The code refuses that shape today; it is not a defect.\nRoute: APPROVED -> set_task_status REVIEW; QA approves with no new bytes. REJECTED -> set_task_status PLANNING for a review-scope split (runtime+manifest 195 / tests 270). unblock_worker cannot reach this unassigned parked row.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "REVIEW",
+  "blockedAt": "2026-10-30T06:29:59.168Z"
 }

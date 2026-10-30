@@ -116,10 +116,17 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 226.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-25aab72268a4420eae3d572e569c89c3",
+      "author": "worker-e60b90bd",
+      "content": "For QA: V03's docs/MCP_SERVER.md changes are not in V03's landing commit cd2160e. Another task's landing, e67ca0e (task-574c0b36, 06:22:35Z), committed the whole file while V03's edits were in it, so V03's hunks were committed there. The completionSummary line \"MCP_SERVER.md (both tools, a Runner channel paragraph with the legacy/observe limit, and a note that record_check_run is diagnostic)\" refers to these hunks. Review them with `git show e67ca0e -- docs/MCP_SERVER.md`:\n- moe.record_check_run Notes: the \"Diagnostic, never authenticated evidence.\" bullet (HEAD L929)\n- `### moe.record_check_dispatch` (HEAD L948), including the \"Runner channel.\" paragraph and its \"Limit.\" (legacy/observe) bullet\n- `### moe.record_check_observation` (HEAD L1000)\nThe rest of e67ca0e's MCP_SERVER.md diff belongs to task-574c0b36, not V03: the NO_TEAM_MEMBERSHIP lines in claim_next_task/wait_for_task and the account-rotation END_SESSION sentence. Checked in git: e67ca0e is the only commit on docs/MCP_SERVER.md since then, and the working tree has no leftover diff on that file. V03's other deliverables (docs/SCHEMA.md, tools/recordCheckDispatch.ts, tools/recordCheckObservation.ts, tools/index.ts, tools/recordCheckObservation.test.ts) are in cd2160e as usual.",
+      "timestamp": "2026-10-30T06:29:57.200Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:54.656Z",
-  "updatedAt": "2026-10-30T06:26:18.397Z",
+  "updatedAt": "2026-10-30T06:29:57.200Z",
   "dependsOn": [
     "task-23a5563cea384d56abb8da1551435455",
     "task-0795112597cb453f93aaa5106e92d023",
@@ -242,7 +249,52 @@
     "packages/moe-daemon/src/tools/recordCheckObservation.ts",
     "packages/moe-daemon/src/tools/index.ts",
     "docs/MCP_SERVER.md",
+    "docs/SCHEMA.md",
+    ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+    ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+    ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+    ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+    ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json"
+  ],
+  "completionSummary": "CQ-V03 tool slice: two runner-channel tools, thin delegates over V03b's checkObservationStore.\n- tools/recordCheckDispatch.ts: moe.record_check_dispatch, plus the shared guard runnerToolCall. Missing context.runner gives NOT_ALLOWED RUNNER_CHANNEL_REQUIRED before args are read; non-object args give INVALID_INPUT params; an unknown key gives INVALID_INPUT naming it.\n- tools/recordCheckObservation.ts: moe.record_check_observation. Its binding comes from the recorded dispatch, and runnerId from the channel.\n- tools/index.ts +6: getTools entries, and TOOL_AUDIENCE 'wrapper' for both, which toolAudience.test requires; it hides them from agent roles.\n- Docs: SCHEMA.md (CheckDispatch/CheckObservation sections and rules); MCP_SERVER.md (both tools, a Runner channel paragraph with the legacy/observe limit, and a note that record_check_run is diagnostic).\nDoD -> tests (tools/recordCheckObservation.test.ts, 24):\n1. T1: /mcp and a {} context are refused, writing nothing. T2: runnerId, source, candidateId, treeSha, command and planRevision are each refused by name. T3: a record_check_run run with the real runnerId and dispatchId fails isAuthenticatedCheckRun; the observed run passes, bound to the dispatch. T6: a real /runner round trip is authenticated; /mcp with the key header writes nothing.\n2. T4: an identical replay gives duplicate:true with bytes unchanged; CHECK_RUN_IMMUTABLE; CHECK_DISPATCH_ALREADY_OBSERVED; CHECK_DISPATCH_IMMUTABLE.\n3. T5: a superseded dispatch at revision 2 still binds cand-k1, its tree and revision 1. NOT_CURRENT and NOT_FOUND are refused.\n4. Gate EXIT 0 (verification); tsc 0.\nMutants: 7/7 killed.\nSize: packages/ net +389 (runtime 147, tests 242). Rail files (checkRunStore, recordCheckRun, policy, the store, server/*, guest-bridge) are unchanged.\nLANDING: the peer completion e67ca0e (task-574c0b36) swept this task's MCP_SERVER.md sections into its commit 4 s before step 4 reported them. They are on the branch there; this landing carries SCHEMA.md, inde",
+  "commits": [
+    {
+      "sha": "cd2160e980ccd3aca81793863a3f221247c5efbf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-e60b90bd@2026-10-30T06:14:37Z",
+      "paths": [
+        ".moe/tasks/task-10af73355e1b4748b1e07491a7a891cb.json",
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-9cc131704d214e66afc8a51a524b35c2.json",
+        ".moe/tasks/task-f943b6877b5f48aeb282d819f9da013d.json",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/tools/index.ts",
+        "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+        "packages/moe-daemon/src/tools/recordCheckObservation.test.ts",
+        "packages/moe-daemon/src/tools/recordCheckObservation.ts"
+      ],
+      "recordedBy": "worker-e60b90bd",
+      "recordedAt": "2026-10-30T06:26:45.777Z",
+      "treeId": "8ff543f3b3c8d7561a91c462c81d150ed7183f38",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/recordCheckObservation.test.ts",
+    "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
+    "packages/moe-daemon/src/tools/recordCheckObservation.ts",
+    "docs/MCP_SERVER.md",
     "docs/SCHEMA.md"
   ],
-  "completionSummary": "CQ-V03 tool slice: two runner-channel tools, thin delegates over V03b's checkObservationStore.\n- tools/recordCheckDispatch.ts: moe.record_check_dispatch, plus the shared guard runnerToolCall. Missing context.runner gives NOT_ALLOWED RUNNER_CHANNEL_REQUIRED before args are read; non-object args give INVALID_INPUT params; an unknown key gives INVALID_INPUT naming it.\n- tools/recordCheckObservation.ts: moe.record_check_observation. Its binding comes from the recorded dispatch, and runnerId from the channel.\n- tools/index.ts +6: getTools entries, and TOOL_AUDIENCE 'wrapper' for both, which toolAudience.test requires; it hides them from agent roles.\n- Docs: SCHEMA.md (CheckDispatch/CheckObservation sections and rules); MCP_SERVER.md (both tools, a Runner channel paragraph with the legacy/observe limit, and a note that record_check_run is diagnostic).\nDoD -> tests (tools/recordCheckObservation.test.ts, 24):\n1. T1: /mcp and a {} context are refused, writing nothing. T2: runnerId, source, candidateId, treeSha, command and planRevision are each refused by name. T3: a record_check_run run with the real runnerId and dispatchId fails isAuthenticatedCheckRun; the observed run passes, bound to the dispatch. T6: a real /runner round trip is authenticated; /mcp with the key header writes nothing.\n2. T4: an identical replay gives duplicate:true with bytes unchanged; CHECK_RUN_IMMUTABLE; CHECK_DISPATCH_ALREADY_OBSERVED; CHECK_DISPATCH_IMMUTABLE.\n3. T5: a superseded dispatch at revision 2 still binds cand-k1, its tree and revision 1. NOT_CURRENT and NOT_FOUND are refused.\n4. Gate EXIT 0 (verification); tsc 0.\nMutants: 7/7 killed.\nSize: packages/ net +389 (runtime 147, tests 242). Rail files (checkRunStore, recordCheckRun, policy, the store, server/*, guest-bridge) are unchanged.\nLANDING: the peer completion e67ca0e (task-574c0b36) swept this task's MCP_SERVER.md sections into its commit 4 s before step 4 reported them. They are on the branch there; this landing carries SCHEMA.md, inde"
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-e60b90bd@2026-10-30T06:14:37Z",
+    "at": "2026-10-30T06:26:45.777Z"
+  }
 }

@@ -13,9 +13,54 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red), scripts/tests/postflight.sh. Load test-driven-development.\n\nOrdering: this row becomes claimable only after CQ-V08b (task-7f82e200) and CQ-V04c (task-c4e076cd) are DONE, and both edit all four files of this plan. Re-read the landed bytes and anchor on names, never on line numbers.\n\nContract, pinned with CQ-R13c1 (landed in 71092fa):\n- The JetBrains launcher sets MOE_RUNTIME_PROTECTED to exactly '1', beside MOE_PROXY_PATH and MOE_DAEMON_PATH.\n- The refusal is one line on stderr, byte-identical in both wrappers, followed by exit code 1:\n  [ERROR] MOE_RUNTIME_PROTECTED_PATH_MISSING: <VAR> must be an absolute path to an existing file when MOE_RUNTIME_PROTECTED=1; refusing to start.\n- <VAR> is MOE_PROXY_PATH or MOE_DAEMON_PATH, checked in that order. The value is never printed.\n\nAdd one section, `[protected runtime]`, just before `echo \"PASS postflight.sh\"`, with the comment `Twin: postflight.ps1.` Keep it compact (target 90 lines or fewer; see the size budget in planningNotes): one setup block, one row helper and eight rows.\n\nSetup, under PR=\"$TMP_DIR/protected\":\n- PRJ=\"$PR/project\", with .moe/project.json (autoCommit false) and an empty .moe/messages/chan-general.jsonl, as in the [team join] row.\n- A marks file, \"$PR/marks\". Every fixture appends one line to it.\n- \"$PR/marked-proxy.js\": one prefix line that appends 'protected-proxy' to the marks file, followed by the bytes of \"$FAKE_PROXY\". Build it with `{ printf ...; cat \"$FAKE_PROXY\"; } > \"$PR/marked-proxy.js\"`. parity-check.sh fails on any redirect INTO $FAKE_PROXY and on any embedded fake-proxy body, so never write to $FAKE_PROXY and never copy its request-parsing line into the harness.\n- \"$PR/fake-daemon.js\": appends `protected-daemon <its argv after the script>` to the marks file, then writes \"<value after --project>/.moe/daemon.json\" as {port: 9876, pid: process.ppid, startedAt, projectPath}. process.ppid is the wrapper, which stays alive, so the wrapper's start poll accepts it.\n- Decoys for every legacy fallback. Each appends a 'decoy-...' line:\n  - \"$PR/bin/moe-proxy\" records 'decoy-proxy', then runs `exec node \"$FAKE_PROXY\" \"$@\"`, so a legacy run still works;\n  - \"$PR/bin/moe-daemon\" records, then exits 1;\n  - a global install at \"$PR/install\", named by \"$PR/home/.moe/config.json\" {\"installPath\": ...}. Its packages/moe-daemon/dist/index.js and packages/moe-proxy/dist/index.js each record, then exit 1.\n- A regular file, \"$PRJ/rel-proxy.js\", and a directory, \"$PR/dir.js\".\n\nRow helper: pr_run ROW MARKER PROXY DAEMON [extra wrapper args...].\n- First reset \"$PR/marks\", \"$PRJ/.mcp.json\", \"$PRJ/.moe/daemon.json\" and \"$PR/home/.config\".\n- MARKER '-' means unset; any other value is exported as given.\n- Run from a subshell whose cwd is \"$PRJ\", with PATH=\"$PR/bin:$TMP_DIR:$PATH\" HOME=\"$PR/home\" MOE_PROXY_PATH=PROXY MOE_DAEMON_PATH=DAEMON FAKE_CLAIM_MODE=idle MOE_TASKLESS_WAIT_SEC=5 MOE_DISABLE_HEARTBEAT=1:\n  timeout \"${POSTFLIGHT_TIMEOUT_SEC}s\" \"$WRAPPER\" --project \"$PRJ\" --worker-id worker-protected --role worker --command /bin/true --no-loop \"$@\"\n- Send the output to \"$PR/ROW.out\". Keep the exit code under set +e / set -e, as the other rows do.\n\nEach REFUSED row asserts all of:\n- the exit code is exactly 1;\n- an output line contains `MOE_RUNTIME_PROTECTED_PATH_MISSING: <VAR> must be`;\n- the output does not contain the PROXY or DAEMON value under test (skip this check for the empty value);\n- \"$PR/marks\" does not exist: no proxy, daemon or decoy ran;\n- neither \"$PRJ/.mcp.json\" nor \"$PR/home/.config/claude/mcp_servers.json\" exists.\n\nRows:\n- P1: marker '1', proxy \"$PR/missing/proxy.js\", daemon \"$PR/fake-daemon.js\". Refused, naming MOE_PROXY_PATH.\n- P2: marker '1', proxy \"$PR/marked-proxy.js\", daemon \"$PR/missing/daemon.js\". Refused, naming MOE_DAEMON_PATH.\n- P3: marker '1', proxy 'rel-proxy.js' (it exists relative to the cwd, but it is not absolute). Refused, naming MOE_PROXY_PATH.\n- P4: marker '1', daemon \"$PR/dir.js\" (a directory). Refused, naming MOE_DAEMON_PATH.\n- P5: marker '1', proxy '' (set but empty). Refused, naming MOE_PROXY_PATH.\n- P6: marker '1', both paths valid, no --no-start-daemon, and no daemon.json. It proceeds:\n  - no refusal code;\n  - marks contains `protected-daemon start --project $PRJ` and `protected-proxy`, and no `decoy` line;\n  - \"$PRJ/.mcp.json\" mcpServers.moe.args equals [\"$PR/marked-proxy.js\"] (read it with node or python).\n- P7: marker unset, proxy \"$PR/missing/proxy.js\", with --no-start-daemon. It keeps today's fallback:\n  - no refusal code;\n  - marks contains `decoy-proxy`;\n  - .mcp.json mcpServers.moe.command is 'moe-proxy'.\n- P8: marker '01', proxy \"$PR/marked-proxy.js\", daemon \"$PR/missing/daemon.js\", with --no-start-daemon. It stays legacy, because only exactly '1' protects:\n  - no refusal code;\n  - marks contains `protected-proxy`.\n\nRED proof, using a trimmed scratch harness (mem:convention-postflight-scratch-harness):\n- Copy scripts/ into a snapshot directory on /mnt/d (mem:gotcha-shared-tree-long-harness-needs-snapshot).\n- Build x-scratch.sh from postflight.sh's prelude, up to and including the line that copies postflight-fake-proxy.js to $FAKE_PROXY (re-grep for it), then the new section, then a PASS line.\n- Run it against HEAD's moe-agent.sh. P1 must fail; only P7 and P8 pass on HEAD.\n- Record the failing row and its reason in the step note.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN, scripts/moe-agent.sh.\n\nNever edit this file while any harness or wrapper from this checkout is running: live seats hot-reload it. Run `bash -n scripts/moe-agent.sh` before every save of a final version (mem:gotcha-editing-wrapper-while-harness-runs).\n\n1. Next to PROXY_PATH_OVERRIDE and DAEMON_PATH_OVERRIDE at the top, set RUNTIME_PROTECTED to 1 only when \"${MOE_RUNTIME_PROTECTED:-}\" = 1 (string equality); otherwise 0.\n   - Write it as an if/else. The file runs under set -e, so no bare `[ ] && X=1` (mem:gotcha-moe-agent-sh-set-e-unguarded-assignments).\n   - Add a short comment naming CQ-R13c2 and the JetBrains contract.\n2. Add a function, refuse_unprotected_runtime VAR. It prints the step-1 refusal line to stderr, with the ${RED}[ERROR]${NC} prefix other errors use, then exits 1. It never prints the value.\n3. The gate. Place it after the project checks and `export MOE_WORKER_ID`, and before `ensure_mcp_config` is defined or called. It then runs before any MCP config write, daemon start, proxy RPC or CLI.\n   When RUNTIME_PROTECTED=1, check PROXY_PATH_OVERRIDE, then DAEMON_PATH_OVERRIDE:\n   - a value is absolute if it matches `/*`, or the drive form `[A-Za-z]:[\\\\/]*` (Git Bash);\n   - refuse unless the value is absolute and `[ -f ]` holds.\n   In legacy mode the gate prints nothing.\n4. No fallback at the use sites. This closes the window after the gate: a file that vanishes later is refused, not replaced.\n   - In ensure_mcp_config, right after the override branch and before `command -v moe-proxy`, add `elif [ \"$RUNTIME_PROTECTED\" = 1 ]; then refuse_unprotected_runtime MOE_PROXY_PATH`.\n   - Add the same to the daemon autostart, before `command -v moe-daemon`, naming MOE_DAEMON_PATH.\n   - Leave TEAM_PROXY's own-root and global fallbacks unchanged. They are unreachable under protection, because PROXY_ARGS is always set.\n5. Legacy lines stay byte-identical. Make additions only, and do not reformat the existing fallback chains.\n\nError handling: guard every new command for set -e. The refusal is the only new output.\n\nRun the step-1 scratch harness against this wrapper. All eight rows must pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "TESTS FIRST (red), scripts/tests/postflight.ps1. Add the twin `[protected runtime]` section just before `Write-Host 'PASS postflight.ps1'`, with the comment `Twin: the [protected runtime] case in postflight.sh.` Use the same eight rows, the same assertions and the same marks lines. Keep it compact (target 110 lines or fewer).\n\nDifferences from the sh twin:\n- Env: rows set it on the harness process, and Invoke-WrapperProcess inherits it. Save and restore, in a finally, every variable the rows touch: MOE_RUNTIME_PROTECTED, MOE_PROXY_PATH, MOE_DAEMON_PATH, USERPROFILE, TEMP, TMP, FAKE_CLAIM_MODE, MOE_TASKLESS_WAIT_SEC and MOE_DISABLE_HEARTBEAT.\n- P5: in PowerShell, `$env:X = ''` deletes X (mem:gotcha-powershell-empty-env-var-deletes). So P5 is \"MOE_PROXY_PATH unset\", which the wrapper treats exactly like empty.\n- Wrapper args: -Project, -WorkerId worker-protected, -Role worker, -Command $trueCmd and -NoLoop, plus -NoStartDaemon for P7 and P8.\n- Decoys: the decoy global install is named by \"$USERPROFILE\\.moe\\config.json\" (Get-MoeInstallPath). The ps1 has no PATH fallback, so there is no bin decoy. The install's packages\\moe-proxy\\dist\\index.js decoy records 'decoy-proxy' and then carries the fake-proxy bytes, so P7 runs. P7 asserts that marks has 'decoy-proxy': today's ps1 order goes from a set-but-missing MOE_PROXY_PATH straight to the global install.\n- No project .mcp.json: the ps1 MCP config is a temp file. P6 therefore proves the proxy through the 'protected-proxy' mark and the absence of any decoy mark.\n- Refused rows also run with TEMP and TMP pointed at an empty per-row directory, and assert that it holds no moe-mcp-config-* file afterwards.\n- P3: wrap the run in Push-Location \"$prProject\" (Start-Process starts the child in the current location), so 'rel-proxy.js' exists relative to the wrapper's cwd. Pop-Location in a finally.\n- P6: the fake daemon writes process.ppid as its pid, which is the wrapper's PowerShell (the Start-Process parent). If that parent is not the wrapper on this engine, keep the fake daemon alive for up to 10 s instead, and say why.\n- Building the marked proxy without tripping parity-check:\n  - read it with `$proxyBody = [IO.File]::ReadAllText($fakeProxy)`, on its own line;\n  - write it with `[IO.File]::WriteAllText($prMarkedProxy, $prefix + $proxyBody)`;\n  - never put Set-Content, Add-Content or Out-File on a line that names $fakeProxy, and never pass $fakeProxy as the first argument of WriteAll*.\n- Quote paths into generated JS with ConvertTo-Json, as the daemon.json fixtures above do.\n- Save the file with the UTF-8 BOM and LF endings it has now.\n\nRED proof: run a trimmed copy of postflight.ps1 against HEAD's moe-agent.ps1, from the step-1 snapshot on /mnt/d.\n- The trimmed copy is the prelude through the $fakeProxy Copy-Item and the $trueCmd definition, then the new section, then the catch/finally.\n- Use the WSL recipe in mem:gotcha-qa-ps1-postflight-from-wsl: `env -u` every MOE_*/CLAUDE_* variable, a /mnt/d cwd, MOE_POSTFLIGHT_TIMEOUT_SEC=180, and `powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'D:\\\\...'`.\n- P1 must fail. If powershell.exe is unreachable, record that and continue.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "GREEN, scripts/moe-agent.ps1. This is the exact twin of step 2. Keep its UTF-8 BOM (parity-check fails without it) and its LF endings.\n\n1. Place the new code after `$env:GIT_TERMINAL_PROMPT = '0'` and before `$script:MoeDeregistered` and the PowerShell.Exiting registration. A refusal there cannot run Invoke-MoeDeregister through an unset proxy.\n   - Set `$script:MoeRuntimeProtected = ($env:MOE_RUNTIME_PROTECTED -ceq '1')`, with the same comment as the sh twin.\n   - Add a function, Stop-MoeProtectedRuntime([string]$Name). It writes the step-1 refusal line, with an `[ERROR] ` prefix and no color codes, through [Console]::Error.WriteLine, then runs `exit 1`. That exits the script pass, and the supervisor at the top of the file re-exits with 1.\n2. The gate. When protected, check 'MOE_PROXY_PATH', then 'MOE_DAEMON_PATH':\n   - take the value with the same .Trim('\"') the legacy reads apply;\n   - a value is absolute if it matches `^[A-Za-z]:[\\\\/]` or the UNC form `^[\\\\/]{2}[^\\\\/]`, or, only on a non-Windows pwsh ($PSVersionTable.PSEdition -eq 'Core' -and -not $IsWindows), if it starts with '/' by an Ordinal StartsWith;\n   - refuse unless the value is absolute and `Test-Path -LiteralPath $v -PathType Leaf` holds;\n   - do not use IsPathFullyQualified: PowerShell 5.1 does not have it.\n3. No fallback at the use sites.\n   - Insert `if ($script:MoeRuntimeProtected) { Stop-MoeProtectedRuntime 'MOE_PROXY_PATH' }` as the FIRST statement inside both proxy fallback branches: `if (-not $proxyScript) {` (own root), and the `if (-not (Test-Path $proxyScript)) {` that falls back to Get-MoeInstallPath.\n   - Do the same inside the two $daemonScript fallback branches, naming 'MOE_DAEMON_PATH'.\n   - Leave the legacy lines otherwise untouched.\n\nError handling: the file sets $ErrorActionPreference = 'Stop', so do not use Write-Error for the refusal. It would throw instead of exiting 1 with one line.\n\nRun the step-3 trimmed ps1 harness against this wrapper; all eight rows must pass. If powershell.exe is unreachable, at least parse the file with [System.Management.Automation.Language.Parser]::ParseFile under pwsh or powershell (mem:pattern-ps1-function-probe-via-ast), and record which engine ran.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFY ONCE, fresh, from a snapshot of scripts/, never from the live shared scripts/: other seats may edit or hot-reload the wrappers mid-run (mem:gotcha-shared-tree-long-harness-needs-snapshot).\n\nSet up the snapshot:\n- Use SNAP=/mnt/d/moe-scratch/r13c2-gate-<utc>.\n- Copy scripts/ there, and cmp the four task files against the worktree.\n- `git diff --stat HEAD -- scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1` must show only this task's hunks.\n\n1. The DoD command, from $SNAP: `bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh`.\n   - Run it in the background with a log; it takes 12 minutes or more on WSL. Set MOE_POSTFLIGHT_TIMEOUT_SEC=180 on a busy box.\n   - It must exit 0 and print `[protected runtime] ok` and `PASS parity-check.sh`.\n   - complete_task gets { command: 'bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh', exitCode, outputTail }.\n2. The PowerShell harness. Record each run in the completion summary with its engine and result, or as unavailable.\n   - postflight.ps1 under powershell.exe (5.1), from $SNAP, with the WSL recipe from step 3 (about 10-12 minutes).\n   - postflight.ps1 under pwsh.exe, when it is present.\n   - `pwsh -NoProfile -File scripts/tests/parity-check.ps1`, when pwsh exists.\n3. DoD 3: `grep -c` shows both MOE_RUNTIME_PROTECTED_PATH_MISSING and MOE_RUNTIME_PROTECTED in scripts/moe-agent.sh and in scripts/moe-agent.ps1.\n4. Size: `git diff --numstat HEAD -- <the four files>` must total 400 net changed lines or fewer. Report the number in the summary.\n\nA timeout or failure is diagnosed, never retried into green. When a ps1 run fails, rerun the parent revision's scripts before blaming the change (mem:gotcha-qa-ps1-postflight-from-wsl). Never weaken an assertion.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a launch that wants to run something other than the protected runtime.\n\n1. Mutants. Apply each in a scratch copy of the step-5 snapshot, never to the shared files. Run the trimmed sh harness, and the ps1 one where it is reachable. Each mutant must turn the named row red:\n   (a) no gate: P1;\n   (b) an existence test only, with no absolute check: P3;\n   (c) `-e`, or Test-Path without Leaf, accepting a directory: P4;\n   (d) the gate checks only MOE_PROXY_PATH: P2;\n   (e) any non-empty marker protects: P8;\n   (f) the gate moved after ensure_mcp_config or after the MCP temp config: P2 (a config is written before the daemon refusal);\n   (g) the message prints the value: P1;\n   (h) a protected success that prefers `command -v moe-proxy` or Get-MoeInstallPath: P6.\n   Afterwards restore, cmp, and rerun green.\n2. Resolution paths: in both wrappers, every proxy or daemon resolution either takes the exact override or refuses under protection. That includes TEAM_PROXY, moe_rpc, the codex/gemini/grok TOML writers and the heartbeat sidecar, which are all fed from PROXY_ARGS / $proxyScript.\n3. Legacy is byte-identical. Diff the legacy branches of both wrappers against HEAD: the legacy-visible change must be none.\n4. Edge cases:\n   - a value with spaces or quotes (ps1 Trim) stays a single argument;\n   - a symlink to a regular file passes [ -f ] / Test-Path Leaf, which is accepted, because the launcher already validates real files;\n   - Git Bash drive paths;\n   - a hot reload re-runs the gate.\n5. Concurrency: the gate is per process and reads only its own env and the filesystem, so seats cannot interfere with each other. A file deleted after the gate is refused at its use site, not fallen back from.\n\nRecord the findings and fixes in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,12 +69,87 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": "task-f4811a729f9e436ba129a65c12d348c1",
   "dependsOn": [
-    "task-7f82e200c224418896667560a49fe0ab"
+    "task-7f82e200c224418896667560a49fe0ab",
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2"
   ],
   "priority": "HIGH",
   "order": 254.25,
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:38.184Z",
-  "updatedAt": "2026-10-30T06:03:38.184Z"
+  "updatedAt": "2026-10-30T06:26:48.888Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:10:34.210Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-4ae016fb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:26:48.869Z",
+  "executionContract": {
+    "intendedBehavior": "With MOE_RUNTIME_PROTECTED exactly '1', scripts/moe-agent.sh and scripts/moe-agent.ps1 run only the proxy and daemon files that MOE_PROXY_PATH and MOE_DAEMON_PATH name. Each must be an absolute path to an existing regular file, checked before any MCP config, daemon, proxy RPC or CLI start. Otherwise the wrapper prints one MOE_RUNTIME_PROTECTED_PATH_MISSING line that names the variable, never its value, and exits 1. It never falls back to PATH, its own packages or the global install, even when a file vanishes after the check. Any other marker value keeps today's behavior byte-identical.",
+    "acceptanceCriteria": [
+      "Protected with a missing, relative, directory or empty MOE_PROXY_PATH: refused with exit 1 and the code naming MOE_PROXY_PATH. No MCP config is written and no proxy, daemon or decoy runs.",
+      "Protected with a missing or directory MOE_DAEMON_PATH: refused the same way, naming MOE_DAEMON_PATH.",
+      "Protected with both files valid: the daemon starts from exactly MOE_DAEMON_PATH and every RPC goes through exactly MOE_PROXY_PATH; no decoy fallback runs.",
+      "Marker unset: a missing MOE_PROXY_PATH still takes today's fallback (sh: moe-proxy on PATH; ps1: the global install).",
+      "Marker '01': legacy, with no refusal.",
+      "parity-check.sh passes, and both launchers contain MOE_RUNTIME_PROTECTED and MOE_RUNTIME_PROTECTED_PATH_MISSING."
+    ],
+    "invariants": [
+      "Legacy output and fallback order are unchanged.",
+      "The refusal never prints a path value.",
+      "The code, the variable name and the refusal sentence are spelled identically in both wrappers.",
+      "moe-agent.ps1 keeps its UTF-8 BOM.",
+      "No change to the JetBrains marker (CQ-R13c1), VS Code, the daemon or .moe."
+    ],
+    "compatibility": [
+      "Every existing postflight row (all legacy) passes unchanged.",
+      "The legacy MOE_PROXY_PATH/MOE_DAEMON_PATH semantics are unchanged: sh uses the value if `-f` holds, else falls back; ps1 trims quotes, then falls back."
+    ],
+    "approvedScope": [
+      "moe-agent.sh: RUNTIME_PROTECTED, refuse_unprotected_runtime, the pre-ensure_mcp_config gate, and the elif refusals in ensure_mcp_config and the daemon autostart",
+      "moe-agent.ps1: $script:MoeRuntimeProtected, Stop-MoeProtectedRuntime, the gate before the PowerShell.Exiting registration, and first-statement refusals in the $proxyScript/$daemonScript fallback branches",
+      "the [protected runtime] sections (P1-P8) in postflight.sh and postflight.ps1"
+    ],
+    "reuse": [
+      "The harness row patterns of [team join]; the shared postflight-fake-proxy.js through a prefixed copy; get_moe_install_path/Get-MoeInstallPath as the decoy route."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh reads PROXY_PATH_OVERRIDE/DAEMON_PATH_OVERRIDE from MOE_PROXY_PATH/MOE_DAEMON_PATH at the top. ensure_mcp_config and the daemon autostart prefer the override only when `-f` holds.",
+      "scripts/moe-agent.ps1 resolves $proxyScript right after the PowerShell.Exiting registration, and $daemonScript inside the -not $NoStartDaemon block.",
+      "TerminalAgentLauncher.selectProtectedAgentRuntime sets MOE_RUNTIME_PROTECTED=1 (landed in 71092fa)."
+    ],
+    "checkRefs": [
+      "bash scripts/tests/postflight.sh && bash scripts/tests/parity-check.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: one early gate per wrapper, plus a refusal at each use-site fallback.\n- The gate refuses before any MCP config write, daemon start, proxy RPC or CLI.\n- The use-site refusal closes the window in which a protected file vanishes after the gate. That window is the scenario CQ-R13c1's description names.\n\nRejected:\n- A gate only: a file deleted between the gate and its use would still fall back to PATH, the wrapper's own root or the global install.\n- Use-site refusals only: the MCP config is written before the daemon site is reached, and DoD 1 says the refusal comes before any MCP config.\n- Rewriting the legacy fallback chains under an if/else: the re-indentation inflates the diff against QA's 400-line cap and risks legacy drift. Additive elif and first-statement guards keep the legacy lines byte-identical.\n- Editing parity-check.{sh,ps1} to list the new code: its auto families are prefix-scoped (MOE_COMMIT_/ATTR_/CHECKPOINT_/ATTRIBUTION_/ACCOUNT_), the task text says it 'still passes', and both harness rows already pin the code and variable spelling in each launcher. That keeps the plan at 4 files.\n- A docs edit: no doc names MOE_PROXY_PATH or MOE_DAEMON_PATH today, and CQ-R13 owns the epic docs sweep. A comment was left on CQ-R13 instead.",
+    "codebaseInsights": "- sh proxy: resolved once, in ensure_mcp_config (PROXY_CMD/PROXY_ARGS). The order is the override if `-f`, then `command -v moe-proxy`, then $ROOT_DIR/packages/moe-proxy/dist/index.js, then get_moe_install_path. The codex/gemini/grok TOML writers, TEAM_PROXY, moe_rpc and the heartbeat all reuse PROXY_ARGS/PROXY_CMD.\n- sh daemon: resolved in the autostart block, in the same order, with `command -v moe-daemon`.\n- ps1: a single $proxyScript is used everywhere downstream: the MCP temp config, the TOML writers, Invoke-MoeRpc and Start-HeartbeatSidecar.\n  - Its order: $env:MOE_PROXY_PATH with .Trim('\"'); if empty, $PSScriptRoot\\..; if Test-Path fails, Get-MoeInstallPath ($env:USERPROFILE\\.moe\\config.json); otherwise Write-Error and exit 1.\n  - $daemonScript does the same at the autostart.\n- ps1 registers PowerShell.Exiting -> Invoke-MoeDeregister before it resolves the proxy, so the gate must come before that registration.\n- moe-agent.sh runs under set -e. moe-agent.ps1 needs its UTF-8 BOM. Both files are LF.\n- JetBrains: selectProtectedAgentRuntime (TerminalAgentLauncher.kt) sets the three variables. WSL launches pass /mnt/ paths through toWslPath, so sh sees POSIX absolute paths and ps1 sees drive paths.\n- Harness: rows run the real wrapper with the fake proxy (postflight-fake-proxy.js), --no-start-daemon and --no-loop. parity-check forbids redirects into $FAKE_PROXY/$fakeProxy and any embedded proxy body.\n- Run times: the full postflight.sh takes 12 minutes or more on WSL; postflight.ps1 takes about 10-12 minutes via powershell.exe.",
+    "risks": "1) Contested files and order. CQ-V07, CQ-V08, CQ-V08b and CQ-V04c all edit these four files. I added CQ-V04c (task-c4e076cd) to this row's dependsOn, per the epic rail on serializing overlapping affectedFiles, so this row is claimed after both. Line numbers will have moved; re-read the files.\n2) Never edit moe-agent.sh while a harness or wrapper from this checkout is running. Live seats hot-reload it, so run `bash -n` before saving.\n3) QA's 400 net-line cap includes tests. Target 40 runtime lines or fewer per wrapper, and 90 (sh) and 110 (ps1) harness lines or fewer. Use a row helper, not copy-pasted rows.\n4) Harness runs launched from WSL into Windows leak MOE_*/CLAUDE_* env and fail from a /tmp cwd. Use the /mnt/d scratch recipe.\n5) PowerShell cannot hold an empty env var, so P5 is 'unset' in the ps1 twin.\n6) Under $ErrorActionPreference = 'Stop', a refusal through Write-Error throws instead of exiting 1.\n7) A legacy regression in the gate would brick every seat. The existing rows (all legacy), plus P7 and P8, are that guard.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/parity-check.sh",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:26:48.888Z",
+  "approvedPlanRevision": 1
 }

@@ -65,10 +65,17 @@
   ],
   "priority": "HIGH",
   "order": 253.2,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-2e8ca340eeef41cdaed3b821cb87fbdd",
+      "author": "architect-bd1eb82d",
+      "content": "Overlap note from architect-bd1eb82d, 2026-10-30, for whoever works this row.\n\nCQ-R10d3 (task-b8e7ad92, plan revision 1) lands before you, by way of CQ-R10d4. In scripts/local-runner/snapshot-transfer.mjs it already does what your step 3 calls \"extract the shared helper\":\n- It adds the internal `transfer(name, provider, options, delivered)` under that exact name and contract: assertNoMounts, then supervise(options), then TRANSFER_FRAME_INVALID unless delivered(), then assertNoMounts again. materializeSnapshot and verifyWorkspace both call it.\n- feed now iterates `for await`, and streamOptions also accepts async-iterable inputs. Sync generators feed exactly as before.\n- MODES gains 'agents', and installAgents is exported.\n\nReuse the landed helper instead of extracting it again, and add 'toolchain' beside 'agents' in MODES. Also: CQ-R10d3a (task-796f3c66) adds the supervisor's 'agents' mode, its main() argv entry and its header lines in guest-supervisor.py, ahead of you.",
+      "timestamp": "2026-10-30T06:28:47.379Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T22:52:33.539Z",
-  "updatedAt": "2026-10-29T23:00:54.271Z",
+  "updatedAt": "2026-10-30T06:28:47.379Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T22:57:25.378Z",
     "plannedStepCount": 5,

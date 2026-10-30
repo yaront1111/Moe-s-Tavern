@@ -13,9 +13,40 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/local-runner/snapshot-transfer.mjs: installAgents, the host half of CQ-R10d3a's 'agents' mode. CQ-R10d3a is task-796f3c66, a dependency, so it has landed. First read its LANDED install_agents and AG rows, and match that frame contract exactly:\n- per binary, {kind:'agent', cli, size, sha256}, then base64 {kind:'data', data} frames;\n- then {kind:'end'};\n- the guest answers with one {kind:'installed', count}.\n\nBefore your first edit, copy scripts/tests/local-runner.test.mjs to your scratch dir as a size baseline (see step 3).\n\n1. Imports: createHash (node:crypto), constants (node:fs), open (node:fs/promises), and { AGENT_CLIS, fetchAgentBinary } from './agent-cache.mjs'.\n   - There is no import cycle: agent-cache imports only guest-bootstrap, image-cache and doctor.\n   - Do NOT edit agent-cache.mjs.\n2. MODES gains 'agents'. The header comment gains one line for installAgents (CQ-R10d3).\n3. Async input:\n   - feed iterates with `for await (const frame of input)`.\n   - streamOptions accepts an input whose Symbol.asyncIterator or Symbol.iterator is a function. Everything else stays refused, so every T6 bad-input row still holds. A sync input behaves as before.\n   - On settle, for-await's return() closes an abandoned generator, so its finally runs.\n4. Shared helper, named exactly as CQ-R11e2's approved plan names it, so R11e2 reuses it instead of extracting it again: async function transfer(name, provider, options, delivered).\n   - It runs assertNoMounts, then supervise(options), then `if (!delivered()) throw transferError('TRANSFER_FRAME_INVALID')`, then assertNoMounts again.\n   - materializeSnapshot calls it with () => materialized, and verifyWorkspace with () => changed !== null. Their behavior is unchanged, and the T and VR rows pass untouched.\n5. async function* agentFrames(binaries). For each binary:\n   - yield its agent header;\n   - open its file with O_RDONLY | (O_NOFOLLOW ?? 0) | (O_NONBLOCK ?? 0), as agent-cache.mjs's holdsPin does, and require handle.stat().isFile();\n   - read exactly `size` bytes by position, in SNAPSHOT_CHUNK_BYTES chunks (a fresh Buffer each), into a running sha256;\n   - a short read, or a final digest that is not the pin, throws TRANSFER_INPUT_INVALID BEFORE that binary's last data frame is yielded, so the guest can never complete a binary this host did not re-verify;\n   - close the handle in finally.\n   After the last binary, yield end. Host memory stays at about one frame.\n6. export async function installAgents(options, seams):\n   - Read { name, arch, cacheDir, provider = {}, timeoutMs = MAX_TIMEOUT_MS } from options only when isRecord(options), so null is a fixed code, not a raw TypeError. The real CLIs total about 600 MB, hence the 600 s default.\n   - onFrame accepts exactly one {kind:'installed', count} with exact keys and count === binaries.length. Anything else is TRANSFER_FRAME_INVALID.\n   - Call streamOptions({ name, mode: 'agents', provider, timeoutMs, input: agentFrames(binaries), onFrame }) FIRST, so a bad name, provider or timeout is refused before any cache read, download or provider call. binaries is an array filled after this call; the generator body only runs when supervise feeds it.\n   - Then, for each cli of AGENT_CLIS, push { cli, ...await fetchAgentBinary({ cli, arch, cacheDir }, { fetch: seams?.fetch, manifest: seams?.manifest }) }. Its AGENT_BINARY_* codes propagate unchanged, before any provider call.\n   - Pins, sizes and files therefore come only from the installed manifest and the verified cache, never from the caller. manifest is fetchAgentBinary's test-only seam.\n   - Then await transfer(name, provider, options, () => installed), and resolve Object.freeze({ instance: name, agents: binaries.length, bytes: <sum of sizes>, executionReady: false }).\n   - JSDoc: copy-only; every byte comes from fetchAgentBinary's verified file and is re-hashed while it streams; no mount before or after; not an isolation claim.\n\nError handling: every failure is a fixed code.\n- TRANSFER_* comes from the stream, AGENT_BINARY_* from the cache, and PROVIDER_* or LIFECYCLE_* from assertNoMounts.\n- No message carries a path, guest text or byte.\n\nTests go in scripts/tests/local-runner.test.mjs, appended after CQ-R10d3a's AG rows under `// CQ-R10d3 host agent install and readiness`. Make every edit of this file with the Edit tool: a shell write leaves no tool witness, so a contested file can be held from landing (mem gotcha-local-runner-size-rails).\n- Reuse BIG, sha, dataFrames, fakeSpawn, transferProvider, transferRefused, PIPES, GUEST, guestDetail, HOST_MOUNT, scratch, failWith, PY_LOAD, PY_SUPERVISOR, NOT_POSIX, spawnChild, modeOf, readdirSync and readFileSync. Import installAgents and loadAgentManifest.\n- Helper agentCache(t):\n  - a scratch cacheDir holding <sha256>.bin stand-ins: claude is BIG (3 data frames) and codex is a short script;\n  - a structuredClone of loadAgentManifest() whose x64 pins carry the stand-ins' sizes and digests (sha256/size for claude, memberSha256/memberSize for codex);\n  - it returns { cacheDir, manifest, fetch }, and fetch fails the test, so every row also proves zero downloads.\n- AI1, a clean install. Assert:\n  - the frozen result { instance: GUEST, agents: 2, bytes, executionReady: false };\n  - proc.before is ['info','mountinfo'], guest.ids() is info+mountinfo twice, and nothing is unexpected;\n  - exactly one spawn ['multipass', snapshotArgv(GUEST, 'agents'), PIPES], and no kill;\n  - proc.frames() deepEqual [claude header, ...dataFrames(BIG), codex header, ...dataFrames(codex), {kind:'end'}];\n  - T4's backpressure bound on proc.peak.\n- AI2 refusals, table-driven:\n  - with zero provider calls and the cache untouched: null options, name 'primary', timeoutMs 600_001 and a non-function spawn are TRANSFER_INPUT_INVALID; arch 'mips' and a relative cacheDir are AGENT_BINARY_INPUT_INVALID;\n  - an empty cacheDir whose fetch seam rejects is AGENT_BINARY_DOWNLOAD_FAILED, with no provider call;\n  - info carrying HOST_MOUNT is TRANSFER_MOUNTS_PRESENT, with no spawn;\n  - guest replies of no frame, {count: 1}, two frames or an extra key are TRANSFER_FRAME_INVALID; exit 65 is TRANSFER_EXIT_FAILED;\n  - rewriting the cached codex file in the spawn hook (same length, other bytes, after fetchAgentBinary verified it) is TRANSFER_INPUT_INVALID, proc.kills is ['SIGKILL'], and the decoded stdin ends at the codex header, with no codex data frame and no end;\n  - truncating the file there instead is also TRANSFER_INPUT_INVALID.\n- AI3 (skip NOT_POSIX), end to end, as T7 does:\n  - a spawn runs the real supervisor's install_agents(0, 1, <scratch agents dir>, (os.getuid(), os.getgid())) through PY_LOAD;\n  - installAgents resolves;\n  - readdirSync of the agents dir is exactly ['claude', 'codex'];\n  - each file reads back its stand-in bytes, with modeOf 0o555.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/snapshot-transfer.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/local-runner/guest-readiness.mjs: the post-install agent check.\n\n1. Import { AGENT_CLIS, loadAgentManifest } from './agent-cache.mjs'.\n   - Define const AGENT_FILES = AGENT_CLIS.map(cli => `/opt/moe/agents/${cli}`); these are the supervisor's JOBS executables.\n   - The header comment gains one line: checkAgents is the post-install check, and bootstrap never runs it.\n2. GUEST_PROBES gains one entry, appended AFTER ...CHECKS: ['agentHashes', ['sudo', '-n', 'sha256sum', ...AGENT_FILES]].\n   - Keep it OUT of CHECKS. installAgents runs after bootstrap, so a bootstrap check would always report AGENT_MISSING.\n   - runGuestProbe accepts it only because it is in the frozen table.\n3. export async function checkAgents({ name, arch, provider = {} } = {}):\n   - Before any provider call, as in waitForGuestReady: an arch outside IMAGE_ARCHES throws bootstrapError('BOOTSTRAP_INPUT_INVALID'), and invoker(name, provider) validates the name and provider (LIFECYCLE_INPUT_INVALID).\n   - Expected digests come only from (await loadAgentManifest()).binaries[cli][arch]: memberSha256 for an archive pin (the member is what fetchAgentBinary caches and installAgents streams), sha256 otherwise. A caller can never supply one.\n   - Run one runGuestProbe(name, 'agentHashes', provider). sha256sum exits 1 with partial stdout when a file is missing, and runGuestProbe returns that as a result.\n   - For each cli, in AGENT_CLIS order: no outputLines entry ending with `  <file>` is AGENT_MISSING; a line that is not exactly `<pin>  <file>` is AGENT_HASH_MISMATCH.\n   - A thrown probe or provider failure is [reported(error)].\n   - Deduplicate in first-seen order, like boundaryFailures.\n   - Return { instance: name, agentsReady: failures.length === 0, executionReady: false, failures }.\n   - JSDoc: runs after installAgents, never at bootstrap; guest-reported evidence, not isolation.\n\nThis step's error handling: input errors throw fixed codes before any provider call, every probe outcome is a code, and no path or guest text leaves the function.\n\nTests go in scripts/tests/local-runner.test.mjs, edited with the Edit tool.\n- R07 probe table. These are the only R07 edits; every R07 row stays.\n  - EXPECTED_PROBES gains agentHashes after the identity loop.\n  - BOUNDARY also filters out 'agentHashes'.\n  - The count becomes 7 + 15 * IDENTITIES.length.\n  This proves the probe is in the fixed table and never in the bootstrap order, because the R07 order rows still compare against BOUNDARY.\n- RA, table-driven:\n  - Run checkAgents({ name: GUEST, arch, provider: { run: fake.run } }) over fakeGuest({ answers: { agentHashes } }).\n  - Each row asserts the whole result and fake.ids() deepEqual ['agentHashes'].\n  - Expected lines are built from the real installed manifest's x64 pins.\n  Rows:\n  - both pinned (code 0): agentsReady true, failures [];\n  - only the claude line (code 1): ['AGENT_MISSING'];\n  - claude with another digest: ['AGENT_HASH_MISMATCH'];\n  - codex showing its archive sha256 rather than the member's: ['AGENT_HASH_MISMATCH'];\n  - the x64 lines checked with arch 'arm64': ['AGENT_HASH_MISMATCH'];\n  - empty stdout (code 1): ['AGENT_MISSING'];\n  - claude changed and codex missing: ['AGENT_HASH_MISMATCH', 'AGENT_MISSING'], in AGENT_CLIS order;\n  - the probe answering { error: failWith({ code: 'ENOENT' }) }: ['PROVIDER_NOT_FOUND'].\n- Refusals with zero provider calls: arch 'mips' is BOOTSTRAP_INPUT_INVALID, and name 'primary' is LIFECYCLE_INPUT_INVALID.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/guest-readiness.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once and fresh from the repo root: `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs`. On WSL run it as `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs`.\n\n- It must exit 0, and its output tail is the complete_task verification evidence.\n- If a failure comes from a peer's dirty hunk in the shared tree, re-run on a pure `git archive HEAD` copy with your three files overlaid (mem gotcha-local-runner-tests-archive-export), and report both runs.\n- Size: count your own lines in local-runner.test.mjs with `diff` against step 1's scratch baseline, not with git diff, because peers' hunks can sit in the file. Count the two runtime files with `git diff --numstat`.\n- The target is at most 300 changed lines in total (additions plus deletions, comments included). QA's hard cap is 400. If you are over, compact the tests (shared row tables, one-line helpers) without dropping a row.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff. Load the adversarial-self-review skill.\n- On every settle path (guest exit, timeout, kill, an onFrame throw, an input throw), is the agentFrames handle closed, and is no read left pending?\n- Can a binary's last data frame, or end, ever be sent after its host re-hash failed or came up short?\n- Does streamOptions still refuse every T6 input, and does a sync generator still feed exactly as before?\n- Are materializeSnapshot and verifyWorkspace equivalent in behavior after the transfer extraction: call order, codes and results?\n- Could any caller value reach a pin, path, url or guest argv? Only arch and cacheDir should; manifest is the cache's test seam.\n- Is agentHashes absent from CHECKS and from the bootstrap order, and is its argv a fixed constant?\n- Two installAgents runs for different guests sharing one cacheDir: does fetchAgentBinary's atomic rename plus positional reads keep each stream whole?\n- null, empty and huge inputs; Windows, where O_NOFOLLOW and O_NONBLOCK fall back to 0 and AI3 skips on win32.\n- Is the final size within step 3's budget?\n- Would I be embarrassed if this shipped?\n\nFix every finding, then re-run step 3's command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -24,7 +55,8 @@
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
-    "task-4017cf1d0cab459eb98f488ea7e3a047"
+    "task-4017cf1d0cab459eb98f488ea7e3a047",
+    "task-796f3c66105e4a26b44cc04416ae8652"
   ],
   "priority": "HIGH",
   "order": 252.3,
@@ -44,9 +76,11 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T17:48:17.692Z",
-  "updatedAt": "2026-10-30T06:04:31.712Z",
+  "updatedAt": "2026-10-30T06:28:26.655Z",
   "metrics": {
-    "firstClaimAt": "2026-10-29T22:28:21.268Z"
+    "firstClaimAt": "2026-10-29T22:28:21.268Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3
   },
   "contextFetchedBy": [
     "architect-bd1eb82d"
@@ -55,5 +89,74 @@
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
   "blockedFromStatus": null,
-  "blockedAt": null
+  "blockedAt": null,
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:28:26.634Z",
+  "executionContract": {
+    "intendedBehavior": "installAgents({name, arch, cacheDir, provider, timeoutMs}, {fetch, manifest}) copies both pinned agent CLIs (agent-cache.mjs AGENT_CLIS) into an owned guest through the supervisor 'agents' mode of CQ-R10d3a.\n\n- It validates the stream options first.\n- It takes each binary only from fetchAgentBinary: the installed manifest's pin and a verified cache file.\n- It streams the binaries between two no-mount checks, re-hashing while it reads, so a binary's last data frame is sent only after the host bytes equal the pin.\n- It accepts exactly one {kind:'installed', count} frame.\n\ncheckAgents({name, arch, provider}) runs one fixed `sudo -n sha256sum /opt/moe/agents/claude /opt/moe/agents/codex` probe after the install. It compares the output with the installed manifest's pins and reports AGENT_MISSING, AGENT_HASH_MISMATCH or a provider code. Bootstrap readiness never runs it.\n\nexecutionReady stays false. Nothing here is an isolation or verified-local claim.",
+    "acceptanceCriteria": [
+      "DoD 1 (the agents mode) is delivered by the dependency CQ-R10d3a (task-796f3c66). Its AG rows run in this task's verification command, and AI3 drives that real supervisor mode end to end from installAgents.",
+      "DoD 2: AI1 proves the exact frames, both mount checks and the frozen result. AI2 proves that every refusal is a fixed TRANSFER_* or AGENT_BINARY_* code, that input errors make no provider call and no download, and that a cache file changed after verification is never completed in the guest.",
+      "DoD 3: RA proves AGENT_MISSING for an absent binary and AGENT_HASH_MISMATCH for a changed one, including the archive-versus-member and wrong-arch cases. Pins come only from the installed manifest.",
+      "DoD 4: the verification command exits 0 on a fresh run."
+    ],
+    "invariants": [
+      "materializeSnapshot and verifyWorkspace keep their exact behavior. Every T, M, VR and R07 row passes unchanged, apart from the three R07 probe-table lines.",
+      "streamOptions validates before any provider call, cache read or download.",
+      "Pins, sizes and files come only from fetchAgentBinary and the installed manifest. A caller supplies only arch and cacheDir.",
+      "Bootstrap CHECKS and waitForGuestReady's probe order are unchanged, and agentHashes is a fixed argv.",
+      "Only fixed codes with fixed messages: no path, guest text or byte in any error.",
+      "agent-cache.mjs, guest-supervisor.py and local-runner-agents.test.mjs are not edited."
+    ],
+    "compatibility": [
+      "runSupervisorStream callers that pass sync iterables (snapshot-import.mjs, check-lifecycle.mjs) behave as before.",
+      "materializeSnapshot and verifyWorkspace results and codes are unchanged for check-lifecycle.mjs and agent-lifecycle.mjs."
+    ],
+    "approvedScope": [
+      "snapshot-transfer.mjs: installAgents (exported); agentFrames; transfer(name, provider, options, delivered), internal and reused later by CQ-R11e2; MODES 'agents'; feed's for-await, with streamOptions accepting async iterables.",
+      "guest-readiness.mjs: checkAgents (exported), AGENT_FILES, and GUEST_PROBES.agentHashes appended after CHECKS and not part of CHECKS.",
+      "local-runner.test.mjs: the R07 probe-table extension (EXPECTED_PROBES.agentHashes, the BOUNDARY filter, the count 7 + 15n) plus the AI1-AI3 and RA rows."
+    ],
+    "reuse": [
+      "From agent-cache.mjs, unchanged: fetchAgentBinary, loadAgentManifest, AGENT_CLIS.",
+      "From snapshot-transfer.mjs: assertNoMounts, supervise, streamOptions, encodeFrame, SNAPSHOT_CHUNK_BYTES, transferError.",
+      "From guest-readiness.mjs and its imports: runGuestProbe, invoker, outputLines, reported, bootstrapError, IMAGE_ARCHES.",
+      "Test helpers: transferProvider, fakeSpawn, fakeGuest, failWith, dataFrames, BIG, sha, PY_LOAD, scratch."
+    ],
+    "sourceAssumptions": [
+      "agent-cache.mjs fetchAgentBinary(input, {fetch, manifest}) returns a frozen {file, sha256, size} for the member pin of an archive (codex memberSha256/memberSize). The file is <cacheDir>/<sha256>.bin, and a cache hit never fetches.",
+      "snapshot-transfer.mjs feed iterates its input synchronously today, and supervise kills the provider on any settle error.",
+      "guest-readiness.mjs runGuestProbe accepts only GUEST_PROBES ids and returns {code, stdout} for a remote non-zero exit.",
+      "local-runner.test.mjs pins GUEST_PROBES to EXPECTED_PROBES (6 + 15n) and the bootstrap order to BOUNDARY.",
+      "CQ-R10d3a provides install_agents(in_fd, out_fd, agents, owner) with the frame contract in the task-796f3c66 description."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-agents.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- One task: rejected. The estimate was 300-450 changed lines, and every CQ-R slice in this epic has landed at 1.5-2x its estimate, against QA's 400 cap. Split on the guest/host seam into CQ-R10d3a (the supervisor mode) and this task (host stream and readiness), following the R08b/c to R08 precedent.\n- Reading each binary into memory before streaming: rejected. About 611 MB peak.\n- A readSync-based sync generator: rejected. Sync I/O in a loop of about 600 iterations; feed's for-await is a 1-line change.\n- An agent check inside bootstrap CHECKS: rejected. It would always report AGENT_MISSING at bootstrap.\n- A caller-supplied binaries list: rejected. That would be caller-minted pins, which the epic rail forbids.",
+    "codebaseInsights": "- streamOptions is the pre-provider validation gate.\n- R07 pins the whole GUEST_PROBES table and the bootstrap order (BOUNDARY), and fakeGuest's PROBE_IDS come from EXPECTED_PROBES, so a new probe id needs exactly three test lines.\n- sha256sum exits 1 with partial stdout for a missing file.\n- holdsPin's open flags (O_NOFOLLOW, O_NONBLOCK) keep a FIFO from blocking a libuv thread.\n- R11e1 already landed (a474446): fetchAgentBinary's signature is unchanged and its internal PINNED_ codes map to AGENT_BINARY_.\n- CQ-R11e2's approved plan extracts `transfer(name, provider, options, delivered)`. This task extracts it first under the same name, and a comment on R11e2 says so.",
+    "risks": "- local-runner.test.mjs is shared. Use the Edit tool (contested-landing gotcha), and measure your own hunks against a scratch baseline.\n- The for-await change touches the stream used by materialize, export and verify, so keep the T rows green unchanged.\n- The drift row must mutate the cache file after fetchAgentBinary verified it; the spawn hook runs after the first mount check.\n- AI3 depends on R10d3a's install_agents signature: read the landed bytes.",
+    "keyFiles": [
+      "scripts/local-runner/snapshot-transfer.mjs",
+      "scripts/local-runner/guest-readiness.mjs",
+      "scripts/local-runner/agent-cache.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      "scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:28:26.655Z",
+  "approvedPlanRevision": 1
 }

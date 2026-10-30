@@ -15,7 +15,7 @@
   ],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -28,9 +28,23 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:04:16.594Z",
-  "updatedAt": "2026-10-30T06:05:00.794Z",
+  "updatedAt": "2026-10-30T06:30:49.419Z",
   "dependsOn": [
     "task-d00dafdf2dde4a41bf5983b1f7d495de",
     "task-001d8ab383ef41088e045b2e41ed0e1e"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:29:13.938Z"
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d"
+  ],
+  "blockedReason": "Not plannable yet. This row is blocked on its own two dependencies and returns to PLANNING automatically once both are DONE.\n\n1. CQ-R13e, task-d00dafdf2dde4a41bf5983b1f7d495de. Another architect is still planning it, and through it CQ-R13d.\n   - CQ-R13d creates scripts/local-runner/certify.mjs, with the CERTIFY_CHECKS BODY/TEARDOWN registry and the shared check context. The file is not in the tree yet, so submit_plan's affectedFiles check refuses it.\n   - CQ-R13e appends its checks, plus the snapshot generate-and-materialize step that check mode needs. 'check-containment' should reuse that step rather than duplicate it.\n2. CQ-R11e, task-001d8ab383ef41088e045b2e41ed0e1e. It owns runCheckJob's final shape with the toolchain and offline dependency phases, and its R11e1-e5 slices are still in flight. 'check-containment' drives runCheckJob and asserts its outcomes: 'inconclusive', and workspace 'changed'.\n\nPlanning now would mean guessing three unlanded APIs (the registry entry shape, R13e's snapshot helper, runCheckJob's result) and replanning later.\n\nResume: read the landed certify.mjs (BODY order, context fields, the teardown-last rule), R13e's checks and check-lifecycle.mjs runCheckJob. Then plan the three BODY checks, with 'controller-replacement' last before teardown, and fake-provider rows in scripts/tests/local-runner.test.mjs. Pointers are in this row's Serena handoff memory.",
+  "blockedOnTaskIds": [
+    "task-d00dafdf2dde4a41bf5983b1f7d495de",
+    "task-001d8ab383ef41088e045b2e41ed0e1e"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-10-30T06:30:49.419Z"
 }
