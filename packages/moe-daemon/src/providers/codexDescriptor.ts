@@ -26,9 +26,9 @@ const BASH_LAUNCH_INTERACTIVE =
   '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" -C "$PROJECT" "$SHORT_PROMPT"';
 const BASH_LAUNCH_EXEC =
   '"$COMMAND_BIN" "${COMMAND_ARGV[@]}" -c "model_instructions_file=$CODEX_SEAT_INSTRUCTIONS_FILE" -c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" "$SHORT_PROMPT"';
-const PS_LAUNCH_INTERACTIVE = '& $Command @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"';
+const PS_LAUNCH_INTERACTIVE = 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C "$projectPath" "$shortPrompt"';
 const PS_LAUNCH_EXEC =
-  '& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"';
+  'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs "$shortPrompt"';
 /** PowerShell builds the per-seat overrides once and splats them into both launches. */
 const PS_SEAT_ARG_WORKER_ID =
   "$codexSeatArgs += @('-c', (Get-CodexMoeServerOverride (Join-Path (Join-Path $projectPath '.codex') 'config.toml') $WorkerId))";
@@ -459,7 +459,7 @@ export const CODEX_DESCRIPTOR: ProviderDescriptor = {
           // cannot slip past the per-mode launch literals.
           emitterEvidence: {
             bash: ['-c "$CODEX_MOE_OVERRIDE" "${CODEX_TASK_ARGS[@]}" "${CODEX_EXEC_OVERRIDES[@]}" exec --json -C "$PROJECT" "${CODEX_SANDBOX_ARGS[@]}" --help 2>&1'],
-            powershell: ['(& $Command @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)'],
+            powershell: ['(Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C "$projectPath" @codexSandboxArgs --help 2>&1 | Out-String)'],
           },
         },
         escalation: {

@@ -15,30 +15,48 @@
     {
       "stepId": "step-1",
       "description": "Re-pin the three PowerShell emitter-evidence literals in packages/moe-daemon/src/providers/codexDescriptor.ts to the guarded launch lines that 447281cf wrote into scripts/moe-agent.ps1. The descriptor follows the launcher: do not edit either launcher.\n\n1. RED first, in a Linux snapshot (step 2's recipe, mem:gotcha-daemon-linux-snapshot-gate; the shared checkout's node_modules are Windows-native, so vitest does not start from WSL there). Run `npx vitest run src/providers/providerDescriptor.contract.test.ts`. Expected at fb47f668: 1 failed / 22 passed, in 'every emitted fact declares per-wrapper emitter evidence, and that evidence is at the emitting line'. The failure lists exactly the argv.tokensByMode.interactive-tui and argv.tokensByMode.exec-headless PowerShell literals. This existing contract test is the regression test; no new test file is needed.\n\n2. Make three edits. Copy each new string byte-for-byte from `grep -nF 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs' scripts/moe-agent.ps1` at YOUR HEAD. You can only claim once the dependsOn row c4cd6dce is DONE, so take its final bytes. If they differ from the strings below, the ps1 wins; say so in your summary. ps1 line numbers are from fb47f668.\n   - :29 PS_LAUNCH_INTERACTIVE becomes 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C \"$projectPath\" \"$shortPrompt\"' (ps1:7248).\n   - :30-31 PS_LAUNCH_EXEC becomes 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$projectPath\" @codexSandboxArgs \"$shortPrompt\"' (ps1:7227).\n   - :462 failures.classes[0].detection.emitterEvidence.powershell becomes '(Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$projectPath\" @codexSandboxArgs --help 2>&1 | Out-String)' (ps1:7206).\n   Mechanically: `& $Command @CommandArgs` becomes `Invoke-MoeGuardedCommand @CommandArgs` on exactly those three lines and nowhere else.\n\n3. Do NOT touch the bash literals: BASH_LAUNCH_INTERACTIVE, BASH_LAUNCH_EXEC and the bash --help probe. 447281cf put `agent_git_exec ` in front of \"$COMMAND_BIN\", so the old bash literals are still substrings of the launch lines and the RED run does not flag them. Widening them is out of scope.\n\n4. Optional, at most two comment lines above PS_LAUNCH_INTERACTIVE: PowerShell launches go through Invoke-MoeGuardedCommand, which wraps `& $Command @args` in the agent Git-write guard env, so its literals start there while bash's guard prefix sits before \"$COMMAND_BIN\". Do not write any daemon comment that matches /never (?:runs|executes|touches) git|runs no git|does not run git/i. util/daemonGitDocs.test.ts fails the full gate on such a comment.\n\n5. GREEN: overlay your file into the snapshot and re-run the contract file: 23/23 pass.\n\nError handling: the descriptor is pure data with no runtime path; nothing in the daemon imports it. Its failure mode is a silent stale pin. Two checks fail closed on it: the contract test (loadWrapper throws on a missing launcher; site-scoped literal checks) and step 2's grep checks.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/providers/codexDescriptor.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "note": "Three PS literals re-pinned byte-for-byte to ps1 lines 7206/7227/7248. Launchers untouched. Peer dirty paths noted and left alone.",
+      "startedAt": "2026-10-30T18:20:57.518Z",
+      "completedAt": "2026-10-30T18:21:03.488Z"
     },
     {
       "stepId": "step-2",
       "description": "Verification gate (DoD 1-3). Run this ONE exact command fresh from the repo root after your last edit. Its output is your complete_task evidence: command, exitCode, outputTail.\n\n( set -u; R=$(git rev-parse --show-toplevel) || exit 1; S=$(mktemp -d \"${TMPDIR:-/tmp}/moe-5b0e-gate.XXXXXX\") || exit 1; trap 'rm -rf \"$S\"' EXIT; F=packages/moe-daemon/src/providers/codexDescriptor.ts; N=\"$HOME/.nvm/versions/node/v24.21.0/bin\"; [ -x \"$N/node\" ] || N=$(dirname \"$(command -v node)\"); git -C \"$R\" archive HEAD | tar -x -C \"$S\" || exit 1; cp \"$R/$F\" \"$S/$F\" || exit 1; for L in 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs -C \"$projectPath\" \"$shortPrompt\"' 'Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$projectPath\" @codexSandboxArgs \"$shortPrompt\"' '(Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$projectPath\" @codexSandboxArgs --help 2>&1 | Out-String)'; do [ \"$(grep -cF -- \"$L\" \"$S/scripts/moe-agent.ps1\")\" = 1 ] || { echo \"NOT ONCE IN ps1: $L\"; exit 1; }; grep -qF -- \"$L\" \"$S/$F\" || { echo \"NOT PINNED: $L\"; exit 1; }; done; if grep -nF '& $Command' \"$S/$F\"; then echo 'STALE & $Command PIN'; exit 1; fi; cd \"$S/packages/moe-daemon\" || exit 1; env -i HOME=\"$HOME\" PATH=\"$N:/usr/local/bin:/usr/bin:/bin\" npm ci --no-audit --no-fund >/dev/null 2>&1 || { echo 'npm ci failed'; exit 1; }; env -i HOME=\"$HOME\" PATH=\"$N:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 npm test > \"$S/gate.log\" 2>&1; rc=$?; tr -d '\\000' < \"$S/gate.log\" | tail -n 8; echo \"GATE_EXIT=$rc\"; exit $rc )\n\nWhat it does:\n- Archives the whole repo at HEAD, with the launchers exactly as committed (that is the DoD 3 evidence), and overlays ONLY codexDescriptor.ts. Never overlay peers' dirty paths.\n- Fails closed unless each new literal occurs exactly once in the snapshot's ps1 and is present in the descriptor, and unless no `& $Command` pin remains. These greps are the only proof for the --help probe pin; see step 3.\n- Runs the full daemon `npm test` under env -i, so no MOE_* variables leak in and no Windows PATH is used. It exits with vitest's code. The trap removes the snapshot.\n\nArchitect dry run on fb47f668, with the fix applied by sed inside a snapshot: GATE_EXIT=0, 210 test files, 6071 passed, 20 skipped, about 38s. The same command on the unfixed tree stops at 'NOT PINNED: …' with exit 1 and leaves no temp dir behind. Counts may grow with peers' landings; the bar is 0 failed and GATE_EXIT=0.\n\nPlan-level error handling:\n- If any test file other than providerDescriptor.contract.test.ts fails, re-run that one file in a pristine HEAD snapshot with no overlay.\n- If it fails there too, it is not this task's bug. File a bug row (it must NOT dependsOn this task) and moe.report_blocked with blockedOnTaskIds naming that row.\n- Never weaken or skip a test to get green.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/providers/codexDescriptor.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "note": "Gate GATE_EXIT=0: 211 files, 6116 passed, 20 skipped.",
+      "startedAt": "2026-10-30T18:21:04.373Z",
+      "completedAt": "2026-10-30T18:21:51.243Z"
     },
     {
       "stepId": "step-3",
       "description": "Adversarial self-review of your own diff: load the adversarial-self-review skill, and attack the diff rather than defend it.\n1. This task's diff is codexDescriptor.ts only: 3 changed literal lines plus at most 2 comment lines. Edit no launcher, no test and no doc. The DoD 3 proof is your modifiedFiles plus step 2's HEAD-built launchers. Do not use `git diff --quiet` on the launchers as proof: peers' WIP may dirty them in the shared checkout. Note any such paths and leave them alone.\n2. Each new literal sits INSIDE the ps1 codex branch, not merely somewhere in the file. The branch runs from `if ($cliType -eq \"codex\") {` / `} elseif ($cliType -eq \"codex\") {` to the next gemini/grok/claude branch. The contract test's site check covers the two launch pins only.\n3. The --help probe pin (failures.classes[0].detection) is NOT asserted by the suite, because EMITTER_PINNED_PREFIXES covers only config., argv.tokensByMode. and argv.perSeatOverrides. Its proof is step 2's grep. Say exactly that in the completion summary; do not claim the suite covers it. The task rail forbids editing the contract test here.\n4. 'pins each session mode to its own whole launch invocation' still holds: both PS launch literals contain `$`, they differ from each other, and the four launch literals stay distinct.\n5. `grep -n 'Command' codexDescriptor.ts` shows no other stale call-operator text.\n6. Your comment, if any, avoids the util/daemonGitDocs.test.ts phrase.\nIf this review changes any byte, re-run step 2's exact command and report that fresh output, never an earlier run.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "packages/moe-daemon/src/providers/codexDescriptor.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/providers/codexDescriptor.ts"
+      ],
+      "note": "Review: the three literals sit at ps1 7206/7227/7248, inside the codex branch (7055-7257). No stale `& $Command` remains; the only other 'Command' hit is the unrelated proxyCommand. Diff is 3+/3- in codexDescriptor.ts, both launchers unchanged, no comment added, so no bytes changed after the gate. The --help probe pin is proven only by the step-2 grep, not by the vitest suite.",
+      "startedAt": "2026-10-30T18:21:52.312Z",
+      "completedAt": "2026-10-30T18:21:57.308Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -54,20 +72,26 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T17:54:47.878Z",
-  "updatedAt": "2026-10-30T18:14:50.798Z",
+  "updatedAt": "2026-10-30T18:22:01.270Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T17:54:52.806Z",
     "plannedStepCount": 3,
-    "plannedDistinctFileCount": 1
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
-    "architect-bd1eb82d"
+    "architect-bd1eb82d",
+    "worker-0062feec"
   ],
   "tier": "light",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T18:08:35.590Z",
   "executionContract": {
@@ -137,8 +161,7 @@
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-52fb6178b3684db89d6e8a5a351c63ea.json",
-    ".moe/tasks/task-af83018e892149a1a18cd6a946edeba5.json"
+    "packages/moe-daemon/src/providers/codexDescriptor.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
@@ -146,5 +169,15 @@
     "kind": "checkpoint",
     "sessionId": "architect-bd1eb82d@2026-10-30T17:54:52Z",
     "at": "2026-10-30T18:14:50.798Z"
-  }
+  },
+  "workStartedAt": "2026-10-30T18:20:57.518Z",
+  "reviewStartedAt": "2026-10-30T18:22:01.235Z",
+  "verification": {
+    "command": "step-2 gate: git archive HEAD snapshot + codexDescriptor.ts overlay, three grep -F pin checks, stale '& $Command' check, then env -i npm ci && npm test in packages/moe-daemon",
+    "exitCode": 0,
+    "outputTail": "Test Files  211 passed (211)\n      Tests  6116 passed | 20 skipped (6136)\n   Start at  20:21:14\n   Duration  36.78s (tests 92%, transform 4%, import 4%)\n\nGATE_EXIT=0",
+    "reportedAt": "2026-10-30T18:22:01.235Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Re-pinned the three PowerShell emitter-evidence literals in codexDescriptor.ts (PS_LAUNCH_INTERACTIVE, PS_LAUNCH_EXEC, the --help probe) from `& $Command @CommandArgs` to the Invoke-MoeGuardedCommand form at scripts/moe-agent.ps1 lines 7248, 7227 and 7206, all inside the codex branch. Diff is 3+/3- in that one file. Launchers, bash literals and the contract test are unchanged. Full daemon `npm test` in a Linux snapshot of HEAD with only this file overlaid: 211 files, 6116 passed, 20 skipped, GATE_EXIT=0, including providerDescriptor.contract.test.ts. The --help probe pin is not asserted by the vitest suite (EMITTER_PINNED_PREFIXES excludes failures.*); its proof is the gate's grep -F check, exactly once in the ps1 and present in the descriptor."
 }
