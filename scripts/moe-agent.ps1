@@ -2597,6 +2597,185 @@ function Invoke-MoeGit {
     return @{ Out = $out; Rc = $rc }
 }
 
+# $true when refs/heads/moe/task/$TaskId is fully landed in $Ref: merging it
+# into $Ref writes $Ref's own tree (design §1.7). Ancestry cannot be the test,
+# because a worktree completion lands as a squash commit. Any failure (git <
+# 2.38, an unknown ref, a conflict) is $false, not landed. WT-14 reuses it with
+# $Ref = refs/heads/<target>. Twin: task_branch_landed.
+function Test-MoeTaskBranchLanded([string]$Top, [string]$Ref, [string]$TaskId) {
+    $merged = Invoke-MoeGit -Top $Top -GitArgs @('merge-tree', '--write-tree', $Ref, "refs/heads/moe/task/$TaskId")
+    if ($merged.Rc -ne 0) { return $false }
+    $tree = Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '--quiet', "$Ref^{tree}")
+    if ($tree.Rc -ne 0) { return $false }
+    $t = "$(@($tree.Out) | Select-Object -First 1)"
+    return ($t.Length -gt 0 -and "$(@($merged.Out) | Select-Object -First 1)" -ceq $t)
+}
+
+# Refuse this worker seat before any CLI launch: print the code, park the task
+# with one moe.report_blocked, stop the sidecar and exit 1 (the pass's finally
+# deregisters, as for MOE_CLI_ARGV_REJECTED). `exit` is flow control, so no
+# catch swallows it. Twin: worktree_stop.
+function Stop-MoeWorktreeSeat([string]$Code, [string]$Detail) {
+    Write-Host "[ERROR] ${Code}: $Detail" -ForegroundColor Red
+    $blocked = $null
+    try { $blocked = Invoke-MoeRpc -Tool 'report_blocked' -Args @{ taskId = $preflightTaskId; workerId = $WorkerId; reason = "${Code}: $Detail" } } catch { $blocked = $null }
+    if ($null -eq $blocked) { Write-Host "[WARN] moe.report_blocked failed for $preflightTaskId; the seat stops anyway." -ForegroundColor Yellow }
+    Stop-HeartbeatSidecar
+    exit 1
+}
+
+# The seat's workspace from the fresh claim (WT-01), else get_context (WT-02):
+# @{ Mode = worktree|shared; Target; Foreign }. Foreign lists the task's
+# checkpoint/completion commits recorded on any ref but its own branch and the
+# target, the ref reduced to [A-Za-z0-9._/@-] for the refusal line. Twin: the
+# python parse in provision_worktree, whose strip() also drops \x1c-\x1f.
+function Get-MoeWorkspaceClaim($Claim, $Context, [string]$TaskId) {
+    $ws = Get-MoeProp $Claim 'workspace'
+    if ($ws -isnot [System.Management.Automation.PSCustomObject]) { $ws = Get-MoeProp $Context 'workspace' }
+    if ($ws -isnot [System.Management.Automation.PSCustomObject]) { $ws = $null }
+    $mode = Get-MoeProp $ws 'mode'
+    $target = Get-MoeProp $ws 'target'
+    $target = if ($target -is [string]) { $target -replace '^[\s\x1c-\x1f]+|[\s\x1c-\x1f]+\z', '' } else { '' }
+    if ($target -match '[\x00-\x1f\x7f]') { $target = '?' }
+    $own = @("moe/task/$TaskId", "refs/heads/moe/task/$TaskId", $target, "refs/heads/$target")
+    $foreign = @()
+    $task = Get-MoeProp $Context 'task'
+    $commits = if ($task -is [System.Management.Automation.PSCustomObject]) { $task.PSObject.Properties['commits'] } else { $null }
+    if ($commits -and $commits.Value -is [array]) {
+        foreach ($r in $commits.Value) {
+            if ($r -isnot [System.Management.Automation.PSCustomObject]) { continue }
+            $kind = Get-MoeProp $r 'kind'; $sha = Get-MoeProp $r 'sha'; $ref = Get-MoeProp $r 'ref'
+            if ($kind -isnot [string] -or @('checkpoint', 'completion') -cnotcontains $kind) { continue }
+            if ($ref -isnot [string]) { $ref = '' }
+            if ($sha -is [string] -and $sha -cmatch '^[0-9a-fA-F]{40}\z' -and $own -cnotcontains $ref) {
+                $safe = $ref -creplace '[^A-Za-z0-9._/@-]', '_'
+                $foreign += @{ Sha = $sha.ToLowerInvariant(); Ref = $(if ($safe) { $safe } else { '-' }) }
+            }
+        }
+    }
+    $isWorktree = $mode -is [string] -and $mode -ceq 'worktree'
+    return @{ Mode = $(if ($isWorktree) { 'worktree' } else { 'shared' }); Target = $target; Foreign = $foreign }
+}
+
+# Worker pre-flight, design §1.1-§1.6. Shared mode refuses only an unlanded
+# moe/task/<id> branch and touches nothing else (epic rail 4). Worktree mode
+# runs the guards in order, then Install-MoeTaskWorktree; there is no fallback
+# to the shared checkout. Any PowerShell error in worktree mode refuses too, so
+# a throw never reaches the CLI launch. Twin: provision_worktree.
+function Initialize-MoeWorktree([string]$TaskId, $Claim, $Context) {
+    $ws = Get-MoeWorkspaceClaim $Claim $Context $TaskId
+    if ($ws.Mode -cne 'worktree') {
+        $git = Get-MoeGitTop
+        if (-not $git) { return }
+        $task = Invoke-MoeGit -Top $git.Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/moe/task/$TaskId")
+        if ($task.Rc -eq 0 -and -not (Test-MoeTaskBranchLanded $git.Top 'HEAD' $TaskId)) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_MODE_MISMATCH' "shared-mode claim, but moe/task/$TaskId holds worktree bytes HEAD lacks; land or rescue that branch first"
+        }
+        return
+    }
+    try {
+        $v = Invoke-MoeGit -Top $projectPath -GitArgs @('--version')
+        $ver = if ($v.Rc -eq 0) { "$(@($v.Out) | Select-Object -First 1)" -creplace '^git version ', '' } else { '' }
+        if (-not ($ver -cmatch '^([0-9]+)\.([0-9]+)') -or [long]$Matches[1] -lt 2 -or ([long]$Matches[1] -eq 2 -and [long]$Matches[2] -lt 38)) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_UNSUPPORTED_GIT' "git $(if ($ver) { $ver } else { '(no version)' }) is older than 2.38; worktree mode needs git merge-tree --write-tree"
+        }
+        $git = Get-MoeGitTop
+        if (-not $git -or $git.Rel) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_PROJECT_NOT_TOP' "$projectPath is not the top level of a git work tree; worktree mode needs the project at the repository root"
+        }
+        $top = $git.Top; $target = $ws.Target
+        $h = Invoke-MoeGit -Top $top -GitArgs @('symbolic-ref', '-q', 'HEAD')
+        $head = if ($h.Rc -eq 0) { "$(@($h.Out) | Select-Object -First 1)".Trim() } else { '' }
+        if ($head -cne 'refs/heads/moe/control') {
+            Stop-MoeWorktreeSeat 'MOE_CONTROL_NOT_FOLLOWING' "the control checkout is on $(if ($head) { $head } else { 'a detached HEAD' }), not refs/heads/moe/control; switch it to moe/control first"
+        }
+        if (-not $target -or "$(@((Invoke-MoeGit -Top $top -GitArgs @('check-ref-format', '--branch', $target)).Out) | Select-Object -First 1)" -cne $target -or
+            (Invoke-MoeGit -Top $top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$target^{commit}")).Rc -ne 0) {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "the claim's target '$target' is not a local branch"
+        }
+        foreach ($f in $ws.Foreign) {
+            if ((Invoke-MoeGit -Top $top -GitArgs @('merge-base', '--is-ancestor', $f.Sha, "refs/heads/$target")).Rc -ne 0) {
+                Stop-MoeWorktreeSeat 'MOE_WORKTREE_MODE_MISMATCH' "task commit $($f.Sha) on $($f.Ref) is not in $target; land or rescue the shared-mode bytes first"
+            }
+        }
+        $w = "$top/.worktrees/$TaskId"
+        if ($PSVersionTable.PSVersion.Major -le 5 -or $IsWindows) {
+            $ls = Invoke-MoeGit -Top $top -GitArgs @('ls-tree', '-r', '-z', '--name-only', "refs/heads/$target")
+            $longest = 0
+            if ($ls.Rc -eq 0) { foreach ($n in ($ls.Out -join "`n").Split([char]0)) { if ($n.Length -gt $longest) { $longest = $n.Length } } }
+            $lp = Invoke-MoeGit -Top $top -GitArgs @('config', '--bool', 'core.longpaths')
+            if ($w.Length + 1 + $longest -gt 240 -and "$(@($lp.Out) | Select-Object -First 1)".Trim() -cne 'true') {
+                Stop-MoeWorktreeSeat 'MOE_WORKTREE_PATH_TOO_LONG' "$w plus its longest path ($longest characters) is over 240 characters and core.longpaths is off"
+            }
+        }
+        Install-MoeTaskWorktree $top $w "moe/task/$TaskId" $target $TaskId
+    } catch {
+        Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "worktree provisioning failed in PowerShell: $_"
+    }
+}
+
+# Reuse, re-add or create the locked sparse worktree $W on $Branch, cut from the
+# LOCAL target, then refuse a W holding .moe. It never deletes a branch, W/.moe,
+# or a W it did not add in this session. Sets $script:MoeWt{Mode,Path,Branch,
+# Target}. Twin: the second half of provision_worktree.
+function Install-MoeTaskWorktree([string]$Top, [string]$W, [string]$Branch, [string]$Target, [string]$TaskId) {
+    $last = { param($r) "$(@($r.Out) | Select-Object -Last 1)" }
+    # W's registration, matched under Get-MoeComparableProjectPath (D:/x is /mnt/d/x).
+    $list = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'list', '--porcelain', '-z')
+    if ($list.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree list failed in $Top" }
+    $want = Get-MoeComparableProjectPath $W
+    $recs = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($field in ($list.Out -join "`n").Split([char]0)) {
+        if ($field.StartsWith('worktree ', [StringComparison]::Ordinal)) { $recs.Add(@{ Path = $field.Substring(9); Ref = '' }) }
+        elseif ($field.StartsWith('branch ', [StringComparison]::Ordinal) -and $recs.Count) { $recs[$recs.Count - 1].Ref = $field.Substring(7) }
+    }
+    $hit = @($recs | Where-Object { [string]::Equals((Get-MoeComparableProjectPath $_.Path), $want, [StringComparison]::Ordinal) }) | Select-Object -First 1
+    $added = $false; $finish = $false
+    if ($hit) {
+        $verb = 'reused'
+        if ($hit.Ref -cne "refs/heads/$Branch") {
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "$W is registered on $(if ($hit.Ref) { $hit.Ref } else { 'a detached HEAD' }), not refs/heads/$Branch"
+        }
+        if (-not [string]::Equals($hit.Path, $W, [StringComparison]::Ordinal)) {
+            $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'repair', $W) -MergeStderr
+            if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree repair failed: $(& $last $r)" }
+        }
+        # An empty index: a session died between the add and read-tree. Finish it.
+        $r = Invoke-MoeGit -Top $W -GitArgs @('ls-files')
+        if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git ls-files failed in $W" }
+        $finish = -not (@($r.Out) -join '')
+    } elseif ((Test-Path -LiteralPath $W) -or (Test-MoeSymlink $W)) {
+        Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "$W exists but is not a registered worktree; a human must inspect it"
+    } else {
+        $added = $true
+        if ((Invoke-MoeGit -Top $Top -GitArgs @('rev-parse', '--verify', '--quiet', "refs/heads/$Branch")).Rc -eq 0) {
+            $verb = 're-added'
+            $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'add', '--lock', '--reason', "moe $TaskId", '--no-checkout', $W, $Branch) -MergeStderr
+        } else {
+            $verb = 'created'
+            $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'add', '--lock', '--reason', "moe $TaskId", '--no-checkout', '--no-track', '-b', $Branch, $W, "refs/heads/$Target") -MergeStderr
+        }
+        if ($r.Rc -ne 0) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git worktree add failed: $(& $last $r)" }
+    }
+    if ($added -or $finish) {
+        $r = Invoke-MoeGit -Top $W -GitArgs @('sparse-checkout', 'set', '--no-cone', '/*', '!/.moe/') -MergeStderr
+        if ($r.Rc -eq 0) { $r = Invoke-MoeGit -Top $W -GitArgs @('read-tree', '-mu', 'HEAD') -MergeStderr }
+        if ($r.Rc -ne 0) {
+            if ($added) {
+                $ahead = Invoke-MoeGit -Top $Top -GitArgs @('rev-list', '--count', "refs/heads/$Target..refs/heads/$Branch")
+                if ($ahead.Rc -eq 0 -and "$(@($ahead.Out) | Select-Object -First 1)".Trim() -ceq '0') { $null = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', '--force', $W) }
+            }
+            Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' "git sparse-checkout or read-tree failed in ${W}: $(& $last $r)"
+        }
+    }
+    $dotMoe = Join-Path $W '.moe'
+    if ((Test-Path -LiteralPath $dotMoe) -or (Test-MoeSymlink $dotMoe)) {
+        Stop-MoeWorktreeSeat 'MOE_WORKTREE_MOE_PRESENT' "$W/.moe exists; a worktree never holds .moe files, so a human must inspect it"
+    }
+    $script:MoeWtMode = 'worktree'; $script:MoeWtPath = $W; $script:MoeWtBranch = $Branch; $script:MoeWtTarget = $Target
+    Write-Host "[worktree] $verb $W on $Branch"
+}
+
 # $true only for a symbolic link (to a file, a directory or nothing). The
 # attribute check comes first, so an ordinary file never pays for the link
 # lookup; [IO.FileInfo] reads LinkType from the link itself, so a dangling link
@@ -6201,6 +6380,7 @@ do {
     $script:MoeAttemptId = ""; $script:MoeAttemptGeneration = $null; Remove-Item Env:MOE_ATTEMPT_ID, Env:MOE_ATTEMPT_GENERATION -ErrorAction SilentlyContinue
     $script:MoeRunnerId = "runner-" + [guid]::NewGuid().ToString("N")
     $preflightTaskId = ""
+    $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''
     # Per-task launch hint from claim_next_task (reset so a tier never leaks into the next task).
     $taskLaunchTier = ""; $taskLaunchModel = ""; $taskLaunchEffort = ""; $taskLaunchCodexModel = ""; $taskLaunchCodexEffort = ""
     $preflightHeldTaskId = ""
@@ -6798,6 +6978,11 @@ When it returns hasNext:true, call moe.claim_next_task, then moe.get_context.
 If moe.wait_for_task returns hasChatMessage:true, call moe.chat_read on chatMessage.channel and reply with moe.chat_send before calling moe.wait_for_task again. Do not claim a new task while a routed mention is unanswered.
 "@
     }
+
+    # -------- Worktree provisioning (worker seats; design §1) --------
+    # Before the pre-flight baseline, so a refusal leaves no fresh baseline; not
+    # gated on autoCommit. Provisions W or stops the seat (Initialize-MoeWorktree).
+    if ($AutoClaim -and $preflightOk -and $preflightTaskId -and $Role -eq 'worker') { Initialize-MoeWorktree $preflightTaskId $claim $preflightContext }
 
     # -------- Pre-flight baseline (land-on-every-exit) --------
     # The task is known and nothing has run yet: this is the single point

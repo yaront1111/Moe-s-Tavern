@@ -885,6 +885,9 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
     # Owner guard cases (one suite shared with postflight.sh).
     & node (Join-Path $root 'scripts\tests\postflight-owner-guard.cjs') ps1 $wrapper $fakeProxy $tempRoot $psExe
     if ($LASTEXITCODE -ne 0) { throw 'Owner guard scenarios failed' }
+    # Worktree provisioning cases (one suite shared with postflight.sh).
+    & node (Join-Path $root 'scripts\tests\postflight-worktree.cjs') ps1 $wrapper $fakeProxy $tempRoot $psExe
+    if ($LASTEXITCODE -ne 0) { throw 'Worktree provisioning scenarios failed' }
 
     $trueCmd = Join-Path $tempRoot 'true.cmd'
     Set-Content -Path $trueCmd -Encoding ASCII -Value "@echo off`r`nexit /b 0`r`n"

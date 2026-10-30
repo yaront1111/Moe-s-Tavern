@@ -1,0 +1,29 @@
+{
+  "id": "task-31187ec10ae54dd2b03f4c166f083f31",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: resumed worktree-mode task runs shared when the pre-flight get_context read fails",
+  "description": "claim_next_task's alreadyAssigned reply carries no workspace, so on a resume WT-04's provision_worktree / Initialize-MoeWorktree take the mode only from the pre-flight get_context (WT-02). When that one read fails (empty PREFLIGHT_CONTEXT / $null $preflightContext, e.g. a daemon restart), the mode reads as shared. If moe/task/<id> does not exist yet (the first session refused before the add), the CLI then launches in the control checkout with no refusal. Needs a contract decision: an unknown mode should fail closed without changing true shared-mode resumes (epic rail 4). Options: put workspace on alreadyAssigned, or refuse a resume whose context read failed while the control is on moe/control.",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-c20464ff64ca49fca4371dd9b5194364"
+  ],
+  "priority": "MEDIUM",
+  "order": 28,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T19:51:26.149Z",
+  "updatedAt": "2026-10-30T19:51:26.149Z"
+}

@@ -2813,6 +2813,172 @@ git_top() {
     return 0
 }
 
+# task_branch_landed REF TASKID -- 0 when refs/heads/moe/task/TASKID is fully
+# landed in REF: merging it into REF writes REF's own tree (design §1.7).
+# Ancestry cannot be the test, because a worktree completion lands as a squash
+# commit. Any failure (git < 2.38, an unknown ref, a conflict) is 1, not landed.
+# WT-14 reuses it with REF=refs/heads/<target>. Twin: Test-MoeTaskBranchLanded.
+task_branch_landed() {
+    local merged tree
+    merged=$(git -C "$MOE_TOP" merge-tree --write-tree "$1" "refs/heads/moe/task/$2" 2>/dev/null) || return 1
+    tree=$(git -C "$MOE_TOP" rev-parse --verify --quiet "$1^{tree}" 2>/dev/null) || return 1
+    [ -n "$tree" ] && [ "${merged%%$'\n'*}" = "$tree" ]
+}
+
+# worktree_stop CODE DETAIL -- refuse this worker seat before any CLI launch:
+# print the code, park the task with one moe.report_blocked, stop the sidecar
+# and exit 1 (the EXIT trap deregisters, as for MOE_CLI_ARGV_REJECTED). Call it
+# from the main shell only, never inside $(...), a pipeline or a subshell,
+# where exit would not end the seat. Twin: Stop-MoeWorktreeSeat.
+worktree_stop() {
+    local args
+    printf '%b[ERROR]%b %s: %s\n' "$RED" "$NC" "$1" "$2"
+    if ! args=$($PYTHON_CMD -c 'import json,sys; t,w,r=sys.argv[1:]; print(json.dumps({"taskId":t,"workerId":w,"reason":r}))' "$PREFLIGHT_TASK_ID" "$WORKER_ID" "$1: $2" 2>/dev/null) \
+        || ! moe_rpc report_blocked "$args" > /dev/null 2>&1; then
+        printf '%b[WARN]%b moe.report_blocked failed for %s; the seat stops anyway.\n' "$YELLOW" "$NC" "$PREFLIGHT_TASK_ID"
+    fi
+    stop_heartbeat_sidecar
+    exit 1
+}
+
+# provision_worktree -- worker pre-flight, design §1.1-§1.6. The fresh claim's
+# workspace (WT-01), else get_context's (WT-02), names the mode; none is shared.
+# Shared mode refuses only an unlanded moe/task/<id> branch and touches nothing
+# else (epic rail 4). Worktree mode runs the guards, then reuses, re-adds or
+# creates the locked sparse worktree W = <git top>/.worktrees/<id> on
+# moe/task/<id>, cut from the LOCAL target, or refuses: there is no fallback to
+# the shared checkout. It never deletes a branch, W/.moe, or a W it did not add
+# in this session. Sets MOE_WT_MODE/PATH/BRANCH/TARGET. Twin: Initialize-MoeWorktree.
+provision_worktree() {
+    local tid="$PREFLIGHT_TASK_ID" parsed mode target foreign ver head w branch found raw ref out verb longest sha fref
+    local added=false finish=false
+    local -a rows=()
+    # The claim and context travel on stdin: one env string is capped at 128 KiB.
+    parsed=$(printf '%s\036%s' "${CLAIM_RESULT:-}" "${PREFLIGHT_CONTEXT:-}" | $PYTHON_CMD -c '
+import json, re, sys
+tid = sys.argv[1]
+claim, _, ctx = sys.stdin.buffer.read().decode("utf-8", "replace").partition("\x1e")
+def load(s):
+    try:
+        d = json.loads(s)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+claim, ctx = load(claim), load(ctx)
+ws = claim.get("workspace") if isinstance(claim.get("workspace"), dict) else ctx.get("workspace")
+ws = ws if isinstance(ws, dict) else {}
+t = ws.get("target").strip() if isinstance(ws.get("target"), str) else ""
+t = "?" if re.search(r"[\x00-\x1f\x7f]", t) else t
+task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+own = {"moe/task/" + tid, "refs/heads/moe/task/" + tid, t, "refs/heads/" + t}
+out = []
+for r in task.get("commits") if isinstance(task.get("commits"), list) else []:
+    if not isinstance(r, dict) or r.get("kind") not in ("checkpoint", "completion"):
+        continue
+    sha, ref = r.get("sha"), r.get("ref") if isinstance(r.get("ref"), str) else ""
+    if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha) and ref not in own:
+        out.append(sha.lower() + ":" + (re.sub(r"[^A-Za-z0-9._/@-]", "_", ref) or "-"))
+sys.stdout.write(("worktree" if ws.get("mode") == "worktree" else "shared") + "\x1f" + t + "\x1f" + " ".join(out))
+' "$tid" 2>/dev/null) || parsed=""
+    IFS=$'\x1f' read -r mode target foreign <<< "$parsed" || true
+    if [ "$mode" != worktree ]; then
+        git_top || return 0
+        if git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/moe/task/$tid" > /dev/null && ! task_branch_landed HEAD "$tid"; then
+            worktree_stop MOE_WORKTREE_MODE_MISMATCH "shared-mode claim, but moe/task/$tid holds worktree bytes HEAD lacks; land or rescue that branch first"
+        fi
+        return 0
+    fi
+    ver=$(git --version 2>/dev/null) || ver=""
+    ver="${ver#git version }"
+    if ! [[ "$ver" =~ ^([0-9]+)\.([0-9]+) ]] || [ "${BASH_REMATCH[1]}" -lt 2 ] || { [ "${BASH_REMATCH[1]}" -eq 2 ] && [ "${BASH_REMATCH[2]}" -lt 38 ]; }; then
+        worktree_stop MOE_WORKTREE_UNSUPPORTED_GIT "git ${ver:-(no version)} is older than 2.38; worktree mode needs git merge-tree --write-tree"
+    fi
+    if ! git_top || [ -n "$MOE_REL" ]; then
+        worktree_stop MOE_WORKTREE_PROJECT_NOT_TOP "$PROJECT is not the top level of a git work tree; worktree mode needs the project at the repository root"
+    fi
+    head=$(git -C "$MOE_TOP" symbolic-ref -q HEAD 2>/dev/null) || head=""
+    if [ "$head" != refs/heads/moe/control ]; then
+        worktree_stop MOE_CONTROL_NOT_FOLLOWING "the control checkout is on ${head:-a detached HEAD}, not refs/heads/moe/control; switch it to moe/control first"
+    fi
+    if [ -z "$target" ] || [ "$(git -C "$MOE_TOP" check-ref-format --branch "$target" 2>/dev/null)" != "$target" ] \
+        || ! git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$target^{commit}" > /dev/null; then
+        worktree_stop MOE_WORKTREE_CREATE_FAILED "the claim's target '$target' is not a local branch"
+    fi
+    read -ra rows <<< "$foreign" || true
+    for sha in "${rows[@]}"; do
+        fref="${sha#*:}"; sha="${sha%%:*}"
+        git -C "$MOE_TOP" merge-base --is-ancestor "$sha" "refs/heads/$target" 2>/dev/null \
+            || worktree_stop MOE_WORKTREE_MODE_MISMATCH "task commit $sha on $fref is not in $target; land or rescue the shared-mode bytes first"
+    done
+    w="$MOE_TOP/.worktrees/$tid"; branch="moe/task/$tid"
+    case "${OSTYPE:-}" in
+        msys*|cygwin*)
+            longest=$(git -C "$MOE_TOP" ls-tree -r -z --name-only "refs/heads/$target" 2>/dev/null | $PYTHON_CMD -c 'import sys; print(max([len(n.decode("utf-8", "replace").encode("utf-16-le")) // 2 for n in sys.stdin.buffer.read().split(b"\0") if n] or [0]))' 2>/dev/null) || longest=0
+            case "$longest" in ''|*[!0-9]*) longest=0 ;; esac
+            if [ $(( ${#w} + 1 + longest )) -gt 240 ] && [ "$(git -C "$MOE_TOP" config --bool core.longpaths 2>/dev/null)" != true ]; then
+                worktree_stop MOE_WORKTREE_PATH_TOO_LONG "$w plus its longest path ($longest characters) is over 240 characters and core.longpaths is off"
+            fi ;;
+    esac
+    # W's registration, matched under probe_daemon_health's path rule (D:/x is /mnt/d/x).
+    found=$(set -o pipefail; git -C "$MOE_TOP" worktree list --porcelain -z 2>/dev/null | $PYTHON_CMD -c '
+import ntpath, posixpath, re, sys
+WINDOWS = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]")
+def comparable(p):
+    p = p.strip()
+    if WINDOWS.match(p):
+        return ntpath.normpath(p).replace("\\", "/").rstrip("/").lower()
+    p = posixpath.normpath(p)
+    m = re.match(r"/mnt/([A-Za-z])(?:/(.*))?$", p)
+    return (m.group(1) + ":" + ("/" + m.group(2) if m.group(2) else "")).lower() if m else p
+want, recs = comparable(sys.argv[1]), []
+for f in sys.stdin.buffer.read().decode("utf-8", "surrogateescape").split("\0"):
+    if f.startswith("worktree "):
+        recs.append([f[9:], ""])
+    elif f.startswith("branch ") and recs:
+        recs[-1][1] = f[7:]
+hit = [r for r in recs if comparable(r[0]) == want]
+out = "found\x1f" + hit[0][0] + "\x1f" + hit[0][1] if hit else "absent"
+sys.stdout.buffer.write(out.encode("utf-8", "surrogateescape"))
+' "$w") || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree list failed in $MOE_TOP"
+    IFS=$'\x1f' read -r found raw ref <<< "$found" || true
+    if [ "$found" = found ]; then
+        verb=reused
+        [ "$ref" = "refs/heads/$branch" ] || worktree_stop MOE_WORKTREE_CREATE_FAILED "$w is registered on ${ref:-a detached HEAD}, not refs/heads/$branch"
+        if [ "$raw" != "$w" ]; then
+            out=$(git -C "$MOE_TOP" worktree repair "$w" 2>&1) || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree repair failed: ${out##*$'\n'}"
+        fi
+        # An empty index: a session died between the add and read-tree. Finish it.
+        out=$(git -C "$w" ls-files 2>/dev/null) || worktree_stop MOE_WORKTREE_CREATE_FAILED "git ls-files failed in $w"
+        [ -n "$out" ] || finish=true
+    elif [ -e "$w" ] || [ -L "$w" ]; then
+        worktree_stop MOE_WORKTREE_CREATE_FAILED "$w exists but is not a registered worktree; a human must inspect it"
+    elif git -C "$MOE_TOP" rev-parse --verify --quiet "refs/heads/$branch" > /dev/null; then
+        verb=re-added; added=true
+        out=$(git -C "$MOE_TOP" worktree add --lock --reason "moe $tid" --no-checkout "$w" "$branch" 2>&1) \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree add failed: ${out##*$'\n'}"
+    else
+        verb=created; added=true
+        out=$(git -C "$MOE_TOP" worktree add --lock --reason "moe $tid" --no-checkout --no-track -b "$branch" "$w" "refs/heads/$target" 2>&1) \
+            || worktree_stop MOE_WORKTREE_CREATE_FAILED "git worktree add failed: ${out##*$'\n'}"
+    fi
+    if [ "$added" = true ] || [ "$finish" = true ]; then
+        # MSYS would rewrite '/*' into a Windows path under Git Bash.
+        if ! out=$(MSYS2_ARG_CONV_EXCL='*' git -C "$w" sparse-checkout set --no-cone '/*' '!/.moe/' 2>&1) \
+            || ! out=$(git -C "$w" read-tree -mu HEAD 2>&1); then
+            if [ "$added" = true ] && [ "$(git -C "$MOE_TOP" rev-list --count "refs/heads/$target..refs/heads/$branch" 2>/dev/null)" = 0 ]; then
+                git -C "$MOE_TOP" worktree remove --force --force "$w" > /dev/null 2>&1 || true
+            fi
+            worktree_stop MOE_WORKTREE_CREATE_FAILED "git sparse-checkout or read-tree failed in $w: ${out##*$'\n'}"
+        fi
+    fi
+    if [ -e "$w/.moe" ] || [ -L "$w/.moe" ]; then
+        worktree_stop MOE_WORKTREE_MOE_PRESENT "$w/.moe exists; a worktree never holds .moe files, so a human must inspect it"
+    fi
+    MOE_WT_MODE=worktree; MOE_WT_PATH="$w"; MOE_WT_BRANCH="$branch"; MOE_WT_TARGET="$target"
+    printf '[worktree] %s %s on %s\n' "$verb" "$w" "$branch"
+    return 0
+}
+
 # moe_snapshot_hash P -- the snapshot blob of TOP-relative P, the blob `git add`
 # would store; prints nothing and returns non-zero when P cannot be hashed. A
 # symlink is hashed by its link text: hash-object follows a link to its
@@ -3612,10 +3778,10 @@ LAND_PREFLIGHT_DIRTY=""
 resolve_attribution() {
     local mode="$1" tid="$2" snap="$3" bfile="$4" ufile="$5" toolfile="$6" scopefile="$7" outdir="$8" override="${9:-}"
     mkdir -p "$outdir" 2>/dev/null || return 1
-    MOE_LAND_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_LAND_CONTESTED="$CS_ATTR_CONTESTED" MOE_LAND_EXCLUDE="$CS_ATTR_EXCLUDE" \
-    MOE_LAND_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_LAND_POLICY_OVERRIDE="$override" \
-    MOE_LAND_BASE="${10:-}" MOE_LAND_INDEX="${11:-}" MOE_LAND_EVIDENCE="${LAND_EVIDENCE_FILE:-}" \
-    MOE_LAND_PREFLIGHT_DIRTY="${LAND_PREFLIGHT_DIRTY:-}" \
+    MOE_PY_UNDECLARED="$CS_ATTR_UNDECLARED" MOE_PY_CONTESTED="$CS_ATTR_CONTESTED" MOE_PY_EXCLUDE="$CS_ATTR_EXCLUDE" \
+    MOE_PY_BOARD_STATE="$CS_COMMIT_BOARD_STATE" MOE_PY_POLICY_OVERRIDE="$override" \
+    MOE_PY_BASE="${10:-}" MOE_PY_INDEX="${11:-}" MOE_PY_EVIDENCE="${LAND_EVIDENCE_FILE:-}" \
+    MOE_PY_PREFLIGHT_DIRTY="${LAND_PREFLIGHT_DIRTY:-}" \
     MOE_GIT_TOP="$MOE_TOP" MOE_GIT_REL="$MOE_REL" \
     $PYTHON_CMD - "$mode" "$tid" "$snap" "$bfile" "$ufile" "$toolfile" "$scopefile" "$outdir" 2>"$outdir/attr.err" <<'PYEOF'
 import json, os, re, subprocess, sys
@@ -3623,13 +3789,13 @@ mode, task_id, snap_f, b_f, u_f, tool_f, scope_f, out_dir = sys.argv[1:9]
 env = os.environ
 top = (env.get('MOE_GIT_TOP') or '').replace('\\', '/').rstrip('/')
 rel = env.get('MOE_GIT_REL') or ''
-undeclared = env.get('MOE_LAND_UNDECLARED') or 'solo'
-contested_policy = env.get('MOE_LAND_CONTESTED') or 'skip-untouched'
-board_state = (env.get('MOE_LAND_BOARD_STATE') or 'true') == 'true'
-override = env.get('MOE_LAND_POLICY_OVERRIDE') or ''
+undeclared = env.get('MOE_PY_UNDECLARED') or 'solo'
+contested_policy = env.get('MOE_PY_CONTESTED') or 'skip-untouched'
+board_state = (env.get('MOE_PY_BOARD_STATE') or 'true') == 'true'
+override = env.get('MOE_PY_POLICY_OVERRIDE') or ''
 if override == 'never':
     undeclared = 'never'
-exclude_extra = [e for e in (env.get('MOE_LAND_EXCLUDE') or '').split('\x1e') if e]
+exclude_extra = [e for e in (env.get('MOE_PY_EXCLUDE') or '').split('\x1e') if e]
 CI = sys.platform in ('win32', 'darwin')
 def key(p):
     return p.lower() if CI else p
@@ -3739,7 +3905,7 @@ for ent in (scope.get('peerDeclared') or []):
 # This session's whole pre-flight dirty snapshot (blob, xy, path rows) as a
 # key set; None = none (a recovery landing, a failed copy): no exception.
 PREFLIGHT_DIRTY = None
-pd_f = env.get('MOE_LAND_PREFLIGHT_DIRTY') or ''
+pd_f = env.get('MOE_PY_PREFLIGHT_DIRTY') or ''
 if pd_f and os.path.isfile(pd_f):
     try:
         with open(pd_f, encoding='utf-8', errors='surrogateescape') as fh:
@@ -3815,7 +3981,7 @@ def changed(pk, blob):
 # can be days older than the session, these are that session's own snapshot.
 # No evidence (a pre-flight that could not snapshot) fails closed: only TOOL.
 PRE = None
-ev_f = env.get('MOE_LAND_EVIDENCE') or ''
+ev_f = env.get('MOE_PY_EVIDENCE') or ''
 if ev_f and os.path.isfile(ev_f):
     PRE = {}
     for parts in read_rows(ev_f):
@@ -3915,7 +4081,7 @@ for pk in sorted(S):
 if mode == 'index':
     with open(snap_f, encoding='utf-8', errors='surrogateescape') as fh:
         cands = [tuple(row.split('\t', 2)) for row in fh.read().split('\0') if row]
-    if any(len(c) != 3 for c in cands) or not env.get('MOE_LAND_INDEX'):
+    if any(len(c) != 3 for c in cands) or not env.get('MOE_PY_INDEX'):
         raise ValueError('MOE_IMPORTEE_INDEX_INPUT_INVALID')
 # IMPORTEE GUARD (ps1 twin: Get-MoeMissingImportees). A landing source file
 # must not import a relative module that is neither in HEAD nor landing in
@@ -4134,7 +4300,7 @@ def relative_imports(source, jsx_source=False):
     return imports
 def head_paths():
     try:
-        target = env.get('MOE_LAND_BASE', '') if mode == 'index' else 'HEAD'
+        target = env.get('MOE_PY_BASE', '') if mode == 'index' else 'HEAD'
         if not target:
             return set()
         r = subprocess.run(['git', '-C', top, 'ls-tree', '-r', '--name-only', '-z', target], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -4191,7 +4357,7 @@ if src_cands:
         for reason, blob, p in src_cands:
             full = (top + '/' + p) if top else p
             if mode == 'index':
-                index_env = dict(env, GIT_INDEX_FILE=env['MOE_LAND_INDEX'])
+                index_env = dict(env, GIT_INDEX_FILE=env['MOE_PY_INDEX'])
                 actual = subprocess.run(['git', '-C', top, 'rev-parse', '--verify', ':0:' + p], env=index_env,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                 if actual.returncode != 0 or actual.stdout.decode('ascii', 'strict').strip() != blob:
@@ -6749,6 +6915,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # and the attempt pair onto the last three.
     export MOE_SESSION_ID="$MOE_SID"
     MOE_TOP=""
+    MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""
     MOE_REL=""
     MOE_GITDIR=""
     MOE_BASELINE_PATH=""
@@ -7758,6 +7925,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
         # seat parks after every task until the operator notices.
         PROMPT_BODY="$PROMPT_BODY INTERACTIVE session: this TUI stays open after you stop, and the wrapper claims the next task only once the CLI exits. End your one-line summary with: 'Exit this CLI session (e.g. /exit; keep the terminal tab open) to start the next task.'"
     fi
+
+    # -------- Worktree provisioning (worker seats; design §1) --------
+    # Before the pre-flight landing, so a refusal leaves no fresh baseline; not
+    # gated on autoCommit. Provisions W or stops the seat (provision_worktree).
+    if [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ -n "$PREFLIGHT_TASK_ID" ] && [ "$ROLE" = worker ]; then provision_worktree; fi
 
     # -------- Pre-flight landing: recovery, baseline, rescue-ref discovery --------
     # Runs once the task id is known and before the CLI starts (fresh claim
