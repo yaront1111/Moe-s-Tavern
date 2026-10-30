@@ -213,3 +213,69 @@ test('VC-M1 the daemon caller trusts only a bounded loopback daemon.json for thi
   assert.equal(silent.made[0].closed, 1);
   await rejectsWith(mcpCaller(project, { WebSocketImpl: null })('moe.list_resources', {}), 'DAEMON_UNREACHABLE');
 });
+
+/** Run `body` with MOE_RUNNER_STATE_DIR pointed at a scratch dir; env is restored even on a throw. */
+function withStateDir(t, body) {
+  const [state, home] = [scratch(t), scratch(t)];
+  const saved = ['MOE_RUNNER_STATE_DIR', 'HOME', 'USERPROFILE'].map(key => [key, process.env[key]]);
+  t.after(() => { for (const [key, value] of saved) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  Object.assign(process.env, { MOE_RUNNER_STATE_DIR: state, HOME: home, USERPROFILE: home });
+  return body(state);
+}
+const onWin32 = (t, then) => { // a win32 stand-in: platform flipped and path.resolve answering as Windows with cwd C:\work
+  if (process.platform === 'win32') return then();
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  t.after(() => Object.defineProperty(process, 'platform', platform));
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  t.mock.method(path, 'resolve', (...parts) => path.win32.resolve('C:\\work', ...parts));
+  return then();
+};
+
+test('VC-L2 canonical spellings keep their pre-fix keys and ledger dirs', t => withStateDir(t, state => {
+  // Literals taken from the pre-fix code; never recomputed, so a drift in the key shows here.
+  for (const spelling of ['D:/x', 'D:\\x', '/mnt/d/x']) {
+    assert.equal(canonicalProjectPath(spelling), 'd:/x');
+    assert.equal(ownedLedgerDir(spelling), path.join(state, 'e11c306f14173b564d02903d983005d9', 'vms'));
+  }
+  if (process.platform !== 'win32') { // its pre-fix value depends on the cwd drive on win32
+    assert.equal(canonicalProjectPath('/home/u/x'), '/home/u/x');
+    assert.equal(canonicalProjectPath('/home/U/X'), '/home/U/X'); // a POSIX path keeps its case
+    assert.equal(ownedLedgerDir('/home/u/x'), path.join(state, '323c3dfd5c9093fc987bfa6f5abd6e59', 'vms'));
+  }
+}));
+
+test('VC-L3 relative and non-normalized /mnt spellings map to the normalized key', { skip: process.platform === 'win32' && 'a Windows process never has a /mnt cwd' }, t => withStateDir(t, () => {
+  t.mock.method(process, 'cwd', () => '/mnt/d/x');
+  const rows = ['.', '/mnt/d/x/.', '/mnt/d/x/sub/..', '/mnt/d//x', 'sub/..', '/mnt/d/x/./', '/mnt/d/x/', '/mnt/d/x', 'D:\\x'];
+  assert.deepEqual(rows.map(input => [input, canonicalProjectPath(input)]), rows.map(input => [input, 'd:/x']));
+  assert.equal(canonicalProjectPath('sub'), 'd:/x/sub');
+  assert.equal(canonicalProjectPath('..'), 'd:');
+  assert.equal(canonicalProjectPath('/mnt/D/x'), 'd:/x');
+  assert.equal(canonicalProjectPath('/mnt/d/../../etc'), '/etc'); // resolves out of the mount: not a drive key
+  assert.equal(ownedLedgerDir('.'), ownedLedgerDir('D:/x'));
+  assert.equal(ownedLedgerDir('/mnt/d//x'), ownedLedgerDir('D:/x'));
+}));
+
+test('VC-L4 on win32 a raw /mnt path is posix-normalized before mapping', t => onWin32(t, () => {
+  const rows = ['/mnt/d/x/sub/..', '/mnt/d/x/./', '/mnt/d//x', 'D:\\x'];
+  assert.deepEqual(rows.map(input => [input, canonicalProjectPath(input)]), rows.map(input => [input, 'd:/x']));
+  assert.equal(canonicalProjectPath('/mnt/d/x/sub/../..'), 'd:');
+}));
+
+test('VC-M2 readDaemonInfo accepts this project\'s daemon.json in another spelling and still refuses another project', { skip: process.platform === 'win32' && 'a Windows process never has a /mnt cwd' }, async t => {
+  const project = scratch(t);
+  mkdirSync(path.join(project, '.moe'));
+  const cwd = process.cwd();
+  t.after(() => process.chdir(cwd));
+  process.chdir(project); // the relative '.' reads this file through the OS cwd...
+  t.mock.method(process, 'cwd', () => '/mnt/d/x'); // ...while canonicalization sees the WSL spelling
+  const info = projectPath => writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ port: 9876, pid: 1, startedAt: 'x', projectPath }));
+  for (const projectPath of ['/mnt/d/x', 'D:\\x', '/mnt/d//x/', '/mnt/d/x/sub/..']) {
+    info(projectPath);
+    assert.deepEqual(await readDaemonInfo('.'), { port: 9876 }, projectPath);
+  }
+  for (const projectPath of ['/mnt/d/y', '/mnt/c/x']) {
+    info(projectPath);
+    await rejectsWith(readDaemonInfo('.'), 'DAEMON_UNREACHABLE');
+  }
+});

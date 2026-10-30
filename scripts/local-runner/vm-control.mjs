@@ -27,15 +27,19 @@ const controlError = (code, fallback = 'VM_CONTROL_FAILED') =>
 const unreachable = () => controlError('DAEMON_UNREACHABLE');
 const windowsDrive = value => path.win32.normalize(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
-/** A port of comparableProjectPath (packages/moe-proxy/src/utils.ts): D:/x, D:\x and /mnt/d/x are one project. */
+/** A port of comparableProjectPath (packages/moe-proxy/src/utils.ts, twin in packages/moe-daemon/src/index.ts):
+ * D:/x, D:\x and /mnt/d/x are one project, and so are their relative and non-normalized spellings. */
 export function canonicalProjectPath(projectPath) {
   const raw = projectPath.trim();
-  // Both special forms are matched on the raw string: path.resolve would mangle either on the other OS.
+  // A drive path is matched raw: off Windows, path.resolve would treat it as relative. /mnt/<d> is matched only after
+  // normalizing: path.resolve on POSIX, path.posix.normalize of the raw string on win32, where resolve prefixes the cwd drive.
   if (/^[a-zA-Z]:[\\/]/.test(raw)) return windowsDrive(raw);
-  const wsl = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(raw);
-  const rest = (wsl?.[2] ?? '').replace(/\/+$/, '');
-  if (wsl) return `${wsl[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
   const resolved = path.resolve(raw);
+  const wsl = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(process.platform === 'win32' ? path.posix.normalize(raw) : resolved);
+  if (wsl) {
+    const rest = (wsl[2] ?? '').replace(/\/+$/, '');
+    return `${wsl[1]}:${rest ? `/${rest}` : ''}`.toLowerCase();
+  }
   return /^[a-zA-Z]:[\\/]/.test(resolved) ? windowsDrive(resolved) : process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
