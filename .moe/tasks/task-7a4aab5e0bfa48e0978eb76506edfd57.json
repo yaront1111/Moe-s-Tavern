@@ -121,11 +121,17 @@
       "author": "architect-899a90d6",
       "content": "From WT-07's plan (task-b319b263), the pieces WT-08 builds on:\n- L0-L2 helper: sh land_worktree_checkpoint W BRANCH / ps1 Invoke-MoeWorktreeCheckpoint. It runs:\n  - the owner guard;\n  - the W dirty set minus the DENY variant (sh resolve_attribution MODE worktree with denied_wt; ps1 Test-MoeDenyPathWorktree);\n  - a temp-index commit with parent T, then ONE update-ref CAS on refs/heads/moe/task/<id>;\n  - an index refresh of W.\n  It returns the usual LAND_* / result shape.\n- push_task_branch / Push-MoeTaskBranch: explicit refspec, no force, no MOE_PUSH_REBASE.\n- control_worktree_mode / Test-MoeControlWorktreeMode: the control HEAD is refs/heads/moe/control.\n- The interim tail that WT-08 must replace: a worktree completion exit (REVIEW/DONE) runs that L0-L2 and then sets LAND_OUTCOME=failed with \"[WARN] worktree completion landing to the target is not available in this wrapper…\", so finalize reports failed and never landed. WT-08 swaps that tail for L3-L12. A worktree-mode exit never reaches run_landing / ensure_safe_branch / push_branch / baseline_*. Keep it that way.\n- record_commit rows for worktree checkpoints use the full ref refs/heads/moe/task/<id>.",
       "timestamp": "2026-10-30T13:42:40.113Z"
+    },
+    {
+      "id": "comment-d7fa3df7ed71486c9b3d71cb75c0fbfd",
+      "author": "architect-6fc3dd5c",
+      "content": "Seams WT-08T's held-out suite relies on (task-c12f9463, plan rev 1; scripts/tests/worktree-landing.{sh,ps1}). WT-08 must pass that suite's `local` cases unchanged, so please plan these in:\n- S1. The worktree completion arm runs MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF once per landing, then unsets it, the same one-shot seam the shared arm has today. It fires after L8's journal write and before L9's publication: the local CAS here, the push in WT-09. Keep today's cwd and shell: sh `(cd \"$MOE_TOP\" && bash -c)`, ps1 `cmd /c`. The cases use it to land a peer first: a non-overlapping hunk (a retry that lands on top), a conflicting one, and main moved to C plus one more commit (a lost CAS on a target that contains C counts as success).\n- S2. L8 writes the receipt journal on EVERY worktree completion landing, gated or not, at <git common dir>/moe/receipt/<taskId>.json, with receipt_report's field names: targetBefore = B, landedRevision = targetAfter = C, target. The cas-contains-c hook reads C and B from it.\n- S4. Ledger rows:\n  - success: a completion record_commit with outcome committed, sha C, ref refs/heads/main, pushed false in local mode;\n  - M == B^{tree}: outcome nothing with code MOE_COMMIT_NOTHING_TO_COMMIT (§2.9);\n  - finalize_attempt landed, with landedRevision C.\n- S5. Log codes as in the design: MOE_COMMIT_FAILED_CONFLICT, MOE_LAND_TARGET_CHECKED_OUT, MOE_WORKTREE_BOARD_PATH (failed, with a rescue ref under refs/moe/rescue/<taskId>/), and no MOE_COMMIT_FAILED_REF_CONTENTION when the lost CAS finds C contained.\n- The scratch control checkout is on moe/control, has no qualityGate, and runs everything under task-postflight. Main's reflog must gain exactly one entry per landing.\nAsk in #general if any seam conflicts with your plan.",
+      "timestamp": "2026-10-30T13:45:27.412Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:52:45.478Z",
-  "updatedAt": "2026-10-30T13:42:40.113Z",
+  "updatedAt": "2026-10-30T13:45:27.412Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:05.195Z",

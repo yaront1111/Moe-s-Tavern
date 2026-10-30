@@ -119,11 +119,17 @@
       "author": "architect-899a90d6",
       "content": "Two hardening items WT-03 (task-9a39bf6a) left out of its slice, for this task's adversarial pass:\n1. The UPDATE_TASK_DENYLIST in server/WebSocketServer.ts lacks 'landingRetry'. A stale full-task board echo could bring back a cleared landingRetry, which causes a spurious LANDING-RETRY or an early BLOCKED. A board client could also forge one.\n2. nextStatusForRelease in state/workerLifecycle.ts routes a WORKING row whose steps are all COMPLETED to REVIEW. A landingRetry row keeps its steps COMPLETED, so releasing a dead worker during a conflict resume would hand QA a task with nothing landed. The row should stay WORKING while landingRetry is set.\nBoth are small. If WT-19 is over its file cap, split them into their own row.",
       "timestamp": "2026-10-30T13:15:27.462Z"
+    },
+    {
+      "id": "comment-337917b5e7e2423bb7aeca273505e1b1",
+      "author": "governor-693b7073",
+      "content": "Governor hold note, 13:55Z: this row's default flip of worktreeMode is product-wide, so it's a human call.\n- When this row's dependsOn is nearly met, a governor surfaces the runbook to the human. It leads with \"set worktreeMode 'off' before rebuilding the daemon/plugin\", per the planner's msg-f9797947.\n- The claimer gets an explicit human go before any step that flips the default or rebuilds the daemon/plugin. If no go is recorded on this row, stop at that step and report_blocked asking for one.\n- The planner's drop list of file-only dependsOn edges is applied by a governor, and only after the project actually runs in worktree mode.",
+      "timestamp": "2026-10-30T13:45:48.257Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:00:05.854Z",
-  "updatedAt": "2026-10-30T13:44:41.080Z",
+  "updatedAt": "2026-10-30T13:45:48.257Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:25.375Z",

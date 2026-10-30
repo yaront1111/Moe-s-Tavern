@@ -108,7 +108,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:52.423Z",
-  "updatedAt": "2026-10-30T13:44:45.455Z",
+  "updatedAt": "2026-10-30T13:45:11.890Z",
   "dependsOn": [
     "task-f3485ac9d4384664870d88db876ddd54",
     "task-de91373a5ed84530b29fc4cfbcee974a",
@@ -218,7 +218,43 @@
   "filesModified": [
     "moe-vscode/tests/protected-runtime.test.cjs",
     "moe-vscode/src/services/MoeDaemonClient.ts",
-    "moe-vscode/src/util/AgentLauncher.ts"
+    "moe-vscode/src/util/AgentLauncher.ts",
+    ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+    ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+    ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json"
   ],
-  "completionSummary": "Under the protected profile, VS Code now launches agents only from <extensionPath>/bundled: the platform wrapper (ps1 on win32, sh elsewhere), daemon/index.js and proxy/index.js. Each must be a real regular file inside the real installed root (exact comparison) and outside the project (folded comparison). MOE_RUNTIME_PROTECTED=1 is set last, after all three are accepted. The first rejection shows \"Protected execution profile: <reason>. Agents only use the wrapper, daemon and proxy installed with the Moe extension.\" and creates no terminal. Legacy keeps resolveAgentScript and identical command bytes.\nruntimeProfile mirrors JetBrains: lstat (only ENOENT is absent), a regular-file check, a 1 MiB capped read, BOM untrusted, own-property checks. Only verified-local pins, for the session. Any failure logs one fail-closed line and answers protected.\nFiles: MoeDaemonClient.ts +116/-3 (exports, no new imports; readDaemonJsonText delegates to readCappedText, same behaviour); AgentLauncher.ts +33/-1; new tests/protected-runtime.test.cjs, 251 lines, 28 rows. Net LOC 396 (+400/-4).\nDoD1: L1-L3 plus the select row. DoD2: the 238 pre-existing tests pass unchanged, plus L4 exact legacy bytes. DoD3: Windows exact gate exit 0, 267 tests (264 pass, 3 skips: 2 symlink EPERM, 1 lstat row Windows reports as ENOENT), tsc exit 0. Linux npm test 267/267.\n22 scratch mutants, all assertion-killed.\nDeviations:\n- TS7 native tsc has only the win32 binary in the shared node_modules, so the gate ran through cmd.exe, which also covers the win32 L1-L3 branch.\n- realpathSync.native instead of plain realpathSync, so Windows 8.3 names canonicalise on both sides.\nRF06b (task-032c9739) owns the daemon spawn and should reuse these exports. Gap noted for RF07: VS Code has no running-daemon provenance (no activationRefusal/RF03 parity), and the pin is session-only because RF01's store is not shareable.\nNo .moe edits or Git writes; peer dirty paths untouched; verified-local not enabled."
+  "completionSummary": "Under the protected profile, VS Code now launches agents only from <extensionPath>/bundled: the platform wrapper (ps1 on win32, sh elsewhere), daemon/index.js and proxy/index.js. Each must be a real regular file inside the real installed root (exact comparison) and outside the project (folded comparison). MOE_RUNTIME_PROTECTED=1 is set last, after all three are accepted. The first rejection shows \"Protected execution profile: <reason>. Agents only use the wrapper, daemon and proxy installed with the Moe extension.\" and creates no terminal. Legacy keeps resolveAgentScript and identical command bytes.\nruntimeProfile mirrors JetBrains: lstat (only ENOENT is absent), a regular-file check, a 1 MiB capped read, BOM untrusted, own-property checks. Only verified-local pins, for the session. Any failure logs one fail-closed line and answers protected.\nFiles: MoeDaemonClient.ts +116/-3 (exports, no new imports; readDaemonJsonText delegates to readCappedText, same behaviour); AgentLauncher.ts +33/-1; new tests/protected-runtime.test.cjs, 251 lines, 28 rows. Net LOC 396 (+400/-4).\nDoD1: L1-L3 plus the select row. DoD2: the 238 pre-existing tests pass unchanged, plus L4 exact legacy bytes. DoD3: Windows exact gate exit 0, 267 tests (264 pass, 3 skips: 2 symlink EPERM, 1 lstat row Windows reports as ENOENT), tsc exit 0. Linux npm test 267/267.\n22 scratch mutants, all assertion-killed.\nDeviations:\n- TS7 native tsc has only the win32 binary in the shared node_modules, so the gate ran through cmd.exe, which also covers the win32 L1-L3 branch.\n- realpathSync.native instead of plain realpathSync, so Windows 8.3 names canonicalise on both sides.\nRF06b (task-032c9739) owns the daemon spawn and should reuse these exports. Gap noted for RF07: VS Code has no running-daemon provenance (no activationRefusal/RF03 parity), and the pin is session-only because RF01's store is not shareable.\nNo .moe edits or Git writes; peer dirty paths untouched; verified-local not enabled.",
+  "commits": [
+    {
+      "sha": "edfd7f9ae19daa8343d4d3e8d9de4492fd729a44",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fe18a9a9@2026-10-30T13:29:16Z",
+      "paths": [
+        ".moe/tasks/task-6f3f7fe97a91434c9143e52e57c6f302.json",
+        ".moe/tasks/task-98ffe33f448746e6bc802db0b5624fd0.json",
+        ".moe/tasks/task-b1ca54f2716442be889a14623eb59983.json",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/protected-runtime.test.cjs"
+      ],
+      "recordedBy": "worker-fe18a9a9",
+      "recordedAt": "2026-10-30T13:45:11.890Z",
+      "treeId": "956ef39503bb44871485762aae98aeaf8a6e1419",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "moe-vscode/tests/protected-runtime.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-fe18a9a9@2026-10-30T13:29:16Z",
+    "at": "2026-10-30T13:45:11.890Z"
+  }
 }

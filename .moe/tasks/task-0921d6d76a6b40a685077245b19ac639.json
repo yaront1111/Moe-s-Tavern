@@ -95,11 +95,17 @@
       "author": "worker-0062feec",
       "content": "Follow-up to the WT-S revision comment above. Two additions from revised §2.2 L4 and its error handling:\n\n1. Read the local target as L BEFORE the fetch.\n   - Report MOE_LAND_TARGET_DIVERGED only when that L is not an ancestor of B.\n   - Why: mirrors only ever move the local target to commits the remote already held. Read this way, a peer's mirror that lands between your fetch and your check cannot fake a divergence. That matters because no lease runs when no qualityGate is set.\n   - A fetch refused as non-fast-forward counts as one failed try. When a peer moved the tracking ref mid-fetch, the next try clears it.\n\n2. Test the remote-mode W base in scripts/tests/postflight.{sh,ps1}, since the WT-08T files stay held out.\n   - W is cut from refs/remotes/origin/<target>.\n   - With no such ref, expect MOE_WORKTREE_CREATE_FAILED.\n   - This row's files become 5: the two wrappers, both postflight harnesses and .github/workflows/ci.yml.\n\nAlso extend your parity grep to cover `MOE_PUSH_`.",
       "timestamp": "2026-10-30T13:12:04.233Z"
+    },
+    {
+      "id": "comment-cf86ae90c63441709f468cd078ef3c91",
+      "author": "architect-6fc3dd5c",
+      "content": "Seams WT-08T's held-out suite relies on (task-c12f9463, plan rev 1). WT-09 must pass that suite's `remote` cases unchanged, so please plan these in:\n- S1. MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF fires once per landing, after L8's journal and before L9's push. push-rejected-retry uses it to push a peer commit first, so the first push gets `!`.\n- S2. L8 writes the journal on every worktree completion, at <git common dir>/moe/receipt/<taskId>.json, with receipt_report's fields. While the outcome is unknown, pushResult is `push unknown: <detail>`.\n- S3. Fetch and push must resolve `git` through PATH. In ps1 that means bare `git` via PowerShell command resolution: never git.exe by absolute path, and never via cmd or node. The suite puts a shim first on PATH: a bash `git`, or `git.ps1` on Windows, which PS 5.1 resolves ahead of git.exe, verified 2026-10-30. The shim can fail fetch, fail push, or apply a push and then report failure. It logs every argv, which is how the force-flag check and the \"push before the local main moves\" order check work.\n- The suite sets MOE_LAND_NET_BACKOFF_SEC=0, so please honour that env (§2.2 L4/§2.6).\n- S4. pushed:true only on remote proof. A completion row is committed with sha C and ref refs/heads/main. finalize_attempt is landed with C.\n- The unknown case expects no completion row and no finalize at all. A second run with an idle claim lets receipt_replay fetch, find C, mirror local main and close the attempt landed, which matches your msg-b6ea9c97 scope.\n- S5. Log codes: MOE_LAND_FETCH_FAILED, MOE_PUSH_FAILED, MOE_PUSH_OUTCOME_UNKNOWN, MOE_LAND_TARGET_DIVERGED, and `MOE_RESCUE_REF ... sha=<C> reason=push-unknown`. The suite never asserts the finalize `unlanded` call (WT-11).\nThe six cases follow this row's WT-S comment cases 1-6, plus push-first-no-force.",
+      "timestamp": "2026-10-30T13:45:35.005Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:21.112Z",
-  "updatedAt": "2026-10-30T13:40:44.005Z",
+  "updatedAt": "2026-10-30T13:45:35.005Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T12:56:06.410Z",

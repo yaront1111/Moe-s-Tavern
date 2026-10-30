@@ -8,9 +8,45 @@
     "Daemon regression suite passes without suppressing PowerShell coverage."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix both reload fixtures in packages/moe-daemon/src/util/heartbeatStop.test.ts. This is test-only: do not touch scripts/moe-agent.{sh,ps1}.\n\nPowerShell test 'does not reload and lose a pending PowerShell job handle':\n- Define `function Test-MoeWrapperReloadDeferred { param($Hash) $false }`. It must return $false (not deferred) so the extracted body goes on to the parse step and the pending-job guard. A $true stub skips the reload and passes vacuously.\n- Point $script:MoeWrapperPath at a temp file holding one parseable line (e.g. `$null = 1`), not at the shared scripts/moe-agent.ps1. Its ParseFile then passes whatever a peer's in-progress edit of the real wrapper looks like.\n- Add expect(r.output).toContain('MOE_HEARTBEAT_STOP_TIMEOUT'): the pending-handle guard, not a refusal or a deferral, is what kept the handle.\n\nBash twin 'does not re-exec and lose a pending Bash sidecar handle'. It is vacuous today: MOE_WRAPPER_PATH=unused makes `bash -n` refuse the reload before the HEARTBEAT_PID guard, and the missing wrapper_reload_deferred only passes because the command-not-found exit (127) is inverted by `!`.\n- Define `wrapper_reload_deferred() { return 1; }`.\n- Set MOE_WRAPPER_PATH to a temp file holding `true`.\n- Assert the output contains MOE_HEARTBEAT_STOP_TIMEOUT.\n\nCreate the temp files with fs.mkdtempSync(path.join(os.tmpdir(), 'moe-hb-reload-')) and remove them in a finally or afterEach.\n\nKeep every existing assertion (no BAD_RELOAD / BAD_REEXEC, RETAINED_HANDLE, exit 0), the hasPwsh/hasBash gates, and every other test byte-identical. Error handling: a missing temp file or a stub error fails the test loudly, never by skipping.\n\nBudget: at most +20 net.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "note": "Both reload fixtures now stub the deferral check as not-deferred, parse a temp wrapper stand-in, and assert MOE_HEARTBEAT_STOP_TIMEOUT. Net +19. Bash twin passes on Linux snapshot. Dirty peer paths left untouched.",
+      "startedAt": "2026-10-30T13:39:55.920Z",
+      "completedAt": "2026-10-30T13:41:04.401Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VERIFY ONCE (load verification-before-completion). Never run vitest in the shared checkout: its node_modules are Windows builds, and vitest writes .vite (mem:pattern-qa-windows-native-vitest-from-wsl).\n\n1. Windows snapshot.\n   - Make a Windows-temp snapshot: git archive HEAD packages/moe-daemon scripts docs CLAUDE.md .gitignore package.json, with this file copied over and cmp'd against the worktree.\n   - Robocopy D:\\projexts\\moes\\packages\\moe-daemon\\node_modules in, with /E /XD .vite; any rc of 7 or less is success.\n   - Check node_modules/vitest/package.json against HEAD's lock.\n2. GATE (complete_task's verification): `cd packages/moe-daemon && npm test` under Windows node, from that snapshot via cmd.exe /c, with pwsh on PATH. It must exit 0.\n   - Expect the full suite green, including heartbeatStop's PowerShell tests actually RUN (check the verbose list). task-2c3e6170 measured 5920 passed and only this failure before the fix.\n   - A failure is acceptable only when an unmodified HEAD Windows snapshot fails the same test the same way. Name it, with both logs.\n3. Linux: run `cd packages/moe-daemon && npm test` in a /tmp snapshot with Linux node_modules (mem:gotcha-linux-vitest-reuse-native-node-modules). It must exit 0, and the bash twin must run.\n4. Mutants, on scratch copies, each run on its own platform:\n   - delete the PS stub: the PS test fails;\n   - make the stub return $true: the MOE_HEARTBEAT_STOP_TIMEOUT assertion fails;\n   - in the bash body copy, remove the HEARTBEAT_PID guard: BAD_REEXEC or the missing code fails the bash test.\n5. Put the counts and mutant outcomes in the step note, and rm -rf the Windows snapshot afterwards, prefix-guarded.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows full npm test (pwsh on PATH, vitest 5.0.5 = HEAD lock): 5920 passed, 47 skipped, 1 failed; heartbeatStop PS tests RAN and passed (3 of 9, bash ones skipped). The 1 failure is repositorySource.test.ts 'only keeps complete records at the search byte cap' (afterEach rmSync EPERM), unrelated; an unmodified-HEAD Windows snapshot fails it identically PLUS the heartbeatStop PS test (Test-MoeWrapperReloadDeferred not recognized). The file passes alone on Windows. Filed as a bug task. Linux full npm test (matching native node_modules, VITEST_MAX_WORKERS=4): exit 0, 208 files, 5953 passed, 16 skipped; bash twin ran. Mutants: PS stub deleted -> PS test fails (term not recognized); PS stub $true -> fails on MOE_HEARTBEAT_STOP_TIMEOUT assertion; bash HEARTBEAT_PID guard removed in a scratch wrapper copy -> BAD_REEXEC fails the bash test. Snapshots removed.",
+      "startedAt": "2026-10-30T13:41:07.678Z",
+      "completedAt": "2026-10-30T13:48:46.656Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "ADVERSARIAL SELF-REVIEW, once (load adversarial-self-review).\n\n- Do both twins now prove the pending-handle guard, rather than passing through a refusal, a deferral or a missing command?\n- Is the test independent of the shared wrapper's live bytes and of the git state of scripts/?\n- Are the temp files cleaned up on failure too?\n- Do the existing ownership assertions (bounded stop, unrelated job preserved) stay byte-identical?\n- Rails: regression test present; error handling (loud failures, no skips added); no PowerShell coverage suppressed; nothing outside the one test file changed.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+      ],
+      "note": "Self-review: both twins now reach and assert the HEARTBEAT guard (mutants prove it); fixture independent of the shared wrapper's bytes/git state (temp stand-in, stubbed deferral); temp dirs removed in afterEach (runs on failure too, dir holds only a plain file after awaited child close); other tests untouched; no skips added; only the one test file changed. Residual: Windows full run has one unrelated pre-existing failure (filed).",
+      "startedAt": "2026-10-30T13:48:50.187Z",
+      "completedAt": "2026-10-30T13:48:59.711Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -23,10 +59,78 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T13:26:01.483Z",
-  "updatedAt": "2026-10-30T13:31:12.407Z",
+  "updatedAt": "2026-10-30T13:49:10.775Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:31:10.398Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:37:03.402Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-bd1eb82d",
+    "worker-73c29a03"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:39:23.634Z",
+  "executionContract": {
+    "intendedBehavior": "heartbeatStop.test.ts's PowerShell and Bash reload fixtures stub the reload-deferral check as 'not deferred' and point the wrapper path at a parseable temp file. Both tests then reach and prove the pending-handle guard (MOE_HEARTBEAT_STOP_TIMEOUT), and pass on native Windows and on Linux.",
+    "acceptanceCriteria": [
+      "The PowerShell pending-job reload test passes on native Windows with pwsh and asserts MOE_HEARTBEAT_STOP_TIMEOUT.",
+      "The Bash twin asserts MOE_HEARTBEAT_STOP_TIMEOUT and no longer passes through a refused parse.",
+      "The full daemon `npm test` passes on native Windows and on Linux, with no PowerShell test skipped by this change."
+    ],
+    "invariants": [
+      "scripts/moe-agent.{sh,ps1} are unchanged.",
+      "Every existing assertion in heartbeatStop.test.ts is kept."
+    ],
+    "checkRefs": [
+      "cd packages/moe-daemon && npm test (native Windows snapshot, pwsh available; and a Linux snapshot)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Extracting the real Test-MoeWrapperReloadDeferred through the AST, as psFunctions does: rejected. It runs git against the shared checkout's wrapper, and while a peer has that file dirty it returns $true (deferred). The test would then pass vacuously, or flip from run to run. A deterministic $false stub plus the guard's own log code proves the intended path.",
+    "codebaseInsights": "- Both reload bodies call the deferral check before parsing: ps1 at about 5991, `-not (Test-MoeWrapperReloadDeferred ...)`; sh at about 6539, `! wrapper_reload_deferred`.\n- Both print 'MOE_HEARTBEAT_STOP_TIMEOUT: deferring wrapper reload to preserve the pending helper handle.' when the sidecar handle is still pending.\n- The bash twin's MOE_WRAPPER_PATH=unused made `bash -n` refuse before that guard, so the test never reached it.\n- A BACKLOG duplicate exists, task-2c3e6170 (commented).",
+    "risks": "- On Linux, hasPwsh is true whenever pwsh is installed (e.g. GitHub ubuntu runners), so the PS test runs in Linux CI too. The fix must pass under pwsh on Linux as well.\n- Windows temp paths contain single quotes only rarely; reuse the existing replaceAll(\"'\", \"''\") quoting for any path embedded in the -Command text.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/heartbeatStop.test.ts",
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:39:23.654Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T13:39:55.920Z",
+  "reviewStartedAt": "2026-10-30T13:49:10.773Z",
+  "verification": {
+    "command": "cd packages/moe-daemon && VITEST_MAX_WORKERS=4 npm test  (Linux /tmp snapshot with matching native node_modules; Windows full run: 5920 passed, 1 unrelated pre-existing repositorySource EPERM failure, same on unmodified HEAD)",
+    "exitCode": 0,
+    "outputTail": "Test Files  208 passed (208)\n      Tests  5953 passed | 16 skipped (5969)",
+    "reportedAt": "2026-10-30T13:49:10.773Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/heartbeatStop.test.ts"
+  ],
+  "completionSummary": "Test-only fix in heartbeatStop.test.ts: both reload fixtures stub the deferral check as not-deferred, use a parseable temp wrapper stand-in, and assert MOE_HEARTBEAT_STOP_TIMEOUT. Linux full npm test: exit 0, 5953 passed. Windows full npm test (pwsh on PATH): 5920 passed, heartbeatStop PS tests ran and passed. One unrelated failure there, repositorySource.test.ts afterEach EPERM, fails identically on an unmodified HEAD Windows snapshot (which also fails the heartbeatStop PS test); filed as task-24a5ad5bb5d74180bb71f5cbff76225a. Mutants (PS stub deleted, PS stub $true, bash guard removed) all fail the target tests."
 }

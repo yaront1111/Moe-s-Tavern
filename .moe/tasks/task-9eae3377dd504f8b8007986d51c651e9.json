@@ -1,0 +1,107 @@
+{
+  "id": "task-9eae3377dd504f8b8007986d51c651e9",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "[WT-03b] Daemon: landingRetry hardening (board-echo denylist, release routing)",
+  "description": "WT-19's planner (architect-4ae016fb) split this row out of WT-19's whole-epic hardening. It carries the two findings WT-03's planner (architect-899a90d6) handed to WT-19 in comment-631323b2. WT-03 (task-9a39bf6a2c4444b4b0799cd16dc2a9f1) adds Task.landingRetry. This row closes two gaps around that field before the WT-11 wrapper resume (task-dd1ee586b90d4fc785434454b1423e76), which depends on this row, relies on it.\n\nObjective: a landingRetry set by the daemon survives board echoes, and releasing a seat mid-retry never hands QA a task with nothing landed.\n\nDeliverable:\n1. packages/moe-daemon/src/server/WebSocketServer.ts: add 'landingRetry' to UPDATE_TASK_DENYLIST.\n   - The daemon owns the field; only finalize_attempt writes it.\n   - Without this, a stale full-task board echo could restore a cleared landingRetry, causing a spurious LANDING-RETRY or an early BLOCKED.\n   - A board client could also forge one.\n2. packages/moe-daemon/src/state/workerLifecycle.ts, nextStatusForRelease:\n   - A WORKING task with landingRetry set stays WORKING on requeue, even when every step is COMPLETED.\n   - Today that case goes to REVIEW, handing QA a task whose completion never landed.\n   - park still goes to BACKLOG.\n   - A task without landingRetry keeps today's routing.\n   - Widen the Pick<Task, ...> parameter to include landingRetry. Callers in sweeps.ts, workerStore.ts, releaseTask.ts and taskStore.ts already pass full tasks; check each one.\n3. Tests: one WebSocketServer.test.ts case, and release cases in the existing release tests (releaseTask.test.ts or workerStore.test.ts).\n\nNOT in scope:\n- finalize_attempt's own routing (WT-03)\n- the wrapper resume (WT-11)\n- docs (WT-17)\n\nVerification: cd packages/moe-daemon && npm run build && npx vitest run src/server/WebSocketServer.test.ts src/tools/releaseTask.test.ts src/state/workerStore.test.ts",
+  "definitionOfDone": [
+    "WebSocketServer.test.ts: a board UPDATE_TASK carrying landingRetry (an object or null) leaves the task's stored landingRetry unchanged, while the message's other allowed fields still apply.",
+    "releaseTask.test.ts or workerStore.test.ts: releasing (requeue) a WORKING task with every step COMPLETED and landingRetry set leaves it WORKING and unassigned. The same task without landingRetry still goes to REVIEW. Park still goes to BACKLOG.",
+    "The verification command in the description exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "1. Protect the board boundary with tests first (DoD 1). After WT-03 lands, use its real LandingRetry type/shape in the existing /ws harness; no `any` stand-in or schema edit. Add a compact parameterized test beside the UPDATE_TASK evidence-strip tests covering stored retry + incoming forged object, stored retry + incoming null, and stored null + incoming stale retry object. Seed before installing spies; send each mixed update with an allowed title change using connectAndCollect and consume STATE_SNAPSHOT. Assert title applied in the TASK_UPDATED response and state, stored/disk landingRetry equals its pre-request value, and the retry object is never passed into state.updateTask at all (spy on forwarded updates, not only the final state). For example:\n```ts\nconst update = vi.spyOn(state, 'updateTask');\nws.send(JSON.stringify({ type: 'UPDATE_TASK', payload: { taskId: 'task-1', updates: { title: 'Allowed edit', landingRetry: forged } } }));\nawait nextTaskUpdated(nextMessage);\nexpect(update.mock.calls.find(([id]) => id === 'task-1')?.[1]).not.toHaveProperty('landingRetry');\nexpect(state.getTask('task-1')?.landingRetry).toEqual(stored);\n```\nClose socket/restore spy in finally. Add only `'landingRetry'` to UPDATE_TASK_DENYLIST with a short comment that finalize_attempt owns it and board echoes cannot restore/clear/forge it. Retain existing stripping behavior, not whole-message rejection, so allowed fields still apply. Existing invalid-envelope/error handling must remain unchanged.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "2. Keep unlanded retries claimable by workers, with tests first (DoD 2). In releaseTask.test.ts reuse writeTask/writeWorker/state fixtures. Parameterize real releaseTaskTool.handler calls for WORKING tasks whose nonempty plan is all COMPLETED: non-null landingRetry => WORKING/unassigned; null and omitted landingRetry => REVIEW/unassigned. Cover both an assigned worker-a and the already-unassigned repair path; assert retry metadata and completed steps persist unchanged in memory and task JSON, and the assigned worker is freed/IDLE where applicable. Use a valid producer-shaped retry, e.g. reason conflict, paths ['src/a.ts'], rescueRef 'refs/moe/rescue/task-1/20261030T120000Z', targetTip null, count 1, valid ISO at. Also exercise exported releaseWorkerTasks(state,'worker-a','test park','park') on a retry task and assert BACKLOG/unassigned with retry metadata intact. Preserve existing incomplete-plan, terminal, missing-task and release-failure tests. Implement the minimal shared rule:\n```ts\n// nextStatusForRelease parameter:\ntask: Pick<Task, 'status' | 'implementationPlan' | 'landingRetry'>\n// WORKING case, after existing park early return:\nif (task.landingRetry != null) return 'WORKING';\nreturn allStepsCompleted(task) ? 'REVIEW' : 'WORKING';\n```\nUpdate this function's local routing comment to explain the retry exception. Verify all current callers in workerStore.ts, sweeps.ts, taskStore.ts, releaseTask.ts, unblockWorker.ts and releaseWorkerTasks pass the full Task; these are read-only inspection paths, not additional edits. Do not alter BLOCKED/REVIEW/terminal routing, clear retry data, reopen steps, change counters, or duplicate logic at individual release callers.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "3. Single final verification gate (DoD 3 plus epic parity and shared-lifecycle regression). From root run exactly `(cd packages/moe-daemon && npm run build && npx vitest run src/server/WebSocketServer.test.ts src/tools/releaseTask.test.ts src/state/workerStore.test.ts && npm test) && bash scripts/tests/parity-check.sh`. This executes the task-description command, then full daemon regression for the shared signature/routing change, then mandatory parity; expect exit 0 throughout. Use bash/WSL/Git Bash for this command; no Windows-specific code changes. Load regression-check and verification-before-completion. Capture fresh command/exitCode/outputTail for complete_task; do not claim success from focused tests alone or old logs. Build regenerates derived init artifacts: do not hand-edit or sweep unrelated generated/peer changes into this task.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "4. Final adversarial self-review, once. Load adversarial-self-review. Check stale full-task board echoes both before and after daemon clearing, malicious object/null overwrite, and a mixed allowed+denied update. Removing the denylist entry must fail the forwarded-key assertion even if a downstream sanitizer protects the final state. Check release after all steps complete but before successful landing, both assigned and unassigned, with null/absent retry and park, and confirm an explicit retry always remains WORKING on requeue but never overrides park. Preserve non-WORKING status routing, retry count/metadata, state persistence/error handling, and complete_task/finalize_attempt ownership. Ensure source edits stay at the two common guards and no peer work/held-out test is modified. Rerun the same gate if review causes fixes; complete through Moe with actual modifiedFiles and fresh evidence, leaving git writes to the wrapper.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+        "packages/moe-daemon/src/state/workerLifecycle.ts",
+        "packages/moe-daemon/src/tools/releaseTask.test.ts"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-30066ccdeb6042c3b5c89a7a31833d14",
+    "task-9a39bf6a2c4444b4b0799cd16dc2a9f1"
+  ],
+  "priority": "HIGH",
+  "order": 9.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T13:42:24.991Z",
+  "updatedAt": "2026-10-30T13:46:30.634Z",
+  "metrics": {
+    "firstClaimAt": "2026-10-30T13:42:37.502Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-76a2c8bb"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T13:46:30.608Z",
+  "planningNotes": {
+    "approachesConsidered": "# Protect landingRetry at board and release boundaries\nGoal: preserve daemon-owned retry state and keep an unlanded completed-step task in the worker queue. Architecture: reuse UPDATE_TASK_DENYLIST and the single nextStatusForRelease routing function; no parallel policy or new schema. Tech: TypeScript/Node.js, Vitest, existing ws integration fixtures.",
+    "codebaseInsights": "Verified UPDATE_TASK filters Object.entries through UPDATE_TASK_DENYLIST before state.updateTask; existing evidence-label tests show the right pattern. nextStatusForRelease currently picks only status/implementationPlan and sends all-completed WORKING tasks to REVIEW after the park check. releaseTask has both assigned release and unassigned repair paths that call it. workerStore, sweeps, taskStore and unblockWorker also pass whole tasks. WT-03's submitted producer contract is Task.landingRetry?: LandingRetry|null with reason,paths,rescueRef,targetTip,count,at; it has not landed yet, so use that landed type rather than adding it here. Memory mem:convention-daemon-owned-task-field-ws-denylist requires asserting forwarded payload keys too, because downstream sanitization can otherwise mask missing transport guards.",
+    "risks": "One narrow two-boundary field protection fix, four files / approximately 35 minutes, under 400 net LOC. Full daemon regression is appropriate for the shared lifecycle signature/routing change in addition to the task's named focused command; epic rail also requires parity. No launcher, schema, finalization, resume or docs edits. Preserve error handling and all non-WORKING/park routing. Test both assigned release and already-unassigned repair, so the latter cannot silently re-promote a retry to QA. Existing files clean during exploration; retain unrelated shared dirt. Portable existing fs/path temp fixtures; no platform-specific logic.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.test.ts",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/tools/releaseTask.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T13:46:30.634Z",
+  "approvedPlanRevision": 1
+}
