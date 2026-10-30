@@ -13,19 +13,27 @@
     {
       "stepId": "step-1",
       "description": "RED test first: scenario AJ in scripts/tests/postflight.sh and scripts/tests/postflight.ps1, placed right after task-a2f243a1's scenario AI. That dependency is DONE before this task can be claimed; reuse AI's fixture and its node checker shape.\n\nFixture per run:\n- `make_scope_project <dir> <plan files> REVIEW '[]' '{\"attribution\":{\"contested\":\"skip\"}}'`;\n- task JSON declaredFiles = [\"held.txt\"], committed;\n- `echo pre > held.txt` before the run;\n- FAKE_TASK_STATUS=REVIEW FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='held.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=1;\n- force the peel failure exactly as scenario R does: `git branch moe` (ps1: `& git -C $dir branch moe`).\n\nRuns:\n- AJ1: plan files '[\"owned-a.txt\"]' plus `echo owned-a > owned-a.txt` as in R, so the CANDIDATES peel path runs. Assert BOTH of the last two record_commit.jsonl rows: the rescue row (kind rescue, outcome committed, code peel-failed) and the final failed row (outcome failed, code MOE_COMMIT_FAILED_PEEL).\n- AJ2: plan files '[]', so held.txt is the only own path and the NO-CANDIDATE completion peel path runs. Assert the final failed/MOE_COMMIT_FAILED_PEEL row.\n\nFor every asserted row:\n- `skipped` and `contested` are JSON ARRAYS (Array.isArray). A PS 5.1 one-element unwrap makes the daemon refuse the whole row as INVALID_INPUT.\n- skipped holds {path:'held.txt', code:'MOE_ATTR_CONTESTED'}.\n- contested holds {path:'held.txt', taskId:'task-peer'}.\nAlso assert that HEAD did not move, the branch is unchanged, and held.txt keeps its pre-flight bytes.\n\nBump each harness's scenario counter by one, as AI did.\n\nRun the ps1 harness and record the RED output: AJ fails on ps1 because its failed and rescue sends carry neither list. The sh harness passes AJ before any wrapper change, because sh's record_commit_rpc already reads ATTR_DIR/skipped and contested on every outcome. That is the parity evidence; record it too. Both harnesses are long, so you may run the AJ block alone in a scratch copy for the RED pair. Say so in the note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Added mirrored AJ1/AJ2 with ledger identity, array-shape, held skip/peer, exact held bytes, HEAD/branch assertions; counters now sh 42/41 and ps1 41/42. RED in scratch /mnt/d/moe-scratch/dfbda1-Rkml using extracted AJ block plus unchanged harness helpers: Linux bash exit 0 ([scenario AJ1] ok, AJ2 ok); PS5.1 AJ1 exit 1: committed/peel-failed/rescue: skipped and contested must be JSON arrays; both rescue and failed rows omit lists. PS5.1 AJ2 exit 1: failed/MOE_COMMIT_FAILED_PEEL/completion arrays missing. Fixture correction within scope: setting FAKE_SCOPE_DECLARED_FIELD enables ASSERTED_FOREIGN, unlike R, so AJ1 must change owned-a.txt during the fake CLI; merely precreating it yields no candidates. Preserve AJ1 filesModified as well. Source files were clean at preflight; unrelated shared dirty paths untouched. No production changes yet.",
+      "startedAt": "2026-10-30T08:12:29.374Z",
+      "completedAt": "2026-10-30T08:17:06.755Z"
     },
     {
       "stepId": "step-2",
       "description": "GREEN in scripts/moe-agent.ps1: every record_commit send AFTER attribution merges the shared helper, as sh's record_commit_rpc does. Line numbers are from plan time and will shift once task-a2f243a1 lands, so match by code and message.\n\n0. In the Invoke-MoeLanding preamble, next to `$casOk=$false` / `$recorded=$false`, add `$attr = $null` and `$dropped = @()`. The catch/finally sends can then never read an unset variable, or a same-named one from an outer scope through PowerShell dynamic scoping, when attribution never ran. The helper then yields empty lists.\n\n1. Merge `+ (Get-MoeRecordHeldFields <attr> <drops> $Git.Rel)` into each send. Pass drops exactly where the sh twin passes LAND_DROPPED_FILE, and @() where sh passes \"\":\n- failed/MOE_COMMIT_FAILED_PEEL, no-candidate completion (~4714): `$attr @()`.\n- failed/MOE_COMMIT_FAILED_PEEL, candidates (~4742): `$attr @()`.\n- failed/MOE_COMMIT_FAILED_ATTRIBUTION, temp-index build failed (~4770): `$attr $dropped`.\n- failed gate-not-run, evidence unavailable (~4808): `$attr @()`. sh's gate records pass no drops.\n- failed/MOE_COMMIT_FAILED_GATE (~4823): `$attr @()`.\n- failed/MOE_COMMIT_FAILED, commit creation (~4859): `$attr $dropped`.\n- failed/MOE_COMMIT_FAILED_REF_CONTENTION (~4902): `$attr $dropped`.\n- the catch committed re-send (~4973): `$attr $dropped`.\n- the finally committed re-send (~4992): `$attr $dropped`.\n- the finally failed send (~5000): `$attr $dropped`.\n- Invoke-MoeRescueRef's kind=rescue send (~4198): `$Attr @()`. Its -Attr may be $null, which yields empty lists. sh's rescue_ref passes \"\" for drops.\n\nWrap the existing single-line literals as `(@{...} + (Get-MoeRecordHeldFields ...))`. A PowerShell hashtable `+` THROWS on a duplicate key, so confirm that none of these literals already holds skipped or contested.\n\nDeliberately unchanged:\n- Send-MoeOwedLedgerRow: a crash replay of an acknowledged landing; attribution was not run this pass.\n- Send-MoeOwnerRefusal: refusals carry no path fields, by contract (scripts/CLAUDE.md owner guard).\n- the 'git status failed' ATTRIBUTION send (~4618): attribution never ran, and sh's twin has no ATTR_DIR lists there either.\n- unattributedPaths on failure rows: out of scope; sh's comment documents ps1 omitting it.\nscripts/moe-agent.sh needs no change.\n\nError handling: the helper must stay total. It filters nulls and only reads $Attr.Skipped/.Contested, so a $null $Attr or empty $dropped never throws inside the finally block, whose own catch would otherwise skip the cleanup that follows.\n\nEdit the live launcher in parseable hunks with a wrapper-observed editing tool. The file is also declared by idle CQ rows (V07/V08/V08b/V04c), so a shell write would leave it held. Keep UTF-8 with BOM and LF. After each hunk run the ParseFile check: `pwsh -NoProfile -Command \"$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('scripts/moe-agent.ps1',[ref]$null,[ref]$e); exit $e.Count\"`. Re-run the ps1 AJ until green.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-10-30T08:17:06.778Z"
     },
     {
       "stepId": "step-3",
@@ -49,7 +57,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -65,7 +73,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:35:22.260Z",
-  "updatedAt": "2026-10-30T07:07:38.218Z",
+  "updatedAt": "2026-10-30T08:19:11.873Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T06:52:01.942Z",
@@ -74,16 +82,20 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T07:03:08.506Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-32ff5555"
+    "architect-32ff5555",
+    "worker-6e57c4f8"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:07:38.194Z",
   "planningNotes": {
@@ -105,5 +117,10 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T07:07:38.218Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T08:12:29.374Z",
+  "blockedReason": "Step-1 completed with mirrored AJ regression tests and real RED evidence (scratch /mnt/d/moe-scratch/dfbda1-Rkml): bash AJ1/AJ2 exit 0; PS5.1 AJ1 rescue+failed rows omit skipped/contested, AJ2 failed row also omits them, exit 1. Step-2 explicitly mandates a wrapper-observed editing tool for contested scripts/moe-agent.ps1. This Codex seat only has unharvested apply_patch; available Serena replace_in_files returned ValueError: No language servers available in the manager and changed nothing. The wrapper harvests Claude tool events, not Codex calls. Cannot satisfy that delivery prerequisite safely by shell edits or claiming modifiedFiles is a witness. No production changes; git diff launchers empty. Only scripts/tests/postflight.sh and .ps1 modified and reported in step-1. Tests were clean initially; next seat should use witnessed edits to carry their now-dirty bytes if contested. Fixture correction documented: declared-field enables ASSERTED_FOREIGN, so AJ1 changes owned-a.txt inside fake CLI, keeping held.txt pre-flight bytes. Full gate/mutants not run; no completion claim. Serena task handoff records exact commands/logs and remaining work.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T08:19:11.873Z"
 }

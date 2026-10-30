@@ -4695,14 +4695,70 @@ try {
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario AI] ok"
 
+  # Scenario AJ -- held paths survive BOTH peel-failure sends and the rescue
+  # ledger row. Twin: scenario AJ in postflight.ps1 (task-dfbda1a8).
+  echo "[scenario AJ] peel failures and rescue records retain held contested paths"
+  scope_aj_cli="$TMP_DIR/aj-cli"
+  printf '#!/usr/bin/env bash\necho owned-a-session > "$MOE_PROJECT_PATH/owned-a.txt"\n' > "$scope_aj_cli"
+  chmod +x "$scope_aj_cli"
+  scope_aj_check='
+const [f,run]=process.argv.slice(1),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
+const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
+try {
+  assert.ok(rows.length>=expected.length,"missing ledger rows");
+  rows.slice(-expected.length).forEach((r,i)=>{
+    const label=expected[i].join("/");
+    assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],label);
+    assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");
+    assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code:"MOE_ATTR_CONTESTED"}],label+": skipped");
+    assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),label+": contested must name held.txt with task-peer");
+  });
+} catch (e) { console.error(e.message+"\nrows: "+JSON.stringify(rows)); process.exit(1); }'
+  for scope_aj_run in 1 2; do
+    SCOPE_AJ_DIR="$TMP_DIR/scope-aj$scope_aj_run"
+    scope_aj_out="$TMP_DIR/scope-aj$scope_aj_run.out"
+    scope_aj_files='[]'; [ "$scope_aj_run" = 2 ] || scope_aj_files='["owned-a.txt"]'
+    make_scope_project "$SCOPE_AJ_DIR" "$scope_aj_files" REVIEW '[]' '{"attribution":{"contested":"skip"}}'
+    "$NODE_FOR_TEST" -e 'const f=process.argv[1],fs=require("fs");const t=JSON.parse(fs.readFileSync(f,"utf8"));t.declaredFiles=["held.txt"];fs.writeFileSync(f,JSON.stringify(t)+"\n");' \
+      "$SCOPE_AJ_DIR/.moe/tasks/task-postflight.json"
+    git -C "$SCOPE_AJ_DIR" commit -qm aj-declared .moe/tasks/task-postflight.json
+    echo pre > "$SCOPE_AJ_DIR/held.txt"
+    scope_aj_cmd=/bin/true
+    if [ "$scope_aj_run" = 1 ]; then
+      echo owned-a > "$SCOPE_AJ_DIR/owned-a.txt"
+      # declaredFiles enables the foreign-byte guard: change this own file
+      # during the session so it remains a candidate, unlike held.txt.
+      scope_aj_cmd="$scope_aj_cli"
+    fi
+    git -C "$SCOPE_AJ_DIR" branch moe
+    scope_aj_head="$(git -C "$SCOPE_AJ_DIR" rev-parse HEAD)"
+    scope_aj_branch="$(git -C "$SCOPE_AJ_DIR" symbolic-ref HEAD)"
+    set +e
+    FAKE_TASK_STATUS=REVIEW FAKE_SCOPE_DECLARED_FIELD=1 FAKE_SCOPE_PEERS_ACTIVE=1 FAKE_SCOPE_PEER_DECLARED='held.txt:task-peer' FAKE_SCOPE_PEER_ACTIVE=1 \
+      run_scope_wrapper "$SCOPE_AJ_DIR" "$scope_aj_out" "$scope_aj_cmd"
+    scope_aj_rc=$?
+    set -e
+    [ "$scope_aj_rc" -eq 0 ] || scope_fail "AJ$scope_aj_run" "wrapper exited with $scope_aj_rc" "$scope_aj_out"
+    [ "$(git -C "$SCOPE_AJ_DIR" rev-parse HEAD)" = "$scope_aj_head" ] && [ "$(git -C "$SCOPE_AJ_DIR" symbolic-ref HEAD)" = "$scope_aj_branch" ] \
+      || scope_fail "AJ$scope_aj_run" "HEAD and branch must not move" "$scope_aj_out"
+    printf 'pre\n' | cmp -s - "$SCOPE_AJ_DIR/held.txt" \
+      || scope_fail "AJ$scope_aj_run" "held.txt must keep its pre-flight bytes" "$scope_aj_out"
+    "$NODE_FOR_TEST" -e "$scope_aj_check" "$SCOPE_AJ_DIR/.moe/record_commit.jsonl" "$scope_aj_run" \
+      || scope_fail "AJ$scope_aj_run" "peel-failure and rescue rows must retain held paths" "$scope_aj_out"
+    echo "[scenario AJ$scope_aj_run] ok"
+  done
+  SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
+  echo "[scenario AJ] ok"
+
   # A harness that silently generated zero scenarios exits 0 and reads as green.
   # (Scenarios Q and V run inside the quality-gate cases above and are guarded
   # by those cases' own fail-fast assertions, not this counter.)
   echo "commit-scope scenarios run: $SCOPE_SCENARIOS_RUN"
-  scope_expected_runs=41
-  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=40
+  scope_expected_runs=42
+  [ "$scope_symlinks_ok" = 1 ] || scope_expected_runs=41
   if [ "$SCOPE_SCENARIOS_RUN" -ne "$scope_expected_runs" ]; then
-    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI); ran $SCOPE_SCENARIOS_RUN" >&2
+    echo "Expected $scope_expected_runs commit-scope scenarios (A-P, K2, L2, M2, M3, M4, P2, R-U, W-Z, Z2, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ); ran $SCOPE_SCENARIOS_RUN" >&2
     exit 1
   fi
 else

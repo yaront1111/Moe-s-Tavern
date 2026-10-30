@@ -4002,13 +4002,76 @@ try {
                 $scopeScenariosRun++
                 Write-Host '[scenario AI] ok'
 
+                # Scenario AJ -- held paths survive BOTH peel-failure sends
+                # and the rescue row. Twin: postflight.sh (task-dfbda1a8).
+                Write-Host '[scenario AJ] peel failures and rescue records retain held contested paths'
+                $ajCli = Join-Path $tempRoot 'aj-cli.cmd'
+                Set-Content -Path $ajCli -Encoding ASCII -Value "@echo off`r`necho owned-a-session > `"%MOE_PROJECT_PATH%\owned-a.txt`"`r`nexit /b 0`r`n"
+                $ajCheck = Join-Path $tempRoot 'scope-aj-check.cjs'
+                [System.IO.File]::WriteAllText($ajCheck, @'
+const [f,run]=process.argv.slice(2),assert=require("assert");
+const rows=require("fs").readFileSync(f,"utf8").trim().split("\n").map(JSON.parse);
+const expected=run==="1"?[["committed","peel-failed","rescue"],["failed","MOE_COMMIT_FAILED_PEEL","completion"]]:[["failed","MOE_COMMIT_FAILED_PEEL","completion"]];
+try {
+  assert.ok(rows.length>=expected.length,"missing ledger rows");
+  rows.slice(-expected.length).forEach((r,i)=>{
+    const label=expected[i].join("/");
+    assert.deepStrictEqual([r.outcome,r.code,r.kind],expected[i],label);
+    assert.ok(Array.isArray(r.skipped)&&Array.isArray(r.contested),label+": skipped and contested must be JSON arrays");
+    assert.deepStrictEqual(r.skipped.filter(s=>String(s.code).startsWith("MOE_ATTR_CONTESTED")),[{path:"held.txt",code:"MOE_ATTR_CONTESTED"}],label+": skipped");
+    assert.ok(r.contested.some(c=>c.path==="held.txt"&&c.taskId==="task-peer"),label+": contested must name held.txt with task-peer");
+  });
+} catch (e) { console.error(e.message+"\nrows: "+JSON.stringify(rows)); process.exit(1); }
+'@, (New-Object System.Text.UTF8Encoding($false)))
+                foreach ($ajRun in 1..2) {
+                    $ajName = "AJ$ajRun"
+                    $ajDir = Join-Path $tempRoot "scope-aj$ajRun"
+                    $ajOut = Join-Path $tempRoot "scope-aj$ajRun.out"
+                    $ajFiles = @(); if ($ajRun -eq 1) { $ajFiles = @('owned-a.txt') }
+                    $ajFilesJson = if ($ajRun -eq 1) { '["owned-a.txt"]' } else { '[]' }
+                    New-ScopeProject $ajDir $ajFiles -Status 'REVIEW' -Settings @{ attribution = @{ contested = 'skip' } }
+                    [System.IO.File]::WriteAllText((Join-Path $ajDir '.moe\tasks\task-postflight.json'),
+                        ('{"id":"task-postflight","title":"Postflight smoke","status":"REVIEW","filesModified":' + $ajFilesJson + ',"declaredFiles":["held.txt"]}'), (New-Object System.Text.UTF8Encoding($false)))
+                    & git -C $ajDir commit -qm aj-declared .moe/tasks/task-postflight.json 2>$null | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $ajDir 'held.txt'), "pre`n", (New-Object System.Text.UTF8Encoding($false)))
+                    $ajCmd = $trueCmd
+                    if ($ajRun -eq 1) {
+                        Set-Content -Path (Join-Path $ajDir 'owned-a.txt') -Value 'owned-a'
+                        # declaredFiles enables the foreign-byte guard: change
+                        # this own file in-session so only held.txt stays held.
+                        $ajCmd = $ajCli
+                    }
+                    & git -C $ajDir branch moe 2>$null | Out-Null
+                    $ajHead = (& git -C $ajDir rev-parse HEAD 2>$null) -join ''
+                    $ajBranch = (& git -C $ajDir symbolic-ref HEAD 2>$null) -join ''
+                    $env:FAKE_SCOPE_DECLARED_FIELD = '1'
+                    $env:FAKE_SCOPE_PEERS_ACTIVE = '1'
+                    $env:FAKE_SCOPE_PEER_DECLARED = 'held.txt:task-peer'
+                    $env:FAKE_SCOPE_PEER_ACTIVE = '1'
+                    try {
+                        Assert-ScopeRun $ajName (Invoke-GateWrapper $ajDir $ajOut -Status 'REVIEW' -Command $ajCmd) $ajOut
+                    } finally {
+                        foreach ($v in 'FAKE_SCOPE_DECLARED_FIELD', 'FAKE_SCOPE_PEERS_ACTIVE', 'FAKE_SCOPE_PEER_DECLARED', 'FAKE_SCOPE_PEER_ACTIVE') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+                    }
+                    $ajText = Get-Content -Raw -Path $ajOut
+                    if (((& git -C $ajDir rev-parse HEAD 2>$null) -join '') -ne $ajHead -or ((& git -C $ajDir symbolic-ref HEAD 2>$null) -join '') -ne $ajBranch) {
+                        Write-Host $ajText; throw "SCENARIO $ajName FAILED: HEAD and branch must not move"
+                    }
+                    if ([System.IO.File]::ReadAllText((Join-Path $ajDir 'held.txt')) -ne "pre`n") { Write-Host $ajText; throw "SCENARIO $ajName FAILED: held.txt must keep its pre-flight bytes" }
+                    & node $ajCheck (Join-Path $ajDir '.moe\record_commit.jsonl') $ajRun
+                    if ($LASTEXITCODE -ne 0) { Write-Host $ajText; throw "SCENARIO $ajName FAILED: peel-failure and rescue rows must retain held paths" }
+                    Write-Host "[scenario $ajName] ok"
+                }
+                $scopeScenariosRun++
+                Write-Host '[scenario AJ] ok'
+
                 # A harness that silently generated zero scenarios exits 0 and
                 # reads as green.
                 Write-Host "commit-scope scenarios run: $scopeScenariosRun"
-                $scopeExpectedRuns = 40
-                if ($symlinksOk) { $scopeExpectedRuns = 41 }
+                $scopeExpectedRuns = 41
+                if ($symlinksOk) { $scopeExpectedRuns = 42 }
                 if ($scopeScenariosRun -ne $scopeExpectedRuns) {
-                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI); ran $scopeScenariosRun"
+                    throw "Expected $scopeExpectedRuns commit-scope scenarios (A-V, K2, L2, M2, M3, M4, P2, X-Z, AA, AB, AB2, AC, AD, AE (needs symlinks), AF, AG, AH, AI, AJ); ran $scopeScenariosRun"
                 }
 
                 $gateFailCommits = [int](& git -C $gateFailDir rev-list --count HEAD 2>$null)
