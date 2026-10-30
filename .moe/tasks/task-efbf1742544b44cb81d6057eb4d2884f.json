@@ -1,0 +1,30 @@
+{
+  "id": "task-efbf1742544b44cb81d6057eb4d2884f",
+  "epicId": "epic-f5c1c2ea674e40bcad8ab16d7657ccc0",
+  "title": "bug: check-architecture run from the candidate's own packages/moe-daemon/dist trusts every module index.ts imports, but requiredChecks scripts protect only the files they name",
+  "description": "In Moe's own repo, the CQ-V10 check `node packages/moe-daemon/dist/index.js check-architecture --rules arch.json` runs code built from the candidate. V01 protected drift covers only the listed scripts (checkArchitecture.ts, architectureRules.ts). A candidate can still change the verdict with no protected-check-changed token by editing context/repositorySource.ts, util/cachedPlanPaths.ts, util/logger.ts, or any other module dist/index.js loads, for example by serving '' content or by overriding stdout/exitCode.\nFix (at activation, V12): run the check from a runner-provisioned trusted install built at the base revision, or protect the import closure. This is not exploitable today, because nothing dispatches the check and verified-local is off.",
+  "definitionOfDone": [
+    "A candidate that edits a non-listed module the checker imports cannot turn a failing architecture check into a delivered pass.",
+    "Legacy/observe behavior unchanged; tests pin the refusal."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-db328cda8c094df3a4551f0015679fed"
+  ],
+  "priority": "MEDIUM",
+  "order": 273.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:10:57.855Z",
+  "updatedAt": "2026-10-30T07:10:57.855Z"
+}

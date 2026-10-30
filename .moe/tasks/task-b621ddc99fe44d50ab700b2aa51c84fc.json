@@ -96,11 +96,17 @@
       "author": "architect-4ae016fb",
       "content": "CQ-V04 split (2026-10-29, the human's choice): V04 keeps the daemon core, CQ-V04b (task-340a07b33a764c65b2486d16b30d7aef) is the local-runner check dispatch client, and CQ-V04c (task-c4e076cd306f4f84a4aa08bf2a4682b2) is the honest host-gate outcome. Both are now in this row's dependsOn. Two items are handed to you.\n\n1. Docs debt, which V04 leaves for your sweep:\n- docs/CONFIGURATION.md: a row for the new settings.checkEnvironments. It is a project.json-only list of human-approved check environment ids (the exact CheckRun.environment values), like deliveryPolicy. Absent approves none; it is read live, so removing an id revokes the evidence recorded in it; UPDATE_SETTINGS refuses it as unknown.\n- docs/CONFIGURATION.md: in the deliveryPolicy and executionProfile rows, the verified-local required-check rule. Only an authenticated observation counts: outcome 'passed', the current approved revision, a dispatch naming that owed check, and a listed environment. Add the new token required-checks-undeclared.\n- docs/SCHEMA.md: the ProjectSettings field.\nV04 itself documents only the record_check_dispatch admission, in MCP_SERVER.md.\n\n2. Activation gap, not owned by any task yet: nothing invokes the V04b client for each strong-profile candidate. The wrappers' strong completion path, after freeze_candidate, would call it instead of the host gate and wait for the observations. Own it here, or split it out, before claiming trusted dispatch end to end.",
       "timestamp": "2026-10-29T18:16:47.256Z"
+    },
+    {
+      "id": "comment-46202c6abefe491aa2371a752cf2503f",
+      "author": "architect-e4b7eee0",
+      "content": "Docs-sweep input from bug task-43088e9b (plan rev 1, WORKING; architect-e4b7eee0, 2026-10-30). That task makes evaluateDeliveryEvidence judge a verified-local task's required checks under EVERY deliveryPolicy, including legacy, absent and null.\n- The checks are judged with trustedPassedOn, protected drift and required-checks-undeclared.\n- Legacy still adds no landing evidence.\n- deliveryProjection.requiredCheckSatisfied reports for such a task too.\n\nThe following statements are true only while verified-local is unreachable. Please qualify them in the sweep:\n- docs/CONFIGURATION.md, deliveryPolicy row: \"`legacy` short-circuits to satisfied\".\n- docs/MCP_SERVER.md qa_approve: \"Under the default `legacy` policy none of this applies\".\n- TaskDelivery.requiredCheckSatisfied docs: \"absent under the legacy policy\".\n\nMatching source comments are owned by V06 and V09/V12b, so they are not edited by task-43088e9b:\n- tools/qaApprove.ts: \"Under the default policy evaluation is satisfied at once\".\n- state/dependencyUnblock.ts: \"under the default policy DONE alone still satisfies\".\n\nOrdering: V06 (task-6a5d5a13) now dependsOn task-43088e9b, so V12 is transitively after it. I didn't add it to V12's own dependsOn, because V12 is at 19 of the 20-id cap.",
+      "timestamp": "2026-10-30T07:10:44.748Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:14.370Z",
-  "updatedAt": "2026-10-29T20:18:34.864Z",
+  "updatedAt": "2026-10-30T07:11:02.623Z",
   "dependsOn": [
     "task-af83018e892149a1a18cd6a946edeba5",
     "task-e493ed19006d4be4a96e3ca2f80a5ab4",
@@ -120,7 +126,8 @@
     "task-754fa988748b4d2abb2628f4c91d8ff5",
     "task-6339299aa3b743d1948ffbd880a5c34a",
     "task-340a07b33a764c65b2486d16b30d7aef",
-    "task-c4e076cd306f4f84a4aa08bf2a4682b2"
+    "task-c4e076cd306f4f84a4aa08bf2a4682b2",
+    "task-f943b6877b5f48aeb282d819f9da013d"
   ],
   "contextFetchedBy": [
     "worker-b5749787",
