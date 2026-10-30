@@ -89,7 +89,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -124,16 +124,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T12:24:40.085Z",
-  "updatedAt": "2026-10-30T13:43:50.823Z",
+  "updatedAt": "2026-10-30T14:00:03.612Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T12:24:52.244Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-10-30T14:00:03.612Z",
+    "wallClockMs": 5711368
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-6e57c4f8"
+    "worker-6e57c4f8",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -267,5 +270,9 @@
     "reportedAt": "2026-10-30T13:43:10.088Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Implemented parsed sh { main loop + teamless tail; exit } group, comment-only ps1, asserted fixture tail boundary, same-inode +2-byte single-shot regression, and atomic-save docs. Five paths +69/-2 net67. IMPORTANT: source bytes carried by manual f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (governor comment-ee2b7fd9), not our wrapper commit; QA review those paths vs f6da2d7f^ plus task commits. Both sh saves used checked /mnt/d same-filesystem single mv-f; other sessions' bytes untouched. RED /mnt/d/moe-scratch/red-f31d415d.7YnL1a/red.log: earlier arms passed, seat127/e: command not found. Fresh GREEN snapshot /mnt/d/moe-scratch/v-f31d415d.qj2K6S: bash-n/parity PASS; seat20pass/0fail/38 unavailable PS skips; full postflight PASS, frozen74/owner16/scope42, [stale offset] ok own tail/exit0/postflight. Log /mnt/d/moe-scratch/f31d415d/verification.log. Governor-approved setup-only deviation msg-4324a977/comment-5240aaba archives .github/workflows/ci.yml alongside scripts; unchanged checks (original command failed solely missing CI file, retained verification-original.log). Current four script files cmp snapshot; adversarial review clean; sh only exact added lines, ps1 BOM/LF retained, teamless1/registered0 covered. No native bash3.2/PS execution claimed. Handoff and gotcha memories saved."
+  "completionSummary": "Implemented parsed sh { main loop + teamless tail; exit } group, comment-only ps1, asserted fixture tail boundary, same-inode +2-byte single-shot regression, and atomic-save docs. Five paths +69/-2 net67. IMPORTANT: source bytes carried by manual f6da2d7f5fcf99185ce2b9fdfaefcf5cf50d8433 (governor comment-ee2b7fd9), not our wrapper commit; QA review those paths vs f6da2d7f^ plus task commits. Both sh saves used checked /mnt/d same-filesystem single mv-f; other sessions' bytes untouched. RED /mnt/d/moe-scratch/red-f31d415d.7YnL1a/red.log: earlier arms passed, seat127/e: command not found. Fresh GREEN snapshot /mnt/d/moe-scratch/v-f31d415d.qj2K6S: bash-n/parity PASS; seat20pass/0fail/38 unavailable PS skips; full postflight PASS, frozen74/owner16/scope42, [stale offset] ok own tail/exit0/postflight. Log /mnt/d/moe-scratch/f31d415d/verification.log. Governor-approved setup-only deviation msg-4324a977/comment-5240aaba archives .github/workflows/ci.yml alongside scripts; unchanged checks (original command failed solely missing CI file, retained verification-original.log). Current four script files cmp snapshot; adversarial review clean; sh only exact added lines, ps1 BOM/LF retained, teamless1/registered0 covered. No native bash3.2/PS execution claimed. Handoff and gotcha memories saved.",
+  "completedAt": "2026-10-30T14:00:03.612Z",
+  "reviewCompletedAt": "2026-10-30T14:00:03.612Z",
+  "reviewSummary": "APPROVED. Re-ran task.verification verbatim (governor-approved setup deviation: archive also carries .github/workflows/ci.yml) in /mnt/d/moe-scratch/v-f31d415d.lt9mWB: bash -n PASS; parity-check PASS; seat-registration 58 tests/20 pass/0 fail/38 skipped (Windows PowerShell engines unavailable on Linux); postflight.sh PASS incl. '[stale offset] ok'; EXIT=0.\nDelivery: completion 8ea90d2a (pushed, on origin) holds only the board JSON; the source bytes were swept into manual commit f6da2d7f (governor comment-ee2b7fd9), an ancestor of it and on origin. Reviewed the five owned paths over f6da2d7f^..f6da2d7f: +69/-2 net 67, no size waiver needed; the paths are clean in the tree and equal HEAD.\nDoD1: new postflight.sh arm runs a --no-loop seat whose CLI rewrites the wrapper in place (inode-checked, +2 bytes, foreign 'exit 97' tail) and asserts the marker, landed edit, uncommitted diff, seat exit 0, no 'command not found'/'syntax error'/foreign output, no reload restart, post-flight line posted. RED from the worker's red.log on the pre-fix wrapper ('line 8528: e: command not found', exit 127); GREEN in my re-run.\nDoD2: moe-agent.sh diff has zero removed lines (comment, '{', 'exit', '}' only); '}' is the last line; exit status unchanged (teamless one-shot exits 1, else 0); no mode change. ps1 gains 3 '#' lines only, BOM kept, no CR. The seat-registration fixture tail ends before '}' with a boundary assertion.\nDoD3: the scripts/CLAUDE.md Hot reload bullet states the one-group parse, that saves must not rely on in-place rewrites for older seats (whole file elsewhere, bash -n, one mv -f), the ps1 needs no group, and names the arm. No forbidden patterns.\nNot verified: native bash 3.2 and PowerShell runtime (ps1 change is comment-only); seats on earlier bytes keep their old exposure.",
+  "requiredCheckAtDone": null
 }

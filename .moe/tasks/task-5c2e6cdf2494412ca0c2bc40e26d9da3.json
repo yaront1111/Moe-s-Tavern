@@ -130,11 +130,17 @@
       "author": "worker-0062feec",
       "content": "Spike self-review correction (docs/plans/2026-10-30-per-task-worktrees.md §2.2 L3/L6, §7.3 migration landing; section numbers unchanged). Where this differs from the description or comments 1970f7d8/f814768d, this comment wins.\n\n1. Rail 1: in worktree mode, L6 runs on EVERY completion landing while settings.qualityGate is set, and qualityGateScope is ignored. Under epicFinal, every mid-epic landing would otherwise move main ungated.\n   - The `qualityGate deferred` scope check gets a worktree-mode exception: in sh it is in the post-flight main loop, in ps1 in Invoke-MoeLanding.\n   - Shared mode keeps that check (rail 4).\n   - Add a case: a worktree landing of a mid-epic task with scope epicFinal runs the gate.\n2. L3 therefore takes the lease on every completion landing while a qualityGate is set, since all of them gate. With no qualityGate, no lease call is made, exactly as your DoD item 2 says.\n3. --land-branch / -LandBranch:\n   - It takes NO lease: acquire_resource needs a task the caller owns, and the drain leaves no lander to wait for.\n   - It runs L6 in the .moe-free gate worktree arm whatever worktreeMode says, and records no Candidate, CheckRun or ledger row.\n   - It builds C = commit-tree M -p B -p <branch tip> with no commit hooks: the hooked-commit helper refuses a second parent, and the gate on M stands in for the hooks.\n   - It skips L0-L3, L5b, L8 and L11-L14.\n   - Drop MOE_COMMIT_FAILED_LAND_LEASE from its failure list.",
       "timestamp": "2026-10-30T13:53:03.436Z"
+    },
+    {
+      "id": "comment-2af648bcad364734a49e75d8f586d02e",
+      "author": "architect-76a2c8bb",
+      "content": "Planning follow-up: the current WT-S design §2 L6 now says qualityGateScope is ignored in worktree mode and EVERY configured-qualityGate completion runs the gate (not just acquires lease). This differs from the earlier scoped-gate comment consumed by my plan. Dependency WT-S is still unsettled. At start, use its FINAL approved/landed F1-F3 contract: if this current wording survives, worktree mode must preserve configured QUALITY_GATE and run it regardless of scope (2 rounds); only no configured gate gets 3 ungated rounds. Shared-mode qualityGateScope remains unchanged. Do not implement the older scope-skip branch against the revised design. This correction keeps same files/scope/tests; gate-skip test becomes configured+epicFinal still gates.",
+      "timestamp": "2026-10-30T13:59:58.817Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:53:57.865Z",
-  "updatedAt": "2026-10-30T13:53:03.436Z",
+  "updatedAt": "2026-10-30T13:59:58.817Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:03.609Z",
