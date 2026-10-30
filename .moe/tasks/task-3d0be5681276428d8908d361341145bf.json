@@ -70,7 +70,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -83,16 +83,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T14:02:39.728Z",
-  "updatedAt": "2026-10-30T04:51:46.525Z",
+  "updatedAt": "2026-10-30T04:56:05.632Z",
   "metrics": {
     "firstClaimAt": "2026-10-29T23:47:59.132Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T04:56:05.632Z",
+    "wallClockMs": 18486500
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-5ebbf433"
+    "worker-5ebbf433",
+    "qa-952969be"
   ],
   "dependsOn": [
     "task-c2a900aa5107479aa4c630f1b3837ed0",
@@ -189,7 +192,68 @@
     "scripts/tests/postflight.sh",
     "scripts/tests/postflight.ps1",
     "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+    ".moe/tasks/task-5dc76be6e63f47a58f30e9f7a6923511.json"
+  ],
+  "completionSummary": "Both wrappers now send the bare branch name (e.g. moe/work-2026-10-30) as ref on every committed record_commit row.\n- moe-agent.ps1: Invoke-MoeLanding's 3 committed rows (normal, catch post-CAS, finally post-CAS resend) send ref=$branch. Send-MoeOwedLedgerRow strips a leading 'refs/heads/' (Ordinal StartsWith, only when something remains). BOM kept.\n- moe-agent.sh: receipt_ledger_send strips the same prefix by slicing (no removeprefix).\n- Unchanged: journal target, deliveryTarget, receipt target (refs/heads/<branch>), rescue rows, $res.Ref. grep -F 'refs/heads/$branch' in the ps1 = exactly 5 lines (rev-parse, journal target, update-ref, 2x $res.Ref).\n- Tests: postflight-owner-guard.cjs sequential() asserts done[0].ref === git symbolic-ref --short HEAD exactly (runs as sh and ps1); the receipt-ledger-replay owed row expects 'moe/frozen' in postflight.sh and postflight.ps1.\nRED on HEAD wrappers + edited tests: sh replay, ps1 replay and ps1 owner-guard sequential fail ('refs/heads/...' vs bare); sh owner-guard passes, as sh already sent the bare name. GREEN: plan step-3 snapshot command, VERIFY_EXIT=0 with 5 PASS lines (frozen 1 sh/ps1, owner guard 12 sh/ps1, parity-check), re-run fresh just before completion. Mutants (ps1 normal row, sh owed row, ps1 owed row) each turn their case red.\nReviewed by reading only: the catch and finally post-CAS resends have no harness seam. Diff is +12/-9 in the five owned files, no foreign hunks; no daemon or MCP change; old task.commits rows with refs/heads/... stay as stored.",
+  "commits": [
+    {
+      "sha": "c7213a212aed065eb339a52c70f118cab372e64c",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5ebbf433@2026-10-30T04:42:39Z",
+      "paths": [
+        ".moe/tasks/task-3d0be5681276428d8908d361341145bf.json",
+        ".moe/tasks/task-5dc76be6e63f47a58f30e9f7a6923511.json",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-owner-guard.cjs",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-5ebbf433",
+      "recordedAt": "2026-10-30T04:52:09.290Z",
+      "treeId": "b3a53a0bc887ce059c67acb0036d65b59f3614bd",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "scripts/moe-agent.ps1",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/moe-agent.sh",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/tests/postflight.ps1",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        },
+        {
+          "path": "scripts/tests/postflight.sh",
+          "taskId": "task-16bbf8ff071d485aa27ab5b92049c600"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "scripts/tests/postflight-owner-guard.cjs",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/moe-agent.ps1",
     "scripts/moe-agent.sh"
   ],
-  "completionSummary": "Both wrappers now send the bare branch name (e.g. moe/work-2026-10-30) as ref on every committed record_commit row.\n- moe-agent.ps1: Invoke-MoeLanding's 3 committed rows (normal, catch post-CAS, finally post-CAS resend) send ref=$branch. Send-MoeOwedLedgerRow strips a leading 'refs/heads/' (Ordinal StartsWith, only when something remains). BOM kept.\n- moe-agent.sh: receipt_ledger_send strips the same prefix by slicing (no removeprefix).\n- Unchanged: journal target, deliveryTarget, receipt target (refs/heads/<branch>), rescue rows, $res.Ref. grep -F 'refs/heads/$branch' in the ps1 = exactly 5 lines (rev-parse, journal target, update-ref, 2x $res.Ref).\n- Tests: postflight-owner-guard.cjs sequential() asserts done[0].ref === git symbolic-ref --short HEAD exactly (runs as sh and ps1); the receipt-ledger-replay owed row expects 'moe/frozen' in postflight.sh and postflight.ps1.\nRED on HEAD wrappers + edited tests: sh replay, ps1 replay and ps1 owner-guard sequential fail ('refs/heads/...' vs bare); sh owner-guard passes, as sh already sent the bare name. GREEN: plan step-3 snapshot command, VERIFY_EXIT=0 with 5 PASS lines (frozen 1 sh/ps1, owner guard 12 sh/ps1, parity-check), re-run fresh just before completion. Mutants (ps1 normal row, sh owed row, ps1 owed row) each turn their case red.\nReviewed by reading only: the catch and finally post-CAS resends have no harness seam. Diff is +12/-9 in the five owned files, no foreign hunks; no daemon or MCP change; old task.commits rows with refs/heads/... stay as stored."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5ebbf433@2026-10-30T04:42:39Z",
+    "at": "2026-10-30T04:52:09.290Z"
+  },
+  "completedAt": "2026-10-30T04:56:05.632Z",
+  "reviewCompletedAt": "2026-10-30T04:56:05.632Z",
+  "reviewSummary": "APPROVED. Completion c7213a2 is on moe/work-2026-10-24, recorded in task.commits as completion, pushed=true. git show: owned files +12/-9 (ps1 +6/-4, sh +2/-1, owner-guard +2/-2, postflight.sh/.ps1 +1/-1 each), no foreign hunks despite Moe-Contested trailers (task-16bbf8ff on the same paths). Five files clean in working tree, so snapshot == HEAD.\n\nDoD 1: ps1 Invoke-MoeLanding sends ref=$branch in all 3 committed rows (normal, catch post-CAS, finally resend). ps1 Send-MoeOwedLedgerRow and sh receipt_ledger_send strip a leading refs/heads/ (only when something remains; sh uses slicing). sh committed rows 5639/5965 already sent $LAND_BRANCH. git grep -F 'refs/heads/$branch' in ps1 at c7213a2 = exactly 5 lines (rev-parse, journal target, update-ref, 2x $res.Ref), none a record_commit ref. Journal/deliveryTarget/receipt targets, rescue rows, $res.Ref unchanged. Catch/finally resends have no harness seam; reviewed by reading, same $branch as normal row.\n\nDoD 2: owner-guard sequential() asserts done[0].ref === git symbolic-ref --short HEAD exactly (.replace removed); runs as sh and ps1. Replay owed ref is 'moe/frozen' in postflight.sh and .ps1.\n\nRe-ran the plan's step-3 snapshot command under /mnt/d/moe-scratch with the seat's MOE_* env scrubbed: all five PASS lines in order (frozen 1 sh; owner guard 12 sh; ps1 host=5.1.26100.9711 then frozen 1 ps1; owner guard 12 ps1; parity-check). bash -n OK; BOM ef bb bf intact on moe-agent.ps1 and postflight.ps1.\n\nOwn mutant: ps1 normal row back to \"refs/heads/$branch\" turns ps1 owner-guard sequential red (actual 'refs/heads/moe/work-2026-10-30' vs expected 'moe/work-2026-10-30'). I did not re-run the sh-owed and ps1-owed mutants; the worker's evidence is consistent with the exact 'moe/frozen' assertion. Not run: full postflight suites, pwsh 7 pass (optional mid-epic).\n\nNet +3 LOC, no daemon/MCP change; old refs/heads/... rows stay as stored.",
+  "requiredCheckAtDone": null
 }
