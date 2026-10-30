@@ -20,6 +20,7 @@ import {
   MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, endAgentJobs, runGuestSession,
 } from '../local-runner/guest-session.mjs';
 import { ownedInstanceName, QUERY_TIMEOUT_MS } from '../local-runner/lifecycle.mjs';
+import { AGENT_CLIS } from '../local-runner/agent-cache.mjs';
 
 // The H section's project and daemon: a fake /health reporting its loopback bind for PROJECT (::1 best-effort; 0 where it
 // cannot bind). It is awaited before any test is registered: awaited after them, rows that all finish meanwhile (every
@@ -1658,3 +1659,169 @@ test('H8 endAgentJobs reports verified only on an observed pgrep count of 0, ret
     await rejectsWith(endAgentJobs(name, provider, options), 'SESSION_INPUT_INVALID', JSON.stringify([name, options]));
   }
 });
+
+// CQ-R10d end to end: the landed R10d slices compose. A fake CLI is installed by the real agents mode, started by the real
+// bridge job from its own session config, and reaches the host only through the real shim and the agent socket. These are
+// local processes: not a live VM, a real CLI, isolation or verified-local.
+const SHIM_FILE = fileURLToPath(new URL('../local-runner/guest-mcp-shim.py', import.meta.url));
+const TOOLS_FILE = fileURLToPath(new URL('../local-runner/guest-mcp-tools.json', import.meta.url));
+const NO_TOMLLIB = NO_GUEST || (spawnSync('python3', ['-I', '-c', 'import tomllib']).status !== 0
+  && 'the fake codex reads config.toml with tomllib (python3 >= 3.11)');
+const UPSTREAM = 'upstream-marker-R10d-7f3a';
+const TABLE = JSON.parse(readFileSync(TOOLS_FILE, 'utf8'));
+// The fake knows only what a real CLI knows: its argv, its session config and the shim command that config names. It
+// sends one request and reads its reply before the next, because the shim drops pending calls at stdin EOF.
+const FAKE_CLI = `import json, os, signal, subprocess, sys
+signal.alarm(20)
+cli = os.path.basename(sys.argv[0])
+record = {'cli': cli, 'argv': sys.argv, 'cwd': os.getcwd(), 'home': os.environ['HOME'], 'config': None, 'replies': [], 'shim': None}
+try:
+    if cli == 'claude':
+        with open(sys.argv[sys.argv.index('--mcp-config') + 1]) as file:
+            record['config'] = json.load(file)
+        servers, env = record['config']['mcpServers'], dict(os.environ)
+    else:
+        import tomllib
+        with open(os.path.join(os.environ['CODEX_HOME'], 'config.toml'), 'rb') as file:
+            record['config'] = tomllib.load(file)
+        servers = record['config']['mcp_servers']
+        env = None
+    (server,) = servers.values()
+    if server['command'] == ${JSON.stringify(GUEST_LAYOUT.shim)} and 'args' not in server:
+        if env is None:  # codex gives an MCP server only HOME, PATH and the names its env_vars lists
+            env = {name: os.environ[name] for name in ('HOME', 'PATH', *server.get('env_vars', [])) if name in os.environ}
+        shim = subprocess.Popen([os.path.join(os.path.dirname(os.path.dirname(sys.argv[0])), 'moe-mcp-shim')],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True)
+        other = {'worker': 'moe.qa_approve', 'qa': 'moe.complete_task'}[os.environ['MOE_ROLE']]
+        def send(message, replied=True):
+            print(json.dumps({'jsonrpc': '2.0', **message}), file=shim.stdin, flush=True)
+            if replied:
+                record['replies'].append(json.loads(shim.stdout.readline()))
+        def tool(id, name, arguments):
+            send({'id': id, 'method': 'tools/call', 'params': {'name': name, 'arguments': arguments}})
+        send({'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'fake', 'version': '1'}}})
+        send({'method': 'notifications/initialized'}, False)
+        send({'id': 2, 'method': 'tools/list'})
+        tool(3, 'moe.get_context', {})
+        tool(4, other, {})
+        tool(5, 'moe.add_comment', {'content': 'e2e', 'workerId': 'someone-else'})
+        tool(6, 'moe.add_comment', {'content': 'e2e'})
+        shim.stdin.close()
+        record['shim'] = shim.wait()
+finally:
+    print(json.dumps(record))
+`;
+const agentFrames = (cli, bytes, digest = createHash('sha256').update(bytes).digest('hex')) =>
+  [{ kind: 'agent', cli, size: bytes.length, sha256: digest }, { kind: 'data', data: bytes.toString('base64') }];
+// The real agents mode, as the current user, into <base>/agents.
+const installFakes = (base, frames) => spawnSync('python3', ['-I', '-B', '-c', `${LOAD}sys.exit(m.install_agents(0, 1, sys.argv[2], (os.getuid(), os.getgid())))`,
+  SUPERVISOR, join(base, 'agents')], { input: Buffer.concat([...frames, { kind: 'end' }].map(frame => encodeFrame(frame, MAX_HOST_FRAME_BYTES))),
+  maxBuffer: 64 << 20, timeout: 30_000 });
+// The local stand-in for /opt/moe/bin/moe-mcp-shim: the shipped shim, with the socket and table paths moved under <base>. It
+// reports the NAMES of its environment on stderr, never a value.
+function standIn(base, python) {
+  const file = join(base, 'moe-mcp-shim');
+  writeFileSync(file, `#!${python} -IB
+import importlib.util, json, os, sys
+spec = importlib.util.spec_from_file_location('moe_shim', ${JSON.stringify(SHIM_FILE)})
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.AGENT_SOCKET = ${JSON.stringify(join(base, 'agent.sock'))}
+m.TOOLS_PATH = ${JSON.stringify(TOOLS_FILE)}
+print(json.dumps({'role': os.environ.get('MOE_ROLE'), 'env': sorted(os.environ)}), file=sys.stderr, flush=True)
+sys.exit(m.main())
+`);
+  chmodSync(file, 0o700);
+}
+// bridgeMain's shape, with every JOBS executable re-rooted under <base>/agents at its path below AGENTS, so a job runs the
+// very file agents mode installed.
+function agentMain(base) {
+  const host = { launches: [], socket: join(base, 'agent.sock') };
+  host.spawn = (executable, argv, options) => {
+    host.launches.push([executable, argv, options]);
+    const code = `${LOAD}base = os.path.dirname(sys.argv[2])
+os.mkdir(os.path.join(base, 'ws'))
+jobs = {cli: (os.path.join(base, 'agents', os.path.relpath(exe, m.AGENTS)), names) for cli, (exe, names) in m.JOBS.items()}
+sys.exit(m.main(['bridge'], geteuid=lambda: 0, workspace=os.path.join(base, 'ws'), sessions=os.path.join(base, 'sessions'),
+                identity=(os.getuid(), os.getgid(), None), jobs=jobs, agent_socket=sys.argv[2]${PEER}))
+`;
+    host.proc = spawn('python3', ['-I', '-B', '-c', code, SUPERVISOR, host.socket], options);
+    sessions.push(host);
+    return host.proc;
+  };
+  return host;
+}
+const outputText = (run, stream) => Buffer.concat(run.outputs.filter(([name]) => name === stream).map(([, data]) => data));
+const pythonPath = () => spawnSync('python3', ['-I', '-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' }).stdout.trim();
+
+test('AE1 end to end, each installed CLI starts headless from its session config and reaches Moe only through the shim and the agent socket',
+  { skip: NO_TOMLLIB, timeout: 60_000 }, async t => {
+    const python = pythonPath();
+    const fake = Buffer.from(`#!${python} -I\n${FAKE_CLI}`);
+    for (const [binding, job] of [[BINDING, HOST_JOB], [QA, HOST_JOB], [BINDING, QA_HOST_JOB], [QA, QA_HOST_JOB]]) {
+      const label = `${job.cli}/${binding.role}`;
+      const base = mkdtempSync(join(tmpdir(), 'moe-r10d-'));
+      t.after(() => rmSync(base, { recursive: true, force: true }));
+      const install = installFakes(base, AGENT_CLIS.flatMap(cli => agentFrames(cli, fake)));
+      assert.equal(install.status, 0, `${label} ${install.stderr}`);
+      assert.deepEqual(createFrameDecoder(MAX_HOST_FRAME_BYTES).push(install.stdout), [{ kind: 'installed', count: 2 }], label);
+      for (const cli of AGENT_CLIS) {
+        assert.equal(statSync(join(base, 'agents', cli)).mode & 0o777, 0o555, `${label} ${cli}`);
+        assert.deepEqual(readFileSync(join(base, 'agents', cli)), fake, `${label} ${cli}`);
+      }
+      standIn(base, python);
+      const host = agentMain(base);
+      const run = openSession(host, { binding, job, timeoutMs: 10_000, answer: tool => {
+        if (tool === 'moe.add_comment') throw new Error(UPSTREAM);
+        return { content: [{ type: 'text', text: tool }] };
+      } });
+      assert.deepEqual(await run.promise, { observation: EXIT, executionReady: false }, `${label} ${outputText(run, 'stderr')}`);
+      assert.deepEqual([host.launches, host.proc.exitCode], [[SPAWNED], 0], label);
+      const report = JSON.parse(outputText(run, 'stdout'));
+      const config = job.cli === 'claude' ? { mcpServers: { moe: { command: GUEST_LAYOUT.shim } } }
+        : { mcp_servers: { moe: { command: GUEST_LAYOUT.shim, env_vars: ['MOE_ROLE'], default_tools_approval_mode: 'approve' } } };
+      assert.deepEqual([report.argv, report.cwd, report.config, report.shim],
+        [launchArgv(job.cli, binding.role, report.home, join(base, 'agents', job.cli)), join(base, 'ws'), config, 0], label);
+      const tools = Object.entries(TABLE[binding.role]).map(([name, properties]) => ({ name, inputSchema: { type: 'object', properties, additionalProperties: false } }));
+      assert.deepEqual(tools.map(tool => tool.name), Object.keys(TOOLS[binding.role]), label);
+      const rpc = (id, body) => ({ jsonrpc: '2.0', id, ...body });
+      assert.deepEqual([report.replies[0].id, report.replies[0].result.protocolVersion], [1, '2025-06-18'], label);
+      assert.deepEqual(report.replies.slice(1), [rpc(2, { result: { tools } }),
+        rpc(3, { result: { content: [{ type: 'text', text: 'moe.get_context' }] } }),
+        rpc(4, { error: { code: -32602, message: 'Tool not available to this role.' } }),
+        rpc(5, { error: { code: -32602, message: 'Argument not allowed for this tool.' } }),
+        rpc(6, { error: { code: -32004, message: 'Moe refused the tool call.', data: { code: 'BRIDGE_UPSTREAM_FAILED' } } })], label);
+      // Only the allowed calls reached the host, each stamped with the binding.
+      assert.deepEqual(run.forwarded, [['moe.get_context', { taskId: 'task-abc', workerId: binding.workerId, sessionId: SESSION_ID }],
+        ['moe.add_comment', { content: 'e2e', taskId: 'task-abc', workerId: binding.workerId }]], label);
+      // The stand-in wrote exactly one stderr line: pin names, because PEP 538 adds LC_CTYPE to a python child without LANG.
+      const stderr = outputText(run, 'stderr').toString();
+      assert.ok(stderr.endsWith('\n') && !stderr.slice(0, -1).includes('\n'), `${label} ${stderr}`);
+      const seen = JSON.parse(stderr);
+      assert.ok(seen.role === binding.role && seen.env.includes('MOE_ROLE'), label);
+      if (job.cli === 'codex') assert.deepEqual(seen.env.filter(name => name === job.credential.name || name === 'CODEX_HOME'), [], label);
+      const everything = Buffer.concat([...run.outputs.map(([, data]) => data), Buffer.from(JSON.stringify([host.launches, run.forwarded, report]))]);
+      for (const secret of [KEY, UPSTREAM]) assert.equal(everything.includes(secret), false, `${label} ${secret}`);
+    }
+  });
+
+test('AE2 a CLI binary that misses its pinned sha256 is never installed, so its job never starts, and JOBS runs only agents-mode paths',
+  { skip: NO_GUEST, timeout: 30_000 }, async t => {
+    // The host cache's CLI list, agents mode (which installs under AGENTS) and the job table name one set of files.
+    const layout = harness('print(json.dumps([m.AGENTS, {cli: exe for cli, (exe, _) in m.JOBS.items()}]))');
+    assert.equal(layout.status, 0, String(layout.stderr));
+    const [agentsDir, executables] = JSON.parse(layout.stdout);
+    assert.deepEqual(executables, Object.fromEntries(AGENT_CLIS.map(cli => [cli, `${agentsDir}/${cli}`])));
+    const base = mkdtempSync(join(tmpdir(), 'moe-r10d-'));
+    t.after(() => rmSync(base, { recursive: true, force: true }));
+    const good = Buffer.from('#!/bin/sh\nexit 0\n');
+    // claude's bytes miss their pin by one byte; install_agents is all-or-nothing, so the valid codex binary goes too.
+    const install = installFakes(base, [...agentFrames('claude', Buffer.concat([good, Buffer.from('#')]), createHash('sha256').update(good).digest('hex')),
+      ...agentFrames('codex', good)]);
+    assert.deepEqual([install.status, install.stdout.length, readdirSync(join(base, 'agents'))], [65, 0, []], String(install.stderr));
+    // No binary, so the job cannot start: the supervisor says hello, its guard finds nothing to run and it exits EX_OSERR.
+    const host = agentMain(base);
+    const session = openSession(host, { binding: BINDING, job: HOST_JOB, timeoutMs: 10_000 });
+    await rejectsWith(session.promise, 'SESSION_PROVIDER_FAILED');
+    assert.deepEqual([session.forwarded, session.observations, session.outputs, host.proc.exitCode], [[], [], [], 71]);
+  });
