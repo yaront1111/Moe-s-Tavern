@@ -926,6 +926,7 @@ Sending the identical report again, for example after a runner crash, returns th
 **Notes:**
 - **Recorded, not approved.** `success: true` only acknowledges that the run was persisted. A nonzero `exitCode` is acknowledged exactly like a pass. The tool never marks a task `DONE`, never approves a review and never releases a dependent task.
 - **`source` is declared provenance.** The daemon never executes `command` and does not authenticate the caller, so `runner-observed` is what the report says, not proof that the command ran or of who ran it. `source` is required, never defaulted, and never inferred from `workerId`.
+- **Diagnostic, never authenticated evidence.** A run recorded here is never authenticated evidence, whatever `source`, `runnerId` or `dispatchId` it carries: `isAuthenticatedCheckRun` (`state/checkObservationStore.ts`) is false for it, because only `moe.record_check_observation` over the runner channel writes the observation marker it requires. Its legacy behavior and how existing delivery policies count it are otherwise unchanged.
 - **Bound to one candidate's tree.** The candidate must exist and `treeSha` must be exactly its tree, with no prefix match and no case folding. No candidate is created on the caller's behalf, and a run recorded for one candidate or tree is never rebound to another.
 - **Immutable, with an idempotent retry.** Re-recording an existing `id` is compared field by field after normalization: the bounded tail, and `""` for an absent one. An identical report returns the stored run (`duplicate: true`, original `createdAt`) and writes nothing. Any difference is refused, so a changed result (another exit code, command, tail or source) is a new run and needs a fresh `id`. If the daemon generated the id, a retry records a second run. An `id` that differs from an existing run's `id` only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`), because on NTFS and a default APFS volume both name one file.
 - **Output tail: 16384 UTF-8 bytes, not characters.** The kept portion is the end of the log and always starts on a whole character; malformed input such as a lone UTF-16 surrogate is first normalized to U+FFFD. This bound is deliberately different from `complete_task`'s `verification.outputTail`, which still keeps the last 2000 characters. Details: docs/SCHEMA.md `## CheckRun`.
@@ -941,6 +942,105 @@ Sending the identical report again, for example after a runner crash, returns th
 - `-32002 CHECK_RUN_ID_CASE_COLLISION`: the same for a check run: the supplied `id` differs only by case from an existing run's `id`; supply a distinct id. `context.checkRunId` is the stored id, `context.requestedId` the one sent.
 - `-32001 ATTEMPT_NOT_FOUND` / `-32002 ATTEMPT_ID_TASK_MISMATCH`: a supplied `attemptId` names no attempt, or an attempt of another task than the candidate's. Checked after the same-id rules, so an identical retry still replays.
 - A failed write (a full disk, a permission error) reaches the caller as a `-32000` error carrying the write's message. No run is recorded or published, and no success is returned.
+
+---
+
+### moe.record_check_dispatch
+
+**Runner channel only; not for agents.** Records which check an authenticated runner is about to run for a task, as an immutable `CheckDispatch` (docs/SCHEMA.md `## CheckDispatch`) at `.moe/checks/dispatches/<id>.json`. While they are current, the dispatch pins the task's current candidate, that candidate's tree, the task's current approved plan revision, the command and the environment. Its one result is recorded later with `moe.record_check_observation`, which inherits that binding. This tool only records; whether a run satisfies a gate is decided later, by policy.
+
+**Runner channel.** `moe.record_check_dispatch` and `moe.record_check_observation` answer only on the `/runner` WebSocket path, which speaks MCP JSON-RPC exactly like `/mcp`:
+- The connection must come from loopback and its upgrade must carry exactly one `x-moe-runner-key` header equal to the project's runner key. Any other `/runner` connection is closed with `1008 runner authentication failed`.
+- The key lives at `<MOE_RUNNER_KEY_DIR or ~/.moe/runner-keys>/<first 32 hex of sha256(projectPath)>.key`: 32 random bytes as 43 characters of unpadded base64url, mode 0600 in a 0700 directory. The daemon provisions it at start and reuses a valid one across restarts. It never lives in the project tree, and no guest receives it: the guest bridge forwards neither tool.
+- The connection's identity is `runnerId = runner-<first 16 hex of sha256(key)>`. It reaches the tools as call context, never from arguments. Over `/mcp` or `/ws` both tools are refused with `RUNNER_CHANNEL_REQUIRED` before anything is read, even when the key header is sent.
+- **Limit.** Under `legacy` and `observe`, a host agent runs as the same OS user and can read the key, so a runner-observed result there is only as trustworthy as the host. The trust is meaningful only once agents are isolated from the key; `verified-local` stays unavailable until that isolation is certified.
+
+**Parameters:**
+```typescript
+{
+  id?: string,             // optional dispatch id, [A-Za-z0-9_-]{1,128}. Reuse it to retry after a crash;
+                           // when omitted the daemon generates "dispatch-<32 hex>"
+  taskId: string,          // the task whose check is dispatched
+  candidateId: string,     // the task's CURRENT candidate (its latest recorded one). Its treeSha is pinned from the candidate, never passed
+  planRevision: number,    // integer >= 1: must equal both the task's planRevision and its approvedPlanRevision
+  command: string,         // the command the runner will run, verbatim; non-blank, ≤500 chars (the CheckRun command rule)
+  checkId?: string,        // optional protected check id, [A-Za-z0-9][A-Za-z0-9._-]{0,63}
+  environment: string,     // opaque environment identity (e.g. an image digest): non-blank, ≤255 chars, no control chars, verbatim
+  workerId?: string        // caller (auto-injected by proxy); not evidence, never stored
+}
+```
+Any other argument, `runnerId`, `source` and `treeSha` included, is refused by name.
+
+**Returns:**
+```typescript
+{ success: true, dispatch: CheckDispatch, duplicate: boolean }
+// dispatch: { id, taskId, candidateId, treeSha, planRevision, command, checkId?, environment, runnerId, createdAt }
+// runnerId is the channel's; treeSha is the candidate's
+// duplicate: true when an identical dispatch already existed under this id; it is returned unchanged and nothing is written
+```
+
+**Notes:**
+- **Pinned while current.** A dispatch can only be recorded for the task's current candidate at the task's current approved plan revision. A superseded candidate never gets a new dispatch, but an existing dispatch stays answerable (see `moe.record_check_observation`).
+- **Immutable, with an idempotent retry.** A same-id call is compared on `taskId`, `candidateId`, `planRevision`, `command`, `checkId`, `environment` and the channel's `runnerId`. An identical one returns the stored dispatch (`duplicate: true`, original `createdAt`) and writes nothing; any difference is refused. The same-id check runs before the currency checks, so a crash retry still replays after its candidate was superseded.
+- **Recorded, not approved.** A dispatch marks nothing `DONE` and releases nothing. `createdAt` is the daemon's clock. The tool is not `blocking`, so dispatch serializes it under the state mutex.
+
+**Errors.** Checked in this order, and every refusal writes nothing:
+- `-32003 RUNNER_CHANNEL_REQUIRED`: the call did not arrive over an authenticated `/runner` connection. Checked before the arguments are read.
+- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: non-object arguments, an argument outside the list above (named in `context.field`), or a malformed or absent field.
+- `-32002 CHECK_DISPATCH_IMMUTABLE`: the `id` already holds a different dispatch; `context.differingFields` names the fields.
+- `-32002 CHECK_DISPATCH_ID_CASE_COLLISION`: the `id` differs only by case from a stored dispatch's id (`context.dispatchId`, `context.requestedId`).
+- `-32001 TASK_NOT_FOUND` / `-32001 CANDIDATE_NOT_FOUND`: no such task or candidate.
+- `-32002 CHECK_DISPATCH_TASK_MISMATCH`: the candidate belongs to another task.
+- `-32002 CHECK_DISPATCH_NOT_CURRENT`: the candidate is superseded; `context.currentCandidateId` names the current one.
+- `-32002 CHECK_DISPATCH_REVISION_MISMATCH`: `planRevision` is not the task's current approved plan revision.
+- A failed write reaches the caller as a `-32000` error, and no dispatch is recorded.
+
+---
+
+### moe.record_check_observation
+
+**Runner channel only; not for agents.** Records the one result an authenticated runner observed for a recorded `CheckDispatch`. The result is a `runner-observed` `CheckRun` at `.moe/checks/<id>.json`, written through the `moe.record_check_run` store and its rules, plus a `CheckObservation` marker at `.moe/checks/observations/<dispatchId>.json` naming that run (docs/SCHEMA.md `## CheckObservation`). Only such a run, with its marker and its dispatch's exact binding, is authenticated evidence (`isAuthenticatedCheckRun` in `state/checkObservationStore.ts`). It uses the same channel as `moe.record_check_dispatch` (see **Runner channel** there).
+
+**Parameters:**
+```typescript
+{
+  id: string,              // the check-run id, [A-Za-z0-9_-]{1,128}. Required, so a crash retry is idempotent; use an unguessable id
+  dispatchId: string,      // a RECORDED dispatch of this runner
+  exitCode: number,        // any safe integer
+  outcome: "passed" | "code-failure" | "infra-failure" | "timeout" | "skipped" | "inconclusive",
+                           // required; passed requires exitCode 0, code-failure a nonzero one; never inferred from exitCode
+  outputTail?: string,     // the end of the output, stored as its final 16384 UTF-8 BYTES; absent is stored as ""
+  environment: string,     // must equal the dispatch's environment exactly
+  workerId?: string        // caller (auto-injected by proxy); not evidence, never stored
+}
+```
+Any other argument, `runnerId`, `source`, `candidateId`, `treeSha`, `command` and `planRevision` included, is refused by name.
+
+**Returns:**
+```typescript
+{ success: true, checkRun: CheckRun, duplicate: boolean }
+// checkRun: { id, candidateId, treeSha, command, exitCode, outputTail, runnerId, source: "runner-observed",
+//   outcome, planRevision, environment, dispatchId, createdAt }
+// candidateId, treeSha, command, planRevision, environment and dispatchId are the dispatch's; runnerId is the channel's
+// duplicate: true when an identical run already existed under this id
+```
+
+**Notes:**
+- **Inherited binding, never retargeted.** The run's candidate, tree, command, plan revision and environment come from the dispatch, never from arguments. A dispatch whose candidate has since been superseded, or whose task has moved to a newer plan revision, is still answered against its own binding: answering a recorded dispatch is the only recovery path. A result never moves to another candidate or revision.
+- **One result per dispatch.** The first run recorded for a dispatch is its result. A run under any other id for the same dispatch is refused.
+- **Replay.** A same-id call is compared like a `moe.record_check_run` report. An identical one returns the stored run with `duplicate: true` and writes nothing, except that it completes a marker a crash left unwritten. Any difference is refused. The run is written before the marker, so a crash between the two leaves a run that is not authenticated until the identical retry completes it.
+- **Id squatting.** A `moe.record_check_run` report that takes the run id first with different content makes the observation fail (`CHECK_RUN_IMMUTABLE`), but never makes that report trusted: it has no marker. Use unguessable run ids.
+- **Recorded, not approved.** The tool is not `blocking`: dispatch serializes it under the state mutex, which keeps one marker per dispatch.
+
+**Errors.** Checked in this order, and every refusal writes nothing:
+- `-32003 RUNNER_CHANNEL_REQUIRED`: the call did not arrive over an authenticated `/runner` connection. Checked before the arguments are read.
+- `-32602 INVALID_INPUT` / `MISSING_REQUIRED`: non-object arguments, an argument outside the list above (named in `context.field`), a malformed `id` or `dispatchId`, or an absent `outcome`.
+- `-32001 CHECK_DISPATCH_NOT_FOUND`: no recorded dispatch has this id.
+- `-32003 CHECK_RUNNER_MISMATCH`: another runner recorded the dispatch.
+- `-32002 CHECK_ENVIRONMENT_MISMATCH`: `environment` is not the dispatch's.
+- `-32002 CHECK_DISPATCH_ALREADY_OBSERVED`: the dispatch already has a result under another id (`context.checkRunId`, `context.requestedId`).
+- Then every `moe.record_check_run` refusal of the run itself: `INVALID_INPUT` / `MISSING_REQUIRED` for `exitCode`, `outcome` or `outputTail` (an outcome incoherent with `exitCode` included), `-32002 CHECK_RUN_IMMUTABLE` and `-32002 CHECK_RUN_ID_CASE_COLLISION`.
+- A failed write reaches the caller as a `-32000` error.
 
 ---
 
@@ -1338,9 +1438,10 @@ Candidates rank by priority first, the same order `wait_for_task` uses, so a hig
     blockedResourceId?: string,     // BLOCKED holds only; set = auto-unblocks on lease grant
     blockedOnTaskIds?: string[]     // BLOCKED holds only; set = auto-unblocks when all are DONE/ARCHIVED
   },
-  sessionHandoff?: { action: "END_SESSION", taskId, workerId, reason },  // resource-BLOCKED hold only: end this session
-  nextAction?: {                    // absent on a resource-BLOCKED hold
-    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance' | 'moe.report_blocked',  // report_blocked = non-resource BLOCKED hold (see above)
+  code?: "NO_TEAM_MEMBERSHIP",      // hasNext: false — the solo epic+status rule emptied the pool (see **No team membership**)
+  sessionHandoff?: { action: "END_SESSION", taskId?, workerId, reason },  // resource-BLOCKED hold (taskId set), or NO_TEAM_MEMBERSHIP for an architect, worker or qa seat (no taskId): end this session
+  nextAction?: {                    // absent on a resource-BLOCKED hold and on a seat's NO_TEAM_MEMBERSHIP
+    tool: 'moe.get_context' | 'moe.get_handoff_history' | 'moe.wait_for_task' | 'moe.enter_governance' | 'moe.report_blocked' | 'moe.join_team',  // report_blocked = non-resource BLOCKED hold (see above); join_team = NO_TEAM_MEMBERSHIP for a governor or role-less caller
     args: object,
     reason: string,
     recommendedSkill?: { name: string, reason: string }
@@ -1362,6 +1463,12 @@ Only one worker can work on tasks of the same status type per epic at a time:
 - Architects (PLANNING) and workers (WORKING) can work in parallel on the same epic
 - Two workers cannot both claim WORKING tasks in the same epic
 - Use `replaceExisting: true` to take over from an existing worker
+
+**No team membership:** a claimer in no team (live, or remembered by a team's `formerMemberIds` tombstone) skips every candidate in an epic+status that a live other worker holds; a team may parallelize one. When that empties the pool, the answer is `{ hasNext: false, code: "NO_TEAM_MEMBERSHIP" }`, never the concurrent-claim answer. The remedy follows what the caller's `tools/list` shows:
+- A worker id prefixed `architect-`, `worker-` or `qa-` has a `tools/list` that hides `moe.join_team` and `moe.list_teams`. It gets `sessionHandoff: { action: "END_SESSION", workerId, reason }` (no `taskId`) and no `nextAction`: save any handoff and end the session. Both wrappers key on `code` and re-run the team join before their next claim, reporting a refused join (for example a full team). The `moe-account-switch` mod ends an interactive seat on the handoff.
+- A governor, or a role-less caller (IDE, `scripts/moe-call.sh`, an unprefixed id), gets `nextAction: { tool: "moe.join_team", args: { workerId } }`, which its `tools/list` shows.
+
+`moe.wait_for_task` answers the same refusal, either at once or when a matching task appears while it waits.
 
 **Errors:**
 - `Epic already has an active worker on <status> tasks: <workerId>` - if another worker is active
@@ -1404,6 +1511,13 @@ Block (long-poll) until a claimable task matching the given `statuses` appears. 
 { hasNext: false, hasChatMessage: true,
   chatMessage: { channel, sender, preview },  // preview = first 200 chars
   nextAction: { tool: "moe.chat_read", args, reason } }
+
+// Work exists but the solo epic+status rule withheld all of it from a caller in no team
+// (immediately, or when a matching task appears while waiting); same refusal as claim_next_task:
+{ hasNext: false, code: "NO_TEAM_MEMBERSHIP",
+  sessionHandoff: { action: "END_SESSION", workerId, reason } }  // architect-/worker-/qa- seat: no nextAction; end the session
+{ hasNext: false, code: "NO_TEAM_MEMBERSHIP",
+  nextAction: { tool: "moe.join_team", args: { workerId }, reason } }  // governor or role-less caller
 
 // Timeout elapsed:
 { hasNext: false, timedOut: true,
@@ -2925,7 +3039,7 @@ Moe can spread claude seats across several Claude subscription accounts on one m
   - has no `rejected`/`overage` status;
   - has no pending refusal.
 
-  A spent account comes back on its own when its window resets. A worker in the middle of a task moves at its next step boundary (`moe.complete_step` `accountSwitch`, `moe.start_step` refusal). An interactive claude seat whose wrapper loop relaunches it (the architect and governor TUIs) runs the `moe-account-switch` mod (`scripts/mods/`), which adds `acceptsAccountSwitch` to its `moe.submit_plan` and `moe.chat_wait` calls. That seat moves between tasks: the architect after `moe.submit_plan`, the governor at `moe.chat_wait`. The mod then ends the session once the turn is over, and the wrapper relaunches it. It also ends a session that claude stopped at the usage limit (100%) before any switch point. The same mod ends the session, leased or not, on a `sessionHandoff` `END_SESSION` addressed to the seat (`moe.report_blocked` freeing it, or a claim refused over a resource-held task): it refuses new work, runs `/exit` 10 s after the main turn ends, and the wrapper relaunches the seat for its next task. Every other seat moves at its next launch.
+  A spent account comes back on its own when its window resets. A worker in the middle of a task moves at its next step boundary (`moe.complete_step` `accountSwitch`, `moe.start_step` refusal). An interactive claude seat whose wrapper loop relaunches it (the architect and governor TUIs) runs the `moe-account-switch` mod (`scripts/mods/`), which adds `acceptsAccountSwitch` to its `moe.submit_plan` and `moe.chat_wait` calls. That seat moves between tasks: the architect after `moe.submit_plan`, the governor at `moe.chat_wait`. The mod then ends the session once the turn is over, and the wrapper relaunches it. It also ends a session that claude stopped at the usage limit (100%) before any switch point. The same mod ends the session, leased or not, on a `sessionHandoff` `END_SESSION` addressed to the seat (`moe.report_blocked` freeing it, a claim refused over a resource-held task, or a claim or wait refused for missing team membership): it refuses new work, runs `/exit` 10 s after the main turn ends, and the wrapper relaunches the seat for its next task. Every other seat moves at its next launch.
 - **Activity:**
   - `ACCOUNT_SWITCHED`, posted to #governors with 🔁;
   - `ACCOUNTS_EXHAUSTED`, every signed-in account spent, posted with ⏸️ once per episode;

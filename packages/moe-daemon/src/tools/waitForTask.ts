@@ -115,7 +115,8 @@ interface MatchResult {
   /**
    * True when the pool had claimable candidates and the solo epic+status rule
    * removed every one of them. claim_next_task answers that exact case with
-   * NO_TEAM_MEMBERSHIP and a join_team nextAction; wait_for_task used to
+   * NO_TEAM_MEMBERSHIP and the remedy for the caller's role (see
+   * noTeamMembershipRefusal); wait_for_task used to
    * answer it with a bare hasNext:false, which reads as "nothing to do" and
    * parked a team-less seat indefinitely. Measured 2026-09-05: a seat whose
    * catch-all team was full (join_team refused it) idled through three
@@ -233,7 +234,8 @@ function findMatchingTask(
     // Same two dead ends claim_next_task distinguishes: an empty pool, or a
     // pool the solo rule alone emptied. Only the second has a remedy the
     // caller can act on, and hiding it behind hasNext:false is what parked
-    // team-less seats — report it so the caller reaches join_team.
+    // team-less seats — report it so the caller gets claim_next_task's
+    // NO_TEAM_MEMBERSHIP remedy for its role.
     return { match: null, skippedForNoTeam: solo && eligible.length > 0 };
   }
   return {
@@ -304,8 +306,8 @@ export function waitForTaskTool(_state: StateManager): ToolDefinition {
       }
       // Work exists but the caller is team-less and the solo epic+status rule
       // withheld all of it. Answer exactly as claim_next_task does — with the
-      // code and the join_team nextAction — instead of parking the caller on a
-      // timer it cannot escape by waiting.
+      // code and the remedy for the caller's role — instead of parking the
+      // caller on a timer it cannot escape by waiting.
       if (immediate.skippedForNoTeam) {
         return noTeamMembershipRefusal(workerId);
       }
