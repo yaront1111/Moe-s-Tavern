@@ -9,9 +9,70 @@
     "Fresh `cd moe-vscode && npm test && npm run compile` plus the JetBrains `./gradlew test` (or its labelled Windows equivalent) exit 0."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED: add the two corpus rows from the task, then watch them fail only in VS Code.\n\nIn moe-jetbrains/src/test/resources/client-verdicts.json the approval array has one row per line. A25 is the last row (line 27, no trailing comma), followed by `],` and `\"vm\":[`. Give A25 a trailing comma and append exactly these two lines after it, the last one without a comma:\n{\"id\":\"A26\",\"rendered\":\"4\",\"events\":[{\"task\":{\"status\":\"PLANNING\",\"planRevision\":\"4\"}},{\"task\":{\"status\":\"WORKING\",\"planRevision\":\"4\"}}],\"verdict\":\"latched\"},\n{\"id\":\"A27\",\"rendered\":\"4\",\"events\":[{\"task\":{\"status\":\"PLANNING\",\"planRevision\":\"4\"}}],\"verdict\":\"latched\"}\nKeep LF endings and touch no other byte. That includes the vm rows, `version` and `taskId`. Both runners pick the rows up with no runner change: VS Code moe-vscode/tests/plan-review.test.cjs section L (`for (const row of CORPUS.approval)`), and JetBrains ClientVerdictCorpusTest (it requires ids matching A[0-9]{2}, unique, at least 25 rows).\n\nRun `cd moe-vscode && npm test`. Expect exactly two failures:\n- `L A26: latched` fails on the first latched assertion: its WORKING 4 event goes through settlePendingApproval and shows 'Plan approved'.\n- `L A27: latched` fails at 'a WORKING probe at the rendered revision must not confirm'.\nEvery other test stays green. If anything else fails, or A26/A27 pass, stop and investigate before step 2. Record the RED output for the completion summary.\n\nJetBrains needs no production change. PlanReviewApprovalState.onStateUpdate sends PENDING plus a present PLANNING snapshot through unusableReason to INVALIDATED (STATUS_CHANGED_KEY), and INVALIDATED ignores every later frame. Both rows already latch there; step 3 proves it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/resources/client-verdicts.json"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/resources/client-verdicts.json"
+      ],
+      "note": "RED: npm test 239 tests, 237 pass, 2 fail: L A26 and L A27 (Plan approved announced). Other 805 dirty paths belong to others; untouched.",
+      "startedAt": "2026-10-30T06:41:38.733Z",
+      "completedAt": "2026-10-30T06:42:17.870Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: end the pending approval unconfirmed on any present, non-AWAITING_APPROVAL, non-WORKING status in moe-vscode/src/panels/PlanReviewPanel.ts settlePendingApproval (around lines 147-175).\n\nReplace the single line `if (task.status !== 'WORKING') { return; }` with two branches:\n- `if (task.status === 'AWAITING_APPROVAL') { return; }`: still waiting on the daemon. Rows A13 (pending) and A14 (latched via the error) depend on this staying exactly as it is.\n- `if (task.status !== 'WORKING') { this.pendingApprovalRevision = undefined; return; }`: covers PLANNING, BLOCKED, REVIEW, DONE, ARCHIVED, BACKLOG and any unknown status. Give it a one-line comment in the style of the vanished-task line above it, e.g. `// Leaving AWAITING_APPROVAL for anything but WORKING ends it unconfirmed too (JetBrains STATUS_CHANGED parity).`\nAlso extend the method's doc comment by one sentence: a present task that leaves AWAITING_APPROVAL for any status other than WORKING ends the approval unconfirmed, the same as a vanished task.\n\nDesign choices, so nobody re-derives them:\n- Do NOT call reportApprovalFailure or post approveFailed here. The debounced updateTask already latches the page: planReview.js tokenForTask returns null for a non-AA task, so applyRenderedTask latches with NOT_APPROVABLE_NOTICE, the JetBrains statusChanged notice equivalent. That is also what the vanished-task branch does: clear the token only. With stale:true the page would show the wrong notice (PLAN_CHANGED). With stale:false a transient text would flash before the updateTask latch.\n- No toast. Toasts stay reserved for the confirmed, mismatch and connection-loss paths.\n- Do not touch media/planReview.js, plan-review.test.cjs, any Kotlin, or the daemon. The webview UI is unchanged: it latched on that frame before the fix too. Only the extension-side token stops surviving, so a later WORKING at the same revision no longer announces 'Plan approved'.\nThe error handling paths are unchanged. handleClientError still reports a correlated APPROVE_TASK refusal. handleConnectionChange now returns early after a status-change clear (pending is undefined), which is correct because the page is already latched. No new IO, so no new failure path.\n\nRe-run `cd moe-vscode && npm test`: all green, including L A26 and L A27. Then run `npm run compile` (tsc) and expect exit 0.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts"
+      ],
+      "note": "GREEN: settlePendingApproval clears pendingApprovalRevision on a present non-AA non-WORKING task. npm test 239/239 (WSL). compile: WSL `npm run compile` fails only on missing @typescript/typescript-linux-x64 (win32 node_modules); tsc6 exit 0 in WSL and `cmd.exe npm run compile` exit 0.",
+      "startedAt": "2026-10-30T06:42:18.702Z",
+      "completedAt": "2026-10-30T06:42:55.226Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate. Run it once, fresh, after step 2. Report both commands as the complete_task evidence, each labelled with where it ran.\n\n1) `cd moe-vscode && npm test && npm run compile`: exit 0. Every test passes, including `L A26: latched`, `L A27: latched` and all existing plan-review sections A-L. Quote the pass and fail totals.\n\n2) JetBrains: `cd moe-jetbrains && ./gradlew test` where a JDK is on PATH. WSL seats have none. There, the accepted labelled Windows equivalent runs under the shared lease:\n- Take `moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"gradlew.bat test --rerun\" }`. If it queues, `moe.report_blocked { resourceId: \"jetbrains-gradle\" }`.\n- Run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"`.\n- Release with `moe.release_resource` even on failure.\nNever run `clean`; the build output is shared. Count from the XML, not the console. A chained or UP-TO-DATE run can say BUILD SUCCESSFUL with zero tests. moe-jetbrains/build/test-results/test/TEST-com.moe.toolwindow.ClientVerdictCorpusTest.xml must show its tests run with 0 failures/errors. The approval rows run inside `every approval row reaches its verdict`, which now covers A26/A27, and `the corpus is complete...` checks the ids. Label it Windows evidence, never relabelled as the POSIX command.\n\nMutant (scratch, restore, cmp-verify): delete only the new `this.pendingApprovalRevision = undefined;` from the non-WORKING branch. VS Code L A26 and L A27 must both fail again, then pass after the restore. Report the mutant result in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-jetbrains/src/test/resources/client-verdicts.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-jetbrains/src/test/resources/client-verdicts.json"
+      ],
+      "note": "Gate: WSL npm test 239/239; compile via cmd.exe npm run compile exit 0. Windows gradlew.bat test --rerun exit 0 under jetbrains-gradle lease (released): XML 24 suites, 341 tests, 0 fail/err/skip, ClientVerdictCorpusTest 3/0, fresh at 06:43:02Z. Mutant (only new clear removed): L A26, L A27 fail; restored, cmp-verified, 239/239.",
+      "startedAt": "2026-10-30T06:42:56.092Z",
+      "completedAt": "2026-10-30T06:44:10.891Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff. Load adversarial-self-review. Check:\n(a) Back-to-back frames inside one render debounce: settlePendingApproval runs per state event before the debounce, so a PLANNING frame clears the token before a following WORKING frame. The page may render only the last frame, and it still latches.\n(b) AWAITING_APPROVAL frames at the same or another revision still keep the approval pending. A13 stays pending and A14 stays latched via its PLAN_REVISION_MISMATCH error.\n(c) The vanished-task branch and the WORKING match/mismatch branches are byte-for-byte unchanged. A01-A12 and A23-A25 still pass.\n(d) An APPROVE_TASK error arriving after the clear only re-posts approveFailed to an already latched page, which never re-arms. A connection drop after the clear stays silent.\n(e) The diff is exactly the two files: corpus +2 rows and a comma; panel about +3/-1 plus the doc sentence. JSON parses, the ids are unique, LF is kept, no forbidden patterns, no edits under .moe/.\n(f) Both clients agree on all 27 approval rows.\nFix anything found, re-run the step 3 commands if any byte changed, then complete_task with the step 3 evidence and the step 1 RED output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-jetbrains/src/test/resources/client-verdicts.json"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/PlanReviewPanel.ts",
+        "moe-jetbrains/src/test/resources/client-verdicts.json"
+      ],
+      "note": "Self-review (a)-(f): AA frames still return early (A13/A14 green); vanished and WORKING branches byte-unchanged; diff is exactly 2 files (panel +5/-1, corpus +3/-1, LF, JSON parses, ids unique); no .moe edits; both clients pass 27 approval rows. No bytes changed after the step 3 gate.",
+      "startedAt": "2026-10-30T06:44:11.659Z",
+      "completedAt": "2026-10-30T06:44:15.795Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -27,10 +88,67 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:47:56.377Z",
-  "updatedAt": "2026-10-30T05:55:48.492Z",
+  "updatedAt": "2026-10-30T06:44:21.036Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:48.492Z",
     "seq": 1
-  }
+  },
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:35:26.071Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-32ff5555",
+    "worker-73c29a03"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:40:48.910Z",
+  "planningNotes": {
+    "approachesConsidered": "1) Chosen: clear pendingApprovalRevision in settlePendingApproval on a present task that is neither AWAITING_APPROVAL nor WORKING. It mirrors JetBrains PENDING -> INVALIDATED (STATUS_CHANGED_KEY) and the existing vanished-task branch. 2) Rejected: also post approveFailed or show a toast. The page already latches on the debounced non-AA updateTask (NOT_APPROVABLE_NOTICE), stale:true would show the wrong PLAN_CHANGED text, and stale:false would flash a transient notice. 3) Rejected: changing the webview or the corpus runners. Both runners already consume new approval rows, and the page latch from task-f2d3d553 is correct.",
+    "codebaseInsights": "settlePendingApproval runs on every client state event before the render debounce (PlanReviewPanel.ts ~100). The webview owns the visible latch: planReview.js tokenForTask returns null when status != AWAITING_APPROVAL, and applyRenderedTask then latches. JetBrains PlanReviewApprovalState.onStateUpdate leaves READY/PENDING only for FINISHED (WORKING at the captured revision) or INVALIDATED (unusableReason/staleReason). INVALIDATED ignores later frames. The corpus format is one row per line and the last approval row has no trailing comma. The ClientVerdictCorpusTest gate needs ids A[0-9]{2}, unique, at least 25 rows.",
+    "risks": "WSL has no JDK: run the JetBrains gate through cmd.exe gradlew.bat test --rerun under the jetbrains-gradle lease, labelled as Windows evidence. Count tests from the XML, since an UP-TO-DATE run looks green with zero tests. Never run clean (shared build output). Do not touch A13/A14 semantics: an AWAITING_APPROVAL frame must keep the approval pending.",
+    "keyFiles": [
+      "moe-vscode/src/panels/PlanReviewPanel.ts",
+      "moe-jetbrains/src/test/resources/client-verdicts.json",
+      "moe-vscode/tests/plan-review.test.cjs",
+      "moe-vscode/media/planReview.js",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/PlanReviewApprovalState.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/ClientVerdictCorpusTest.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:40:48.929Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T06:41:38.733Z",
+  "reviewStartedAt": "2026-10-30T06:44:21.034Z",
+  "verification": {
+    "command": "WSL: cd moe-vscode && npm test ; Windows: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && npm run compile\" ; Windows gradle equivalent of `cd moe-jetbrains && ./gradlew test` (WSL has no JDK; jetbrains-gradle lease, released): cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "npm test: tests 239, pass 239, fail 0 (incl. L A26, L A27). npm run compile (cmd.exe): tsc -p ./ exit 0. gradlew.bat test --rerun: BUILD SUCCESSFUL; XML 24 suites, 341 tests, 0 failures/errors/skipped; ClientVerdictCorpusTest tests=3 failures=0 errors=0.",
+    "reportedAt": "2026-10-30T06:44:21.034Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/resources/client-verdicts.json",
+    "moe-vscode/src/panels/PlanReviewPanel.ts"
+  ],
+  "completionSummary": "VS Code PlanReviewPanel.settlePendingApproval now ends a pending approval unconfirmed when the task is present but neither AWAITING_APPROVAL nor WORKING (PlanReviewPanel.ts +5/-1 incl. doc sentence). Added corpus rows A26 (PLANNING 4 then WORKING 4) and A27 (PLANNING 4), both latched, to client-verdicts.json (+3/-1). RED: npm test 239 tests, 237 pass, exactly L A26 and L A27 failed ('Plan approved' announced). GREEN: 239/239. Mutant (only the new clear removed): L A26 and L A27 fail, restored cmp-verified, 239/239 again. JetBrains needed no production change; its corpus runner passes the 27 rows. Evidence labels: VS Code tests ran in WSL; `npm run compile` in WSL fails only for a platform reason (node_modules has the win32 native tsc), so it ran via cmd.exe (exit 0), and WSL tsc6 -p ./ also exit 0. JetBrains ran as Windows gradlew.bat test --rerun under the jetbrains-gradle lease (released): XML 24 suites, 341 tests, 0 fail/err/skip, ClientVerdictCorpusTest 3/0."
 }

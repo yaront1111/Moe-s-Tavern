@@ -149,6 +149,8 @@ export class PlanReviewPanel implements vscode.Disposable {
      * at the SAME revision the human approved. WORKING at another revision, or at
      * an unreadable one, is not this approval: warn and latch the page. The new
      * revision is never adopted as the pending token and nothing is retried.
+     * A present task that leaves AWAITING_APPROVAL for any status other than
+     * WORKING ends the approval unconfirmed, the same as a vanished task.
      */
     private settlePendingApproval(): void {
         const pending = this.pendingApprovalRevision;
@@ -157,7 +159,9 @@ export class PlanReviewPanel implements vscode.Disposable {
         const task = this.findTask();
         // A vanished task ends the approval unconfirmed (JetBrains TASK_MISSING parity).
         if (!task) { this.pendingApprovalRevision = undefined; return; }
-        if (task.status !== 'WORKING') { return; }
+        if (task.status === 'AWAITING_APPROVAL') { return; }
+        // Leaving AWAITING_APPROVAL for anything but WORKING ends it unconfirmed too (JetBrains STATUS_CHANGED parity).
+        if (task.status !== 'WORKING') { this.pendingApprovalRevision = undefined; return; }
 
         const current = effectivePlanRevision(task);
         if (current === pending) {

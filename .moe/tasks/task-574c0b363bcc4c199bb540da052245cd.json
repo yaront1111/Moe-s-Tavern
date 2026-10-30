@@ -103,7 +103,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-29T23:30:26.694Z",
-  "updatedAt": "2026-10-30T06:43:35.994Z",
+  "updatedAt": "2026-10-30T06:44:06.678Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T05:55:40.120Z",
@@ -233,7 +233,9 @@
     "docs/MCP_SERVER.md",
     ".moe/tasks/task-4e0264fc52e04574a9d10ef602281ca3.json",
     ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
-    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json"
+    ".moe/tasks/task-a8a3a502b8264cc5adcb660f59656a00.json",
+    ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+    ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json"
   ],
   "completionSummary": "A NO_TEAM_MEMBERSHIP refusal served to a teamless architect-/worker-/qa- seat now carries sessionHandoff { action:'END_SESSION', workerId, reason } and NO nextAction; its JSON names no moe.* tool (the reason says: end the session, the wrapper retries the team join before its next claim). Governor and role-less callers keep the join_team nextAction byte-for-byte. Option chosen: role-aware refusal (not healing, not a TOOL_AUDIENCE change).\n\nFiles (5): util/teamMembershipHeal.ts (noTeamMembershipRefusal is role-aware via roleFromWorkerId; new exported NoTeamMembershipHandoff; docstring; still pure, one-arg, never throws; heal/resolve/tombstone functions untouched). tools/waitForTask.ts (3 comments only). tools/waitForTask.test.ts (only the 2 superseded remedy assertions for 'worker-b' + comment wording, per the architect's DoD1/DoD2 reconciliation comment). tools/noTeamMembershipAudience.test.ts (new, 14 cases: T1-T6 claim + wait for architect/worker/qa, T7 governor + role-less control, T8 pure function, premise cases). docs/MCP_SERVER.md (claim Returns, No team membership paragraph, wait Returns, account-rotation END_SESSION list). All three producers (claimNextTask.ts:712, waitForTask.ts:312/443) route through the one function; claimNextTask.ts, tools/index.ts, teamMembershipHeal.test.ts, claimNextTask.test.ts, toolAudience.test.ts have an empty diff.\n\nEvidence (Linux-native snapshot of HEAD ced4869 + exactly the 5 owned files, cmp-identical, env -i, node v24.21.0): RED first: 9 failed | 5 passed. Focused list green: 5 files, 107 tests. Full `npm test` run twice: exit 0, Test Files 197 passed (197), Tests 5494 passed | 16 skipped (5510). tsc --noEmit clean. Mutants M1-M5 each turned the named tests red (M1 10, M2 4, M3 1, M4a 10, M4b 9, M5 6); none survived.\n\nLanding note: docs/MCP_SERVER.md is shared with five idle CQ rows and a peer session added one unrelated hunk (line ~929, +1) during my session; my 4 hunks (+18/-4) were made via the Edit tool and are declared. ",
   "commits": [
@@ -264,6 +266,23 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "ce4b8ee7da68db202e574e67442bd54cd213000d",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-952969be@2026-10-30T06:40:13Z",
+      "paths": [
+        ".moe/tasks/task-574c0b363bcc4c199bb540da052245cd.json",
+        ".moe/tasks/task-796f3c66105e4a26b44cc04416ae8652.json",
+        ".moe/tasks/task-7fffec67fbb44d1e9a509f214105e2bb.json"
+      ],
+      "recordedBy": "qa-952969be",
+      "recordedAt": "2026-10-30T06:44:06.678Z",
+      "treeId": "dad469b58742596ce1d593a875150c0e3ad2719e",
+      "status": "DONE",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -276,9 +295,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T06:16:18Z",
-    "at": "2026-10-30T06:22:38.180Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-952969be@2026-10-30T06:40:13Z",
+    "at": "2026-10-30T06:44:06.678Z"
   },
   "completedAt": "2026-10-30T06:43:35.993Z",
   "reviewCompletedAt": "2026-10-30T06:43:35.993Z",
