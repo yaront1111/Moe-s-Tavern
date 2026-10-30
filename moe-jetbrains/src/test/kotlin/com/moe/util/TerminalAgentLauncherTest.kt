@@ -349,6 +349,44 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
+    fun `protected runtime marker renders as exactly 1 in WSL bash and PowerShell`() {
+        val env = linkedMapOf(
+            "MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js",
+            "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js",
+            "MOE_RUNTIME_PROTECTED" to "1"
+        )
+        val bash = TerminalAgentLauncher.buildWslBashCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.sh",
+            envOverrides = env, agentCommand = "claude"
+        )
+        assertTrue(bash.contains("MOE_DAEMON_PATH='/mnt/c/moe/daemon/index.js'"))
+        assertTrue(bash.contains("MOE_RUNTIME_PROTECTED='1'"))
+        val ps = TerminalAgentLauncher.buildPowerShellCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
+            envOverrides = env, agentCommand = "claude"
+        )
+        assertTrue(ps.contains("\$env:MOE_RUNTIME_PROTECTED='1'"))
+    }
+
+    @Test
+    fun `legacy env overrides never render the protected runtime marker`() {
+        val legacy = mapOf("MOE_DAEMON_PATH" to "C:\\moe\\daemon\\index.js", "MOE_PROXY_PATH" to "C:\\moe\\proxy\\index.js")
+        val bash = TerminalAgentLauncher.buildWslBashCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.sh",
+            envOverrides = legacy, agentCommand = "claude"
+        )
+        val ps = TerminalAgentLauncher.buildPowerShellCommandForTest(
+            basePath = "D:\\projexts\\px4swarm", role = "worker", scriptPath = "C:\\moe\\scripts\\moe-agent.ps1",
+            envOverrides = legacy, agentCommand = "claude"
+        )
+        assertFalse(bash.contains("MOE_RUNTIME_PROTECTED"))
+        assertFalse(ps.contains("MOE_RUNTIME_PROTECTED"))
+        TerminalAgentLauncher.ScriptSource.values().forEach {
+            assertFalse(it.name, TerminalAgentLauncher.resolveAgentEnvOverrides(it).containsKey("MOE_RUNTIME_PROTECTED"))
+        }
+    }
+
+    @Test
     fun `bashWrapPowerShell produces a bash-safe interop line`() {
         val psLine = TerminalAgentLauncher.buildPowerShellCommandForTest(
             basePath = "D:\\projexts\\px4swarm",

@@ -14,9 +14,48 @@
     "No direct .moe edits; no Git-write commands by agents; wrappers own landing.",
     "Do not enable verified-local or claim isolation until all requisite implementation and certification gates pass."
   ],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (red). Load test-driven-development.\n\nCQ-R13a (task-6dd3ce1f) lands first: it changes cli.mjs argument parsing for --cache-dir and adds its rows. Re-read cli.mjs, native-smoke.mjs and the native-smoke section of scripts/tests/local-runner.test.mjs (~2482-2690) before editing.\n\nIn scripts/tests/local-runner.test.mjs, after the native-smoke rows, reuse smokeHarness's fake provider, image download and delete recorder, plus assertSanitized and scratch. Rows CF1-CF8 call the injected core, certifyCore({ platform, workDir, deps }):\n- CF1: with every check passing, the report has exactly the schema:\n  - {kind:'isolation-certification', version:1, platform, arch, transport:'injected', provider:{name:'multipass', version}, image:{sourceSha256, providerImageHash}, supervisorSha256, startedAt, finishedAt, checks, certified:false, executionReady:false};\n  - checks are exactly CERTIFY_CHECKS' ids in order, each {id, result:'passed', code:null};\n  - injected evidence never certifies.\n- CF2: a readiness failure gives provision 'passed', then readiness 'failed' with readiness's own fixed failure code, no-mounts 'not-run' and teardown 'passed'.\n  - Teardown deleted exactly this run's VM (the delete recorder).\n  - The ledger keeps no live record of this run's attempt.\n  - A foreign record seeded in the same ledger survives.\n- CF3:\n  - A provision rejection: that check fails with its fixed code, every later check except teardown is 'not-run', and teardown passes with nothing reserved.\n  - A check whose run throws an unexpected error fails with CERTIFY_CHECK_FAILED, and teardown still runs.\n  - certifyCore never rejects after input validation.\n- CF4: the JSON report never contains the credential bytes (hex or base64), the workDir path or any host path, and every code matches /^[A-Z][A-Z0-9_]{0,63}$/.\n- CF5: validateCertificationReport.\n  - It returns a frozen copy of a well-formed native report.\n  - It refuses with CERTIFY_REPORT_INVALID: a missing or extra key at any depth; a wrong kind or version; missing, extra or reordered check ids; a result outside the enum; a non-null, non-code code; certified that differs from (transport === 'native' && every check passed); executionReady true; and a non-ISO timestamp.\n- CF6: runIsolationCertify, the native entry, refuses every shape but exactly { workDir: <absolute, no control characters> } with CERTIFY_INPUT_INVALID, mirroring the smoke's options list. With process.platform overridden to 'sunos', as the smoke's row does, it refuses with CERTIFY_UNSUPPORTED_HOST. Neither creates workDir.\n- CF7: the core writes the report to <workDir>/certification-<platform>-<arch>-<UTC stamp>-<random>.json, opened 'wx' with mode 0600, asserted on POSIX only. The file's bytes equal JSON of the returned report.\n- CF8: through runCli:\n  - `certify --work-dir <abs>` calls the injected certify and exits 0 only when certified === true;\n  - every other shape (a missing or relative path, an extra flag) is CLI_INPUT_INVALID with exit 2;\n  - a CERTIFY_* rejection prints {code, certified:false, executionReady:false} and exits 2.\n\nIn scripts/tests/local-runner-bundle.test.mjs, `required` gains 'certify.mjs'.\n\nRun `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs`. The new rows fail, and every other row passes.\n\nError handling in the tests: assertions name fixed codes, never messages, and every scratch directory is removed in t.after.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/local-runner.test.mjs",
+        "scripts/tests/local-runner-bundle.test.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Create scripts/local-runner/certify.mjs, modeled on native-smoke.mjs. Its header states:\n- it is operator-invoked on real hardware, never in CI;\n- it is the only evidence that can establish an isolation support claim;\n- certification is not activation: executionReady stays false and verified-local stays unavailable.\n\nRegistry:\n- CERTIFY_CHECKS = Object.freeze([...BODY, TEARDOWN]), each entry a frozen {id, run(context)}. run resolves {result: 'passed'|'failed', code}.\n- BODY is 'provision', 'readiness', 'no-mounts'. CQ-R13e/f/h/g append to BODY, so 'teardown' always stays last.\n\nThe checks:\n- 'provision': provisionGuest({ platform, ledger, owner, cacheDir: <workDir>/images, supervisor, credential, provider }).\n  - It uses an observed platform whose prerequisites capture the detected arch, exactly as native-smoke does.\n  - It uses a ledger wrapper whose reserve captures this run's instance name, as check-lifecycle.mjs does.\n  - supervisor is the REAL bytes of ./guest-supervisor.py, read through new URL(..., import.meta.url). credential is randomBytes(32).\n  - It passes only when provisioned === true and instance equals the captured name.\n- 'readiness': passes only when bootstrapReady === true and failures is an empty array. Otherwise it fails with failures[0] (readiness's own fixed codes, which name a degraded cloud-init boot) or CERTIFY_NOT_READY.\n- 'no-mounts': assertNoMounts(name, provider); a refusal fails with its TRANSFER_* code.\n- 'teardown': always runs.\n  - With no captured name, it passes.\n  - Otherwise deleteOwned({ ledger, name, owner, provider }) must resolve 'deleted' or 'not-launched', and ledger.read(name) must show no live record of this attempt. Anything else fails with CERTIFY_TEARDOWN_FAILED.\n\nRunner, run(platform, workDir, deps, native):\n- The owner is synthetic: { taskId: 'task-certify', attemptId: 'attempt-' + 32 random hex, generation: 1 }.\n- The ledger is createLedger(<workDir>/ledger, { random: deps.random }).\n- Checks run in order. After the first failure, every BODY check is 'not-run'.\n- Each run is wrapped. A throw becomes 'failed' with the error's code when it matches /^[A-Z][A-Z0-9_]{0,63}$/, else CERTIFY_CHECK_FAILED.\n- provider.version comes from runDoctor({ executable })'s version when providerReady, else null. The report has no executable path, because it carries no host path.\n- certified = native && every check passed.\n- The report is deep-frozen. It is written to <workDir>/certification-<platform>-<arch>-<UTC stamp>-<6 hex>.json, where the stamp is YYYYMMDDTHHMMSSZ with no ':' (Windows-safe). The file is opened with fs.promises.open(path, 'wx', 0o600), then written, synced and closed.\n- A write failure returns the report with certified false, and a failed 'teardown'-independent code CERTIFY_REPORT_WRITE_FAILED recorded as the last check's code. Hmm: keep it simple, and instead throw CERTIFY_REPORT_WRITE_FAILED after teardown has run.\n\nExports:\n- certifyCore({ platform, workDir, deps }): injected, never certifies.\n- runIsolationCertify(options): the native entry. options must be exactly { workDir } (absolute, with no control characters, and its own keys checked by Reflect.ownKeys), else CERTIFY_INPUT_INVALID. platformFor(process.platform) null gives CERTIFY_UNSUPPORTED_HOST. Neither refusal creates workDir.\n- validateCertificationReport(value).\n- CERTIFY_CHECKS.\n\nError handling: fixed codes only, with a MESSAGES table of fixed text and no path or byte. Teardown runs on every path after provisioning has started.",
+      "status": "PENDING",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/local-runner/certify.mjs"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/local-runner/cli.mjs: the `certify` command. Edit the bytes CQ-R13a landed.\n\n- COMMANDS gains 'certify'.\n- argumentsFor accepts exactly `certify --work-dir <absolute path>`, under native-smoke's rules: no control characters and an absolute path. Anything else is null, which becomes CLI_INPUT_INVALID.\n- runCli gains an injectable `certify`. The default lazily imports ./certify.mjs runIsolationCertify, as smokeReport does for native-smoke, so a doctor or prerequisites run never loads it.\n- The printed result is the report. A rejection with a /^CERTIFY_[A-Z_]{1,40}$/ code prints {code, certified:false, executionReady:false}; any other rejection prints CERTIFY_UNAVAILABLE.\n- The exit code is 0 only when result.certified === true, else 2.\n- USAGE names the command.\n- The header comment names certify as the second operator-invoked native run, beside native-smoke.\n\nError handling: only stable codes reach the report. No stack, path or provider diagnostic is printed.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/local-runner/cli.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY ONCE, fresh.\n\n1. Run `node --test scripts/tests/local-runner.test.mjs scripts/tests/local-runner-bundle.test.mjs`. On WSL, run it under env -i HOME=\"$HOME\" PATH=\"<nvm Node 24 bin>:/usr/bin:/bin\". It must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n2. `git diff --check` over cli.mjs, certify.mjs and the two test files is clean.\n3. A read-only `git status --short` shows only those four files changed. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nThe native run is operator-only and is NOT part of this verification. No agent here has Multipass.\n\nError handling: fix a failing row in code, never by weakening a schema assertion.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the four-file diff as an attacker:\n- Can an injected or partly failed run ever produce certified: true?\n- Can a caller smuggle deps or a provider into the native entry? Check options with extra keys, symbols, getters or prototypes.\n- Can any path, credential byte or guest byte reach the report or the CLI output?\n- Does teardown run on every path after provisioning starts, including a throw in a later check? Does it delete only this run's VM, never a foreign or colliding record?\n- Does validateCertificationReport accept anything it should not? A reordered check list, a certified/transport inconsistency, or extra nested keys must all be refused.\n- Is the report file created exclusively (O_EXCL) and owner-only? Is the name Windows-safe?\n- If two certify runs share a workDir concurrently, are the ledger and the file names collision-safe?\n- Would I be embarrassed if this shipped?\nFix any finding, then re-run step 4's command fresh before complete_task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,8 +68,46 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:03:53.740Z",
-  "updatedAt": "2026-10-30T06:05:00.586Z",
+  "updatedAt": "2026-10-30T06:13:43.096Z",
   "dependsOn": [
     "task-6dd3ce1fbf204f0e9427fd0693118a0c"
-  ]
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-10-30T06:11:34.852Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-e4b7eee0"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-10-30T06:13:43.076Z",
+  "planningNotes": {
+    "approachesConsidered": "- Extending native-smoke.mjs instead of a new module: rejected. The smoke establishes PROVIDER support with a dummy supervisor and deletes the VM at once. Certify needs the real supervisor, a VM that lives across checks, and a different claim. Both stay operator-only.\n- provider.executable in the report: dropped, deliberately. The executable is a host path, and the report carries no host path. provider is {name:'multipass', version}.\n- A raw cloud-init status field: dropped. R07's readiness already fails a degraded boot with its own fixed code, which the 'readiness' check records as its code.\n- An env-gated native test row like the smoke's: not added. The operator path is `cli.mjs certify`, and CQ-R13 validates its reports.\n- Write failure: after teardown, the run throws CERTIFY_REPORT_WRITE_FAILED. Durable evidence is part of the result, so the CLI then exits 2.",
+    "codebaseInsights": "- native-smoke.mjs is the template: the injected core reports transport 'injected', the native entry takes exactly { workDir } via Reflect.ownKeys, platformFor comes from cli.mjs (with no import cycle, because cli.mjs imports lazily), an observed platform captures the arch, and there is a synthetic owner and a ledger under workDir.\n- check-lifecycle.mjs's ledger wrapper captures this run's reserved instance name.\n- lifecycle.mjs exports deleteOwned (~364), cleanupOwned (~381) and createLedger (~274).\n- doctor.mjs runDoctor reports version (the client version) when ready.\n- Test harness in local-runner.test.mjs (~2482-2690): smokeHarness (fake provider, image download, delete recorder), assertSanitized, and the process.platform override for the unsupported host.",
+    "risks": "- CQ-R13a edits argumentsFor first. Merge into its bytes.\n- The registry contract for the later rows: they append to BODY only, and teardown stays last.\n- validateCertificationReport pins the CURRENT check ids. Reports from an older registry are refused, which is intended: reports must come from the certified code.\n- Windows file modes: the 0600 assertion runs on POSIX only. 'wx' is exclusive on every OS.\n- The report must be deep-frozen. JSON of the returned object must equal the file bytes.",
+    "keyFiles": [
+      "scripts/local-runner/native-smoke.mjs",
+      "scripts/local-runner/cli.mjs",
+      "scripts/local-runner/check-lifecycle.mjs",
+      "scripts/local-runner/lifecycle.mjs",
+      "scripts/local-runner/provision.mjs",
+      "scripts/local-runner/doctor.mjs",
+      "scripts/tests/local-runner.test.mjs",
+      "scripts/tests/local-runner-bundle.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planApprovedAt": "2026-10-30T06:13:43.096Z",
+  "approvedPlanRevision": 1
 }

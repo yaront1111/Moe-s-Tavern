@@ -71,6 +71,14 @@ object TerminalAgentLauncher {
     }
 
     /**
+     * Contract with scripts/moe-agent.{sh,ps1} (CQ-R13c2): exactly "1", set only by [selectProtectedAgentRuntime]
+     * under the PROTECTED profile, so the wrappers refuse to fall back from MOE_DAEMON_PATH/MOE_PROXY_PATH.
+     * A MOE_RUNTIME_PROTECTED already in the IDE's own environment would make a legacy wrapper refuse its
+     * fallback too; that fails closed, so it is not stripped.
+     */
+    internal const val PROTECTED_RUNTIME_MARKER = "MOE_RUNTIME_PROTECTED"
+
+    /**
      * The strong profile's agent runtime: the wrapper, daemon and proxy installed with the plugin,
      * each a real file inside [root] and outside the project. The wrapper keeps the legacy
      * preference order; the project's scripts/ and the global install path are never consulted.
@@ -96,6 +104,7 @@ object TerminalAgentLauncher {
                 is RuntimeSelection.Rejected -> return ProtectedAgentRuntime.Refused(selection.reason)
             }
         }
+        env[PROTECTED_RUNTIME_MARKER] = "1"
         return ProtectedAgentRuntime.Selected(script, env)
     }
 
@@ -764,7 +773,7 @@ object TerminalAgentLauncher {
         return null
     }
 
-    private fun resolveAgentEnvOverrides(source: ScriptSource): Map<String, String> {
+    internal fun resolveAgentEnvOverrides(source: ScriptSource): Map<String, String> {
         if (source == ScriptSource.BUNDLED) {
             val daemon = resolveBundledPath("daemon/index.js") ?: return emptyMap()
             val proxy = resolveBundledPath("proxy/index.js") ?: return emptyMap()

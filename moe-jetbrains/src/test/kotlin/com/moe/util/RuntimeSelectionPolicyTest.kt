@@ -438,7 +438,8 @@ class RuntimeSelectionPolicyTest {
         val root = installedLayout(temporaryFolder.newFolder("installed"))
         val env = mapOf(
             "MOE_DAEMON_PATH" to realFile(File(root, "daemon/index.js")).path,
-            "MOE_PROXY_PATH" to realFile(File(root, "proxy/index.js")).path
+            "MOE_PROXY_PATH" to realFile(File(root, "proxy/index.js")).path,
+            "MOE_RUNTIME_PROTECTED" to "1"
         )
         val ps1 = ResolvedScript(realFile(File(root, "scripts/moe-agent.ps1")), ScriptSource.BUNDLED, ScriptKind.POWERSHELL)
         val sh = ResolvedScript(realFile(File(root, "scripts/moe-agent.sh")), ScriptSource.BUNDLED, ScriptKind.BASH)
@@ -448,7 +449,7 @@ class RuntimeSelectionPolicyTest {
                 val label = "windows=$windows preferBash=$preferBash"
                 val selection = TerminalAgentLauncher.selectProtectedAgentRuntime(project.path, preferBash, root, windows)
                 assertEquals(label, ProtectedAgentRuntime.Selected(script, env), selection)
-                (env.values + script.file.path).forEach {
+                (listOf(env.getValue("MOE_DAEMON_PATH"), env.getValue("MOE_PROXY_PATH")) + script.file.path).forEach {
                     assertFalse("$label $it", RuntimeSelectionPolicy.isWithin(comparable(it, true), inProject))
                 }
             }
@@ -482,6 +483,7 @@ class RuntimeSelectionPolicyTest {
         ).forEach { (label, row) ->
             val selection = TerminalAgentLauncher.selectProtectedAgentRuntime(project.path, false, row.first, true)
             assertEquals(label, ProtectedAgentRuntime.Refused(row.second), selection)
+            assertFalse(label, selection is ProtectedAgentRuntime.Selected)
         }
     }
 
@@ -497,6 +499,8 @@ class RuntimeSelectionPolicyTest {
         val selected = TerminalAgentLauncher.protectedAgentRuntime(strong.path, false) { root }
         assertTrue("$selected", selected is ProtectedAgentRuntime.Selected)
         assertEquals(TerminalAgentLauncher.selectProtectedAgentRuntime(strong.path, false, root), selected)
+        assertEquals("1", (selected as ProtectedAgentRuntime.Selected).env["MOE_RUNTIME_PROTECTED"])
+        assertEquals(setOf("MOE_DAEMON_PATH", "MOE_PROXY_PATH", "MOE_RUNTIME_PROTECTED"), selected.env.keys)
         val refused = TerminalAgentLauncher.protectedAgentRuntime(strong.path, false) { null }
         assertEquals(ProtectedAgentRuntime.Refused("installed Moe runtime not found"), refused)
         assertEquals(
