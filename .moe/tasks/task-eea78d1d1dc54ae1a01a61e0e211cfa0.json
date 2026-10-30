@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -84,7 +84,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T14:29:43.966Z",
-  "updatedAt": "2026-10-30T15:15:06.769Z",
+  "updatedAt": "2026-10-30T15:20:56.108Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T14:30:43.184Z",
@@ -94,11 +94,14 @@
     "firstClaimAt": "2026-10-30T14:30:47.251Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-10-30T15:20:56.108Z",
+    "wallClockMs": 3008857
   },
   "contextFetchedBy": [
     "architect-bc59d28a",
-    "worker-55e6716a"
+    "worker-55e6716a",
+    "qa-952969be"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -191,18 +194,38 @@
       "treeId": "69ce85acb0e96b08efed19b19bc3040385ba00ff",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "d2dea3e28db7d7ff29312b5c3a99c16eef3ef8e2",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T15:06:56Z",
+      "paths": [
+        ".moe/tasks/task-eea78d1d1dc54ae1a01a61e0e211cfa0.json",
+        ".moe/tasks/task-fad5ef971b0941b590621aa40702ad4b.json",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T15:15:26.229Z",
+      "treeId": "1a72ecc5d9b46f0a63fbc5f600fe0879b0f0221d",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
     "packages/moe-daemon/src/index.test.ts",
-    "packages/moe-daemon/src/index.ts"
+    "packages/moe-daemon/src/index.ts",
+    ".moe/tasks/task-eea78d1d1dc54ae1a01a61e0e211cfa0.json",
+    ".moe/tasks/task-fad5ef971b0941b590621aa40702ad4b.json"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "architect-bc59d28a@2026-10-30T14:30:40Z",
-    "at": "2026-10-30T14:47:54.666Z"
+    "kind": "completion",
+    "sessionId": "worker-55e6716a@2026-10-30T15:06:56Z",
+    "at": "2026-10-30T15:15:26.229Z"
   },
   "workStartedAt": "2026-10-30T15:08:00.406Z",
   "reviewStartedAt": "2026-10-30T15:15:06.767Z",
@@ -213,5 +236,9 @@
     "reportedAt": "2026-10-30T15:15:06.767Z",
     "source": "agent-reported"
   },
-  "completionSummary": "Fixed native on-disk project aliases with private namesOwnProject: lexical match first, foreign guard, realpathSync.native on both native paths, catch => false. Exactly four lifecycle comparisons changed; transport helpers, exports, lock writer, cleanup/TTL and wire/file formats unchanged. Own diff: index.ts +20/-10, index.test.ts +86/-5 = 91 net LOC.\nX16 covers start/status/stop and byte-identical daemon files for canonical↔link plus Windows 8.3; X17 proves a live child lock refuses contenders both directions; X18 keeps wrong-directory/link cleanup without a probe. X1-X15 unchanged.\nFresh Linux whole-repo HEAD cd5e400a archive, owned overlays cmp-verified, matching-lock npm ci, clean env Node 24.21.0: tsc clean, 126 passed/1 Windows-only skip, rc0. Native Windows exact index command: 41 passed/3 existing skips, rc0; verbose repeat proves junction and 8.3 rows ran/passed. RED: 4 assertion failures before fix. All four scratch mutants killed by assertions: foreign guard→X13; lexical lock→X17; lexical response→X16; accept any resolved pair→X18. Restored/cmp verified. Test-only tsc and error probes (4 errno codes × both realpath positions × 4 consumers) pass; lexical/foreign paths make zero realpaths.\nLogs /tmp/moe-eea78d-{linux-gate,windows-gate,windows-verbose,red,green,error-probe,test-types,mutant-m1,mutant-m2,mutant-m3,mutant-m4}.log; snapshot /tmp/moe-eea78d-worker.Df9Hyz. Self-review/diff --check clean, handoff and gotcha memory saved. No production changes after gate.\nAccepted limits: native UNC SMB timeout; mutable-symlink TOCTOU unchanged. Out of scope: bind mounts; Windows trailing-dot spelling (planner observed ENOENT); doctor/proxy task-f33bf7af; empty-lock window task-4ca62c89. Wrapper owns landing."
+  "completionSummary": "Fixed native on-disk project aliases with private namesOwnProject: lexical match first, foreign guard, realpathSync.native on both native paths, catch => false. Exactly four lifecycle comparisons changed; transport helpers, exports, lock writer, cleanup/TTL and wire/file formats unchanged. Own diff: index.ts +20/-10, index.test.ts +86/-5 = 91 net LOC.\nX16 covers start/status/stop and byte-identical daemon files for canonical↔link plus Windows 8.3; X17 proves a live child lock refuses contenders both directions; X18 keeps wrong-directory/link cleanup without a probe. X1-X15 unchanged.\nFresh Linux whole-repo HEAD cd5e400a archive, owned overlays cmp-verified, matching-lock npm ci, clean env Node 24.21.0: tsc clean, 126 passed/1 Windows-only skip, rc0. Native Windows exact index command: 41 passed/3 existing skips, rc0; verbose repeat proves junction and 8.3 rows ran/passed. RED: 4 assertion failures before fix. All four scratch mutants killed by assertions: foreign guard→X13; lexical lock→X17; lexical response→X16; accept any resolved pair→X18. Restored/cmp verified. Test-only tsc and error probes (4 errno codes × both realpath positions × 4 consumers) pass; lexical/foreign paths make zero realpaths.\nLogs /tmp/moe-eea78d-{linux-gate,windows-gate,windows-verbose,red,green,error-probe,test-types,mutant-m1,mutant-m2,mutant-m3,mutant-m4}.log; snapshot /tmp/moe-eea78d-worker.Df9Hyz. Self-review/diff --check clean, handoff and gotcha memory saved. No production changes after gate.\nAccepted limits: native UNC SMB timeout; mutable-symlink TOCTOU unchanged. Out of scope: bind mounts; Windows trailing-dot spelling (planner observed ENOENT); doctor/proxy task-f33bf7af; empty-lock window task-4ca62c89. Wrapper owns landing.",
+  "completedAt": "2026-10-30T15:20:56.108Z",
+  "reviewCompletedAt": "2026-10-30T15:20:56.108Z",
+  "reviewSummary": "APPROVED. Completion d2dea3e2 on moe/work-2026-10-24 (pushed, == HEAD, shared daemon pkg clean). Own diff index.ts +20/-10, index.test.ts +86/-5 = 91 net; board: own json + DONE peer fad5ef97.\nCode: private namesOwnProject = lexical match -> foreign guard -> realpathSync.native both -> catch false. Exactly 4 approved sites switched (lock mismatch, validate precheck, probe metadata, /health body w/ typeof guard). No export/lock-writer/TTL/cleanup/shape change; path helpers untouched. status/stop/start lock-wait route through the fixed checks.\nRe-ran in fresh git archive of d2dea3e2 (npm ci, env -i Node 24.21.0): `cd packages/moe-daemon && npx tsc --noEmit && npx vitest run src/index.test.ts src/server/healthHost.test.ts src/server/bindHosts.test.ts` -> exit 0, 126 passed/1 win32-only skip. Full daemon suite: 209 files, 6064 passed/20 skipped, exit 0.\nNative Windows: `npx vitest run src/index.test.ts --reporter=verbose` -> exit 0, 41 passed/3 skipped; X16 both junction directions AND the 8.3 row ran+passed, X17 both, X18 both. No leftover links.\nOwn mutants (scratch, restored+cmp): lexical-only -> 4 assertion fails (X16x2, X17x2); catch=>true -> 2 fails (X15 moved control, another-project test).\nNon-blocking: on win32 a /health reply's native non-lexical projectPath is realpath'd, so a hostile loopback listener on a stale port could trigger a UNC/SMB lookup; within the accepted UNC-timeout limitation. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }
