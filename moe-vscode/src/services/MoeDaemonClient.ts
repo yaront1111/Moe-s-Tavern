@@ -229,12 +229,15 @@ export function installedExecutable(p: string | undefined, basePath: string, fol
 }
 
 function selectInstalledFile(file: string, label: string, basePath: string, foldCase: boolean, realRoot?: string): ArtifactSelection {
+    const notLocal = 'the project directory is not a plain local Windows path';
+    if (isWindowsAlias(basePath)) { return { rejected: notLocal }; }
     const project = realPathOrNull(basePath);
     if (project === null) { return { rejected: 'the project directory cannot be resolved' }; }
     const rejected = (reason: string, detail: string): ArtifactSelection => {
         log(`Moe protected runtime selection refused: ${reason} (${detail})`);
         return { rejected: reason };
     };
+    if (isWindowsAlias(project)) { return rejected(notLocal, project); }
     let real: string;
     try {
         real = fs.realpathSync.native(file);
@@ -257,17 +260,16 @@ export function isFullyQualified(p: string, windows = process.platform === 'win3
     return windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/.test(p) : path.posix.isAbsolute(p);
 }
 
-/** Win32 strips segment-ending dots/spaces that Node's namespaced fs keeps; UNC shares can expose any local folder. */
+/** On Windows only plain drive paths compare: Win32 strips segment-ending dots/spaces Node's \\?\ fs keeps; UNC, device and rooted forms can name any folder. */
 export function isWindowsAlias(p: string, windows = process.platform === 'win32'): boolean {
-    return windows && (/[. ](?:[\\/]|$)/.test(p) || comparablePath(p, false).startsWith('//'));
+    return windows && (/[. ](?:[\\/]|$)/.test(p) || !/^[A-Za-z]:\//.test(comparablePath(p, false)));
 }
 
 export function isOutsideProject(p: string, basePath: string, foldCase = defaultFoldCase): boolean {
     try {
-        if (!isFullyQualified(p)) { return false; }
-        const forms = pathForms(p);
-        if (forms.some(form => isWindowsAlias(form))) { return false; }
-        const projects = pathForms(basePath);
+        if (!isFullyQualified(p) || isWindowsAlias(basePath)) { return false; }
+        const forms = pathForms(p), projects = pathForms(basePath);
+        if ([...forms, ...projects].some(form => isWindowsAlias(form))) { return false; }
         return !forms.some(form => projects.some(project => isWithin(comparablePath(form, foldCase), comparablePath(project, foldCase))));
     } catch { return false; }
 }

@@ -165,10 +165,11 @@ test('Windows alias predicate rejects segment-ending dots/spaces and UNC forms o
     const { isWindowsAlias } = fixture(t).api;
     assert.equal(typeof isWindowsAlias, 'function');
     for (const p of ['C:\\p.', 'C:\\p.\\', 'C:\\p.\\bin', 'C:\\p. ', 'C:\\p .', '//?/C:/p.', '//?/C:/p./bin',
-        'C:\\PROJEC~1.', '\\\\?\\C:\\p.', 'C:\\p \\bin', '\\\\srv\\sh', '//srv/sh', '\\\\?\\UNC\\srv\\sh', '\\\\localhost\\C$\\x']) {
+        'C:\\PROJEC~1.', '\\\\?\\C:\\p.', 'C:\\p \\bin', '\\\\srv\\sh', '//srv/sh', '\\\\?\\UNC\\srv\\sh', '\\\\localhost\\C$\\x',
+        '\\x', '/x', 'C:x', 'x', '\\\\?\\Volume{0}\\x', '\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\x', '\\\\.\\pipe\\x']) {
         assert.equal(isWindowsAlias(p, true), true, p); assert.equal(isWindowsAlias(p, false), false, p);
     }
-    for (const p of ['C:\\p', 'C:\\p\\', 'C:\\', 'C:\\Program Files\\nodejs\\', 'C:\\Python3.11\\Scripts', '\\\\?\\C:\\x']) {
+    for (const p of ['C:\\p', 'C:\\p\\', 'C:\\', 'C:\\Program Files\\nodejs\\', 'C:\\Python3.11\\Scripts', '\\\\?\\C:\\x', '//?/c:/x']) {
         assert.equal(isWindowsAlias(p, true), false, p);
     }
     for (const p of ['/tmp/p.', '/tmp/p./bin', '/tmp/a /b', '//srv/sh']) { assert.equal(isWindowsAlias(p, false), false, p); }
@@ -191,6 +192,25 @@ test('Windows aliases cannot run project executables through the protected PATH'
     assert.equal(spawn(env).error?.code, 'ENOENT');
     assert.deepEqual(plain(api.installedExecutable(write(path.join(p + '.', 'node.exe')), p)),
         { rejected: 'node executable is not a plain local Windows path' });
+});
+
+test('Windows alias project bases prove nothing outside them and start no daemon', { skip: process.platform !== 'win32' && 'Windows only' }, async t => {
+    const f = fixture(t), api = f.api, p = f.project, SystemRoot = process.env.SystemRoot, reason = 'the project directory is not a plain local Windows path';
+    fs.copyFileSync(path.join(SystemRoot, 'System32', 'whoami.exe'), write(path.join(p, 'moe-rf06b-base.exe')));
+    const run = env => require('node:child_process').spawnSync('moe-rf06b-base', { cwd: f.outside, env });
+    assert.equal(run({ PATH: p, SystemRoot }).status, 0, 'control: the local project spelling runs the project executable');
+    // A junction to a literal 'project.' folder: a plain spelling whose real path is an alias, like a mapped network drive.
+    fs.copyFileSync(path.join(p, '.moe', 'project.json'), write(path.join(p + '.', '.moe', 'project.json')));
+    const junction = path.join(f.outside, 'dot-project'); fs.symlinkSync(p + '.', junction, 'junction');
+    f.env.MOE_NODE_COMMAND = write(path.join(p, 'node.exe'));
+    for (const base of [`\\\\localhost\\${p[0]}$${p.slice(2)}`, `\\\\127.0.0.1\\${p[0]}$${p.slice(2)}`, junction, p.slice(2)]) {
+        assert.deepEqual([api.isOutsideProject(p, base), api.isOutsideProject(f.outside, base)], [false, false], base);
+        assert.deepEqual(plain(api.installedExecutable(f.env.MOE_NODE_COMMAND, base)), { rejected: reason }, base);
+        const env = api.protectedDaemonEnvironment({ PATH: [p, f.outside].join(';'), SystemRoot }, base, f.node, true, undefined);
+        assert.deepEqual([env.PATH, run(env).error?.code], ['', 'ENOENT'], base);
+        if (base !== p.slice(2)) { await f.client.startDaemon('start', base); }
+    }
+    assert.deepEqual([f.spawns, f.errors], [[], Array(3).fill(refusal(reason))]);
 });
 
 for (const code of ['ENOENT', 'EACCES']) {

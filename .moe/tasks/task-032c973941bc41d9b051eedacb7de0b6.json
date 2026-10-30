@@ -17,41 +17,63 @@
     {
       "stepId": "step-1",
       "description": "Reopen 3. QA qa-ba3f4f35 failed DoD 1 on the INVERSE UNC case. Read first:\n- rejectionDetails;\n- task comments 09feee65, 51a169fb and e8181ee2;\n- the Serena notes decision-protected-windows-alias-refusal and gotcha-windows-node-namespaced-realpath.\n\nThe leak: getWorkspacePath returns uri.fsPath unchanged. For a base \\\\localhost\\C$\\...\\project (also 127.0.0.1, or a mapped drive whose real path is UNC), realpath keeps the UNC form. The local C:\\...\\project spelling of the SAME folder then compares as outside: isOutsideProject keeps it in PATH, and selectInstalledFile accepts a node inside it.\n\nThe fix (step 2) stops enumerating spellings: on a Windows host, only plain local drive paths are compared, on BOTH sides. The architect validated this exact diff on native Windows; it is in D:\\moe-rf06b-r3-architect-probe\\vscode (the patched source, the test file and six mutants). That folder and QA's folders (D:\\qa-rf06b-r2, D:\\qa-rf06b-ba3f4f35-wwdawo_j) are read-only for you.\n\nTESTS FIRST, in moe-vscode/tests/protected-daemon-spawn.test.cjs. Keep every other line byte-identical; copy the probe file's lines. The spellings below are in Windows notation; write them as escaped JS literals, as the probe file does.\n\n(a) In the test 'Windows alias predicate…':\n- append to the true list: \\x, /x, C:x, x, \\\\?\\Volume{0}\\x, \\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\x and \\\\.\\pipe\\x;\n- append //?/c:/x to the false list.\nDo NOT list \\\\.\\C:\\x as false: its '.' device segment was already an alias under the reopen-2 rule.\n\n(b) Directly after the test 'Windows aliases cannot run project executables…', add the probe's 19-line test 'Windows alias project bases prove nothing outside them and start no daemon', skipped off Windows like its neighbours. Setup:\n- reason = 'the project directory is not a plain local Windows path';\n- copy whoami.exe to p\\moe-rf06b-base.exe;\n- control: a bare-name spawnSync with PATH = p from cwd f.outside exits 0;\n- write p + '.\\.moe\\project.json' (Node's namespaced mkdir creates a literal 'project.' folder), plus a junction f.outside\\dot-project pointing to it;\n- MOE_NODE_COMMAND = a node.exe inside p.\nFor each base of [\\\\localhost\\<d>$<rest of p>, \\\\127.0.0.1\\<d>$<rest of p>, the junction, p.slice(2)]:\n- isOutsideProject(p, base) and isOutsideProject(f.outside, base) are both false;\n- installedExecutable(node, base) is rejected with reason;\n- protectedDaemonEnvironment({ PATH: [p, f.outside].join(';'), SystemRoot }, base, f.node, true, undefined).PATH is '', and the bare-name spawn with that env gives ENOENT;\n- await f.client.startDaemon('start', base) for every base except the rooted one.\nAt the end, f.spawns is [] and f.errors is exactly three refusal(reason) messages.\n\nWhy each base:\n- The UNC bases are QA's repro. The raw spelling refuses them, so the result does not depend on the admin share being reachable: an unreachable share fails lstat with code UNKNOWN, and runtimeProfile then fails closed to protected.\n- The junction stands in for a mapped drive (a plain spelling whose real path is an alias). It is the only base that exercises the real-path checks.\n- The rooted base resolves against the host cwd drive, while the daemon would resolve it against ITS cwd drive. It skips startDaemon because runtimeProfile can read legacy there.\nThe fixture's fs.rmSync removes the literal folder and the junction; the probe left no moe-rf06b-* temp dirs.\n\nRED evidence, record both:\n- Linux `cd moe-vscode && node --test tests/protected-daemon-spawn.test.cjs` fails (a) at '\\x'.\n- `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test tests/protected-daemon-spawn.test.cjs\"` fails (a), and (b) with isOutsideProject [true, true] for the localhost base.\nThe architect saw both red on e83fef4c.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/tests/protected-daemon-spawn.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Read the full QA rejection/comments and prior knowledge; RF06 prerequisite is landed. Confirmed getWorkspacePath passes uri.fsPath unchanged and both containment sites omit alias project-base checks. Tests match the architect probe byte-for-byte; no production changes yet. RED: cd moe-vscode && node --test tests/protected-daemon-spawn.test.cjs -> exit 1, 18 pass/1 fail/3 skips, predicate fails at \\\\x. Native command cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test tests/protected-daemon-spawn.test.cjs\" -> exit 1, 19 pass/2 fail/1 existing privilege skip; predicate fails at \\\\x and new project-base test gets [true,true] instead of [false,false] for localhost UNC. Logs /tmp/moe-rf06b-r3-worker-c2da129d/red-{linux,windows}.log. Only the approved test file changed; QA/probe directories read-only. Current size rail was raised to 470 net by prop-27ddd22a.",
+      "startedAt": "2026-10-30T16:47:50.680Z",
+      "completedAt": "2026-10-30T16:48:33.391Z"
     },
     {
       "stepId": "step-2",
       "description": "Implement in moe-vscode/src/services/MoeDaemonClient.ts. These are exactly the probe's three edits (net +2 lines). Add no import, and change nothing else.\n\n1. isWindowsAlias becomes an allow-list. Keep the same signature and host default, and replace only the UNC clause:\n   return windows && (/[. ](?:[\\\\/]|$)/.test(p) || !/^[A-Za-z]:\\//.test(comparablePath(p, false)));\n   Doc comment: /** On Windows only plain drive paths compare: Win32 strips segment-ending dots/spaces Node's \\\\?\\ fs keeps; UNC, device and rooted forms can name any folder. */\n   comparablePath strips a \\\\?\\ prefix (so \\\\?\\C:\\x stays local) and maps \\\\?\\UNC\\ to //.\n\n2. isOutsideProject:\n   if (!isFullyQualified(p) || isWindowsAlias(basePath)) { return false; }\n   const forms = pathForms(p), projects = pathForms(basePath);\n   if ([...forms, ...projects].some(form => isWindowsAlias(form))) { return false; }\n   The comparison line is unchanged. The raw base is checked before any I/O, so an unreachable share costs nothing per PATH entry. Unequal namespaces never prove 'outside'.\n\n3. selectInstalledFile. As its first lines:\n   const notLocal = 'the project directory is not a plain local Windows path';\n   if (isWindowsAlias(basePath)) { return { rejected: notLocal }; }\n   Then the existing realpath, null check and rejected helper, followed by:\n   if (isWindowsAlias(project)) { return rejected(notLocal, project); }\n   Checking the spelling before realpath gives a reachable share, an unreachable share and a rooted spelling the same reason.\n\nError handling is unchanged:\n- isOutsideProject's try/catch still answers false for non-ENOENT realpath errors, e.g. UNKNOWN for an unreachable share.\n- The UI reason is path-free, and the log gets the real path through rejected().\n- startProtectedDaemon needs no edit: the daemon's installedArtifact refuses first, so it shows 'Protected execution profile: the project directory is not a plain local Windows path. Project and PATH copies of the Moe daemon are not used.' and spawns nothing.\n- RF06's AgentLauncher gets the same refusal.\n\nAlways call the predicate through an arrow, never as forms.some(isWindowsAlias), and never pass the windows argument at call sites (host semantics).\nPOSIX and legacy are unchanged. Step 1's tests now pass on Linux and on native Windows.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Applied exactly the three approved probe edits (source cmp matches): isWindowsAlias is a host-only plain-local-drive allow-list; isOutsideProject checks the raw base before I/O plus all candidate/project forms; selectInstalledFile refuses raw and real alias project bases with the path-free reason. No import or legacy edits. Focused Linux command cd moe-vscode && node --test tests/protected-daemon-spawn.test.cjs -> 0, 19 pass/0 fail/3 Windows skips. Native cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-vscode && node --test tests/protected-daemon-spawn.test.cjs\" -> 0, 21 pass/0 fail/1 symlink privilege skip. Both native alias tests execute and pass, including no daemon spawn and exactly three refusals for UNC/junction bases. Logs /tmp/moe-rf06b-r3-worker-c2da129d/green-{linux,windows}.log.",
+      "startedAt": "2026-10-30T16:48:46.419Z",
+      "completedAt": "2026-10-30T16:49:00.579Z"
     },
     {
       "stepId": "step-3",
       "description": "Run the gate once, fresh, after step 2:\n  cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\"\nIt must exit 0, with 289 tests: 285 pass, 0 fail and the 4 existing privilege/platform skips. Quote the ✔ lines of BOTH native alias tests (reopen 2's and the new project-base test) to show they ran rather than skipped. This output is the complete_task verification evidence.\n\nAlso run Linux `cd moe-vscode && npm test`. It must exit 0: 286 pass, 3 Windows-only skips. RF06's protected-runtime.test.cjs and the five closed vm harnesses must pass unchanged.\n\nQA repros, run against the working tree:\n- Copy trailing-dot.cjs, aliases.cjs and unc-project.cjs from D:\\qa-rf06b-ba3f4f35-wwdawo_j into a new scratch dir outside the checkout.\n- Change only the source line, path.join(__dirname, 'MoeDaemonClient.e83fef4c.ts'), to 'D:/projexts/moes/moe-vscode/src/services/MoeDaemonClient.ts'.\n- Run each through cmd.exe /d /c \"cd /d D:\\projexts\\moes && node <copy>\".\n- Expect NO LEAK, kept:false on every aliases row, and UNC_PROJECT_LEAKS=0, where node and command carry the new reason and filteredPATH is ''. The architect's run of the probe source matched this.\n\nQA's unc-start scratch tests read f.spawns[0] in their PATH case. With the fix, startDaemon spawns nothing, so that case throws a TypeError. That is expected; the committed test asserts spawns [] and the refusal. Say so in the summary.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-daemon-spawn.test.cjs"
-      ]
+      ],
+      "note": "Verification-only step; no repository edits. Fresh native gate cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\" -> exit 0: 289 tests, 285 pass, 0 fail, 4 existing privilege/platform skips; tsc passes. Exact executed rows: ✔ Windows aliases cannot run project executables through the protected PATH (56.7315ms); ✔ Windows alias project bases prove nothing outside them and start no daemon (30.6517ms). Linux cd moe-vscode && npm test -> exit 0: 289 tests, 286 pass, 0 fail, 3 Windows-only skips. RF06 protected-runtime and five closed VM harnesses unchanged and pass. Logs /tmp/moe-rf06b-r3-worker-c2da129d/gate-{windows,linux}.log. Copied QA's three scripts into D:/moe-rf06b-r3-worker-0sdgszas, changed only the source pointer to working-tree MoeDaemonClient.ts, and ran each via cmd.exe from D:/projexts/moes: all exit 0, trailing-dot NO LEAK, all 7 aliases kept:false, UNC_PROJECT_LEAKS=0 with both node/command exact project-base refusal and filteredPATH ''. Original QA/probe folders untouched. QA unc-start PATH scratch assertion assumes f.spawns[0]; under this refusal it would TypeError as the plan explains, while the committed regression directly asserts zero spawns and exactly 3 refusals.",
+      "startedAt": "2026-10-30T16:49:06.433Z",
+      "completedAt": "2026-10-30T16:50:05.763Z"
     },
     {
       "stepId": "step-4",
       "description": "Load adversarial-self-review. Review only the reopen-3 diff, `git diff e83fef4c -- moe-vscode/`. Check:\n(a) QA's UNC bases, a junction or mapped-drive base, a rooted base and every reopen-1/2 spelling are refused.\n(b) Nothing ordinary is newly refused: C:\\, C:\\Program Files\\nodejs\\, Python3.11, \\\\?\\C:\\ forms, 8.3 names and subst drives (realpath maps a subst drive to the local path; architect probe).\n(c) POSIX is unchanged (the Linux run). The legacy spawn bytes are unchanged, there is no new import, process.env is never mutated, and UI messages carry no path.\n(d) Each of these six mutants is killed by an assertion. Run them on scratch copies only (see D:\\moe-rf06b-r3-architect-probe\\vscode\\mutants):\n- drop the raw-basePath check in isOutsideProject;\n- drop ...projects from its alias check;\n- drop the raw-basePath check in selectInstalledFile;\n- drop the project real-path check there;\n- restore the old clause comparablePath(p, false).startsWith('//');\n- ignore the windows parameter.\n\nReport in the completion summary:\n- Size, from `git diff --numstat 0645f5e3^ -- moe-vscode/`. The probe measures +462/-3, net 459. The ceiling is the CQ-RF06b rail in get_context allRails.epic at completion time: 460 today. MODIFY_RAIL prop-27ddd22a proposes 470, and the governor decides it. Stay at or below the active value, and quote it.\n- Accepted cost: under protected on Windows, a workspace on a UNC path, a mapped drive or \\\\wsl$ starts no daemon or agent.\n- VS Code is stricter than JetBrains until twin task-526a2080 lands.\n- Still out of scope (QA-accepted, shared with JetBrains): a not-yet-existing PATH leaf below a symlink, junction, 8.3, subst or mapped-drive ancestor is compared lexically. Running-daemon provenance stays with CQ-RF07.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-vscode/src/services/MoeDaemonClient.ts",
         "moe-vscode/tests/protected-daemon-spawn.test.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-daemon-spawn.test.cjs"
+      ],
+      "note": "Adversarial review complete on git diff e83fef4c -- moe-vscode/. No new edits during review; listed files are the task's cumulative modified paths. Checked concurrency/TOCTOU (synchronous refusal adds no shared state; existing start guard unchanged), typed/empty/path-shaped inputs and linear regex, host-vs-env-casing semantics, error/refusal cleanup, no process.env mutation, and path-free UI. Class/import bytes and all six regression harnesses are byte-identical to e83fef4c. Ordinary drive/root/spaced/dotted/device paths still pass predicate and native tests; existing realpath canonicalization retains 8.3/subst behavior. Windows raw alias bases are refused before selector/PATH I/O; junction real alias bases and candidate alias forms are refused. POSIX suite stays green. Scratch-only native mutation baseline: 3 pass/0 fail/0 skip. All six mutants assertion-killed: M1 raw outside guard (rooted [true,true]); M2 project forms (junction [true,true]); M3 raw select guard (rooted wrong reason); M4 real project guard (junction accepted node); M5 old UNC predicate (rooted/predicate); M6 ignore windows argument (false-mode predicate). Logs D:/moe-rf06b-r3-worker-0sdgszas/mutation/*.log. No changes to original QA/probe folders or shared source during mutation. git diff --check clean. Final-context rail is 470 net; git diff --numstat 0645f5e3^ -- moe-vscode/ = source +153/-3, tests +309/-0, total +462/-3 net 459 across exactly two files. Accepted cost: protected Windows UNC/mapped/WSL-share workspaces start no daemon or agent; VS Code is stricter until JetBrains twin task-526a2080 lands. Known QA-accepted exclusions unchanged: nonexistent PATH leaves under link/junction/8.3/subst/mapped ancestors remain lexical; running-daemon provenance stays with CQ-RF07. Step-3 fresh native gate: 285 pass/4 skips/0 fail + tsc; Linux: 286 pass/3 skips/0 fail.",
+      "startedAt": "2026-10-30T16:50:38.614Z",
+      "completedAt": "2026-10-30T16:52:36.965Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-c2da129d",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 3,
@@ -117,11 +139,23 @@
       "author": "governor-693b7073",
       "content": "@architect-bd1eb82d Governor ruling on rail coverage, asked by architect-6fc3dd5c at 16:20Z: prop-3f719e10 COVERS the UNC project-base refusal. No new proposal is needed for it.\n- Why: the rail defines \"A Windows alias is a path segment ending in '.' or ' ', or a UNC form\". Refusing a project base whose path.resolve or realpath form isWindowsAlias, with a named reason in selectInstalledFile so isOutsideProject keeps nothing, is the same alias refusal applied to the base. It is still \"the reopen-2 Windows alias refusal and its tests\".\n- Conditions, all from the rail's own text:\n  - The total stays at most 460 net from 0645f5e3^ (437 now, planner estimate about 452).\n  - The edit touches exactly moe-vscode/src/services/MoeDaemonClient.ts and moe-vscode/tests/protected-daemon-spawn.test.cjs. AgentLauncher and other consumers inherit the fix through selectInstalledFile without edits. A third file's lines are not covered.\n  - No rewrite or re-slice of landed bytes.\n- Going past 460 or touching a third file needs a new proposal, filed at submit time.\n- The fail-closed cost (a share-hosted or mapped-drive project refuses under protected on Windows) matches the cost already accepted for network PATH entries. It is option 2 in my comment-e8181ee2. The planner decides the shape, and QA rules DoD 1.",
       "timestamp": "2026-10-30T16:21:21.786Z"
+    },
+    {
+      "id": "comment-d95e0ef29d50494c9d9b2943db4c6d9d",
+      "author": "architect-bd1eb82d",
+      "content": "@governor-693b7073 Rev 3 is submitted (planRevision 3, TURBO, WORKING). It takes your second direction: fail closed outside one namespace, with no further spelling enumeration. On a Windows host, isWindowsAlias becomes an allow-list (plain local drive path), and it applies to the project base too (raw, resolved and real forms) as well as to candidates.\nI validated the exact diff on native Windows (D:\\moe-rf06b-r3-architect-probe):\n- the new tests are red on e83fef4c and green with the patch;\n- all six mutants are killed;\n- QA's trailing-dot, aliases and unc-project repros report NO LEAK, kept:false and UNC_PROJECT_LEAKS=0;\n- the full suite is green on both hosts, apart from scratch-only ESLint rows.\nSize: +462/-3, net 459 from 0645f5e3^. That is 1 under the active 460, and the current wording covers only the reopen-2/UNC growth. I filed MODIFY_RAIL prop-27ddd22a (EPIC): ceiling 470, with the alias definition extended to the reopen-3 base forms. Please decide it before QA reviews; the worker is told to stay at or below whatever allRails.epic shows at completion.\nStill out of scope and QA-accepted: not-yet-existing PATH leaves under link, 8.3, subst or mapped ancestors. Identity (dev+ino) containment would close those, but it needs a rewrite and its own SMB probe, so it is left for later hardening.",
+      "timestamp": "2026-10-30T16:46:31.416Z"
+    },
+    {
+      "id": "comment-08aeab5dc438478ea98148d63153bf9c",
+      "author": "governor-693b7073",
+      "content": "Size rail updated. prop-27ddd22a (MODIFY_RAIL of prop-3f719e10's text) was APPROVED at 16:46:54Z under the human's 2026-10-30 delegation. The epic still has 8 rails, and the RF06b exception now reads 470.\n- What it covers: at most 470 net from 0645f5e3^ (the architect's validated rev-3 diff is 459), across exactly MoeDaemonClient.ts and protected-daemon-spawn.test.cjs. Growth is only the alias refusal: candidate forms (reopen 2) and base forms (reopen 3), plus its tests.\n- \"Windows alias\" is now an allow-list: anything other than a drive-qualified local path (X:\\, optionally \\\\?\\-prefixed) whose segments do not end in '.' or ' '. UNC, volume-device, rooted and drive-relative forms are aliases.\n- What it doesn't change: it waives size-only rejection, nothing else. QA rules DoD 1. The row is at reopen cap 3/3.",
+      "timestamp": "2026-10-30T16:47:01.997Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:22:02.365Z",
-  "updatedAt": "2026-10-30T16:46:22.419Z",
+  "updatedAt": "2026-10-30T16:54:01.061Z",
   "planningEntry": {
     "from": "REVIEW",
     "at": "2026-10-30T16:16:33.971Z",
@@ -131,7 +165,7 @@
     "firstClaimAt": "2026-10-30T07:23:47.806Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 12,
+    "executedStepCount": 16,
     "rejectCount": 3,
     "reopenCount": 3
   },
@@ -144,7 +178,12 @@
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T16:46:14.082Z",
   "executionContract": {
@@ -223,22 +262,19 @@
   "planApprovedAt": "2026-10-30T16:46:14.103Z",
   "approvedPlanRevision": 3,
   "workStartedAt": "2026-10-30T14:27:17.002Z",
-  "reviewStartedAt": "2026-10-30T16:08:19.166Z",
+  "reviewStartedAt": "2026-10-30T16:54:01.059Z",
   "verification": {
     "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes && cd moe-vscode && npm test && npm run compile\"",
     "exitCode": 0,
-    "outputTail": "✔ Windows aliases cannot run project executables through the protected PATH (54.571ms)\never touches the title, description or Definition of Done inputs (0.5481ms)\n✔ the TypeScript rule and both webview copies agree on every fixture (7.651ms)\n✔ the TypeScript rule reads the attention flag verbatim and keeps recorded ids intact (0.126ms)\n✔ board card of a claimed task shows only its elapsed wall-clock under every legacy cap shape (8.7607ms)\n✔ board card of a never-claimed task has no elapsed badge under every legacy cap shape (6.8173ms)\n✔ board card shows no badge for a recorded duration without a first claim (5.525ms)\n✔ board card elapsed badge keeps its duration rules under every legacy cap shape (60.5375ms)\n✔ board stylesheet styles the class the elapsed badge emits and drops the retired class (2.2367ms)\n✔ board card keeps its chips and elapsed badge for a task with every live metric (5.2735ms)\n✔ task detail markup is identical with or without any legacy cap (13.4831ms)\n✔ task detail renders no Metrics section when the only metric data is a legacy cap (11.3327ms)\n✔ task detail wall-clock KPI keeps its duration rules under every legacy cap shape (79.207ms)\n✔ task detail keeps every live metric, critique, failed DoD item and handoff (9.8702ms)\n✔ task title stays escaped next to the elapsed badge and in the detail (1.5368ms)\nℹ tests 288\nℹ suites 0\nℹ pass 284\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 682.8042\n\n> moe-vscode@0.8.0 compile\n> tsc -p ./\n\n",
-    "reportedAt": "2026-10-30T16:08:19.166Z",
+    "outputTail": "rnal block without throwing (8.1875ms)\n✔ a live update renders exactly what the initial markup renders (10.9447ms)\n✔ a live reason arrives as a DOM text node, not as markup (0.7148ms)\n✔ a BLOCKED to WORKING update clears the section (0.5774ms)\n✔ attention survives the unblock and only clears when its own flag clears (0.954ms)\n✔ a live update carrying malformed metadata clears to an external block without throwing (8.0942ms)\n✔ a live update never touches the title, description or Definition of Done inputs (0.5679ms)\n✔ the TypeScript rule and both webview copies agree on every fixture (6.8406ms)\n✔ the TypeScript rule reads the attention flag verbatim and keeps recorded ids intact (0.0991ms)\n✔ board card of a claimed task shows only its elapsed wall-clock under every legacy cap shape (8.7737ms)\n✔ board card of a never-claimed task has no elapsed badge under every legacy cap shape (6.314ms)\n✔ board card shows no badge for a recorded duration without a first claim (5.3052ms)\n✔ board card elapsed badge keeps its duration rules under every legacy cap shape (52.9596ms)\n✔ board stylesheet styles the class the elapsed badge emits and drops the retired class (1.8682ms)\n✔ board card keeps its chips and elapsed badge for a task with every live metric (5.1651ms)\n✔ task detail markup is identical with or without any legacy cap (9.7812ms)\n✔ task detail renders no Metrics section when the only metric data is a legacy cap (7.2822ms)\n✔ task detail wall-clock KPI keeps its duration rules under every legacy cap shape (75.008ms)\n✔ task detail keeps every live metric, critique, failed DoD item and handoff (10.5052ms)\n✔ task title stays escaped next to the elapsed badge and in the detail (1.8812ms)\nℹ tests 289\nℹ suites 0\nℹ pass 285\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\nℹ todo 0\nℹ duration_ms 642.7282\n\n> moe-vscode@0.8.0 compile\n> tsc -p ./\n\n",
+    "reportedAt": "2026-10-30T16:54:01.059Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "moe-vscode/tests/protected-daemon-spawn.test.cjs",
-    "moe-vscode/src/services/MoeDaemonClient.ts",
-    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
-    ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
-    ".moe/tasks/task-c12f9463b68c44a18cc460a7e9460247.json"
+    "moe-vscode/src/services/MoeDaemonClient.ts"
   ],
-  "completionSummary": "Reopen-2 Windows alias refusal implemented and tested: isOutsideProject rejects trailing-dot/space and UNC path forms; selectInstalledFile rejects alias real files. Host-only gating preserves POSIX; legacy startup and closed VM imports unchanged. Red-first regression reproduced project-dot acceptance; native control executes through raw PATH, filtered spawn fails ENOENT, literal sibling node refuses. Fresh Windows npm test + compile: 288 tests, 284 pass, 0 fail, 4 expected skips; native alias test PASS (not skipped). Linux npm test: 286 pass/288, 2 Windows-only skips, 0 failures. QA repros against working tree: NO LEAK; all seven aliases kept:false. Six required scratch-only mutants killed by assertions; baseline 2/2 green. Evidence: D:\\moe-rf06b-r2-worker-_uh4_g6z (verification.log and mutations/*.log). Size vs 0645f5e3^: +440/-3 net437; reopen growth net40 <=45. RF06b net460 size exception ACTIVE in get_context allRails.epic. Deliberately stricter than JetBrains: outside dot/space and network-share paths dropped; JetBrains UNC follow-up task-526a208079b5467db13cb9dd10da442e. Still out of scope: nonexistent PATH leaves below symlink/8.3 local ancestors remain lexical; running-daemon provenance remains RF07. No isolation/verified-local enablement. Handoff/gotcha memories saved; wrapper owns landing.",
+  "completionSummary": "Reopen 3: Windows containment now allow-lists plain local drive paths on both sides. Raw/resolved/real alias project bases refuse before accepting installed files or PATH entries; startDaemon shows the exact path-free project-directory refusal and spawns nothing. Legacy/class/import bytes and six existing harnesses unchanged; POSIX unchanged.\nFresh native gate exit 0: 289 tests, 285 pass, 0 fail, 4 existing skips; tsc passes. Executed:\n✔ Windows aliases cannot run project executables through the protected PATH (56.7315ms)\n✔ Windows alias project bases prove nothing outside them and start no daemon (30.6517ms)\nLinux npm test: 286 pass/0 fail/3 Windows-only skips. RED evidence preceded implementation.\nQA repro copies in D:/moe-rf06b-r3-worker-0sdgszas: NO LEAK; seven kept:false aliases; UNC_PROJECT_LEAKS=0, empty PATH and exact node/command refusal. Original QA/probe folders untouched. Scratch baseline 3/3 passes; all six approved mutants assertion-killed, no skips. QA's older unc-start PATH assertion would TypeError on f.spawns[0] because nothing spawns; committed regression asserts [] and three refusals instead.\nSize: git diff --numstat 0645f5e3^ -- moe-vscode/ = +462/-3, net 459, below active 470 rail. Exactly MoeDaemonClient.ts and protected-daemon-spawn.test.cjs. Adversarial review and diff check clean.\nAccepted cost: protected Windows UNC, mapped-drive or WSL-share workspaces start no daemon/agent. VS Code is stricter until JetBrains twin task-526a2080 lands. Known QA-accepted exclusions unchanged: nonexistent PATH leaves under symlink/junction/8.3/subst/mapped ancestors remain lexical; running-daemon provenance stays CQ-RF07. No Git writes or verified-local enablement; wrapper owns landing. Handoff/gotcha memories saved.",
   "commits": [
     {
       "sha": "0645f5e3dea78225b1d1de6a0fb392cd3c58b9e0",
@@ -329,14 +365,31 @@
       "treeId": "37dfa4f2fa35597ce4915e6485be6b4cd02f3373",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "ea406d0bfac8d118b6ded5c30dd4631dc47b4ea0",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c2da129d@2026-10-30T16:46:16Z",
+      "paths": [
+        ".moe/tasks/task-032c973941bc41d9b051eedacb7de0b6.json",
+        ".moe/tasks/task-1c2bfeca0ec34589b8cb498abc082549.json",
+        ".moe/tasks/task-f3f364a6c6864054901ec27f342a87f6.json"
+      ],
+      "recordedBy": "worker-c2da129d",
+      "recordedAt": "2026-10-30T16:46:34.291Z",
+      "treeId": "44b65e929b33e8aabb850e08bff2e88f3fa56a15",
+      "status": "WORKING",
+      "pushed": true
     }
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c2da129d@2026-10-30T15:59:56Z",
-    "at": "2026-10-30T16:08:37.334Z"
+    "kind": "checkpoint",
+    "sessionId": "worker-c2da129d@2026-10-30T16:46:16Z",
+    "at": "2026-10-30T16:46:34.291Z"
   },
   "reviewCompletedAt": "2026-10-30T16:16:33.971Z",
   "rejectionDetails": {
