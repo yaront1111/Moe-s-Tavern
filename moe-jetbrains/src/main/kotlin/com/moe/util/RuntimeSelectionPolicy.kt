@@ -115,7 +115,10 @@ object RuntimeSelectionPolicy {
             pinned += key
             if (stored != StoredProfile.PROTECTED) persist(basePath, key, RuntimeProfile.PROTECTED)
         } else {
-            if (stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY) return RuntimeProfile.LEGACY
+            if (stored == StoredProfile.ABSENT || stored == StoredProfile.LEGACY) {
+                // Another reader may have pinned and confirmed a downgrade while this one was reading the store.
+                return if (key in pinned) RuntimeProfile.PROTECTED else RuntimeProfile.LEGACY
+            }
             if (pinned.add(key)) askDowngrade(basePath, key)
         }
         return RuntimeProfile.PROTECTED

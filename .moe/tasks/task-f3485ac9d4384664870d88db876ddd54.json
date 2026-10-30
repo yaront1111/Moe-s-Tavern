@@ -94,26 +94,37 @@
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE, fresh.\n\n1. Hold the jetbrains-gradle shared resource while Gradle runs. Take it with moe.acquire_resource {resourceId: 'jetbrains-gradle'}; when it is busy, queue with moe.report_blocked and that resourceId. Release it afterwards.\n2. Run the task's command from WSL: cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\".\n   - This WSL host has no Linux JDK, and this Windows run is the accepted gate. Report it as Windows evidence.\n   - It must exit 0. Its fresh command, exit code and output tail are complete_task's verification evidence.\n3. `git diff --check` over the three files is clean.\n4. A read-only `git status --short` shows only those files changed by this task. Never revert, stash, `git add -A` or commit a peer's or pre-existing dirty path.\n\nError handling: fix a failing row in code, never by weakening an assertion.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-30T08:22:35.068Z"
+      "note": "Resumed IN_PROGRESS step; both child fixes present and task comments confirm landed/DONE. Ran exact cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" fresh under jetbrains-gradle: exit 0, BUILD SUCCESSFUL in 9s, 26 fresh XML classes / 382 tests, 0 failures/errors/skips; policy 48/48. Windows-clock start 09:07:11.834693Z, XML timestamps checked against it. Evidence D:\\moe-scratch\\rf02-worker-55e6716a\\baseline.log and XML copies. Scoped git diff --check clean; three source files clean against checkpoint. No files changed this step; pre-existing/peer dirty paths preserved. Retaining lease briefly for final review reproduction and any required rerun.",
+      "startedAt": "2026-10-30T08:22:35.068Z",
+      "completedAt": "2026-10-30T09:08:10.865Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the three-file diff as an attacker:\n- Can a repository edit alone ever turn a confirmed-protected project legacy? Try a weaker read, a deleted project.json, a crafted record, a record of another project, a link, and a file that is not owner-only.\n- Can anything but an explicit true write 'legacy'? Try a dismiss, Escape, a throw, a second answer and a headless IDE.\n- Can the dialog appear twice for one project in a session, with parallel callers?\n- Can it block a thread or deadlock? profile() runs on the EDT (ManagedVmPanel) and off it (the supervisor).\n- Does a failed project.json read still never pin, write or ask? Does profile() still never throw?\n- Is the record outside the repository and owner-only on every path, including a repair write?\n- Does any test touch the real IDE system directory?\n- Would I be embarrassed if this shipped?\n\nFix any finding, then re-run step 5's command fresh before complete_task.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
         "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
       ],
       "newFiles": [
         "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+        ".serena/memories/task-task-f3485ac9d4384664870d88db876ddd54-handoff.md",
+        ".serena/memories/gotcha-protected-profile-concurrent-pin.md"
+      ],
+      "note": "Adversarial review of original checkpoint three-file diff and current diff found one in-scope race: delayed weaker reader could pass the initial pin check, then consume a newly confirmed legacy record while session was pinned. Added deterministic D6 using existing store seam/latches: required full Windows gate RED 383 tests / exactly 1 failure, expected PROTECTED but was LEGACY. Minimal fix rechecks pinned on legacy return after IO; no locks/extra state. +17 test lines keeps RF02 tests at 200. Fresh exact cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\" GREEN exit 0, BUILD SUCCESSFUL in 9s, 26 fresh XML classes, 383 tests / 0 failures/errors/skips, policy 49/49. Windows start 09:09:45.284441Z; timestamp+mtime freshness checked, evidence D:\\moe-scratch\\rf02-worker-55e6716a\\final.log and final-xml/. Lease released. Reviewed malformed/foreign/weak/deleted input, link/ACL refusal, repairs, first-answer handling, headless defaults, nonblocking confirmation, no-pin read failures; no further findings. POSIX branches not locally exercised. Scoped diff-check clean; source changes confined to two planned files, peer dirty bytes preserved. Required handoff/gotcha written and declared, wrapper-excluded metadata. No Git writes/direct .moe edits.",
+      "startedAt": "2026-10-30T09:08:10.885Z",
+      "completedAt": "2026-10-30T09:12:05.475Z"
     }
   ],
   "planRevision": 3,
-  "status": "BLOCKED",
-  "assignedWorkerId": "worker-55e6716a",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -150,7 +161,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:06:25.972Z",
-  "updatedAt": "2026-10-30T09:04:29.559Z",
+  "updatedAt": "2026-10-30T09:12:26.471Z",
   "dependsOn": [
     "task-fd653cfbaea541c39569dfed9452cf5c"
   ],
@@ -163,7 +174,7 @@
     "firstClaimAt": "2026-10-30T06:56:52.610Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 4
+    "executedStepCount": 6
   },
   "contextFetchedBy": [
     "architect-4ae016fb",
@@ -179,7 +190,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T07:04:02.804Z",
@@ -212,11 +225,11 @@
     "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
     ".serena/memories/gotcha-protected-state-absent-root.md"
   ],
-  "blockedReason": "Required fresh full Windows test gate is waiting for jetbrains-gradle; queued #1 behind worker-262588d0/task-90664db1. Steps 1–4 checkpointed, step 5 in progress, step 6 pending. No tests run or passing claim this session; handoff and in-scope potential concurrency review finding recorded. Auto-resume on lease grant.",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
-  "blockedResourceId": "jetbrains-gradle",
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T09:04:29.559Z",
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "commits": [
     {
       "sha": "91eb0d14ebb34d521930f5f2a3a2ee6252584444",
@@ -236,20 +249,46 @@
       "treeId": "dac3495a73b3e74f3a5c522e585f9d45d9cf9031",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "3bfeab89497444af0e105aab7d8ada7c46f75ccf",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-55e6716a@2026-10-30T09:00:38Z",
+      "paths": [
+        ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
+        ".moe/tasks/task-c61311dc98424120be5775ce91c50ed0.json",
+        ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json"
+      ],
+      "recordedBy": "worker-55e6716a",
+      "recordedAt": "2026-10-30T09:04:47.857Z",
+      "treeId": "9abc3c79968aca7bde24b4678b0edcbb86173caa",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-2f2484b426ef42aaa0566323da2d550e.json",
-    ".moe/tasks/task-f3485ac9d4384664870d88db876ddd54.json",
-    "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+    ".serena/memories/task-task-f3485ac9d4384664870d88db876ddd54-handoff.md",
     "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
-    "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt"
+    "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt",
+    ".serena/memories/gotcha-protected-profile-concurrent-pin.md"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
     "kind": "checkpoint",
-    "sessionId": "worker-c2da129d@2026-10-30T08:14:40Z",
-    "at": "2026-10-30T08:27:54.930Z"
-  }
+    "sessionId": "worker-55e6716a@2026-10-30T09:00:38Z",
+    "at": "2026-10-30T09:04:47.857Z"
+  },
+  "reviewStartedAt": "2026-10-30T09:12:26.469Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :compileKotlin\n> Task :compileJava NO-SOURCE\n> Task :classes UP-TO-DATE\n> Task :jar\n> Task :compileTestKotlin UP-TO-DATE\n> Task :compileTestJava NO-SOURCE\n> Task :testClasses UP-TO-DATE\n> Task :instrumentTestCode SKIPPED\n> Task :composedJar\n> Task :prepareTestSandbox\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 9s\n11 actionable tasks: 6 executed, 5 up-to-date\nFresh XML validation: 26 classes, 383 tests, 0 failures/errors/skips; policy 49 including D6. Windows start 2026-10-30T09:09:45.284441Z; policy timestamp 2026-10-30T09:09:47.882Z.",
+    "reportedAt": "2026-10-30T09:12:26.469Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Persistent protected-profile confirmation is implemented in JetBrains using RF01's external owner-only store, strict project-bound records and an injected async safe-default dialog. Decline/dismiss/throw stays protected; only the first explicit true persists legacy, effective after restart. Original three-file checkpoint retained; landed store-root and supervisor-test fixes verified. Final adversarial review reproduced and fixed a delayed-reader race: recheck the session pin after store IO before returning legacy. D6 was RED (expected PROTECTED, got LEGACY), then GREEN; RF02 test additions total 200 lines. Fresh exact Windows full gate under jetbrains-gradle exited 0: 26 XML classes, 383 tests, zero failures/errors/skips; RuntimeSelectionPolicyTest 49/49. XML timestamps and mtimes verified against Windows-clock start 09:09:45.284441Z. Evidence D:\\moe-scratch\\rf02-worker-55e6716a\\final.log and final-xml/; race-red proof alongside. Lease released. Scoped diff-check clean, required Serena handoff/gotcha updated and declared. All peer/pre-existing bytes preserved, no direct .moe edits or Git writes. Windows evidence only; POSIX branches not locally exercised. Verified-local remains disabled; no isolation claim."
 }

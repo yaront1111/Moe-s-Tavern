@@ -104,6 +104,23 @@ class RuntimeSelectionPolicyTest {
     }
 
     @Test
+    fun `D6 a delayed reader honors a concurrent session pin after confirmation`() = withProfileStore { store, dir, asks ->
+        store.write(RuntimeSelectionPolicy.profileRecordName(dir.path), profileJson(dir, "protected"))
+        writeProfile(dir, "legacy")
+        val entered = CountDownLatch(1); val resume = CountDownLatch(1)
+        RuntimeSelectionPolicy.store = {
+            if (entered.count > 0) { entered.countDown(); assertTrue(resume.await(5, TimeUnit.SECONDS)) }
+            store
+        }
+        val delayed = CompletableFuture.supplyAsync { profileOf(dir) }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertEquals(RuntimeProfile.PROTECTED, profileOf(dir))
+            asks.answers.single()(true)
+        } finally { resume.countDown() }
+        assertEquals(RuntimeProfile.PROTECTED, delayed.get(5, TimeUnit.SECONDS))
+    }
+    @Test
     fun `D2 upgrades need no confirmation and unavailable stores preserve session-only behavior`() = withProfileStore { store, dir, asks ->
         val name = RuntimeSelectionPolicy.profileRecordName(dir.path)
         store.write(name, profileJson(dir, "legacy"))
