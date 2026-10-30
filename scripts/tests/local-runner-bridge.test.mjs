@@ -14,7 +14,7 @@ import {
   AGENT_JOBS, MAX_GUEST_FRAME_BYTES, MAX_HOST_FRAME_BYTES, bridgeArgv, createFrameDecoder, encodeFrame, jobFrame as hostJobFrame, parseGuestFrame,
   scopeRequest, TOOLS,
 } from '../local-runner/guest-bridge.mjs';
-import { JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
+import { GUEST_LAYOUT, JOB_IDENTITIES } from '../local-runner/guest-bootstrap.mjs';
 import {
   MAX_ARGUMENT_DEPTH, MAX_DAEMON_INFO_BYTES, MAX_PENDING_REQUESTS, MAX_RESPONSE_BYTES, endAgentJobs, runGuestSession,
 } from '../local-runner/guest-session.mjs';
@@ -1183,6 +1183,19 @@ const RECORD = `def record(argv, out_fd, in_fd, agent_socket, agent_uid, peer_ui
     return 42
 m.relay = record
 `;
+const LA_PROMPTS = {
+  worker: 'Call moe.get_context for your assigned task first. You are the worker: follow nextAction and the approved implementation plan, then finish with moe.complete_task.',
+  qa: 'Call moe.get_context for your assigned task first. You are QA: review against the definition of done, then finish with moe.qa_approve or moe.qa_reject.',
+};
+const LA_CONFIG = {
+  claude: JSON.stringify({ mcpServers: { moe: { command: '/opt/moe/bin/moe-mcp-shim' } } }),
+  codex: '[mcp_servers.moe]\ncommand = "/opt/moe/bin/moe-mcp-shim"\ndefault_tools_approval_mode = "approve"\n',
+};
+function launchArgv(cli, role, home, exe = `/opt/moe/agents/${cli}`) {
+  return cli === 'claude'
+    ? [exe, '-p', LA_PROMPTS[role], '--mcp-config', join(home, '.moe-mcp.json'), '--strict-mcp-config', '--dangerously-skip-permissions']
+    : [exe, 'exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', LA_PROMPTS[role]];
+}
 function bridgeJob(input, { workspace = 'ws', setup = '', seams = OWN, runs = 1 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'moe-r10b-'));
   const code = `${LOAD}${JOB_DIRS}${RECORD}${setup}
@@ -1240,10 +1253,11 @@ os.chown = lambda path, uid, gid, chown=os.chown: print('chown', path, uid, gid,
     assert.deepEqual([run.status, String(run.stderr)], [42, chowned]);
     for (const [index, { cli, role, credential }] of [JOB, QA_JOB].entries()) {
       const [argv, outFd, inFd, socket, agentUid, realPeer, job] = calls[index];
-      assert.deepEqual([argv, outFd, inFd, socket, agentUid, realPeer], [[`/opt/moe/agents/${cli}`], 1, 0, '/run/moe/agent.sock', uid, true]);
       const home = job.env.HOME;
+      assert.deepEqual([argv, outFd, inFd, socket, agentUid, realPeer], [launchArgv(cli, role, home), 1, 0, '/run/moe/agent.sock', uid, true]);
       assert.deepEqual(job, { env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, USER: 'moe-agent', LOGNAME: 'moe-agent', LANG: 'C.UTF-8',
-        MOE_ROLE: role, [credential.name]: SECRET }, spawn: { user: uid, group: process.getgid(), extra_groups: [], umask: 0o077, cwd: join(run.dir, 'ws') } });
+        MOE_ROLE: role, [credential.name]: SECRET, ...(cli === 'codex' ? { CODEX_HOME: join(home, '.codex') } : {}) },
+      spawn: { user: uid, group: process.getgid(), extra_groups: [], umask: 0o077, cwd: join(run.dir, 'ws') } });
       assert.equal(dirname(home), run.sessions);
       const info = statSync(home);
       assert.deepEqual([info.isDirectory(), info.mode & 0o7777, info.uid], [true, 0o700, uid]);
@@ -1299,7 +1313,7 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
     const homes = readdirSync(join(dir, 'kept', 'sessions'));
     assert.equal(homes.length, 1);
     assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'kept', 'sessions', homes[0]), USER: 'moe-agent',
-      LOGNAME: 'moe-agent', LANG: 'C.UTF-8', MOE_ROLE: 'qa', CODEX_API_KEY: SECRET });
+      LOGNAME: 'moe-agent', LANG: 'C.UTF-8', MOE_ROLE: 'qa', CODEX_API_KEY: SECRET, CODEX_HOME: join(dir, 'kept', 'sessions', homes[0], '.codex') });
     assert.deepEqual([probe.cwd, probe.umask, probe.nnp], [join(dir, 'kept', 'ws'), 0o077, ['NoNewPrivs:\t1']]);
     assert.ok(probe.cmdlines[1].includes('\0-c\0import json, os, resource, signal'), 'the parent is the guard');
     assert.ok(probe.cmdlines[2].includes(`\0${SUPERVISOR}\0`), 'the grandparent is the supervisor');
@@ -1310,6 +1324,98 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
       assert.deepEqual(decodeAll([groups.stdout]).map(parseGuestFrame), [HELLO]);
     }
   });
+
+// CQ-R10d4: launch only fixed, headless CLI argv and a private, per-job MCP configuration.
+test('LA1 each CLI and role gets the exact fixed headless argv, never a credential or resume token', { skip: NO_GUEST }, t => {
+  for (const cli of ['claude', 'codex']) for (const role of ['worker', 'qa']) {
+    const frame = { ...(cli === 'claude' ? JOB : QA_JOB), role };
+    const run = bridgeJob(jobFrame(frame));
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    assert.equal(run.status, 42, String(run.stderr));
+    const [argv, , , , , , job] = JSON.parse(run.stdout);
+    assert.deepEqual(argv, launchArgv(cli, role, job.env.HOME));
+    assert.equal(argv.some(arg => /^(--resume|--continue|resume)/.test(arg) || arg.includes(SECRET)), false);
+    assert.ok(LA_PROMPTS[role].startsWith('Call moe.get_context for your assigned task first.'));
+    assert.notEqual(LA_PROMPTS.worker, LA_PROMPTS.qa);
+  }
+});
+
+test('LA2 only the shim config exists in the fresh home, with private modes and agent ownership', { skip: NO_GUEST }, t => {
+  for (const frame of [JOB, QA_JOB]) {
+    const run = bridgeJob(jobFrame(frame));
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    assert.equal(run.status, 42, String(run.stderr));
+    const job = JSON.parse(run.stdout)[6], home = job.env.HOME;
+    const paths = frame.cli === 'claude' ? ['.moe-mcp.json'] : ['.codex', '.codex/config.toml'];
+    assert.equal(dirname(home), run.sessions);
+    assert.deepEqual(readdirSync(home), [paths[0]]);
+    if (frame.cli === 'codex') {
+      assert.deepEqual(readdirSync(join(home, '.codex')), ['config.toml']);
+      assert.equal(job.env.CODEX_HOME, join(home, '.codex'));
+    }
+    for (const path of ['', ...paths]) {
+      const info = statSync(join(home, path));
+      assert.deepEqual([info.mode & 0o7777, info.uid, info.gid], [info.isDirectory() ? 0o700 : 0o600, process.getuid(), process.getgid()]);
+    }
+    const text = readFileSync(join(home, paths.at(-1)), 'utf8');
+    if (frame.cli === 'claude') assert.deepEqual(JSON.parse(text), JSON.parse(LA_CONFIG.claude));
+    else assert.equal(text, LA_CONFIG.codex);
+    assert.equal(text.includes(SECRET), false);
+  }
+});
+
+test('LA2 pre-existing config entries or a failed config write refuse before relay without following links', { skip: NO_GUEST }, t => {
+  for (const frame of [JOB, QA_JOB]) for (const planted of ['symlink', 'file', 'directory', 'write-error']) {
+    const setup = `original = m.session_home
+def planted_home(*args):
+    home = original(*args)
+    target = os.path.join(base, 'untouched')
+    with open(target, 'w') as f: f.write('original')
+    path = os.path.join(home, ${JSON.stringify(frame.cli === 'claude' ? '.moe-mcp.json' : '.codex/config.toml')})
+    if ${JSON.stringify(frame.cli)} == 'codex': os.mkdir(os.path.dirname(path), 0o700)
+    if ${JSON.stringify(planted)} == 'symlink': os.symlink(target, path)
+    elif ${JSON.stringify(planted)} == 'file': open(path, 'w').close()
+    elif ${JSON.stringify(planted)} == 'directory': os.mkdir(path)
+    else:
+        def fail(*args): raise OSError('private failure')
+        m.write_all = fail
+    return home
+m.session_home = planted_home
+`;
+    const run = bridgeJob(jobFrame(frame), { setup });
+    t.after(() => rmSync(run.dir, { recursive: true, force: true }));
+    assert.deepEqual([run.status, run.stdout.length, run.stderr.length], [71, 0, 0], `${frame.cli} ${planted} ${run.stderr}`);
+    assert.equal(readFileSync(join(run.dir, 'untouched'), 'utf8'), 'original');
+  }
+});
+
+test('LA3 real probe through main sees its headless argv, workspace and exact session config bytes', { skip: NO_GUEST }, t => {
+  const probe = `import json, os, sys
+home = os.environ['HOME']
+configs = {path: open(os.path.join(home, path)).read() for path in ('.moe-mcp.json', '.codex/config.toml') if os.path.exists(os.path.join(home, path))}
+print(json.dumps({'argv': sys.argv, 'cwd': os.getcwd(), 'home': home, 'configs': configs}))
+`;
+  for (const frame of [JOB, QA_JOB]) {
+    const dir = mkdtempSync(join(tmpdir(), 'moe-launch-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const run = spawnSync('python3', ['-I', '-B', '-c', `${LOAD}${JOB_DIRS}${HELD('None')}`, SUPERVISOR, dir, 'ws', probe],
+      { input: jobFrame(frame), timeout: 30_000 });
+    const result = session(run);
+    assert.deepEqual(result.exit, EXIT, String(run.stderr));
+    const observed = JSON.parse(result.stdout), path = frame.cli === 'claude' ? '.moe-mcp.json' : '.codex/config.toml';
+    assert.deepEqual(observed.argv, launchArgv(frame.cli, frame.role, observed.home, join(dir, 'probe')));
+    assert.equal(observed.cwd, join(dir, 'ws'));
+    assert.deepEqual(Object.keys(observed.configs), [path]);
+    if (frame.cli === 'claude') assert.deepEqual(JSON.parse(observed.configs[path]), JSON.parse(LA_CONFIG.claude));
+    else assert.equal(observed.configs[path], LA_CONFIG.codex);
+  }
+});
+
+test('LA4 launch keys, exact prompts and shim path mirror the protected tables', { skip: NO_GUEST }, () => {
+  const run = harness("print(json.dumps([sorted(m.LAUNCH), sorted(m.JOBS), sorted(m.PROMPTS), sorted(m.JOB_ROLES), m.SHIM, m.PROMPTS]))");
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(JSON.parse(run.stdout), [['claude', 'codex'], ['claude', 'codex'], ['qa', 'worker'], ['qa', 'worker'], GUEST_LAYOUT.shim, LA_PROMPTS]);
+});
 
 // CQ-R10c: the host's job frame is the first stdin write of every session, and endAgentJobs proves the end of the guest
 // job only from a pgrep count it observed. KEY holds 'secret', so rejectsWith also proves that no error echoes it.

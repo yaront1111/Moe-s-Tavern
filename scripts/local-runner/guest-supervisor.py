@@ -4,15 +4,16 @@
 # its stdout: child bytes reach the host only inside base64 'output' frames, and termination only as this process's
 # own 'observation' frame from waitpid. Standard library only; the guest has python3 for cloud-init and no Node.
 # Modes: 'bridge' (CQ-R08b/c; CQ-R10b: one host job frame on stdin, then that agent CLI job as the AGENT_IDENTITY
-# account), 'materialize' (CQ-R09c: one snapshot from host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
+# account, CQ-R10d4: fixed headless argv and private shim-only MCP config), 'materialize' (CQ-R09c: one snapshot from
+# host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
 # WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
 # Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
 # unreadable export manifest or workspace root, an export over its bounds, or a malformed or disallowed job frame; 66 no
 # materialized workspace for the job; 71 the job could not start (child or agent socket: hello, then EOF, no
-# observation; or no AGENT_IDENTITY account or session home, or the export could not become it); 73 the workspace or its
+# observation; or no AGENT_IDENTITY account, session home or launch config, or the export could not become it); 73 the workspace or its
 # manifest already exists; 74 I/O failure or host EOF (child group killed), including EOF before a whole job frame; 75
 # SIGTERM, SIGHUP or SIGINT (child group killed, no observation); 76 host protocol violation (child group killed); 77 not
-# root. A bridge refusal before hello (65, 66, 74, and 71 for a missing account or session home) writes no frame, nor
+# root. A bridge refusal before hello (65, 66, 74, and 71 for a missing account, session home or launch config) writes no frame, nor
 # does 77.
 # Mode 'check' (CQ-R11a): one host check frame on stdin, then that approved command as the CHECK_IDENTITY account. It
 # shares the bridge's codes, and none writes a frame: 65 also for a malformed protected entry or a workspace entry reown
@@ -774,13 +775,24 @@ def export(out_fd, workspace=WORKSPACE, manifest=WORKSPACE_MANIFEST, drop=drop_t
         os.close(root)
 
 
-# CQ-R10b: the agent CLIs a bridge job may run, as JOBS[cli] = (executable, the credential names it may get). argv is
-# the executable alone; CQ-R10d installs the CLIs and owns their flags, prompt and MCP wiring.
+# CQ-R10b: JOBS[cli] = (executable, allowed credential names); keep the 2-tuple mirror in guest-bridge.mjs unchanged.
+# CQ-R10d4: fixed headless argv and shim-only config, never workspace files or a resumed session.
 JOBS = {'claude': ('/opt/moe/agents/claude', ('ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN')),
         'codex': ('/opt/moe/agents/codex', ('OPENAI_API_KEY', 'CODEX_API_KEY'))}
 AGENTS = '/opt/moe/agents'  # CQ-R10d3a installs every JOBS executable here
 MAX_AGENT_BYTES = 1073741824  # 2**30, mirrors agent-cache.mjs MAX_AGENT_BINARY_BYTES
 JOB_ROLES = ('worker', 'qa')
+SHIM = '/opt/moe/bin/moe-mcp-shim'  # GUEST_LAYOUT.shim in guest-bootstrap.mjs
+PROMPTS = {
+    'worker': 'Call moe.get_context for your assigned task first. You are the worker: follow nextAction and the approved implementation plan, then finish with moe.complete_task.',
+    'qa': 'Call moe.get_context for your assigned task first. You are QA: review against the definition of done, then finish with moe.qa_approve or moe.qa_reject.',
+}
+LAUNCH = {
+    'claude': (('-p', '{prompt}', '--mcp-config', '{config}', '--strict-mcp-config', '--dangerously-skip-permissions'),
+               '.moe-mcp.json', json.dumps({'mcpServers': {'moe': {'command': SHIM}}})),
+    'codex': (('exec', '--sandbox', 'danger-full-access', '--skip-git-repo-check', '{prompt}'), '.codex/config.toml',
+              '[mcp_servers.moe]\ncommand = "' + SHIM + '"\ndefault_tools_approval_mode = "approve"\n'),
+}
 JOB_PATH = '/usr/local/bin:/usr/bin:/bin'
 SESSIONS = '/var/lib/moe/sessions'
 CREDENTIAL = re.compile(r'[\x21-\x7e]{1,4096}')
@@ -828,12 +840,33 @@ def session_home(sessions, uid, gid):
     return home
 
 
+def prepare_launch(cli, role, home, uid, gid, exe):
+    tail, relative, content = LAUNCH[cli]
+    fds = [os.open(home, WALK)]
+    try:
+        parent, name = os.path.split(relative)
+        if parent:
+            os.mkdir(parent, 0o700, dir_fd=fds[0])
+            fds.append(os.open(parent, WALK, dir_fd=fds[0]))
+            os.fchown(fds[-1], uid, gid)
+        fds.append(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fds[-1]))
+        write_all(fds[-1], content.encode('utf-8'))
+        os.fsync(fds[-1])
+        os.fchown(fds[-1], uid, gid)
+    finally:
+        for fd in reversed(fds):
+            os.close(fd)
+    config = os.path.join(home, relative)
+    argv = [exe, *(arg.format(prompt=PROMPTS[role], config=config) for arg in tail)]
+    return argv, {'CODEX_HOME': os.path.join(home, '.codex')} if cli == 'codex' else {}
+
+
 # One bridge session runs one agent CLI job. The host's first frame, read before hello, picks the CLI, the role and the
-# one credential, which reaches the job only through its environment; nothing from the frame reaches argv. identity is
+# one credential, which reaches the job only through its environment; argv uses only the role's fixed prompt. identity is
 # (uid, gid, groups): by default the AGENT_IDENTITY account with groups [], which is setgroups([]); None keeps the
 # caller's groups, for a non-root test only. workspace, sessions, identity, jobs, agent_socket and peer_uid are
 # injectable from Python only (tests). A refusal writes no frame, starts no job and echoes nothing from the frame: 74
-# host EOF, 65 a malformed or disallowed frame, 71 no account, 66 no workspace owned by the job uid, 71 no session home.
+# host EOF, 65 a malformed or disallowed frame, 71 no account, 66 no workspace owned by the job uid, 71 no home or config.
 def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, jobs=JOBS, agent_socket=AGENT_SOCKET,
               peer_uid=peer_uid):
     try:
@@ -857,13 +890,14 @@ def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
         return os.EX_NOINPUT
     try:
         home = session_home(sessions, uid, gid)
+        argv, extra_env = prepare_launch(frame['cli'], frame['role'], home, uid, gid, jobs[frame['cli']][0])
     except OSError:
         return os.EX_OSERR
     secret = frame['credential']
     env = {'PATH': JOB_PATH, 'HOME': home, 'USER': AGENT_IDENTITY, 'LOGNAME': AGENT_IDENTITY, 'LANG': 'C.UTF-8',
-           'MOE_ROLE': frame['role'], secret['name']: secret['value']}
+           'MOE_ROLE': frame['role'], secret['name']: secret['value'], **extra_env}
     spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace}
-    return relay([jobs[frame['cli']][0]], out_fd, in_fd, agent_socket, uid, peer_uid, job={'env': env, 'spawn': spawn})
+    return relay(argv, out_fd, in_fd, agent_socket, uid, peer_uid, job={'env': env, 'spawn': spawn})
 
 
 # CQ-R11a: one approved check per fresh check VM. CHECK_IDENTITY is JOB_IDENTITIES[1] in guest-bootstrap.mjs; the id,

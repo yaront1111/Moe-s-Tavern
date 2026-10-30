@@ -1,0 +1,27 @@
+{
+  "id": "task-3fa69c192a2147fa8555b33c86ad2f82",
+  "epicId": "epic-be924fb8",
+  "title": "chore: gitignore moe-jetbrains/.kotlin/ (Kotlin daemon session files raise MOE_ATTRIBUTION_UNRESOLVED on landings)",
+  "description": "Observed 2026-10-30 at 07:33Z on two landings: V05 (102c9838) and R10d3 (5f4c6873). Each raised `MOE_ATTRIBUTION_UNRESOLVED` for `moe-jetbrains/.kotlin/sessions/kotlin-compiler-<n>.salive`. The Kotlin Gradle plugin writes those transient daemon-session files during every ./gradlew run. `git check-ignore` confirms that neither .gitignore nor moe-jetbrains/.gitignore covers `.kotlin/`, so every landing made during a Gradle build reports them as unattributed paths.\n\nFix: ignore the directory (e.g. `.kotlin/` in moe-jetbrains/.gitignore, which matches JetBrains' standard Kotlin ignore). Nothing under it is tracked today.",
+  "definitionOfDone": [
+    "`git check-ignore moe-jetbrains/.kotlin/sessions/x.salive` reports the matching ignore rule, and no tracked file is newly ignored: `git ls-files -ci --exclude-standard` prints nothing new.",
+    "The change touches only a .gitignore file."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 287.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:45:23.579Z",
+  "updatedAt": "2026-10-30T07:45:23.579Z"
+}
