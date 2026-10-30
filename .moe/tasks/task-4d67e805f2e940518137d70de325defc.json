@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:35:01.788Z",
-  "updatedAt": "2026-10-30T06:56:06.700Z",
+  "updatedAt": "2026-10-30T06:56:36.310Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:40:57.614Z",
     "plannedStepCount": 5,
@@ -158,7 +158,62 @@
   "filesModified": [
     "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
     "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "docs/MCP_SERVER.md",
+    ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+    ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json"
+  ],
+  "completionSummary": "claim_next_task's fileCollision entries now carry liveAssignee when the peer task is assigned to a registered, non-DEAD worker (the claim's own isTaskAssignedToInactiveWorker predicate, no idle heuristic); unassigned, DEAD-held and unregistered-held peers carry no key. The #workers notice @mentions each live assignee and the claimer (so their chat_wait wakes) and lists live peers before dormant ones; a dormant-only claim posts the old wording with no mention. File names are code-quoted (a raw '@scope' in a path used to parse as a mention); a backtick in a path is swapped for a quote; an id that is not one mention token, or is itself a group token (a seat named 'qa'), is never written with '@'. The collision scan now sits in a try/catch (logged, response omits fileCollision): before, a throw failed the tool AFTER the assignment and attempt were written. docs/MCP_SERVER.md: response shape + fileCollision[] bullet only. Tests: governanceFeatures.test.ts cases (a)-(g); RED run before the fix was 5 failed | 14 passed (a-e failing). Mutants M1 no mapping, M2 liveness predicate dropped, M3 no code-quoting, M4 no try/catch, M5 no token-grammar filter, M6 dormant listed first, M7 no group-token check: all killed by real test failures. Deviation from plan: state.createWorker only accepts [A-Za-z0-9_-] ids, so the 'worker x' case re-keys the in-memory worker record. Final git diff of the 3 files shows only this task's hunks (docs: @@ -1438 and @@ -1466); no foreign hunks ride this commit.",
+  "commits": [
+    {
+      "sha": "f4e99ab2178672579e901d9f4d6e417e6b119f8f",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-093a65d0@2026-10-30T06:49:12Z",
+      "paths": [
+        ".moe/tasks/task-2cd62d2c87ab4e118222a5a8b841db6c.json",
+        ".moe/tasks/task-2e8dda26dd9848c5bbb02e31424b99b8.json",
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+        ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts"
+      ],
+      "recordedBy": "worker-093a65d0",
+      "recordedAt": "2026-10-30T06:56:36.310Z",
+      "treeId": "fa6874186a25aa0a8d91945da766f554a6cb9fa3",
+      "status": "REVIEW",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        },
+        {
+          "path": "packages/moe-daemon/src/tools/claimNextTask.ts",
+          "taskId": "task-af83018e892149a1a18cd6a946edeba5"
+        }
+      ],
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
     "docs/MCP_SERVER.md"
   ],
-  "completionSummary": "claim_next_task's fileCollision entries now carry liveAssignee when the peer task is assigned to a registered, non-DEAD worker (the claim's own isTaskAssignedToInactiveWorker predicate, no idle heuristic); unassigned, DEAD-held and unregistered-held peers carry no key. The #workers notice @mentions each live assignee and the claimer (so their chat_wait wakes) and lists live peers before dormant ones; a dormant-only claim posts the old wording with no mention. File names are code-quoted (a raw '@scope' in a path used to parse as a mention); a backtick in a path is swapped for a quote; an id that is not one mention token, or is itself a group token (a seat named 'qa'), is never written with '@'. The collision scan now sits in a try/catch (logged, response omits fileCollision): before, a throw failed the tool AFTER the assignment and attempt were written. docs/MCP_SERVER.md: response shape + fileCollision[] bullet only. Tests: governanceFeatures.test.ts cases (a)-(g); RED run before the fix was 5 failed | 14 passed (a-e failing). Mutants M1 no mapping, M2 liveness predicate dropped, M3 no code-quoting, M4 no try/catch, M5 no token-grammar filter, M6 dormant listed first, M7 no group-token check: all killed by real test failures. Deviation from plan: state.createWorker only accepts [A-Za-z0-9_-] ids, so the 'worker x' case re-keys the in-memory worker record. Final git diff of the 3 files shows only this task's hunks (docs: @@ -1438 and @@ -1466); no foreign hunks ride this commit."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-093a65d0@2026-10-30T06:49:12Z",
+    "at": "2026-10-30T06:56:36.310Z"
+  }
 }

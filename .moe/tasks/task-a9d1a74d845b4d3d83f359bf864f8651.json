@@ -122,7 +122,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -142,7 +142,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:55.999Z",
-  "updatedAt": "2026-10-30T06:51:15.994Z",
+  "updatedAt": "2026-10-30T06:59:05.316Z",
   "dependsOn": [
     "task-9cc131704d214e66afc8a51a524b35c2"
   ],
@@ -150,7 +150,9 @@
     "firstClaimAt": "2026-10-26T08:35:49.789Z",
     "plannedStepCount": 7,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 7
+    "executedStepCount": 7,
+    "doneAt": "2026-10-30T06:59:05.315Z",
+    "wallClockMs": 339795526
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -160,7 +162,8 @@
   "priorBlockedReason": "A plan written now would be speculative. CQ-V04 dispatches required focused checks through the isolated check runner and publishes a pass only through the authenticated observation channel, and neither exists yet.\n1. The runner is CQ-R11 (BACKLOG, unplanned). It owns the fresh check environment, the environment identity that DoD1 must match against approval, and the post-run tree/index/HEAD re-measurement that DoD2 relies on.\n2. The trusted-pass channel is CQ-V03 (BLOCKED, for the same reason, on CQ-V02 and CQ-R11).\nCQ-V02 is planned (2026-10-26). It adds CheckRun outcome / planRevision / environment / dispatchId / attemptId, and a passedOn guard so skipped or inconclusive outcomes never count. That already covers most of DoD3. The planning analysis is in Serena memory task-<this id>-handoff. The task auto-unblocks to PLANNING when both prerequisites are DONE.",
   "contextFetchedBy": [
     "architect-4ae016fb",
-    "worker-fe18a9a9"
+    "worker-fe18a9a9",
+    "qa-952969be"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -327,5 +330,9 @@
     "packages/moe-daemon/src/tools/recordCheckDispatch.ts",
     "docs/MCP_SERVER.md",
     "packages/moe-daemon/src/delivery/policy.ts"
-  ]
+  ],
+  "completedAt": "2026-10-30T06:59:05.315Z",
+  "reviewCompletedAt": "2026-10-30T06:59:05.315Z",
+  "reviewSummary": "APPROVED CQ-V04. Reviewed completion b25131b on moe/work-2026-10-24.\n\nQA gate, fresh Linux snapshot of b25131b (native npm ci, env -i, node v24.21.0):\n- `cd packages/moe-daemon && npm test`: EXIT 0, 5543 passed, 16 skipped.\n- `npx tsc --noEmit`: EXIT 0. The test file also type-checks.\n\nSize: packages/ net 387; with docs, 399 non-board, within the cap.\n\nDoD:\n1. Defs and environment match approval: owedChecks plus admission refuse unowed, wrong-checkId, unlisted and absent cases, writing nothing. A malformed list is INVALID_INPUT. The replay returns duplicate:true.\n2. Inconclusive at exit 0 and a record_check_run forgery both fail (D). A newer tree resets the check (R3).\n3. Missing, skipped, inconclusive, timeout, infra-failure and code-failure all keep the token, and evaluation, projection and dependency agree (O).\n4. Gate exit 0.\n\nLegacy and observe are unchanged (L, D-legacy). Readiness is mocked only in the new file, and the real assertion is pinned.\n\nMutants: QA killed 9 of 9 with real failures:\n- drop auth;\n- drop the environment check;\n- accept any outcome;\n- drop checkId;\n- drop the revision check;\n- drop the undeclared token;\n- skip admission;\n- admit before the replay check;\n- apply the strong rule everywhere.\n\nAccepted deviation: admission applies to verified-local tasks only. V03's landed test dispatches an unowed legacy check, and evaluation enforces command, checkId and environment independently.\n\nNon-blocking:\n- approvedDefinitions duplicates the contract validation.\n- The reason text is generic (V12).\n- Bug task-43088e9b was filed.",
+  "requiredCheckAtDone": null
 }

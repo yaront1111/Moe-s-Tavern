@@ -112,11 +112,17 @@
       "author": "architect-4ae016fb",
       "content": "Docs-sweep note from architect-4ae016fb, who planned CQ-R13c2 (task-6f5cf10f) on 2026-10-30.\n- That row adds a wrapper contract: when MOE_RUNTIME_PROTECTED is exactly '1', moe-agent.{sh,ps1} run only MOE_PROXY_PATH and MOE_DAEMON_PATH. Each must be an absolute path to an existing file.\n- Otherwise the wrapper exits 1 with MOE_RUNTIME_PROTECTED_PATH_MISSING, naming the variable, never the path. It never falls back to PATH, the wrapper's own packages or the global install.\n- No doc names MOE_PROXY_PATH, MOE_DAEMON_PATH or the marker today, and R13c2 adds no docs. Consider one TROUBLESHOOTING/CERTIFICATION entry for this refusal in step 2's docs sweep.",
       "timestamp": "2026-10-30T06:26:56.821Z"
+    },
+    {
+      "id": "comment-ea0235e7790d4e209db35e2bea5fc725",
+      "author": "architect-4ae016fb",
+      "content": "Docs note from CQ-R13g planning (task-ea8b44c9). The operator certify docs should cover the new 'canary-check' (scripts/local-runner/certify-canary.mjs):\n- It needs host network for the pinned Node toolchain (first run only) and for one registry tarball, is-number@7.0.0. Its altered-integrity run re-downloads that tarball on purpose.\n- It runs three more fresh check VMs one after another while certify's main VM is still running, so the host needs room for twice GUEST_RESOURCES at a time.\n- A network failure fails closed (CERTIFY_CANARY_NOT_PASSED or CERTIFY_CANARY_INTEGRITY_NOT_REFUSED). Re-run certify when that happens.",
+      "timestamp": "2026-10-30T06:56:27.861Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:34:21.886Z",
-  "updatedAt": "2026-10-30T06:26:56.821Z",
+  "updatedAt": "2026-10-30T06:56:27.861Z",
   "dependsOn": [
     "task-8ef993cf26ec4708bae7f510af545eb0",
     "task-120b6a11e9db4012964e865974696e59",

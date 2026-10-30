@@ -77,7 +77,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:11:11.654Z",
-  "updatedAt": "2026-10-30T06:56:15.208Z",
+  "updatedAt": "2026-10-30T06:56:52.539Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:30:34.132Z",
     "plannedStepCount": 4,
@@ -166,7 +166,43 @@
   },
   "filesModified": [
     "scripts/tests/local-runner-vm-control.test.mjs",
+    "scripts/local-runner/vm-control.mjs",
+    ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+    ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+    ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+    ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json"
+  ],
+  "completionSummary": "vm-control canonicalProjectPath now ports the proxy/daemon rule: drive paths matched raw, then path.resolve (POSIX) or path.posix.normalize(raw) (win32) before the /mnt/<d> match. Relative and non-normalized /mnt spellings now share one key, so ownedLedgerDir picks one ledger dir and readDaemonInfo accepts the project's own daemon. Canonical spellings are byte-identical, pinned as literals taken from the pristine code (VC-L2). Tests VC-L2/L3/L4/M2 added, and the first three were red on the pristine file. Full local-runner set: 442 tests, 440 pass, 0 fail, 2 skipped. Windows node.exe on the vm-control suite: 10 pass, 2 skipped (VC-L3/M2 need a /mnt cwd), VC-L4 ran on real win32. Mutants M1-M5 are killed; M5 initially survived, so I added a '/home/U/X' row to VC-L2. Residual: a ledger under an old mis-keyed hash is orphaned for that spelling only. The suite is still not in CI (task-b8b8faba).",
+  "commits": [
+    {
+      "sha": "19a310c2b72da6f8352e92e5b8a0e56550e03d4e",
+      "ref": "moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-73c29a03@2026-10-30T06:53:14Z",
+      "paths": [
+        ".moe/tasks/task-48edc21bf9e2474689c3028d4463bbd2.json",
+        ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
+        ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
+        ".moe/tasks/task-ea8b44c9964442e3a5ca80b2a1cc2ad7.json",
+        "scripts/local-runner/vm-control.mjs",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "recordedBy": "worker-73c29a03",
+      "recordedAt": "2026-10-30T06:56:52.539Z",
+      "treeId": "f558b7d9e2d545d59b2f38bb6a96fbfa2a756083",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "touchedFiles": [
     "scripts/local-runner/vm-control.mjs"
   ],
-  "completionSummary": "vm-control canonicalProjectPath now ports the proxy/daemon rule: drive paths matched raw, then path.resolve (POSIX) or path.posix.normalize(raw) (win32) before the /mnt/<d> match. Relative and non-normalized /mnt spellings now share one key, so ownedLedgerDir picks one ledger dir and readDaemonInfo accepts the project's own daemon. Canonical spellings are byte-identical, pinned as literals taken from the pristine code (VC-L2). Tests VC-L2/L3/L4/M2 added, and the first three were red on the pristine file. Full local-runner set: 442 tests, 440 pass, 0 fail, 2 skipped. Windows node.exe on the vm-control suite: 10 pass, 2 skipped (VC-L3/M2 need a /mnt cwd), VC-L4 ran on real win32. Mutants M1-M5 are killed; M5 initially survived, so I added a '/home/U/X' row to VC-L2. Residual: a ledger under an old mis-keyed hash is orphaned for that spelling only. The suite is still not in CI (task-b8b8faba)."
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-73c29a03@2026-10-30T06:53:14Z",
+    "at": "2026-10-30T06:56:52.539Z"
+  }
 }
