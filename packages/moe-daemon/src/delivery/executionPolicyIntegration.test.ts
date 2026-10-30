@@ -16,9 +16,10 @@ import fs from 'fs';
 import path from 'path';
 import { ToolTestHarness } from '../tools/toolTestHarness.js';
 import { qaApproveTool } from '../tools/qaApprove.js';
-import { listReviewsForTask } from '../state/reviewStore.js';
+import { listReviewsForTask, resolveReviewedCandidate } from '../state/reviewStore.js';
 import { MoeError } from '../util/errors.js';
 import * as policy from './policy.js';
+import * as reviewBinding from './reviewBinding.js';
 import {
   dependencyShortfall, describeUnmetDependency, isDependencySatisfied, runDependencyUnblock, unmetDependsOn,
 } from '../state/dependencyUnblock.js';
@@ -201,6 +202,15 @@ async function refusedWithoutWrites(call: () => Promise<unknown>, codeName: stri
 }
 
 describe('CQ-M01f Q: qa_approve cannot bypass a strict task policy', () => {
+  // These rows seed no QA attempt, so CQ-V06's strict review binding would refuse them first
+  // (STEP_ENTRY_IDENTITY_REQUIRED, before any write; reviewBinding.test.ts pins that order). It is
+  // passed through to the pre-V06 candidate check here, so each row still reaches the readiness
+  // refusal it pins.
+  beforeEach(() => {
+    vi.spyOn(reviewBinding, 'assertReviewBinding').mockImplementation((state, task, params) =>
+      resolveReviewedCandidate(state, task.id, params.candidateId, 'qa_approve'));
+  });
+
   it.each(STRICT_SOURCES)('Q1 %s is refused EXECUTION_PROFILE_NOT_READY before any write', async (_label, settings, snapshot, extra) => {
     await seedReview(settings, snapshot, extra);
     expectNotReady(await refusedWithoutWrites(() => approve(), 'EXECUTION_PROFILE_NOT_READY'));

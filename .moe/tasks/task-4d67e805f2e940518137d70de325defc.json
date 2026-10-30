@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T06:35:01.788Z",
-  "updatedAt": "2026-10-30T07:50:23.468Z",
+  "updatedAt": "2026-10-30T07:51:18.787Z",
   "metrics": {
     "firstClaimAt": "2026-10-30T06:40:57.614Z",
     "plannedStepCount": 5,
@@ -168,7 +168,8 @@
     ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
     ".moe/tasks/task-ab029075e214413483456f26eef0269a.json",
     ".moe/tasks/task-d8fc3955a12949858a9be4f584a1cc67.json",
-    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json"
+    ".moe/tasks/task-ea57601db42448dabefbbbe6557a0b9d.json",
+    ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
   ],
   "completionSummary": "claim_next_task's fileCollision entries now carry liveAssignee when the peer task is assigned to a registered, non-DEAD worker (the claim's own isTaskAssignedToInactiveWorker predicate, no idle heuristic); unassigned, DEAD-held and unregistered-held peers carry no key. The #workers notice @mentions each live assignee and the claimer (so their chat_wait wakes) and lists live peers before dormant ones; a dormant-only claim posts the old wording with no mention. File names are code-quoted (a raw '@scope' in a path used to parse as a mention); a backtick in a path is swapped for a quote; an id that is not one mention token, or is itself a group token (a seat named 'qa'), is never written with '@'. The collision scan now sits in a try/catch (logged, response omits fileCollision): before, a throw failed the tool AFTER the assignment and attempt were written. docs/MCP_SERVER.md: response shape + fileCollision[] bullet only. Tests: governanceFeatures.test.ts cases (a)-(g); RED run before the fix was 5 failed | 14 passed (a-e failing). Mutants M1 no mapping, M2 liveness predicate dropped, M3 no code-quoting, M4 no try/catch, M5 no token-grammar filter, M6 dormant listed first, M7 no group-token check: all killed by real test failures. Deviation from plan: state.createWorker only accepts [A-Za-z0-9_-] ids, so the 'worker x' case re-keys the in-memory worker record. Final git diff of the 3 files shows only this task's hunks (docs: @@ -1438 and @@ -1466); no foreign hunks ride this commit.",
   "commits": [
@@ -205,6 +206,28 @@
         }
       ],
       "pushed": true
+    },
+    {
+      "sha": "b6a66475cbf1911b6c0db78f49ca312661dce190",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "qa",
+      "sessionId": "qa-ba3f4f35@2026-10-30T07:45:49Z",
+      "paths": [
+        ".moe/tasks/task-4d67e805f2e940518137d70de325defc.json",
+        ".moe/tasks/task-801272c49c0447cc944e6aaa2963f85f.json"
+      ],
+      "recordedBy": "qa-ba3f4f35",
+      "recordedAt": "2026-10-30T07:51:18.787Z",
+      "treeId": "804dd0e3ceb9e6d09f0b503401541e8deddcb5b5",
+      "status": "DONE",
+      "contested": [
+        {
+          "path": "docs/MCP_SERVER.md",
+          "taskId": "task-66e8d7d1e9ef4ba281cdb2f505d47e7d"
+        }
+      ],
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -212,12 +235,15 @@
     "packages/moe-daemon/src/tools/claimNextTask.ts",
     "docs/MCP_SERVER.md"
   ],
-  "unattributedPaths": [],
+  "unattributedPaths": [
+    "packages/moe-daemon/src/delivery/executionPolicyIntegration.test.ts",
+    "packages/moe-daemon/src/delivery/executionPolicyLifecycle.test.ts"
+  ],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-093a65d0@2026-10-30T06:49:12Z",
-    "at": "2026-10-30T06:56:36.310Z"
+    "kind": "checkpoint",
+    "sessionId": "qa-ba3f4f35@2026-10-30T07:45:49Z",
+    "at": "2026-10-30T07:51:18.787Z"
   },
   "completedAt": "2026-10-30T07:50:23.468Z",
   "reviewCompletedAt": "2026-10-30T07:50:23.468Z",

@@ -376,7 +376,9 @@ describe('B: rollback', () => {
       expect(await callTool('moe.wait_for_task', { statuses: ['WORKING'], workerId: W, timeoutMs: 1000 }))
         .toMatchObject({ hasNext: false, timedOut: true });
       await expectNotReady(callTool('moe.set_task_status', { taskId: 'task-Q', status: 'DONE' }));
-      await expectNotReady(callTool('moe.qa_approve', { taskId: 'task-Q', workerId: QA, summary: SUMMARY }));
+      // CQ-V06: a strict review first needs QA's own attempt identity; readiness still refuses after it.
+      expect((await refusal(callTool('moe.qa_approve', { taskId: 'task-Q', workerId: QA, summary: SUMMARY }))).codeName)
+        .toBe('STEP_ENTRY_IDENTITY_REQUIRED');
       expect(listReviewsForTask(h.state, 'task-Q')).toEqual([]);
       expect(((await context('task-D')).task as Row).dependsOnUnmet).toEqual(['task-P']);
       for (const id of ['task-S', 'task-Q', 'task-P']) expect((await policyOf(id))?.effectiveProfile).toBe('verified-local');

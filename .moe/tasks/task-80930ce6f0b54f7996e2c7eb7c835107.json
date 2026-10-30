@@ -1,0 +1,28 @@
+{
+  "id": "task-80930ce6f0b54f7996e2c7eb7c835107",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: daemon HTTP /health checks no Host header, so a DNS-rebinding browser page can read the daemon's pid and project path",
+  "description": "Found by worker-fe18a9a9 on CQ-RF05 (task-b439d7fb), whose decision record docs/design/protected-profile-threat-model.md places browser pages inside the threat model. Problem class: a loopback HTTP endpoint answers any Host. packages/moe-daemon/src/index.ts:669 serves GET /health with pid, projectPath, version and stats, and never checks req.headers.host. The WebSocket Origin rule (task-801272c4) does not cover plain HTTP. Fix direction: answer /health only for a loopback-literal or localhost Host (plus the bind address), else 403; add vitest coverage. This row sits beside the HIGH row task-724e31fa (epic-be924fb8), and the governor may move it there. Keep the row's text at problem-class level, because .moe/tasks is pushed.",
+  "definitionOfDone": [
+    "GET /health with a Host other than a loopback literal, localhost or the daemon's own bind address (with or without the port) gets 403 and no body fields; the existing clients (daemon CLI probe, launchers, IDE plugins) still pass.",
+    "vitest covers the allowed and refused Host values, including an absent Host.",
+    "docs/MCP_SERVER.md or docs/ARCHITECTURE.md notes the Host rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BACKLOG",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 286.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-10-30T07:52:38.398Z",
+  "updatedAt": "2026-10-30T07:52:38.398Z"
+}
