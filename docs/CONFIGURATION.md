@@ -13,7 +13,7 @@ This document covers all configuration options for Moe's Tavern.
 | `MOE_PROJECT_PATH` | Path to project containing `.moe/` folder | Current directory | `/home/user/myproject` |
 | `MOE_DEFAULT_PORT` | WebSocket/HTTP server port (auto-scans upward if taken) | `9876` | `9900` |
 | `MOE_PORT_RANGE` | How many ports to scan past the default | `50` | `100` |
-| `MOE_BIND_HOST` | Bind address (recorded as `bindHost` in daemon.json when non-loopback; WSL agent mode uses `0.0.0.0`) | `127.0.0.1` | `0.0.0.0` |
+| `MOE_BIND_HOST` | Bind address or `wsl`: loopback plus the non-internal IPv4 addresses of each `vEthernet (WSL...)` adapter, on one port. Recorded as `bindHost` in daemon.json for values other than `127.0.0.1`, including the literal `wsl`. | `127.0.0.1` | `wsl` |
 | `MOE_SHUTDOWN_TIMEOUT_MS` | Grace period for clean shutdown | `10000` | `5000` |
 | `LOG_LEVEL` | Logging verbosity | `info` | `debug`, `warn`, `error` |
 | `LOG_MAX_SIZE_MB` | Max activity.log size before rotation | `10` | `5` |
@@ -24,6 +24,8 @@ This document covers all configuration options for Moe's Tavern.
 (Advanced tuning — see `packages/moe-daemon/src/index.ts` and the util that reads each: port/lock `MOE_SOCKET_TIMEOUT_MS`, `MOE_PORT_CHECK_INTERVAL_MS`, `MOE_PORT_READY_TIMEOUT_MS`, `MOE_LOCK_RETRY_DELAY_MS`, `MOE_LOCK_STALE_TIMEOUT_MS`, `MOE_HTTP_CLOSE_TIMEOUT_MS`; state/limits `MOE_STATE_LOAD_TIMEOUT_MS`, `MOE_MCP_MAX_BATCH_SIZE`, `MOE_MAX_COMMENTS_PER_TASK`, `MOE_MAX_COMMITS_PER_TASK` (cap on `task.commits`, default 50, newest kept); rate limiting `MOE_RATE_LIMIT_ENABLED`, `MOE_RATE_LIMIT_WINDOW_MS`, `MOE_RATE_LIMIT_MAX_REQUESTS`; proposal cleanup `MOE_PROPOSAL_PURGE_INTERVAL_MS`, `MOE_PROPOSAL_PURGE_AGE_MS`, `MOE_PROPOSAL_SNAPSHOT_RETENTION_MS`; log compression `LOG_COMPRESSION_TIMEOUT_MS`.)
 
 **WebSocket Origin rule.** The daemon refuses any WebSocket upgrade that carries an `Origin` header (`Sec-WebSocket-Origin` too), on every path (`/ws`, `/mcp`, `/runner`), with HTTP 403 before any message is processed. That includes the values `null` and empty. Browsers always send `Origin` on a WebSocket upgrade and apply no CORS to it. No Moe client sends one: the IDE plugins, moe-proxy, the Claude plugin hook and the local runner. The allowed set is empty, and it has no setting or environment knob. `/runner` still requires its key on top of this rule. See `docs/TROUBLESHOOTING.md`, **WebSocket upgrade refused with HTTP 403**.
+
+`--host wsl` selects the same mode and takes precedence over `MOE_BIND_HOST`. With no WSL adapter (mirrored networking or a non-Windows host), it binds only loopback. JetBrains' **Run Agents in WSL** mode uses `wsl` once the corresponding launcher update is installed; older launchers use `0.0.0.0`. An explicit `--host 0.0.0.0` still listens on every IPv4 interface and is **not recommended**.
 
 ### Proxy Configuration
 

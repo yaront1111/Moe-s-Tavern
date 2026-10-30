@@ -150,6 +150,16 @@ cat .moe/daemon.json
 
 ---
 
+### WSL agents cannot reach the Windows daemon
+
+**Solution:** Start the Windows daemon with `--host wsl` (or `MOE_BIND_HOST=wsl`). This binds loopback plus the IPv4 addresses of its WSL adapters, not every interface. In NAT mode agents reach it through the WSL gateway, which is the Windows adapter address; mirrored networking uses loopback. Without a WSL adapter, only loopback is bound.
+
+- Allow the daemon's `node.exe` through Windows Firewall for the WSL adapter/subnet; do not open it to the whole LAN.
+- Restart the daemon after WSL restarts: the adapter address can change, and listeners are resolved only at daemon startup.
+- If automatic host discovery fails, set `MOE_DAEMON_HOST` in the WSL agent environment to the reachable Windows host address (gateway in NAT mode, `127.0.0.1` in mirrored mode). This overrides the client's destination, not the daemon's bind addresses.
+
+---
+
 ### WebSocket upgrade refused with HTTP 403
 
 **Symptom:** A client's WebSocket handshake to `/ws`, `/mcp` or `/runner` gets `HTTP/1.1 403 Forbidden`. The daemon log shows a warning: `Refused WebSocket upgrade: Origin not allowed`, with the remote address, the path and a truncated origin.

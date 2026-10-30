@@ -17,6 +17,7 @@ import { healMassDeletion } from './state/massDeletionHeal.js';
 import { McpAdapter } from './server/McpAdapter.js';
 import { MoeWebSocketServer } from './server/WebSocketServer.js';
 import { ensureRunnerKey } from './server/runnerChannel.js';
+import { WSL_BIND_HOST, resolveBindHosts, listenOnHosts } from './server/bindHosts.js';
 import { backfillTaskMetrics } from './state/backfills/backfillTaskMetrics.js';
 import { reconcileRunningAttempts } from './state/attemptStore.js';
 import { runDoctor } from './commands/doctor.js';
@@ -71,10 +72,10 @@ const LOOPBACK_PROBE_TIMEOUT_MS = 500;
 
 /**
  * Address local probes (port scans, readiness checks) should connect to for a
- * given bind host. Wildcard binds include loopback; a specific address does not.
+ * given bind host. Wildcard and WSL binds include loopback; a specific address does not.
  */
 function probeHostFor(bindHost: string): string {
-  return bindHost === '0.0.0.0' || bindHost === '::' ? DEFAULT_BIND_HOST : bindHost;
+  return bindHost === '0.0.0.0' || bindHost === '::' || bindHost === WSL_BIND_HOST ? DEFAULT_BIND_HOST : bindHost;
 }
 
 function daemonInfoPath(projectPath: string): string {
@@ -438,11 +439,15 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function findAvailablePort(preferred: number, host: string = DEFAULT_BIND_HOST): Promise<number> {
+async function findAvailablePort(preferred: number, host: string | readonly string[] = DEFAULT_BIND_HOST): Promise<number> {
+  const hosts = typeof host === 'string' ? [host] : host;
   for (let i = 0; i < PORT_RANGE; i += 1) {
     const port = preferred + i;
-    const available = await isPortAvailable(port, host);
-    if (available) return port;
+    let available = true;
+    for (const address of hosts) {
+      if (!await isPortAvailable(port, address)) { available = false; break; }
+    }
+    if (available && hosts.length > 0) return port;
   }
   throw new Error('No available port found');
 }
@@ -607,6 +612,14 @@ async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> 
 
 async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
   const host = bindHost || DEFAULT_BIND_HOST;
+  let hosts = [host];
+  if (host === WSL_BIND_HOST) {
+    try { hosts = resolveBindHosts(host, os.networkInterfaces()); }
+    catch (err) {
+      logger.warn({ err }, 'Could not read WSL adapters; binding loopback only');
+      hosts = [DEFAULT_BIND_HOST];
+    }
+  }
   if (await existingDaemonBlocksStart(projectPath)) return;
 
   // Acquire lock to prevent race conditions
@@ -628,7 +641,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   let port: number;
   let state: StateManager;
   try {
-    port = await findAvailablePort(preferredPort || DEFAULT_PORT, host);
+    port = await findAvailablePort(preferredPort || DEFAULT_PORT, hosts);
     state = new StateManager({ projectPath });
     await state.load();
     // state.load() above populates state.attempts, so both passes below see the
@@ -665,7 +678,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   const startTime = Date.now();
 
   // Create HTTP server for health endpoint
-  const httpServer = http.createServer((req, res) => {
+  const handler: http.RequestListener = (req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       // Perform health checks
       const checks: { name: string; healthy: boolean; message?: string }[] = [];
@@ -708,7 +721,8 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       res.writeHead(426, { 'Content-Type': 'text/plain' });
       res.end('Upgrade Required');
     }
-  });
+  };
+  const httpServer = http.createServer(handler);
 
   const mcpAdapter = new McpAdapter(state);
   try {
@@ -720,11 +734,15 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   const wsServer = new MoeWebSocketServer(httpServer, state, mcpAdapter);
 
   // Wait for server to actually start listening
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once('listening', resolve);
-    httpServer.once('error', reject);
-    httpServer.listen(port, host);
-  });
+  let servers: http.Server[];
+  try {
+    servers = await listenOnHosts(httpServer, hosts, port, handler);
+  } catch (error) {
+    releaseLock(projectPath);
+    await wsServer.close();
+    throw error;
+  }
+  logger.info({ hosts, port }, 'Daemon listening');
 
   // Verify port is actually accepting connections
   const portReady = await waitForPortListening(port, PORT_READY_TIMEOUT_MS, probeHostFor(host));
@@ -821,11 +839,13 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       logger.error({ error }, 'Error closing WebSocket server');
     }
 
-    try {
-      await closeHttpServer(httpServer);
-    } catch (error) {
-      logger.error({ error }, 'Error closing HTTP server');
-    }
+    await Promise.all(servers.map(async (server) => {
+      try {
+        await closeHttpServer(server);
+      } catch (error) {
+        logger.error({ error }, 'Error closing HTTP server');
+      }
+    }));
 
     // Cancel any pending SPEED mode auto-approval timeouts
     clearAllSpeedModeTimeouts();
@@ -1227,6 +1247,7 @@ export {
   stopDaemon,
   statusDaemon,
   existingDaemonBlocksStart,
+  findAvailablePort,
   isPortAvailable,
 };
 
