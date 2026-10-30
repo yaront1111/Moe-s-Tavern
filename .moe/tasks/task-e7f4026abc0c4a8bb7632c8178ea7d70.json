@@ -64,20 +64,25 @@
     {
       "stepId": "step-5",
       "description": "VERIFY ONCE. Edit only what this step's findings need, and report it in modifiedFiles.\n\nNever run the launcher tests in the shared tree: its moe-agent.{sh,ps1} carry peers' dirty edits. First build a snapshot with git archive HEAD of scripts/ and .github/ (the CI row reads ci.yml). Overlay this task's four files only, and cmp-verify each one.\n\n1. Linux. In the snapshot, run `node --test scripts/tests/daemon-json-cap.test.mjs`. That covers bash, plus pwsh if installed.\n\n2. Windows. Copy the snapshot's scripts/ and .github/ to a Windows temp dir and run the same file with Windows node (mem:gotcha-qa-windows-launcher-tests-from-wsl). That covers Git Bash, PowerShell 5.1 and pwsh 7.\n- Report tests, pass, fail and skipped per engine.\n- No identity row may be skipped except by the documented engine or OS skips.\n\n3. Parity. Run `bash scripts/tests/parity-check.sh` in the snapshot, and parity-check.ps1 on Windows.\n\n4. Mutants, on snapshot copies only. A kill counts only when assertions fail.\n- M1: sh treats rc 3 as 0. The sh foreign rows fail.\n- M2: ps1 ignores the foreign verdict. The ps1 foreign rows fail.\n- M3: the comparable rule drops /mnt/<d> folding, in both sh and ps1. The same-project spelling rows fail.\n- M4: a relative served path is judged. The relative row fails.\n\n5. DoD 2 evidence. In a Linux-native snapshot of packages/moe-proxy (mem:gotcha-daemon-linux-snapshot-gate), run `npm ci`, then `npm test`. It must exit 0, and task-86093c3e's identity tests must run.\n\n6. DoD 3 evidence, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If the lease is queued, call moe.report_blocked with that resourceId. Release it in every exit path. Run:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun --tests <task-90664db1's identity test classes>\"\nCite task-90664db1's commit.\n\n7. GATE for complete_task (DoD 1). In the snapshot, run fresh, exit 0:\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\nSupply its output and the Windows run's counts, and cite task-86093c3e's and task-90664db1's commits for DoD 2 and DoD 3.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-10-30T11:03:16.880Z"
+      "note": "RESUME: reverified task/comments, checkpoint 9fa1fcb3 and root files. start_step correctly refused because step5 was already IN_PROGRESS; continued that step. No new project edits; peers' dirty paths untouched. Fresh scripts/.github archive b2138fba plus only the four owned files, cmp-checked (Linux /tmp/e7f4-resume.mvnO0m/snapshot; Windows C:/Users/Yaron/AppData/Local/Temp/e7f4-resume.IXcXBP). Linux daemon-json-cap 55 tests: bash10 + static3 pass, 42 documented PS skips, 0fail; parity-check.sh and bash-n pass. Windows same suite 55: GitBash7pass/3 documented Windows-owned-branch skips, PS5.1 21/21, PS7 21/21, static3; 52pass/0fail. parity-check.ps1 pass. Reran all nine mutants on isolated copies: assertions kill M1sh3, M3sh2, M4sh1, M2ps2, M3ps2, M4ps2, ceq2, mount-case2, culture-segments6; originals restored/cmp-checked. Pure-archive proxy fresh npm ci daemon+proxy and npm test: 6files/263pass, identity75; prerequisite6c55aefa DONE/landed per epicSiblings. JetBrains lease granted, focused gradlew.bat test --rerun --tests com.moe.services.DaemonIdentityTest --tests com.moe.services.MoeProjectForeignDaemonTest exit0: fresh XML19+10, 0fail/error/skip, :test executed; lease released to next waiter. Helper+helper tests equal ff5933d9; service/foreign tests include later landed dependency fixes, no dirty Kotlin. Logs/XML/mutants in /tmp/e7f4-resume.mvnO0m. Completion gate will rerun after final review.",
+      "startedAt": "2026-10-30T11:03:16.880Z",
+      "completedAt": "2026-10-30T11:26:08.099Z"
     },
     {
       "stepId": "step-6",
       "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read this row's diff together with task-86093c3e's and task-90664db1's, once as the px4swarm seat and once as a hostile process holding the port.\n\n- Can a seat still register, claim or bridge to a foreign daemon by any path? Check:\n  - --no-start-daemon;\n  - a resumed seat;\n  - a later loop iteration after the daemon changed (the proxy's per-RPC probe);\n  - MOE_DAEMON_HOST set;\n  - the foreign branch's gateway candidate.\n\n- Can a spelling difference refuse a seat's own daemon? Check:\n  - the D:\\, D:/, /mnt/d and msys /d forms;\n  - case;\n  - a trailing slash;\n  - '.' and '..';\n  - UNC;\n  - a relative served path.\n  Do the sh, ps1, proxy, Kotlin and daemon rules agree on every row?\n\n- Is every read bounded in time and bytes? Can a slow or endless /health stall pre-flight for longer than about 3 s per candidate?\n\n- Can set -e abort on the probe's exit code? Can the ps1 catch swallow the refusal and start a daemon?\n\n- Does the message print anything beyond the two paths and host:port? Is it byte-identical in sh and ps1?\n\n- Rails:\n  - regression tests exist for each slice;\n  - error handling: every failure is unknown and keeps today's behavior;\n  - no MCP contract change;\n  - existing daemon.json files still parse;\n  - no forbidden pattern.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Loaded adversarial-self-review; read original completion6a1b7953, QA checkpoint9fa1fcb3 and prerequisite/current proxy+Kotlin identity changes. No new project files modified this resume. Concurrency: probes only read; refusal starts/deletes/exports nothing, sockets close; accepted health→socket race and unknown fail-open mean this is not authentication. No-start, resume and later wrapper RPCs still spawn the per-connect/reconnect-guarded proxy; host override and gateway sh candidate stop on rc3. PS exits rather than throws inside catch; sh captures rc under set-e. Inputs bounded (64KiB body, sh3s watchdog, PS3s deadline), relative/missing/malformed identity unknown, served diagnostic sanitized/capped; exact three-line parity/BOM verified. Drive/mount/dot/trailing/case and UNC regressions pass; ordinal comparisons retain Unicode distinctions. Not claiming all client rules identical: pre-existing proxy/daemon POSIX/UNC/WSL-share drift reproduced, filed same-epic bug task-25ba449ab87d4039a283426f07302cbc, no inline scope growth. No MCP/state-format changes or new forbidden patterns. Regression gate rerun fresh after review in /tmp/e7f4-final-gate.Ibjcqp at3891660a + cmp-matched four owned paths:55 tests/13pass/0fail/42 documented engine skips, parity PASS. Windows52pass/0fail/3 documented GitBash skips; proxy263pass; leased JetBrains19+10pass; nine assertion-killed mutants. Hashes/root diff-check still unchanged/clean. Original4-file scope cumulative+434/-42 net392; no new size growth.",
+      "startedAt": "2026-10-30T11:26:16.401Z",
+      "completedAt": "2026-10-30T11:29:25.806Z"
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": "worker-262588d0",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
@@ -110,11 +115,17 @@
       "author": "worker-262588d0",
       "content": "Step 5 partial evidence (all isolated snapshots, bb2f846a + own 4-file overlay, cmp-matched): Linux node --test scripts/tests/daemon-json-cap.test.mjs: 55 tests, 13 pass/0 fail/42 documented PS skips (bash 10/10 + 3 static). Windows same suite: 55 tests, 52 pass/0 fail/3 documented Git Bash Windows-owned-branch skips; Git Bash 7/10, PS5.1 21/21, PS7 21/21, static 3/3. parity-check.sh, parity-check.ps1, bash -n and git diff --check pass. Proxy fresh npm ci daemon+proxy then npm test in /tmp/e7f4-proxy.y0kdQC: 6 files/263 pass, identity 75. Nine isolated mutants killed by named assertion failures: M1-sh 3, M3-sh 2, M4-sh 1, M2-ps 2, M3-ps 2, M4-ps 2; -ceq substitution 2; case-insensitive mount 2; culture-aware segments 6. Sources restored/cmp-checked. No JetBrains check run this session: jetbrains-gradle remains held by RF04 task-de91373a/worker-73c29a03; after doing the non-resource work per nextAction and rechecking, this row is still queue #1. Will park for that resource. Step 5 remains IN_PROGRESS; step 6 adversarial review and fresh completion gate remain. No unrun check is claimed passing.",
       "timestamp": "2026-10-30T11:05:11.599Z"
+    },
+    {
+      "id": "comment-5e5f4482de5f44949fedae8d751d977b",
+      "author": "worker-262588d0",
+      "content": "Adversarial review: the QA fix preserves ordinal distinctions (including culture-ignorable segments) and literal /mnt case; all 12 added regressions pass and corresponding mutants fail. No new root code edits this resume; checkpoint9fa1fcb3 contains the fix. Reviewed no-start/resume/later-RPC paths through the proxy, host override/gateway candidate refusal, bounded probes, refusal cleanup, BOM, old daemon.json compatibility and exact sh/ps1 messages. Accepted limitations remain unknown fail-open and /health→socket TOCTOU, not an authentication protocol. Found pre-existing shared-normalizer parity drift outside this four-file scope: proxy/daemon fold POSIX case on native Windows and disagree on UNC/WSL-share forms. Reproduced with built b2138fba helpers on Linux+Windows; filed task-25ba449ab87d4039a283426f07302cbc rather than modifying sibling utilities. Therefore not claiming universal cross-client path parity. Fresh verification details: step5 note and /tmp/e7f4-resume.mvnO0m/{windows-gate.log,windows-parity.log,proxy-gate.log,jetbrains-gate.log,jetbrains-xml/,mutants.log}. JetBrains lease released. Final launcher gate running fresh for complete_task.",
+      "timestamp": "2026-10-30T11:28:02.638Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T07:43:02.972Z",
-  "updatedAt": "2026-10-30T11:06:35.850Z",
+  "updatedAt": "2026-10-30T11:29:46.844Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T07:43:11.337Z",
@@ -124,7 +135,7 @@
     "firstClaimAt": "2026-10-30T07:45:40.066Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 10,
+    "executedStepCount": 12,
     "rejectCount": 1,
     "reopenCount": 1
   },
@@ -144,7 +155,9 @@
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5",
+    "step-6"
   ],
   "failedDodItems": [
     {
@@ -176,27 +189,21 @@
   "planApprovedAt": "2026-10-30T07:59:43.710Z",
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-10-30T10:25:53.684Z",
-  "reviewStartedAt": "2026-10-30T10:51:47.794Z",
+  "reviewStartedAt": "2026-10-30T11:29:46.842Z",
   "verification": {
-    "command": "set -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\nSNAP=$(mktemp -d /tmp/e7f4-gate.XXXXXX)\ngit archive \"$REV\" scripts .github | tar -x -C \"$SNAP\"\nfor f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/daemon-json-cap.test.mjs; do cp \"$f\" \"$SNAP/$f\"; cmp \"$f\" \"$SNAP/$f\"; done\ncd \"$SNAP\"\numask 022\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\necho \"gate ok rev=$REV snap=$SNAP\"",
+    "command": "set -euo pipefail\ncd /mnt/d/projexts/moes\nREV=$(git rev-parse HEAD)\nSNAP=$(mktemp -d /tmp/e7f4-final-gate.XXXXXX)\ngit archive \"$REV\" scripts .github CLAUDE.md | tar -x -C \"$SNAP\"\nfor f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/daemon-json-cap.test.mjs CLAUDE.md; do cp \"$f\" \"$SNAP/$f\"; cmp \"$f\" \"$SNAP/$f\"; done\ncd \"$SNAP\"\numask 022\nnode --test scripts/tests/daemon-json-cap.test.mjs && bash scripts/tests/parity-check.sh\necho \"gate ok rev=$REV snap=$SNAP\"",
     "exitCode": 0,
-    "outputTail": "✔ bash: identity: a Windows-owned daemon.json whose daemon serves another project is refused, untouched\n✔ bash: identity: a Windows-owned daemon.json whose daemon serves this project in another spelling is adopted\n✔ bash: identity: a Windows-owned daemon.json whose daemon names a relative project is adopted (unknown)\n✔ bash: identity: a live pid whose daemon serves another project is refused\n✔ bash: identity: a live pid whose 503 unhealthy daemon serves another project is refused\n✔ bash: identity: a live pid whose daemon serves this project is adopted\n✔ bash: identity: a live pid with an unreachable /health is adopted as today\n(30 PowerShell rows skipped: 5.1 is Windows-only, pwsh not installed on Linux)\n✔ CI runs this suite on Linux and Windows\nℹ tests 43\nℹ pass 13\nℹ fail 0\nℹ skipped 30\nPASS parity-check.sh\ngate ok rev=980c9a39854ac4e78225b7dc9f2045e2f490181e snap=/tmp/e7f4-gate.PzTO0l\n\nWindows run of the same file (Windows node.exe, same snapshot files): 43 tests / 40 pass / 0 fail / 3 skipped. Git Bash 7 pass + 3 documented skips (Windows-owned branch never runs under OSTYPE msys); PowerShell 5.1 15/15; pwsh 7 15/15. parity-check.ps1 PASS.",
-    "reportedAt": "2026-10-30T10:51:47.794Z",
+    "outputTail": "✔ CI runs this suite on Linux and Windows (0.558401ms)\nℹ tests 55\nℹ suites 0\nℹ pass 13\nℹ fail 0\nℹ cancelled 0\nℹ skipped 42\nℹ todo 0\nℹ duration_ms 1154.794731\nPASS parity-check.sh\ngate ok rev=3891660ade2f9cd2b29a1e0dc86ecbe5420b2dff snap=/tmp/e7f4-final-gate.Ibjcqp\n\nWindows same suite (cmp-identical owned files): 55 tests, 52 pass, 0 fail, 3 documented Git Bash Windows-owned-branch skips. Git Bash7 pass/3skip; PowerShell5.1 21/21; PowerShell7 21/21; static3/3. PASS parity-check.ps1.\nProxy npm test: 6 files,263 passed; daemonIdentity75. JetBrains fresh XML: DaemonIdentityTest19 + MoeProjectForeignDaemonTest10,0fail/errors/skips. Resource released.",
+    "reportedAt": "2026-10-30T11:29:46.842Z",
     "source": "agent-reported"
   },
   "filesModified": [
     "scripts/tests/daemon-json-cap.test.mjs",
     "scripts/moe-agent.sh",
     "scripts/moe-agent.ps1",
-    "CLAUDE.md",
-    ".moe/epics/epic-dce3a64f31a44d948f771137a2c0dbed.json",
-    ".moe/tasks/task-01f37ac63316409ab581f5a189002cb8.json",
-    ".moe/tasks/task-30066ccdeb6042c3b5c89a7a31833d14.json",
-    ".moe/tasks/task-6fc0096b9fff4c45904cfbce7833ad2d.json",
-    ".moe/tasks/task-dfbda1a8230a4fe5b57dbe512fa62a33.json",
-    ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json"
+    "CLAUDE.md"
   ],
-  "completionSummary": "DoD 1: both launchers refuse a live daemon whose /health projectPath is another project.\n- moe-agent.sh: probe_daemon_health takes the expected project. Exit 3 means foreign; the comparable rule (ntpath/posixpath) mirrors comparableProjectPath. The probe has a 3 s total watchdog, a 64 KiB cap and no env proxy. The Windows-owned branch refuses on rc 3, and so does the PID branch, which now probes after kill -0. Git Bash compares `cygpath -m` output; a cygpath failure counts as unknown.\n- moe-agent.ps1: Get-MoeComparableProjectPath and Get-MoeDaemonIdentity, probed after Get-Process. On foreign it exits 1 inside the try.\n- Both print the same three MOE_DAEMON_FOREIGN_PROJECT lines naming both projects. They delete, start and export nothing. Every probe failure is unknown and keeps today's behavior.\n- DEVIATION: the ps1 probe is a raw HTTP/1.0 TcpClient with one deadline, not HttpWebRequest. HttpWebRequest's per-read timeout restarts on every trickled byte, the defect QA rejected in the JetBrains probe. Ad-hoc trickle tests end at about 3.0 s on 5.1 and 7.\n- CLAUDE.md: two clauses. Size +414/-42, net 372.\nTests: daemon-json-cap.test.mjs gains 'identity:' rows. Runs are async with a fake /health that counts requests, and the ps1 fixtures moved off 9876.\n- RED on HEAD launchers: Linux 5 failures, Windows 16.\n- GREEN on Linux: 13 pass, 30 PowerShell skips.\n- GREEN on Windows: 40 pass, 0 fail, 3 documented Git Bash skips (Git Bash 7/3, PowerShell 5.1 15/15, pwsh 7 15/15).\n- parity-check.sh and parity-check.ps1 PASS.\n- Mutants M1-M4 for sh and ps1 are all killed by assertions.\n- Live check against the real moes daemon: px4swarm is refused (sh via the WSL gateway, ps1 on 5.1 and 7) and moes is judged same.\nDoD 2 (task-86093c3e, 6c55aefa): proxy npm test in a Linux-native snapshot at 980c9a39 passes, 6 files / 263 tests, daemonIdentity 75.\nDoD 3 (task-90664db1, ff5933d9): run under the jetbrains-gradle lease (released afterwards). DaemonIdentityTest 19/19 and MoeProjectForeig",
+  "completionSummary": "Reopen-1 QA fixes are checkpointed in 9fa1fcb3, atop original launcher/docs completion6a1b7953. PowerShell uses ordinal normalized equality (not -eq/-ceq), case-sensitive /mnt matching, and ordinal empty/dot/parent segment handling; drive/UNC lowercasing retained. Six regression rows per PS engine cover Unicode composition, POSIX case, uppercase /MNT and culture-ignorable segments; UTF-8 capture/BOM preserved. Original sh refusal and two CLAUDE.md clauses unchanged. No new source edits in this resumed session; cumulative four-file scope +434/-42 net392.\nFresh snapshot verification: Linux55 tests/13pass/0fail/42 documented PS skips; Windows55/52pass/0fail/3 documented GitBash branch skips (GitBash7, PS5.1 21, PS7 21, static3). Both parity scripts, bash-n and diff-check pass. Nine isolated mutants assertion-killed, restored/cmp-checked.\nDoD2: proxy prerequisite6c55aefa DONE/landed per epicSiblings; fresh pure-archive npm ci daemon+proxy and npm test:6files/263pass, identity75. DoD3: prerequisiteff5933d9 DONE/landed; leased gradlew.bat test --rerun for DaemonIdentityTest+MoeProjectForeignDaemonTest: fresh XML19+10,0fail/errors/skips; lease released.\nFinal adversarial review and fresh completion gate passed. Logs/XML/mutants: /tmp/e7f4-resume.mvnO0m; Windows snapshot C:/Users/Yaron/AppData/Local/Temp/e7f4-resume.IXcXBP; final gate /tmp/e7f4-final-gate.Ibjcqp. Handoff/gotcha memories saved. Existing unknown fail-open and health→socket TOCTOU remain. Pre-existing shared proxy/daemon POSIX/UNC/WSL-share comparison drift reproduced and filed separately as task-25ba449ab87d4039a283426f07302cbc; no universal cross-client path parity claim.",
   "commits": [
     {
       "sha": "6a1b7953522d20bd557c883b1c3acb80b718e0ae",
@@ -221,6 +228,24 @@
       "treeId": "245fc12c9fc6f18eeb9bf08b261dcec0facb9c32",
       "status": "REVIEW",
       "pushed": true
+    },
+    {
+      "sha": "9fa1fcb3d7ee1d1adb737098dd464507dc276fda",
+      "ref": "moe/work-2026-10-24",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-262588d0@2026-10-30T10:58:51Z",
+      "paths": [
+        ".moe/tasks/task-9d27749421b045c18a6c6eb99694236d.json",
+        ".moe/tasks/task-e7f4026abc0c4a8bb7632c8178ea7d70.json",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-json-cap.test.mjs"
+      ],
+      "recordedBy": "worker-262588d0",
+      "recordedAt": "2026-10-30T11:06:52.675Z",
+      "treeId": "f12a16d1de482ce9ded69a906ef8ce0cdcc5c322",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "touchedFiles": [
@@ -232,9 +257,9 @@
   "unattributedPaths": [],
   "lastCommitOutcome": {
     "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-e60b90bd@2026-10-30T10:23:33Z",
-    "at": "2026-10-30T10:52:15.313Z"
+    "kind": "checkpoint",
+    "sessionId": "worker-262588d0@2026-10-30T10:58:51Z",
+    "at": "2026-10-30T11:06:52.675Z"
   },
   "reviewCompletedAt": "2026-10-30T10:58:46.460Z",
   "rejectionDetails": {
@@ -280,11 +305,9 @@
       ]
     }
   ],
-  "blockedReason": "Waiting for shared resource jetbrains-gradle, queue #1 behind worker-73c29a03/task-de91373a5ed84530b29fc4cfbcee974a. QA path-identity fix implemented and reported; step 5 non-resource checks pass (Linux 13/55 with 42 documented skips, Windows 52/55 with 3 documented skips, both parity, proxy 263 tests, nine assertion-killed mutants). Required fresh identity JUnit check has NOT run and is not claimed passing. Once granted, run planned DaemonIdentityTest + MoeProjectForeignDaemonTest --rerun, release lease, finish step 5 and final adversarial step 6, fresh completion gate then complete_task. Full evidence/resume commands in task-task-e7f4026abc0c4a8bb7632c8178ea7d70-handoff.",
-  "blockedOnTaskIds": [
-    "task-de91373a5ed84530b29fc4cfbcee974a"
-  ],
-  "blockedResourceId": "jetbrains-gradle",
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-10-30T11:06:35.850Z"
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null
 }
