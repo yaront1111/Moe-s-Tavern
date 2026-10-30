@@ -17,11 +17,12 @@
     {
       "stepId": "step-1",
       "description": "TESTS FIRST (red). First read the LANDED V08 (task-2720c13b). If it exports a shared verified-delivery predicate, build on it instead of step 2's composition, and adapt.\n\nCreate packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts.\n- Use ToolTestHarness, and reuse the candidate, check-run, review and receipt fixture helpers of delivery/requiredChecks.delivery.test.ts and state/dependencyUnblock.test.ts.\n- A STRICT consumer is one whose resolveTaskDeliveryPolicy is not 'legacy', e.g. executionPolicySnapshot v2 deliveryPolicy 'local-branch'.\n- A legacy prerequisite carries a v2 snapshot with deliveryPolicy 'legacy'.\n- Assert exact unmet lists and tokens, table-driven.\n\nDoD1. For a strict consumer, each of these is UNMET:\n- a legacy-policy DONE prerequisite: token legacy-delivery;\n- a missing or deleted id: prerequisite-missing;\n- an ARCHIVED prerequisite without verified delivery: archived-without-verified-delivery;\n- a non-DONE prerequisite.\nThe SAME prerequisites under a LEGACY consumer stay satisfied exactly as today.\n\nDoD2. An ARCHIVED strict prerequisite satisfies a strict consumer when all of these hold:\n- evaluateDeliveryEvidence is satisfied;\n- its current candidate has a passing runner-observed check;\n- the LAST review on that candidate is 'approve';\n- a delivery receipt exists for that candidate.\nRemoving any one of them makes it unmet, one row each.\n\nDoD3:\n- set_task_dependencies by a non-architect gives NOT_ALLOWED and writes nothing.\n- By an architect: the TASK_DEPENDENCIES_SET activity entry names the actor, and the system message lists the removed ids.\n- After removing a missing prerequisite, the claim gate opens, but the consumer's own evaluateDeliveryEvidence result is byte-identical: no evidence is manufactured.\n- delete_task of a prerequisite never satisfies a strict consumer.\n\nPaths. Run one case per consumer path, each with a strict consumer and a legacy-DONE prerequisite:\n- the claim_next_task WORKING withholding;\n- wait_for_task;\n- the runDependencyUnblock restore (it stays BLOCKED);\n- report_blocked dependenciesSatisfied (false);\n- describeUnmetDependency naming the token;\n- the get_context, list_tasks and search_tasks unmet counts.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/dependencyReadiness.strict.test.ts"
-      ]
+      ],
+      "startedAt": "2026-10-30T17:37:06.765Z"
     },
     {
       "stepId": "step-2",
@@ -70,7 +71,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -80,12 +81,18 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 8,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-eb614bd4c3a3416a8353802785e861cd",
+      "author": "governor-693b7073",
+      "content": "Governor, 17:36Z: I removed dependsOn V08 (task-2720c13b) so V09 can run now, in parallel with the wrapper lane. The human asked for \"fix whats needed and unblock\" while 8 worker seats sat idle.\n\nWhy it's safe:\n- The edge was a CQ-import alias (\"Dependency aliases ... V08\"), not something the plan uses. Step 1 already says to build on V08's predicate only if V08 has landed one, and otherwise to compose it in step 2.\n- evaluateDeliveryEvidence and resolveTaskDeliveryPolicy already exist (delivery/policy.ts:553 and :171). C07 (93dee42f) is DONE.\n- No other open row edits V09's files. The one exception is V12b (dependencyUnblock.ts), and it is already ordered after V09.\n- V08 edits only wrapper and scripts files, with no file overlap.\n- Legacy consumers stay byte-identical (DoD), so landing early doesn't change how the board behaves.\n- Precedent: I02/V06 on 2026-10-26.\n\nWorker: V08 has not landed, so take step 2's composition path. Undo: set_task_dependencies { taskId: af83018e, addDependsOn: [task-2720c13bc79b438e840b14cbba4fea50] }.",
+      "timestamp": "2026-10-30T17:36:16.689Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-23T23:35:02.918Z",
-  "updatedAt": "2026-10-30T14:04:48.216Z",
+  "updatedAt": "2026-10-30T17:38:45.024Z",
   "dependsOn": [
-    "task-2720c13bc79b438e840b14cbba4fea50",
     "task-a4ca766a67184630842d4a6d12338cf8"
   ],
   "metrics": {
@@ -94,7 +101,8 @@
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-4ae016fb"
+    "architect-4ae016fb",
+    "worker-6e57c4f8"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -122,5 +130,10 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-29T17:00:33.660Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-10-30T17:37:06.765Z",
+  "blockedReason": "Approved plan conflicts with existing contract. Step 1 requires a strict local-branch v2 snapshot consumer plus a legacy v2 snapshot prerequisite; step 2 resolves both via resolveTaskDeliveryPolicy. Actual delivery/policy.ts:171 ignores captured deliveryPolicy for legacy/observe, returning the SAME live project policy for both; verified-local throws NOT_READY. Thus the required mixed-policy fixture and strict legacy-delivery branch are unreachable. Changing selector semantics violates the epic's live-policy preservation and expands beyond approved scope. Reproduced at cd522777 in /tmp/moe-v09-policy.eGaN6X: consumer/prerequisite resolve legacy/legacy under live legacy and local-branch/local-branch under live local-branch. Fresh existing Q5 policy tests: 22 passed, 92 filtered skips, exit 0. Need approved definition of historical legacy delivery evidence versus current consumer strictness. V08 is NOT a dependency blocker (governor removed it). Step 1 started; no source/test edits or Git writes; full gate not run. Handoff and gotcha memories recorded.",
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-10-30T17:38:45.024Z"
 }
